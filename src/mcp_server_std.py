@@ -539,12 +539,20 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
 # Built after the handlers so make_lowlevel_server can register all four on the
 # low-level Server (decorator API on mcp 1.x, on_* callbacks on 2.x).
 
+# `instructions` reaches every MCP client in the initialize response, once, at
+# no per-call cost, and is the only in-band channel that can carry prose about
+# the surface a mode does NOT list. src/mcp_server.py has always passed it on
+# the /mcp/ mount; stdio passed nothing, so a stdio client on a narrow profile
+# had no way to learn what the server still does.
+from src.tool_modes import build_server_instructions
+
 server = make_lowlevel_server(
     "governance-monitor-v1",
     list_tools=list_tools,
     call_tool=call_tool,
     list_resources=list_resources,
     read_resource=read_resource,
+    instructions=build_server_instructions(),
 )
 
 

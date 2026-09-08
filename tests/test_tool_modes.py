@@ -320,6 +320,83 @@ class TestIsClaudeDesktopClient:
     def test_anthropic_env_var_detection(self):
         assert is_claude_desktop_client() is True
 
+    def test_degrades_when_psutil_is_absent(self, monkeypatch):
+        """psutil is an OPTIONAL dependency; a core install must still list tools.
+
+        Until 2026-09-08 the process walk lived in a try whose except clause
+        named ``psutil.NoSuchProcess`` while ``import psutil`` inside that same
+        try bound the name as a function local. On ImportError the except tuple
+        itself raised UnboundLocalError, which propagated out of
+        should_include_tool and get_public_tool_definitions -- tools/list
+        crashed outright instead of degrading to "not Claude Desktop".
+        """
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _no_psutil(name, *args, **kwargs):
+            if name == "psutil":
+                raise ImportError("psutil is not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_psutil)
+        monkeypatch.delitem(sys.modules, "psutil", raising=False)
+
+        assert is_claude_desktop_client() is False
+        # and the listing predicate above it stays usable
+        assert should_include_tool("sync_state", mode="standard") is True
+
+    def test_env_detection_survives_missing_psutil(self, monkeypatch):
+        """The env-var check is not best-effort and must be reached regardless."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _no_psutil(name, *args, **kwargs):
+            if name == "psutil":
+                raise ImportError("psutil is not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_psutil)
+        monkeypatch.delitem(sys.modules, "psutil", raising=False)
+        monkeypatch.setenv("CLAUDE_DESKTOP", "1")
+
+        assert is_claude_desktop_client() is True
+
+    def test_empty_exclusion_set_skips_the_process_walk(self, monkeypatch):
+        """should_include_tool runs once per included tool; the walk is uncached.
+
+        While CLAUDE_DESKTOP_EXCLUDED_TOOLS is empty the detection decides
+        nothing, so it must not run at all.
+        """
+        import src.tool_modes as tool_modes
+
+        calls = []
+        monkeypatch.setattr(
+            tool_modes,
+            "is_claude_desktop_client",
+            lambda: calls.append(1) or True,
+        )
+        assert tool_modes.CLAUDE_DESKTOP_EXCLUDED_TOOLS == set()
+        tool_modes.should_include_tool("sync_state", mode="standard")
+        assert calls == []
+
+    def test_exclusion_still_applies_when_the_set_is_populated(self, monkeypatch):
+        """The mechanism stays wired: the guard is a fast path, not a removal."""
+        import src.tool_modes as tool_modes
+
+        monkeypatch.setattr(
+            tool_modes, "CLAUDE_DESKTOP_EXCLUDED_TOOLS", {"sync_state"}
+        )
+        monkeypatch.setattr(tool_modes, "is_claude_desktop_client", lambda: True)
+        assert tool_modes.should_include_tool("sync_state", mode="standard") is False
+        assert (
+            tool_modes.should_include_tool(
+                "sync_state", mode="standard", client_type="other"
+            )
+            is True
+        )
+
 
 # --- Server instructions Tests ---
 

@@ -15,7 +15,8 @@ A mode decides what tools/list ADVERTISES. It does not decide what dispatches:
 every register=True handler and every workflow alias stays callable by name on
 every transport (REST, stdio, and the FastMCP /mcp/ mount, which registers the
 whole surface and filters only its listing - see
-src/tool_registration.py::install_tool_mode_listing). Dropping a name from a
+src/tool_mode_listing.py::mode_filtered_server_class, applied in
+src/mcp_server.py). Dropping a name from a
 mode set therefore hides it from schema-driven clients; it never deletes it.
 Full mode should always include *all* schema tools even if categories lag behind.
 
@@ -385,48 +386,68 @@ def build_server_instructions(mode: str = None) -> str:
 def is_claude_desktop_client() -> bool:
     """
     Detect if MCP client is Claude Desktop (vs Cursor or other clients).
-    
+
     Claude Desktop is more sensitive to hangs, so we exclude problematic tools.
-    
+
     Returns:
         True if client appears to be Claude Desktop
     """
-    # Check parent process name (most reliable)
+    # psutil is an OPTIONAL dependency (pyproject.toml, [project.optional-
+    # dependencies].full), so a core install does not have it. Import it OUTSIDE
+    # the try whose except clause names psutil.NoSuchProcess: `import psutil`
+    # inside that try makes the name a function local, so on ImportError the
+    # except TUPLE ITSELF raises UnboundLocalError, which propagates out of
+    # should_include_tool and get_public_tool_definitions and takes tools/list
+    # down entirely instead of degrading to "not Claude Desktop".
     try:
         import psutil
-        current_process = psutil.Process()
-        parent = current_process.parent()
-        if parent:
-            parent_name = parent.name().lower()
-            if "claude" in parent_name:
-                return True
-            # Check up the process tree
-            for _ in range(3):
-                try:
-                    if parent:
-                        parent = parent.parent()
+    except ImportError:
+        psutil = None
+
+    # Check parent process name (most reliable)
+    if psutil is not None:
+        try:
+            current_process = psutil.Process()
+            parent = current_process.parent()
+            if parent:
+                parent_name = parent.name().lower()
+                if "claude" in parent_name:
+                    return True
+                # Check up the process tree
+                for _ in range(3):
+                    try:
                         if parent:
-                            parent_name = parent.name().lower()
-                            if "claude" in parent_name:
-                                return True
-                except (psutil.NoSuchProcess, AttributeError):
-                    break
-    except (ImportError, AttributeError, psutil.NoSuchProcess):
-        pass
-    
-    # Check environment variables
+                            parent = parent.parent()
+                            if parent:
+                                parent_name = parent.name().lower()
+                                if "claude" in parent_name:
+                                    return True
+                    except (psutil.NoSuchProcess, AttributeError):
+                        break
+        except (AttributeError, psutil.NoSuchProcess):
+            pass
+
+    # Check environment variables. Reached on a core install too: the process
+    # walk is best-effort, this is not.
     if os.getenv("CLAUDE_DESKTOP") or os.getenv("ANTHROPIC_CLAUDE"):
         return True
-    
+
     return False
 
 
 # Tools to exclude for Claude Desktop (causes hangs/freezes)
-CLAUDE_DESKTOP_EXCLUDED_TOOLS: Set[str] = {
-    # Add tools here that cause Claude Desktop to hang
-    # Example: "web_search", "heavy_operation", etc.
-    # Currently empty - add tools as issues are discovered
-}
+#
+# CAUTION before adding a name: is_claude_desktop_client() matches the substring
+# "claude" anywhere in the parent process tree, so it returns True under Claude
+# CODE as well as Claude Desktop (verified 2026-09-08 from a Claude Code
+# session). While this set is empty that mis-detection decides nothing; the
+# first name added here is excluded from BOTH clients, not just Desktop.
+#
+# `{}` here was an empty DICT annotated as Set[str] until 2026-09-08. Falsy and
+# `in`-compatible either way, so nothing behaved differently -- but the first
+# name added would have had to be added as a dict key.
+# Add names as hangs are discovered, e.g. {"web_search"}.
+CLAUDE_DESKTOP_EXCLUDED_TOOLS: Set[str] = set()
 
 
 def should_include_tool(tool_name: str, mode: str = "full", client_type: str = None) -> bool:
@@ -448,8 +469,16 @@ def should_include_tool(tool_name: str, mode: str = "full", client_type: str = N
     if tool_name not in allowed_tools:
         return False
     
-    # Check Claude Desktop exclusions
-    if client_type == "claude_desktop" or (client_type is None and is_claude_desktop_client()):
+    # Check Claude Desktop exclusions. The empty-set guard comes FIRST: this
+    # runs once per included tool per listing (42 calls for full), and
+    # is_claude_desktop_client() walks up to four psutil process hops with no
+    # caching. While CLAUDE_DESKTOP_EXCLUDED_TOOLS is empty the whole walk
+    # decides nothing, so skipping it is behavior-preserving. The mechanism
+    # stays wired: add a name to the set and detection resumes.
+    if CLAUDE_DESKTOP_EXCLUDED_TOOLS and (
+        client_type == "claude_desktop"
+        or (client_type is None and is_claude_desktop_client())
+    ):
         if tool_name in CLAUDE_DESKTOP_EXCLUDED_TOOLS:
             return False
     

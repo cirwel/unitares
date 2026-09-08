@@ -146,6 +146,7 @@ def make_lowlevel_server(
     list_resources: Any,
     read_resource: Any,
     resource_mime_type: str = "text/markdown",
+    instructions: str | None = None,
 ) -> Any:
     """Build a low-level ``mcp.server.Server`` with request handlers, across 1.x/2.x.
 
@@ -163,8 +164,20 @@ def make_lowlevel_server(
     constructor callbacks with an ``(request_context, params) -> Result``
     contract. This builder hides that split — on 2.x it adapts each plain
     handler into the ``on_*`` shape and wraps returns in the proper result type.
+
+    ``instructions`` reaches the client in the ``initialize`` response, once,
+    at no per-call cost. It is forwarded on both majors when the resolved
+    ``Server`` accepts it, and dropped otherwise rather than raising.
     """
     from mcp.server import Server
+
+    extra: dict[str, Any] = {}
+    if instructions is not None:
+        try:
+            if "instructions" in inspect.signature(Server.__init__).parameters:
+                extra["instructions"] = instructions
+        except (ValueError, TypeError):
+            pass
 
     if MCP_MAJOR >= 2:
         from mcp.types import (
@@ -201,10 +214,11 @@ def make_lowlevel_server(
             on_call_tool=_on_call_tool,
             on_list_resources=_on_list_resources,
             on_read_resource=_on_read_resource,
+            **extra,
         )
 
     # mcp 1.x — the decorator API wraps raw return values for us.
-    server = Server(name)
+    server = Server(name, **extra)
     server.list_resources()(list_resources)
     server.read_resource()(read_resource)
     server.list_tools()(list_tools)
