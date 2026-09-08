@@ -19,7 +19,7 @@ unchanged from v2.22.0. No database migration is introduced.
 
 ### Fixed
 
-- **container publication:** publish only the versioned image; keep `latest` unchanged until the verified multi-architecture index digest is explicitly promoted without rebuilding. Remove the publication-time promotion switch.
+- **container publication:** publish only the versioned image; keep `latest` unchanged until the verified multi-architecture index digest is explicitly promoted without rebuilding. Remove the publication-time promotion switch. (#2108)
 - **Compose upgrade:** pass `GOVERNANCE_TOOL_MODE` from Compose interpolation into the server environment, so setting `lite` in `.env`, rebuilding/recreating the service, and reconnecting the MCP client restores wider discovery. v2.22.0 needs the explicit override documented in its errata. Backports the fix merged after v2.22.0 was tagged. (#2092)
 - **release metadata:** keep published installation pins separate from the source version, bind plugin parity to the inspected v2.22.0 tag, and prevent source-version updates from rewriting historical bundle evidence. Restore the v2.22.0 changelog to its actual tagged contents and record the post-publication correction separately. (#2092)
 
