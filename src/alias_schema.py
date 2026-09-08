@@ -17,7 +17,9 @@ from src.schema_brief import (
 
 
 # Subtraction is the compatibility-safe policy for established read aliases:
-# every listed field is write-side and is never read by the pinned action.
+# every listed field belongs to another action and is never read by the pinned
+# action or its helpers. Do not derive this list from ACTION_FIELDS alone: that
+# discovery map can lag the handler (search's provenance/type/severity did).
 ALIAS_SCHEMA_DROP = {
     "search_shared_memory": frozenset({
         "content",
@@ -34,6 +36,20 @@ ALIAS_SCHEMA_DROP = {
         "task_outcome",
         "auto_link_related",
         "comparison_key",
+        "closure_class",
+        "closure_evidence",
+        "confidence",
+        "dry_run",
+        "include_response_chain",
+        "including_cold",
+        "length",
+        "max_chain_depth",
+        "memory_context",
+        "min_members",
+        "top_n",
+        "topic",
+        "use_llm",
+        "use_model",
     }),
 }
 

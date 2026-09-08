@@ -166,6 +166,49 @@ def test_recovery_hint_targets_are_advertised_in_standard():
         )
 
 
+def test_standard_can_finish_the_review_it_can_start():
+    """`standard` advertises `dialectic`, not just `request_review`.
+
+    `request_review` pins action="request". Until 2026-09-08 that was the only
+    reachable action of the dialectic router on the default profile, so an
+    agent could OPEN a review and reach none of the six actions that finish
+    one -- get, list, thesis, antithesis, synthesis, reassign. A loop you can
+    enter and not leave is worse than one you were never offered.
+
+    The server walks the agent into it, which is what makes this a defect
+    rather than a gap:
+
+        src/mcp_handlers/dialectic/handlers.py:1385
+            request_review's own SESSION_EXISTS refusal --
+            "Use dialectic(action='get', session_id='...')"
+        src/mcp_handlers/middleware/envelope_step.py:1169
+            build_experience_envelope tells any agent holding an open session
+            to call dialectic(action='thesis', ...) -- middleware, so it fires
+            for every experience alias on every profile
+
+    Verified from a Claude Code session on this default 2026-09-08: it called
+    request_review, was told to poll dialectic(action='get'), and could not,
+    because the name had never been advertised to it.
+
+    If this fails, do NOT drop `dialectic` from the set: either keep it
+    advertised, or remove every hint that names an action `request_review`
+    cannot reach.
+    """
+    registry = set(get_tool_registry().keys())
+    assert "dialectic" in registry, "dialectic lost register=True"
+    assert "dialectic" in STANDARD_MODE_TOOLS, (
+        "standard advertises request_review (action='request') but not the "
+        "dialectic router, so six of its seven actions are unreachable for a "
+        "schema-driven client -- including the get/thesis the server's own "
+        "responses tell the agent to call."
+    )
+
+    # The alias must still be there: it is the agent-facing name and carries
+    # the normalized envelope (is_experience_alias). Advertising the router is
+    # additive, not a replacement.
+    assert "request_review" in STANDARD_MODE_TOOLS
+
+
 def test_minimal_wire_surface_is_the_five_tool_loop():
     """The default (minimal) advertised surface is exactly the checkpoint loop."""
     allowed = get_tools_for_mode("minimal")

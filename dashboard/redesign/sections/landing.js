@@ -214,7 +214,23 @@
                   ? "tactical signal " + stats.calibrationSignal : null,
                ].filter(Boolean).join(" · "),
         cls: stats.calibrated === true ? "up" : stats.calibrated === false ? "down" : "" },
-      { h: "Anomalies", num: un(stats.anomalies) ? "—" : stats.anomalies, sub: un(stats.anomalies) ? "unavailable" : (stats.anomalies ? stats.anomalies + " active" : "clear"), cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : "up") },
+      // "clear" is a claim about the fleet, so it may only be made when the
+      // scan covered the fleet. The server caps its default scan at
+      // scan.scan_cap active agents and reports scan.truncated; a truncated
+      // scan that found nothing means "nothing among the ones looked at", which
+      // is not an all-clear and must not go green — the same rule the
+      // Calibration card above follows for unknown calibration. An older server
+      // sends no scan block, so truncated is null and the card is unchanged.
+      { h: "Anomalies",
+        num: un(stats.anomalies) ? "—" : stats.anomalies,
+        sub: un(stats.anomalies) ? "unavailable"
+             : [stats.anomalies ? stats.anomalies + " active"
+                                : (stats.anomaliesTruncated ? "none found" : "clear"),
+                stats.anomaliesTruncated && !un(stats.anomaliesScanned) && !un(stats.anomaliesActive)
+                  ? "scanned " + stats.anomaliesScanned + " of " + stats.anomaliesActive + " agents"
+                  : null,
+               ].filter(Boolean).join(" · "),
+        cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : (stats.anomaliesTruncated ? "" : "up")) },
     ];
     const degradeBanner = stats.degraded > 0
       ? `<div style="grid-column:1/-1;font-size:var(--text-xs);color:var(--warn);display:flex;gap:6px;align-items:center;margin-bottom:calc(-1 * var(--space-2))"><span>⚠</span><span>${stats.degraded} metric${stats.degraded > 1 ? "s" : ""} couldn't refresh just now — showing "—" instead of stale values.</span></div>`

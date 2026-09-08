@@ -1342,7 +1342,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             error_code="AGENT_NOT_FOUND",
             error_category="validation_error",
             recovery={
-                "action": "Call identity() or process_agent_update() to register.",
+                "action": "Call identity() or sync_state() to register.",
                 "related_tools": ["identity", "process_agent_update"]
             },
             arguments=arguments

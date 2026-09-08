@@ -264,7 +264,18 @@ class TestProcessAgentUpdate:
 
             data = parse_result(result)
             assert data["error"] == "Identity not resolved for this check-in."
-            assert "client_session_id returned by that onboard() call" in data["recovery"]["action"]
+            # The prose names the ADVERTISED alias: `standard` lists
+            # start_session, not its onboard implementation.
+            assert (
+                "client_session_id returned by that start_session() call"
+                in data["recovery"]["action"]
+            )
+            assert "onboard(" not in data["recovery"]["action"]
+            # related_tools still carries raw implementation names. That is the
+            # same defect in a syntax the hint scanner cannot see (a bare name
+            # has no parenthesis), measured at 68 sites across the tree and
+            # left for its own change; this assertion pins today's behaviour so
+            # that change is visible when it lands.
             assert data["recovery"]["related_tools"] == ["onboard", "identity", "process_agent_update"]
 
     @pytest.mark.asyncio

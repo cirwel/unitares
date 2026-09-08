@@ -785,6 +785,11 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 
 _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     (
+        re.compile(r"that argument has a measured failure rate", re.IGNORECASE),
+        "corrected: a static hint inventory has no observed failure-rate "
+        "denominator; review caller/profile reachability and severity separately",
+    ),
+    (
         re.compile(
             r"Redis is (?:an? )?optional|Redis is (?:a )?session cache only|"
             r"Redis \(optional\)|Redis optional cache",

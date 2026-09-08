@@ -63,6 +63,23 @@ MINIMAL_MODE_TOOLS: Set[str] = {
 # paths named by ordinary responses. Other routers and operator surfaces stay
 # in lite/full, where an operator opts into a wider listing.
 #
+# dialectic is a router and is here for the reason self_recovery is, one step
+# further on: `request_review` pins action="request", so under the ten-name
+# default an agent could OPEN a review and reach none of the six actions that
+# finish one -- get, list, thesis, antithesis, synthesis, reassign. That is a
+# broken loop, not a missing convenience, and the server itself walks the agent
+# into it: request_review's own SESSION_EXISTS refusal says "Use
+# dialectic(action='get', session_id='...')"
+# (src/mcp_handlers/dialectic/handlers.py:1385), and the shared envelope
+# middleware tells any agent holding an open session to call
+# dialectic(action='thesis', ...)
+# (src/mcp_handlers/middleware/envelope_step.py:1169) -- middleware, so it fires
+# for every experience alias on every profile. Verified from a Claude Code
+# session on this default 2026-09-08: it called request_review, was told to poll
+# dialectic(action='get'), and could not, because the name had never been
+# advertised to it. The router is also the cheap shape here -- 5,435 B for seven
+# actions is 776 B/action, against 2,136 B for request_review's one.
+#
 # self_recovery is a router (check / quick / review) and is here anyway, which
 # is not an exception to the rule above but an application of it: NO other
 # advertised name reaches recovery, so "a router over actions these already
@@ -81,6 +98,7 @@ STANDARD_MODE_TOOLS: Set[str] = MINIMAL_MODE_TOOLS | {
     "store_finding",          # Write a durable finding
     "update_finding",         # Revise a finding already stored
     "request_review",         # Structured review (dialectic(action="request"))
+    "dialectic",              # Read and advance the review request_review opens
     "consult",                # Advisory model help
     "self_recovery",          # Recover from a pause the server just imposed
     "knowledge",              # Open individual search results by discovery_id
@@ -359,9 +377,10 @@ def build_server_instructions(mode: str = None) -> str:
             "",
             "search_shared_memory reads the cross-agent knowledge graph and "
             "store_finding / update_finding write to it; search before you "
-            "write. request_review opens a structured review. consult asks an "
-            "advisory model. self_recovery is how a paused agent gets moving "
-            "again.",
+            "write. request_review opens a structured review and dialectic "
+            "reads and advances it (action=get / thesis / antithesis / "
+            "synthesis / list / reassign). consult asks an advisory model. "
+            "self_recovery is how a paused agent gets moving again.",
         ]
     summary = _MODE_SUMMARY.get(mode)
     advertised = known.get(mode)
@@ -395,8 +414,8 @@ def build_server_instructions(mode: str = None) -> str:
         )
     if mode == "standard":
         not_listed.append(
-            "the other consolidated routers (agent, observe, dialectic, "
-            "calibration, config, export) and list_tools"
+            "the other consolidated routers (agent, observe, calibration, "
+            "config, export) and list_tools"
         )
     if mode != "full" and not not_listed:
         not_listed.append("the operator and admin tools")

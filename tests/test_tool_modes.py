@@ -68,20 +68,27 @@ class TestModeSets:
         advertises shared memory, structured review, advisory inference and
         recovery on top of the checkpoint loop, plus the detail inspection and
         server-health diagnostics that ordinary responses recommend.
+
+        `dialectic` joined on 2026-09-08 for the same reason, one step further
+        on: `request_review` pins action="request", so without the router six
+        of the seven actions that FINISH a review were unreachable and an agent
+        could open one it had no way to read or advance. See
+        tests/test_lite_wire_surface.py::test_standard_can_finish_the_review_it_can_start.
         """
         assert STANDARD_MODE_TOOLS == MINIMAL_MODE_TOOLS | {
             "search_shared_memory",
             "store_finding",
             "update_finding",
             "request_review",
+            "dialectic",
             "consult",
             "self_recovery",
             "knowledge",
             "describe_tool",
             "health_check",
         }
-        assert len(STANDARD_MODE_TOOLS) == 14
-        for router in ("agent", "observe", "dialectic", "config"):
+        assert len(STANDARD_MODE_TOOLS) == 15
+        for router in ("agent", "observe", "config"):
             assert router not in STANDARD_MODE_TOOLS
         assert "list_tools" not in STANDARD_MODE_TOOLS
         assert "describe_tool" in STANDARD_MODE_TOOLS
@@ -437,7 +444,7 @@ class TestServerInstructions:
 
     def test_reports_the_advertised_count_of_the_profile(self):
         assert "advertises 5 tools" in build_server_instructions("minimal")
-        assert "advertises 14 tools" in build_server_instructions("standard")
+        assert "advertises 15 tools" in build_server_instructions("standard")
         assert (
             f"advertises {len(LITE_MODE_TOOLS)} tools"
             in build_server_instructions("lite")
