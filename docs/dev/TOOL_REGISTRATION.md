@@ -362,6 +362,101 @@ Two things this does **not** do, deliberately:
   separate risk profile (the advertised schema would stop matching what
   FastMCP's argument model generates), and it is not attempted here.
 
+That structural lever is now **measured**, though still not applied
+(`scripts/diagnostics/tool_surface_cost.py --boilerplate`, 2026-09-08):
+
+| Profile | Advertised | `title` | null-union | both |
+|---|---|---|---|---|
+| `minimal` | 19,112 B | 1,547 (8%) | 924 (4%) | 2,471 (12%) |
+| `standard` | 52,612 B | 4,856 (9%) | 3,612 (6%) | 8,468 (16%) |
+| `lite` | 91,390 B | 8,485 (9%) | 6,160 (6%) | 14,645 (16%) |
+| `full` | 129,043 B | 11,789 (9%) | 8,428 (6%) | 20,217 (15%) |
+
+The two halves are not the same proposition and the script keeps them apart. A
+property `title` is a titleized echo of the key (`client_session_id` → "Client
+Session Id"); JSON Schema does not validate against it, so removing it loses no
+information and changes no contract — a flat 9% of every profile. Flattening
+the null unions is a real narrowing: an explicit `null` stops validating. It is
+measured for scale, not recommended.
+
+---
+
+## What a Profile Costs
+
+`scripts/diagnostics/count_tools.py` answers "how many tools are there".
+`scripts/diagnostics/tool_surface_cost.py` answers what a context budget
+actually asks — how much advertising them costs, in the bytes a client receives
+before the agent has decided it wants any of them. Measured 2026-09-08:
+
+| Profile | Tools | Advertised | ~tokens | vs `minimal` |
+|---|---|---|---|---|
+| `minimal` | 5 | 19,112 B | ~4,778 | 1.0x |
+| `standard` (default) | 14 | 52,612 B | ~13,153 | 2.8x |
+| `lite` | 29 | 91,390 B | ~22,847 | 4.8x |
+| `full` | 50 | 129,043 B | ~32,260 | 6.8x |
+
+Bytes are measured; tokens are an estimate at 4 B/token, not a tokenizer
+result. Two things this table settles:
+
+- **`lite` is the second-widest profile, not a light one.** The ladder is
+  ordered `minimal < standard < lite < full` and `--check-ladder` confirms it
+  holds in both senses that matter — each rung advertises a superset of the one
+  below it, and each costs more. The structure is sound; only the *name* is
+  wrong for its position, and renaming it recovers no bytes.
+- **Cost tracks parameter breadth, not tool count.** In `standard` the
+  knowledge graph is 46% of the payload and is advertised twice: the
+  `knowledge` router (51 params, 1 required, 10,530 B) plus the aliases
+  `search_shared_memory` (36 params, 7,696 B), `store_finding` (2,980 B) and
+  `update_finding` (2,973 B). The last two are small because they use
+  keep-lists in `src/alias_schema.py` that advertise only the parameters their
+  pinned action reads; `search_shared_memory` uses a subtraction list and still
+  carries `closure_class`, `closure_evidence`, `use_llm`, `topic`,
+  `min_members` and other parameters belonging to *other* actions of the router.
+
+Use `--mode <profile> --params` for the per-parameter breakdown behind those
+numbers.
+
+---
+
+## Hints That Name Unadvertised Tools
+
+A response saying "poll `dialectic(action='get', ...)`" is an instruction, and
+a schema-driven client can only call names `tools/list` returned. When the
+named tool is not advertised, the instruction is a dead end — the server told
+the agent to do something it has no way to do. `src/tool_modes.py` is right
+that an unadvertised name still *dispatches*; that is a property no
+schema-driven client can use.
+
+`tests/test_lite_wire_surface.py` holds this invariant against two hand-written
+lists. `scripts/diagnostics/hint_target_advertisement.py` derives the set
+instead, reading caller-facing response keys out of the handler tree. On
+`standard`, 2026-09-08: **10 tools named in caller-facing hints are not
+advertised, across 53 sites.** They split two ways, and `--classify` says which:
+
+1. **The hint names the raw twin of an advertised alias** — `onboard` (24
+   sites) for `start_session`, `process_agent_update` (4) for `sync_state`,
+   `get_governance_metrics` (2) for `check_working_state`. The capability *is*
+   advertised; the hint just says a name the client was never shown. Fix the
+   hint text; costs nothing on the wire.
+2. **The hint names a capability the profile does not advertise** —
+   `dialectic` (8 sites, actions `get`/`reassign`/`request`/`thesis`),
+   `observe` (7), `agent`, `bind_session`, `cirs_protocol`,
+   `operator_resume_agent`, `verify_trajectory_identity`. Either advertise it,
+   or route the hint through something that is.
+
+An alias pins one action of its router, so alias coverage is checked per
+action: `request_review` covers `dialectic(action='request')` and nothing else
+on that router, which is why `dialectic` lands in class 2 despite having an
+advertised alias.
+
+This was found the hard way. A Claude Code session on the default `standard`
+profile called `request_review`; the response told it to poll
+`dialectic(action='get', session_id=...)`, and the session could not — the name
+had never been advertised, so it was never offered to the model. Before
+proposing that any capability be dropped from a profile on the grounds that it
+"stays callable by name", run this script: that argument has a measured failure
+rate.
+
 ---
 
 ## Tool Tiers (for list_tools filtering and tool modes)
@@ -460,6 +555,16 @@ grep "AUTO_REGISTER" data/logs/mcp_server_error.log | tail -1
 curl -s -X POST "http://localhost:8767/v1/tools/call" \
   -H "Content-Type: application/json" \
   -d '{"name": "describe_tool", "arguments": {"tool_name": "my_new_tool"}}'
+
+# What each profile costs on the wire, and whether the ladder still holds
+python3 scripts/diagnostics/tool_surface_cost.py
+python3 scripts/diagnostics/tool_surface_cost.py --check-ladder
+python3 scripts/diagnostics/tool_surface_cost.py --mode standard --params
+python3 scripts/diagnostics/tool_surface_cost.py --boilerplate
+
+# Hints that name a tool the profile does not advertise
+python3 scripts/diagnostics/hint_target_advertisement.py --classify
+python3 scripts/diagnostics/hint_target_advertisement.py --mode lite
 ```
 
 ---
@@ -474,6 +579,7 @@ curl -s -X POST "http://localhost:8767/v1/tools/call" \
 | Tool needs session | + `TOOLS_NEEDING_SESSION_INJECTION` in `tool_registration.py` |
 | Rename/deprecate tool | `tool_stability.py` (add alias) |
 | Categorize / tier / classify for list_tools and tool modes | `tool_meta.py` (the tool's record) |
+| Check what a profile costs, or what a hint promises | nothing to edit — run `scripts/diagnostics/tool_surface_cost.py` and `scripts/diagnostics/hint_target_advertisement.py` |
 
 ---
 
