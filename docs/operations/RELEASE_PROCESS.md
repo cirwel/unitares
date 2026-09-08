@@ -2,7 +2,38 @@
 
 This checklist separates source delivery, runtime deployment, and package
 publication. A Git tag does not by itself prove that a service restarted or a
-package reached a registry.
+package reached a registry. `VERSION` identifies the source tree;
+`PUBLISHED_VERSION` identifies the most recent server release whose tag,
+release page, and container were verified. Public install pins follow
+`PUBLISHED_VERSION`, so a source-version bump cannot advertise missing artifacts.
+Merging a change under `docs/public-site/` does deploy GitHub Pages; it does
+not publish a server tag or container.
+
+## v2.22.1 maintenance candidate
+
+See the [candidate notes and publication checklist](../releases/2.22.1.md).
+
+This correction is prepared from tag `v2.22.0` (`b1360809`) on
+`release/2.22`, rather than from current master. It backports #2092 and the
+release-evidence corrections while preserving the published callable surface
+and skills. Master has removed `direct_resume_if_safe` and changed schemas and
+skills; those changes need their own release/version assessment.
+
+Merge the maintenance PR into `release/2.22` only after independent review and
+its Python, Docker, Elixir, documentation, scope and release-seam checks pass.
+Tag v2.22.1 at that reviewed merge commit; do not tag current master for this
+candidate. Apply the publication verification steps below to that exact tag.
+Do not merge the whole maintenance branch back into master: #2092 is already
+there and the shared documentation correction has its own master PR.
+
+The existing v2.22.0 tag and release remain intact. Append
+[`../releases/2.22.0-errata.md`](../releases/2.22.0-errata.md) to the release
+body without overwriting its existing text.
+
+After v2.22.1's tag, release page, both container architectures, SBOM and
+provenance are verified, advance `PUBLISHED_VERSION` in a separate master PR.
+Keep the install pin at v2.21.0 during preparation. A merge into the maintenance
+branch does not deploy the master-only public Pages workflow.
 
 ## Server release
 
@@ -11,19 +42,26 @@ package reached a registry.
 2. Run `make version-bump PART=patch|minor|major`, update
    [`docs/CHANGELOG.md`](../CHANGELOG.md) and the `date-released` field in
    [`CITATION.cff`](../../CITATION.cff), then review every generated version
-   change. `VERSION` remains the authority.
+   change. `VERSION` remains the source-version authority. Leave
+   `PUBLISHED_VERSION` unchanged during release preparation.
 3. Run `./scripts/dev/test-cache.sh` and `make validate`. When container build
    inputs changed **anywhere in the release range** (`vLAST..master`), not merely
    in the release PR's own diff, also run the documented Docker quickstart on a
    Docker-capable host and record the command/result in the release PR. Check
    the range with
-   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' docker-compose.yml db/postgres scripts/demo/quick_demo.py`. Delegating this check
+   `git log --oneline vLAST..origin/master -- Dockerfile 'requirements*.txt' constraints.txt docker-compose.yml db/postgres elixir/lease_plane elixir/unitares_sdk scripts/demo/quick_demo.py scripts/demo/coordination_demo.py scripts/ci/check_mcp_tool_surface.py .github/workflows/docker-quickstart.yml`.
+   This covers dependency resolution and stack wiring; application source is
+   also copied into the image but deliberately does not trigger every rebuild.
+   Delegating this check
    to CI counts only when the required CI workflow actually contains and passes
    that quickstart; a green Python/package test job is not equivalent evidence.
-4. Merge the release PR only after required CI is green and every applicable
-   release-specific check from step 3 has recorded evidence.
-5. From the merged release commit, create a signed annotated tag when signing is
-   available: `git tag -s vX.Y.Z -m "UNITARES vX.Y.Z"`. Do not replace an
+4. Merge the release PR only after required CI is green, every applicable
+   release-specific check from step 3 has recorded evidence, and an independent
+   reviewer has checked the release notes, version choice, compatibility claims,
+   and upgrade path. Record that review separately from author validation.
+5. From the final reviewed release commit, including any follow-up release
+   fixes, create a signed annotated tag when signing is available:
+   `git tag -s vX.Y.Z -m "UNITARES vX.Y.Z"`. Do not replace an
    existing public tag merely to add a signature.
 6. Push the tag and create the GitHub release with user impact, compatibility,
    migrations, evidence changes, known limits, and rollback notes.
@@ -31,7 +69,11 @@ package reached a registry.
    images to GHCR with an SBOM and build-provenance attestation. For a release
    created before that workflow existed, dispatch it manually with the existing
    release tag. Leave `publish_latest` off when backfilling an older release.
-8. Verify the release page, container digest, attestation, and clean closeout.
+8. Verify the release page, both container architectures, digest, SBOM, and
+   attestation. Then set `PUBLISHED_VERSION` to the verified version, run
+   `python scripts/ops/version_manager.py --update`, and deliver the public-pin
+   update in a follow-up PR. Until that merges, public installation examples
+   continue to name the previous verified release. Finish with clean closeout.
 
 ## Correcting a published release
 

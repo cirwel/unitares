@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Version Management - Single Source of Truth
+Source and Published Version Management
 
-Manages version number across all files in the project.
-Prevents version drift by using VERSION file as authority.
+VERSION is the source-version authority. PUBLISHED_VERSION independently pins
+verified public artifacts, so preparing a release cannot advance install links
+before the tag, GitHub release, and container exist.
 
 Usage:
     python3 scripts/ops/version_manager.py                # Show current version
@@ -19,6 +20,7 @@ from typing import List, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 VERSION_FILE = PROJECT_ROOT / "VERSION"
+PUBLISHED_VERSION_FILE = PROJECT_ROOT / "PUBLISHED_VERSION"
 
 
 def get_version() -> str:
@@ -32,6 +34,11 @@ def get_version() -> str:
 def set_version(version: str):
     """Set version in VERSION file."""
     VERSION_FILE.write_text(version + "\n")
+
+
+def get_published_version() -> str:
+    """Read the operator-verified public release pin; never infer publication."""
+    return PUBLISHED_VERSION_FILE.read_text(encoding="utf-8").strip()
 
 
 def bump_version(part: str) -> str:
@@ -70,6 +77,19 @@ VERSION_REFERENCES = [
     ("README.md", [
         (r'\*\*Status:\*\* v([\d.]+)\.',
          r'**Status:** v{version}.'),
+    ]),
+    ("COMPATIBILITY.md", [
+        (r'\| UNITARES server \| `v([\d.]+)`',
+         r'| UNITARES server | `v{version}`'),
+        # Historical plugin bundle evidence is pinned to its inspected tag.
+        # A source bump must not rewrite that claim into a new verification.
+    ]),
+]
+
+# Installation pins move only after RELEASE_PROCESS step 8 verifies the public
+# artifacts and the operator updates PUBLISHED_VERSION in a follow-up PR.
+PUBLISHED_VERSION_REFERENCES = [
+    ("README.md", [
         (r'git clone --branch v([\d.]+) --depth 1',
          r'git clone --branch v{version} --depth 1'),
     ]),
@@ -92,24 +112,18 @@ VERSION_REFERENCES = [
          r'Replace `@v{version}` with another server release tag'),
     ]),
     ("COMPATIBILITY.md", [
-        (r'\| UNITARES server \| `v([\d.]+)`',
-         r'| UNITARES server | `v{version}`'),
-        # Tracks the plugin row's server pin. This pattern carried the weaker
-        # word "compatible with" from 2.18.0 to 2.19.0, because the 2.18.0
-        # errata exists precisely because "aligned" overclaimed: v0.4.13's
-        # tagged skill bundle predated plugin PR #116.
-        #
-        # Plugin v0.4.14 (2026-08-21) earns the stronger word. Its bundle is a
-        # byte-identical mirror of this repo's skills/ at v2.19.0, verified
-        # file-by-file and against the published SKILLS_MANIFEST.sha256, and it
-        # carries both #116 and the v2.19.0 margin-semantics correction. The
-        # pattern moves with the claim, so a future edit that weakens the row
-        # back to "compatible with" fails this check rather than passing
-        # silently — the guard still works, in the other direction.
-        (r'aligned with server `v([\d.]+)`',
-         r'aligned with server `v{version}`'),
+        (r'\| Published server/container \| `v([\d.]+)`',
+         r'| Published server/container | `v{version}`'),
     ]),
 ]
+
+
+def version_reference_groups():
+    """Keep source-version claims and verified install pins on their own clocks."""
+    return (
+        (get_version(), VERSION_REFERENCES),
+        (get_published_version(), PUBLISHED_VERSION_REFERENCES),
+    )
 
 
 def check_file_versions(filepath: Path, patterns: List[Tuple[str, str]], expected_version: str) -> list:
@@ -189,12 +203,13 @@ def main():
     if args.check or not args.update:
         # Check mode
         print(f"Current version: {current_version}")
+        print(f"Verified published version: {get_published_version()}")
         all_issues = []
 
-        for doc_file, patterns in VERSION_REFERENCES:
-            filepath = PROJECT_ROOT / doc_file
-            issues = check_file_versions(filepath, patterns, current_version)
-            all_issues.extend(issues)
+        for expected, references in version_reference_groups():
+            for doc_file, patterns in references:
+                filepath = PROJECT_ROOT / doc_file
+                all_issues.extend(check_file_versions(filepath, patterns, expected))
 
         if all_issues:
             print(f"\n❌ Found {len(all_issues)} version mismatches:")
@@ -209,14 +224,16 @@ def main():
     if args.update:
         # Update mode
         updated = []
-        for doc_file, patterns in VERSION_REFERENCES:
-            filepath = PROJECT_ROOT / doc_file
-            if update_file_versions(filepath, patterns, current_version):
-                updated.append(doc_file)
+        for expected, references in version_reference_groups():
+            for doc_file, patterns in references:
+                filepath = PROJECT_ROOT / doc_file
+                if update_file_versions(filepath, patterns, expected):
+                    updated.append(doc_file)
 
         if updated:
-            print(f"✅ Updated {len(updated)} files to version {current_version}:")
-            for doc_file in updated:
+            print(f"✅ Updated source references to {current_version}; "
+                  f"public install pins to {get_published_version()}:")
+            for doc_file in sorted(set(updated)):
                 print(f"  - {doc_file}")
         else:
             print("✅ All files already have correct version!")

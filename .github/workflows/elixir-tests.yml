@@ -60,9 +60,9 @@ name: Elixir Tests
 on:
   merge_group:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, release/2.22 ]
   pull_request:
-    branches: [ master, main ]
+    branches: [ master, main, release/2.22 ]
 
 # Superseded runs on the same ref are cancelled (same shape as tests.yml): this
 # workflow now fires on every push, and strict up-to-date auto-updates re-push
