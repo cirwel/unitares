@@ -53,11 +53,10 @@ def test_tier_one_quickstart_is_release_pinned_and_coordination_complete() -> No
     manual = _read("docs/manual/02-install.md")
     compose = _read("docker-compose.yml")
 
-    # Pinned to the release VERSION, not a frozen literal: version_manager
-    # rewrites both files on every bump, so a literal here only ever reports
-    # that a release happened. The contract being guarded is that the
-    # quickstart names a release tag at all, never `master`.
-    pin = f"git clone --branch v{_current_version()} --depth 1"
+    # Source bumps must not advertise an unavailable release. Public examples
+    # advance only after tag, release page, and container verification.
+    published = _read("PUBLISHED_VERSION").strip()
+    pin = f"git clone --branch v{published} --depth 1"
 
     assert "the supported install path" in readme
     assert pin in readme
