@@ -26,6 +26,10 @@ source_files:
   # live in these two files; the reference drifts silently when they move.
   - unitares/src/tool_modes.py
   - unitares/src/tool_mode_listing.py
+  # Added 2026-09-08: the reference now says the advertised parameter
+  # descriptions are abridged and names describe_tool as where the full text
+  # lives. The trim rule is here; if it changes, that claim drifts silently.
+  - unitares/src/schema_brief.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "5a6e81697f537ac2"
   unitares/src/mcp_handlers/identity/handlers.py: "c840edc5049524ed"
@@ -37,8 +41,9 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "96ffbcfbbea5ff34"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "3fd24e37c57566a3"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "95af4068c129a4c6"
+  unitares/src/tool_modes.py: "b8aeac54f4e4bdc1"
   unitares/src/tool_mode_listing.py: "a99a9e7f6e4a95c4"
+  unitares/src/schema_brief.py: "7410c20f9b0374e3"
 ---
 
 # Agent Lifecycle
@@ -234,6 +239,14 @@ harness that offers only listed tools shows ten under the default, and the
 rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 `start_session(verbose=true)` reports the running mode under `tool_mode`.
 
+Whatever your client lists, the *parameter descriptions* it shows are
+abridged to their first sentence — the catalog is paid for on every
+`tools/list`, in every session. `describe_tool(tool_name=..., action=...)`
+returns the full authored text, and for a consolidated router only the
+parameters one action takes. The server says so in its `instructions` string
+at initialize. Nothing is hidden: reach for `describe_tool` when a trimmed
+description leaves you unsure what a parameter takes.
+
 ### Essential (use in every session)
 
 - `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity once, optionally declaring lineage
@@ -260,4 +273,4 @@ rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
 - `call_model()` — Delegate to a configured secondary model for analysis
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
-- `list_tools()` / `describe_tool()` — Inspect the deployed surface instead of guessing an old tool name. Advertised on `lite` and `full`, not on the default `standard` or on `minimal`, where the MCP client's own `tools/list` is the discovery surface; both still answer when called by name
+- `list_tools()` / `describe_tool()` — Inspect the deployed surface instead of guessing an old tool name. `describe_tool` is also where the full parameter descriptions live, since the catalog advertises them abridged. Advertised on `lite` and `full`, not on the default `standard` or on `minimal`, where the MCP client's own `tools/list` is the discovery surface; both still answer when called by name
