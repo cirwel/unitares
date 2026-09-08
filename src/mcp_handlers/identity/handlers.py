@@ -1869,9 +1869,8 @@ def _build_tool_mode_info(verbose: bool):
     tool_mode_info = None
     if verbose:
         try:
-            from src.tool_modes import TOOL_MODE, get_tools_for_mode
-            from src.tool_schemas import get_tool_definitions
-            all_tools = get_tool_definitions()
+            from src.tool_modes import TOOL_MODE, advertised_tool_names_full, get_tools_for_mode
+            all_tools = advertised_tool_names_full()
             mode_tools = get_tools_for_mode(TOOL_MODE)
             tool_mode_info = {
                 "current_mode": TOOL_MODE,

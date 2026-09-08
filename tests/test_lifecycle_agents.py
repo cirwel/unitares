@@ -4,7 +4,7 @@ Comprehensive tests for src/mcp_handlers/lifecycle.py - Agent lifecycle handlers
 Covers: handle_list_agents, handle_get_agent_metadata, handle_update_agent_metadata,
         handle_archive_agent, handle_delete_agent, handle_archive_old_test_agents,
         handle_archive_orphan_agents, handle_mark_response_complete,
-        handle_direct_resume_if_safe, handle_self_recovery_review,
+        handle_self_recovery_review,
         handle_detect_stuck_agents, handle_ping_agent.
 """
 
@@ -1762,10 +1762,6 @@ class TestResumeAgent:
             meta.add_lifecycle_event.assert_not_called()
 
 
-# ============================================================================
-# handle_direct_resume_if_safe
-# ============================================================================
-
 class TestListAgentsLiteImplicit:
     """Tests for implicit lite=False when advanced params are used without explicit lite flag."""
 
@@ -2737,8 +2733,3 @@ class TestMarkResponseCompleteEdgeCases:
             assert data["success"] is True
             assert "maintenance_prompt" in data
             assert len(data["maintenance_prompt"]["open_discoveries"]) == 2
-
-
-# ============================================================================
-# handle_direct_resume_if_safe - edge cases (lines 1317, 1355-1356, 1391-1392)
-# ============================================================================

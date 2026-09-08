@@ -264,7 +264,6 @@ _LIFECYCLE_MODULES = [
     "src.mcp_handlers.lifecycle.mutation",
     "src.mcp_handlers.lifecycle.operations",
     "src.mcp_handlers.lifecycle.stuck",
-    "src.mcp_handlers.lifecycle.resume",
     "src.mcp_handlers.lifecycle.self_recovery",
 ]
 
@@ -319,7 +318,7 @@ def patch_lifecycle_server(server, require_registered=None, **extra_patches):
             result = await handle_list_agents({"lite": True})
 
         with patch_lifecycle_server(server, require_registered=("agent-1", None)):
-            result = await handle_direct_resume_if_safe({"agent_id": "agent-1"})
+            result = await handle_mark_response_complete({"agent_id": "agent-1"})
     """
     from contextlib import ExitStack
 
