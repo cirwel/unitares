@@ -64,12 +64,28 @@ def cache_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 set -euo pipefail
 
 if [[ "${1:-}" == "-" ]]; then
+    if [[ -n "${FAKE_COVERAGE_VERSION:-}" ]]; then
+        exec python3 -c '
+import importlib.metadata
+import os
+import sys
+
+real_version = importlib.metadata.version
+def version(package):
+    if package == "coverage":
+        return os.environ["FAKE_COVERAGE_VERSION"]
+    return real_version(package)
+importlib.metadata.version = version
+exec(compile(sys.stdin.read(), "<stdin>", "exec"))
+'
+    fi
     exec python3 "$@"
 fi
 
 if [[ "${1:-}" == "-m" && "${2:-}" == "pytest" ]]; then
     count_file="${FAKE_PYTEST_COUNT:?}"
     printf "%s\\n" "$*" > "${FAKE_PYTEST_ARGS:?}"
+    printf "%s\\n" "${COVERAGE_CORE:-}" > "${FAKE_PYTEST_CORE:?}"
     count=0
     if [[ -f "$count_file" ]]; then
         count="$(cat "$count_file")"
@@ -100,6 +116,7 @@ exit 99
     env["UNITARES_TEST_CACHE_LOCK_DIR"] = str(repo / "test-cache.lock")
     env["FAKE_PYTEST_COUNT"] = str(repo / "pytest-count.txt")
     env["FAKE_PYTEST_ARGS"] = str(repo / "pytest-args.txt")
+    env["FAKE_PYTEST_CORE"] = str(repo / "pytest-core.txt")
     return repo, env
 
 
@@ -158,6 +175,41 @@ def test_tracked_sql_change_invalidates_worktree_cache(cache_repo):
     assert third.returncode == 0, third.stdout + third.stderr
     assert "[test-cache] MISS" in third.stdout
     assert _pytest_count(repo) == 2
+
+
+def test_changing_coverage_core_reruns_pytest(cache_repo):
+    repo, env = cache_repo
+
+    for core, expected_runs, expected_status in (
+        ("sysmon", 1, "MISS"),
+        ("ctrace", 2, "MISS"),
+        ("ctrace", 2, "HIT"),
+    ):
+        result = _run_cache(repo, {**env, "COVERAGE_CORE": core})
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"[test-cache] {expected_status}" in result.stdout
+        assert _pytest_count(repo) == expected_runs
+        assert (repo / "pytest-core.txt").read_text().strip() == core
+
+
+def test_unset_empty_and_explicit_default_core_share_a_cache(cache_repo):
+    repo, env = cache_repo
+    env.pop("COVERAGE_CORE", None)
+
+    for selected in ({}, {"COVERAGE_CORE": ""}, {"COVERAGE_CORE": "sysmon"}):
+        result = _run_cache(repo, {**env, **selected})
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _pytest_count(repo) == 1
+        assert (repo / "pytest-core.txt").read_text().strip() == "sysmon"
+
+
+def test_changing_coverage_version_reruns_pytest(cache_repo):
+    repo, env = cache_repo
+
+    for version, expected_runs in (("7.15.0", 1), ("7.16.0", 2), ("7.16.0", 2)):
+        result = _run_cache(repo, {**env, "FAKE_COVERAGE_VERSION": version})
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert _pytest_count(repo) == expected_runs
 
 
 def test_untracked_test_file_invalidates_worktree_cache(cache_repo):

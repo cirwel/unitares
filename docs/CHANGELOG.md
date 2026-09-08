@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **embeddings:** `similarity()` and `rank_by_similarity()` now compute over already-materialized vectors without requiring the optional sentence-transformers runtime. NumPy remains a core dependency; producing embeddings through `embed()` / `embed_batch()` still requires the model runtime. (#2101)
+
 - **container publication:** publish only the versioned image; keep `latest` unchanged until the verified multi-architecture index digest is explicitly promoted without rebuilding. Remove the publication-time promotion switch. (#2109)
 - **release compatibility:** #2092 merged after the v2.22.0 tag. Its Compose forwarding, Docker MCP checks, publication-pin separation, and corrected upgrade guidance are post-release fixes, with a narrow v2.22.1 maintenance backport being prepared. The v2.22.0 entry below again describes only the tagged contents; see its errata. (#2092, #2105)
 
