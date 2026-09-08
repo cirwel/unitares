@@ -57,11 +57,15 @@ its own identity, declare the dispatcher as parent with
 The primary tools return a compact agent-facing envelope. State-changing tools
 preserve the raw payload under `raw_governance`; read aliases omit that repeated
 payload by default and expose a full-mode escape hatch. The default server
-surface is the five-tool loop (`start_session`, `identity`, `sync_state`,
-`record_result`, `check_working_state`); the other rows above are advertised
-under `GOVERNANCE_TOOL_MODE=lite` or `full`, where `list_tools()` gives the
-current surface rather than a copied catalog in prose. Names outside the
-running mode still dispatch by name.
+surface is the ten-tool `standard` profile: the checkpoint loop
+(`start_session`, `identity`, `sync_state`, `record_result`,
+`check_working_state`) plus `search_shared_memory`, `store_finding`,
+`update_finding`, `request_review`, and `consult`. The remaining rows above --
+the consolidated routers and the discovery tools -- are advertised under
+`GOVERNANCE_TOOL_MODE=lite` or `full`, where `list_tools()` gives the current
+surface rather than a copied catalog in prose. Names outside the running
+profile still dispatch by name, though a client that offers the model only
+what discovery returned will not call them.
 
 For `sync_state`, read `action_summary` first. It keeps the policy action,
 one-line reason, risk score, and verdict maturity together; a cold-start result
@@ -81,6 +85,21 @@ is a bounded interpreted summary for agents: action/reason, explained state and
 verdict provenance, EISV/risk, and only actionable policy/enforcement summaries.
 Both retain the normalized action and cold-start verdict caveat. Compatibility
 aliases are exact: `lite=compact`, `verbose=full`, and `interpreted=standard`.
+
+A consolidated router (`knowledge`, `dialectic`, `observe`, `agent`, and the
+rest) advertises one flat schema covering every action it routes, because the
+MCP wrapper builds a tool's argument model from top-level properties. That
+union is not what a single call takes: `knowledge` shows about fifty
+parameters whichever of its twelve actions you mean. Pass the action to
+`describe_tool` to see only that action's parameters:
+
+```
+describe_tool(tool_name="knowledge", action="search")
+```
+
+Without an action, the response lists the actions the tool routes. The
+narrowed schema describes one call; the wire is unchanged, so parameters
+belonging to other actions are still accepted and ignored.
 
 `search_shared_memory` defaults to a lean discovery digest. Its
 `memory_suggestions` retain ids, one-line summaries, lifecycle/type metadata,

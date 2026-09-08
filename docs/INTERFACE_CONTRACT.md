@@ -48,16 +48,25 @@ Those are host-integration capabilities, documented separately in the
 
 ## Modes and compatibility
 
-`minimal`, `lite`, and `full` are server-selected discovery profiles. They
-decide what `tools/list` advertises, not what dispatches: every registered
-name and every workflow alias is callable by name in every profile on every
-transport. `minimal` is the server default and advertises the five-tool
-checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
-`check_working_state`). The checked-in artifact uses `lite`, the wider
-agent-facing profile; full mode adds administrative and specialist tools. The
-live handshake (`list_tools(lite=true)`) reports the profile the server runs,
-so a `minimal` deployment answers with five capabilities and its own surface
-hash while still dispatching the lite names.
+`minimal`, `standard`, `lite`, and `full` are server-selected discovery
+profiles. They decide what `tools/list` advertises, not what dispatches: every
+registered name and every workflow alias is callable by name in every profile
+on every transport. `standard` is the server default and advertises ten names:
+the checkpoint loop (`start_session`, `identity`, `sync_state`,
+`record_result`, `check_working_state`) plus `search_shared_memory`,
+`store_finding`, `update_finding`, `request_review`, and `consult`. `minimal`
+advertises the checkpoint loop alone. The checked-in artifact uses `lite`, the
+wider agent-facing profile; full mode adds administrative and specialist
+tools. The live handshake (`list_tools(lite=true)`) reports the profile the
+server runs, so a `minimal` deployment answers with five capabilities and its
+own surface hash while still dispatching the lite names.
+
+Because a schema-driven client offers the model only the names discovery
+returned, the profile is a capability boundary for such clients even though it
+is not one for dispatch. The server therefore states its profile, and what it
+is withholding, in the MCP `instructions` string returned at connect. That
+string is orientation, not contract: it is not part of the surface hash and
+may be reworded in any release.
 
 Adding a compatible capability increments the contract version. Renaming,
 removing, or changing the meaning of an existing capability requires a new
@@ -69,10 +78,22 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.2.0` is the negotiated interface release. Compatible additions
+- `version: 1.3.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
-  already read).
+  already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
+  for one action of a consolidated router, and `dialectic` drops the `vote`
+  parameter, which named an action the router does not route and which no
+  handler read).
+
+A consolidated router advertises the union of every action's parameters,
+because the wire schema must be flat: the MCP wrapper builds a tool's argument
+model from top-level properties, so a per-action `oneOf` would not survive
+registration. That union is the contract. Which of those parameters each
+action uses is declared alongside them, as `ACTION_FIELDS` on the router's
+parameter model, and `describe_tool(tool_name=..., action=...)` serves it. The
+narrowed schema is a description of one call, not a second contract: the wire
+still accepts and ignores the parameters of other actions.
 
 Core currently supports `mcp>=1.26.0,<3.0.0`. Both admitted major versions are
 tested, and the newest in-range resolution is a blocking CI lane. A client

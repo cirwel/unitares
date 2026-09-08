@@ -1,8 +1,9 @@
 """
 CI drift guard: the advertised MCP wire surface must match the mode sets.
 
-`GOVERNANCE_TOOL_MODE` defaults to "minimal" (src/tool_modes.py): the five-tool
-checkpoint loop. Under `GOVERNANCE_TOOL_MODE=lite` the server advertises exactly
+`GOVERNANCE_TOOL_MODE` defaults to "standard" (src/tool_modes.py): the five-tool
+checkpoint loop plus shared memory, structured review, and advisory inference.
+Under `GOVERNANCE_TOOL_MODE=lite` the server advertises exactly
 the tools in `LITE_MODE_TOOLS` over the MCP protocol. That advertised surface
 is composed from two places (src/tool_registration.py + src/tool_mode_listing.py):
 

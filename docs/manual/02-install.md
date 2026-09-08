@@ -54,27 +54,43 @@ UNITARES_DEMO_PORT=18767 make demo
 UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 ```
 
-### Choosing the advertised tool surface
+### Choosing the advertised tool surface (v2.23.0 and later)
 
-v2.22.0 introduced the five-tool `minimal` default. The `.env` forwarding
-below requires v2.22.1 or later; v2.22.0 needs the explicit override in the
-[release errata](../releases/2.22.0-errata.md). To keep the wider `lite`
-surface when upgrading, set `GOVERNANCE_TOOL_MODE=lite` in the checkout's
-`.env` file before starting the new version, then run:
+The default is the ten-tool `standard` profile: the five-name checkpoint loop
+plus shared memory (`search_shared_memory`, `store_finding`, `update_finding`),
+structured review (`request_review`), and advisory inference (`consult`). To
+choose a different profile, set `GOVERNANCE_TOOL_MODE` in the checkout's `.env`
+file before starting the server, then run:
 
 ```bash
 docker compose up -d --build --wait --force-recreate governance-mcp
 ```
 
+| Profile | Advertises |
+|---|---|
+| `minimal` | the five checkpoint names alone |
+| `standard` (default) | those five plus shared memory, review, and advisory inference |
+| `lite` | the above plus the consolidated routers and `list_tools` / `describe_tool` |
+| `full` | every registered tool |
+
 Reconnect the MCP client so it refreshes discovery. Compose explicitly passes
 this variable into the server; changing the host environment without
-recreating the container does not update a running service. `full` advertises
-the complete registered surface. Profiles affect discovery, not authorization
-or dispatch: registered names remain callable, subject to their normal gates.
+recreating the container does not update a running service.
 
-v2.21.0 has an older six-tool `minimal` profile and registration-time filtering
-on the HTTP MCP mount. Selecting that profile does not reproduce the five-tool
-surface or its dispatch compatibility; upgrade the server for those changes.
+Profiles affect discovery, not authorization or dispatch: registered names
+remain callable by name on every transport, subject to their normal gates. Be
+deliberate when narrowing, though, because a schema-driven client offers the
+model only the tools discovery returned, so a name that is not advertised is
+one such a client cannot reach. The server states its own profile and what it
+is withholding in the MCP `instructions` string returned at connect.
+
+v2.22.0 defaults to the five-tool `minimal` profile and has no `standard`. Its
+published Compose file does not forward `GOVERNANCE_TOOL_MODE` either, so
+selecting a profile there needs the explicit override in the [release
+errata](../releases/2.22.0-errata.md). v2.21.0 has an older six-tool `minimal`
+profile and registration-time filtering on the HTTP MCP mount. Selecting a
+profile on either does not reproduce this surface or its dispatch
+compatibility; upgrade the server for those changes.
 
 ## 2.2 Bare-metal installation
 

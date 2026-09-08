@@ -80,13 +80,19 @@ jobs:
         run: make coordination-demo
 
       - name: Verify default MCP discovery and unadvertised named calls
-        run: docker compose exec -T governance-mcp python - --mode minimal < scripts/ci/check_mcp_tool_surface.py
+        run: docker compose exec -T governance-mcp python - --mode standard < scripts/ci/check_mcp_tool_surface.py
 
-      - name: Verify the documented lite upgrade override from .env
+      - name: Verify the documented profile override from .env
         run: |
           printf 'GOVERNANCE_TOOL_MODE=lite\n' > .env
           docker compose up -d --build --wait --force-recreate governance-mcp
           docker compose exec -T governance-mcp python - --mode lite < scripts/ci/check_mcp_tool_surface.py
+
+      - name: Verify the narrow profile still dispatches the names it hides
+        run: |
+          printf 'GOVERNANCE_TOOL_MODE=minimal\n' > .env
+          docker compose up -d --build --wait --force-recreate governance-mcp
+          docker compose exec -T governance-mcp python - --mode minimal < scripts/ci/check_mcp_tool_surface.py
 
       - name: Dump container logs on failure
         if: failure()

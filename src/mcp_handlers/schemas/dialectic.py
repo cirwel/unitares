@@ -1,4 +1,4 @@
-from typing import Optional, Union, Literal, List
+from typing import ClassVar, List, Literal, Mapping, Optional, Tuple, Union
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -136,6 +136,43 @@ class LlmAssistedDialecticParams(AgentIdentityMixin):
 
 class DialecticParams(AgentIdentityMixin):
     """Parameters for dialectic"""
+    # Which of these flat parameters each action uses. The wire schema stays
+    # flat (the MCP wrapper builds its argument model from top-level
+    # properties), so this is the only machine-readable statement of the
+    # per-action contract; describe_tool(action=...) serves it and
+    # tests/test_router_action_fields.py holds it to the routing table.
+    # Identity and session parameters are common to every action and are
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "get": (
+                "session_id", "check_timeout",
+        ),
+        "list": (
+                "status", "limit", "include_transcript",
+        ),
+        "quick": (
+                "position", "decision", "reasoning",
+        ),
+        "request": (
+                "issue_description", "reason", "use_brief_as_thesis",
+        ),
+        "thesis": (
+                "session_id", "position", "reasoning", "root_cause",
+                "proposed_conditions", "conditions",
+        ),
+        "antithesis": (
+                "session_id", "concerns", "reasoning", "observed_metrics",
+                "reviewer_provenance", "take_over_if_requested",
+                "takeover_reason",
+        ),
+        "synthesis": (
+                "session_id", "agrees", "reasoning", "proposed_conditions",
+                "conditions",
+        ),
+        "reassign": (
+                "session_id", "new_reviewer_id",
+        ),
+    }
     # default mirrors action_router's default_action="list" — the schema
     # validated BEFORE the router and a required field here made
     # dialectic({}) error despite the router's fallback (PR #611 council
@@ -169,8 +206,12 @@ class DialecticParams(AgentIdentityMixin):
     take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
     agrees: Union[bool, str, None] = Field(None, description="Agreement flag (for action=synthesis)")
-    vote: Optional[str] = Field(None, description="Vote: resume, block, or cooldown (for action=vote)")
-    conditions: Optional[List[str]] = Field(None, description="Conditions (for action=vote)")
+    # `vote` was removed 2026-09-08: it documented "for action=vote" against a
+    # router with no `vote` action, and no handler ever read it. `conditions`
+    # is live — it is the accepted alias for `proposed_conditions`
+    # (dialectic/handlers._read_proposed_conditions), so it carries that
+    # parameter's actions and says so.
+    conditions: Optional[List[str]] = Field(None, description="Resumption conditions; alias for proposed_conditions (for action=thesis/synthesis)")
     new_reviewer_id: Optional[str] = Field(None, description="New reviewer agent ID (for action=reassign)")
     reason: Optional[str] = Field(None, description="Reason (for action=request/reassign)")
 
