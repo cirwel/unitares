@@ -1173,6 +1173,18 @@ def build_experience_envelope(
 
     if next_action is not None:
         envelope["next_action"] = _friendly_action_hint(next_action)
+
+    # Surface the tactical prediction id as a top-level field, not only inside
+    # the next_action prose above. services/update_response_service.py mints it
+    # onto the base payload with a docstring naming top-level placement as the
+    # contract, and the README quickstart reads it as
+    # `result.get("prediction_id")` — but this envelope rebuilds the response
+    # from scratch, so the documented loop passed None to record_result and the
+    # outcome silently graded a fallback confidence instead of this check-in
+    # (#2123). Prose stays: it tells the agent what the id is for.
+    prediction_id = payload.get("prediction_id") or source_payload.get("prediction_id")
+    if isinstance(prediction_id, str) and prediction_id:
+        envelope["prediction_id"] = prediction_id
     if state_summary:
         # state_summary can carry glossary coaching (e.g. an uninitialized
         # verdict's "Submit one process_agent_update...") — translate it like

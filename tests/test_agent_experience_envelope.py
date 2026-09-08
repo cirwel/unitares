@@ -1233,6 +1233,68 @@ def test_sync_state_envelope_prediction_id_composes_with_review_nudge():
     assert "request_review" in env["next_action"]
 
 
+# ─── #2123: the README quickstart reads prediction_id as a top-level key ────
+# The envelope rebuilds the response from scratch, so naming the id only in
+# next_action prose made `result.get("prediction_id")` return None on the
+# documented loop. record_result then graded a fallback confidence instead of
+# the check-in that produced it — success:true in both cases, so the
+# degradation was silent in both directions.
+
+
+def test_sync_state_envelope_exposes_prediction_id_top_level():
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "prediction_id": "abc-123",
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env.get("prediction_id") == "abc-123"
+    # The prose keeps saying what the id is for; the key is what code reads.
+    assert "prediction_id='abc-123'" in env["next_action"]
+
+
+def test_sync_state_envelope_lifts_prediction_id_from_nested_payload():
+    """A caller handing us an already-enveloped response still gets the key."""
+    payload = {
+        "success": True,
+        "raw_governance": {
+            "success": True,
+            "decision": {"action": "proceed"},
+            "prediction_id": "nested-456",
+        },
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env.get("prediction_id") == "nested-456"
+
+
+def test_sync_state_envelope_omits_prediction_id_when_none_was_minted():
+    """Absent beats present-and-null: record_result must not echo a None."""
+    payload = {"success": True, "decision": {"action": "proceed"}}
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "prediction_id" not in env
+
+
+def test_quickstart_loop_can_thread_prediction_id_without_raw_governance():
+    """Pins the README Quickstart contract end to end.
+
+    README.md reads `result.get("prediction_id")` straight off the sync_state
+    response. This asserts the documented expression yields the real id
+    without the caller reaching into raw_governance or regexing next_action.
+    """
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"risk_score": 0.2},
+        "prediction_id": "quickstart-789",
+    }
+    result = build_experience_envelope("sync_state", "process_agent_update", payload)
+
+    prediction_id = result.get("prediction_id")  # the README's own expression
+
+    assert prediction_id == "quickstart-789"
+    assert prediction_id is not None, "record_result would grade a fallback"
+
+
 @pytest.mark.parametrize("risk,band", [(0.44, "low"), (0.46, "elevated"), (0.71, "high")])
 def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
     envelope = build_experience_envelope(
