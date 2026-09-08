@@ -159,6 +159,11 @@ if server_supports_kwarg("instructions"):
     from src.tool_modes import build_server_instructions
 
     _server_kwargs["instructions"] = build_server_instructions()
+# serverInfo.version defaults to "" on both majors, so without this every
+# client — directory crawlers included — sees a server that will not say
+# which build it is. SERVER_VERSION already reads the VERSION file above.
+if server_supports_kwarg("version"):
+    _server_kwargs["version"] = SERVER_VERSION
 if server_supports_kwarg("host"):
     _server_kwargs["host"] = _LISTEN_HOST
 if server_supports_kwarg("transport_security"):
