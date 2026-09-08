@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **ci(skills):** the skill freshness gate now reads source drift from recorded content digests. Each `SKILL.md` frontmatter carries `source_digests`, a sha256 prefix of every cited source taken when the skill was last verified; a source whose content no longer matches, or has no record, marks the skill STALE, and a source absent from the checkout (another repository, the plugin mirror) is counted and reported rather than guessed. The previous signal, filesystem mtime, is rewritten by every checkout, so CI ran the calendar-age check only and five of seven skills sat stale behind a green gate. Commit dates were rejected because the repository squash-merges, which stamps a landed change with its merge time. `check-skill-freshness.sh --stamp NAME` re-records a skill after its claims were re-checked and rewrites only the date line and the digest block; `SKILL_FRESHNESS_AGE_ONLY=1` remains as an explicit age-only switch. (#2097)
+- **tool registry:** the five hand-maintained bookkeeping maps now describe the advertised roster, exactly. The roster is every `register=True` dispatch tool plus the eight workflow aliases (`tool_modes.advertised_tool_names_full()`), and `GOVERNANCE_TOOL_MODE=full` now returns it instead of the schema-definition list, which also counted the 23 `register=False` delegates that only validate router actions and put `full` fifteen names wider than anything the registrar advertises (the two standing edge-index warnings on `full` clear). `TOOL_CATEGORIES` and `TOOL_TIERS` partition the roster, one bucket per advertised name: 23 registered tools had no category or tier before (every action router among them) and 26 pre-consolidation names were still listed; categories agree with the introspection catalog that `list_tools(category=...)` filters on, which gains a `workspace` category the catalog already had. `TOOL_OPERATIONS` covers every advertised name (22 were missing and defaulted to `read` in `list_tools` / `describe_tool` output, `knowledge` and `agent` included), and `dialectic` is classified `write` (request / thesis / antithesis / synthesis / reassign mutate). The stability map is keyed by every registered tool with no silent defaults, drops four names that no longer exist (`who_am_i`, `quick_resume`, `self_recovery_review`, `check_recovery_options`), and an alias reports its canonical tool's tier; `knowledge` and `self_recovery` carry the STABLE tier their flat predecessors all declared, every other router stays BETA. The onboard `tool_mode` block counts the roster. `validate_tool_modes.py` fails on an uncategorized advertised tool (it warned) and on a category entry off the roster; `tests/test_tool_registry_bookkeeping.py` holds every map to the rule. (#2093)
+
+### Removed
+
+- **tools:** `direct_resume_if_safe`, deprecated 2026-01-29 in favour of `self_recovery` and annotated "will be removed in v2.0", is removed. It was a `full`-mode-only tool with no caller in the SDK, the governance plugin, or the reference residents. No alias is left behind: an alias to `self_recovery(action="quick")` would answer the old name with narrower behavior (quick resumes only at risk < 0.40; the removed handler resumed without reflection up to 0.60), and retiring that band is the substance of the removal, as the deprecation's own migration said: quick below 0.40, `review` with a reflection above. A caller of the old name now gets `tool_not_found_error` with a suggestion. The catalog's three recovery entries that named `register=False` delegates as if they were callable tools (`quick_resume`, `self_recovery_review`, `check_recovery_options`) are folded into `self_recovery`'s entry as its actions. Registered tools: 43 to 42. (#2093)
 
 ### Documentation
 
@@ -20,14 +25,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.22.0] - 2026-09-07
 
+### Compatibility and upgrade
+
+This is a minor source release with a default discovery behavior change.
+Registered callable names, input schemas, lifecycle envelopes, and the
+selectable `lite` contract are preserved; no database migration is introduced.
+This does not promise unchanged default workflows for schema-driven clients:
+the default advertised surface shrinks from 29 tools to five. To retain the
+wider surface, set `GOVERNANCE_TOOL_MODE=lite` in the server environment before
+upgrading. Compose forwards this setting from `.env`; recreate `governance-mcp`
+and reconnect the MCP client to refresh discovery.
+
+The five-tool profile requires v2.22.0 or later. v2.21.0's `minimal` profile has
+six tools, omits `record_result`, and filters HTTP dispatch at registration
+time. Selecting that older profile does not reproduce this release's behavior.
+
 ### Changed
 
 - **tool surface:** the default MCP surface is now `GOVERNANCE_TOOL_MODE=minimal` — the five-tool checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`, `check_working_state`). The previous default, `lite` (29 tools), and `full` remain one flag away. `minimal` no longer carries `list_tools` / `describe_tool`: with five tools the MCP client's native `tools/list` is the discovery surface, and the two introspection tools stay on `lite` and `full`. Nothing is force-included in any mode any more; the mode set is the advertised surface. Deployments that relied on the default and want the wider surface advertised to schema-driven clients (Claude Code, Codex) set `GOVERNANCE_TOOL_MODE=lite`; the operator LaunchAgent template and `.env.example` document the knob, and the template pins `lite`. (#2081)
 - **mcp transport:** a tool mode now filters only `tools/list` on the FastMCP `/mcp/` mount. The registrars register every `register=True` handler and every workflow alias regardless of mode (`src/tool_mode_listing.py`), so a name outside the running mode dispatches on `/mcp/` exactly as it always did on REST and stdio. Until now the mount applied the mode at registration time and answered `Unknown tool` for unadvertised names (verified 2026-08-11), which is what made the surface cut unsafe for the SDK, the governance plugin, and the residents. The onboard `tool_mode` tip, the `list_tools` `not_advertised` block, and `validate_tool_modes.py` (which now asserts `minimal` is exactly the five-tool loop) describe the new shape. (#2081)
 - **ci(quickstart):** the Docker Quickstart workflow's path filter now includes `constraints.txt`, which `Dockerfile` installs alongside `requirements-docker.txt`. A pin moving in `constraints.txt` previously changed the shipped image without the job that validates the image running; surfaced auditing the v2.21.0 release range against the release process. (#2075)
+- **release infrastructure:** update the pinned GitHub Pages deploy action and container-publication QEMU setup action. (#2079)
+- **dashboard test tooling:** update Vitest from 4.1.11 to 5.0.0. (#2078)
 
 ### Fixed
 
+- **release compatibility:** forward `GOVERNANCE_TOOL_MODE` through Compose, exercise minimal discovery plus an unadvertised named call and the `.env` lite override in Docker CI, correct the older-minimal upgrade advice, and identify plugin v0.4.17 as the verified matching skill bundle. Separate `PUBLISHED_VERSION` from the source `VERSION` so public install links advance only after the tag, release page, and container are verified; merging public-site source still deploys Pages. (#2092)
 - **README:** the "What is built" table claimed 106 MCP tools. That figure was an AST count of `@mcp_tool` decorator sites (#1907), most of them `register=False` internal delegates that never reach any wire. The runtime registry has 43 registered tools (8 of them consolidated routers over 52 actions) plus 8 workflow aliases and a 70-entry legacy alias table; the row now states those numbers, in the form `update_docs_tool_count.py --check` binds to the live registry. The README also opens with the five tools and a compact quickstart; the wider surface moves to "Beyond the five". (#2081)
 - **tool-edge-index:** the exposure snapshot's per-mode model still mirrored a registration-time filter with workflow aliases registered unconditionally, so it reported five aliases as "advertised but undeclared" under `minimal` and produced three spurious `MODE_UNDECLARED_ADVERTISED` warnings. It now uses the same listing predicate the transports use, and the warnings clear. (#2081)
 
@@ -35,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **agent contract:** clarify delegated measurement authority in the shared `AGENTS.md` / `CLAUDE.md` block — a deciding standard (threshold, control, noise floor) is a choice stated before it is applied, decided by the operator unless explicitly delegated within a recorded scope; applying an agreed standard needs no renewed approval, and authorship, identity, or persistence alone does not authorize changing it. (#2080)
 - **interface contract, integration manual, tool registration:** state that a mode decides what `tools/list` advertises and never what dispatches, that `minimal` is the server default, and that the checked-in contract artifact remains the `lite` profile by declaration while the live handshake reports the running mode. (#2081)
+
+<!-- changelog-coverage-exempt: #2079 no-user-effect -->
+<!-- changelog-coverage-exempt: #2078 no-user-effect -->
 
 ## [2.21.0] - 2026-09-04
 
