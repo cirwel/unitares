@@ -19,7 +19,13 @@ class IdentityParams(AgentIdentityMixin):
             "NOT change your public structured handle (`agent_id`) or the registry "
             "key (`uuid`). For cross-tool threading, key on `uuid` (the identity "
             "key), not on this name."
-        )
+        ),
+        json_schema_extra={
+            "brief": (
+                "Optional COSMETIC display name; sets display_name only, never "
+                "`agent_id` or `uuid`. Thread `uuid` across tools, not this."
+            )
+        },
     )
     model_type: Optional[str] = Field(
         default=None,
@@ -70,7 +76,13 @@ class OnboardParams(AgentIdentityMixin):
             "and the public handle deliberately diverge. The canonical identifier "
             "for cross-tool reference is `uuid` (is_identity_key:true in the "
             "response). Thread that, not the display name."
-        )
+        ),
+        json_schema_extra={
+            "brief": (
+                "Optional COSMETIC display name; sets display_name only, never "
+                "`agent_id` or `uuid`. Thread `uuid` across tools, not this."
+            )
+        },
     )
     model_type: Optional[str] = Field(
         default=None,
@@ -123,7 +135,13 @@ class OnboardParams(AgentIdentityMixin):
             "Why this fork was created. Registered lineage reasons: subagent, "
             "dialectic_reviewer, dispatch, compaction, explicit, new_session. "
             "Unknown values remain compatible but receive no live-parent exemption."
-        )
+        ),
+        json_schema_extra={
+            "brief": (
+                "Why this fork was created. Registered reasons: subagent, "
+                "dialectic_reviewer, dispatch, compaction, explicit, new_session."
+            )
+        },
     )
     thread_id: Optional[str] = Field(
         default=None,
