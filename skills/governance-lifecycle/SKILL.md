@@ -34,7 +34,7 @@ source_files:
   - unitares/src/schema_brief.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "d7d09d260fedd7ec"
-  unitares/src/mcp_handlers/identity/handlers.py: "6a8eb54058609b20"
+  unitares/src/mcp_handlers/identity/handlers.py: "c5bd71f4ab659d05"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
@@ -217,6 +217,7 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 
 - UUID is an identity anchor, not proof that the current process owns that identity
 - Session binding can happen via transport session, `client_session_id`, or short-lived continuity token
+- Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. Your identity is unchanged; retry from a client that sends its own session identifier.
 - Use `identity()` when continuity seems unclear
 - Inspect:
   - `identity_status`
