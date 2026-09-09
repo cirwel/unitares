@@ -237,15 +237,8 @@ def test_health_reports_status_and_version(cli_env):
 def test_tools_lists_core_governance_tools(cli_env):
     result = _run(cli_env, "tools")
     assert "Tools:" in result.stdout
-    # The /v1/tools REST surface lists what the running mode advertises. The
-    # sacrificial server inherits the process default, standard: the five-tool
-    # checkpoint loop plus the three capabilities with no other advertised
-    # route (shared memory, structured review, advisory inference), under
-    # their workflow names. The lite-only names (onboard, health_check,
-    # list_tools) are not listed but stay callable by name -- the onboard test
-    # below goes through one -- so nothing is asserted about their absence:
-    # descriptions may mention them.
-    assert "(standard mode)" in result.stdout
+    # The current server exposes the complete catalog, with no mode selector.
+    assert " mode)" not in result.stdout
     for name in (
         "start_session",
         "identity",
@@ -257,6 +250,10 @@ def test_tools_lists_core_governance_tools(cli_env):
         "update_finding",
         "request_review",
         "consult",
+        "admin",
+        "agent",
+        "observe",
+        "list_tools",
     ):
         assert name in result.stdout, name
 
@@ -1107,3 +1104,14 @@ def test_agent_argument_errors(stub_env):
         result = _run(stub_env, "agent", *args, check=False)
         assert result.returncode != 0
         assert expect in result.stderr
+
+
+@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full"])
+def test_ci_probe_sees_complete_live_mcp_catalog(mcp_test_server, mode):
+    probe = (REPO_ROOT / "scripts/ci/check_mcp_tool_surface.py").read_text()
+    result = subprocess.run(
+        [sys.executable, "-", "--mode", mode, "--url", mcp_test_server + "/mcp/"],
+        input=probe, text=True, capture_output=True, cwd=REPO_ROOT, timeout=40,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS:" in result.stdout

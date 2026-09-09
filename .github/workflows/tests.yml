@@ -85,11 +85,9 @@ jobs:
       run: |
         bash scripts/client/check-skill-freshness.sh
 
-    - name: Validate tool-mode / schema config
+    - name: Validate complete catalog and legacy configuration compatibility
       # DB-free: confirms TOOL_CATEGORIES matches the tool schema (alias-aware),
-      # minimal is exactly the five-tool checkpoint loop, and lite keeps the
-      # loop plus the discovery tools, so TOOL_MODE filtering stays consistent
-      # with the served surface.
+      # and every legacy mode resolves to the complete served catalog.
       run: |
         python scripts/diagnostics/validate_tool_modes.py
 

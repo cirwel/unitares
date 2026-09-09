@@ -56,18 +56,12 @@ its own identity, declare the dispatcher as parent with
 
 The primary tools return a compact agent-facing envelope. State-changing tools
 preserve the raw payload under `raw_governance`; read aliases omit that repeated
-payload by default and expose a full-mode escape hatch. The default server
-surface is the fifteen-tool `standard` profile: the checkpoint loop
-(`start_session`, `identity`, `sync_state`, `record_result`,
-`check_working_state`) plus `search_shared_memory`, `store_finding`,
-`update_finding`, `request_review`, `dialectic`, `consult`, `self_recovery`,
-`knowledge`, `describe_tool`, and `health_check`. The
-remaining rows above --
-the other consolidated routers and `list_tools` -- are advertised under
-`GOVERNANCE_TOOL_MODE=lite` or `full`, where `list_tools()` gives the current
-surface rather than a copied catalog in prose. Names outside the running
-profile still dispatch by name, though a client that offers the model only
-what discovery returned will not call them.
+payload by default and expose a full-mode escape hatch. Interface contract 1.6.0 and later advertises one complete catalog, including
+all routers and discovery tools. Legacy `GOVERNANCE_TOOL_MODE` values are
+ignored. `list_tools()` reports the current catalog and contract version;
+`describe_tool(tool_name=..., action=...)` provides the full action parameters.
+Raw implementations remain available for independently upgraded clients.
+Each action still enforces its own authorization and identity requirements.
 
 For `sync_state`, read `action_summary` first. It keeps the policy action,
 one-line reason, risk score, and verdict maturity together; a cold-start result

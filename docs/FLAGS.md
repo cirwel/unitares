@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**165 flags.**
+**164 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -30,7 +30,6 @@ index; that one is the curated decision record.
 | `GOVERNANCE_DATABASE_URL` | `'postgresql://postgres:postgres@localhost:5432/governance'` | Poll lease_plane_events for forced-release alarms; emit findings | agents/sentinel/agent.py |
 | `GOVERNANCE_HEALTH_URL` | `'http://localhost:8767/health'` | — | agents/vigil/checks/governance_health.py |
 | `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD` | `'true'` | — | config/governance_config.py |
-| `GOVERNANCE_TOOL_MODE` | `'standard'` | — | src/tool_modes.py |
 | `GOVERNANCE_URL` | varies: `'http://localhost:8767/mcp/'` (src/gateway/constants.py); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | read by _governance_url() | src/gateway/constants.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py (+2 more) |
 | `GOVERNANCE_VERIFICATION_FLOOR` | `'false'` | — | config/governance_config.py |
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW` | `'true'` | — | config/governance_config.py |

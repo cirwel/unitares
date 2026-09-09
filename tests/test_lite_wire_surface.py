@@ -219,13 +219,9 @@ def test_minimal_wire_surface_is_the_five_tool_loop():
         if info is not None:
             surface.add(alias)
 
-    assert surface == MINIMAL_MODE_TOOLS == {
-        "start_session",
-        "identity",
-        "sync_state",
-        "record_result",
-        "check_working_state",
-    }
+    assert surface == MINIMAL_MODE_TOOLS
+    assert {"agent", "observe", "config", "admin", "list_tools", "dialectic"} <= surface
+
 
 
 def test_every_lite_tool_is_backed_by_handler_or_alias():

@@ -24,6 +24,9 @@ from src.mcp_compat import get_tool_input_schema
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
 
 
+pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
+
+
 def _schema_digest(schema: dict) -> str:
     encoded = json.dumps(
         schema,
@@ -146,8 +149,9 @@ def test_federation_lifecycle_aliases_emit_required_success_envelope(
 
 
 @pytest.mark.asyncio
-async def test_rest_and_stdio_discovery_share_lite_names_and_schemas(
-    monkeypatch,
+@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full", "operator_readonly", "unknown"])
+async def test_rest_and_stdio_discovery_share_complete_names_and_schemas(
+    monkeypatch, mode,
 ):
     from src.http_routes.tools import http_list_tools
     import src.mcp_server_std as stdio
@@ -155,12 +159,10 @@ async def test_rest_and_stdio_discovery_share_lite_names_and_schemas(
     monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
     monkeypatch.setattr(stdio, "STDIO_PROXY_HTTP_URL", None)
     monkeypatch.setattr(stdio, "STDIO_PROXY_URL", None)
-    # The checked-in artifact is the lite profile; the process default is
-    # minimal, so pin the mode the stdio listing reads rather than the default.
-    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", mode)
 
     request = SimpleNamespace(
-        query_params={"mode": "lite"},
+        query_params={"mode": mode},
         headers={},
         client=SimpleNamespace(host="127.0.0.1"),
     )
@@ -179,6 +181,8 @@ async def test_rest_and_stdio_discovery_share_lite_names_and_schemas(
     expected = _expected_lite()
     assert response.status_code == 200
     assert rest == expected
+    assert rest_payload["mode"] == "full"
+    assert "ignored" in rest_payload["note"]
     assert stdio_surface == expected
     assert rest_payload["interface_contract"] == get_interface_contract_summary(
         "lite"
@@ -220,3 +224,16 @@ def test_streamable_mcp_registers_the_lite_contract_in_every_mode():
 
     registered = set(mcp_server.mcp._tool_manager._tools)
     assert set(_expected_lite()) <= registered
+
+
+@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full", "operator_readonly", "core", "unknown"])
+def test_legacy_mode_has_identical_federation_contract(mode):
+    assert build_interface_contract(mode) == build_interface_contract()
+    assert get_public_tool_definitions(mode) == get_public_tool_definitions()
+
+
+def test_complete_catalog_preserves_every_registered_capability(first_party_tool_surface):
+    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
+    names = {tool.name for tool in get_public_tool_definitions()}
+    assert names == set(get_tool_registry()) | set(AGENT_WORKFLOW_ALIASES)
