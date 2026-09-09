@@ -412,6 +412,26 @@ def _run_eval_subprocess() -> Dict[str, Any]:
         return {}
 
 
+def eligible_for_archive(top_stale: list, threshold_days: int) -> list:
+    """The entries auto-archive would actually act on.
+
+    One predicate, used by both the reporter and the actor. They were separate,
+    and the reported number counted the whole ``candidate_for_archive`` bucket
+    while the archiver additionally required age past the threshold and zero
+    activity. Review, 2026-09-08: reporting the bucket size still overstated
+    the queue — live it was 2 candidates, both younger than the 90-day
+    threshold, so 0 were actionable. Renaming a number without fixing what it
+    counts preserves the false implication it was meant to remove.
+    """
+    return [
+        e for e in top_stale
+        if isinstance(e, dict)
+        and e.get("bucket") == "candidate_for_archive"
+        and e.get("last_activity_days", 0) > threshold_days
+        and e.get("activity_score", 0) == 0
+    ]
+
+
 class VigilAgent(GovernanceAgent):
     def __init__(
         self,
@@ -501,6 +521,8 @@ class VigilAgent(GovernanceAgent):
         summary: Dict[str, Any] = {
             "audit_run": False,
             "stale_found": 0,
+            "archive_candidates": 0,
+            "archive_eligible": 0,
             "archived": 0,
             "errors": [],
         }
@@ -516,6 +538,23 @@ class VigilAgent(GovernanceAgent):
                 buckets = audit_data.get("buckets", {}) if isinstance(audit_data, dict) else {}
                 summary["stale_found"] = (
                     buckets.get("stale", 0) + buckets.get("candidate_for_archive", 0)
+                )
+                # Reported separately because the two numbers in the summary
+                # line come from different populations and the pairing invited
+                # the wrong reading. `stale_found` counts `stale` PLUS
+                # `candidate_for_archive`, but auto-archive only ever acts on
+                # the latter, and cleanup_knowledge walks the lifecycle ladder
+                # rather than either bucket. Measured 2026-09-08: 90 stale, 2
+                # candidates. "92 stale, 0 archived" therefore reads as a
+                # backlog of 92 that nothing is draining, when the archiver's
+                # actual queue was 2, both younger than the 90-day threshold —
+                # i.e. working exactly as designed.
+                summary["archive_candidates"] = buckets.get("candidate_for_archive", 0)
+                summary["archive_eligible"] = len(
+                    eligible_for_archive(
+                        audit_data.get("top_stale", []) or [],
+                        int(os.getenv("VIGIL_AUTO_ARCHIVE_AGE_DAYS", "90")),
+                    )
                 )
 
                 if summary["stale_found"] > 0:
@@ -537,14 +576,25 @@ class VigilAgent(GovernanceAgent):
 
         if summary["audit_run"]:
             note_text = (
-                f"Groundskeeper: {summary['stale_found']} stale, "
+                f"Groundskeeper: {summary['stale_found']} stale "
+                f"({summary['archive_eligible']} archivable now, "
+                f"{summary['archive_candidates']} candidates), "
                 f"{summary['archived']} archived"
             )
             prev = prev_state or {}
             # Compare only the persistent backlog count. The archived count
             # is per-cycle progress, not state, and oscillates (see docstring).
+            # Both populations, not just the sum. Review, 2026-09-08: keyed on
+            # stale_found alone, a shift of 90+2 to 89+3 leaves the sum at 92
+            # and suppresses the note — hiding exactly the movement in the
+            # archivable count that this line was changed to surface.
+            # An absent key means the previous cycle predates this field, not
+            # that the count moved — otherwise the first cycle after a deploy
+            # emits a spurious note for every resident.
             unchanged = (
                 prev.get("groundskeeper_stale") == summary["stale_found"]
+                and prev.get("groundskeeper_eligible", summary["archive_eligible"])
+                == summary["archive_eligible"]
             )
             if unchanged and prev:
                 summary["note_suppressed"] = True
@@ -930,7 +980,8 @@ class VigilAgent(GovernanceAgent):
             groundskeeper_summary = await self._run_groundskeeper(client, prev_state)
             if groundskeeper_summary.get("stale_found", 0) > 0:
                 findings.append(
-                    f"KG: {groundskeeper_summary['stale_found']} stale, "
+                    f"KG: {groundskeeper_summary['stale_found']} stale "
+                    f"({groundskeeper_summary.get('archive_eligible', 0)} archivable now), "
                     f"{groundskeeper_summary['archived']} archived"
                 )
             if sentinel_force_audit and not self.with_audit:
@@ -1044,7 +1095,8 @@ class VigilAgent(GovernanceAgent):
         gk_info = ""
         if groundskeeper_summary.get("audit_run"):
             gk_info = (
-                f" Groundskeeper: {groundskeeper_summary['stale_found']} stale, "
+                f" Groundskeeper: {groundskeeper_summary['stale_found']} stale "
+                f"({groundskeeper_summary.get('archive_eligible', 0)} archivable now), "
                 f"{groundskeeper_summary['archived']} archived."
             )
         checkin_text = f"Heartbeat cycle: {summary}.{test_info}{gk_info} Issues: {issues}"
@@ -1059,9 +1111,11 @@ class VigilAgent(GovernanceAgent):
         if groundskeeper_summary.get("audit_run"):
             gk_stale = groundskeeper_summary.get("stale_found", 0)
             gk_archived = groundskeeper_summary.get("archived", 0)
+            gk_eligible = groundskeeper_summary.get("archive_eligible", 0)
         else:
             gk_stale = prev_state.get("groundskeeper_stale", 0)
             gk_archived = prev_state.get("groundskeeper_archived", 0)
+            gk_eligible = prev_state.get("groundskeeper_eligible", 0)
 
         self._cycle_state = {
             **health_state,
@@ -1070,6 +1124,7 @@ class VigilAgent(GovernanceAgent):
             # None-summary fallback path that the if/else block establishes.
             "groundskeeper_stale": gk_stale,
             "groundskeeper_archived": gk_archived,
+            "groundskeeper_eligible": gk_eligible,
             "hygiene_stale_opens": len(stale_opens),
             "eval_ndcg10": eval_result.get("metrics", {}).get("nDCG@10"),
             "eval_baseline": eval_result.get("baseline"),
