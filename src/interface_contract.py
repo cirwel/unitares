@@ -24,6 +24,7 @@ from mcp.types import Tool
 
 from src.alias_schema import build_alias_input_schema
 from src.mcp_compat import get_tool_input_schema
+from src.tool_annotations import tool_annotations
 
 
 INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
@@ -99,10 +100,15 @@ def build_alias_tool_definition(
         inject_action=bool(alias.inject_action),
     )
     description = alias.migration_note or f"Alias for {actual_name}"
+    # An alias is annotated in its own right rather than inheriting the
+    # implementation tool's hints: it narrows the schema, and a router alias
+    # pins one action, so its side effects are a subset of what the router as a
+    # whole can do (search_shared_memory is read-only; knowledge is not).
     return Tool(
         name=alias_name,
         description=description,
         inputSchema=schema,
+        annotations=tool_annotations(alias_name),
     )
 
 

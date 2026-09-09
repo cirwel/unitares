@@ -22,6 +22,7 @@ from src.schema_brief import (
     resolve_field_description_mode,
     resolve_property_title_mode,
 )
+from src.tool_annotations import tool_annotations
 
 
 _EXTRA_SCHEMA_MODULES: list[str] = []
@@ -391,5 +392,11 @@ def get_tool_definitions(
         )
         if verbosity == "short":
             t.description = _first_line(t.description)
+        # The machine-readable half of the same statement the description
+        # makes in prose (src/tool_annotations.py). Both Tool() sites above
+        # funnel through this loop, so stdio, REST and the FastMCP registrar
+        # all read one table. A tool with no record keeps annotations unset,
+        # which the spec treats as "no hints", not as "no side effects".
+        t.annotations = tool_annotations(t.name)
 
     return all_tools
