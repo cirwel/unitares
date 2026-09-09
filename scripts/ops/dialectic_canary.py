@@ -38,7 +38,27 @@ the gate measures, end-to-end, on a schedule:
      is progress, not proof that the review completed.
   5. append one JSONL line per run; exit 0/1 (launchd surfaces the log).
 
-Gate contract (#1387 amendment, 2026-08-01): the kill read is valid only if
+Each line carries ``outcome``, which says what the run established rather than
+only whether it was green: ``green``, ``surface_ok_verdict_pending`` (the
+one-call path worked, the review had not converged inside the poll window),
+``surface_ok_review_unresolved`` (the path worked, the review ended terminal
+and not resolved -- a reviewer declining a synthetic probe lands here), or
+``surface_broken`` (the path itself failed). Only the last is evidence against
+the surface, and only the last exits non-zero.
+
+``ok`` keeps its strict pre-existing meaning -- a terminal resolved verdict was
+read back -- so the JSONL series stays comparable across the whole log. The
+EXIT CODE changed: it now tracks surface health, because a reviewer that has
+not converged, or that correctly declines to resolve a synthetic probe, is not
+a broken surface and should not sit on the operator's attention list. Both
+consumers that once read the strict signal are gone: the #1387 gate was retired
+2026-08-18 (see above) and dialectic-adoption-read-trigger.sh fired once on
+2026-08-16 and removed its own plist, so launchd's last-exit status is the only
+live reader.
+
+Gate contract (#1387 amendment, 2026-08-01), retained as the historical reason
+this probe's checks are shaped as they are; the gate itself was retired
+2026-08-18 and its read was taken on 2026-08-16: the kill read is valid only if
 this canary is green through the measurement window. Organic zero + green
 canary = the one-call lever didn't move the dial → retire the LEVER, iterate
 to the next one (per the adoption lever model). Organic zero + red canary =
@@ -67,7 +87,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -77,6 +97,74 @@ DEFAULT_URL = os.environ.get("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 CANARY_NAME = "canary_dialectic"
 LABEL_PREFIX = "canary_"
 TERMINAL_PHASES = {"resolved", "failed", "escalated", "timeout", "abandoned"}
+
+# The four things a run can actually mean. Until 2026-09-08 every non-green run
+# reported the same way -- ``ok: false`` plus a prose ``detail`` -- so a broken
+# review surface and a working one whose reviewer had simply not converged
+# inside the poll window were indistinguishable to the operator.
+#
+# ⛔The poll itself is PART OF THE SURFACE. Step 4 polls read-only
+# ``dialectic(action='get')``, so a failed read, an error envelope, or a
+# wrong-session response is surface breakage, not a slow reviewer. An earlier
+# draft set ``surface_ok`` before polling and classified those as merely
+# pending, which would have reported #1442 -- a hung one-call path, one of the
+# three defects this canary exists to catch -- as healthy. Both the codex
+# review and the adversarial review caught it; ``surface_ok`` is now set only
+# after at least one VERIFIED persisted read.
+OUTCOME_GREEN = "green"
+OUTCOME_REVIEW_UNRESOLVED = "surface_ok_review_unresolved"
+OUTCOME_VERDICT_PENDING = "surface_ok_verdict_pending"
+OUTCOME_SURFACE_BROKEN = "surface_broken"
+
+# Outcomes that mean the one-call review surface did its job. The exit code is
+# driven by this set, NOT by ``ok``.
+#
+# Why the split. This canary's stated job is the SURFACE: it is the only thing
+# exercising the one-call review path end-to-end on a schedule. Reviewer
+# convergence is a different question, and a reviewer that correctly declines
+# to resolve a synthetic probe is the protocol working. Until now any red run
+# exited 1, so a healthy surface landed on the operator's launchd attention
+# list -- the only live consumer, since the #1387 gate was retired 2026-08-18
+# and dialectic-adoption-read-trigger.sh fired once on 2026-08-16 and removed
+# its own plist. ``ok`` keeps its strict historical meaning (a terminal
+# resolved verdict was read back) so the JSONL series stays comparable across
+# the whole log; the exit code now answers the question the alert is asking.
+SURFACE_HEALTHY_OUTCOMES = frozenset(
+    {OUTCOME_GREEN, OUTCOME_REVIEW_UNRESOLVED, OUTCOME_VERDICT_PENDING}
+)
+
+
+def classify_run(*, ok: bool, surface_ok: bool, terminal_phase: Any) -> str:
+    """Name what a finished run established, not merely whether it was green.
+
+    ``surface_ok`` is the liveness claim this canary exists to make: the
+    one-call ``request_review`` returned a well-formed response, the session,
+    thesis and ``audit.tool_usage`` rows it should have written are readable,
+    AND at least one persisted read-back of the session succeeded. That last
+    clause is what separates "the reviewer has not finished" from "we could not
+    read the session": the sentinel phase ``unverified`` -- which run() assigns
+    on a failed read, an error envelope, or a mismatched session -- can now only
+    occur with ``surface_ok`` false, so a broken read path can never launder
+    itself into a pending verdict.
+    """
+    if ok:
+        return OUTCOME_GREEN
+    if not surface_ok:
+        return OUTCOME_SURFACE_BROKEN
+    phase = str(terminal_phase or "").strip().lower()
+    if phase == "resolved":
+        # Terminal and resolved, yet not green: the row came back without a
+        # usable resolution action. That is a malformed record from the
+        # surface, not a reviewer outcome.
+        return OUTCOME_SURFACE_BROKEN
+    if phase in TERMINAL_PHASES:
+        return OUTCOME_REVIEW_UNRESOLVED
+    return OUTCOME_VERDICT_PENDING
+
+
+def exit_code_for(outcome: str) -> int:
+    """1 only when the review surface itself failed. See SURFACE_HEALTHY_OUTCOMES."""
+    return 0 if outcome in SURFACE_HEALTHY_OUTCOMES else 1
 
 
 def _timeout_s() -> float:
@@ -393,10 +481,22 @@ def append_log(log_path: Path, record: Dict[str, Any]) -> None:
         fh.write(json.dumps(record, default=str) + "\n")
 
 
-async def run(url: str, log_path: Path, skip_db: bool) -> int:
+async def run(
+    url: str,
+    log_path: Path,
+    skip_db: bool,
+    *,
+    record_out: Optional[Dict[str, Any]] = None,
+) -> int:
     record: Dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "ok": False,
+        # Did the one-call review surface demonstrably work, independently of
+        # whether the review then reached a verdict. Stays False until the
+        # response shape, the DB ground truth, AND a persisted read-back have
+        # all passed -- see classify_run.
+        "surface_ok": False,
+        "outcome": OUTCOME_SURFACE_BROKEN,
         "stage": "onboard",
         "url": url,
         # Always present, including early red paths. ``not_started``/None and
@@ -536,6 +636,11 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
             record["terminal_phase"] = "unverified"
             record["review_verdict"] = None
             record["whose_move"] = None
+        # Only now can the surface be called healthy: the one-call response and
+        # the DB ground truth passed AND a persisted read-back verified. Set
+        # from the same flag that gates terminal evidence, so the two can never
+        # disagree.
+        record["surface_ok"] = bool(persisted_terminal_verified)
         record["terminal_poll_attempt_count"] = attempts
         record["terminal_poll_completed_count"] = completed
         # Compatibility for existing log/dashboard readers: this remains the
@@ -555,6 +660,13 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         return 1
     finally:
         record["total_s"] = round(time.monotonic() - started, 2)
+        record["outcome"] = classify_run(
+            ok=bool(record.get("ok")),
+            surface_ok=bool(record.get("surface_ok")),
+            terminal_phase=record.get("terminal_phase"),
+        )
+        if record_out is not None:
+            record_out.update(record)
         append_log(log_path, record)
         print(json.dumps(record, default=str))
 
@@ -572,7 +684,11 @@ def main() -> int:
         help="Skip the Postgres ground-truth check (response-shape only)",
     )
     args = parser.parse_args()
-    return asyncio.run(run(args.url, Path(args.log), args.skip_db))
+    record: Dict[str, Any] = {}
+    asyncio.run(run(args.url, Path(args.log), args.skip_db, record_out=record))
+    # Exit on surface health, not on whether the reviewer converged. run()'s own
+    # int return stays the strict green/red used for ``ok`` in the JSONL.
+    return exit_code_for(record.get("outcome") or OUTCOME_SURFACE_BROKEN)
 
 
 if __name__ == "__main__":

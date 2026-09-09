@@ -950,7 +950,24 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     # Pi connectivity check is skipped entirely when the unitares-pi-plugin
     # isn't installed; a missing plugin is the default in OSS builds and
     # shouldn't surface as a "degraded" signal in the health payload.
+    #
+    # ⛔It is ALSO skipped when plugins are disabled, and the ImportError guard
+    # alone is not enough to do that. Importing the plugin module runs its
+    # ``@mcp_tool`` decorators, which register tools into the same registry the
+    # interface contract is built from — but well after
+    # ``mcp_server_bootstrap`` mounted the surface, so the tool is counted and
+    # never dispatchable. This probe runs on a timer five seconds after start,
+    # so a server launched with UNITARES_DISABLE_PLUGINS reported 50 advertised
+    # tools and a 51-capability federation contract, and calling the 51st
+    # returned "Unknown tool". Measured 2026-09-09.
+    from src.plugin_loader import plugins_disabled
+
     try:
+        if plugins_disabled():
+            # Deliberately the same outcome as "not installed": no Pi check and
+            # no degraded signal, routed through the existing ImportError arm so
+            # the two skip reasons cannot drift apart.
+            raise ImportError("plugin loading disabled by UNITARES_DISABLE_PLUGINS")
         from unitares_pi_plugin.handlers import PI_MCP_URLS, call_pi_tool  # type: ignore
     except ImportError:
         pass
