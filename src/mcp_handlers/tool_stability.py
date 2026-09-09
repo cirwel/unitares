@@ -513,7 +513,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "inferred returns that agent's real state marked "
             "identity_assurance.caller_proven=false, which may be a co-located "
             "sibling's, so pass the client_session_id start_session returned to "
-            "be sure the reading is yours. Use sync_state to also "
+            "be sure the reading is yours. lite=false returns the full "
+            "canonical payload under raw_governance, which is where mode and "
+            "basin live. Use sync_state to also "
             "log work and get a proceed or pause decision. "
             f"{EISV_INLINE_SUMMARY}"
         ),
