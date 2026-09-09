@@ -55,12 +55,28 @@ def get_kg_lifecycle_health() -> Dict[str, Any]:
 
 
 # Lifecycle policy definitions
+#
+# ⛔ Every entry must be a value `DiscoveryType` can actually hold. This set was
+# hand-written and drifted: it read "architecture_decision", which is not a
+# storable type — the real one is "architectural_decision" — so for its whole
+# life the "never auto-archive" protection covered none of them. Measured
+# 2026-09-08 against the live KG: of 1,784 discoveries, `architecture_decision`
+# matched 0, `root_cause_analysis` 0, and `migration` 0; only `learning` (16)
+# and `pattern` (33) matched anything at all. Three of five entries were inert.
+#
+# It was not latent. Six architectural decisions — recorded operator decisions
+# and RFCs among them — were archived in one batch on 2026-06-27 with no
+# closure evidence, which is exactly what this set exists to prevent.
+#
+# The Literal beside it in src/mcp_handlers/schemas/knowledge.py carries the
+# comment "Derived, not hand-listed, so it can't drift from the type"; this set
+# is the counterexample. It stays hand-written because it is a policy choice
+# rather than the full enumeration, so `test_permanent_types_are_storable`
+# pins the membership instead.
 PERMANENT_TYPES: Set[str] = {
-    "architecture_decision",
+    "architectural_decision",
     "learning",
     "pattern",
-    "root_cause_analysis",
-    "migration",
 }
 
 PERMANENT_TAGS: Set[str] = {

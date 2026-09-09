@@ -128,9 +128,19 @@ class TestScoreDiscovery:
         assert result["bucket"] == "candidate_for_archive"
 
     def test_permanent_always_healthy(self):
-        """Permanent-type entries should always be 'healthy' regardless of age."""
+        """Permanent-type entries should always be 'healthy' regardless of age.
+
+        This test used to pass `type="architecture_decision"`, which is not a
+        value DiscoveryType can hold — the storable type is
+        `architectural_decision`. It passed because PERMANENT_TYPES carried the
+        same misspelling, so the test agreed with the bug and protected it: the
+        assertion "permanent types stay healthy" was true of a string no
+        discovery could ever have, while every real architectural decision aged
+        into candidate_for_archive. Six were archived in one batch on
+        2026-06-27 with no closure evidence.
+        """
         from src.knowledge_graph_lifecycle import _score_discovery, KnowledgeGraphLifecycle
-        d = _make_discovery(age_days=90, type="architecture_decision")
+        d = _make_discovery(age_days=90, type="architectural_decision")
         lifecycle = KnowledgeGraphLifecycle()
         result = _score_discovery(d, lifecycle)
         assert result["bucket"] == "healthy"

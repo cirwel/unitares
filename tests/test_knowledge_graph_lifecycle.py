@@ -70,8 +70,8 @@ class TestGetLifecyclePolicy:
     def setup_method(self):
         self.lifecycle = KnowledgeGraphLifecycle()
 
-    def test_permanent_by_type_architecture_decision(self):
-        d = MockDiscovery(id="1", type="architecture_decision")
+    def test_permanent_by_type_architectural_decision(self):
+        d = MockDiscovery(id="1", type="architectural_decision")
         assert self.lifecycle.get_lifecycle_policy(d) == "permanent"
 
     def test_permanent_by_type_learning(self):
@@ -82,13 +82,16 @@ class TestGetLifecyclePolicy:
         d = MockDiscovery(id="3", type="pattern")
         assert self.lifecycle.get_lifecycle_policy(d) == "permanent"
 
-    def test_permanent_by_type_root_cause_analysis(self):
-        d = MockDiscovery(id="4", type="root_cause_analysis")
-        assert self.lifecycle.get_lifecycle_policy(d) == "permanent"
-
-    def test_permanent_by_type_migration(self):
-        d = MockDiscovery(id="5", type="migration")
-        assert self.lifecycle.get_lifecycle_policy(d) == "permanent"
+    def test_unstorable_types_are_not_policy(self):
+        """`root_cause_analysis` and `migration` were in PERMANENT_TYPES and
+        are not values DiscoveryType can hold, so they matched 0 of 1,784 rows
+        and the tests asserting they were "permanent" only ever exercised a
+        string no discovery could carry. Removed rather than kept as
+        aspirational: an entry that can never match is what hid the
+        `architecture_decision` misspelling sitting beside it."""
+        for unstorable in ("root_cause_analysis", "migration"):
+            d = MockDiscovery(id="4", type=unstorable)
+            assert self.lifecycle.get_lifecycle_policy(d) == "standard"
 
     def test_permanent_by_tag(self):
         for tag in PERMANENT_TAGS:
@@ -116,7 +119,7 @@ class TestGetLifecyclePolicy:
 
     def test_permanent_type_overrides_ephemeral_tag(self):
         """Permanent type takes priority over ephemeral tag."""
-        d = MockDiscovery(id="11", type="architecture_decision", tags=["ephemeral"])
+        d = MockDiscovery(id="11", type="architectural_decision", tags=["ephemeral"])
         assert self.lifecycle.get_lifecycle_policy(d) == "permanent"
 
 
@@ -174,7 +177,7 @@ class TestRunCleanup:
     async def test_cleanup_skips_permanent_resolved(self):
         """Permanent discoveries should not be archived even when old and resolved."""
         old_time = (datetime.now() - timedelta(days=45)).isoformat()
-        d = MockDiscovery(id="perm1", type="architecture_decision", tags=[],
+        d = MockDiscovery(id="perm1", type="architectural_decision", tags=[],
                           status="resolved", resolved_at=old_time)
 
         graph = make_mock_graph(resolved_items=[d])
@@ -208,7 +211,7 @@ class TestRunCleanup:
         'archived' stays in default search scope instead of being buried.
         """
         old_time = (datetime.now() - timedelta(days=120)).isoformat()
-        d = MockDiscovery(id="perm_arch1", type="root_cause_analysis", tags=[],
+        d = MockDiscovery(id="perm_arch1", type="architectural_decision", tags=[],
                           status="archived", updated_at=old_time)
 
         graph = make_mock_graph(archived_items=[d])
@@ -268,8 +271,11 @@ class TestRunCleanup:
 def test_permanent_types_are_set():
     """PERMANENT_TYPES should be a non-empty set."""
     assert isinstance(PERMANENT_TYPES, set)
-    assert len(PERMANENT_TYPES) >= 4
-    assert "architecture_decision" in PERMANENT_TYPES
+    assert len(PERMANENT_TYPES) >= 3
+    # Was `>= 4` and `"architecture_decision"`, which is why a set with three
+    # inert entries and one misspelling satisfied it. Membership is now pinned
+    # against the storable types in tests/test_lifecycle_policy_types.py.
+    assert "architectural_decision" in PERMANENT_TYPES
     assert "learning" in PERMANENT_TYPES
 
 
