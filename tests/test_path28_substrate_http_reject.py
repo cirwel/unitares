@@ -266,26 +266,73 @@ async def test_force_new_bypasses_path28_and_gate() -> None:
                 # Don't actually call resolve_session_identity with
                 # force_new — that triggers the full create path which
                 # has many dependencies. The contract we're verifying is
-                # that the gate is INSIDE the `not force_new` block.
-                # That's already statically true from the edit's
-                # location — assert by reading the source.
+                # that BOTH substrate-HTTP gates are INSIDE a
+                # `not force_new` block, and still inline in
+                # resolve_session_identity — assert by reading the source.
                 import inspect
                 module_src = inspect.getsource(resolution_mod)
                 start = module_src.index("async def resolve_session_identity(")
                 src = module_src[start:]
-                # The gate's marker comment should appear inside the
-                # `if token_agent_uuid and not force_new:` block.
+                # TWO independent substrate-HTTP gates live inside
+                # resolve_session_identity, and BOTH must stay there:
+                #   Gate A - the PATH-pre / S19 defense-in-depth check that runs
+                #            before the PATH 1/2 session lookup, so a copied
+                #            resident token whose embedded sid still has a live
+                #            Redis/PG binding cannot bypass S19.
+                #   Gate B - the PATH 2.8 token-resume check.
+                # Anchor the census on the reason literal, which occurs exactly
+                # once per gate. The "[SUBSTRATE_HTTP_REJECT]" marker occurs
+                # TWICE per gate (refusal log + fall-through log), so counting
+                # markers cannot tell a two-gate module from a one-gate one -
+                # which is how this lock previously green-lit the deletion of
+                # either gate.
+                gate_count = src.count("substrate_anchored_uuid_requires_uds")
+                assert gate_count == 2, (
+                    "expected exactly 2 substrate-HTTP gates inside "
+                    "resolve_session_identity (Gate A: PATH-pre/S19, "
+                    "Gate B: PATH 2.8) - deleting or hoisting either one is a "
+                    f"security regression; found {gate_count}"
+                )
                 assert "[SUBSTRATE_HTTP_REJECT]" in src
-                assert "substrate_anchored_uuid_requires_uds" in src
-                # The block that contains the gate must be the
-                # ``if token_agent_uuid and not force_new:`` body —
-                # verified by checking the surrounding context.
-                gate_idx = src.index("[SUBSTRATE_HTTP_REJECT]")
-                preamble = src[:gate_idx]
-                last_if = preamble.rfind("if token_agent_uuid and not force_new")
-                assert last_if != -1, (
-                    "gate must be located inside the "
-                    "`if token_agent_uuid and not force_new:` block"
+
+                gate_positions = []
+                cursor = 0
+                while True:
+                    found = src.find("substrate_anchored_uuid_requires_uds", cursor)
+                    if found == -1:
+                        break
+                    gate_positions.append(found)
+                    cursor = found + 1
+                assert len(gate_positions) == 2
+
+                # For EACH gate: its nearest-preceding
+                # ``if token_agent_uuid and not force_new:`` guard must exist,
+                # and no function boundary may sit between that guard and the
+                # gate body. The second half is what proves the gate is still
+                # INLINE in resolve_session_identity rather than hoisted into a
+                # helper - an extraction would either move the literal out of
+                # this slice or leave a ``def`` between the guard and the gate.
+                guard_positions = []
+                for n, gate_idx in enumerate(gate_positions, start=1):
+                    preamble = src[:gate_idx]
+                    last_if = preamble.rfind("if token_agent_uuid and not force_new")
+                    assert last_if != -1, (
+                        f"gate {n} must be located inside the "
+                        "`if token_agent_uuid and not force_new:` block"
+                    )
+                    guard_positions.append(last_if)
+                    between = src[last_if:gate_idx]
+                    assert "\nasync def " not in between and "\ndef " not in between, (
+                        f"gate {n} was hoisted out of resolve_session_identity: "
+                        "a function boundary appears between its "
+                        "`if token_agent_uuid and not force_new:` guard and the "
+                        "gate body"
+                    )
+                # Each gate must sit under its OWN guard; both resolving to the
+                # same guard would mean one gate lost its enclosing block.
+                assert len(set(guard_positions)) == 2, (
+                    "the two gates must sit under two distinct "
+                    "`if token_agent_uuid and not force_new:` guards"
                 )
     finally:
         reset_session_signals(signals_token)
