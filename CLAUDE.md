@@ -173,7 +173,7 @@ Before touching one, run `gh pr list -R CIRWEL/unitares --search "in:title,body 
 
 Surfaces:
 
-- **Migration slots and migration-drift fixes** — `db/postgres/migrations/`. CI-gated by `scripts/dev/unitares_doctor.py`, which fails on slot/name drift; session-level coordination still avoids wasted parallel work.
+- **Migration slots and migration-drift fixes** — `db/postgres/migrations/`. CI-gated by `tests/test_migration_registry_versions.py`, which fails when a file registers a slot other than its own; session-level coordination still avoids wasted parallel work.
 - **Identity / onboarding — docs AND implementing code are one coupled surface** — docs (`docs/ontology/identity.md`, `commands/governance-start.md`, `skills/governance-lifecycle/SKILL.md`, the `AGENTS.md`/`CLAUDE.md` shared contract including the `Strict Identity, Simple Contract` block below, the `force_new=true` / `parent_agent_id` posture) AND code (`src/mcp_handlers/identity/`, `src/mcp_handlers/middleware/identity_step.py`, `src/mcp_handlers/support/agent_auth.py`, `src/mcp_handlers/schemas/identity.py`). Treat as a single writer-locked region, not as separate doc/code workstreams. These also flow across two repos (unitares + gov-plugin); check both.
 - **`docs/ontology/plan.md`** — chronological state ledger; two sessions appending rows in the same window collide trivially. If a session is already editing it, branch from its head rather than starting parallel.
 - **Active proposal/RFC docs in hot phase** — the Plexus / lease-plane / BEAM thread (`docs/proposals/plexus-scope.md`, `surface-lease-plane-v0.md`, `surface-lease-plane-phase-a-plan.md`, `beam-footprint-roadmap-v0.md`, `beam-coordination-kernel.md`). Restructure-during-flight is normal here; same rule as plan.md.
