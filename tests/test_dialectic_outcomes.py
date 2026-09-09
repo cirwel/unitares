@@ -103,3 +103,47 @@ class TestResolutionRate:
         assert resolution_rate(counts) == pytest.approx(1.0)
         # And the honest caveat: that denominator is below the gate's own floor.
         assert counts[RESOLVED] + counts[FAILED] < 30
+
+
+class TestStandingRejectionIsPreferredOverTheFlag:
+    """The flag decayed; the transcript-derived signal is what to trust.
+
+    Re-measured 2026-09-09 over 30 days: awaiting_facilitation is still
+    perfectly SPECIFIC (no resolved session carries it) but no longer
+    SENSITIVE, missing 13 of 44 failed sessions -- 11 of them reaped by the
+    Python inactivity sweeper, which does not set it.
+    """
+
+    def test_a_standing_rejection_is_unresolved_even_without_the_flag(self):
+        """The 11 sessions the flag misses. This is the whole point."""
+        assert classify_outcome("failed", False, None, standing_rejection=True) == (
+            UNRESOLVED_AWAITING_FACILITATION
+        )
+
+    def test_no_standing_rejection_is_a_plain_failure_even_with_the_flag(self):
+        """An explicit False outranks the flag: the transcript is the authority."""
+        assert classify_outcome("failed", True, None, standing_rejection=False) == FAILED
+
+    def test_the_flag_is_still_honoured_when_no_transcript_answer_is_supplied(self):
+        """Backward compatibility for callers that cannot supply the signal."""
+        assert classify_outcome("failed", True, None) == UNRESOLVED_AWAITING_FACILITATION
+        assert classify_outcome("failed", True, None, standing_rejection=None) == (
+            UNRESOLVED_AWAITING_FACILITATION
+        )
+
+    def test_neither_signal_is_a_plain_failure(self):
+        assert classify_outcome("failed", False, None, standing_rejection=False) == FAILED
+        assert classify_outcome("failed", False, None) == FAILED
+
+    def test_canary_still_outranks_everything(self):
+        """A probe's ending says nothing about dialectic quality either way."""
+        assert classify_outcome(
+            "failed", True, "canary_dialectic_abc", standing_rejection=True
+        ) == CANARY
+
+    def test_resolved_outranks_a_stale_rejection(self):
+        """A later agreeing synthesis resolves the session; the row is the truth."""
+        assert classify_outcome("resolved", False, None, standing_rejection=True) == RESOLVED
+
+    def test_a_nonterminal_status_is_open_regardless(self):
+        assert classify_outcome("active", True, None, standing_rejection=True) == OPEN
