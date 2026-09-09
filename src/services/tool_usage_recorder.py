@@ -74,22 +74,25 @@ _EISV_CAUSED_ERROR_CATEGORIES = frozenset({"state_error"})
 # ``rollout_flag`` is set unconditionally by ``strict_identity_refusal_payload``
 # and by nothing else in the codebase, so it is a precise single-sourced
 # marker: no other success payload can false-positive on it.
-_IDENTITY_REFUSAL_MARKER = "STRICT_IDENTITY_REQUIRED"
+# The predicate moved next to the builder it tests for
+# (``identity_bootstrap.strict_identity_refusal_payload``) when a second
+# consumer appeared: the experience envelope had its own success/error guard
+# and no way to ask this question.
+#
+# Imported function-locally, matching this module's existing convention for
+# every other ``mcp_handlers`` reference. A module-scope import here costs
+# real startup: this module is imported at module scope by the transport entry
+# points (``tool_registration.py``, ``mcp_server_std.py``,
+# ``services/http_tool_service.py``), and importing any ``src.mcp_handlers``
+# submodule executes that package's ``__init__``, which pulled 86 modules and
+# ~0.55s where this file previously loaded none.
 
 
 def _identity_refusal_status(payload: Any) -> Optional[str]:
-    """Return the refusal ``status`` if this payload is a #425 typed refusal.
+    """Thin local alias for the single-sourced predicate; see identity_bootstrap."""
+    from src.mcp_handlers.identity_bootstrap import identity_refusal_status
 
-    ``status`` varies by emission point (``identity_required``,
-    ``lineage_declaration_required``, ...) and is a bounded server-authored
-    literal, so it is safe as an ``error_type``. Returns None for anything else.
-    """
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("rollout_flag") != _IDENTITY_REFUSAL_MARKER:
-        return None
-    status = payload.get("status")
-    return str(status) if status else "identity_required"
+    return identity_refusal_status(payload)
 
 
 def classify_tool_result(result: Any) -> Tuple[bool, Optional[str]]:
