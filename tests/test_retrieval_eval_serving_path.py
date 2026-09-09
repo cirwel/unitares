@@ -158,15 +158,18 @@ def _fake_graph(statuses: dict):
     return _get
 
 
+def _labels(tmp_path, pairs):
+    f = tmp_path / "labels.json"
+    f.write_text(json.dumps({"schema_version": 1, "pairs": pairs}))
+    return f
+
+
 @pytest.mark.asyncio
-async def test_label_scope_report_flags_rows_lifecycle_moved_out_of_scope(monkeypatch):
-    """An archived label is unreachable by definition, not a ranking failure."""
+async def test_label_scope_report_names_rows_lifecycle_moved_out_of_scope(monkeypatch):
     import src.knowledge_graph as kg
 
     monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({
-        "live": "open",
-        "gone": "archived",
-        "frozen": "cold",
+        "live": "open", "gone": "archived", "frozen": "cold",
     }))
 
     report = await retrieval_eval.label_scope_report([
@@ -175,88 +178,92 @@ async def test_label_scope_report_flags_rows_lifecycle_moved_out_of_scope(monkey
     ])
 
     assert report["out_of_scope"] == {"gone": "archived", "frozen": "cold"}
-    assert report["out_of_scope_count"] == 2
     assert report["by_status"] == {"archived": 1, "cold": 1, "open": 1}
 
 
 @pytest.mark.asyncio
-async def test_label_scope_report_widens_when_scope_is_widened(monkeypatch):
-    import src.knowledge_graph as kg
+async def test_an_unrecognised_status_is_never_called_decay(monkeypatch):
+    """The serving predicate excludes only archived and cold.
 
-    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({"gone": "archived"}))
-
-    pairs = [{"query": "q", "relevant_ids": ["gone"]}]
-    narrow = await retrieval_eval.label_scope_report(pairs)
-    wide = await retrieval_eval.label_scope_report(pairs, include_archived=True)
-
-    assert narrow["out_of_scope_count"] == 1
-    assert wide["out_of_scope_count"] == 0
-
-
-@pytest.mark.asyncio
-async def test_a_missing_label_is_not_silently_read_as_reachable(monkeypatch):
-    import src.knowledge_graph as kg
-
-    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({}))
-
-    report = await retrieval_eval.label_scope_report(
-        [{"query": "q", "relevant_ids": ["deleted"]}]
-    )
-
-    assert report["out_of_scope"] == {"deleted": "missing"}
-
-
-@pytest.mark.asyncio
-async def test_evaluate_excludes_a_fully_decayed_query_instead_of_scoring_it_a_miss(
-    monkeypatch, tmp_path
-):
-    """The 2026-09-09 regression: two queries lost their only target to archival.
-
-    Scored as flat misses they dragged recall from 0.567 to 0.167 with no
-    change to the retrieval stack. They must leave the aggregate entirely.
+    The first cut kept a parallel allowlist of reachable statuses, so a status
+    nobody had thought of was reported as decay with no flag to recover it —
+    the same false signal this reporting exists to expose, only quieter.
     """
     import src.knowledge_graph as kg
 
     monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({
-        "reachable": "open",
-        "archived-since-labeling": "archived",
+        "novel": "triaged", "cased": "Archived", "live": "open",
     }))
 
-    async def fake_search(arguments):
-        return _text_payload({"success": True, "discoveries": [{"id": "reachable"}]})
+    report = await retrieval_eval.label_scope_report(
+        [{"query": "q", "relevant_ids": ["novel", "cased", "live"]}]
+    )
 
-    monkeypatch.setattr(retrieval_eval, "handle_search_knowledge_graph", fake_search)
-
-    labels = tmp_path / "labels.json"
-    labels.write_text(json.dumps({
-        "schema_version": 1,
-        "pairs": [
-            {"query": "scorable", "relevant_ids": ["reachable"]},
-            {"query": "decayed", "relevant_ids": ["archived-since-labeling"]},
-        ],
-    }))
-
-    result = await retrieval_eval.evaluate(labels)
-
-    assert result["corpus"]["pair_count"] == 2
-    assert result["corpus"]["scored_pair_count"] == 1
-    assert result["corpus"]["unscorable_pair_count"] == 1
-    assert [q["query"] for q in result["unscorable"]] == ["decayed"]
-    # The decayed query must not appear as a miss in the headline numbers.
-    assert result["aggregate"]["flat_miss_count"] == 0
-    assert result["aggregate"]["flat_miss_rate"] == 0.0
-    assert result["label_health"]["out_of_scope_count"] == 1
+    assert report["out_of_scope"] == {}, "only archived/cold are out of scope"
+    assert report["out_of_scope_count"] == 0
 
 
 @pytest.mark.asyncio
-async def test_partially_decayed_query_scores_against_what_is_reachable(
-    monkeypatch, tmp_path
-):
+async def test_scope_opt_ins_clear_the_matching_status(monkeypatch):
     import src.knowledge_graph as kg
 
     monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({
-        "here": "open",
-        "gone": "archived",
+        "a": "archived", "c": "cold",
+    }))
+    pairs = [{"query": "q", "relevant_ids": ["a", "c"]}]
+
+    narrow = await retrieval_eval.label_scope_report(pairs)
+    half = await retrieval_eval.label_scope_report(pairs, include_archived=True)
+    wide = await retrieval_eval.label_scope_report(
+        pairs, include_archived=True, include_cold=True
+    )
+
+    assert narrow["out_of_scope_count"] == 2
+    assert half["out_of_scope"] == {"c": "cold"}
+    assert wide["out_of_scope_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_missing_and_failed_lookups_are_undetermined_not_decay(monkeypatch):
+    """A vanished row or a broken lookup is not a lifecycle decision.
+
+    Calling them decay let a run against the wrong database read as an orderly
+    corpus that had simply aged.
+    """
+    import src.knowledge_graph as kg
+
+    class _Graph:
+        async def get_discovery(self, discovery_id):
+            if discovery_id == "boom":
+                raise RuntimeError("backend unavailable")
+            return None
+
+    async def _get():
+        return _Graph()
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", _get)
+
+    report = await retrieval_eval.label_scope_report(
+        [{"query": "q", "relevant_ids": ["vanished", "boom"]}]
+    )
+
+    assert report["out_of_scope"] == {}
+    assert report["undetermined"] == {"vanished": "missing", "boom": "lookup_failed"}
+    assert report["undetermined_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_decay_never_changes_the_denominator(monkeypatch, tmp_path):
+    """Narrowing per-query ground truth made the aggregate RISE as labels aged.
+
+    On the weekly gate's 5-query sample that would have cut n to 3 and left
+    every survivor with one target, so recall climbed with no change to the
+    ranker. A false improvement is not a fix for a false regression.
+    """
+    import src.knowledge_graph as kg
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({
+        "here": "open", "gone": "archived",
     }))
 
     async def fake_search(arguments):
@@ -264,27 +271,110 @@ async def test_partially_decayed_query_scores_against_what_is_reachable(
 
     monkeypatch.setattr(retrieval_eval, "handle_search_knowledge_graph", fake_search)
 
-    labels = tmp_path / "labels.json"
-    labels.write_text(json.dumps({
-        "schema_version": 1,
-        "pairs": [{"query": "q", "relevant_ids": ["here", "gone"]}],
-    }))
-
+    labels = _labels(tmp_path, [{"query": "q", "relevant_ids": ["here", "gone"]}])
     result = await retrieval_eval.evaluate(labels)
     q = result["per_query"][0]
 
     assert result["corpus"]["scored_pair_count"] == 1
-    assert q["scored_against_ids"] == ["here"]
+    # Both targets stay in the denominator: 1 of 2 retrieved.
+    assert q["recall@20"] == 0.5
+    # The decay is named so the miss is readable, without moving the score.
     assert q["out_of_scope_ids"] == ["gone"]
-    # Recall is 1.0 over the reachable target, not 0.5 over a target that the
-    # measured scope cannot return.
-    assert q["recall@20"] == 1.0
+    assert result["aggregate"]["labels_out_of_scope"] == 1
 
 
 @pytest.mark.asyncio
-async def test_widened_scope_reaches_the_search_not_only_the_classification(monkeypatch):
-    """A label counted reachable while the search still drops it is worse than
-    the bug it replaces: the query scores a real miss for a bookkeeping reason."""
+async def test_a_fully_decayed_query_is_still_scored_and_still_counted(
+    monkeypatch, tmp_path
+):
+    import src.knowledge_graph as kg
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({"gone": "archived"}))
+
+    async def fake_search(arguments):
+        return _text_payload({"success": True, "discoveries": [{"id": "other"}]})
+
+    monkeypatch.setattr(retrieval_eval, "handle_search_knowledge_graph", fake_search)
+
+    labels = _labels(tmp_path, [{"query": "q", "relevant_ids": ["gone"]}])
+    result = await retrieval_eval.evaluate(labels)
+
+    assert result["corpus"]["scored_pair_count"] == 1
+    assert result["aggregate"]["flat_miss_count"] == 1
+    assert result["aggregate"]["labels_out_of_scope"] == 1
+
+
+@pytest.mark.asyncio
+async def test_decay_counts_ride_inside_aggregate_where_the_gate_can_see_them(
+    monkeypatch, tmp_path
+):
+    """The weekly gate logs `aggregate` and nothing else.
+
+    Decay reported anywhere outside that dict reaches no reader that exists.
+    """
+    import src.knowledge_graph as kg
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({"gone": "archived"}))
+
+    async def fake_search(arguments):
+        return _text_payload({"success": True, "discoveries": []})
+
+    monkeypatch.setattr(retrieval_eval, "handle_search_knowledge_graph", fake_search)
+
+    labels = _labels(tmp_path, [{"query": "q", "relevant_ids": ["gone"]}])
+    agg = (await retrieval_eval.evaluate(labels))["aggregate"]
+
+    assert agg["labels_out_of_scope"] == 1
+    assert agg["labels_undetermined"] == 0
+    assert agg["labels_total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_zero_scored_reports_no_metrics_rather_than_zero_metrics(
+    monkeypatch, tmp_path, capsys
+):
+    """An empty labels file used to raise KeyError in print_human, while the
+    --json path emitted flat_miss_rate 0.0 — a broken run recorded as clean."""
+    import src.knowledge_graph as kg
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({}))
+
+    labels = _labels(tmp_path, [])
+    result = await retrieval_eval.evaluate(labels)
+
+    assert result["corpus"]["scored_pair_count"] == 0
+    assert result["aggregate"]["flat_miss_rate"] is None, "0.0 would read as a clean run"
+
+    retrieval_eval.print_human(result)  # must not raise
+    assert "NO QUERIES SCORED" in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_non_string_label_ids_do_not_abort_the_run(monkeypatch, tmp_path):
+    """sorted() over mixed str/int/None raises TypeError before any query runs."""
+    import src.knowledge_graph as kg
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({}))
+
+    async def fake_search(arguments):
+        return _text_payload({"success": True, "discoveries": []})
+
+    monkeypatch.setattr(retrieval_eval, "handle_search_knowledge_graph", fake_search)
+
+    labels = _labels(tmp_path, [{"query": "q", "relevant_ids": [123, None, "ok"]}])
+    result = await retrieval_eval.evaluate(labels)
+
+    assert result["corpus"]["scored_pair_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scope_flags_are_forwarded_to_the_search_arguments(monkeypatch):
+    """Argument wiring only. This CANNOT prove the handler honours them.
+
+    Named for what it checks: review found a handler branch
+    (_candidate_matches_semantic_fallback) that reads include_archived and
+    never checks cold at all, which a mocked handler can never surface.
+    """
     calls = []
 
     async def fake_search(arguments):
@@ -293,35 +383,7 @@ async def test_widened_scope_reaches_the_search_not_only_the_classification(monk
 
     monkeypatch.setattr(retrieval_eval, "handle_search_knowledge_graph", fake_search)
 
-    await retrieval_eval.run_query(
-        "q", top_k=2, include_archived=True, include_cold=True
-    )
+    await retrieval_eval.run_query("q", top_k=2, include_archived=True, include_cold=True)
 
     assert calls[0]["include_archived"] is True
     assert calls[0]["include_cold"] is True
-
-
-@pytest.mark.asyncio
-async def test_a_broken_status_lookup_fails_open_and_never_drops_a_query(monkeypatch):
-    """Excluding a query is a strong action; a broken lookup is not evidence.
-
-    Fail-closed here would let a transient backend problem quietly shrink the
-    scored set, which reads as a clean run rather than a degraded one.
-    """
-    import src.knowledge_graph as kg
-
-    class _Graph:
-        async def get_discovery(self, discovery_id):
-            raise RuntimeError("backend unavailable")
-
-    async def _get():
-        return _Graph()
-
-    monkeypatch.setattr(kg, "get_knowledge_graph", _get)
-
-    report = await retrieval_eval.label_scope_report(
-        [{"query": "q", "relevant_ids": ["unknowable"]}]
-    )
-
-    assert report["out_of_scope"] == {}
-    assert report["by_status"] == {"lookup_failed": 1}
