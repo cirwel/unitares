@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-08"
+last_verified: "2026-09-09"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -37,7 +37,7 @@ source_digests:
   unitares/src/mcp_handlers/identity/handlers.py: "6a8eb54058609b20"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "a75b77f84ba24129"
+  unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
   unitares/src/mcp_handlers/updates/phases.py: "0c28700d12434e77"
   unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
@@ -148,6 +148,15 @@ present for the action, verdict, and evidence maturity, then `next_action`,
 present. `check_working_state()` and `search_shared_memory()` omit the repeated
 canonical payload by default; use `lite=false` or `response_mode="full"`,
 respectively, when you need it under `raw_governance`.
+
+One response is deliberately **not** that envelope. When a call is refused for
+identity, you get the typed refusal contract instead: `status`
+(`identity_required` or `lineage_declaration_required`), `hint`, `next_step`,
+`safe_options`, `do_not`, and `rollout_flag`. There is no `next_action` —
+read `next_step` and `safe_options`. It carries `success: true`, because it is
+a structured refusal rather than a transport error, so branching on
+`success is False` will miss it; branch on `status` or `rollout_flag`. Nothing
+was written. Follow `next_step` rather than retrying the same call.
 
 Cold-start action summaries carry a provisional headline. A `proceed` action
 before the behavioral baseline forms is permission to continue under the current
