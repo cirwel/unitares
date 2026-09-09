@@ -1876,15 +1876,12 @@ def _build_tool_mode_info(verbose: bool):
                 "current_mode": TOOL_MODE,
                 "visible_tools": len(mode_tools),
                 "total_tools": len(all_tools),
-                "available_modes": ["minimal", "standard", "lite", "full"],
+                "available_modes": ["full"],
                 "tip": (
-                    f"You're seeing {len(mode_tools)}/{len(all_tools)} tools in "
-                    f"'{TOOL_MODE}' mode. The rest stay callable by name; to "
-                    "advertise them, run the server with "
-                    "GOVERNANCE_TOOL_MODE=lite or full (list_tools() and "
-                    "describe_tool() are on those surfaces). The server's MCP "
-                    "instructions string carries this same orientation to "
-                    "every client at connect."
+                    "One complete tool catalog is available. No mode selection "
+                    "is needed; legacy GOVERNANCE_TOOL_MODE settings are ignored. "
+                    "Use list_tools() for categories and describe_tool() for "
+                    "full parameters or an individual router action."
                 ),
             }
         except Exception as e:

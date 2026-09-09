@@ -1,14 +1,14 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
-  "mode": "lite",
+  "mode": "full",
   "transports": [
     "mcp_streamable_http",
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "9258b7eee51471d69d68440025a7d9a1b4505500d6b9f961dc4bbb8af267b206",
+  "surface_sha256": "df2de79be8693cf76fbfab2ced967bb0136667d652065e03dde29d778c78a6a9",
   "capabilities": [
     {
       "name": "start_session",
@@ -110,6 +110,72 @@
       }
     },
     {
+      "name": "get_workspace_health",
+      "implementation": "get_workspace_health",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "2a04f5d445d6a42b1f87e1157a35b12ddf62ae743b4127156abc9cfabbff5942",
+      "transport_names": {
+        "mcp_streamable_http": "get_workspace_health",
+        "rest_v1_tools": "get_workspace_health",
+        "stdio": "get_workspace_health"
+      }
+    },
+    {
+      "name": "process_agent_update",
+      "implementation": "process_agent_update",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "0ec14e81bef0ce0c3391cb3d379f7514a6ec00bf32725ed9295e99a13901dd46",
+      "transport_names": {
+        "mcp_streamable_http": "process_agent_update",
+        "rest_v1_tools": "process_agent_update",
+        "stdio": "process_agent_update"
+      }
+    },
+    {
+      "name": "get_governance_metrics",
+      "implementation": "get_governance_metrics",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "03b41bc388657c854dac2e657fc544a81eec246dcc7b997eab45131bf05ab216",
+      "transport_names": {
+        "mcp_streamable_http": "get_governance_metrics",
+        "rest_v1_tools": "get_governance_metrics",
+        "stdio": "get_governance_metrics"
+      }
+    },
+    {
+      "name": "mark_response_complete",
+      "implementation": "mark_response_complete",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "46305d52ac4a9d29e1d9c134e444d40422678ccb7019fb012e6031cfc0238cf7",
+      "transport_names": {
+        "mcp_streamable_http": "mark_response_complete",
+        "rest_v1_tools": "mark_response_complete",
+        "stdio": "mark_response_complete"
+      }
+    },
+    {
+      "name": "detect_stuck_agents",
+      "implementation": "detect_stuck_agents",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "4d1f02e8addcd99f389931e070e25249d6c726bcddbddcfc6743fd04c0026cbd",
+      "transport_names": {
+        "mcp_streamable_http": "detect_stuck_agents",
+        "rest_v1_tools": "detect_stuck_agents",
+        "stdio": "detect_stuck_agents"
+      }
+    },
+    {
+      "name": "archive_old_test_agents",
+      "implementation": "archive_old_test_agents",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "23ecd119b2bf68ee67d09d2f18d69a7c2487699562cf16ffedb4a9962efe7bea",
+      "transport_names": {
+        "mcp_streamable_http": "archive_old_test_agents",
+        "rest_v1_tools": "archive_old_test_agents",
+        "stdio": "archive_old_test_agents"
+      }
+    },
+    {
       "name": "archive_orphan_agents",
       "implementation": "archive_orphan_agents",
       "kind": "canonical_tool",
@@ -118,6 +184,50 @@
         "mcp_streamable_http": "archive_orphan_agents",
         "rest_v1_tools": "archive_orphan_agents",
         "stdio": "archive_orphan_agents"
+      }
+    },
+    {
+      "name": "simulate_update",
+      "implementation": "simulate_update",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "62d892c808c99f1c69614d51d11c9574615072681e299b9c235cc8e0876e7cf7",
+      "transport_names": {
+        "mcp_streamable_http": "simulate_update",
+        "rest_v1_tools": "simulate_update",
+        "stdio": "simulate_update"
+      }
+    },
+    {
+      "name": "get_thresholds",
+      "implementation": "get_thresholds",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "b6f48a4e2a297c7e0847d1f086978b692e305563d9c146e83d2a5b39fb9dc0c2",
+      "transport_names": {
+        "mcp_streamable_http": "get_thresholds",
+        "rest_v1_tools": "get_thresholds",
+        "stdio": "get_thresholds"
+      }
+    },
+    {
+      "name": "set_thresholds",
+      "implementation": "set_thresholds",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "18d620370ad941c9ee88111a3a10e228b7a29e7a3139c600ba920c81cf7bd7e5",
+      "transport_names": {
+        "mcp_streamable_http": "set_thresholds",
+        "rest_v1_tools": "set_thresholds",
+        "stdio": "set_thresholds"
+      }
+    },
+    {
+      "name": "outcome_event",
+      "implementation": "outcome_event",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "8e8b9e128e8579b5db4dc2b524a090c1c6cad13ba9880d1618659a95f92bcae6",
+      "transport_names": {
+        "mcp_streamable_http": "outcome_event",
+        "rest_v1_tools": "outcome_event",
+        "stdio": "outcome_event"
       }
     },
     {
@@ -140,6 +250,28 @@
         "mcp_streamable_http": "describe_tool",
         "rest_v1_tools": "describe_tool",
         "stdio": "describe_tool"
+      }
+    },
+    {
+      "name": "skills",
+      "implementation": "skills",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "98816b4177354d3ee3c4c378412dcd555ba6e9633753fd5594bd19716a28c981",
+      "transport_names": {
+        "mcp_streamable_http": "skills",
+        "rest_v1_tools": "skills",
+        "stdio": "skills"
+      }
+    },
+    {
+      "name": "search_knowledge_graph",
+      "implementation": "search_knowledge_graph",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "09dd2a0c735871c0641dd79ca7468aac58a83f2d03299eeebd3a555b29a6b361",
+      "transport_names": {
+        "mcp_streamable_http": "search_knowledge_graph",
+        "rest_v1_tools": "search_knowledge_graph",
+        "stdio": "search_knowledge_graph"
       }
     },
     {
@@ -297,6 +429,17 @@
       }
     },
     {
+      "name": "cirs_protocol",
+      "implementation": "cirs_protocol",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "90b7ea26f6103188cbf70175c6ab1870903e83075155a27695101fd79c5e6171",
+      "transport_names": {
+        "mcp_streamable_http": "cirs_protocol",
+        "rest_v1_tools": "cirs_protocol",
+        "stdio": "cirs_protocol"
+      }
+    },
+    {
       "name": "self_recovery",
       "implementation": "self_recovery",
       "kind": "canonical_tool",
@@ -305,6 +448,17 @@
         "mcp_streamable_http": "self_recovery",
         "rest_v1_tools": "self_recovery",
         "stdio": "self_recovery"
+      }
+    },
+    {
+      "name": "operator_resume_agent",
+      "implementation": "operator_resume_agent",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "b5ea67f24260c8086f180deb0f9ae2d98038977d0062ca6b4e22eee279ce98f5",
+      "transport_names": {
+        "mcp_streamable_http": "operator_resume_agent",
+        "rest_v1_tools": "operator_resume_agent",
+        "stdio": "operator_resume_agent"
       }
     },
     {
@@ -327,6 +481,83 @@
         "mcp_streamable_http": "dialectic",
         "rest_v1_tools": "dialectic",
         "stdio": "dialectic"
+      }
+    },
+    {
+      "name": "dashboard",
+      "implementation": "dashboard",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "f068ddfd97e9c768f9fc6418c0db0385d795073138a119f1c776f631be042bb1",
+      "transport_names": {
+        "mcp_streamable_http": "dashboard",
+        "rest_v1_tools": "dashboard",
+        "stdio": "dashboard"
+      }
+    },
+    {
+      "name": "admin",
+      "implementation": "admin",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "c7c186f1ab66d67ca88d4bd852de5d8bdf50d72f97b20d9bc54ac90f0cd9881e",
+      "transport_names": {
+        "mcp_streamable_http": "admin",
+        "rest_v1_tools": "admin",
+        "stdio": "admin"
+      }
+    },
+    {
+      "name": "get_trajectory_status",
+      "implementation": "get_trajectory_status",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "600ffc3efc50d13961abfc14aa89e2976365de1ddb8e977c1ce1f4c111acdfee",
+      "transport_names": {
+        "mcp_streamable_http": "get_trajectory_status",
+        "rest_v1_tools": "get_trajectory_status",
+        "stdio": "get_trajectory_status"
+      }
+    },
+    {
+      "name": "verify_trajectory_identity",
+      "implementation": "verify_trajectory_identity",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "6544dc6100ff25d4732894cdfc8637eec5583ade228acae84ba854915685aa24",
+      "transport_names": {
+        "mcp_streamable_http": "verify_trajectory_identity",
+        "rest_v1_tools": "verify_trajectory_identity",
+        "stdio": "verify_trajectory_identity"
+      }
+    },
+    {
+      "name": "list_process_bindings",
+      "implementation": "list_process_bindings",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "184483c2893f72e07b68b762faac0f26183d5f44a02fe1e40b7d51b9290449ee",
+      "transport_names": {
+        "mcp_streamable_http": "list_process_bindings",
+        "rest_v1_tools": "list_process_bindings",
+        "stdio": "list_process_bindings"
+      }
+    },
+    {
+      "name": "outcome_correlation",
+      "implementation": "outcome_correlation",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "5db9064796b5bdcaa18825ec97644413f768bdbd3deee62bda2c1f01f3e9870b",
+      "transport_names": {
+        "mcp_streamable_http": "outcome_correlation",
+        "rest_v1_tools": "outcome_correlation",
+        "stdio": "outcome_correlation"
+      }
+    },
+    {
+      "name": "record_progress_pulse",
+      "implementation": "record_progress_pulse",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "63f9bd6d5242d02af3307c47d1ac4103aafc2cf0aaf4b711ce30e3434640b19f",
+      "transport_names": {
+        "mcp_streamable_http": "record_progress_pulse",
+        "rest_v1_tools": "record_progress_pulse",
+        "stdio": "record_progress_pulse"
       }
     }
   ],

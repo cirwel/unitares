@@ -101,7 +101,7 @@ async def http_list_tools(request):
     """List all tools in OpenAI-compatible format
 
     Query params:
-        mode: Tool mode filter - "minimal", "lite", "full" (default from GOVERNANCE_TOOL_MODE env)
+        mode: Legacy compatibility parameter; every value returns the complete catalog.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     try:
@@ -109,7 +109,7 @@ async def http_list_tools(request):
             return access._http_unauthorized()
         from src.tool_modes import TOOL_MODE
 
-        # Get mode from query param or env default
+        # Retain old query inputs for independently upgraded clients.
         query_mode = request.query_params.get("mode", TOOL_MODE)
 
         filtered_tools = get_public_tool_definitions(query_mode)
@@ -129,10 +129,10 @@ async def http_list_tools(request):
         return JSONResponse({
             "tools": openai_tools,
             "count": len(openai_tools),
-            "mode": query_mode,
+            "mode": "full",
             "total_available": len(all_tools),
             "interface_contract": get_interface_contract_summary(query_mode),
-            "note": f"Showing {len(filtered_tools)}/{len(all_tools)} tools in '{query_mode}' mode. Use ?mode=full for all."
+            "note": "Complete tool catalog. Legacy mode parameters are ignored."
         })
     except Exception as e:
         logger.error(f"Error listing tools: {e}", exc_info=True)

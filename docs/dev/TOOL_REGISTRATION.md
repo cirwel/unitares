@@ -46,12 +46,11 @@ TOOLS_NEEDING_SESSION_INJECTION = {
 }
 ```
 
-**Step 4: Add the tool to a mode set** if agents should see it without
-`GOVERNANCE_TOOL_MODE=full` (`LITE_MODE_TOOLS` in `src/tool_modes.py`;
-`MINIMAL_MODE_TOOLS` is the five-tool checkpoint loop and does not grow). The
-tier and category come from the `ToolMeta` record of Step 1. A tool outside the active mode set is still registered and
-callable by name on every transport; it is absent from `tools/list` (see Common
-Mistakes #5).
+**Step 4: Verify discovery.** No mode-set edit is needed. Every registered tool
+and primary workflow alias is advertised on all transports. Keep its schema,
+ToolMeta record, and handler consistent; the interface and registry tests catch
+missing definitions. Category and tier are browsing metadata, not visibility
+gates.
 
 ---
 
@@ -64,7 +63,7 @@ Mistakes #5).
 | Pydantic `*Params` model + `src/tool_descriptions.py` + `TOOL_ORDER` | Tool schema, description, listing order | Always - defines the tool |
 | `src/mcp_handlers/<subpackage>/*.py` | Handler implementations with `@mcp_tool` | Always - implements the logic |
 | `src/tool_registration.py` | Auto-registration pass + `TOOLS_NEEDING_SESSION_INJECTION` | Rarely - session injection, registration behavior |
-| `src/tool_modes.py` | `TOOL_TIERS` tier membership | Always - new tools need a tier |
+| `src/tool_meta.py` | Category, tier, operation and stability | Always - one metadata record per tool |
 
 ### Key Modules
 
@@ -81,9 +80,9 @@ Mistakes #5).
 `auto_register_all_tools` in `src/tool_registration.py` (called from `mcp_server.py`):
 1. Reads all tool definitions from `tool_schemas.py`
 2. **Filters to only tools in `_TOOL_DEFINITIONS`** (tools with `register=True`)
-3. **Does not apply the tool mode** — every registered tool is registered with
-   FastMCP whatever `GOVERNANCE_TOOL_MODE` says; the mode filters `tools/list`
-   only, through `src/tool_mode_listing.py::mode_filtered_server_class`
+3. **Exposes the complete catalog** — legacy `GOVERNANCE_TOOL_MODE` settings
+   affect neither registration nor discovery. The listing wrapper compacts
+   schema annotations only.
 4. Creates FastMCP wrappers for each tool
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator
@@ -521,3 +520,14 @@ python3 scripts/diagnostics/hint_target_advertisement.py --mode lite
 ---
 
 **Last Updated:** 2026-08-16 (full re-verification against master: registration moved to `tool_registration.py`, Pydantic-built schemas, three-phase middleware package, tool-mode filter, `pre_onboard_actions`, current action counts; drift list in #1702)
+
+
+### Unified discovery (interface 1.6.0)
+
+The profile measurements above are historical. Current servers expose the same
+complete catalog for every legacy mode input. The cost diagnostic retains old
+profile labels for compatibility comparisons; they now measure equal surfaces.
+Use `--mode full` for one measurement. The first-party final MCP catalog measured
+107,189 bytes of compact UTF-8 JSON during this change (50 names, transport
+framing excluded). Compact descriptions and action-level detail lookup remain
+the way to control schema overhead while keeping capabilities discoverable.

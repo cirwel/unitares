@@ -421,16 +421,13 @@ EXTRA_ARGUMENT_PASSTHROUGH_TOOLS = {
 # its compact experience envelope unless the caller explicitly requests full.
 # FastMCP reconstructs schemas from wrapper signatures, so the override is
 # applied both before wrapper creation and to the registered Tool below.
-def auto_register_all_tools(mcp):
+def auto_register_all_tools(mcp, *, only_missing: bool = False):
     """
     Auto-register tools from tool_schemas.py with typed signatures.
 
     Only registers tools that are in the decorator registry (register=True).
-    Tools with register=False in @mcp_tool decorator are skipped. The active
-    tool mode is deliberately NOT applied here: registration is what makes a
-    name dispatch on the /mcp/ mount, and GOVERNANCE_TOOL_MODE is an
-    advertising choice, enforced by the tools/list filter installed through
-    src/tool_mode_listing.py::mode_filtered_server_class.
+    Tools with register=False in @mcp_tool decorator are skipped. Every
+    registered tool is discoverable; legacy mode settings have no effect.
 
     This generates wrappers with explicit parameter signatures from JSON schemas,
     allowing FastMCP to infer correct schemas without kwargs wrapping.
@@ -439,8 +436,7 @@ def auto_register_all_tools(mcp):
     - Claude.ai sends parameters directly (no kwargs wrapper needed)
     - CLI's kwargs wrapping still works (dispatch_tool unwraps)
     - Proper client autocomplete from typed signatures
-    - The mode-filtered tools/list keeps the advertised count small for
-      schema-driven clients without making the rest uncallable
+    - Compact schema annotations keep discovery descriptions bounded
 
     Just add the tool to:
     1. tool_schemas.py (definition)
@@ -467,7 +463,7 @@ def auto_register_all_tools(mcp):
 
     # The mode is NOT applied here. Every register=True handler is registered
     # so it dispatches by name on /mcp/ exactly as it does on REST and stdio;
-    # GOVERNANCE_TOOL_MODE filters only tools/list (src/tool_mode_listing.py).
+    # Legacy mode settings no longer filter discovery either.
     # The advertised set is computed once, for the log line only.
     try:
         advertised = advertised_tool_names(TOOL_MODE)
@@ -476,6 +472,10 @@ def auto_register_all_tools(mcp):
 
     for tool in tools:
         tool_name = tool.name
+        if only_missing:
+            manager = getattr(mcp, "_tool_manager", None)
+            if manager is not None and manager.get_tool(tool_name) is not None:
+                continue
 
         # Skip tools not in registry (register=False in decorator)
         if tool_name not in registered_tools:

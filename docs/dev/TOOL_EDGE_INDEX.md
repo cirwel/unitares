@@ -47,10 +47,10 @@ removal authority.
 
 | Mode | Declared | Advertised | Declared only | Advertised only |
 |---|---:|---:|---|---|
-| `minimal` | 5 | 5 | — | — |
-| `lite` | 29 | 29 | — | — |
-| `operator_readonly` | 12 | 12 | — | — |
-| `operator_recovery` | 16 | 16 | — | — |
+| `minimal` | 50 | 50 | — | — |
+| `lite` | 50 | 50 | — | — |
+| `operator_readonly` | 50 | 50 | — | — |
+| `operator_recovery` | 50 | 50 | — | — |
 | `full` | 50 | 50 | — | — |
 
 ### Workflow alias views

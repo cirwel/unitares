@@ -20,7 +20,7 @@ aliases; one uncovered action must stay visible. Even complete name/action
 coverage does not justify a blind text replacement: alias schemas can hide
 parameters (check_working_state hides agent_id), and response contracts differ.
 
-The four reviewed candidates inherited from #2119 remain in KNOWN_DEAD_ENDS.
+The four profile-only candidates inherited from #2119 are resolved by the complete catalog.
 The broader scan also reports previously unseen candidates. --fail-on-finding
 therefore currently exits 3 on standard: those sites have not been accepted or
 fixed. Do not broaden the surface or rubber-stamp a baseline to make it green.
@@ -133,28 +133,11 @@ MIDDLEWARE_MARKER = "/middleware/"
 #: Scoped to the DEFAULT profile. `--fail-on-finding --mode <other>` will report
 #: that profile's own unlisted findings, which is intended: a wider profile has
 #: different reachability and its own ledger question, not this one's.
-KNOWN_DEAD_ENDS: Dict[tuple, str] = {
-    ("observe", "src/mcp_handlers/consolidated.py:121", None):
-        "observe's own identity refusal, naming observe. Only a caller who "
-        "already invoked observe can receive it, so it strands nobody. The "
-        "emitter is unresolvable here because consolidated.py builds its "
-        "routers through a factory rather than @mcp_tool, so the call-graph "
-        "hop bottoms out at a closure.",
-    ("observe", "src/mcp_handlers/consolidated.py:126", None):
-        "Same refusal payload as :121 (its next_step half).",
-    ("agent", "src/mcp_handlers/support/agent_auth.py:211", "update"):
-        "The archived-identity refusal offers the agent path first "
-        "(start_session(resume=true), advertised) and names "
-        "agent(action='update') explicitly as 'Operator restore:'. Naming "
-        "another party's remedy is not a dead end for the caller.",
-    ("get_governance_metrics", "src/mcp_handlers/core.py:218", None):
-        "OPEN, needs a decision rather than a rename. The example is "
-        "get_governance_metrics(agent_id='<uuid>'); rewriting it to "
-        "check_working_state(agent_id=...) would name a parameter that alias "
-        "HIDES on the wire (_HIDE_IDENTITY_PARAMS_TOOLS), trading one dead end "
-        "for another. Reading another agent's metrics is an observability "
-        "operation and `standard` advertises no path to it.",
-}
+# The four profile-only dead ends from #2119 are resolved by the complete
+# catalog (interface 1.6.0). Keep scanning legacy alias hints and unmapped
+# actions; a wider catalog is not proof that every emitted hint is usable.
+KNOWN_DEAD_ENDS: Dict[tuple, str] = {}
+
 
 #: Emitter value recorded for a middleware hint. Not a tool name -- deliberately
 #: unusable as one, so it cannot collide with the roster.

@@ -158,7 +158,7 @@ def _cleanup_forced_process_markers() -> None:
         logger.warning("Could not remove PID file: %s", exc)
 
 
-def load_entrypoint_plugins() -> None:
+def load_entrypoint_plugins() -> bool:
     """Load plugins after the handler registry is fully initialized."""
     from src.mcp_handlers import refresh_tool_handlers_from_registry
     from src.plugin_loader import load_plugins
@@ -167,6 +167,7 @@ def load_entrypoint_plugins() -> None:
     added = refresh_tool_handlers_from_registry()
     if loaded:
         logger.info("plugins loaded: %s (+%d tools)", loaded, added)
+    return bool(loaded)
 
 
 def sync_declared_host(mcp: Any, host: str) -> None:
@@ -280,7 +281,11 @@ async def bootstrap_server(
     mcp: Any,
 ) -> ServerBootstrap:
     """Acquire process resources and initialize server dependencies."""
-    load_entrypoint_plugins()
+    if load_entrypoint_plugins():
+        # The initial MCP table is built at import time, before entry-point
+        # plugins load. Mount their new typed tools before accepting clients.
+        from src.tool_registration import auto_register_all_tools
+        auto_register_all_tools(mcp, only_missing=True)
     sync_declared_host(mcp, host)
     process_lease = ServerProcessLease.acquire(force=force)
 

@@ -35,200 +35,37 @@ from src.tool_modes import (
 # --- Mode Sets Tests ---
 
 
-class TestModeSets:
-    """Tests for the mode tool sets."""
+class TestUnifiedCatalog:
+    @pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full", "operator_readonly", "operator_recovery", "core", "unknown"])
+    def test_legacy_modes_cannot_hide_capabilities(self, mode):
+        from src.tool_modes import advertised_tool_names_full
+        assert get_tools_for_mode(mode) == advertised_tool_names_full()
+        for name in ("agent", "observe", "admin", "config", "list_tools", "dialectic", "self_recovery"):
+            assert should_include_tool(name, mode=mode)
 
-    def test_minimal_mode_is_the_five_tool_checkpoint_loop(self):
-        """Minimal is exactly the loop: bind, re-bind, check in, record, read.
-
-        Discovery tools are deliberately absent -- with five tools the MCP
-        client's native tools/list is the discovery surface -- and the raw
-        implementation names stay behind their task-verb aliases.
-        """
-        assert MINIMAL_MODE_TOOLS == {
-            "start_session",
-            "identity",
-            "sync_state",
-            "record_result",
-            "check_working_state",
-        }
-        assert "list_tools" not in MINIMAL_MODE_TOOLS
-        assert "describe_tool" not in MINIMAL_MODE_TOOLS
-        assert "onboard" not in MINIMAL_MODE_TOOLS
-        assert "process_agent_update" not in MINIMAL_MODE_TOOLS
-        assert "get_governance_metrics" not in MINIMAL_MODE_TOOLS
-        assert "outcome_event" not in MINIMAL_MODE_TOOLS
-
-    def test_standard_mode_is_the_loop_plus_the_unreachable_capabilities(self):
-        """Standard adds exactly the names that carry an otherwise-dormant capability.
-
-        A mode filters tools/list, and a schema-driven client offers the model
-        only what tools/list returns -- so a capability that is never
-        advertised cannot be reached by such a client at all. Standard
-        advertises shared memory, structured review, advisory inference and
-        recovery on top of the checkpoint loop, plus the detail inspection and
-        server-health diagnostics that ordinary responses recommend.
-
-        `dialectic` joined on 2026-09-08 for the same reason, one step further
-        on: `request_review` pins action="request", so without the router six
-        of the seven actions that FINISH a review were unreachable and an agent
-        could open one it had no way to read or advance. See
-        tests/test_lite_wire_surface.py::test_standard_can_finish_the_review_it_can_start.
-        """
-        assert STANDARD_MODE_TOOLS == MINIMAL_MODE_TOOLS | {
-            "search_shared_memory",
-            "store_finding",
-            "update_finding",
-            "request_review",
-            "dialectic",
-            "consult",
-            "self_recovery",
-            "knowledge",
-            "describe_tool",
-            "health_check",
-        }
-        assert len(STANDARD_MODE_TOOLS) == 15
-        for router in ("agent", "observe", "config"):
-            assert router not in STANDARD_MODE_TOOLS
-        assert "list_tools" not in STANDARD_MODE_TOOLS
-        assert "describe_tool" in STANDARD_MODE_TOOLS
-        assert "admin" not in STANDARD_MODE_TOOLS
-
-    def test_default_mode_is_standard(self, monkeypatch):
-        """GOVERNANCE_TOOL_MODE unset means the fourteen-tool surface."""
+    @pytest.mark.parametrize("setting", [None, "minimal", "standard", "lite", "operator_readonly", "unknown"])
+    def test_environment_cannot_fragment_the_catalog(self, monkeypatch, setting):
         import importlib
+        import src.tool_modes as module
+        if setting is None:
+            monkeypatch.delenv("GOVERNANCE_TOOL_MODE", raising=False)
+        else:
+            monkeypatch.setenv("GOVERNANCE_TOOL_MODE", setting)
+        importlib.reload(module)
+        assert module.TOOL_MODE == "full"
+        assert module.get_tools_for_mode() == module.advertised_tool_names_full()
 
-        import src.tool_modes as tool_modes
+    def test_returns_independent_sets(self):
+        first = get_tools_for_mode("minimal")
+        first.add("fake_tool")
+        assert "fake_tool" not in get_tools_for_mode("minimal")
+        assert not should_include_tool("fake_tool")
 
-        monkeypatch.delenv("GOVERNANCE_TOOL_MODE", raising=False)
-        reloaded = importlib.reload(tool_modes)
-        try:
-            assert reloaded.TOOL_MODE == "standard"
-            assert reloaded.get_tools_for_mode(reloaded.TOOL_MODE) == (
-                reloaded.STANDARD_MODE_TOOLS
-            )
-        finally:
-            importlib.reload(tool_modes)
-
-    def test_modes_nest_from_minimal_through_lite(self):
-        """Widening never drops a name a narrower profile advertised."""
-        assert MINIMAL_MODE_TOOLS < STANDARD_MODE_TOOLS < LITE_MODE_TOOLS
-
-    def test_lite_mode_superset_of_minimal(self):
-        """Widening the mode never drops a tool from the checkpoint loop."""
-        assert MINIMAL_MODE_TOOLS <= LITE_MODE_TOOLS
-
-    def test_lite_mode_has_consolidated_tools(self):
-        """Lite mode should have Feb 2026 consolidated tools."""
-        consolidated = ["agent", "knowledge", "observe", "config", "export", "calibration"]
-        for tool in consolidated:
-            assert tool in LITE_MODE_TOOLS, f"Consolidated tool '{tool}' should be in lite mode"
-
-    def test_operator_readonly_has_detection(self):
-        assert "detect_stuck_agents" in OPERATOR_READONLY_MODE_TOOLS
-
-    def test_operator_recovery_extends_readonly(self):
-        """Recovery mode should include all readonly tools plus recovery tools."""
-        for tool in OPERATOR_READONLY_MODE_TOOLS:
-            assert tool in OPERATOR_RECOVERY_MODE_TOOLS, \
-                f"Readonly tool '{tool}' should be in recovery mode"
-        assert "operator_resume_agent" in OPERATOR_RECOVERY_MODE_TOOLS
-
-    def test_minimal_is_smallest(self):
-        assert len(MINIMAL_MODE_TOOLS) < len(STANDARD_MODE_TOOLS) < len(LITE_MODE_TOOLS)
-
-
-# --- get_tools_for_mode Tests ---
-
-
-class TestGetToolsForMode:
-    """Tests for get_tools_for_mode()."""
-
-    def test_minimal_mode(self):
-        tools = get_tools_for_mode("minimal")
-        assert tools == MINIMAL_MODE_TOOLS
-
-    def test_standard_mode(self):
-        tools = get_tools_for_mode("standard")
-        assert tools == STANDARD_MODE_TOOLS
-
-    def test_lite_mode(self):
-        tools = get_tools_for_mode("lite")
-        assert tools == LITE_MODE_TOOLS
-
-    def test_operator_readonly(self):
-        tools = get_tools_for_mode("operator_readonly")
-        assert tools == OPERATOR_READONLY_MODE_TOOLS
-
-    def test_operator_recovery(self):
-        tools = get_tools_for_mode("operator_recovery")
-        assert tools == OPERATOR_RECOVERY_MODE_TOOLS
-
-    def test_full_mode_returns_all(self):
-        tools = get_tools_for_mode("full")
-        # Full mode should include everything from lite + more
-        assert len(tools) >= len(LITE_MODE_TOOLS)
-
-    def test_category_mode(self):
-        """Passing a category name should return that category's tools."""
-        tools = get_tools_for_mode("core")
-        assert tools == TOOL_CATEGORIES["core"]
-
-    def test_returns_copy(self):
-        """Should return a copy, not the original set."""
-        tools1 = get_tools_for_mode("minimal")
-        tools1.add("fake_tool")
-        tools2 = get_tools_for_mode("minimal")
-        assert "fake_tool" not in tools2
-
-    def test_unknown_mode_returns_all(self):
-        """Unknown mode should fall through to union of categories."""
-        tools = get_tools_for_mode("nonexistent_mode")
-        assert len(tools) > 0
-
-
-# --- should_include_tool Tests ---
-
-
-class TestShouldIncludeTool:
-    """Tests for should_include_tool()."""
-
-    def test_tool_in_mode(self):
-        assert should_include_tool("start_session", mode="minimal") is True
-
-    def test_tool_not_in_mode(self):
-        assert should_include_tool("call_model", mode="minimal") is False
-
-    def test_discovery_tools_follow_the_mode_set(self):
-        """Nothing is force-included: list_tools/describe_tool are ordinary
-        members of lite and full, and absent from minimal by design."""
-        assert should_include_tool("list_tools", mode="minimal") is False
-        assert should_include_tool("describe_tool", mode="minimal") is False
-        assert should_include_tool("list_tools", mode="lite") is True
-        assert should_include_tool("describe_tool", mode="lite") is True
-        assert should_include_tool("list_tools", mode="full") is True
-
-    def test_minimal_advertises_only_the_five(self):
-        for name in ("start_session", "identity", "sync_state",
-                     "record_result", "check_working_state"):
-            assert should_include_tool(name, mode="minimal") is True
-        for name in ("onboard", "knowledge", "self_recovery", "health_check",
-                     "search_shared_memory", "request_review", "consult"):
-            assert should_include_tool(name, mode="minimal") is False
-
-    def test_full_mode_includes_all(self):
-        assert should_include_tool("process_agent_update", mode="full") is True
-
-    def test_claude_desktop_exclusion(self):
-        """Tools in CLAUDE_DESKTOP_EXCLUDED_TOOLS should be excluded for Claude Desktop."""
-        # Currently empty set, but test the mechanism
-        if CLAUDE_DESKTOP_EXCLUDED_TOOLS:
-            tool = next(iter(CLAUDE_DESKTOP_EXCLUDED_TOOLS))
-            assert should_include_tool(tool, mode="full", client_type="claude_desktop") is False
-
-    def test_non_claude_desktop_no_exclusion(self):
-        """Non-Claude-Desktop clients should not be affected by exclusions."""
-        assert should_include_tool("start_session", mode="lite", client_type=None) is True
+    def test_legacy_constants_share_one_first_party_catalog(self):
+        from src.tool_meta import TOOL_META_BY_NAME
+        for names in (MINIMAL_MODE_TOOLS, STANDARD_MODE_TOOLS, LITE_MODE_TOOLS,
+                      OPERATOR_READONLY_MODE_TOOLS, OPERATOR_RECOVERY_MODE_TOOLS):
+            assert names == set(TOOL_META_BY_NAME)
 
 
 # --- TOOL_TIERS Tests ---
@@ -428,32 +265,14 @@ class TestServerInstructions:
                          "check_working_state"):
                 assert name in text, f"{name} missing from {mode} instructions"
 
-    def test_narrow_profiles_name_what_they_do_not_advertise(self):
-        minimal = build_server_instructions("minimal")
-        # The capabilities minimal hides are named, so an agent can ask for them.
-        for name in ("search_shared_memory", "store_finding", "update_finding",
-                     "request_review", "consult"):
-            assert name in minimal
-        assert "callable by name" in minimal
-        assert "GOVERNANCE_TOOL_MODE=lite or full" in minimal
-
-        standard = build_server_instructions("standard")
-        # Standard advertises those five, so it points at the routers instead.
-        assert "list_tools" in standard
-        assert "(knowledge, agent" not in standard
-
-    def test_reports_the_advertised_count_of_the_profile(self):
-        assert "advertises 5 tools" in build_server_instructions("minimal")
-        assert "advertises 15 tools" in build_server_instructions("standard")
-        assert (
-            f"advertises {len(LITE_MODE_TOOLS)} tools"
-            in build_server_instructions("lite")
-        )
-
-    def test_full_claims_no_hidden_surface(self):
-        text = build_server_instructions("full")
-        assert "every registered tool" in text
-        assert "Not listed here" not in text
+    def test_instructions_explain_one_catalog(self):
+        for mode in ("minimal", "standard", "lite", "full"):
+            text = build_server_instructions(mode)
+            assert text == build_server_instructions()
+            assert "every registered tool" in text
+            assert "settings are ignored" in text
+            assert "authorization" in text
+            assert "Not listed here" not in text
 
     def test_no_empty_clause_on_any_known_mode(self):
         """A profile with nothing to disclose must not emit a dangling list."""
