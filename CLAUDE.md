@@ -305,13 +305,21 @@ Without the tag, snapshots land as ordinary open entries and never close: a
 snapshot has no resolution condition, only a timestamp, so every later sweep
 re-reads it as unfinished work. With it, `KnowledgeGraphLifecycle` archives
 after seven days — archived, still retrievable via `include_archived=true`,
-never deleted (`src/knowledge_graph_lifecycle.py:139`).
+never deleted (`src/knowledge_graph_lifecycle.py`, `_archive_ephemeral`).
 
 Two traps. `EPHEMERAL_TAGS` also contains `test` and `demo`, so a durable
 finding *about* the test suite must not carry the `test` tag. And permanence
-wins on tie: a `learning` / `pattern` / `root_cause_analysis` / `migration`
-type, or a `permanent` / `foundational` / `architecture` / `decision` tag,
-overrides an ephemeral tag rather than losing to it — `get_lifecycle_policy`
-checks permanence first (`src/knowledge_graph_lifecycle.py:107`).
+wins on tie: an `architectural_decision` / `learning` / `pattern` type, or a
+`permanent` / `foundational` / `architecture` / `decision` tag, overrides an
+ephemeral tag rather than losing to it — `get_lifecycle_policy` checks
+permanence first.
+
+This paragraph named `architecture_decision` (no `al`) until 2026-09-08,
+matching a misspelling in `PERMANENT_TYPES` that made type-based permanence
+inert for every architectural decision in the graph. It also carried line
+numbers, which went stale the first time the file moved; symbol names are used
+now. Permanence governs RETENTION only — whether an entry may be deliberately
+superseded is gated on the TAGS alone (`is_permanent_by_tag`), because
+revision is an architectural decision's normal lifecycle.
 
 <!-- END SHARED CONTRACT -->
