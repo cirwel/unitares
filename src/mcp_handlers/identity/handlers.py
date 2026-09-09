@@ -1617,13 +1617,19 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
     # to a stranger's session. The `!=` guard below cannot catch this: a foreign
     # key differs from `client_session_id` by construction, so the guard passes
     # exactly when the destination is most dangerous.
-    if mcp_session_key and mcp_key_source in FOREIGN_DESTINATION_SOURCES:
+    rebind_refused: Optional[str] = None
+    if mcp_session_key and mcp_session_key == client_session_id:
+        # Nothing to rebind — the caller already holds this key. Checked first
+        # so the benign self-pin case is never reported as a refusal.
+        pass
+    elif mcp_session_key and mcp_key_source in FOREIGN_DESTINATION_SOURCES:
+        rebind_refused = mcp_key_source
         logger.warning(
             "[BIND_SESSION] refused rebind: destination key resolved via %s, "
             "which is not this caller's own transport key",
             mcp_key_source,
         )
-    elif mcp_session_key and mcp_session_key != client_session_id:
+    elif mcp_session_key:
         await _perform_session_bind(target_uuid, mcp_session_key, display_agent_id=target_agent_id, source="bind_session")
 
     # Update request context so subsequent calls in this request use the correct agent
@@ -1634,13 +1640,37 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         pass
 
     bind_response: Dict[str, Any] = {
-        "bound": True,
+        # Resolution succeeded; only the transport rebind was refused. This
+        # stays a success_response for that reason — but it must not CLAIM a
+        # bind the server declined, which is what an operator debugging a
+        # User-Agent collision would read in the transcript (#2142).
+        "bound": rebind_refused is None,
         "agent_uuid": target_uuid,
         "agent_id": target_agent_id,
         "display_name": target_label,
-        "mcp_session_key": mcp_session_key[:20] + "..." if mcp_session_key else None,
-        "message": f"MCP session bound to agent '{target_label or target_agent_id}'",
+        # Never echo a key the caller does not own, not even a prefix.
+        "mcp_session_key": (
+            None if rebind_refused
+            else (mcp_session_key[:20] + "..." if mcp_session_key else None)
+        ),
+        "message": (
+            f"Resolved agent '{target_label or target_agent_id}', but declined to "
+            f"bind this transport: the destination key resolved via "
+            f"'{rebind_refused}', which is keyed on the User-Agent alone and can "
+            f"belong to another caller. Your identity is unchanged."
+            if rebind_refused
+            else f"MCP session bound to agent '{target_label or target_agent_id}'"
+        ),
     }
+    if rebind_refused:
+        bind_response["rebind_refused"] = rebind_refused
+        bind_response["recovery"] = {
+            "action": (
+                "Retry from a client that carries its own session identifier "
+                "(Mcp-Session-Id or X-Session-ID), or rebind out of band."
+            ),
+            "related_tools": ["identity", "start_session"],
+        }
 
     return success_response(bind_response)
 

@@ -53,7 +53,7 @@ class _Signals:
 
 @pytest.fixture
 def foreign_pin():
-    async def _pin(candidate):
+    async def _pin(candidate, *, refresh_ttl=True):
         return FOREIGN_KEY
 
     with patch.object(S, "lookup_onboard_pin", _pin):
@@ -175,3 +175,86 @@ class TestTheUnsafeAutoBindIsGone:
         assert "FOREIGN_DESTINATION_SOURCES" in src
         # The derive that picks the destination must not stamp.
         assert "stamp=False" in src and "derive_session_key_with_source" in src
+
+
+class TestAnAuxiliaryDeriveObservesRatherThanMutates:
+    """Review finding: `stamp=False` suppressed the provenance stamp but left
+    the derivation's *mutating* side effect in place — `lookup_onboard_pin`
+    defaults to `refresh_ttl=True`, so merely LOOKING at a foreign pin extended
+    its sliding TTL. Reading to decide something must not keep a slot alive.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_auxiliary_derive_does_not_refresh_the_pin_ttl(self):
+        seen = {}
+
+        async def _pin(candidate, *, refresh_ttl=True):
+            seen["refresh_ttl"] = refresh_ttl
+            return FOREIGN_KEY
+
+        with patch.object(S, "lookup_onboard_pin", _pin):
+            await derive_session_key_with_source(_Signals(), stamp=False)
+        assert seen["refresh_ttl"] is False
+
+    @pytest.mark.asyncio
+    async def test_the_load_bearing_derive_still_refreshes(self):
+        seen = {}
+
+        async def _pin(candidate, *, refresh_ttl=True):
+            seen["refresh_ttl"] = refresh_ttl
+            return FOREIGN_KEY
+
+        with patch.object(S, "lookup_onboard_pin", _pin):
+            await derive_session_key(_Signals())
+        assert seen["refresh_ttl"] is True
+
+    @pytest.mark.asyncio
+    async def test_an_auxiliary_derive_skips_the_shadow_observation(self, foreign_pin):
+        """The shadow lookup is another request-scoped write. It is skipped
+        entirely under stamp=False, not merely gated on the source."""
+        called = []
+
+        async def _shadow(signals, arguments, resolved_key):
+            called.append(resolved_key)
+
+        with patch.object(S, "_shadow_pin_observe", _shadow):
+            await derive_session_key_with_source(_Signals(), stamp=False)
+        assert called == []
+
+
+class TestTheRefusalIsVisible:
+    """Four review lenses independently flagged this: the guard logged a
+    warning and fell through to a payload asserting `bound: True` while echoing
+    a prefix of the stranger's key. An operator debugging the exact User-Agent
+    collision #2142 is about would read "bound" in the transcript.
+    """
+
+    def _response(self, **kw):
+        import inspect
+
+        from src.mcp_handlers.identity import handlers
+
+        src = inspect.getsource(handlers.handle_bind_session)
+        return src
+
+    def test_a_refused_rebind_does_not_claim_it_bound(self):
+        src = self._response()
+        assert '"bound": rebind_refused is None' in src
+
+    def test_a_refused_rebind_does_not_echo_the_foreign_key(self):
+        src = self._response()
+        assert "None if rebind_refused" in src
+
+    def test_a_refused_rebind_names_the_source_and_offers_recovery(self):
+        src = self._response()
+        assert '"rebind_refused"' in src
+        assert '"recovery"' in src
+
+    def test_the_self_pin_case_is_not_reported_as_a_refusal(self):
+        """A caller who owns the pin passes the same value as
+        client_session_id, so equality is checked FIRST and that benign case
+        never sets rebind_refused."""
+        src = self._response()
+        eq = src.index("mcp_session_key == client_session_id")
+        foreign = src.index("FOREIGN_DESTINATION_SOURCES")
+        assert eq < foreign, "equality must be checked before the foreign-source guard"

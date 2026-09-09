@@ -536,7 +536,11 @@ async def derive_session_key_with_source(
     and would mis-gate any decision made on it. Callers deciding whether a key
     is a safe bind DESTINATION need this (see ``FOREIGN_DESTINATION_SOURCES``).
 
-    Also fires — after the winning path is decided — an observation-only shadow
+    Under ``stamp=False`` every request-scoped side effect is suppressed, not
+    just the provenance stamp: the shadow observation below is skipped and the
+    pin lookup does not refresh its TTL. An auxiliary derivation observes.
+
+    Also fires — when stamping, after the winning path is decided — a shadow
     pin lookup when the IP/UA pin path *didn't* win but the request carried an
     IP/UA fingerprint signal. The shadow lookup answers "would the pin have hit
     if we'd checked it?" without altering resolution order, and exists so later
@@ -555,7 +559,7 @@ async def derive_session_key_with_source(
         # ("ip_ua_fingerprint" — fingerprint signal present but no pin
         # candidate matched). In both cases re-running it tells us nothing
         # new and just spends a Redis call.
-        if source not in ("pinned_onboard_session", "ip_ua_fingerprint"):
+        if stamp and source not in ("pinned_onboard_session", "ip_ua_fingerprint"):
             await _shadow_pin_observe(signals, arguments, resolved)
     except Exception:
         # Shadow lookup is best-effort and never fatal — its job is
@@ -827,7 +831,11 @@ async def _derive_session_key_impl(
                 include_unscoped_fallback=not bool(hint or model),
             )
             for candidate in scoped_candidates:
-                pinned = await lookup_onboard_pin(candidate)
+                # refresh_ttl=stamp: an auxiliary derive (stamp=False) reads
+                # the pin to decide something about itself; it must not keep a
+                # slot alive. Refreshing here would let a caller that merely
+                # LOOKED at a foreign pin extend its 30-minute sliding window.
+                pinned = await lookup_onboard_pin(candidate, refresh_ttl=stamp)
                 if pinned:
                     _mark("pinned_onboard_session")
                     if stamp:
