@@ -285,3 +285,57 @@ class TestAttachAttestation:
             assert "attach_attestation(result)" in lines[i + 1], (
                 f"handlers.py:{i + 1} serves a resolution without the descriptor"
             )
+
+
+class TestNoForgeableFallbackKey:
+    """A signature derived from public data is worse than no signature.
+
+    Until 2026-09-09 the LLM-assisted finalize path, when no api_key was on
+    file, signed with a key derived as f"llm-{agent_uuid[:8]}". The uuid is
+    served publicly in session reads, so anyone able to see the session could
+    recompute that "signature" — it attested nothing while reading as attested.
+    It produced every signature_a written in 2026 (4 rows).
+
+    With no key, compute_signature returns "" and describe_attestation reports
+    the record as `unsigned`, which is the truth.
+    """
+
+    def test_an_empty_key_yields_no_signature_and_an_unsigned_verdict(self):
+        proto = _resolution()
+        payload = proto.canonical_payload()
+        assert Resolution.compute_signature(payload, "") == ""
+        unsigned = _resolution(
+            signature_a=Resolution.compute_signature(payload, ""),
+            signature_b="",
+        )
+        assert describe_attestation(unsigned)["state"] == ATTESTATION_UNSIGNED
+
+    def test_a_uuid_derived_key_would_have_read_as_attested(self):
+        """Shows what the old fallback bought: single_signer, not unsigned.
+
+        This is the whole harm — the record claimed a party attested when the
+        'secret' was recomputable from a public identifier.
+        """
+        proto = _resolution()
+        payload = proto.canonical_payload()
+        forged = _resolution(
+            signature_a=Resolution.compute_signature(payload, "llm-d81d5ab6"),
+            signature_b="",
+        )
+        assert describe_attestation(forged)["state"] == ATTESTATION_SINGLE_SIGNER
+
+    def test_no_finalize_site_derives_a_key_from_an_agent_uuid(self):
+        """Pins the removal so it cannot creep back in."""
+        import pathlib
+        import re
+
+        handlers = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "src" / "mcp_handlers" / "dialectic" / "handlers.py"
+        )
+        for i, line in enumerate(handlers.read_text().splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            assert not re.search(r'f"llm-\{agent_uuid', line), (
+                f"handlers.py:{i} re-derives a signing key from a public uuid"
+            )

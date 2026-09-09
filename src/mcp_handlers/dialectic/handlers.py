@@ -2301,10 +2301,17 @@ async def _run_synthetic_review(
     resolved = False
     if session.phase == DialecticPhase.RESOLVED:
         paused_meta = mcp_server.agent_metadata.get(agent_uuid)
+        # ⛔No fallback key. This used to derive one as f"llm-{agent_uuid[:8]}"
+        # when no key was on file, which is FORGEABLE BY CONSTRUCTION: the uuid
+        # is served publicly in session reads, so anyone who can see the session
+        # can recompute the "signature". It produced every signature_a written
+        # in 2026 (4 rows), each of which reads as attested and is not.
+        # An empty key makes compute_signature return "", and describe_attestation
+        # then reports the record as `unsigned` -- which is the truth.
         api_key_a = (
             paused_meta.api_key
             if paused_meta and getattr(paused_meta, "api_key", None)
-            else f"llm-{agent_uuid[:8]}"
+            else ""
         )
         try:
             resolution_obj = session.finalize_resolution(api_key_a, "")
@@ -3823,17 +3830,22 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         # LLM-assisted dialectic has no real second party — pass an empty
         # api_key_b so the v2 attestation correctly reports as
         # not-verifiable-bilaterally (verify_signatures() will return False).
-        # The agent's own api_key (or a fallback derived from agent_uuid)
-        # produces a real signature_a; signature_b is empty by design.
+        # The agent's own api_key produces a real signature_a when one is on
+        # file; signature_b is empty by design. With no key on file BOTH are
+        # empty and the record reports as `unsigned`, which is the truth --
+        # see the note below on why the uuid-derived fallback was removed.
         # Only finalize when the reviewer actually agreed (phase reaches RESOLVED).
         # On COOLDOWN/ESCALATE the synthesis registered agrees=False, so the session
         # stays unresolved and is left for facilitation rather than force-resumed.
         if synth_agrees and session.phase == DialecticPhase.RESOLVED:
             paused_meta = mcp_server.agent_metadata.get(agent_uuid)
+            # ⛔No fallback key -- see the note at the other finalize site.
+            # A uuid-derived key is forgeable from public data and mints a
+            # signature that looks like attestation and is not.
             api_key_a = (
                 paused_meta.api_key
                 if paused_meta and getattr(paused_meta, "api_key", None)
-                else f"llm-{agent_uuid[:8]}"
+                else ""
             )
             resolution_obj = session.finalize_resolution(api_key_a, "")
             session.resolution = resolution_obj
