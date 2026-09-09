@@ -1,8 +1,10 @@
 <div align="center">
 
-<img alt="UNITARES: self-state telemetry for long-lived AI-agent fleets" src="docs/assets/hero-v3.png" width="100%">
+<img alt="UNITARES: infrastructure for long-lived AI-agent fleets" src="docs/assets/hero-v3.png" width="100%">
 
-### Runtime infrastructure for long-lived AI agents.
+### Infrastructure for long-lived AI agents.
+
+Identity, memory, and evidence that outlive the process.
 
 </div>
 
