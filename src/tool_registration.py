@@ -34,7 +34,11 @@ import json
 import time
 from typing import Dict
 
-from src.mcp_compat import Context, get_tool_input_schema
+from src.mcp_compat import (
+    Context,
+    get_tool_input_schema,
+    tool_decorator_supports_kwarg,
+)
 from src.alias_schema import (
     ALIAS_SCHEMA_DROP,
     ALIAS_SCHEMA_KEEP,
@@ -43,6 +47,7 @@ from src.alias_schema import (
     apply_alias_schema_property_overrides as _apply_alias_schema_property_overrides,
     build_alias_input_schema,
 )
+from src.tool_annotations import tool_annotations
 
 from src.logging_utils import get_logger
 from src.metrics_registry import TOOL_CALLS_TOTAL, TOOL_CALL_DURATION
@@ -76,6 +81,25 @@ __all__ = [
 ]
 
 logger = get_logger(__name__)
+
+# FastMCP does not carry a tools/list Tool through from get_tool_definitions();
+# it rebuilds its own from the registered function, so the annotations applied
+# in src/tool_schemas.py never reach /mcp/. They have to ride the registration
+# call itself, which is why both registrars below pass this.
+_TOOL_ACCEPTS_ANNOTATIONS = tool_decorator_supports_kwarg("annotations")
+
+
+def _annotation_kwargs(tool_name: str) -> dict:
+    """``annotations=`` for ``mcp.tool()``, or nothing to pass.
+
+    Empty when the tool has no record and when the installed SDK's ``tool()``
+    would not accept the kwarg — an unannotated tool is the spec's default, so
+    dropping the hints degrades discovery rather than breaking registration.
+    """
+    if not _TOOL_ACCEPTS_ANNOTATIONS:
+        return {}
+    annotations = tool_annotations(tool_name)
+    return {"annotations": annotations} if annotations is not None else {}
 
 
 def _session_id_from_ctx(ctx: Context | None) -> str | None:
@@ -500,7 +524,11 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
             )
 
             # Register with FastMCP - it will infer schema from signature
-            mcp.tool(description=description, structured_output=False)(wrapper)
+            mcp.tool(
+                description=description,
+                structured_output=False,
+                **_annotation_kwargs(tool_name),
+            )(wrapper)
             if tool_name in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
                 tool_manager = getattr(mcp, "_tool_manager", None)
                 registered_tool = (
@@ -590,7 +618,11 @@ def _register_common_aliases(mcp):
                 session_extractor=_session_id_from_ctx,
             )
             desc = alias_tool.description or f"Alias for {actual}"
-            mcp.tool(description=desc, structured_output=False)(wrapper)
+            mcp.tool(
+                description=desc,
+                structured_output=False,
+                **_annotation_kwargs(alias_name),
+            )(wrapper)
             tool_manager = getattr(mcp, "_tool_manager", None)
             registered_tool = (
                 tool_manager.get_tool(alias_name)

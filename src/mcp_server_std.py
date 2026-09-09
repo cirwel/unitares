@@ -153,6 +153,33 @@ def _mcp_proxy_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
+def _proxied_tool_annotations(entry: dict[str, Any]) -> Any:
+    """``ToolAnnotations`` from one /v1/tools entry, or None when it has none.
+
+    The deployed Glama container runs this proxy — docker/glama/supervise.py
+    sets ``UNITARES_STDIO_PROXY_HTTP_URL``, so ``list_tools`` below takes the
+    HTTP branch and everything a scoring client learns about a tool arrives
+    through this rebuild. An annotation the REST payload omits, or that this
+    function drops, is invisible on that surface no matter how carefully
+    src/tool_annotations.py records it.
+
+    The member sits beside ``function`` rather than inside it, because the
+    OpenAI function shape has no room for it. Read defensively: an older
+    server, or any non-UNITARES one, simply does not send it, and a malformed
+    one must cost that tool its hints rather than cost the client its listing.
+    """
+    raw = entry.get("annotations")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    try:
+        from mcp.types import ToolAnnotations
+
+        return ToolAnnotations(**raw)
+    except Exception as e:
+        logger.warning(f"Ignoring unusable tool annotations from proxy payload: {e}")
+        return None
+
+
 async def _proxy_http_list_tools() -> list[Tool]:
     """Proxy list_tools to HTTP (/v1/tools) and convert to MCP Tool objects."""
     import urllib.request
@@ -185,6 +212,7 @@ async def _proxy_http_list_tools() -> list[Tool]:
             name=name,
             description=fn.get("description") or "",
             inputSchema=fn.get("parameters") or {"type": "object", "properties": {}},
+            annotations=_proxied_tool_annotations(entry),
         ))
     try:
         from src.tool_modes import TOOL_MODE, should_include_tool
