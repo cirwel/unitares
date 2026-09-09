@@ -19,7 +19,7 @@ source_files:
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
 source_digests:
-  unitares/src/mcp_handlers/knowledge/handlers.py: "9ddb3b9a52bfd79b"
+  unitares/src/mcp_handlers/knowledge/handlers.py: "824d8fdc9903fe7a"
   unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
   unitares/src/mcp_handlers/schemas/knowledge.py: "d3a3a6b031026ba7"
   unitares/src/alias_schema.py: "6cf38a6e81f09728"
@@ -27,7 +27,7 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"
   unitares/src/knowledge_graph.py: "0f53dddc433c13aa"
-  unitares/src/knowledge_graph_lifecycle.py: "b2988b7694718525"
+  unitares/src/knowledge_graph_lifecycle.py: "3d943c8664beedd6"
   unitares/src/storage/knowledge_graph_age.py: "0541b46146c6084c"
   unitares/src/storage/knowledge_graph_postgres.py: "212a048e391c53b3"
   unitares/src/db/mixins/knowledge_graph.py: "f3f00b0381c5fa10"
