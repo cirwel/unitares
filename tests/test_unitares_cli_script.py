@@ -1104,3 +1104,14 @@ def test_agent_argument_errors(stub_env):
         result = _run(stub_env, "agent", *args, check=False)
         assert result.returncode != 0
         assert expect in result.stderr
+
+
+@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full"])
+def test_ci_probe_sees_complete_live_mcp_catalog(mcp_test_server, mode):
+    probe = (REPO_ROOT / "scripts/ci/check_mcp_tool_surface.py").read_text()
+    result = subprocess.run(
+        [sys.executable, "-", "--mode", mode, "--url", mcp_test_server + "/mcp/"],
+        input=probe, text=True, capture_output=True, cwd=REPO_ROOT, timeout=40,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS:" in result.stdout

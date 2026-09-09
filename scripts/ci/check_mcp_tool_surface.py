@@ -2,14 +2,12 @@
 """Check the running Compose server's discovery and named-call contract.
 
 Run inside the governance-mcp container, using its installed MCP dependency:
-    docker compose exec -T governance-mcp python - --mode standard < scripts/ci/check_mcp_tool_surface.py
+    docker compose exec -T governance-mcp python - --mode full < scripts/ci/check_mcp_tool_surface.py
 
 This checks the real HTTP mount, not only the in-process registration table.
-The only tool call is the read-only list_tools introspection handler, which
-must dispatch even when the profile does not advertise it. The initialize
-result is checked too: a profile narrower than `full` withholds names from
-discovery, and the `instructions` string is the one in-band place a client
-learns what it was not told about.
+The only tool call is the read-only list_tools introspection handler. Its
+contract and the MCP listing must expose the complete catalog under every
+legacy mode input. Initialize must still provide workflow orientation.
 """
 
 import argparse
@@ -21,9 +19,14 @@ from mcp.client.streamable_http import streamable_http_client
 
 from src.mcp_compat import mcp_httpx
 from src.tool_modes import get_tools_for_mode
+from src.interface_contract import get_interface_contract_summary
 
 
 async def check(mode: str, url: str) -> None:
+    # Match the installed server's entry-point catalog before comparing it.
+    # Registration is local; the probe invokes no plugin operations.
+    from src.services.mcp_server_bootstrap import load_entrypoint_plugins
+    load_entrypoint_plugins()
     expected = get_tools_for_mode(mode)
     with anyio.fail_after(30):
         # The Compose-local probe must not inherit a host's outbound proxy.
@@ -35,11 +38,6 @@ async def check(mode: str, url: str) -> None:
                     if not instructions:
                         raise RuntimeError(
                             f"{mode}: initialize returned no instructions string"
-                        )
-                    if mode != "full" and "callable by name" not in instructions:
-                        raise RuntimeError(
-                            f"{mode}: instructions do not disclose the "
-                            "unadvertised surface"
                         )
                     listed = await session.list_tools()
                     names = {tool.name for tool in listed.tools}
@@ -58,6 +56,15 @@ async def check(mode: str, url: str) -> None:
                     ))
                     if payload.get("success") is False:
                         raise RuntimeError(f"{mode}: list_tools returned an application error")
+                    expected_contract = get_interface_contract_summary()
+                    actual_contract = payload.get("interface_contract", {})
+                    if actual_contract != expected_contract:
+                        differences = {
+                            key: {"expected": value, "actual": actual_contract.get(key)}
+                            for key, value in expected_contract.items()
+                            if actual_contract.get(key) != value
+                        }
+                        raise RuntimeError(f"{mode}: federation contract mismatch: {differences}")
                     shown = {tool["name"] for tool in payload["tools"]}
                     if shown != expected:
                         raise RuntimeError(f"{mode}: introspection disagrees with discovery")
@@ -71,7 +78,7 @@ async def check(mode: str, url: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode", choices=("minimal", "standard", "lite", "full"), required=True
+        "--mode", choices=("minimal", "standard", "lite", "full"), default="full"
     )
     parser.add_argument("--url", default="http://127.0.0.1:8767/mcp/")
     args = parser.parse_args()

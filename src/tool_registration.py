@@ -421,7 +421,7 @@ EXTRA_ARGUMENT_PASSTHROUGH_TOOLS = {
 # its compact experience envelope unless the caller explicitly requests full.
 # FastMCP reconstructs schemas from wrapper signatures, so the override is
 # applied both before wrapper creation and to the registered Tool below.
-def auto_register_all_tools(mcp):
+def auto_register_all_tools(mcp, *, only_missing: bool = False):
     """
     Auto-register tools from tool_schemas.py with typed signatures.
 
@@ -472,6 +472,10 @@ def auto_register_all_tools(mcp):
 
     for tool in tools:
         tool_name = tool.name
+        if only_missing:
+            manager = getattr(mcp, "_tool_manager", None)
+            if manager is not None and manager.get_tool(tool_name) is not None:
+                continue
 
         # Skip tools not in registry (register=False in decorator)
         if tool_name not in registered_tools:
