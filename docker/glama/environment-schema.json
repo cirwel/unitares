@@ -2,7 +2,8 @@
   "type": "object",
   "properties": {
     "GOVERNANCE_TOOL_MODE": {
-      "type": "string", "enum": ["standard", "minimal", "lite", "full"], "default": "standard"
+      "type": "string", "enum": ["standard", "minimal", "lite", "full"], "default": "full",
+      "description": "Accepted for compatibility and ignored. Since interface release 1.6.0 the server advertises one complete tool catalog on every transport, so no value here narrows or widens what tools/list returns; the contract's mode field always reports full. The key stays settable so an existing deployment's value remains valid."
     },
     "UNITARES_KNOWLEDGE_BACKEND": {
       "type": "string", "enum": ["postgres", "age"], "default": "postgres",

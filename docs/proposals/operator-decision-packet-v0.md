@@ -60,11 +60,11 @@ whichever produced it, and the two are not interchangeable.
    the only path that runs today, and it is operator-orchestrated, not code.
 
 2. **The dialectic's `ESCALATE` action is a latent scaffold, not a working seam.**
-   `ESCALATE` is defined in the `ResolutionAction` enum (`src/dialectic_protocol.py:195`)
+   `ESCALATE` is defined in the `ResolutionAction` enum (`src/dialectic_protocol.py`)
    but **no resolution path ever emits it** — only `RESUME` is instantiated
-   (`dialectic_protocol.py:881`). The operator-facing `awaiting_facilitation` state
+   (`ResolutionAction.RESUME.value` in `src/dialectic_protocol.py`). The operator-facing `awaiting_facilitation` state
    is reached *only* via the stuck-reviewer auto-timeout
-   (`src/mcp_handlers/dialectic/auto_resolve.py:159-176`), never via `ESCALATE`.
+   (`_auto_resolve_stuck_sessions` in `src/mcp_handlers/dialectic/auto_resolve.py`), never via `ESCALATE`.
    So the seam is **aspirational**: wiring it would be net-new code, not a re-route
    of something already flowing. v0 claimed ESCALATE "routes to awaiting_facilitation
    today" — that was false, and the gap is exactly the point: the typed-escalation

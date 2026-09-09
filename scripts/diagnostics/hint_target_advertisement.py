@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static candidates for hints naming tools absent from a profile.
+"""Static candidates for hints naming tools the advertised catalog omits.
 
 HINT_KEYS is a heuristic seed list, not proof that a value reaches a caller.
 The scan follows literals, nested containers, local value bindings and local
@@ -22,12 +22,13 @@ parameters (check_working_state hides agent_id), and response contracts differ.
 
 The four profile-only candidates inherited from #2119 are resolved by the complete catalog.
 The broader scan also reports previously unseen candidates. --fail-on-finding
-therefore currently exits 3 on standard: those sites have not been accepted or
-fixed. Do not broaden the surface or rubber-stamp a baseline to make it green.
+therefore currently exits 3: those sites have not been accepted or fixed. Do
+not broaden the surface or rubber-stamp a baseline to make it green.
 
 Usage:
     python3 scripts/diagnostics/hint_target_advertisement.py --classify
-    python3 scripts/diagnostics/hint_target_advertisement.py --mode lite --json
+    python3 scripts/diagnostics/hint_target_advertisement.py --json
+    python3 scripts/diagnostics/hint_target_advertisement.py --mode lite  # legacy label, same catalog
     python3 scripts/diagnostics/hint_target_advertisement.py --fail-on-finding
 """
 
@@ -130,9 +131,10 @@ MIDDLEWARE_MARKER = "/middleware/"
 #: An entry that stops matching is also reported, so a fixed site cannot sit
 #: here forever pretending to be outstanding.
 #:
-#: Scoped to the DEFAULT profile. `--fail-on-finding --mode <other>` will report
-#: that profile's own unlisted findings, which is intended: a wider profile has
-#: different reachability and its own ledger question, not this one's.
+#: Scoped to the one advertised catalog. `--mode` no longer selects a narrower
+#: surface, so every value reports the same findings against the same ledger;
+#: there is no second profile with its own reachability and its own ledger
+#: question any more.
 # The four profile-only dead ends from #2119 are resolved by the complete
 # catalog (interface 1.6.0). Keep scanning legacy alias hints and unmapped
 # actions; a wider catalog is not proof that every emitted hint is usable.
@@ -146,7 +148,7 @@ MIDDLEWARE_SENTINEL = "*middleware*"
 
 @dataclass(frozen=True)
 class DeadEndHint:
-    """A static hint candidate naming a tool absent from the profile."""
+    """A static hint candidate naming a tool the advertised catalog omits."""
 
     tool: str
     sites: List[str] = field(default_factory=list)
@@ -628,14 +630,20 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Find tools named in caller-facing hints that a profile does not "
-            "advertise"
+            "Find tools named in caller-facing hints that the advertised "
+            "catalog does not contain"
         )
     )
     parser.add_argument(
         "--mode",
-        default="standard",
-        help="GOVERNANCE_TOOL_MODE profile to check (default: standard)",
+        default="full",
+        help=(
+            "Legacy GOVERNANCE_TOOL_MODE / category label to scan under "
+            "(default: full). Kept so existing invocations keep working, but "
+            "since interface 1.6.0 every accepted value resolves to the one "
+            "complete catalog: this labels the output, it does not narrow "
+            "what is scanned"
+        ),
     )
     parser.add_argument(
         "--classify",
@@ -693,7 +701,7 @@ def main() -> int:
 
     if args.fail_on_finding:
         seen = finding_keys(findings)
-        ledger = KNOWN_DEAD_ENDS if args.mode == "standard" else {}
+        ledger = KNOWN_DEAD_ENDS
         order = lambda key: (key[0], key[1], key[2] or "")
         unlisted = sorted(seen - set(ledger), key=order)
         stale = sorted(set(ledger) - seen, key=order)

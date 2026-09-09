@@ -55,7 +55,7 @@ class TrajectoryContinuityScore:
 
 For each dimension `d ∈ {E, I, S, V}`:
 1. Reconstruct parent's `d`-series and successor's `d`-series from `agent_states` rows over `window`.
-2. `sim_d = _dtw_similarity(parent_series_d, successor_series_d)` — existing primitive at `src/trajectory_identity.py:198`.
+2. `sim_d = _dtw_similarity(parent_series_d, successor_series_d)` — existing primitive in `src/trajectory_identity.py`.
 3. If either side has < `min_observations` rows for dimension `d`, record `None` and carry the dimension in `reasons`.
 
 `plausibility = mean(sim_d for d in dimensions if sim_d is not None)`.
@@ -442,7 +442,7 @@ These are mechanical fixes to v3.1/v3.2 prose — no spec impact. Future readers
 | `record_agent_state` at line 33 | def at line 17; epoch arg at line 39 | `src/db/mixins/state.py:17,39` |
 | `_write_entry` at lines 431-439 | def at line 515; fire-and-forget docstring at line 541 | `src/audit_log.py:515,541` |
 
-**KG upsert primitive — flag refuted, not folded as forcing.** v3.2-D's dedupe-by-pair claim was challenged by the code-reviewer review pass as requiring a MERGE primitive that "doesn't exist." Live-verifier ground-truthed this: `src/storage/knowledge_graph_postgres.py:82` already has `ON CONFLICT (id) DO UPDATE SET`. The dedupe-by-pair pattern is feasible against the existing write path; v3.2-D stands as specified.
+**KG upsert primitive — flag refuted, not folded as forcing.** v3.2-D's dedupe-by-pair claim was challenged by the code-reviewer review pass as requiring a MERGE primitive that "doesn't exist." Live-verifier ground-truthed this: `kg_add_discovery` (`src/db/mixins/knowledge_graph.py`), the write the `knowledge_graph_postgres` store delegates to, already has `ON CONFLICT (id) DO UPDATE SET`. The dedupe-by-pair pattern is feasible against the existing write path; v3.2-D stands as specified.
 
 ### v3.3 summary
 
