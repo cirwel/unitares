@@ -1361,7 +1361,12 @@ async def _prepare_store_supersession(state: _KnowledgeStoreState) -> None:
     from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle
 
     lifecycle = KnowledgeGraphLifecycle()
-    if lifecycle.get_lifecycle_policy(state.supersedes_target) == "permanent":
+    # Tag, not policy. `get_lifecycle_policy` also returns "permanent" for
+    # permanent TYPES, and gating supersession on that would refuse the normal
+    # way an architectural decision is retired — replacing it with its next
+    # revision. Retention and replaceability are different questions; see
+    # KnowledgeGraphLifecycle.is_permanent_by_tag.
+    if lifecycle.is_permanent_by_tag(state.supersedes_target):
         target = state.supersedes_target
         raise _StoreResponseError(
             error_response(

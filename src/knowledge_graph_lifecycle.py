@@ -6,8 +6,11 @@ Never delete memories. Archive forever. Forced amnesia is not governance.
 
 LIFECYCLE TIERS:
 - Tier 1: Permanent (never auto-archive)
-    - type: architecture_decision, learning, pattern, root_cause_analysis
-    - tags: ["permanent", "foundational"]
+    - type: architectural_decision, learning, pattern (plus the backend-only
+      root_cause_analysis, migration — see PERMANENT_TYPES)
+    - tags: ["permanent", "foundational", "architecture", "decision"]
+    - permanence governs RETENTION; deliberate supersession is gated on the
+      TAGS only (KnowledgeGraphLifecycle.is_permanent_by_tag)
 
 - Tier 2: Resolved → Archived (30 days after resolved)
     - Default for resolved items
@@ -55,10 +58,39 @@ def get_kg_lifecycle_health() -> Dict[str, Any]:
 
 
 # Lifecycle policy definitions
+#
+# ⛔ Every entry must be a value `DiscoveryType` can actually hold. This set was
+# hand-written and drifted: it read "architecture_decision", which is not a
+# storable type — the real one is "architectural_decision" — so for its whole
+# life the "never auto-archive" protection covered none of them. Measured
+# 2026-09-08 against the live KG: of 1,784 discoveries, `architecture_decision`
+# matched 0, `root_cause_analysis` 0, and `migration` 0; only `learning` (16)
+# and `pattern` (33) matched anything at all. Three of five entries were inert.
+#
+# Whether it has already cost anything is NOT established. 14 architectural
+# decisions were archived in a single minute on 2026-06-27, none carrying a
+# protective tag — but that batch is 100% one type, which looks more like a
+# deliberate type-targeted sweep than an age-based archiver, and an age-based
+# one would have hit mixed types. The archival path is not shown to have run
+# that day. So: the protection was inert, which is the defect; the June batch
+# is not offered as its consequence.
+#
+# The Literal beside it in src/mcp_handlers/schemas/knowledge.py carries the
+# comment "Derived, not hand-listed, so it can't drift from the type"; this set
+# is the counterexample. It stays hand-written because it is a policy choice
+# rather than the full enumeration, so `test_permanent_types_are_storable`
+# pins the membership instead.
 PERMANENT_TYPES: Set[str] = {
-    "architecture_decision",
+    "architectural_decision",
     "learning",
     "pattern",
+    # No MCP caller can write these two — both vocabularies reject them — but
+    # `DiscoveryNode.type` is unconstrained and the column is plain TEXT, so a
+    # direct backend caller still can. Review, 2026-09-08: a first draft
+    # removed them as dead weight, and a dry run showed an old resolved
+    # `root_cause_analysis` becoming an archive candidate as a result. Zero
+    # rows here proves no current exposure, not impossibility. Keeping two
+    # inert strings costs nothing; dropping a protection costs a category.
     "root_cause_analysis",
     "migration",
 }
@@ -104,6 +136,23 @@ class KnowledgeGraphLifecycle:
             self._graph = await get_knowledge_graph()
         return self._graph
 
+    def is_permanent_by_tag(self, discovery) -> bool:
+        """Whether a human explicitly marked this entry permanent.
+
+        Separated from `get_lifecycle_policy` because "permanent" was carrying
+        two different powers: never auto-archive, AND refuse an explicit
+        supersede (`_check_supersedes` in the knowledge handlers). Those are
+        not the same claim. A TAG is a deliberate human marking, so vetoing a
+        replacement on it is defensible. A TYPE is automatic classification,
+        and vetoing on it is wrong for exactly the category this fix restores:
+        an architectural decision's normal lifecycle IS revision — the graph
+        holds RFCs at v0.2.1, v0.3 and v0.4, each superseding the last. Adding
+        the type to PERMANENT_TYPES without this split would have made the
+        canonical way to retire an ADR fail with "Cannot supersede permanent
+        discovery".
+        """
+        return bool(set(discovery.tags or []) & PERMANENT_TAGS)
+
     def get_lifecycle_policy(self, discovery) -> str:
         """
         Determine lifecycle policy for a discovery.
@@ -112,6 +161,9 @@ class KnowledgeGraphLifecycle:
             "permanent" - Never auto-archive
             "standard" - Resolved → Archived after 30 days
             "ephemeral" - Archive after 7 days
+
+        Governs RETENTION only. For whether an entry may be deliberately
+        replaced, see `is_permanent_by_tag`.
         """
         # Check for permanent types
         if discovery.type in PERMANENT_TYPES:
