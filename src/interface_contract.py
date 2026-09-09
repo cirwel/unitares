@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from typing import Any, Iterable
 
 from mcp.types import Tool
@@ -105,12 +106,52 @@ def build_alias_tool_definition(
     )
 
 
+def mounted_tool_names() -> set[str] | None:
+    """Names the running server will actually dispatch, or None if nothing is mounted.
+
+    ``tools/list`` serves FastMCP's mounted table; this module builds the
+    federation contract from the decorator registry. The two are reconciled
+    exactly once, by ``auto_register_all_tools`` in
+    ``services/mcp_server_bootstrap``. Anything that registers AFTER that is
+    counted and never dispatchable — an advertised capability the server
+    refuses to serve.
+
+    Measured 2026-09-09: a deep-health probe imported a plugin package five
+    seconds after startup, taking a server from 50 advertised / 50 counted to
+    50 advertised / 51 counted, and calling the 51st returned "Unknown tool".
+    ⛔The plugin flag is only ONE route in. The same state is reachable with
+    plugins enabled whenever the entry point is not discovered but the package
+    is importable (no metadata, a stale egg-info, a ``register()`` that raised
+    and was swallowed) — because ``mcp_server_bootstrap`` remounts only when a
+    plugin actually loaded. Fixing callers one at a time cannot close that;
+    refusing to advertise what is not mounted can.
+
+    Returns None rather than an empty set when no server module has been
+    imported, so a bare import — the flag/index generators, a unit test,
+    ``python -m src.interface_contract`` — keeps describing the registry
+    exactly as it did before. Reads ``sys.modules`` instead of importing the
+    server, so this never creates an import cycle and never starts anything.
+    """
+    server_module = sys.modules.get("src.mcp_server")
+    mcp = getattr(server_module, "mcp", None) if server_module else None
+    manager = getattr(mcp, "_tool_manager", None)
+    tools = getattr(manager, "_tools", None)
+    if not tools:
+        return None
+    return set(tools)
+
+
 def get_public_tool_definitions(
     mode: str = "full",
     *,
     client_type: str | None = None,
 ) -> list[Tool]:
-    """Return the exact advertised tool surface for a transport and mode."""
+    """Return the exact advertised tool surface for a transport and mode.
+
+    Narrowed to the mounted table when a server has mounted one, so the
+    contract cannot promise a capability that dispatch would refuse. See
+    ``mounted_tool_names``.
+    """
 
     # Importing the package settles every @mcp_tool decorator before the
     # registry is read.  This is idempotent in long-running servers.
@@ -153,6 +194,15 @@ def get_public_tool_definitions(
         for tool in definitions
         if tool.name in public and tool.name not in alias_names
     )
+
+    # Never advertise what dispatch would refuse. Narrowing happens last so it
+    # cannot reorder the surface, and only when a server has actually mounted a
+    # table — see mounted_tool_names() for why this is not the same as the
+    # registry, and for the measurement that motivated it.
+    mounted = mounted_tool_names()
+    if mounted is not None:
+        ordered_names = [name for name in ordered_names if name in mounted]
+
     return [public[name] for name in ordered_names]
 
 
