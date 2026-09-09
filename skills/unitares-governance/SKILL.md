@@ -33,7 +33,7 @@ source_digests:
   unitares/src/mcp_handlers/core.py: "d7d09d260fedd7ec"
   unitares/src/mcp_handlers/identity/handlers.py: "f554fa8d18a0434d"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "a75b77f84ba24129"
+  unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
   unitares/src/tool_modes.py: "9c911b713b2296a4"
   unitares/src/mcp_handlers/identity/session.py: "e24a8588ad4b8f47"
@@ -42,7 +42,7 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
-  unitares/skills/governance-lifecycle/SKILL.md: "86208e6b59e69abf"
+  unitares/skills/governance-lifecycle/SKILL.md: "b8999185eb4b9e03"
   unitares/skills/governance-fundamentals/SKILL.md: "20b81e7a89af1eb0"
   unitares/skills/knowledge-graph/SKILL.md: "8e521b485806415c"
   unitares/skills/dialectic-reasoning/SKILL.md: "379b42161aedd37e"
@@ -123,6 +123,11 @@ read `action_summary` for the decision and its evidence maturity, `next_action`,
 `prediction_id`, thread that exact ID into `record_result(...)` when the outcome
 lands. Use raw `process_agent_update()` when you need the unwrapped handler
 response.
+
+If the call is refused for identity, the response is the typed refusal rather
+than the envelope: no `next_action`, but `status`, `hint`, `next_step`,
+`safe_options` and `do_not`. It carries `success: true`, so detect it by
+`status` or `rollout_flag`, not by `success is False`. Nothing was written.
 
 ## Knowledge Layer
 
