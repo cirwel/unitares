@@ -38,14 +38,42 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Load environment variables from ~/.env.mcp
-try:
-    from dotenv import load_dotenv
+def load_server_env() -> bool:
+    """Load ~/.env.mcp into os.environ. Called from the entrypoint, NEVER at import.
+
+    ⛔This used to run at module scope, and that made merely importing this
+    module a side effect on the whole process. Measured 2026-09-09 in a clean
+    interpreter: GITHUB_TOKEN absent before `import src.mcp_server`, present
+    after, along with DB_POSTGRES_URL pointing at the PRODUCTION `governance`
+    database. Three consequences, none of them intended:
+
+      * os.environ is inherited by every subprocess spawned afterwards, so a
+        live GitHub token and the production DSN reached child processes that
+        have no business holding either -- including test fixtures that do
+        `env = os.environ.copy()` and spawn a server.
+      * It fired for any importer, including tests whose body touches no
+        environment variable at all and merely imports this module for a symbol.
+      * It silently pointed the local suite at the production database instead
+        of governance_test.
+
+    Safe to defer because nothing reads these at import time: the DSN is read
+    in PostgresBackend.__init__ (db/postgres_backend.py) and DB_BACKEND inside
+    functions in knowledge_graph.py, all of which run long after main() starts.
+    ⛔If you add a module-level `os.getenv` for one of these, this deferral
+    breaks silently -- read it inside a function instead.
+
+    Returns True if a file was loaded, for callers that want to log it.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return False
     env_path = Path.home() / ".env.mcp"
-    if env_path.exists():
-        load_dotenv(env_path)
-except ImportError:
-    pass
+    if not env_path.exists():
+        return False
+    load_dotenv(env_path)
+    return True
+
 
 # Prometheus metrics (REGISTRY, generate_latest, CONTENT_TYPE_LATEST used in http_api.py)
 
@@ -325,6 +353,10 @@ if __name__ == "__main__":
             _frames = 5
         tracemalloc.start(_frames)
         print(f"[tracemalloc] enabled with {_frames} frames")
+
+    # Load operator env here, at the entrypoint, so importing this module for a
+    # symbol does not inject secrets into the process. See load_server_env().
+    load_server_env()
 
     try:
         asyncio.run(main())

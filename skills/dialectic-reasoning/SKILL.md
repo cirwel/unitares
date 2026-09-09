@@ -20,7 +20,7 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "9d8b8ae1d271de80"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "15b30d47a10463f5"
   unitares/src/mcp_handlers/dialectic/session.py: "8065938fced23b6f"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
