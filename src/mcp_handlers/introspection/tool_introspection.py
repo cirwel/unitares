@@ -140,31 +140,14 @@ def _format_lite_parameter(
     return f"{field_name}: {field_type}"
 
 def _not_advertised_summary(tools_list, mode: str) -> dict:
-    """Registered tools this deployment's mode keeps off the MCP wire.
-
-    Reported, never silently dropped. A name here is dispatchable by name on
-    every transport (TOOL_HANDLERS is not mode-filtered, and since the 2026-09
-    surface cut the FastMCP /mcp/ mount registers the whole surface and filters
-    only its tools/list) but absent from tools/list, so a schema-driven MCP
-    client cannot discover it and will not call it unprompted. That is a
-    property of the deployment's tool mode -- "never surfaced" -- and must not
-    be read as evidence that a capability is unused.
-    """
+    """Explain registration/catalog discrepancies without suggesting a mode."""
     names = sorted(t["name"] for t in tools_list if not t.get("advertised", True))
     return {
-        "count": len(names),
-        "tools": names,
-        "mode": mode,
-        "reason": (
-            f"registered and dispatchable by name on every transport, but "
-            f"GOVERNANCE_TOOL_MODE={mode} does not advertise them in tools/list"
-        ),
-        "note": (
-            "Absence from the wire is a mode setting, not a signal about the "
-            "tool. Widen GOVERNANCE_TOOL_MODE or add the name to that mode's "
-            "set to expose it."
-        ),
+        "count": len(names), "tools": names, "mode": "full",
+        "reason": "Registered names without a public schema in this catalog snapshot",
+        "note": "Discovery is complete by default. Use health_check and describe_tool to inspect a catalog discrepancy; mode settings do not hide capabilities.",
     }
+
 
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
@@ -208,39 +191,14 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     from src.tool_modes import TOOL_MODE, TOOL_TIERS
     interface_contract = get_interface_contract_summary(TOOL_MODE)
 
-    # The names THIS deployment actually advertises on the MCP wire.
-    #
-    # Orientation used to ignore the deployment mode entirely: the default
-    # (lite=true) view filtered against the hardcoded LITE_MODE_TOOLS constant
-    # and the lite=false view filtered against nothing, while the wire is
-    # filtered by TOOL_MODE. Both directions were wrong. Measured 2026-08-29:
-    #   GOVERNANCE_TOOL_MODE=lite, lite=false ......... 21 names shown that the
-    #                                                   wire will not dispatch
-    #   GOVERNANCE_TOOL_MODE=operator_readonly, default  19 of 28 shown names
-    #                                                   not dispatchable, and 3
-    #                                                   advertised tools hidden
-    # A client that can only call advertised names reads a name here and gets
-    # "Unknown tool"; the reverse case hides tools the deployment does offer.
-    #
-    # Nothing is dropped on the strength of this: every entry carries an
-    # `advertised` flag, and lite=false still lists the unadvertised names with
-    # a reason. A tool absent from the wire is not thereby unwanted -- it is a
-    # tool this deployment's mode did not register, which is exactly the
-    # "never surfaced / not reachable" distinction the measurement-authority
-    # rules require us to keep visible rather than silently collapse to zero.
+    # Orientation and all transports share the same complete catalog.
     try:
         advertised_names = {
             tool.name for tool in get_public_tool_definitions(TOOL_MODE)
         } or None
     except Exception:
         advertised_names = None
-    # `or None` above is deliberate: an EMPTY advertised set means the surface
-    # could not be determined, not that this deployment offers nothing. Every
-    # deployable mode set is non-empty (minimal is the five-tool checkpoint
-    # loop), so a real server always advertises something. Treating empty as
-    # authoritative would return `shown: 0` and blank out orientation entirely,
-    # which is a far worse failure than over-listing. Both this and the except
-    # branch fall through to the pre-2026-08-29 behavior below.
+    # An unavailable/empty schema catalog fails open to registration.
 
     # Deprecated tools - hidden from list_tools by default.
     # Two independent sources, and both are needed:
@@ -426,7 +384,6 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # LITE MODE: Return only ESSENTIAL tools (~1KB vs ~20KB)
     if lite_mode:
         # Import from single source of truth
-        from src.tool_modes import LITE_MODE_TOOLS
         lite_tools = [
             {
                 "name": t["name"],
@@ -440,15 +397,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "advertised": t.get("advertised", True),
             }
             for t in tools_list
-            # The compact view shows what this deployment can actually
-            # dispatch. It filtered on the hardcoded LITE_MODE_TOOLS constant
-            # until 2026-08-29, which was only ever right when the deployment
-            # happened to run GOVERNANCE_TOOL_MODE=lite -- under
-            # operator_readonly it hid 3 advertised tools and listed 19 that
-            # were not on the wire. LITE_MODE_TOOLS remains the fallback for
-            # the degraded case where the advertised surface cannot be built.
+            # Compact controls detail, never capability availability.
             if (
-                t["name"] in LITE_MODE_TOOLS
+                True
                 if advertised_names is None
                 else t.get("advertised", True)
             )

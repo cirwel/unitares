@@ -54,37 +54,19 @@ UNITARES_DEMO_PORT=18767 make demo
 UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 ```
 
-### Choosing the advertised tool surface (v2.23.0 and later)
+### Tool discovery (interface 1.6.0 and later)
 
-The default is the fifteen-tool `standard` profile: the five-name checkpoint
-loop plus shared memory (`search_shared_memory`, `store_finding`,
-`update_finding`), structured review (`request_review`, `dialectic`), advisory
-inference (`consult`), recovery (`self_recovery`), and inspection (`knowledge`,
-`describe_tool`, `health_check`). To
-choose a different profile, set `GOVERNANCE_TOOL_MODE` in the checkout's `.env`
-file before starting the server, then run:
+The current source advertises one complete catalog, including installed plugin
+tools. No mode selection is needed. Old `GOVERNANCE_TOOL_MODE` values are
+ignored; reconnect the MCP client after upgrading so it refreshes discovery.
+Use `list_tools(category=...)` to browse and `describe_tool(tool_name=...,
+action=...)` for the full parameters of one operation. Action authorization
+and identity gates are unchanged.
 
-```bash
-docker compose up -d --build --wait --force-recreate governance-mcp
-```
-
-| Profile | Advertises |
-|---|---|
-| `minimal` | the five checkpoint names alone |
-| `standard` (default) | those five plus shared memory, review, advisory inference, recovery, and inspection |
-| `lite` | the above plus the remaining consolidated routers and `list_tools` |
-| `full` | every registered tool |
-
-Reconnect the MCP client so it refreshes discovery. Compose explicitly passes
-this variable into the server; changing the host environment without
-recreating the container does not update a running service.
-
-Profiles affect discovery, not authorization or dispatch: registered names
-remain callable by name on every transport, subject to their normal gates. Be
-deliberate when narrowing, though, because a schema-driven client offers the
-model only the tools discovery returned, so a name that is not advertised is
-one such a client cannot reach. The server states its own profile and what it
-is withholding in the MCP `instructions` string returned at connect.
+Earlier releases used `minimal`, `standard`, `lite`, and `full` discovery
+profiles. v2.23.0 defaulted to the fifteen-tool `standard` profile. Those
+releases still require their own configuration instructions; changing an old
+server's environment does not install the unified catalog.
 
 v2.22.0 defaults to the five-tool `minimal` profile and has no `standard`. Its
 published Compose file does not forward `GOVERNANCE_TOOL_MODE` either, so

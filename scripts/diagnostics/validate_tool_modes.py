@@ -14,10 +14,7 @@ Checks:
 - Every tool_stability alias resolves to a schema tool (a dangling alias is
   real drift)
 - Full mode equals the roster
-- Minimal is exactly the five-tool checkpoint loop (no discovery tools: with
-  five tools the client's native tools/list is the discovery surface)
-- Lite is a superset of minimal and carries the discovery tools
-  (list_tools, describe_tool)
+- Every legacy mode and category setting resolves to that same complete roster
 
 tests/test_tool_registry_bookkeeping.py checks the same rule for the tier,
 operation, stability, and catalog maps; this script is the CI smoke gate for
@@ -71,24 +68,12 @@ def main() -> int:
     full_missing = sorted(advertised - full_mode_set)
     full_extra = sorted(full_mode_set - advertised)
 
-    # Minimal is the five-tool checkpoint loop, exactly. Growing or shrinking
-    # it is a product decision (README "Five tools"), not a drift to absorb.
-    # Discovery tools are deliberately absent: with five tools the MCP client's
-    # native tools/list is the discovery surface, and list_tools/describe_tool
-    # live on lite/full (and stay callable by name in every mode).
-    checkpoint_loop = {
-        "start_session",
-        "identity",
-        "sync_state",
-        "record_result",
-        "check_working_state",
+    # Legacy configuration cannot partition the public federation catalog.
+    legacy_mismatches = {
+        mode: tool_modes.get_tools_for_mode(mode) ^ advertised
+        for mode in ("minimal", "standard", "lite", "operator_readonly", "operator_recovery", *tool_modes.TOOL_CATEGORIES)
+        if tool_modes.get_tools_for_mode(mode) != advertised
     }
-    required_discovery = {"list_tools", "describe_tool"}
-    minimal_set = tool_modes.get_tools_for_mode("minimal")
-    lite_set = tool_modes.get_tools_for_mode("lite")
-    minimal_missing = sorted(checkpoint_loop - minimal_set)
-    minimal_extra = sorted(minimal_set - checkpoint_loop)
-    lite_missing = sorted((required_discovery | checkpoint_loop) - lite_set)
 
     ok = True
 
@@ -122,23 +107,9 @@ def main() -> int:
             for n in full_extra:
                 print(f"    - {n}")
 
-    if minimal_missing or minimal_extra:
+    for mode, names in legacy_mismatches.items():
         ok = False
-        print("FAIL: minimal mode is not the five-tool checkpoint loop.")
-        if minimal_missing:
-            print("  Missing from minimal:")
-            for n in minimal_missing:
-                print(f"    - {n}")
-        if minimal_extra:
-            print("  Extra in minimal (widen lite instead, or decide the loop grows):")
-            for n in minimal_extra:
-                print(f"    - {n}")
-
-    if lite_missing:
-        ok = False
-        print("FAIL: lite mode missing the checkpoint loop or the discovery tools:")
-        for n in lite_missing:
-            print(f"  - {n}")
+        print(f"FAIL: legacy mode {mode!r} differs from the complete catalog: {sorted(names)}")
 
     if not ok:
         return 1

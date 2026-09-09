@@ -163,7 +163,7 @@ class TestConsultSchema:
 
     def test_catalog_classification_makes_consult_primary_not_bootstrap(self):
         assert "consult" in LITE_MODE_TOOLS
-        assert "consult" not in MINIMAL_MODE_TOOLS
+        assert "consult" in MINIMAL_MODE_TOOLS  # old profiles cannot hide advisory inference
         assert "consult" in TOOL_TIERS["essential"]
         assert TOOL_OPERATIONS["consult"] == "read"
         assert "consult" in TOOL_CATEGORIES["inference"]

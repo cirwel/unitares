@@ -31,18 +31,18 @@ source_files:
   - unitares/skills/unitares-dashboard/SKILL.md
 source_digests:
   unitares/src/mcp_handlers/core.py: "d7d09d260fedd7ec"
-  unitares/src/mcp_handlers/identity/handlers.py: "f554fa8d18a0434d"
+  unitares/src/mcp_handlers/identity/handlers.py: "6a8eb54058609b20"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/tool_modes.py: "9c911b713b2296a4"
+  unitares/src/tool_modes.py: "aa75ef30ee2c2383"
   unitares/src/mcp_handlers/identity/session.py: "e24a8588ad4b8f47"
   unitares/src/mcp_handlers/schemas/identity.py: "6a02e1c69d225e98"
   unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
-  unitares/skills/governance-lifecycle/SKILL.md: "b8999185eb4b9e03"
+  unitares/skills/governance-lifecycle/SKILL.md: "e22c8d1f67a81dec"
   unitares/skills/governance-fundamentals/SKILL.md: "20b81e7a89af1eb0"
   unitares/skills/knowledge-graph/SKILL.md: "8e521b485806415c"
   unitares/skills/dialectic-reasoning/SKILL.md: "379b42161aedd37e"
@@ -76,16 +76,13 @@ main check-in loop. A new user message is not a reason to call
 `start_session(force_new=true)` again; that mints another process identity.
 These are the primary workflow tools; raw implementation tools such as
 `onboard(...)` and
-`process_agent_update(...)` remain available for compatibility. On a stock
-server the default `GOVERNANCE_TOOL_MODE=standard` lists fifteen names: the
-five checkpoint tools (`start_session`, `identity`, `sync_state`,
-`record_result`, `check_working_state`) plus `search_shared_memory`,
-`store_finding`, `update_finding`, `request_review`, `consult`, and
-`self_recovery`, `knowledge`, `dialectic`, `describe_tool`, and `health_check`. Every other name in this
-skill still dispatches by name, and `GOVERNANCE_TOOL_MODE=lite` advertises the
-rest (see governance-lifecycle, *MCP Tools Reference*). Parameter descriptions
-in whatever your client lists are abridged to their first sentence;
-`describe_tool(tool_name=..., action=...)` returns the full text. The full raw
+`process_agent_update(...)` remain available for compatibility. Interface contract
+1.6.0 and later exposes one complete catalog, including routers, diagnostics,
+and installed plugins. No tool mode is needed; old `GOVERNANCE_TOOL_MODE`
+settings are ignored. Use `list_tools` for the live contract and
+`describe_tool` for action parameters. Older servers may still advertise a
+restricted profile; inspect their actual catalog (see governance-lifecycle,
+*MCP Tools Reference*). The full raw
 payload remains available under `raw_governance`; the read aliases
 `check_working_state` and `search_shared_memory` default compact and require
 their documented full-mode option to include it.

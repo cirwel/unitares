@@ -77,9 +77,9 @@ class TestEmitterResolution:
         reachable = scanner._reachable_predicate("standard")
         assert reachable({"request_dialectic_review"})
 
-    def test_an_unadvertised_operator_tool_is_not_reachable_on_standard(self):
+    def test_operator_tools_are_discoverable_with_action_authorization(self):
         reachable = scanner._reachable_predicate("standard")
-        assert not reachable({"operator_resume_agent"})
+        assert reachable({"operator_resume_agent"})
 
     def test_an_advertised_router_reaches_all_of_its_actions(self):
         # standard advertises the `knowledge` router, so every action it routes
@@ -135,11 +135,16 @@ class TestNoRegression:
         # #2119 fixed 27 call-shaped hints in selected fields. It did not fix
         # raw names in structured lists, safe_options or message strings.
         findings = {f.tool for f in scanner.find_dead_end_hints("standard")}
-        assert {"onboard", "process_agent_update"} <= findings
+        assert not ({"onboard", "process_agent_update"} & findings)
 
 
 @pytest.fixture
 def handler_tree(tmp_path, monkeypatch):
+    # Synthetic restricted catalog keeps the scanner's reachability tests
+    # meaningful even though the production catalog no longer hides tools.
+    from src.tool_modes import get_tools_for_mode
+    synthetic = get_tools_for_mode() - {"bind_session", "operator_resume_agent"}
+    monkeypatch.setattr("src.tool_modes.get_tools_for_mode", lambda mode: synthetic)
     root = tmp_path / "src" / "mcp_handlers"
     root.mkdir(parents=True)
     monkeypatch.setattr(scanner, "PROJECT_ROOT", tmp_path)

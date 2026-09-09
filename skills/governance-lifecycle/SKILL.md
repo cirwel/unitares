@@ -34,7 +34,7 @@ source_files:
   - unitares/src/schema_brief.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "d7d09d260fedd7ec"
-  unitares/src/mcp_handlers/identity/handlers.py: "f554fa8d18a0434d"
+  unitares/src/mcp_handlers/identity/handlers.py: "6a8eb54058609b20"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
@@ -45,8 +45,8 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "b6f921fb24a523ce"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "9bfffd3b09f6cc0f"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "9c911b713b2296a4"
-  unitares/src/tool_mode_listing.py: "3dacb43ce2d0dd2c"
+  unitares/src/tool_modes.py: "aa75ef30ee2c2383"
+  unitares/src/tool_mode_listing.py: "e14ecf4249c3007b"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
 ---
 
@@ -253,28 +253,18 @@ before its first check-in; it does not need a recovery reflection. Inspect
 
 ## MCP Tools Reference
 
-Which of these names your client *lists* depends on the server's
-`GOVERNANCE_TOOL_MODE`. The default, `standard`, advertises fifteen names: the
-checkpoint loop (`start_session`, `identity`, `sync_state`, `record_result`,
-`check_working_state`) plus `search_shared_memory`, `store_finding`,
-`update_finding`, `request_review`, `dialectic`, `consult`, `self_recovery`,
-`knowledge`, `describe_tool`, and `health_check`. `minimal`
-advertises the
-checkpoint loop alone. `lite` (29 tools) advertises every name in this
-reference plus `list_tools` / `describe_tool`; `full` advertises everything
-registered. A mode filters only `tools/list`: every registered tool dispatches
-by name in every mode, on `/mcp/`, REST `/v1/tools/call`, and stdio alike. So a
-harness that offers only listed tools shows fifteen under the default, and the
-rest are one server-side flag away (`GOVERNANCE_TOOL_MODE=lite`), not gone.
-`start_session(verbose=true)` reports the running mode under `tool_mode`.
+Interface contract 1.6.0 and later exposes one complete catalog on MCP, REST,
+and stdio, including installed plugin tools. No tool mode is needed; legacy
+`GOVERNANCE_TOOL_MODE` settings are ignored. `list_tools(lite=true)` reports
+the live interface version and surface hash. Here `lite` only controls response
+detail. Use categories to browse and `describe_tool(tool_name=..., action=...)`
+to inspect the parameters of one router action. Prefer primary workflow names;
+raw implementations remain discoverable and callable for compatibility.
+Authorization and identity gates still apply to each action.
 
-Whatever your client lists, the *parameter descriptions* it shows are
-abridged to their first sentence — the catalog is paid for on every
-`tools/list`, in every session. `describe_tool(tool_name=..., action=...)`
-returns the full authored text, and for a consolidated router only the
-parameters one action takes. The server says so in its `instructions` string
-at initialize. Nothing is hidden: reach for `describe_tool` when a trimmed
-description leaves you unsure what a parameter takes.
+Older servers may advertise a restricted profile. Inspect the client's actual
+tool catalog and server instructions; do not assume a name is callable merely
+because this skill mentions it. Upgrade the server for the complete catalog.
 
 ### Essential (use in every session)
 
@@ -302,4 +292,4 @@ description leaves you unsure what a parameter takes.
 - `call_model()` — Delegate to a configured secondary model for analysis
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
-- `list_tools()` / `describe_tool()` — Inspect the deployed surface instead of guessing an old tool name. `describe_tool` is also where the full parameter descriptions live, since the catalog advertises them abridged. Advertised on `lite` and `full`, not on the default `standard` or on `minimal`, where the MCP client's own `tools/list` is the discovery surface; both still answer when called by name
+- `list_tools()` / `describe_tool()` — Inspect the deployed catalog and full action parameters instead of guessing tool names. Available in the complete catalog; older servers may require their own discovery-profile configuration.
