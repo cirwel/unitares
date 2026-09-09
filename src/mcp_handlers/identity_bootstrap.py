@@ -60,6 +60,37 @@ _DEFAULT_REFUSAL_DO_NOT = (
 )
 
 
+# The #425 typed refusal is the one success-SHAPED payload that is not a
+# success: `strict_identity_refusal_payload` is deliberately "a structured
+# success-shape, not an error" (see below), so it carries `success: true` with
+# no `error` key. Every consumer that branches on success/error therefore
+# misses it unless it checks this marker. `rollout_flag` is written by
+# `strict_identity_refusal_payload` and by nothing else in the codebase, so it
+# is a precise marker: no other success payload can false-positive on it.
+IDENTITY_REFUSAL_MARKER = "STRICT_IDENTITY_REQUIRED"
+
+
+def identity_refusal_status(payload: object) -> str | None:
+    """Return the refusal ``status`` if ``payload`` is a #425 typed refusal.
+
+    ``status`` varies by emission point (``identity_required``,
+    ``lineage_declaration_required``, ...) and is a bounded server-authored
+    literal. Returns None for anything else.
+
+    Lives here, beside the builder, for the reason the builder itself is
+    single-sourced: the shape and the test for the shape must not drift apart.
+    Consumers: ``services/tool_usage_recorder.py`` (so a refusal is not counted
+    as a successful call) and ``middleware/envelope_step.py`` (so a refusal is
+    not rebuilt into an ordinary check-in).
+    """
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("rollout_flag") != IDENTITY_REFUSAL_MARKER:
+        return None
+    status = payload.get("status")
+    return str(status) if status else "identity_required"
+
+
 def strict_identity_refusal_payload(
     tool_name: str,
     *,

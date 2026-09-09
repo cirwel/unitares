@@ -1293,6 +1293,7 @@ async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, r
     the invoked name lives in ctx.original_name. Returns the (possibly
     reshaped) handler result; on ANY failure returns it untouched."""
     try:
+        from ..identity_bootstrap import identity_refusal_status
         from ..tool_stability import is_experience_alias
 
         invoked = getattr(ctx, "original_name", None)
@@ -1306,6 +1307,19 @@ async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, r
             return result
         if payload.get("success") is False or "error" in payload:
             return result  # raw error contract carries its own recovery info
+
+        # A #425 typed identity refusal is success-SHAPED (`success: true`, no
+        # `error` key), so the guard above does not catch it. Without this, a
+        # refused write is rebuilt as an ordinary check-in: `status` is dropped
+        # from the top level, `hint` / `next_step` / `safe_options` / `do_not`
+        # are stripped, and `next_action` falls through to the generic "Keep
+        # working - sync_state again after your next substantial step" text,
+        # because `decision.get("action")` is None for a refusal. The agent is
+        # told to continue after a write that was refused and not persisted.
+        # The refusal shape already carries its own recovery block, which is
+        # exactly what this guard exists to preserve.
+        if identity_refusal_status(payload) is not None:
+            return result
 
         envelope = build_experience_envelope(invoked, name, payload, arguments)
         return [TextContent(type="text", text=json.dumps(envelope, ensure_ascii=False))]

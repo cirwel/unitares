@@ -74,22 +74,17 @@ _EISV_CAUSED_ERROR_CATEGORIES = frozenset({"state_error"})
 # ``rollout_flag`` is set unconditionally by ``strict_identity_refusal_payload``
 # and by nothing else in the codebase, so it is a precise single-sourced
 # marker: no other success payload can false-positive on it.
-_IDENTITY_REFUSAL_MARKER = "STRICT_IDENTITY_REQUIRED"
+from src.mcp_handlers.identity_bootstrap import (
+    IDENTITY_REFUSAL_MARKER as _IDENTITY_REFUSAL_MARKER,
+    identity_refusal_status as _identity_refusal_status,
+)
 
-
-def _identity_refusal_status(payload: Any) -> Optional[str]:
-    """Return the refusal ``status`` if this payload is a #425 typed refusal.
-
-    ``status`` varies by emission point (``identity_required``,
-    ``lineage_declaration_required``, ...) and is a bounded server-authored
-    literal, so it is safe as an ``error_type``. Returns None for anything else.
-    """
-    if not isinstance(payload, dict):
-        return None
-    if payload.get("rollout_flag") != _IDENTITY_REFUSAL_MARKER:
-        return None
-    status = payload.get("status")
-    return str(status) if status else "identity_required"
+# The predicate moved next to the builder it tests for
+# (``identity_bootstrap.strict_identity_refusal_payload``) when a second
+# consumer appeared: the experience envelope was rebuilding typed refusals into
+# ordinary check-ins because it had its own success/error guard and no way to
+# ask this question. Re-exported under the original private names so this
+# module's callers and tests are unaffected.
 
 
 def classify_tool_result(result: Any) -> Tuple[bool, Optional[str]]:
