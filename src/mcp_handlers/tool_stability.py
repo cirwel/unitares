@@ -523,10 +523,14 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "search_shared_memory": ToolAlias(
         old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
         migration_note=(
-            "Search the cross-agent knowledge graph for prior findings. Archived "
-            "and cold-storage rows are excluded unless status is set explicitly, "
-            "so a closed finding reads as zero results rather than as an answer. "
-            "This read serves unbound callers, so it works before start_session, "
+            "Search the cross-agent knowledge graph for prior findings. Rows in "
+            "status archived or cold are excluded unless you set status "
+            "explicitly or pass include_archived / include_cold; a resolved or "
+            "closed finding is still returned. Reading is not free of effect: "
+            "every successful search appends a knowledge_read audit row naming "
+            "the reader and a redacted copy of the query, which is why this tool "
+            "is not annotated read-only. It serves unbound callers, so it works "
+            "before start_session, "
             "unlike the writes: use store_finding to add a finding and "
             "update_finding to revise one."
         ),
