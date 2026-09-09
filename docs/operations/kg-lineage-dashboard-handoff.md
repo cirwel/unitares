@@ -100,11 +100,11 @@ it. Two honest options:
 ## Backend (recommended)
 
 Mirror the agent-history endpoint already in the repo — `http_agent_history`
-(`src/http_api.py:1025`, route `/v1/agents/{agent_id}/history`, PR #935) is the
+(`src/http_routes/overview.py`, route `/v1/agents/{agent_id}/history`, PR #935) is the
 exact template: bearer-auth via `_check_http_auth` / `_http_unauthorized`,
 `db.acquire()`, `JSONResponse`, graceful-empty, registered with
 `app.routes.append(Route(..., methods=["GET"]))` in `register_http_routes`
-(`http_api.py:3101`).
+(`src/http_api.py`).
 
 ```
 GET /v1/discoveries/{id}/lineage

@@ -35,12 +35,21 @@ a prototype or a system?
 
 | | |
 |---|---|
-| **42 tools** on the wire | fifteen advertised by default and the rest behind `GOVERNANCE_TOOL_MODE`; 8 of them are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
-| **12,619 test functions** | across 720 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
-| **64 database migrations** | slot-and-name drift is gated by the repo doctor |
-| **509 Python modules** | `src/`, `governance_core/`, and the reference residents |
-| **208 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
+| **42 tools** on the wire | one complete catalog, every name advertised on every transport (legacy `GOVERNANCE_TOOL_MODE` settings are accepted and ignored); 8 of them are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
+| **13,528 test functions** | across 771 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
+| **67 database migrations** | slot-and-name drift is gated by the repo doctor |
+| **523 Python modules** | `src/`, `governance_core/`, and the reference residents |
+| **226 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
 | **7 companion repositories** | listed under [Ecosystem repositories](../README.md#ecosystem-repositories), including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland |
+
+Recounted 2026-09-09 against tracked files at `aed9f6f6`, each with the command
+that produced it. Test files: `git ls-files tests/` filtered to `test_*.py`;
+test functions: an AST walk of those files for `def test_*`. Migrations:
+`git ls-files db/postgres/migrations/ | wc -l`. Python modules:
+`git ls-files src/ governance_core/ agents/ | grep -c '\.py$'`. Documents:
+`git ls-files docs/ | grep -c '\.md$'`. The tool, router, action, and alias
+figures are read from `src/tool_meta.py` and the routers' `ACTION_FIELDS`
+declarations, not from a directory count.
 
 ## Local control and future federation
 

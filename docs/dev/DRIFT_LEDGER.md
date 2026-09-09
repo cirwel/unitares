@@ -51,9 +51,9 @@ when they don't.
 
 | Seam | What can drift | Guard | Gated? |
 |---|---|---|---|
-| `db/postgres/migrations/` | slot/name drift, schema ↔ applied DB | `scripts/dev/unitares_doctor.py` | ✅ CI |
-| AGENTS.md ↔ CLAUDE.md | the SHARED CONTRACT block | `scripts/dev/check-shared-contract.sh` | ✅ CI |
-| code ↔ tests | regressions | `scripts/dev/test-cache.sh` (tree-hash) | ✅ pre-push + CI |
+| `db/postgres/migrations/` | slot/name drift; schema ↔ applied DB | slot/name: `tests/test_migration_registry_versions.py`; schema ↔ DB: `scripts/dev/unitares_doctor.py` (`check_schema_migrations`, `check_migration_checksum_drift`, `check_column_drift`, `check_constraint_drift`) | ⚠️ partial — slot/name is CI-gated by that test (it runs in the `test_shard` matrix). The doctor's four schema ↔ DB checks need a live database and **CI never calls them**: `tests.yml` imports `unitares_doctor` for `check_dockerfile_pinned_tags` only, and the `doctor` collector in `surface-findings.yml` is advisory and dispatch-only. That half is operator-run. |
+| AGENTS.md ↔ CLAUDE.md | the SHARED CONTRACT block | `scripts/dev/check-shared-contract.sh` | ✅ CI (`repo-scope.yml`) |
+| code ↔ tests | regressions | `scripts/dev/test-cache.sh` (tree-hash) locally; the `test_shard` matrix in `.github/workflows/tests.yml` in CI | ✅ CI — but via the shards, which run pytest directly; `test-cache.sh` itself is invoked by no workflow, and the pre-push hook that runs it is machine-local (this repo ships no installer for it) |
 | docs ↔ runtime | stale architecture phrasing, tool count, version | `scripts/diagnostics/check_doc_drift.py`, `documentation-validation.yml` | ✅ CI |
 | tool schema ↔ tool modes | served surface vs config | `scripts/diagnostics/validate_tool_modes.py` | ✅ CI |
 | `skills/` ↔ committed fingerprint | a skill edited without republishing the fingerprint | `scripts/dev/skills_manifest.py --check` | ✅ CI (smoke) |
@@ -62,6 +62,13 @@ when they don't.
 | identity/onboarding docs ↔ code (cross-repo) | coupled changes diverging | single-writer-surface rules in the SHARED CONTRACT | ❌ human discipline |
 | vocabulary homonyms ("substrate", "fingerprint", "surface") | same word, different meaning | `docs/ontology/glossary-drift-audit-2026-06-20.md` | ❌ audit doc, no gate |
 | parallel sessions on a single-writer surface | colliding branches | `gh pr list` check before starting (SHARED CONTRACT) | ❌ human discipline |
+
+The "Gated?" column was last verified row-by-row against `.github/workflows/`
+on 2026-09-09. A ✅ here means a workflow step actually invokes the named
+guard — check that before trusting it, because two rows were over-claiming: the
+shared-contract script was invoked by nothing outside prose (now wired into
+`repo-scope.yml`), and the migrations row credited CI with doctor checks CI has
+never run.
 
 ## How to extend this
 
