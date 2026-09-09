@@ -272,14 +272,36 @@ class SyncGovernanceClient:
         return NoteResult.model_validate(raw)
 
     def audit_knowledge(
-        self, scope: str = "open", top_n: int = 10, **kwargs: Any
+        self, scope: str = "open", top_n: int = 10, use_model: bool = False,
+        **kwargs: Any
     ) -> AuditResult:
+        """Audit knowledge graph. Maps to server tool: knowledge(action=audit).
+
+        ``use_model`` routes the audit through the local LLM to write a prose
+        KEEP/ARCHIVE assessment of the stale entries. It is off by default
+        because it costs a model round-trip and nothing in this tree reads the
+        field it produces: ``model_assessment`` is written by
+        ``knowledge_graph_lifecycle.py`` and has no caller. Pass
+        ``use_model=True`` to get it back; the server's own default is also
+        off, so omitting the flag and passing False are equivalent.
+
+        Measured 2026-09-08 against the live server, scope=open over 477
+        entries: 0.1s without it. With it, four consecutive runs took 11.3s,
+        12.1s, 15.8s and 14.9s on an otherwise idle model slot — straddling
+        the 15s ceiling that two of Vigil's three audit call sites impose. On
+        a slot shared with the Watcher it is slower again. This is a measured
+        expense removed, not a proof that every past timeout had this one
+        cause; cold model loads and prompt size vary the same number.
+        """
         args: dict[str, Any] = {
             "action": "audit",
             "scope": scope,
             "top_n": str(top_n),
-            "use_model": "true",
         }
+        # Sent only when opting IN, so a caller can still defer to whatever the
+        # server's default is rather than pinning it from the client side.
+        if use_model:
+            args["use_model"] = "true"
         args.update(kwargs)
         raw = self.call_tool("knowledge", args)
         return AuditResult.model_validate(raw)
