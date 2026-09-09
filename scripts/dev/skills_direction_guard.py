@@ -14,16 +14,18 @@ creation, all of which destroy mtime.
 THE RULE: when content differs, the sync proceeds only if canonical can be
 POSITIVELY shown to be newer. Two things can show that, and nothing else does:
 the mirror's declared date is strictly older, or -- when the dates are equal --
-the mirror's exact bytes appear as a past version of that file in canonical's
-git history, which means canonical has already moved past it. Every other
-combination refuses.
+canonical's current content was introduced into its git history strictly after
+the mirror's content last appeared there, which means canonical has moved past
+it. Every other combination refuses.
 
 The equal-date appeal to history exists because a mirror produced by an earlier
 sync inherits canonical's date verbatim. A canonical edit later the same day
 then leaves both sides reading one date with different content, which by date
 alone is indistinguishable from the #112 case below. It is not indistinguishable
-by history: a stale snapshot is a state canonical held, and mirror-side work
-canonical never had is not.
+by history: a stale snapshot is a state canonical has since moved past, and
+mirror-side work canonical never had is not. Note the ordering — presence in
+history alone is not enough, because a revert can put a mirror's newer content
+back into canonical's past. See ``is_past_canonical_state``.
 
 That direction is deliberate, and it is the correction to two earlier bugs:
 
@@ -65,6 +67,16 @@ EXIT_BLOCKED = 4
 _GIT_TIMEOUT_SECONDS = 30
 
 
+def last_verified(path: pathlib.Path) -> str | None:
+    """Return the declared ``last_verified`` date, or None if absent/unreadable."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    match = _LAST_VERIFIED.search(text)
+    return match.group(1) if match else None
+
+
 def _git(repo: pathlib.Path, *args: str) -> str | None:
     """Run git in ``repo``, or return None if it cannot be run at all.
 
@@ -83,8 +95,14 @@ def _git(repo: pathlib.Path, *args: str) -> str | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
+def _blob_id(repo: pathlib.Path, path: pathlib.Path) -> str | None:
+    """Git's content hash for ``path``, or None when it cannot be taken."""
+    out = _git(repo, "hash-object", "--", str(path.resolve()))
+    return out.strip() if out and out.strip() else None
+
+
 def is_past_canonical_state(canon: pathlib.Path, mirror: pathlib.Path) -> bool:
-    """True when the mirror's bytes are a state canonical has already moved past.
+    """True when canonical has demonstrably MOVED PAST the mirror's content.
 
     Breaks the equal-date tie that ``last_verified`` alone cannot. A mirror
     produced by an earlier sync inherits canonical's date verbatim, so a
@@ -92,13 +110,22 @@ def is_past_canonical_state(canon: pathlib.Path, mirror: pathlib.Path) -> bool:
     different content -- indistinguishable, by date, from the plugin #112 case
     where the mirror carried content canonical never had.
 
-    Git history separates them. If the mirror's exact bytes appear as a past
-    version of this file in canonical's history, the mirror is a stale snapshot
-    and syncing forward reverts nothing. If they do not, the mirror holds
-    content canonical never had, which is #112, and the sync must still refuse.
+    Mere PRESENCE of the mirror's bytes in history is not enough, and assuming
+    it was is how the first cut of this got it wrong. Consider canonical going
+    A -> B -> revert to A while the mirror sits at B. B is in history, so a
+    presence test waves the sync past and B is silently deleted -- reachable
+    through this guard's own remedy, since the refusal message tells operators
+    to forward-port mirror-side work into canonical, and a later rollback then
+    turns the guard against the very content it first protected.
+
+    So the test is an ORDERING one: canonical's current content must have been
+    introduced strictly after the mirror's content last appeared. In the revert
+    case canonical's current blob (A) was first introduced BEFORE the mirror's
+    (B), so it refuses. In the ordinary stale-mirror case canonical's current
+    blob is newer than every occurrence of the mirror's, so it proceeds.
 
     Blob ids are compared rather than file contents: git already content-hashes
-    every version, so one ``log --raw`` names every past state in a single call.
+    every version, so one ``log --raw`` names the states to order.
     """
     repo_root = _git(canon.parent, "rev-parse", "--show-toplevel")
     if repo_root is None:
@@ -106,41 +133,45 @@ def is_past_canonical_state(canon: pathlib.Path, mirror: pathlib.Path) -> bool:
     repo = pathlib.Path(repo_root.strip())
 
     try:
-        rel = canon.resolve().relative_to(repo.resolve())
+        canon_abs = canon.resolve()
+        rel = canon_abs.relative_to(repo.resolve())
     except (OSError, ValueError):
         return False
 
-    blob = _git(repo, "hash-object", "--", str(mirror))
-    if blob is None:
-        return False
-    mirror_blob = blob.strip()
-    if not mirror_blob:
+    # Absolute paths on both: `git -C repo hash-object` resolves a relative
+    # path against the REPO root, not the caller's cwd, which silently hashes
+    # a same-named decoy inside canonical when the CLI is given relative args.
+    mirror_blob = _blob_id(repo, mirror)
+    canon_blob = _blob_id(repo, canon_abs)
+    if not mirror_blob or not canon_blob:
         return False
 
-    # --raw names the post-image blob of every commit that touched the path,
-    # walking from HEAD, so every id it yields is a state an ancestor held.
+    # --raw names the post-image blob of each commit that touched the path,
+    # newest first. Merge commits are omitted by default, so a state created by
+    # a conflict resolution is invisible here and the sync is refused rather
+    # than allowed — a false refusal, on the safe side of the asymmetry.
     history = _git(repo, "log", "--raw", "--no-abbrev", "--format=", "--", str(rel))
     if history is None:
         return False
 
+    blobs: list[str] = []
     for line in history.splitlines():
         if not line.startswith(":"):
             continue
         fields = line.split()
         # :<oldmode> <newmode> <oldblob> <newblob> <status>\t<path>
-        if len(fields) >= 4 and fields[3] == mirror_blob:
-            return True
-    return False
+        if len(fields) >= 4:
+            blobs.append(fields[3])
 
+    if mirror_blob not in blobs or canon_blob not in blobs:
+        # The mirror holds content canonical never had (#112), or canonical's
+        # working copy is not a committed state. Either way, nothing to order.
+        return False
 
-def last_verified(path: pathlib.Path) -> str | None:
-    """Return the declared ``last_verified`` date, or None if absent/unreadable."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return None
-    match = _LAST_VERIFIED.search(text)
-    return match.group(1) if match else None
+    # Newest-first, so a LARGER index is OLDER.
+    mirror_newest = blobs.index(mirror_blob)
+    canon_oldest = len(blobs) - 1 - blobs[::-1].index(canon_blob)
+    return canon_oldest < mirror_newest
 
 
 def regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:

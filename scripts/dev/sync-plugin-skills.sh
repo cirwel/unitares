@@ -93,9 +93,10 @@ fi
 # A date alone cannot order an EQUAL-date difference, and that case is common:
 # a mirror produced by this script inherits canonical's date verbatim, so any
 # canonical edit later the same day lands both sides on one date with different
-# content. The guard settles those against canonical's git history — a stale
-# mirror is a state canonical held and can be safely overwritten; mirror-side
-# work canonical never had is not, and still refuses.
+# content. The guard settles those against canonical's git history, by ORDER:
+# it proceeds only when canonical's current content entered history strictly
+# after the mirror's content last appeared there. Mirror-side work canonical
+# never had, and content canonical reverted away from, both still refuse.
 #
 # The rule and its two corrected bugs (`>` vs `>=`, and failing open on a
 # missing date) live in scripts/dev/skills_direction_guard.py, which is a
