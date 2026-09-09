@@ -920,6 +920,90 @@ class TestLoadSessionAsDict:
         assert result["resolution"]["action"] == "resume"
 
     @pytest.mark.asyncio
+    async def test_serves_the_attestation_state_beside_the_resolution(self):
+        """A reader must not have to infer "unsigned" from two empty strings.
+
+        The live shape since 2026-06-23 is signature_version 2 with both
+        signatures empty, because no agent has been minted with an api_key
+        since 2026-01-29 and compute_signature returns "" without one.
+        """
+        from src.mcp_handlers.dialectic.session import load_session_as_dict
+
+        resolution = _make_resolution_dict()
+        resolution["signature_a"] = ""
+        resolution["signature_b"] = ""
+        resolution["signature_version"] = 2
+
+        mock_session_row = {
+            "session_id": "attest_sess",
+            "phase": "resolved",
+            "status": "resolved",
+            "session_type": "review",
+            "paused_agent_id": "agent_a",
+            "reviewer_agent_id": "agent_b",
+            "topic": None,
+            "created_at": datetime.now(),
+            "resolution_json": resolution,
+        }
+
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(return_value=mock_session_row)
+        mock_conn.fetch = AsyncMock(return_value=[])
+
+        mock_pool = AsyncMock()
+        mock_pool.acquire = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        mock_db = AsyncMock()
+        mock_db._pool = mock_pool
+        mock_db._ensure_pool = AsyncMock()
+
+        with patch("src.dialectic_db.get_dialectic_db", new_callable=AsyncMock, return_value=mock_db):
+            result = await load_session_as_dict("attest_sess")
+
+        assert result["attestation"]["state"] == "unsigned"
+        assert result["attestation"]["signer_count"] == 0
+        assert result["attestation"]["signature_version"] == 2
+        # Derived only: the served record keeps exactly the stored fields.
+        assert "attestation" not in result["resolution"]
+        assert result["resolution"]["signature_version"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_session_without_a_resolution_carries_no_attestation(self):
+        from src.mcp_handlers.dialectic.session import load_session_as_dict
+
+        mock_session_row = {
+            "session_id": "no_res_sess",
+            "phase": "synthesis",
+            "status": "active",
+            "session_type": "review",
+            "paused_agent_id": "agent_a",
+            "reviewer_agent_id": "agent_b",
+            "topic": None,
+            "created_at": datetime.now(),
+            "resolution_json": None,
+        }
+
+        mock_conn = AsyncMock()
+        mock_conn.fetchrow = AsyncMock(return_value=mock_session_row)
+        mock_conn.fetch = AsyncMock(return_value=[])
+
+        mock_pool = AsyncMock()
+        mock_pool.acquire = MagicMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        mock_db = AsyncMock()
+        mock_db._pool = mock_pool
+        mock_db._ensure_pool = AsyncMock()
+
+        with patch("src.dialectic_db.get_dialectic_db", new_callable=AsyncMock, return_value=mock_db):
+            result = await load_session_as_dict("no_res_sess")
+
+        assert "attestation" not in result
+
+    @pytest.mark.asyncio
     async def test_handles_agrees_field(self):
         from src.mcp_handlers.dialectic.session import load_session_as_dict
 

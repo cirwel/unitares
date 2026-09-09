@@ -68,6 +68,7 @@ logger = get_logger(__name__)
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 # Import session persistence from new module
 from .session import (
+    attach_attestation,
     discard_receipt_unless_written,
     seal_resolution_for_persistence,
     save_session,
@@ -1827,12 +1828,16 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                     return success_response({
                         "success": False,
                         "error": timeout_reason,
-                        "session": session.to_dict(),
+                        "session": attach_attestation(session.to_dict()),
                         "recovery": get_session_timeout_recovery(timeout_reason),
                     })
 
             result = session.to_dict()
             result["success"] = True
+            # Same descriptor the PostgreSQL fast path adds. Without it, whether a
+            # caller sees `attestation` depended on check_timeout, so the same
+            # resolved session answered two ways through the same tool.
+            attach_attestation(result)
             result.update(_build_dialectic_actionability(result))
             return success_response(result)
         
@@ -1864,6 +1869,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
             if len(matching_sessions) == 1:
                 result = matching_sessions[0]
                 result["success"] = True
+                attach_attestation(result)
                 return success_response(result)
 
             # Multiple sessions - return list
@@ -3228,6 +3234,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 else:
                     result["action"] = "resume"
                     result["resolution"] = resolution.to_dict()
+                    attach_attestation(result)
     
                     try:
                         execution_result = await execute_resolution(session, resolution)
@@ -3321,9 +3328,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 written = bool(await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved"))
                             discard_receipt_unless_written(resolution, written=written, had_receipt=False)
                             result["resolution"] = resolution.to_dict()
+                            attach_attestation(result)
                         except Exception as e:
                             discard_receipt_unless_written(resolution, written=False, had_receipt=False)
                             result["resolution"] = resolution.to_dict()
+                            attach_attestation(result)
                             logger.warning(f"Could not resolve session in PostgreSQL: {e}")
                     except Exception as e:
                         # Execution failed - mark FAILED, not resolved

@@ -455,6 +455,89 @@ class Resolution:
         )
 
 
+# Attestation states a reader can distinguish without knowing the emptiness
+# convention. See ``describe_attestation``.
+ATTESTATION_BILATERAL = "bilateral"
+ATTESTATION_SINGLE_SIGNER = "single_signer"
+ATTESTATION_UNSIGNED = "unsigned"
+ATTESTATION_LEGACY_V1 = "legacy_v1"
+
+
+def coerce_signature_version(value: Any) -> int:
+    """Stored rows predate the field (-> 1); JSON round-trips may stringify it.
+
+    Canonical here rather than in the read path, because two copies drifted:
+    an independent reimplementation in ``describe_attestation`` mapped a stored
+    ``0`` to 1 while ``mcp_handlers/dialectic/session.py`` mapped it to 0, so
+    the same row could be described as legacy and reconstructed as version 0.
+    Adversarial review 2026-09-08 caught it before either behaviour shipped.
+    """
+    try:
+        return int(value) if value is not None else 1
+    except (TypeError, ValueError):
+        return 1
+
+
+def describe_attestation(resolution) -> Optional[Dict[str, Any]]:
+    """State, in the response, what party attestation a resolution actually carries.
+
+    The stored record already holds everything needed to work this out, and
+    ``verify_signatures`` already refuses to return a vacuous True on empty
+    signatures. What was missing is that a reader had to know the convention:
+    ``signature_version`` is a SCHEME label, not a claim that anyone signed, so
+    ``{"signature_version": 2, "signature_a": "", "signature_b": ""}`` reads as
+    a v2 attestation until you notice both signatures are empty strings. This
+    is a presentation fix, not a correctness one -- nothing here changes what
+    verification concludes.
+
+    Measured 2026-09-08 on the live corpus, which is why it is worth stating:
+    no agent has been minted with an api_key since 2026-01-29 (0 of the 1,223
+    agents created in the preceding 30 days carry one), so 104 of 122 stored
+    resolutions are ``unsigned``, and none has been signed since 2026-06-23.
+    Party-level HMAC attestation therefore has no key material and has produced
+    nothing for seven months. Naming that state is NOT a decision to keep the
+    scheme: the choice between restoring key issuance and deleting the party
+    HMAC outright is tracked as its own issue, because a descriptor that makes
+    an inert mechanism read as handled would be worse than the silence.
+
+    Derived, never stored. Computed on the read path only: adding a field to
+    ``Resolution.to_dict()`` would change ``Resolution.hash()``, which is served
+    as ``resolution_hash``, and would alter the bytes the drr.v1 receipt is
+    minted over. Deliberately small -- no prose ``note`` field -- because
+    ``dialectic(action='list')`` pages 50 sessions and a per-row constant string
+    would re-inflate exactly the payload #1929's projection work cut down.
+
+    Accepts a ``Resolution`` or the parsed ``resolution_json`` dict, and returns
+    None for a session with no resolution.
+    """
+    if resolution is None:
+        return None
+    if isinstance(resolution, dict):
+        get = resolution.get
+    else:
+        get = lambda key, default=None: getattr(resolution, key, default)  # noqa: E731
+
+    signature_a = get("signature_a", "") or ""
+    signature_b = get("signature_b", "") or ""
+    version = coerce_signature_version(get("signature_version", None))
+
+    signer_count = bool(signature_a) + bool(signature_b)
+    if version != 2:
+        state = ATTESTATION_LEGACY_V1 if signer_count else ATTESTATION_UNSIGNED
+    elif signer_count == 2:
+        state = ATTESTATION_BILATERAL
+    elif signer_count == 1:
+        state = ATTESTATION_SINGLE_SIGNER
+    else:
+        state = ATTESTATION_UNSIGNED
+
+    return {
+        "state": state,
+        "signature_version": version,
+        "signer_count": signer_count,
+    }
+
+
 class DialecticSession:
     """
     Manages a dialectic session between paused agent (A) and reviewer (B).

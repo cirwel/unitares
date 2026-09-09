@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-08"
+last_verified: "2026-09-09"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
@@ -19,9 +19,9 @@ source_files:
   - unitares/src/mcp_handlers/identity/operator.py
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
-  unitares/src/dialectic_protocol.py: "071d0adc326edfe9"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "b6f921fb24a523ce"
-  unitares/src/mcp_handlers/dialectic/session.py: "6a0ed1ed453d9f76"
+  unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "9d8b8ae1d271de80"
+  unitares/src/mcp_handlers/dialectic/session.py: "8065938fced23b6f"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
   unitares/src/mcp_handlers/dialectic/reviewer.py: "d5e71f324195eb6c"
@@ -255,6 +255,16 @@ including one a timeout sweep already marked failed for lack of facilitation.
 `escalate` and `cooldown` exist in the `ResolutionAction` enum but no live path
 produces them; they survive only as recommendation labels in the model-assisted
 tool.
+
+A resolved session read also carries an `attestation` block saying what party
+signatures the record actually holds: `bilateral`, `single_signer`, `unsigned`,
+or `legacy_v1`. Read it rather than inferring from the signature fields, and do
+not read `signature_version` as a claim that anyone signed — it names the
+scheme, not the act. As of 2026-09-08 essentially every live resolution is
+`unsigned`, because agents are no longer minted with the api_key the party HMAC
+needs. That is a known gap under decision, not a fault in your session, and it
+does not weaken the conditions you agreed to: the resolution record is governed
+by the transcript either way.
 
 ## How to Participate Well
 
