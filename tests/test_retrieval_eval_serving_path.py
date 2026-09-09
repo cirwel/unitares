@@ -117,6 +117,14 @@ async def test_run_query_restores_existing_env(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_evaluate_reports_flat_miss_count_and_rate(monkeypatch, tmp_path: Path):
+    # evaluate() reads label scope before it scores, so the graph has to be
+    # stubbed even for a test that only cares about flat-miss accounting.
+    # Left real, it reaches the isolated db backend and leaks an unawaited
+    # AsyncMock coroutine, which the session-level guard in conftest fails on.
+    import src.knowledge_graph as kg
+
+    monkeypatch.setattr(kg, "get_knowledge_graph", _fake_graph({}))
+
     labels = tmp_path / "labels.json"
     labels.write_text(json.dumps({
         "schema_version": 1,
