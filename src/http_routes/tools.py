@@ -27,6 +27,7 @@ from src.interface_contract import (
     get_interface_contract_summary,
     get_public_tool_definitions,
 )
+from src.tool_annotations import annotation_payload
 
 from src.http_routes import access
 
@@ -93,6 +94,26 @@ def _normalize_http_tool_name(body: dict, mcp_server_name: str) -> str:
     return normalize_http_tool_name(body, mcp_server_name)
 
 
+def _serialize_tool_annotations(tool) -> dict | None:
+    """MCP annotations for one tool in wire spelling, or None when it has none.
+
+    Prefers what the definition itself carries, so a surface that overrode a
+    hint keeps its override, and falls back to the table for a ``Tool`` built
+    without them. ``by_alias`` for the same reason
+    :func:`_serialize_mcp_content_item` uses it: mcp 2.x renamed these fields
+    to snake_case and kept camelCase only as a serialization alias, so without
+    it this route would start emitting ``read_only_hint`` on a version bump.
+    """
+    annotations = getattr(tool, "annotations", None)
+    if annotations is not None and hasattr(annotations, "model_dump"):
+        dumped = annotations.model_dump(exclude_none=True, by_alias=True)
+        if dumped:
+            return dumped
+    if isinstance(annotations, dict) and annotations:
+        return dict(annotations)
+    return annotation_payload(tool.name)
+
+
 # ---------------------------------------------------------------------------
 # Endpoint handlers
 # ---------------------------------------------------------------------------
@@ -118,14 +139,32 @@ async def http_list_tools(request):
         openai_tools = []
         for tool in filtered_tools:
             description = tool.description.split("\n")[0] if tool.description else f"Tool: {tool.name}"
-            openai_tools.append({
+            entry = {
                 "type": "function",
                 "function": {
                     "name": tool.name,
                     "description": description,
                     "parameters": get_tool_input_schema(tool)
                 }
-            })
+            }
+            # MCP annotations ride BESIDE the OpenAI function object, never
+            # inside it: `function` has no `annotations` member and no
+            # extension point, so burying them there would invent a field for a
+            # schema that does not have one. A client reading this route as
+            # OpenAI tools sees the same three keys it always did.
+            #
+            # They are here because this route is not only an OpenAI surface.
+            # The deployed Glama container runs stdio as a proxy over it
+            # (docker/glama/supervise.py sets UNITARES_STDIO_PROXY_HTTP_URL),
+            # so _proxy_http_list_tools in src/mcp_server_std.py rebuilds every
+            # Tool a scoring client ever sees from exactly this payload. Before
+            # this member existed, 50 annotated definitions arrived there as 50
+            # unannotated ones, with nothing failing. Removing it silently
+            # restores that.
+            annotations = _serialize_tool_annotations(tool)
+            if annotations:
+                entry["annotations"] = annotations
+            openai_tools.append(entry)
         return JSONResponse({
             "tools": openai_tools,
             "count": len(openai_tools),

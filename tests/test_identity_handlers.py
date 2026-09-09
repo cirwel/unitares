@@ -965,6 +965,7 @@ class TestHandleBindSession:
 
         with patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new=AsyncMock(return_value=resolved)), \
              patch("src.mcp_handlers.identity.handlers.derive_session_key", new=AsyncMock(return_value="mcp:test-session")), \
+             patch("src.mcp_handlers.identity.handlers.derive_session_key_with_source", new=AsyncMock(return_value=("mcp:test-session", "mcp_session_id"))), \
              patch("src.mcp_handlers.identity.handlers._cache_session", new=AsyncMock()), \
              patch("src.mcp_handlers.identity.handlers.get_db", return_value=mock_db), \
              patch("src.mcp_handlers.context.get_session_signals", return_value=SimpleNamespace(user_agent="test")):
@@ -1004,6 +1005,7 @@ class TestHandleBindSession:
 
         with patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new=AsyncMock(return_value=resolved)), \
              patch("src.mcp_handlers.identity.handlers.derive_session_key", new=AsyncMock(return_value="mcp:test-session")), \
+             patch("src.mcp_handlers.identity.handlers.derive_session_key_with_source", new=AsyncMock(return_value=("mcp:test-session", "mcp_session_id"))), \
              patch("src.mcp_handlers.identity.handlers._cache_session", new=AsyncMock()), \
              patch("src.mcp_handlers.identity.handlers.get_db", return_value=mock_db), \
              patch("src.mcp_handlers.context.get_session_signals", return_value=SimpleNamespace(user_agent="test")):
@@ -1032,6 +1034,7 @@ class TestHandleBindSession:
 
         with patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new=AsyncMock(return_value=resolved)), \
              patch("src.mcp_handlers.identity.handlers.derive_session_key", new=AsyncMock(return_value="mcp:test-session")), \
+             patch("src.mcp_handlers.identity.handlers.derive_session_key_with_source", new=AsyncMock(return_value=("mcp:test-session", "mcp_session_id"))), \
              patch("src.mcp_handlers.context.get_session_signals", return_value=SimpleNamespace(user_agent="test")):
             result = await handle_bind_session({
                 "client_session_id": "agent-abc123",
@@ -1097,6 +1100,7 @@ class TestHandleBindSession:
 
             with patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new=resolve_identity), \
                  patch("src.mcp_handlers.identity.handlers.derive_session_key", new=derive_session), \
+                 patch("src.mcp_handlers.identity.handlers.derive_session_key_with_source", new=AsyncMock(return_value=("mcp:test-session", "mcp_session_id"))), \
                  patch("src.mcp_handlers.context.get_session_signals", return_value=SimpleNamespace(user_agent="test")):
                 result = await handle_bind_session({
                     "continuity_token": token,
@@ -2220,6 +2224,7 @@ class TestHandleOnboardV2:
 
         with patch("src.mcp_handlers.identity.handlers.resolve_session_identity", new=AsyncMock(return_value=resolved)), \
              patch("src.mcp_handlers.identity.handlers.derive_session_key", new=AsyncMock(return_value="mcp:test-session")), \
+             patch("src.mcp_handlers.identity.handlers.derive_session_key_with_source", new=AsyncMock(return_value=("mcp:test-session", "mcp_session_id"))), \
              patch("src.mcp_handlers.identity.handlers._cache_session", new=AsyncMock()), \
              patch("src.mcp_handlers.identity.handlers.get_db", return_value=mock_db), \
              patch("src.mcp_handlers.context.get_session_signals", return_value=SimpleNamespace(user_agent="test")), \

@@ -476,31 +476,60 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "start_session": ToolAlias(
         old_name="start_session", new_name="onboard", reason="intuitive_alias",
         migration_note=(
-            "Primary workflow name for starting a session; implemented by "
-            "onboard(). Common case: force_new=true alone — save the returned "
-            "uuid and client_session_id. parent_agent_id is for a real handoff "
-            "from an exited predecessor, not for a session sharing the "
-            "workspace with one still running."
+            "Register this process-instance and mint its agent identity; keep the "
+            "returned client_session_id for later calls. Call with force_new=true "
+            "— a bare call with no ownership proof is defaulted to force_new or "
+            "refused under strict identity, never resumed onto another process's "
+            "uuid. parent_agent_id claims succession from an EXITED predecessor: "
+            "naming a still-live parent is rejected as coincidental and the claim "
+            "cleared, unless spawn_reason marks a dispatched child or a "
+            "compaction continuation. Use identity to inspect or rename an "
+            "existing binding."
         ),
         experience=True),
     "sync_state": ToolAlias(
         old_name="sync_state", new_name="process_agent_update", reason="intuitive_alias",
         migration_note=(
-            "Primary workflow name for checking in state; implemented by "
-            f"process_agent_update(). {EISV_INLINE_SUMMARY}"
+            "Record a work check-in and get a governance decision: it advances "
+            "and persists this agent's EISV state and returns proceed or pause "
+            "with a named reason, plus a prediction_id — only when you pass "
+            "confidence — to grade that check-in later with record_result. The "
+            "first call auto-binds an identity, except under strict identity, "
+            "which refuses and points at start_session. simulate_update previews "
+            "a proposed check-in without advancing state, though it still "
+            "appends an audit event; check_working_state reads the current "
+            "verdict without writing. "
+            f"{EISV_INLINE_SUMMARY}"
         ),
         param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
         experience=True),
     "check_working_state": ToolAlias(
         old_name="check_working_state", new_name="get_governance_metrics", reason="intuitive_alias",
         migration_note=(
-            "Primary workflow name for reading current EISV state; implemented by "
-            f"get_governance_metrics(). {EISV_INLINE_SUMMARY}"
+            "Read the calling agent's current governance state and verdict "
+            "without running a cycle, writing anything, or minting an identity. "
+            "A client_session_id resolving to no agent gets an explicit unbound "
+            "payload pointing at start_session; a binding the server merely "
+            "inferred returns that agent's real state marked "
+            "identity_assurance.caller_proven=false, which may be a co-located "
+            "sibling's, so pass the client_session_id start_session returned to "
+            "be sure the reading is yours. lite=false returns the full "
+            "canonical payload under raw_governance, which is where mode and "
+            "basin live. Use sync_state to also "
+            "log work and get a proceed or pause decision. "
+            f"{EISV_INLINE_SUMMARY}"
         ),
         experience=True),
     "search_shared_memory": ToolAlias(
         old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
-        migration_note="Primary workflow name for memory search; implemented by knowledge(action='search').",
+        migration_note=(
+            "Search the cross-agent knowledge graph for prior findings. Archived "
+            "and cold-storage rows are excluded unless status is set explicitly, "
+            "so a closed finding reads as zero results rather than as an answer. "
+            "This read serves unbound callers, so it works before start_session, "
+            "unlike the writes: use store_finding to add a finding and "
+            "update_finding to revise one."
+        ),
         inject_action="search",
         param_normalizer=_SEARCH_SHARED_MEMORY_NORMALIZER,
         experience=True),
@@ -517,33 +546,57 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "store_finding": ToolAlias(
         old_name="store_finding", new_name="knowledge", reason="intuitive_alias",
         migration_note=(
-            "Primary workflow name for recording a finding to shared memory; "
-            "implemented by knowledge(action='store'). Use for durable knowledge "
-            "— a discovery, root cause, or correction. For task/tool/test "
-            "outcomes use record_result instead."
+            "Write one new durable finding into the cross-agent knowledge graph "
+            "and get back its discovery_id. summary is required at call time even "
+            "though the schema marks every field optional; severity high or "
+            "critical is refused unless the session is bound to a registered "
+            "agent, while low and medium fall back to an anonymous writer id. "
+            "Every call mints a NEW discovery — search_shared_memory first, and "
+            "use update_finding to revise one that already exists. Use it for a "
+            "discovery, root cause or correction, and record_result for task, "
+            "tool or test outcomes; budget 20 findings an hour."
         ),
         inject_action="store", experience=True),
     "update_finding": ToolAlias(
         old_name="update_finding", new_name="knowledge", reason="intuitive_alias",
         migration_note=(
-            "Primary workflow name for revising a finding already in shared "
-            "memory; implemented by knowledge(action='update'). Needs the "
-            "discovery_id; set status when the finding is resolved or superseded."
+            "Revise a discovery already in the knowledge graph. discovery_id is "
+            "required at call time even though the schema marks it optional; get "
+            "one from search_shared_memory. summary and details replace what was "
+            "there, while resolution_notes appends a timestamped block, so a "
+            "repeated call appends again. Editing at high or critical severity, "
+            "or raising a discovery into that band, needs a registered, "
+            "session-bound identity, and a non-owner may then only set status to "
+            "resolved, closed or wont_fix. Set status when the finding is "
+            "resolved or superseded."
         ),
         inject_action="update", experience=True),
     "record_result": ToolAlias(
         old_name="record_result", new_name="outcome_event", reason="intuitive_alias",
         migration_note=(
-            "Primary workflow name for recording outcomes; implemented by "
-            f"outcome_event(). {EISV_INLINE_SUMMARY}"
+            "Record a measurable outcome and pair it with this agent's EISV "
+            "snapshot so verdicts can be graded against what really happened. "
+            "Pass the prediction_id from a sync_state reply to bind the outcome "
+            "to that check-in's confidence; it is consumed on first use and "
+            "TTL-bound (an hour by default). Needs a bound or explicit agent_id, "
+            "and refuses under strict identity from an ephemeral session. "
+            "Provenance cannot be self-attested here: verification_source is "
+            "forced and provenance keys in detail are stripped. Use store_finding "
+            "for durable knowledge. "
+            f"{EISV_INLINE_SUMMARY}"
         ),
         experience=True),
     "request_review": ToolAlias(
         old_name="request_review", new_name="dialectic", reason="intuitive_alias",
-        migration_note="Primary workflow name for structured review; implemented by "
-        "dialectic(action='request'). The issue description is reused as the thesis "
-        "by default, so a reviewer answers or a verdict returns without duplicating "
-        "the brief. Pass use_brief_as_thesis=false for the explicit two-call flow.",
+        migration_note=(
+            "Open a governed, on-record review session for this agent. "
+            "issue_description is reused as the thesis by default, so one call "
+            "can reach a verdict; pass use_brief_as_thesis=false for the two-call "
+            "form. Requires a session-owned registered identity, refuses with "
+            "SESSION_EXISTS while one is active, and returns skipped with no "
+            "session when the agent is waiting_input. dialectic advances an open "
+            "session; consult gives advisory evidence with no verdict."
+        ),
         inject_action="request", inject_defaults={"use_brief_as_thesis": True},
         experience=True),
 }

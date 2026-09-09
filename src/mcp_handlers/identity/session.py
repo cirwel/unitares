@@ -486,38 +486,87 @@ def _build_pin_fingerprint_candidates(
     return ordered
 
 
+# Sources that resolve to a key belonging to SOMEONE ELSE rather than to this
+# caller's own transport. `pinned_onboard_session` is a store lookup keyed on a
+# fingerprint that `_extract_base_fingerprint` reduces to the User-Agent alone
+# ("we pin by UA_hash ONLY"), so unrelated callers behind one proxy pool or a
+# common client string share the slot. A key from this source must never be used
+# as the DESTINATION of a session bind: it would attach this agent's uuid to a
+# stranger's session. Every other ladder source names the caller's own transport.
+FOREIGN_DESTINATION_SOURCES = frozenset({"pinned_onboard_session"})
+
+
 async def derive_session_key(
     signals: "Optional[SessionSignals]" = None,
     arguments: Optional[Dict[str, Any]] = None,
+    *,
+    stamp: bool = True,
 ) -> str:
     """Resolve a session key from transport signals and call arguments.
 
-    Thin wrapper around :func:`_derive_session_key_impl` that — after the
-    winning path is decided — fires an observation-only shadow pin lookup
-    when the IP/UA pin path *didn't* win but the request carried an IP/UA
-    fingerprint signal. The shadow lookup answers "would the pin have hit
-    if we'd checked it?" without altering resolution order, and exists so
-    later analysis can distinguish (a) pin expired absolutely from
-    (b) pin alive but bypassed by ordering / fingerprint shift.
+    Always returns the key as a string. Use
+    :func:`derive_session_key_with_source` when the caller also needs to know
+    HOW it resolved — the return type is deliberately not conditional on a
+    flag, because a mocked or flag-unaware caller would otherwise unpack a
+    string into characters instead of failing loudly.
+
+    ``stamp=False`` marks an AUXILIARY derivation: one computing a key for its
+    own use rather than resolving who is acting. It suppresses the identity
+    provenance side effects so the load-bearing derivation stays the single
+    stamper. The default is True so that a future identity-resolving caller
+    which forgets the flag lands on the old, fail-CLOSED behaviour rather than
+    leaving ``proof_origin`` unset, which ``updates/phases.py`` passes through
+    by design.
+    """
+    key, _ = await derive_session_key_with_source(signals, arguments, stamp=stamp)
+    return key
+
+
+async def derive_session_key_with_source(
+    signals: "Optional[SessionSignals]" = None,
+    arguments: Optional[Dict[str, Any]] = None,
+    *,
+    stamp: bool = True,
+) -> "tuple[str, Optional[str]]":
+    """Resolve a session key AND report which ladder source won.
+
+    The source is reported out-of-band rather than read back from
+    ``get_session_resolution_source()`` because under ``stamp=False`` nothing
+    is written, so that contextvar still holds the PREVIOUS derivation's source
+    and would mis-gate any decision made on it. Callers deciding whether a key
+    is a safe bind DESTINATION need this (see ``FOREIGN_DESTINATION_SOURCES``).
+
+    Under ``stamp=False`` every request-scoped side effect is suppressed, not
+    just the provenance stamp: the shadow observation below is skipped and the
+    pin lookup does not refresh its TTL. An auxiliary derivation observes.
+
+    Also fires — when stamping, after the winning path is decided — a shadow
+    pin lookup when the IP/UA pin path *didn't* win but the request carried an
+    IP/UA fingerprint signal. The shadow lookup answers "would the pin have hit
+    if we'd checked it?" without altering resolution order, and exists so later
+    analysis can distinguish (a) pin expired absolutely from (b) pin alive but
+    bypassed by ordering / fingerprint shift.
     """
     arguments = arguments or {}
-    resolved = await _derive_session_key_impl(signals, arguments)
+    sink: Dict[str, Any] = {}
+    resolved = await _derive_session_key_impl(
+        signals, arguments, stamp=stamp, sink=sink
+    )
+    source = sink.get("source")
     try:
-        from ..context import get_session_resolution_source
         # Skip the shadow lookup when the pin path either won
         # ("pinned_onboard_session") or already ran and missed
         # ("ip_ua_fingerprint" — fingerprint signal present but no pin
         # candidate matched). In both cases re-running it tells us nothing
         # new and just spends a Redis call.
-        source = get_session_resolution_source()
-        if source not in ("pinned_onboard_session", "ip_ua_fingerprint"):
+        if stamp and source not in ("pinned_onboard_session", "ip_ua_fingerprint"):
             await _shadow_pin_observe(signals, arguments, resolved)
     except Exception:
         # Shadow lookup is best-effort and never fatal — its job is
         # observation, not resolution. Failure leaves the shadow
         # contextvars at default (all None).
         pass
-    return resolved
+    return resolved, source
 
 
 async def _shadow_pin_observe(
@@ -597,6 +646,9 @@ async def _shadow_pin_observe_inner(
 async def _derive_session_key_impl(
     signals: "Optional[SessionSignals]" = None,
     arguments: Optional[Dict[str, Any]] = None,
+    *,
+    stamp: bool = True,
+    sink: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Single source of truth for session key derivation.
 
@@ -661,6 +713,20 @@ async def _derive_session_key_impl(
     }
 
     def _mark(source: str) -> None:
+        # `sink` reports the winning source to the caller out-of-band, so a
+        # derivation can be read without being allowed to SPEAK for the
+        # request's identity. It is recorded even under stamp=False.
+        if sink is not None:
+            sink["source"] = source
+        if not stamp:
+            # stamp=False marks an AUXILIARY derivation — one computing a key
+            # for its own use, not resolving who is acting. Such a call must
+            # not restate the request's identity provenance: the load-bearing
+            # derivation is the single stamper. Default stays True so that a
+            # future identity-resolving caller which forgets the flag lands on
+            # the old, fail-CLOSED behaviour rather than leaving proof_origin
+            # unset, which `updates/phases.py` passes through by design.
+            return
         try:
             from ..context import (
                 set_session_resolution_source,
@@ -765,10 +831,15 @@ async def _derive_session_key_impl(
                 include_unscoped_fallback=not bool(hint or model),
             )
             for candidate in scoped_candidates:
-                pinned = await lookup_onboard_pin(candidate)
+                # refresh_ttl=stamp: an auxiliary derive (stamp=False) reads
+                # the pin to decide something about itself; it must not keep a
+                # slot alive. Refreshing here would let a caller that merely
+                # LOOKED at a foreign pin extend its 30-minute sliding window.
+                pinned = await lookup_onboard_pin(candidate, refresh_ttl=stamp)
                 if pinned:
                     _mark("pinned_onboard_session")
-                    _mark_pin_scope(candidate, base_fp, hint, model, signals.user_agent)
+                    if stamp:
+                        _mark_pin_scope(candidate, base_fp, hint, model, signals.user_agent)
                     # S13: emit passive observation event distinct from the
                     # active-alert identity_hijack_suspected. Caller may still
                     # have proof signals; this fires regardless to build the
