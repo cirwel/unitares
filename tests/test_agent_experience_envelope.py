@@ -127,6 +127,117 @@ async def test_error_payload_passes_through():
 
 
 @pytest.mark.asyncio
+async def test_a_real_typed_refusal_passes_through():
+    """#2134. The case above intends to cover typed refusals, but its
+    ``identity_required`` fixture carries ``success: False`` — a shape no
+    emission point produces. A real refusal is built by
+    ``strict_identity_refusal_payload`` and is deliberately "a structured
+    success-shape, not an error", so it carries ``success: true`` with no
+    ``error`` key and slipped past the guard.
+
+    Build the payload from the real single-sourced builder, not a hand-written
+    dict, so this cannot drift from the shape it is protecting.
+    """
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+    from src.mcp_handlers.response_base import success_response
+
+    raw = success_response(strict_identity_refusal_payload("process_agent_update"))
+    payload = json.loads(raw[0].text)
+    # Guard the premise: if the refusal ever becomes error-shaped, this test
+    # stops proving anything and should be revisited rather than silently pass.
+    assert payload["success"] is True and "error" not in payload
+
+    out = await apply_experience_envelope(
+        "process_agent_update", {}, _ctx("sync_state"), raw
+    )
+    # Not an identity-return: the tool name is translated to the invoked alias
+    # (see test_a_refusal_names_the_tool_the_caller_invoked). Everything else
+    # must survive verbatim, which is what the field assertions below pin.
+    d = json.loads(out[0].text)
+    assert d["status"] == "identity_required"
+    for field in ("hint", "next_step", "safe_options", "do_not"):
+        assert field in d, field
+    # The generic check-in guidance must never be layered over a refusal.
+    assert "next_action" not in d
+    # Both shipped SDKs read the refusal at the top level: the Python SDK keys
+    # on rollout_flag, the Elixir SDK on status. Enveloping broke both.
+    assert d["rollout_flag"] == "STRICT_IDENTITY_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_names_the_tool_the_caller_invoked():
+    """The refusal's own `tool` is the canonical name, because that is what
+    the emission point knows. Passing it through unchanged would answer an
+    agent about a tool it never called — the register-mismatch the envelope
+    already guards against elsewhere. The Python SDK surfaces this field
+    verbatim in IdentityRefusedError, so it reaches a human.
+    """
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+    from src.mcp_handlers.response_base import success_response
+
+    raw = success_response(strict_identity_refusal_payload("process_agent_update"))
+    assert json.loads(raw[0].text)["tool"] == "process_agent_update"
+
+    out = await apply_experience_envelope(
+        "process_agent_update", {}, _ctx("sync_state"), raw
+    )
+    d = json.loads(out[0].text)
+    assert d["tool"] == "sync_state"
+    # Nothing else may be reshaped on the way through.
+    for field in ("status", "hint", "next_step", "safe_options", "do_not", "rollout_flag"):
+        assert field in d, field
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_on_the_canonical_name_is_returned_untouched():
+    """When the caller used the canonical name there is nothing to translate,
+    so the payload must not be rebuilt at all."""
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+    from src.mcp_handlers.response_base import success_response
+
+    raw = success_response(strict_identity_refusal_payload("get_governance_metrics"))
+    out = await apply_experience_envelope(
+        "get_governance_metrics", {}, _ctx("get_governance_metrics"), raw
+    )
+    assert out is raw
+
+
+@pytest.mark.asyncio
+async def test_every_refusal_status_passes_through():
+    """``status`` varies by emission point; the marker is what identifies a
+    refusal, so a differently-statused refusal must pass through too."""
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+    from src.mcp_handlers.response_base import success_response
+
+    for status in ("identity_required", "lineage_declaration_required"):
+        raw = success_response(
+            strict_identity_refusal_payload("onboard", status=status)
+        )
+        out = await apply_experience_envelope(
+            "onboard", {}, _ctx("start_session"), raw
+        )
+        d = json.loads(out[0].text)
+        assert d["status"] == status
+        assert d["rollout_flag"] == "STRICT_IDENTITY_REQUIRED", status
+        # Recovery contract intact for every status the builder can emit.
+        for field in ("hint", "next_step", "safe_options", "do_not"):
+            assert field in d, (status, field)
+        assert "next_action" not in d, status
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_success_is_still_enveloped():
+    """The refusal guard must not swallow normal payloads: only the
+    ``rollout_flag`` marker may divert, and nothing else writes it."""
+    raw = _result({"success": True, "status": "healthy", "metrics": {"E": 0.5}})
+    out = await apply_experience_envelope(
+        "process_agent_update", {}, _ctx("sync_state"), raw
+    )
+    assert out is not raw
+    assert "next_action" in json.loads(out[0].text)
+
+
+@pytest.mark.asyncio
 async def test_malformed_result_passes_through():
     for raw in ([TextContent(type="text", text="not json")],
                 [TextContent(type="text", text="[1, 2]")],
