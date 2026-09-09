@@ -84,7 +84,7 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'1024'` (agents/dialectic_reviewer/host_backends.py, agents/dialectic_reviewer/reviewer.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
-| `UNITARES_DISABLE_PLUGINS` | `None (no reader fallback)` | Load every registered ``governance_mcp.plugins`` entry point | src/plugin_loader.py |
+| `UNITARES_DISABLE_PLUGINS` | `None (no reader fallback)` | True when this process must not load or import plugin packages | src/plugin_loader.py |
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
 | `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py); `''` (agents/vigil/agent.py) | Derive a config tag matching baseline filename suffix from env vars | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
