@@ -3,7 +3,7 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-09-08"
+last_verified: "2026-09-09"
 freshness_days: 21
 source_files:
   - unitares/src/mcp_handlers/knowledge/handlers.py
@@ -19,7 +19,7 @@ source_files:
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
 source_digests:
-  unitares/src/mcp_handlers/knowledge/handlers.py: "9ddb3b9a52bfd79b"
+  unitares/src/mcp_handlers/knowledge/handlers.py: "824d8fdc9903fe7a"
   unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
   unitares/src/mcp_handlers/schemas/knowledge.py: "d3a3a6b031026ba7"
   unitares/src/alias_schema.py: "6cf38a6e81f09728"
@@ -27,7 +27,7 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "b81fb422cdec412c"
   unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"
   unitares/src/knowledge_graph.py: "0f53dddc433c13aa"
-  unitares/src/knowledge_graph_lifecycle.py: "b2988b7694718525"
+  unitares/src/knowledge_graph_lifecycle.py: "3d943c8664beedd6"
   unitares/src/storage/knowledge_graph_age.py: "0541b46146c6084c"
   unitares/src/storage/knowledge_graph_postgres.py: "212a048e391c53b3"
   unitares/src/db/mixins/knowledge_graph.py: "f3f00b0381c5fa10"
@@ -172,9 +172,13 @@ Tags are how future agents find your contributions. Be intentional:
 - **Be consistent**: Check existing tags before inventing new ones
 - **Mind the lifecycle tags**: `ephemeral`, `temp`, `scratch`, `test`, `demo`
   archive the entry after 7 days; `permanent`, `foundational`, `architecture`,
-  `decision` (and the `learning` / `pattern` types) make it permanent, and
-  permanence wins on tie. A durable finding *about* the test suite must not
-  carry the `test` tag.
+  `decision` (and the `architectural_decision` / `learning` / `pattern` types)
+  make it permanent, and permanence wins on tie. A durable finding *about* the
+  test suite must not carry the `test` tag.
+- **Permanent means retained, not unchangeable**: it stops automatic archival.
+  Superseding an entry deliberately is gated on the permanent TAGS only, so an
+  architectural decision can still be replaced by its next revision — which is
+  that category's normal lifecycle.
 
 ## Closing the Loop
 
