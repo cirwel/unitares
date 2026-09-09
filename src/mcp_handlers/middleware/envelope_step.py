@@ -883,6 +883,14 @@ def build_experience_envelope(
         envelope["agent_uuid"] = payload["uuid"]
 
     source_payload = _harvest_payload(payload)
+    # Resolve the tactical prediction id ONCE, canonical-source first.
+    # _harvest_payload treats a nested raw_governance as the canonical payload,
+    # so preferring the outer copy could hand back a stale id when a caller
+    # passes an already-enveloped response carrying both (codex review, #2123).
+    # Both the prose below and the top-level key use this one value.
+    prediction_id = source_payload.get("prediction_id") or payload.get("prediction_id")
+    if not (isinstance(prediction_id, str) and prediction_id):
+        prediction_id = None
     coherence, risk = _coherence_and_risk(source_payload)
     include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
     retrieval_options = _effective_discovery_retrieval_options(
@@ -964,8 +972,7 @@ def build_experience_envelope(
                 state_summary["coherence"] = coherence
         if risk is not None:
             state_summary["risk_score"] = risk
-        prediction_id = payload.get("prediction_id") or source_payload.get("prediction_id")
-        if isinstance(prediction_id, str) and prediction_id:
+        if prediction_id:
             # The id already sits in the canonical payload; naming it here is
             # what makes registry-bound record_result discoverable — otherwise
             # the outcome grades a confidence borrowed from an unrelated
@@ -1137,7 +1144,28 @@ def build_experience_envelope(
             compact = _compact_eisv(snapshot)
             if compact:
                 state_summary["working_state"] = compact
+        # Binding disclosure. The producer returns prediction_binding /
+        # prediction_source / calibration_excluded precisely so a caller can
+        # tell a registry-bound outcome from one that fell back to scraped
+        # confidence — and a scraped-confidence row is excluded from
+        # calibration entirely. Confined to raw_governance, those three left
+        # the friendly surface reporting "Outcome recorded" identically either
+        # way, so an agent could not tell a counted outcome from a dropped one.
+        binding = _lift(
+            source_payload,
+            "prediction_binding",
+            "prediction_source",
+            "calibration_excluded",
+        )
+        state_summary.update(binding)
         next_action = "Outcome recorded - continue, or sync_state to fold it into your working state."
+        if binding.get("calibration_excluded"):
+            next_action = (
+                "Outcome recorded, but stamped calibration_excluded (binding: "
+                f"{binding.get('prediction_binding') or 'unknown'}), so it does "
+                "not train calibration. Pass the prediction_id from the "
+                "sync_state you are grading to bind the outcome to it."
+            )
 
     elif canonical_name == "dialectic":
         state_summary = _lift(
@@ -1173,6 +1201,22 @@ def build_experience_envelope(
 
     if next_action is not None:
         envelope["next_action"] = _friendly_action_hint(next_action)
+
+    # Surface the tactical prediction id as a machine-readable field, not only
+    # inside the next_action prose #1696 added. Every other formatter already
+    # passes it through top-level (response_formatter _format_standard /
+    # _format_mirror / _format_compact; minimal opts out on bandwidth grounds),
+    # and update_response_service mints it onto the base payload with a
+    # docstring naming top-level placement as the contract — this envelope,
+    # which rebuilds the response from scratch, was the sole surface dropping
+    # it. What an unbound record_result costs: prediction_source falls back to
+    # "prev_confidence_fallback", which is in SCRAPED_PREDICTION_SOURCES, so
+    # the row is stamped calibration_excluded and never reaches the tactical
+    # lane (outcome_events.py); and decision_action for test_passed/test_failed
+    # is hardcoded "proceed" rather than read off the registered prediction.
+    # The prose stays — it tells the agent what the id is for (#2123).
+    if prediction_id and canonical_name == "process_agent_update":
+        envelope["prediction_id"] = prediction_id
     if state_summary:
         # state_summary can carry glossary coaching (e.g. an uninitialized
         # verdict's "Submit one process_agent_update...") — translate it like

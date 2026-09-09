@@ -1233,6 +1233,136 @@ def test_sync_state_envelope_prediction_id_composes_with_review_nudge():
     assert "request_review" in env["next_action"]
 
 
+# ─── #2123: the README quickstart reads prediction_id as a top-level key ────
+# The envelope rebuilds the response from scratch, so naming the id only in
+# next_action prose made `result.get("prediction_id")` return None. An unbound
+# record_result then falls back to prev_confidence_fallback — a member of
+# SCRAPED_PREDICTION_SOURCES — so the row is stamped calibration_excluded and
+# never reaches the tactical lane, and decision_action for test_passed /
+# test_failed is hardcoded "proceed" instead of read off the registered
+# prediction. Both calls return success:true.
+
+
+def test_sync_state_envelope_exposes_prediction_id_top_level():
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "prediction_id": "abc-123",
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env.get("prediction_id") == "abc-123"
+    # The prose keeps saying what the id is for; the key is what code reads.
+    assert "prediction_id='abc-123'" in env["next_action"]
+
+
+def test_sync_state_envelope_lifts_prediction_id_from_nested_payload():
+    """A caller handing us an already-enveloped response still gets the key."""
+    payload = {
+        "success": True,
+        "raw_governance": {
+            "success": True,
+            "decision": {"action": "proceed"},
+            "prediction_id": "nested-456",
+        },
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env.get("prediction_id") == "nested-456"
+
+
+def test_sync_state_envelope_omits_prediction_id_when_none_was_minted():
+    """Absent beats present-and-null: record_result must not echo a None."""
+    payload = {"success": True, "decision": {"action": "proceed"}}
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "prediction_id" not in env
+
+
+def test_quickstart_loop_can_thread_prediction_id_without_raw_governance():
+    """Pins the README Quickstart contract end to end.
+
+    README.md reads `result.get("prediction_id")` straight off the sync_state
+    response. This asserts the documented expression yields the real id
+    without the caller reaching into raw_governance or regexing next_action.
+    """
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "metrics": {"risk_score": 0.2},
+        "prediction_id": "quickstart-789",
+    }
+    result = build_experience_envelope("sync_state", "process_agent_update", payload)
+
+    prediction_id = result.get("prediction_id")  # the README's own expression
+
+    assert prediction_id == "quickstart-789"
+    # Without this, record_result falls back to prev_confidence_fallback, which
+    # is in SCRAPED_PREDICTION_SOURCES — the row is then stamped
+    # calibration_excluded and dropped from the tactical lane.
+    assert prediction_id is not None
+
+
+def test_envelope_prefers_canonical_prediction_id_over_stale_outer_copy():
+    """Nested raw_governance is the canonical payload, so it wins a conflict.
+
+    Preferring the outer copy would hand back an older id; record_result would
+    then consume and grade whatever prediction that id still points at.
+    """
+    payload = {
+        "success": True,
+        "prediction_id": "stale-outer",
+        "raw_governance": {
+            "success": True,
+            "decision": {"action": "proceed"},
+            "prediction_id": "fresh-canonical",
+        },
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env["prediction_id"] == "fresh-canonical"
+    assert "prediction_id='fresh-canonical'" in env["next_action"]
+
+
+def test_prediction_id_is_not_lifted_onto_unrelated_tools():
+    """Only the check-in mints one; echoing a consumed id back would misbind."""
+    payload = {"success": True, "prediction_id": "already-consumed"}
+    env = build_experience_envelope("record_result", "outcome_event", payload)
+    assert "prediction_id" not in env
+
+
+def test_record_result_envelope_discloses_a_fallback_binding():
+    """A calibration_excluded outcome must not read as a counted one."""
+    payload = {
+        "success": True,
+        "outcome_id": "o-1",
+        "outcome_type": "test_passed",
+        "raw_governance": {
+            "prediction_binding": "prev_confidence_fallback",
+            "prediction_source": "prev_confidence_fallback",
+            "calibration_excluded": True,
+        },
+    }
+    env = build_experience_envelope("record_result", "outcome_event", payload)
+    assert env["state_summary"]["calibration_excluded"] is True
+    assert env["state_summary"]["prediction_binding"] == "prev_confidence_fallback"
+    assert "calibration_excluded" in env["next_action"]
+    assert "prediction_id" in env["next_action"]
+
+
+def test_record_result_envelope_reports_a_registry_binding_plainly():
+    payload = {
+        "success": True,
+        "outcome_id": "o-2",
+        "outcome_type": "test_passed",
+        "raw_governance": {
+            "prediction_binding": "registry",
+            "prediction_source": "registry",
+            "calibration_excluded": False,
+        },
+    }
+    env = build_experience_envelope("record_result", "outcome_event", payload)
+    assert env["state_summary"]["prediction_binding"] == "registry"
+    assert env["state_summary"]["calibration_excluded"] is False
+    assert env["next_action"].startswith("Outcome recorded - continue")
+
+
 @pytest.mark.parametrize("risk,band", [(0.44, "low"), (0.46, "elevated"), (0.71, "high")])
 def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
     envelope = build_experience_envelope(
