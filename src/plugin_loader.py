@@ -30,6 +30,23 @@ logger = get_logger(__name__)
 _ENTRY_POINT_GROUP = "governance_mcp.plugins"
 
 
+def plugins_disabled() -> bool:
+    """True when this process must not load or import plugin packages.
+
+    The predicate is public because the entry-point loader is not the only way
+    a plugin package reaches this process. Anything that imports a plugin
+    module directly runs its ``@mcp_tool`` decorators and registers tools, and
+    a caller that only guards on ``ImportError`` will do exactly that with the
+    flag set. Measured 2026-09-09: ``runtime_queries.get_health_check_data``
+    imported ``unitares_pi_plugin.handlers`` from the deep-health probe about
+    five seconds after startup, so a server started with the flag went from 50
+    to 51 capabilities while still advertising 50 — publishing a federation
+    capability it then refused to dispatch. Ask this before importing a plugin
+    package, not just before iterating entry points.
+    """
+    return bool(os.environ.get("UNITARES_DISABLE_PLUGINS"))
+
+
 def load_plugins() -> List[str]:
     """Load every registered ``governance_mcp.plugins`` entry point.
 
@@ -37,7 +54,7 @@ def load_plugins() -> List[str]:
     failed plugin logs a warning and is skipped so one broken plugin
     can't take governance down.
     """
-    if os.environ.get("UNITARES_DISABLE_PLUGINS"):
+    if plugins_disabled():
         logger.info("plugin loading skipped (UNITARES_DISABLE_PLUGINS set)")
         return []
 
