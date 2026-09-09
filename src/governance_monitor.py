@@ -1181,22 +1181,40 @@ class UNITARESMonitor:
         scaled_dt = elapsed_seconds * (config.DT / config.DT_EXPECTED_INTERVAL)
         effective_dt = max(config.DT, min(scaled_dt, config.DT_MAX))
 
-        # Saturation event: gap exceeds the cadence band that the linear
-        # scaling can represent. Above this threshold a 17h gap and a 30h
-        # gap integrate identically — operator-visible signal that decay
-        # is no longer gap-proportional. See task #7 for semantics decision.
+        # Two distinct facts about this gap, deliberately no longer one test.
         #
-        # We also arm the gap-recovery window here. The next N attestations
-        # may run on stale/transient state (e.g., MacBook clamshell sleep-wake
-        # produced false high-risk verdicts on Lumen/Sentinel/Watcher 2026-05-08
-        # to 2026-05-12); during the window we downgrade 'pause' decisions
-        # so the circuit breaker doesn't trip on a sleep-wake artifact.
-        if scaled_dt > config.DT_MAX:
+        # dt_saturated: the gap exceeds the cadence band the linear scaling can
+        # represent, so a 17h gap and a 30h gap integrate identically. This is a
+        # statement about numerical integration (DT_MAX is an Euler stability
+        # cap) and is telemetry only — decay is no longer gap-proportional above
+        # it. Semantics for the saturated band remain open; see
+        # docs/proposals/gap-recovery-arming-semantics-v0.md.
+        #
+        # gap_recovery_armed: the agent was absent long enough that the next N
+        # attestations may run on stale/transient state (MacBook clamshell
+        # sleep-wake produced false high-risk verdicts on Lumen/Sentinel/Watcher
+        # 2026-05-08 to 2026-05-12); during the window we downgrade 'pause' so
+        # the circuit breaker does not trip on a wake artifact. This one gates
+        # enforcement, so it reads its own constant rather than inferring
+        # absence from an integrator bound.
+        #
+        # At the shipped default the two coincide exactly (both at 150s); they
+        # separate as soon as an operator moves GAP_RECOVERY_ARM_SECONDS.
+        dt_saturated = scaled_dt > config.DT_MAX
+        gap_recovery_armed = elapsed_seconds > config.GAP_RECOVERY_ARM_SECONDS
+
+        if gap_recovery_armed:
             self._gap_recovery_cycles_remaining = config.GAP_RECOVERY_CYCLES
+
+        if dt_saturated or gap_recovery_armed:
             logger.info(
-                f"[DT_MAX saturation] {self.agent_id}: elapsed={elapsed_seconds:.1f}s "
-                f"clipped to dt={config.DT_MAX} (linear scaling would give {scaled_dt:.2f}); "
-                f"arming gap-recovery for {config.GAP_RECOVERY_CYCLES} cycles"
+                f"[gap] {self.agent_id}: elapsed={elapsed_seconds:.1f}s; "
+                f"dt_saturated={dt_saturated} "
+                f"(dt={effective_dt:.2f}, linear scaling would give {scaled_dt:.2f}, "
+                f"cap={config.DT_MAX}); "
+                f"gap_recovery_armed={gap_recovery_armed} "
+                f"(threshold={config.GAP_RECOVERY_ARM_SECONDS:.1f}s"
+                + (f", {config.GAP_RECOVERY_CYCLES} cycles)" if gap_recovery_armed else ")")
             )
 
         # === DUAL-LOG GROUNDING (Patent: Dual-Log Architecture) ===

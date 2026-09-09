@@ -899,15 +899,38 @@ class GovernanceConfig:
     DT_EXPECTED_INTERVAL = 15.0  # Expected check-in cadence (seconds)
     DT_MAX = 1.0     # Euler stability cap (max single-step dt)
 
-    # Gap-recovery: when wall-clock dt exceeds the band that linear scaling
-    # can represent (scaled_dt > DT_MAX), the next N attestations may run
-    # on stale/transient state — for example, a MacBook clamshell sleep-wake
-    # leaves the governance-MCP process with one cached attest cycle and
-    # then a wake-window attest that arrives with discontinuous EMA inputs.
-    # In that window we downgrade 'pause' decisions to 'proceed' (the next
-    # cycle's verdict will catch genuine high-risk states). Evidence in
-    # knowledge graph discovery 2026-05-15T14:27:26.894282+00:00.
+    # Gap-recovery: after a wall-clock gap longer than GAP_RECOVERY_ARM_SECONDS,
+    # the next N attestations may run on stale/transient state — for example, a
+    # MacBook clamshell sleep-wake leaves the governance-MCP process with one
+    # cached attest cycle and then a wake-window attest that arrives with
+    # discontinuous EMA inputs. In that window we downgrade 'pause' decisions to
+    # 'proceed' (the next cycle's verdict will catch genuine high-risk states).
+    # Evidence in knowledge graph discovery 2026-05-15T14:27:26.894282+00:00.
     GAP_RECOVERY_CYCLES = 2
+
+    # How long an absence has to be before the first check-in after it is
+    # distrusted. This is the *enforcement* question — "was this agent away?" —
+    # and it is deliberately its own constant.
+    #
+    # It used to be a side effect of the integrator. Arming tested
+    # `scaled_dt > DT_MAX`, i.e. a statement about Euler stability reused as a
+    # proxy for absence, which put the threshold at DT_MAX * DT_EXPECTED_INTERVAL
+    # / DT = 150s without anyone choosing 150s. The default below reproduces that
+    # exact value, so this constant is behavior-preserving on its own; what it
+    # changes is that the value can now be moved without also rescaling the ODE's
+    # notion of time.
+    #
+    # What the deployed default costs, measured (2026-08-06 audit,
+    # docs/ontology/eisv-proprioception-contract.md rows 24/35/41): 195 of 218
+    # recorded pauses (89.4%) were downgraded, median suppressed gap 300.9s. Only
+    # 4 of 195 firings (2.1%) were sleep-shaped (>1h) — the mechanism built for
+    # clamshell sleep-wake acts, as deployed, as a cadence gate on enforcement.
+    # Raising this restores enforcement between the old and new thresholds.
+    #
+    # Choosing the value is an operator call, not a derivation; see
+    # docs/proposals/gap-recovery-arming-semantics-v0.md for the options and what
+    # the data does and does not settle.
+    GAP_RECOVERY_ARM_SECONDS = DT_MAX * DT_EXPECTED_INTERVAL / DT  # 150.0s
 
     # Warmup structural grace: on the first WARMUP_STRUCTURAL_GRACE_CYCLES
     # process-LOCAL updates after a process (re)start, the ODE state

@@ -56,10 +56,10 @@ UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 
 ### Choosing the advertised tool surface (v2.23.0 and later)
 
-The default is the fourteen-tool `standard` profile: the five-name checkpoint
+The default is the fifteen-tool `standard` profile: the five-name checkpoint
 loop plus shared memory (`search_shared_memory`, `store_finding`,
-`update_finding`), structured review (`request_review`), advisory inference
-(`consult`), recovery (`self_recovery`), and inspection (`knowledge`,
+`update_finding`), structured review (`request_review`, `dialectic`), advisory
+inference (`consult`), recovery (`self_recovery`), and inspection (`knowledge`,
 `describe_tool`, `health_check`). To
 choose a different profile, set `GOVERNANCE_TOOL_MODE` in the checkout's `.env`
 file before starting the server, then run:
