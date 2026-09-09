@@ -797,6 +797,56 @@ async def _decode_stored_identity(
     return agent_uuid, agent_id
 
 
+def _resumed_identity_result(
+    *,
+    agent_id,
+    agent_uuid,
+    label,
+    persisted: bool,
+    is_archived,
+    agent_status,
+    source: str,
+    traj_result: dict,
+) -> Dict[str, Any]:
+    """Build the resumed-identity result shared by PATH 1 and PATH 2.
+
+    Both paths returned the same 13 keys in the same order and differed only
+    in `persisted` (PATH 1 has to look it up, PATH 2 found the row in PG so
+    it is True by construction) and `source`. Extracted 2026-09-08.
+
+    Deliberately NOT shared with the token-rebind result or
+    _adopt_recovered_identity's: those omit `archived` and the trajectory_*
+    keys, and folding them in here would hand their callers keys they do not
+    see today.
+    """
+    return {
+
+        "agent_id": agent_id,   # Human-readable (model+date). UUID for lookup is agent_uuid.
+        "public_agent_id": agent_id,
+
+        "agent_uuid": agent_uuid,
+
+        "display_name": label,
+
+        "label": label,  # backward compat
+
+        "created": False,
+
+        "persisted": persisted,
+
+        "archived": is_archived,
+        "core_agent_row_status": agent_status,
+
+        "source": source,
+        "identity_resolution_outcome": "resumed",
+
+        "trajectory_verified": traj_result.get("verified"),
+
+        "trajectory_warning": traj_result.get("warning"),
+
+    }
+
+
 async def resolve_session_identity(
 
     session_key: str,
@@ -1075,32 +1125,16 @@ async def resolve_session_identity(
 
 
 
-                            return {
-
-                                "agent_id": agent_id,   # Human-readable (model+date). UUID for lookup is agent_uuid.
-                                "public_agent_id": agent_id,
-
-                                "agent_uuid": agent_uuid,
-
-                                "display_name": label,
-
-                                "label": label,  # backward compat
-
-                                "created": False,
-
-                                "persisted": persisted,
-
-                                "archived": is_archived,
-                                "core_agent_row_status": agent_status,
-
-                                "source": "redis",
-                                "identity_resolution_outcome": "resumed",
-
-                                "trajectory_verified": traj_result.get("verified"),
-
-                                "trajectory_warning": traj_result.get("warning"),
-
-                            }
+                            return _resumed_identity_result(
+                                agent_id=agent_id,
+                                agent_uuid=agent_uuid,
+                                label=label,
+                                persisted=persisted,
+                                is_archived=is_archived,
+                                agent_status=agent_status,
+                                source="redis",
+                                traj_result=traj_result,
+                            )
 
             except Exception as e:
                 # INFO level (v2.5.7): Redis lookup failures are recoverable but should be visible
@@ -1213,32 +1247,16 @@ async def resolve_session_identity(
 
 
 
-                return {
-
-                    "agent_id": agent_id,   # Human-readable (model+date). UUID for lookup is agent_uuid.
-                    "public_agent_id": agent_id,
-
-                    "agent_uuid": agent_uuid,
-
-                    "display_name": label,
-
-                    "label": label,  # backward compat
-
-                    "created": False,
-
-                    "persisted": True,  # Found in PostgreSQL = persisted
-
-                    "archived": is_archived,
-                    "core_agent_row_status": agent_status,
-
-                    "source": "postgres",
-                    "identity_resolution_outcome": "resumed",
-
-                    "trajectory_verified": traj_result.get("verified"),
-
-                    "trajectory_warning": traj_result.get("warning"),
-
-                }
+                return _resumed_identity_result(
+                    agent_id=agent_id,
+                    agent_uuid=agent_uuid,
+                    label=label,
+                    persisted=True,  # Found in PostgreSQL = persisted
+                    is_archived=is_archived,
+                    agent_status=agent_status,
+                    source="postgres",
+                    traj_result=traj_result,
+                )
 
         except Exception as e:
 
