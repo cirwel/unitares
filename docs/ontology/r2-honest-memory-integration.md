@@ -223,7 +223,7 @@ This pattern matches existing background tasks (`class_promotion_sweeper_task`, 
 
 Audit events fire from two contexts:
 
-1. **`lineage_cross_role_rejected`** and **`lineage_declared`** fire from the onboard handler (anyio context). Per the same rule above, these use the existing `append_audit_event_async` pattern that wraps writes in fire-and-forget background dispatch (see `agent_silent` audit at `src/background_tasks.py:1023-1032` for the precedent). Onboard handler does NOT block on the audit write.
+1. **`lineage_cross_role_rejected`** and **`lineage_declared`** fire from the onboard handler (anyio context). Per the same rule above, these use the existing `append_audit_event_async` pattern that wraps writes in fire-and-forget background dispatch (see the `agent_silent` audit emit in `src/background_tasks.py` for the precedent). Onboard handler does NOT block on the audit write.
 2. **`lineage_promoted`**, **`lineage_demoted`**, **`lineage_grace_expired`** fire from `_evaluate_lineage_for` or from the sweeper — both outside anyio context — and can use the standard direct-await audit path.
 
 ### What changes at each transition (v2 — with clawback semantics)

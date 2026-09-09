@@ -24,7 +24,7 @@ source_digests:
   unitares/src/mcp_handlers/schemas/knowledge.py: "d3a3a6b031026ba7"
   unitares/src/alias_schema.py: "6cf38a6e81f09728"
   unitares/src/mcp_handlers/consolidated.py: "99210293967885fb"
-  unitares/src/mcp_handlers/tool_stability.py: "57c09b746a2dbe71"
+  unitares/src/mcp_handlers/tool_stability.py: "430c2b2b206ecd99"
   unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"
   unitares/src/knowledge_graph.py: "0f53dddc433c13aa"
   unitares/src/knowledge_graph_lifecycle.py: "3d943c8664beedd6"

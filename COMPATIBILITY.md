@@ -35,15 +35,16 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
-- v2.23.0 preserves registered callable names, input schemas, lifecycle
-  envelopes, and every selectable profile; no database migration is
-  introduced. Its default discovery profile changes from five tools to eleven:
-  a new `standard` profile adds `search_shared_memory`, `store_finding`,
-  `update_finding`, `request_review`, `consult`, and `self_recovery` to the
-  checkpoint loop. A client that selected tools from discovery on v2.22.0 sees
-  six additional names and no removals. `GOVERNANCE_TOOL_MODE=minimal` keeps the v2.22.0
-  default surface. The server now also returns an MCP `instructions` string
-  describing its profile.
+- v2.23.0 preserves registered callable names, input schemas, and lifecycle
+  envelopes; no database migration is introduced. Discovery profiles are gone
+  (#2137): every transport advertises one complete catalog — every registered
+  tool plus the primary workflow aliases — so a client that selected tools from
+  discovery on v2.22.0 sees additional names and no removals. Legacy
+  `GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
+  but ignored, `minimal` included, so that value no longer restores the v2.22.0
+  default surface; see the
+  [interface contract](docs/INTERFACE_CONTRACT.md). The server also returns an
+  MCP `instructions` string describing the catalog.
 - v2.22.0 preserves registered callable names, input schemas, lifecycle
   envelopes, and the selectable `lite` contract; no database migration is
   introduced. Its default discovery profile changes from 29 tools to five.

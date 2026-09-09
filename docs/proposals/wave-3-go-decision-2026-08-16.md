@@ -259,8 +259,8 @@ Verified against `master` 2026-08-22: `auto_resolve_stuck_sessions` calls **none
 
 | Path | Members (verified 2026-08-22) | Character |
 |---|---|---|
-| **(1) Periodic sweeper** | `auto_resolve_stuck_sessions` (`src/mcp_handlers/dialectic/auto_resolve.py:102`), `_parse_timestamp` (`:32`) | the dual-writer hazard; the reason to take this at all |
-| **(2) Request-driven** | `check_reviewer_stuck` (`src/mcp_handlers/dialectic/handlers.py:211`), `_apply_reviewer_reassignment` (`:933`), `check_timeout` (`src/dialectic_protocol.py:1216`) | get / takeover / reassign entry points |
+| **(1) Periodic sweeper** | `auto_resolve_stuck_sessions` and `_parse_timestamp` (`src/mcp_handlers/dialectic/auto_resolve.py`) | the dual-writer hazard; the reason to take this at all |
+| **(2) Request-driven** | `check_reviewer_stuck` and `_apply_reviewer_reassignment` (`src/mcp_handlers/dialectic/handlers.py`), `DialecticSession.check_timeout` (`src/dialectic_protocol.py`) | get / takeover / reassign entry points |
 
 ⛔**The smaller gate must estimate and gate these separately, or scope only (1) plus its
 dependencies.** ⛔Line numbers drift — re-verify by symbol, never by line. V0.6's own
