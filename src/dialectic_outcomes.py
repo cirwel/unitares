@@ -14,12 +14,30 @@ thesis correctly, and is never facilitated is recorded identically to a dead
 probe, so a raw resolution rate penalises the dialectic for producing real
 disagreement.
 
-The signal already exists on the row: `awaiting_facilitation` is set when the
-self-clear guard refuses a paused agent's attempt to resolve over a standing
-objection. Measured over the live corpus, it is exact -- true on every swept
-session, false on every resolved one. So this module fixes the readers rather
-than the terminal write, which is the far smaller blast radius on a
-load-bearing path.
+⛔The header used to say `awaiting_facilitation` is exact -- "true on every
+swept session, false on every resolved one" -- and that it is set when the
+self-clear guard refuses a paused agent resolving over a standing objection.
+BOTH claims are now known false, so do not restore them:
+
+  * Not exact. Re-measured 2026-09-09 over 30 days: still perfectly SPECIFIC
+    (no resolved session carries it) but no longer SENSITIVE, missing 13 of 44
+    failed sessions. 11 of those were reaped by the Python inactivity sweeper,
+    which does not set it.
+  * Not the self-clear guard. It is written in
+    `mcp_handlers/dialectic/auto_resolve.py` under `check_time > fail_time`, a
+    reviewer-liveness TIMING condition recording that the sweeper raised a
+    facilitation request. The "paused agent came back and was refused" reading
+    was REFUTED by measurement: 24 sessions carry the flag with the paused
+    agent having never replied.
+
+So the reliable signal is the transcript -- the most recent reviewer synthesis
+carrying agrees=false, unsuperseded -- passed in as `standing_rejection`. The
+flag survives as a fallback for callers that cannot supply it, which is safe
+because it remains specific. This module still fixes the readers rather than
+the terminal write, which is the far smaller blast radius on a load-bearing
+path, and ⛔the writer must NOT be "repaired" to match: the sweeper never loads
+the transcript, so making it set the flag would fabricate a facilitation
+request that was never raised.
 
 Canary partitioning uses `core.agents.label LIKE 'canary_dialectic%'`.
 It deliberately does NOT use `trigger_source`, which is the literal string
@@ -70,13 +88,41 @@ def classify_outcome(
     status: Optional[str],
     awaiting_facilitation: Optional[bool],
     paused_agent_label: Optional[str] = None,
+    standing_rejection: Optional[bool] = None,
 ) -> str:
     """Classify one session into the outcome a reader should key on.
 
     Order matters. Canary is checked first because a probe's `failed` says
     nothing about dialectic quality either way, so it must not land in the
-    denominator. `awaiting_facilitation` is checked before `failed` because a
-    standing, unfacilitated objection is the case `failed` was hiding.
+    denominator. The unresolved case is checked before `failed` because a
+    standing, unfacilitated objection is what `failed` was hiding.
+
+    ``standing_rejection`` -- does the session's most recent reviewer synthesis
+    carry ``agrees=false``, unsuperseded -- is the RELIABLE signal, and callers
+    that can supply it should. ``awaiting_facilitation`` is the fallback, kept
+    so existing callers keep working, and it is a fallback rather than the
+    primary for a measured reason:
+
+    This module's header used to claim the flag is exact -- "true on every
+    swept session, false on every resolved one" -- measured 2026-07-28..08-18.
+    It has since decayed. Re-measured 2026-09-09 over 30 days: still perfectly
+    SPECIFIC (no resolved session carries it) but no longer SENSITIVE, missing
+    13 of 44 failed sessions. 11 of those 13 were reaped by the Python
+    inactivity sweeper, which does not set it.
+
+    ⛔The flag does not mean what its name suggests, so do not "repair" it at
+    the writer. It is set in `mcp_handlers/dialectic/auto_resolve.py` under
+    `check_time > fail_time`, a reviewer-liveness TIMING condition recording
+    that the sweeper raised a facilitation request -- not a verdict about the
+    transcript. An earlier reading of it as "the paused agent returned and its
+    self-clear was refused" was REFUTED by measurement: 24 sessions carry the
+    flag with the paused agent having never replied. And the Python sweeper's
+    own reap-description docstring says it deliberately never claims a verdict
+    because it never loads the transcript, so making it set the flag would
+    fabricate a facilitation request that was never raised.
+
+    Hence the fix belongs here, in the reader, with the transcript-derived
+    predicate supplied by the caller.
     """
     if is_canary_label(paused_agent_label):
         return CANARY
@@ -84,7 +130,11 @@ def classify_outcome(
         return OPEN
     if status == "resolved":
         return RESOLVED
-    if awaiting_facilitation:
+    if standing_rejection:
+        return UNRESOLVED_AWAITING_FACILITATION
+    if standing_rejection is None and awaiting_facilitation:
+        # No transcript-derived answer available; fall back to the flag, which
+        # is specific enough that a true reading is still trustworthy.
         return UNRESOLVED_AWAITING_FACILITATION
     return FAILED
 
