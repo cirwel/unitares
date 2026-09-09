@@ -173,3 +173,115 @@ def test_cli_rejects_wrong_arity():
     )
     assert proc.returncode == 2
     assert "usage:" in proc.stderr
+
+
+# --- the equal-date tie-break, resolved by canonical's git history -----------
+#
+# A mirror produced by a sync inherits canonical's `last_verified` verbatim, so
+# a canonical edit later the same day leaves both sides on one date with
+# different content. By date that is indistinguishable from #112 above. By
+# history it is not, and these pin both directions of that.
+
+
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(repo), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.fixture()
+def canonical_repo(tmp_path: Path) -> Path:
+    """A canonical checkout that is a real git repo, plus its mirror dir."""
+    repo = tmp_path / "unitares"
+    (repo / "skills").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.invalid")
+    _git(repo, "config", "user.name", "test")
+    return repo
+
+
+def test_equal_dates_pass_when_mirror_is_a_past_canonical_state(
+    canonical_repo, tmp_path
+):
+    """Today's real case: the mirror is last week's canonical, same date.
+
+    Canonical committed one state, the mirror was synced from it, then canonical
+    moved on the same day. The mirror's bytes are still in canonical's history,
+    so nothing is reverted by syncing forward.
+    """
+    src = canonical_repo / "skills"
+    dst = tmp_path / "mirror"
+    dst.mkdir()
+
+    _skill(src, "a", date="2026-09-08", body="state the mirror was synced from")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "canonical state one")
+
+    # The mirror is a byte copy of that committed state.
+    _skill(dst, "a", date="2026-09-08", body="state the mirror was synced from")
+
+    # Canonical then moves on, same day, same declared date.
+    _skill(src, "a", date="2026-09-08", body="canonical moved on")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "canonical state two")
+
+    assert regressions(src, dst) == []
+
+
+def test_equal_dates_still_block_when_mirror_content_is_not_in_history(
+    canonical_repo, tmp_path
+):
+    """The #112 case must survive the tie-break.
+
+    Mirror-side work that canonical never had appears nowhere in canonical's
+    history, so the appeal to history finds nothing and the guard still refuses.
+    """
+    src = canonical_repo / "skills"
+    dst = tmp_path / "mirror"
+    dst.mkdir()
+
+    _skill(src, "a", date="2026-07-28", body="canonical")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "canonical")
+
+    _skill(dst, "a", date="2026-07-28", body="DIFFERENT merged content")
+
+    (msg,) = regressions(src, dst)
+    assert "same date as" in msg
+    assert "not a past state" in msg
+
+
+def test_equal_dates_block_when_canonical_is_not_a_git_checkout(pair):
+    """No history to appeal to means no proof, and no proof means refuse."""
+    src, dst = pair
+    _skill(src, "a", date="2026-09-08", body="canonical")
+    _skill(dst, "a", date="2026-09-08", body="mirror")
+    (msg,) = regressions(src, dst)
+    assert "not a past state" in msg
+
+
+def test_mirror_newer_date_still_blocks_regardless_of_history(
+    canonical_repo, tmp_path
+):
+    """The tie-break is scoped to EQUAL dates and must not widen.
+
+    A mirror declaring a later date is claiming a verification canonical has
+    not made. That claim is not something git history can overrule.
+    """
+    src = canonical_repo / "skills"
+    dst = tmp_path / "mirror"
+    dst.mkdir()
+
+    _skill(src, "a", date="2026-09-08", body="old state")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "one")
+    _skill(dst, "a", date="2026-09-09", body="old state")  # in history, newer date
+    _skill(src, "a", date="2026-09-08", body="canonical moved on")
+    _git(canonical_repo, "add", "-A")
+    _git(canonical_repo, "commit", "-qm", "two")
+
+    (msg,) = regressions(src, dst)
+    assert "newer than" in msg

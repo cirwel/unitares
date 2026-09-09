@@ -90,6 +90,13 @@ fi
 # creation, all of which destroy mtime (see the --checksum note below for how
 # badly mtime behaves here).
 #
+# A date alone cannot order an EQUAL-date difference, and that case is common:
+# a mirror produced by this script inherits canonical's date verbatim, so any
+# canonical edit later the same day lands both sides on one date with different
+# content. The guard settles those against canonical's git history — a stale
+# mirror is a state canonical held and can be safely overwritten; mirror-side
+# work canonical never had is not, and still refuses.
+#
 # The rule and its two corrected bugs (`>` vs `>=`, and failing open on a
 # missing date) live in scripts/dev/skills_direction_guard.py, which is a
 # module rather than a heredoc precisely so the rule can be tested — see
