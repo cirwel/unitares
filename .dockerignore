@@ -64,13 +64,6 @@ archives/
 *.log
 .DS_Store
 
-# Node dev dependencies. The dashboard is buildless and neither Dockerfile
-# runs npm, so node_modules is only ever a local artifact of running the
-# dashboard test suite. Without this line a build from a working tree that
-# has run npm install bakes it into the image; a clean CI checkout never
-# had it, which is why this went unnoticed.
-node_modules/
-
 # Local env (don't bake secrets into image)
 .env
 .env.local
