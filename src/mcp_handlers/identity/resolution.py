@@ -715,6 +715,138 @@ async def recover_identity_before_mint(
     return None
 
 
+def _validate_session_key(session_key: str) -> str:
+    """Validate and sanitize a session key (pure string transform).
+
+    SECURITY (Feb 2026): session keys should be a reasonable length and
+    contain only safe characters, so an injection payload cannot ride in on
+    the key. Truncation and sanitization each emit a [SECURITY] warning.
+
+    Extracted verbatim from resolve_session_identity (2026-09-08). The
+    empty-key ValueError deliberately stays in the caller: it is an argument
+    contract, not a sanitization step.
+    """
+    MAX_SESSION_KEY_LENGTH = 256
+    if len(session_key) > MAX_SESSION_KEY_LENGTH:
+        logger.warning(f"[SECURITY] Session key too long ({len(session_key)} chars), truncating")
+        session_key = session_key[:MAX_SESSION_KEY_LENGTH]
+
+    # Sanitize: Replace potentially dangerous characters
+    # Allow: alphanumeric, dash, underscore, colon, dot, at-sign (for email-like IDs)
+    if not re.match(r'^[\w\-.:@]+$', session_key):
+        # Contains characters outside allowed set - sanitize
+        original = session_key
+        session_key = re.sub(r'[^\w\-.:@]', '_', session_key)
+        logger.warning(
+            "[SECURITY] Session key sanitized (input_length=%s, output_length=%s)",
+            len(original),
+            len(session_key),
+        )
+    return session_key
+
+
+async def _refresh_session_ttl(session_key: str) -> None:
+    """SLIDING TTL: refresh the Redis session expiry on every cache hit (v2.5.5).
+
+    Best-effort side effect. The swallowing `except Exception: pass` is part
+    of the contract and stays inside this helper: a Redis hiccup must never
+    turn a successful resume into a failure. Extracted from
+    resolve_session_identity (2026-09-08) with no behavior change.
+    """
+    try:
+
+        from src.cache.redis_client import get_redis
+
+        raw_redis = await get_redis()
+
+        if raw_redis:
+            await raw_redis.expire(f"session:{session_key}", GovernanceConfig.SESSION_TTL_SECONDS)
+
+    except Exception:
+
+        pass
+
+
+async def _decode_stored_identity(
+    stored_id: str, display_agent_id: Optional[str] = None
+) -> tuple[str, str]:
+    """Decode a stored session identity into (agent_uuid, agent_id).
+
+    Two storage formats exist. A 36-character, 4-dash value is the correct
+    post-v2.5.2 UUID form; the human-readable agent_id then comes from the
+    caller's cached display_agent_id when it has one (v2.5.2+), else from a
+    metadata lookup, else falls back to the UUID itself. Anything else is the
+    legacy model+date format, where the single value serves as both —
+    v1 identity deleted Feb 2026, so no new entries arrive in that format.
+
+    Shared by PATH 1 (Redis cache; passes display_agent_id) and PATH 2 (PG
+    session row; has none). Extracted from resolve_session_identity
+    2026-09-08 — the metadata lookup stays short-circuited behind a present
+    display_agent_id, exactly as before.
+    """
+    is_uuid = len(stored_id) == 36 and stored_id.count("-") == 4
+
+    if is_uuid:
+        agent_uuid = stored_id
+        agent_id = display_agent_id or (
+            await _get_agent_id_from_metadata(agent_uuid) or agent_uuid
+        )
+    else:
+        agent_uuid = agent_id = stored_id
+
+    return agent_uuid, agent_id
+
+
+def _resumed_identity_result(
+    *,
+    agent_id,
+    agent_uuid,
+    label,
+    persisted: bool,
+    is_archived,
+    agent_status,
+    source: str,
+    traj_result: dict,
+) -> Dict[str, Any]:
+    """Build the resumed-identity result shared by PATH 1 and PATH 2.
+
+    Both paths returned the same 13 keys in the same order and differed only
+    in `persisted` (PATH 1 has to look it up, PATH 2 found the row in PG so
+    it is True by construction) and `source`. Extracted 2026-09-08.
+
+    Deliberately NOT shared with the token-rebind result or
+    _adopt_recovered_identity's: those omit `archived` and the trajectory_*
+    keys, and folding them in here would hand their callers keys they do not
+    see today.
+    """
+    return {
+
+        "agent_id": agent_id,   # Human-readable (model+date). UUID for lookup is agent_uuid.
+        "public_agent_id": agent_id,
+
+        "agent_uuid": agent_uuid,
+
+        "display_name": label,
+
+        "label": label,  # backward compat
+
+        "created": False,
+
+        "persisted": persisted,
+
+        "archived": is_archived,
+        "core_agent_row_status": agent_status,
+
+        "source": source,
+        "identity_resolution_outcome": "resumed",
+
+        "trajectory_verified": traj_result.get("verified"),
+
+        "trajectory_warning": traj_result.get("warning"),
+
+    }
+
+
 async def resolve_session_identity(
 
     session_key: str,
@@ -818,23 +950,7 @@ async def resolve_session_identity(
         raise ValueError("session_key is required")
 
     # SECURITY (Feb 2026): Validate and sanitize session_key to prevent injection attacks
-    # Session keys should be reasonable length and contain only safe characters
-    MAX_SESSION_KEY_LENGTH = 256
-    if len(session_key) > MAX_SESSION_KEY_LENGTH:
-        logger.warning(f"[SECURITY] Session key too long ({len(session_key)} chars), truncating")
-        session_key = session_key[:MAX_SESSION_KEY_LENGTH]
-
-    # Sanitize: Replace potentially dangerous characters
-    # Allow: alphanumeric, dash, underscore, colon, dot, at-sign (for email-like IDs)
-    if not re.match(r'^[\w\-.:@]+$', session_key):
-        # Contains characters outside allowed set - sanitize
-        original = session_key
-        session_key = re.sub(r'[^\w\-.:@]', '_', session_key)
-        logger.warning(
-            "[SECURITY] Session key sanitized (input_length=%s, output_length=%s)",
-            len(original),
-            len(session_key),
-        )
+    session_key = _validate_session_key(session_key)
 
     # S19 defense-in-depth: a substrate resident's copied continuity token
     # must not resume over non-UDS transport even when the token's embedded
@@ -902,36 +1018,9 @@ async def resolve_session_identity(
 
                 if cached and cached.get("agent_id"):
 
-                    cached_id = cached["agent_id"]
-
-                    # Detect format: UUID (correct) vs model+date (legacy, pre-v2.5.2)
-
-                    is_uuid = len(cached_id) == 36 and cached_id.count("-") == 4
-
-                    if is_uuid:
-
-                        # Correct format: cached value is UUID
-
-                        agent_uuid = cached_id
-
-                        # First check if display_agent_id is in cache (v2.5.2+)
-
-                        agent_id = cached.get("display_agent_id")
-
-                        if not agent_id:
-
-                            # Fall back to metadata lookup
-
-                            agent_id = await _get_agent_id_from_metadata(agent_uuid) or agent_uuid
-
-                    else:
-
-                        # Legacy format (pre-v2.5.2): treat as both agent_id and UUID fallback
-                        # v1 identity deleted Feb 2026 — no new entries in this format
-
-                        agent_uuid = cached_id
-
-                        agent_id = cached_id
+                    agent_uuid, agent_id = await _decode_stored_identity(
+                        cached["agent_id"], cached.get("display_agent_id")
+                    )
 
                     # IDENTITY HONESTY: When resume=False, don't return cached identity.
                     # Fall through to PATH 3 (create new). Fingerprint match is a routing
@@ -1032,48 +1121,20 @@ async def resolve_session_identity(
                             traj_result = await _soft_verify_trajectory(agent_uuid, trajectory_signature, "redis")
 
                             # SLIDING TTL: Refresh Redis expiry on every hit (v2.5.5)
-
-                            try:
-
-                                from src.cache.redis_client import get_redis
-
-                                raw_redis = await get_redis()
-
-                                if raw_redis:
-                                    await raw_redis.expire(f"session:{session_key}", GovernanceConfig.SESSION_TTL_SECONDS)
-
-                            except Exception:
-
-                                pass
+                            await _refresh_session_ttl(session_key)
 
 
 
-                            return {
-
-                                "agent_id": agent_id,   # Human-readable (model+date). UUID for lookup is agent_uuid.
-                                "public_agent_id": agent_id,
-
-                                "agent_uuid": agent_uuid,
-
-                                "display_name": label,
-
-                                "label": label,  # backward compat
-
-                                "created": False,
-
-                                "persisted": persisted,
-
-                                "archived": is_archived,
-                                "core_agent_row_status": agent_status,
-
-                                "source": "redis",
-                                "identity_resolution_outcome": "resumed",
-
-                                "trajectory_verified": traj_result.get("verified"),
-
-                                "trajectory_warning": traj_result.get("warning"),
-
-                            }
+                            return _resumed_identity_result(
+                                agent_id=agent_id,
+                                agent_uuid=agent_uuid,
+                                label=label,
+                                persisted=persisted,
+                                is_archived=is_archived,
+                                agent_status=agent_status,
+                                source="redis",
+                                traj_result=traj_result,
+                            )
 
             except Exception as e:
                 # INFO level (v2.5.7): Redis lookup failures are recoverable but should be visible
@@ -1142,27 +1203,7 @@ async def resolve_session_identity(
 
             if session and session.agent_id and resume:
 
-                stored_id = session.agent_id
-
-                # Detect format: UUID (correct) vs model+date (legacy)
-
-                is_uuid = len(stored_id) == 36 and stored_id.count("-") == 4
-
-                if is_uuid:
-
-                    agent_uuid = stored_id
-
-                    # Fetch agent_id (model+date) from metadata
-
-                    agent_id = await _get_agent_id_from_metadata(agent_uuid) or agent_uuid
-
-                else:
-
-                    # Legacy format (pre-v2.5.2): treat as both agent_id and UUID fallback
-
-                    agent_uuid = stored_id
-
-                    agent_id = stored_id
+                agent_uuid, agent_id = await _decode_stored_identity(session.agent_id)
 
                 # S19 extension (#802): same gate as PATH 1, for a UUID resolved
                 # from a PG session row (Redis cache miss → PG hit). A substrate
@@ -1206,32 +1247,16 @@ async def resolve_session_identity(
 
 
 
-                return {
-
-                    "agent_id": agent_id,   # Human-readable (model+date). UUID for lookup is agent_uuid.
-                    "public_agent_id": agent_id,
-
-                    "agent_uuid": agent_uuid,
-
-                    "display_name": label,
-
-                    "label": label,  # backward compat
-
-                    "created": False,
-
-                    "persisted": True,  # Found in PostgreSQL = persisted
-
-                    "archived": is_archived,
-                    "core_agent_row_status": agent_status,
-
-                    "source": "postgres",
-                    "identity_resolution_outcome": "resumed",
-
-                    "trajectory_verified": traj_result.get("verified"),
-
-                    "trajectory_warning": traj_result.get("warning"),
-
-                }
+                return _resumed_identity_result(
+                    agent_id=agent_id,
+                    agent_uuid=agent_uuid,
+                    label=label,
+                    persisted=True,  # Found in PostgreSQL = persisted
+                    is_archived=is_archived,
+                    agent_status=agent_status,
+                    source="postgres",
+                    traj_result=traj_result,
+                )
 
         except Exception as e:
 
