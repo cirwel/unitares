@@ -508,11 +508,12 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         migration_note=(
             "Read the calling agent's current governance state and verdict "
             "without running a cycle, writing anything, or minting an identity. "
-            "It reads only the session's own binding: an unbound session, or one "
-            "whose binding the server merely inferred from a shared transport, "
-            "gets an explicit unbound payload pointing at start_session rather "
-            "than a co-located sibling's state — so pass the client_session_id "
-            "that start_session returned to read your own. Use sync_state to also "
+            "A client_session_id resolving to no agent gets an explicit unbound "
+            "payload pointing at start_session; a binding the server merely "
+            "inferred returns that agent's real state marked "
+            "identity_assurance.caller_proven=false, which may be a co-located "
+            "sibling's, so pass the client_session_id start_session returned to "
+            "be sure the reading is yours. Use sync_state to also "
             "log work and get a proceed or pause decision. "
             f"{EISV_INLINE_SUMMARY}"
         ),
