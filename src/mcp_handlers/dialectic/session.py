@@ -12,7 +12,12 @@ import os
 import asyncio
 from datetime import datetime, timedelta
 
-from src.dialectic_protocol import DialecticSession, DialecticPhase
+from src.dialectic_protocol import (
+    DialecticSession,
+    DialecticPhase,
+    coerce_signature_version,
+    describe_attestation,
+)
 from src.db.acquire_compat import compatible_acquire
 from src.logging_utils import get_logger
 
@@ -118,12 +123,9 @@ def _normalize_string_list(value: Any) -> List[str]:
     return [str(value).strip()] if str(value).strip() else []
 
 
-def _coerce_signature_version(value: Any) -> int:
-    """Stored rows predate the field (-> 1); JSON round-trips may stringify it."""
-    try:
-        return int(value) if value is not None else 1
-    except (TypeError, ValueError):
-        return 1
+# Canonical in dialectic_protocol so the read path and describe_attestation
+# cannot drift; they had already disagreed on a stored 0.
+_coerce_signature_version = coerce_signature_version
 
 
 def _normalize_resolution_dict(value: Any) -> Any:
@@ -133,6 +135,31 @@ def _normalize_resolution_dict(value: Any) -> Any:
     normalized = dict(value)
     normalized["conditions"] = _normalize_string_list(normalized.get("conditions"))
     return normalized
+
+
+def attach_attestation(payload: Any) -> Any:
+    """Add the derived ``attestation`` descriptor to any response carrying a resolution.
+
+    One helper rather than an inline call per site, because the same resolved
+    session reaches a client through several shapes: the PostgreSQL fast path
+    (``load_session_as_dict``), the list summary (``list_all_sessions``), and
+    ``DialecticSession.to_dict()`` on the timeout-check and agent-lookup
+    branches of the get handler. Codex review 2026-09-08 caught those last
+    branches serving the same session WITHOUT the descriptor, which is worse
+    than not having it: a reader would see attestation on one call and not the
+    next and reasonably conclude the two rows differ.
+
+    Derived only. This never touches ``Resolution.to_dict()``, whose bytes feed
+    ``Resolution.hash()`` (served as ``resolution_hash``) and the drr.v1 receipt
+    digest. A payload with no resolution is returned untouched, so ``attestation``
+    is absent rather than null when there is nothing to describe.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    resolution = payload.get("resolution")
+    if isinstance(resolution, dict):
+        payload["attestation"] = describe_attestation(resolution)
+    return payload
 
 
 def seal_resolution_for_persistence(session, resolution, *, status: str) -> Dict[str, Any]:
@@ -505,6 +532,7 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
             if res:
                 parsed_resolution = res if isinstance(res, dict) else json.loads(res)
                 result["resolution"] = _normalize_resolution_dict(parsed_resolution)
+                attach_attestation(result)
 
             for msg in msg_rows:
                 reasoning = msg["reasoning"] or ""

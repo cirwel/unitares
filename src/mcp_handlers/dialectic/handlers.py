@@ -1827,12 +1827,16 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                     return success_response({
                         "success": False,
                         "error": timeout_reason,
-                        "session": session.to_dict(),
+                        "session": attach_attestation(session.to_dict()),
                         "recovery": get_session_timeout_recovery(timeout_reason),
                     })
 
             result = session.to_dict()
             result["success"] = True
+            # Same descriptor the PostgreSQL fast path adds. Without it, whether
+            # a caller sees `attestation` depended on check_timeout, so the same
+            # resolved session answered two ways on the same tool.
+            attach_attestation(result)
             result.update(_build_dialectic_actionability(result))
             return success_response(result)
         
@@ -1864,6 +1868,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
             if len(matching_sessions) == 1:
                 result = matching_sessions[0]
                 result["success"] = True
+                attach_attestation(result)
                 return success_response(result)
 
             # Multiple sessions - return list
