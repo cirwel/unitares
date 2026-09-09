@@ -777,12 +777,28 @@
         ]);
         if (!w && !sn && !vg && !h && !res) return null;
         const out = {};
-        if (w) out.watcher = { total: w.total, byStatus: w.by_status || {}, openSev: w.by_severity_open || {},
+        // Watcher, Sentinel and Vigil build from their own summary endpoints,
+        // and all three of those are roster-independent: they answer on a
+        // fresh install (findings.jsonl absent = empty summary; audit.events
+        // empty; no Vigil in metadata = a success envelope with stats {}).
+        // Nothing here consulted /v1/residents, so a deployment that has none
+        // of them still got three panels under the "Always-on fleet" eyebrow
+        // and a live badge — a claim about which residents EXIST, not about
+        // their health. Gate them on roster membership, the same predicate
+        // fromResidents() already applies to Chronicler/Steward/Lumen below.
+        //
+        // Only when /v1/residents actually ANSWERED. A momentary outage also
+        // arrives as res === null, and reading that as "these residents do not
+        // exist" would silently delete three panels from a fully-rostered
+        // deployment on a blip. Unknown roster => render, as before.
+        const rosterKnown = !!(res && Array.isArray(res.residents));
+        const inRoster = (label) => !rosterKnown || res.residents.some((r) => r.label === label);
+        if (w && inRoster("Watcher")) out.watcher = { total: w.total, byStatus: w.by_status || {}, openSev: w.by_severity_open || {},
           patterns: (w.patterns || []).map((p) => ({ p: p.pattern, confirmed: p.confirmed, dismissed: p.dismissed, surfaced: p.surfaced, ratio: p.dismiss_ratio })) };
-        if (sn) out.sentinel = { total: sn.total, bySeverity: sn.by_severity || {},
+        if (sn && inRoster("Sentinel")) out.sentinel = { total: sn.total, bySeverity: sn.by_severity || {},
           byClass: (sn.by_violation_class || []).map((c) => ({ c: c.violation_class, n: c.count })),
           recent: (sn.recent || []).map((r) => ({ ts: r.timestamp, severity: r.severity, vclass: r.violation_class, type: r.finding_type, message: r.message })) };
-        if (vg && vg.stats) out.vigil = { cycles24h: vg.stats.cycles_24h, writesWindow: vg.stats.total_writes_in_window, lastVerdict: vg.stats.last_verdict,
+        if (vg && vg.stats && inRoster("Vigil")) out.vigil = { cycles24h: vg.stats.cycles_24h, writesWindow: vg.stats.total_writes_in_window, lastVerdict: vg.stats.last_verdict,
           lastCycleAgeS: vg.stats.last_cycle_age_seconds, avgCoherence: vg.stats.avg_coherence_window,
           eisv: vg.cycles && vg.cycles[0] ? vg.cycles[0] : null };
         if (h) out.health = { status: h.status, version: h.version, checks: h.status_breakdown || {},
