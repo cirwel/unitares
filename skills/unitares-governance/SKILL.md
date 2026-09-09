@@ -47,7 +47,7 @@ source_digests:
   unitares/skills/knowledge-graph/SKILL.md: "9b81250c71b16fbb"
   unitares/skills/dialectic-reasoning/SKILL.md: "b5f8550d8fda45b6"
   unitares/skills/discord-bridge/SKILL.md: "3ca60ac744a6223e"
-  unitares/skills/unitares-dashboard/SKILL.md: "2a100c2a96107e97"
+  unitares/skills/unitares-dashboard/SKILL.md: "fb5918a17c45bfa9"
 ---
 
 # UNITARES Governance
