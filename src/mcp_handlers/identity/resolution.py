@@ -767,6 +767,36 @@ async def _refresh_session_ttl(session_key: str) -> None:
         pass
 
 
+async def _decode_stored_identity(
+    stored_id: str, display_agent_id: Optional[str] = None
+) -> tuple[str, str]:
+    """Decode a stored session identity into (agent_uuid, agent_id).
+
+    Two storage formats exist. A 36-character, 4-dash value is the correct
+    post-v2.5.2 UUID form; the human-readable agent_id then comes from the
+    caller's cached display_agent_id when it has one (v2.5.2+), else from a
+    metadata lookup, else falls back to the UUID itself. Anything else is the
+    legacy model+date format, where the single value serves as both —
+    v1 identity deleted Feb 2026, so no new entries arrive in that format.
+
+    Shared by PATH 1 (Redis cache; passes display_agent_id) and PATH 2 (PG
+    session row; has none). Extracted from resolve_session_identity
+    2026-09-08 — the metadata lookup stays short-circuited behind a present
+    display_agent_id, exactly as before.
+    """
+    is_uuid = len(stored_id) == 36 and stored_id.count("-") == 4
+
+    if is_uuid:
+        agent_uuid = stored_id
+        agent_id = display_agent_id or (
+            await _get_agent_id_from_metadata(agent_uuid) or agent_uuid
+        )
+    else:
+        agent_uuid = agent_id = stored_id
+
+    return agent_uuid, agent_id
+
+
 async def resolve_session_identity(
 
     session_key: str,
@@ -938,36 +968,9 @@ async def resolve_session_identity(
 
                 if cached and cached.get("agent_id"):
 
-                    cached_id = cached["agent_id"]
-
-                    # Detect format: UUID (correct) vs model+date (legacy, pre-v2.5.2)
-
-                    is_uuid = len(cached_id) == 36 and cached_id.count("-") == 4
-
-                    if is_uuid:
-
-                        # Correct format: cached value is UUID
-
-                        agent_uuid = cached_id
-
-                        # First check if display_agent_id is in cache (v2.5.2+)
-
-                        agent_id = cached.get("display_agent_id")
-
-                        if not agent_id:
-
-                            # Fall back to metadata lookup
-
-                            agent_id = await _get_agent_id_from_metadata(agent_uuid) or agent_uuid
-
-                    else:
-
-                        # Legacy format (pre-v2.5.2): treat as both agent_id and UUID fallback
-                        # v1 identity deleted Feb 2026 — no new entries in this format
-
-                        agent_uuid = cached_id
-
-                        agent_id = cached_id
+                    agent_uuid, agent_id = await _decode_stored_identity(
+                        cached["agent_id"], cached.get("display_agent_id")
+                    )
 
                     # IDENTITY HONESTY: When resume=False, don't return cached identity.
                     # Fall through to PATH 3 (create new). Fingerprint match is a routing
@@ -1166,27 +1169,7 @@ async def resolve_session_identity(
 
             if session and session.agent_id and resume:
 
-                stored_id = session.agent_id
-
-                # Detect format: UUID (correct) vs model+date (legacy)
-
-                is_uuid = len(stored_id) == 36 and stored_id.count("-") == 4
-
-                if is_uuid:
-
-                    agent_uuid = stored_id
-
-                    # Fetch agent_id (model+date) from metadata
-
-                    agent_id = await _get_agent_id_from_metadata(agent_uuid) or agent_uuid
-
-                else:
-
-                    # Legacy format (pre-v2.5.2): treat as both agent_id and UUID fallback
-
-                    agent_uuid = stored_id
-
-                    agent_id = stored_id
+                agent_uuid, agent_id = await _decode_stored_identity(session.agent_id)
 
                 # S19 extension (#802): same gate as PATH 1, for a UUID resolved
                 # from a PG session row (Redis cache miss → PG hit). A substrate
