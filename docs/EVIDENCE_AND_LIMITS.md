@@ -35,7 +35,7 @@ a prototype or a system?
 
 | | |
 |---|---|
-| **42 tools** on the wire | fourteen advertised by default and the rest behind `GOVERNANCE_TOOL_MODE`; 8 of them are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
+| **42 tools** on the wire | fifteen advertised by default and the rest behind `GOVERNANCE_TOOL_MODE`; 8 of them are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
 | **12,619 test functions** | across 720 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
 | **64 database migrations** | slot-and-name drift is gated by the repo doctor |
 | **509 Python modules** | `src/`, `governance_core/`, and the reference residents |
