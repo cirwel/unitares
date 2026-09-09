@@ -715,6 +715,36 @@ async def recover_identity_before_mint(
     return None
 
 
+def _validate_session_key(session_key: str) -> str:
+    """Validate and sanitize a session key (pure string transform).
+
+    SECURITY (Feb 2026): session keys should be a reasonable length and
+    contain only safe characters, so an injection payload cannot ride in on
+    the key. Truncation and sanitization each emit a [SECURITY] warning.
+
+    Extracted verbatim from resolve_session_identity (2026-09-08). The
+    empty-key ValueError deliberately stays in the caller: it is an argument
+    contract, not a sanitization step.
+    """
+    MAX_SESSION_KEY_LENGTH = 256
+    if len(session_key) > MAX_SESSION_KEY_LENGTH:
+        logger.warning(f"[SECURITY] Session key too long ({len(session_key)} chars), truncating")
+        session_key = session_key[:MAX_SESSION_KEY_LENGTH]
+
+    # Sanitize: Replace potentially dangerous characters
+    # Allow: alphanumeric, dash, underscore, colon, dot, at-sign (for email-like IDs)
+    if not re.match(r'^[\w\-.:@]+$', session_key):
+        # Contains characters outside allowed set - sanitize
+        original = session_key
+        session_key = re.sub(r'[^\w\-.:@]', '_', session_key)
+        logger.warning(
+            "[SECURITY] Session key sanitized (input_length=%s, output_length=%s)",
+            len(original),
+            len(session_key),
+        )
+    return session_key
+
+
 async def resolve_session_identity(
 
     session_key: str,
@@ -818,23 +848,7 @@ async def resolve_session_identity(
         raise ValueError("session_key is required")
 
     # SECURITY (Feb 2026): Validate and sanitize session_key to prevent injection attacks
-    # Session keys should be reasonable length and contain only safe characters
-    MAX_SESSION_KEY_LENGTH = 256
-    if len(session_key) > MAX_SESSION_KEY_LENGTH:
-        logger.warning(f"[SECURITY] Session key too long ({len(session_key)} chars), truncating")
-        session_key = session_key[:MAX_SESSION_KEY_LENGTH]
-
-    # Sanitize: Replace potentially dangerous characters
-    # Allow: alphanumeric, dash, underscore, colon, dot, at-sign (for email-like IDs)
-    if not re.match(r'^[\w\-.:@]+$', session_key):
-        # Contains characters outside allowed set - sanitize
-        original = session_key
-        session_key = re.sub(r'[^\w\-.:@]', '_', session_key)
-        logger.warning(
-            "[SECURITY] Session key sanitized (input_length=%s, output_length=%s)",
-            len(original),
-            len(session_key),
-        )
+    session_key = _validate_session_key(session_key)
 
     # S19 defense-in-depth: a substrate resident's copied continuity token
     # must not resume over non-UDS transport even when the token's embedded
