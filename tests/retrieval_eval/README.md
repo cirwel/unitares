@@ -49,9 +49,38 @@ Requires live Postgres + embeddings backend. Not part of the default `pytest` ru
 
 Labels are binary (relevant / not). Order within `relevant_ids` is not significant.
 
+## Label decay
+
+Labeled rows are ordinary discoveries, and lifecycle policy keeps archiving
+them. A target that has left the scope being measured cannot be retrieved by
+definition, so scoring it as a ranking miss manufactures a regression out of
+routine housekeeping.
+
+Measured 2026-09-09, this set is more than half decayed: 12 of its 21 labeled
+rows have left the default scope, and 8 of 22 queries have no reachable target
+left. `com.unitares.kg-corpus-rerank-gate` samples the first 5 queries, two of
+which lost their only target to archival on 2026-09-08; its recall fell 0.567
+to 0.167 with no change to the retrieval stack. Over all 22 pairs with the
+scope widened, the same corpus gives recall 0.795 and nDCG 0.608.
+
+The eval therefore reports `label_health` and refuses to score a query whose
+targets have all left scope:
+
+- `label_health.out_of_scope` names every decayed label and its status.
+- A fully decayed query moves to `unscorable` and leaves the aggregate. It is
+  not a flat miss.
+- A partly decayed query scores against its reachable targets only.
+- `--include-archived` / `--include-cold` widen the measured scope, on both the
+  search and the classification, when you want the full labeled corpus back.
+
+Read `label_health` before `aggregate`. A rising `out_of_scope_count` is the
+label set decaying, and that is indistinguishable from a quality drop in the
+metrics alone. A status lookup that fails is treated as reachable, so a broken
+backend can never quietly shrink the scored set.
+
 ## Growing the corpus
 
-The seed set (~20 pairs, 2026-04-20) is proof-of-life, not gold. Target is 100+
+The seed set (22 pairs) is proof-of-life, not gold. Target is 100+
 pairs over time. Add pairs whenever:
 
 - An agent writes a `dogfood` or `design-gap` note complaining about search (we want the complaint resolvable by retrieval).
