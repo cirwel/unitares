@@ -725,12 +725,39 @@ class DialecticDB:
 
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
+            # `standing_rejection` is the transcript-derived signal
+            # classify_outcome prefers: the session's most recent reviewer
+            # synthesis, unsuperseded, carrying agrees=false. Derived here in
+            # SQL rather than by loading transcripts, so this stays one query.
+            #
+            # ⛔The LEFT JOIN on core.agents is deliberate and load-bearing.
+            # Sessions exist whose paused_agent_id has no agents row, and an
+            # inner join would drop real work while looking like a filter.
             rows = await conn.fetch("""
                 SELECT s.status,
                        coalesce(s.awaiting_facilitation, false) AS awaiting_facilitation,
-                       a.label AS paused_agent_label
+                       a.label AS paused_agent_label,
+                       -- ⛔Three-valued ON PURPOSE. `r.agrees IS FALSE` would
+                       -- collapse "the reviewer never synthesised" into
+                       -- "the reviewer agreed", yielding FALSE for both and
+                       -- making classify_outcome's documented
+                       -- awaiting_facilitation fallback unreachable from its
+                       -- only caller. NULL means "no transcript answer", which
+                       -- is exactly when the flag should still be consulted.
+                       CASE WHEN r.agrees IS NULL THEN NULL
+                            ELSE (r.agrees IS FALSE)
+                       END AS standing_rejection
                 FROM core.dialectic_sessions s
                 LEFT JOIN core.agents a ON a.id = s.paused_agent_id
+                LEFT JOIN LATERAL (
+                    SELECT dm.agrees
+                    FROM core.dialectic_messages dm
+                    WHERE dm.session_id = s.session_id
+                      AND dm.message_type = 'synthesis'
+                      AND dm.agent_id = s.reviewer_agent_id
+                    ORDER BY dm.timestamp DESC, dm.message_id DESC
+                    LIMIT 1
+                ) r ON true
                 WHERE s.created_at >= now() - interval '1 day' * $1
             """, window_days)
 
@@ -746,6 +773,7 @@ class DialecticDB:
                 row["status"],
                 row["awaiting_facilitation"],
                 row["paused_agent_label"],
+                standing_rejection=row["standing_rejection"],
             )
             counts[outcome] = counts.get(outcome, 0) + 1
 
