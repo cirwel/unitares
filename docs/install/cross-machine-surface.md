@@ -37,7 +37,7 @@ These values bake one operator's environment into code that ships to others. Eac
 | ✅ resolved | `scripts/ops/start_server.sh` | 60 | Same `gov.cirwel.org` example string | Generic example |
 | ⏸ deferred | `scripts/ops/health_watchdog.sh` | 28 | Hardcoded Pi Tailscale IP `100.79.215.83` | See *deferred rationale* below |
 | ✅ resolved | `requirements-core.txt` | 22 | Comment example uses `https://gov.cirwel.org/v1/tools` | Generic example |
-| ✅ resolved | `scripts/ops/com.unitares.ipv6-loopback-proxy.plist.template` | 33 | Hardcoded `/Users/cirwel/projects/unitares/scripts/ops/ipv6_loopback_proxy.py` | `__UNITARES_ROOT__` + `__PYTHON3__` placeholders; install header shows `sed` substitution |
+| ✅ resolved | `scripts/ops/com.unitares.ipv6-loopback-proxy.plist.template` | 33 | Hardcoded `/Users/<operator>/projects/unitares/scripts/ops/ipv6_loopback_proxy.py` | `__UNITARES_ROOT__` + `__PYTHON3__` placeholders; install header shows `sed` substitution |
 
 ### Deferred: `health_watchdog.sh:28`
 
@@ -123,9 +123,11 @@ These appear in the audit but need no change. Listed so future audits don't re-f
 
 Run these from the repo root. Excludes `.git`, `.worktrees`, `data/`, `papers/`, `__pycache__`, and `tests/` (test fixtures legitimately use any of these strings).
 
+The operator-path pattern matches any home directory, not one name, so it also reports deliberate placeholders and the scope guard's own definition of the pattern. Read its hits, do not assume every one is a leak. It was narrowed to a single operator name until 2026-09-09, which passed over operator-shaped absolute paths belonging to anyone else.
+
 ```bash
 # Operator path
-rg -n --hidden -g '!.git' -g '!.worktrees' -g '!data/' -g '!papers/**' -g '!**/__pycache__/**' -g '!tests/**' '/Users/cirwel'
+rg -n --hidden -g '!.git' -g '!.worktrees' -g '!data/' -g '!papers/**' -g '!**/__pycache__/**' -g '!tests/**' '/Users/[A-Za-z]'
 
 # Operator's home LAN / Tailscale IPs
 rg -n --hidden -g '!.git' -g '!.worktrees' -g '!data/' -g '!papers/**' -g '!**/__pycache__/**' -g '!tests/**' '\b100\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b|\b192\.168\.1\.[0-9]{1,3}\b'
