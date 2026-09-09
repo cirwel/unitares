@@ -3,6 +3,13 @@ on:
   pull_request:
     paths:
       - 'Dockerfile.glama'
+      - 'src/**'
+      - 'governance_core/**'
+      - 'agents/**'
+      - 'config/**'
+      - 'dashboard/**'
+      - 'skills/**'
+      - 'VERSION'
       - 'docker/glama/**'
       - 'db/postgres/**'
       - 'requirements-docker.txt'
