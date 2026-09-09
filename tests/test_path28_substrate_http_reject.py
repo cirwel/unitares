@@ -231,6 +231,87 @@ async def test_http_path_gate_exception_falls_through() -> None:
 
 
 # =============================================================================
+# Gate B (PATH 2.8) has its own behavioral witness
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_gate_b_refuses_when_gate_a_falls_through() -> None:
+    """PATH 2.8's gate (Gate B) must refuse on its own, without Gate A.
+
+    Two substrate-HTTP gates guard this function: Gate A (the PATH-pre /
+    S19 defense-in-depth check) and Gate B (PATH 2.8). They share the
+    same preconditions, so Gate A shadows every scenario the rest of the
+    suite exercises — which left Gate B with NO behavioral witness at
+    all: deleting it, or neutering it with a one-line edit, kept the
+    whole substrate suite green (verified 2026-09-08).
+
+    Gate A swallows any exception and falls through BY DESIGN (a
+    transient DB error must not lock out non-substrate clients). That
+    fall-through is exactly when Gate B is load-bearing, and it is what
+    this test drives: ``fetch_substrate_claim`` raises on its first call
+    (Gate A) and returns the claim on its second (Gate B). The refusal
+    must still happen.
+
+    Unlike the structural census below, this test fails on a neutered
+    Gate B, on a deleted Gate B, and on a Gate B hoisted into a helper
+    that is never called.
+    """
+    claim = _make_claim()
+    calls = {"n": 0}
+
+    async def _raise_first_then_claim(agent_uuid: str) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # Gate A: transient failure -> logged fall-through.
+            raise RuntimeError("gate A transient failure")
+        return claim
+
+    signals_token = set_session_signals(SessionSignals())  # HTTP path
+    try:
+        with patch(
+            "src.substrate.verification.fetch_substrate_claim",
+            new=_raise_first_then_claim,
+        ), patch(
+            "src.mcp_handlers.identity.resolution._get_redis",
+            return_value=None,  # PATH 1 miss
+        ), patch(
+            "src.mcp_handlers.identity.resolution.get_db",
+            return_value=MagicMock(
+                init=AsyncMock(),
+                get_session=AsyncMock(return_value=None),  # PATH 2 miss
+            ),
+        ), patch(
+            "src.mcp_handlers.identity.resolution._agent_exists_in_postgres",
+            new=AsyncMock(return_value=False),
+        ):
+            result = await resolution_mod.resolve_session_identity(
+                "session-key-gate-b",
+                persist=False,
+                resume=True,
+                token_agent_uuid=claim.agent_id,
+            )
+    finally:
+        reset_session_signals(signals_token)
+
+    assert calls["n"] == 2, (
+        "Gate A must fall through (call 1 raised) and Gate B must run its "
+        f"OWN substrate-claim lookup (call 2); saw {calls['n']} call(s). "
+        "One call means either Gate B never executed (deleted, neutered, or "
+        "hoisted out of the PATH 2.8 flow) or Gate A was removed - this test "
+        "drives Gate A's fall-through, so it needs both gates present. The "
+        "gate census in test_force_new_bypasses_path28_and_gate says which."
+    )
+    assert result.get("resume_failed") is True, (
+        "PATH 2.8 must refuse a substrate-anchored UUID over HTTP even when "
+        "Gate A fell through"
+    )
+    assert result.get("error") == "substrate_anchored_uuid_requires_uds"
+    assert "UNITARES_UDS_SOCKET" in result.get("message", "")
+    assert claim.expected_launchd_label in result.get("message", "")
+
+
+# =============================================================================
 # force_new bypasses the entire PATH 2.8 path (and therefore the gate)
 # =============================================================================
 
@@ -270,9 +351,13 @@ async def test_force_new_bypasses_path28_and_gate() -> None:
                 # `not force_new` block, and still inline in
                 # resolve_session_identity — assert by reading the source.
                 import inspect
-                module_src = inspect.getsource(resolution_mod)
-                start = module_src.index("async def resolve_session_identity(")
-                src = module_src[start:]
+                import re
+                # Scope the census to the FUNCTION, not "def to EOF". A
+                # module-tail slice silently assumes resolve_session_identity
+                # is the last top-level def, so a decoy helper appended below
+                # it could supply the second reason literal that a deleted
+                # Gate B no longer supplies.
+                src = inspect.getsource(resolution_mod.resolve_session_identity)
                 # TWO independent substrate-HTTP gates live inside
                 # resolve_session_identity, and BOTH must stay there:
                 #   Gate A - the PATH-pre / S19 defense-in-depth check that runs
@@ -291,7 +376,11 @@ async def test_force_new_bypasses_path28_and_gate() -> None:
                     "expected exactly 2 substrate-HTTP gates inside "
                     "resolve_session_identity (Gate A: PATH-pre/S19, "
                     "Gate B: PATH 2.8) - deleting or hoisting either one is a "
-                    f"security regression; found {gate_count}"
+                    f"security regression; found {gate_count}. If you are "
+                    "consolidating a gate into _substrate_http_reject, do NOT "
+                    "just lower this count - land a behavioral test that "
+                    "reaches the consolidated gate on its own route first "
+                    "(see test_gate_b_refuses_when_gate_a_falls_through)."
                 )
                 assert "[SUBSTRATE_HTTP_REJECT]" in src
 
@@ -322,7 +411,11 @@ async def test_force_new_bypasses_path28_and_gate() -> None:
                     )
                     guard_positions.append(last_if)
                     between = src[last_if:gate_idx]
-                    assert "\nasync def " not in between and "\ndef " not in between, (
+                    # Indentation-insensitive: a NESTED ``async def`` inside
+                    # resolve_session_identity is an extraction too (and the
+                    # classic variant forgets the ``await``, making the gate
+                    # dead code), so a column-0-only needle would miss it.
+                    assert not re.search(r"\n\s*(async\s+)?def ", between), (
                         f"gate {n} was hoisted out of resolve_session_identity: "
                         "a function boundary appears between its "
                         "`if token_agent_uuid and not force_new:` guard and the "
