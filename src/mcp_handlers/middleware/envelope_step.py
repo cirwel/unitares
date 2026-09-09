@@ -1288,11 +1288,35 @@ def build_experience_envelope(
     return envelope
 
 
+def _refusal_with_friendly_tool(payload: dict, invoked: str, result):
+    """Pass a typed refusal through, but name the tool the caller actually
+    invoked.
+
+    The refusal's ``tool`` is the canonical name (``process_agent_update``)
+    because that is what the emission point knows. An agent that called
+    ``sync_state`` should not be answered about a tool it never called — the
+    same register-mismatch the envelope already guards against for
+    ``next_action`` and ``state_summary`` (dogfood 2026-08-20). The Python SDK
+    surfaces this field verbatim in ``IdentityRefusedError``, so it reaches a
+    human. Nothing else is touched, and the payload is only rebuilt when the
+    name actually differs.
+    """
+    if not invoked or payload.get("tool") == invoked:
+        return result
+    friendly = dict(payload)
+    friendly["tool"] = invoked
+    return [
+        TextContent(type="text", text=json.dumps(friendly, ensure_ascii=False)),
+        *result[1:],
+    ]
+
+
 async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
     """POST_EXECUTION step. `name` is the canonical (post-alias) tool;
     the invoked name lives in ctx.original_name. Returns the (possibly
     reshaped) handler result; on ANY failure returns it untouched."""
     try:
+        from ..identity_bootstrap import identity_refusal_status
         from ..tool_stability import is_experience_alias
 
         invoked = getattr(ctx, "original_name", None)
@@ -1306,6 +1330,29 @@ async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, r
             return result
         if payload.get("success") is False or "error" in payload:
             return result  # raw error contract carries its own recovery info
+
+        # A #425 typed identity refusal is success-SHAPED (`success: true`, no
+        # `error` key), so the guard above does not catch it and the refusal
+        # was being rebuilt as an ordinary check-in.
+        #
+        # Precisely: the recovery block was RELOCATED, not destroyed —
+        # `hint` / `next_step` / `safe_options` / `do_not` / `status` all
+        # survived under `raw_governance`, and `status` was also lifted into
+        # `state_summary`. Two things were actually wrong. `next_action`
+        # became the generic "Keep working - sync_state again after your next
+        # substantial step", because `decision.get("action")` is None for a
+        # refusal — an agent whose write was refused was told to continue. And
+        # both shipped SDKs read the refusal at the TOP level, which the
+        # envelope no longer had: `agents/sdk/.../errors.py` keys on
+        # `rollout_flag`, and `elixir/unitares_sdk/.../envelope.ex` keys on
+        # `status == "identity_required"` with two production outages pinned
+        # as tests. Enveloping a refusal broke the detection both rely on.
+        #
+        # So the refusal passes through as its own contract. Everything the
+        # envelope would add is derived from governance state that is never
+        # computed before identity is proven, so there is nothing to lose.
+        if identity_refusal_status(payload) is not None:
+            return _refusal_with_friendly_tool(payload, invoked, result)
 
         envelope = build_experience_envelope(invoked, name, payload, arguments)
         return [TextContent(type="text", text=json.dumps(envelope, ensure_ascii=False))]

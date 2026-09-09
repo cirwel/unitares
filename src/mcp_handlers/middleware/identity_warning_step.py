@@ -51,6 +51,7 @@ async def apply_identity_warnings(name: str, arguments: Dict[str, Any], ctx, res
             get_continuity_token_invalid,
             get_session_resolution_source,
         )
+        from ..identity_bootstrap import identity_refusal_status
 
         if not get_continuity_token_invalid():
             return result
@@ -62,6 +63,15 @@ async def apply_identity_warnings(name: str, arguments: Dict[str, Any], ctx, res
             return result
         if payload.get("success") is False or "error" in payload:
             return result  # failure/refusal responses explain themselves
+        # #2134: that guard says "refusal" but only catches error-SHAPED ones. A
+        # #425 typed identity refusal carries `success: true` with no `error`
+        # key, so it reached this step and got a warning appended saying "the
+        # call succeeded via '<fallback>' instead" — stapled onto a payload
+        # whose own `status` is `identity_required`. The response then asserted
+        # both that the write was refused and that it succeeded. The refusal
+        # already carries its own recovery block; nothing here may contradict it.
+        if identity_refusal_status(payload) is not None:
+            return result
 
         resolved_via = get_session_resolution_source() or "unknown"
         warning = {
