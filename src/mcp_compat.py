@@ -72,6 +72,7 @@ __all__ = [
     "func_metadata",
     "MCP_MAJOR",
     "server_supports_kwarg",
+    "tool_decorator_supports_kwarg",
     "get_tool_input_schema",
     "set_tool_input_schema",
     "lowlevel_server",
@@ -90,6 +91,22 @@ def server_supports_kwarg(name: str) -> bool:
     try:
         return name in inspect.signature(_ServerClass.__init__).parameters
     except (ValueError, TypeError):
+        return False
+
+
+def tool_decorator_supports_kwarg(name: str) -> bool:
+    """Whether ``FastMCP.tool()`` accepts ``name`` as a keyword argument.
+
+    The registrar passes ``annotations=`` here. Both majors currently accept it
+    (verified against 1.26.0 and 2.2.0, whose ``tool()`` signatures are
+    identical), but the requirement admits everything in ``>=1.26.0,<3.0.0``,
+    and a registration-time ``TypeError`` takes the whole tool surface down
+    rather than degrading. Ask instead of assuming, the way
+    :func:`server_supports_kwarg` does for the constructor.
+    """
+    try:
+        return name in inspect.signature(_ServerClass.tool).parameters
+    except (ValueError, TypeError, AttributeError):
         return False
 
 

@@ -323,11 +323,15 @@ print("Summary: " + str(r.get("summary", "?")))
 }
 
 parse_tools() {
-    local body; body=$(cat)
-    BODY="$body" python3 -c '
-import json, os, sys
+    # Read the body on stdin, not through the environment. /v1/tools now
+    # serialises ~145 KB (50 tools with full descriptions, schemas and
+    # annotations) and a single environment variable is capped at
+    # MAX_ARG_STRLEN, 128 KiB on Linux — over that, exec fails with
+    # "Argument list too long" and the CLI exits 126. stdin has no such cap.
+    python3 -c '
+import json, sys
 try:
-    data = json.loads(os.environ["BODY"])
+    data = json.loads(sys.stdin.read())
 except Exception as exc:
     print("error: bad JSON from /v1/tools: " + str(exc), file=sys.stderr)
     sys.exit(1)

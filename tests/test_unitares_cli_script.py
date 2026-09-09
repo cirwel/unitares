@@ -1115,3 +1115,22 @@ def test_ci_probe_sees_complete_live_mcp_catalog(mcp_test_server, mode):
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS:" in result.stdout
+
+
+def test_parse_tools_reads_the_body_on_stdin_not_the_environment():
+    """The /v1/tools payload outgrew MAX_ARG_STRLEN (128 KiB on Linux).
+
+    Passing it through the environment made `unitares tools` exit 126 with
+    "Argument list too long" once descriptions, schemas and annotations for
+    50 tools were serialised together. The other parse_* helpers read small
+    fixed-shape payloads; this one scales with the catalog, so it must stay
+    on stdin. See scripts/unitares parse_tools.
+    """
+    source = CLI.read_text()
+    start = source.index("parse_tools() {")
+    body = source[start:source.index("\n}\n", start)]
+    assert 'BODY="$body"' not in body, (
+        "parse_tools passes the /v1/tools response through the environment; "
+        "a single env var is capped at 128 KiB on Linux and the payload is larger"
+    )
+    assert "sys.stdin.read()" in body
