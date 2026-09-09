@@ -747,3 +747,62 @@ def test_positive_float_env_rejects_invalid_and_nonpositive(monkeypatch):
     assert canary._verdict_timeout_s() == 120.0
     monkeypatch.setenv("UNITARES_CANARY_VERDICT_TIMEOUT_S", "45")
     assert canary._verdict_timeout_s() == 45.0
+
+
+class TestClassifyRun:
+    """A red run has two very different causes and used to report them alike.
+
+    Measured on the deployed log 2026-09-08: every one of the three most recent
+    red runs read ``review did not reach a terminal verdict within 120.0s`` with
+    the session sitting in ``antithesis`` or ``synthesis``. The one-call surface
+    had done its entire job in each case, so treating those as evidence against
+    the surface inverts what the probe measures.
+    """
+
+    def test_green_requires_nothing_further(self):
+        assert (
+            canary.classify_run(ok=True, surface_ok=True, terminal_phase="resolved")
+            == canary.OUTCOME_GREEN
+        )
+
+    def test_surface_failure_is_the_only_evidence_against_the_surface(self):
+        assert (
+            canary.classify_run(
+                ok=False, surface_ok=False, terminal_phase="not_started"
+            )
+            == canary.OUTCOME_SURFACE_BROKEN
+        )
+
+    @pytest.mark.parametrize("phase", ["antithesis", "synthesis", "unverified", None])
+    def test_working_surface_without_a_verdict_is_pending_not_broken(self, phase):
+        assert (
+            canary.classify_run(ok=False, surface_ok=True, terminal_phase=phase)
+            == canary.OUTCOME_VERDICT_PENDING
+        )
+
+    @pytest.mark.parametrize("phase", ["failed", "escalated", "abandoned"])
+    def test_reviewer_declining_a_synthetic_probe_is_not_surface_breakage(self, phase):
+        assert (
+            canary.classify_run(ok=False, surface_ok=True, terminal_phase=phase)
+            == canary.OUTCOME_REVIEW_UNRESOLVED
+        )
+
+    def test_a_surface_failure_outranks_a_stale_terminal_phase(self):
+        """surface_ok is authoritative; a leftover phase must not launder a red."""
+        assert (
+            canary.classify_run(ok=False, surface_ok=False, terminal_phase="resolved")
+            == canary.OUTCOME_SURFACE_BROKEN
+        )
+
+    def test_ok_and_exit_semantics_are_unchanged_by_the_new_field(self):
+        """Only OUTCOME_GREEN corresponds to ok=True, so no red becomes green.
+
+        dialectic-adoption-read-trigger.sh and the #1387 gate read ``ok``. This
+        change must add discrimination beside that signal, never loosen it.
+        """
+        reds = [
+            canary.classify_run(ok=False, surface_ok=s, terminal_phase=p)
+            for s in (True, False)
+            for p in ("resolved", "failed", "synthesis", None)
+        ]
+        assert canary.OUTCOME_GREEN not in reds

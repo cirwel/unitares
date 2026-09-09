@@ -38,6 +38,16 @@ the gate measures, end-to-end, on a schedule:
      is progress, not proof that the review completed.
   5. append one JSONL line per run; exit 0/1 (launchd surfaces the log).
 
+Each line carries ``outcome``, which says what the run established rather than
+only whether it was green: ``green``, ``surface_ok_verdict_pending`` (the
+one-call path worked, the review had not converged inside the poll window),
+``surface_ok_review_unresolved`` (the path worked, the review ended terminal
+and not resolved -- a reviewer declining a synthetic probe lands here), or
+``surface_broken`` (the path itself failed). Only the last is evidence against
+the surface. ``ok`` and the exit code keep their strict pre-existing meaning so
+the #1387 gate read and dialectic-adoption-read-trigger.sh are unaffected;
+read ``outcome`` to tell a red run's two very different causes apart.
+
 Gate contract (#1387 amendment, 2026-08-01): the kill read is valid only if
 this canary is green through the measurement window. Organic zero + green
 canary = the one-call lever didn't move the dial → retire the LEVER, iterate
@@ -77,6 +87,42 @@ DEFAULT_URL = os.environ.get("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 CANARY_NAME = "canary_dialectic"
 LABEL_PREFIX = "canary_"
 TERMINAL_PHASES = {"resolved", "failed", "escalated", "timeout", "abandoned"}
+
+# The four things a run can actually mean. Until 2026-09-08 every non-green run
+# reported the same way -- ``ok: false`` plus a prose ``detail`` -- so a broken
+# review surface and a working one whose reviewer had simply not converged
+# inside the poll window were indistinguishable to any consumer keying on
+# ``ok``. Measured over the deployed log, the three most recent red runs were
+# all the second kind: the reviewer had reached ``antithesis`` or ``synthesis``,
+# which means the one-call path did its whole job.
+#
+# ``ok`` and the exit code deliberately keep their old strict meaning, because
+# the #1387 gate contract and dialectic-adoption-read-trigger.sh both read them,
+# and loosening green would weaken a gate rather than clarify a signal. This
+# adds the discrimination beside them instead of inside them.
+OUTCOME_GREEN = "green"
+OUTCOME_REVIEW_UNRESOLVED = "surface_ok_review_unresolved"
+OUTCOME_VERDICT_PENDING = "surface_ok_verdict_pending"
+OUTCOME_SURFACE_BROKEN = "surface_broken"
+
+
+def classify_run(*, ok: bool, surface_ok: bool, terminal_phase: Any) -> str:
+    """Name what a finished run established, not merely whether it was green.
+
+    ``surface_ok`` is the liveness claim this canary exists to make: the
+    one-call ``request_review`` returned a well-formed response AND the
+    session, thesis, and ``audit.tool_usage`` rows it should have written are
+    readable. Everything after that is the reviewer's business, and a reviewer
+    that declines to resolve a synthetic probe is the protocol working.
+    """
+    if ok:
+        return OUTCOME_GREEN
+    if not surface_ok:
+        return OUTCOME_SURFACE_BROKEN
+    phase = str(terminal_phase or "").strip().lower()
+    if phase in TERMINAL_PHASES:
+        return OUTCOME_REVIEW_UNRESOLVED
+    return OUTCOME_VERDICT_PENDING
 
 
 def _timeout_s() -> float:
@@ -397,6 +443,11 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
     record: Dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "ok": False,
+        # Did the one-call review surface demonstrably work, independently of
+        # whether the review then reached a verdict. Set once the response
+        # shape and the DB ground truth have both passed.
+        "surface_ok": False,
+        "outcome": OUTCOME_SURFACE_BROKEN,
         "stage": "onboard",
         "url": url,
         # Always present, including early red paths. ``not_started``/None and
@@ -490,6 +541,10 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
                 record["detail"] = detail
                 return 1
 
+        # The surface has now proven itself: a well-formed one-call response
+        # plus, unless --skip-db, the session/thesis/tool_usage rows read back.
+        record["surface_ok"] = True
+
         record["stage"] = "await_terminal_review"
         (
             terminal_payload,
@@ -555,6 +610,11 @@ async def run(url: str, log_path: Path, skip_db: bool) -> int:
         return 1
     finally:
         record["total_s"] = round(time.monotonic() - started, 2)
+        record["outcome"] = classify_run(
+            ok=bool(record.get("ok")),
+            surface_ok=bool(record.get("surface_ok")),
+            terminal_phase=record.get("terminal_phase"),
+        )
         append_log(log_path, record)
         print(json.dumps(record, default=str))
 

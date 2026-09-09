@@ -455,6 +455,97 @@ class Resolution:
         )
 
 
+# Attestation states a reader can distinguish without knowing the emptiness
+# convention. See ``describe_attestation``.
+ATTESTATION_BILATERAL = "bilateral"
+ATTESTATION_SINGLE_SIGNER = "single_signer"
+ATTESTATION_UNSIGNED = "unsigned"
+ATTESTATION_LEGACY_V1 = "legacy_v1"
+
+_ATTESTATION_NOTES = {
+    ATTESTATION_BILATERAL: (
+        "Both parties signed the canonical payload under the v2 scheme. "
+        "Presence only — verify_signatures(api_key_a, api_key_b) is what "
+        "establishes validity, and it needs both keys."
+    ),
+    ATTESTATION_SINGLE_SIGNER: (
+        "One party signed. The LLM-assisted path signs signature_a with the "
+        "paused agent's api_key, or with a fallback derived from its public "
+        "uuid, and leaves signature_b empty by design. Not bilateral."
+    ),
+    ATTESTATION_UNSIGNED: (
+        "Neither party signed. compute_signature returns an empty string when "
+        "an api_key is absent, so this is what a resolution between two agents "
+        "with no key material looks like. The record is a governed decision "
+        "either way; it carries no party attestation."
+    ),
+    ATTESTATION_LEGACY_V1: (
+        "Pre-v2 scheme. Both signatures were computed over the same last "
+        "synthesis message, so they are not independent and cannot be "
+        "verified at the resolution level."
+    ),
+}
+
+
+def describe_attestation(resolution) -> Optional[Dict[str, Any]]:
+    """State, in the response, what party attestation a resolution actually carries.
+
+    The stored record already holds everything needed to work this out, and
+    ``verify_signatures`` already refuses to return a vacuous True on empty
+    signatures. What was missing is that a reader had to know the convention:
+    ``signature_version`` is a SCHEME label, not a claim that anyone signed, so
+    ``{"signature_version": 2, "signature_a": "", "signature_b": ""}`` reads as
+    a v2 attestation until you notice both signatures are empty strings. That
+    is the same defect class as an envelope that overstates what it did (#1746)
+    — the record is honest, the presentation is not.
+
+    Measured 2026-09-08 on the live corpus, which is why this exists: no agent
+    has been minted with an api_key since 2026-01-29 (0 of 1,221 agents created
+    in the preceding 30 days carry one), so every resolution since 2026-06-23
+    is ``unsigned`` while still carrying ``signature_version: 2``. Whether to
+    restore key material or retire the party-level HMAC scheme is an operator
+    decision; this function only stops the state being invisible.
+
+    Derived, never stored. It is computed on the read path only: adding a field
+    to ``Resolution.to_dict()`` would change ``Resolution.hash()``, which is
+    served as ``resolution_hash``, and would alter the bytes the drr.v1 receipt
+    is minted over. Accepts a ``Resolution`` or the parsed ``resolution_json``
+    dict, and returns None for a session with no resolution.
+    """
+    if resolution is None:
+        return None
+    if isinstance(resolution, dict):
+        get = resolution.get
+    else:
+        get = lambda key, default=None: getattr(resolution, key, default)  # noqa: E731
+
+    signature_a = get("signature_a", "") or ""
+    signature_b = get("signature_b", "") or ""
+    try:
+        version = int(get("signature_version", 1) or 1)
+    except (TypeError, ValueError):
+        version = 1
+
+    signer_count = bool(signature_a) + bool(signature_b)
+    if version != 2:
+        state = ATTESTATION_LEGACY_V1 if signer_count else ATTESTATION_UNSIGNED
+    elif signer_count == 2:
+        state = ATTESTATION_BILATERAL
+    elif signer_count == 1:
+        state = ATTESTATION_SINGLE_SIGNER
+    else:
+        state = ATTESTATION_UNSIGNED
+
+    return {
+        "state": state,
+        "signature_version": version,
+        "signer_count": signer_count,
+        "both_signatures_present": signer_count == 2,
+        "party_attested": signer_count > 0,
+        "note": _ATTESTATION_NOTES[state],
+    }
+
+
 class DialecticSession:
     """
     Manages a dialectic session between paused agent (A) and reviewer (B).

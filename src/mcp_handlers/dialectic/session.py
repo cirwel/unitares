@@ -12,7 +12,7 @@ import os
 import asyncio
 from datetime import datetime, timedelta
 
-from src.dialectic_protocol import DialecticSession, DialecticPhase
+from src.dialectic_protocol import DialecticSession, DialecticPhase, describe_attestation
 from src.db.acquire_compat import compatible_acquire
 from src.logging_utils import get_logger
 
@@ -505,6 +505,7 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
             if res:
                 parsed_resolution = res if isinstance(res, dict) else json.loads(res)
                 result["resolution"] = _normalize_resolution_dict(parsed_resolution)
+                result["attestation"] = describe_attestation(result["resolution"])
 
             for msg in msg_rows:
                 reasoning = msg["reasoning"] or ""
@@ -687,6 +688,10 @@ async def list_all_sessions(
                             pass
                     elif isinstance(resolution, dict):
                         summary["resolution"] = _normalize_resolution_dict(resolution)
+                    if "resolution" in summary:
+                        summary["attestation"] = describe_attestation(
+                            summary["resolution"]
+                        )
 
                 # Include transcript if requested
                 if include_transcript:
