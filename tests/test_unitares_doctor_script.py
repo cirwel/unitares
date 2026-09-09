@@ -213,6 +213,32 @@ def test_check_schema_migrations_allows_known_slot_18_exception(doctor, monkeypa
     assert "registry matches source manifest" in result.message
 
 
+def test_check_schema_migrations_passes_on_a_db_without_the_slot_18_row(doctor, monkeypatch, tmp_path):
+    """The case nothing pinned before 2026-09-09: a database holding EXACTLY the
+    source migrations and not the out-of-band row.
+
+    KNOWN_SCHEMA_MIGRATION_EXCEPTIONS used to be folded into `expected`, which
+    made version 18 required — but no 018_*.sql exists, so a correctly
+    provisioned fresh install reported "missing 18" and the check could not pass.
+    The exception suppresses an `unexpected` finding; it never adds a
+    requirement.
+    """
+    root = _migration_root(tmp_path)
+
+    class Proc:
+        returncode = 0
+        stdout = "1|initial_schema\n"  # no phantom 18 row
+        stderr = ""
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *args, **kwargs: Proc())
+
+    result = doctor.check_schema_migrations("postgresql://example", root)
+
+    assert result.status == doctor.Status.PASS
+    assert "missing 18" not in result.detail
+
+
 def test_check_schema_migrations_detects_unexpected_out_of_band_row(doctor, monkeypatch, tmp_path):
     root = _migration_root(tmp_path)
 
@@ -311,6 +337,35 @@ def test_check_column_drift_skips_table_lookup_failure(doctor, monkeypatch, tmp_
     # Pass with 0 refs counted (table skipped)
     assert result.status == doctor.Status.PASS
     assert "0 INSERT-referenced columns" in result.message
+
+
+def test_check_column_drift_does_not_pass_when_every_lookup_fails(doctor, monkeypatch, tmp_path):
+    """The inverse of the neighbour above: psql rc != 0 is "I could not look",
+    not "the table is absent".
+
+    Both returned None until 2026-09-09, so against an unreachable database every
+    table was skipped, total_refs stayed 0, and the check reported a green PASS
+    claiming all zero referenced columns existed. That is failing toward
+    "healthy"; .github/workflows/tests.yml states twice that this repo's checks
+    must fail toward "unknown" instead.
+    """
+    sql = "INSERT INTO core.identities (id, name, status) VALUES ($1, $2, $3)"
+    root = _src_root_with_insert(tmp_path, sql)
+
+    class Proc:
+        returncode = 2  # connection refused / bad DSN / permission denied
+        stdout = ""
+        stderr = 'psql: error: connection to server at "127.0.0.1" failed'
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *args, **kwargs: Proc())
+
+    result = doctor.check_column_drift("postgresql://example", root)
+
+    assert result.status is not doctor.Status.PASS
+    assert result.status == doctor.Status.FAIL
+    assert "UNKNOWN" in result.message
+    assert "core.identities" in result.detail
 
 
 def test_check_column_drift_skips_when_psql_missing(doctor, monkeypatch, tmp_path):

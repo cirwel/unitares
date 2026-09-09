@@ -56,6 +56,22 @@ GOVERNANCE_LAUNCHD_LABEL = "com.unitares.governance-mcp"
 KNOWN_SCHEMA_MIGRATION_EXCEPTIONS = {
     # 2026-04-26: applied out-of-band before the source-file repair landed.
     # Keep this as accepted history, but still fail any new unexpected rows.
+    #
+    # This dict SUPPRESSES an "unexpected" finding for a row a database already
+    # carries. It does NOT declare the version required. No 018_*.sql exists
+    # (the source set jumps 017 -> 020), so folding these into `expected` — as
+    # check_schema_migrations did until 2026-09-09 — made "missing 18" the
+    # verdict on any database holding exactly the source migrations, i.e. on
+    # every correctly provisioned fresh install. apply_migrations.py, which
+    # imports this dict precisely so detection cannot fork from the CI gate, has
+    # always read it the other way: its compute_plan gates "unexpected" on
+    # `{**exceptions, **expected}` and computes "pending" from `expected` alone.
+    #
+    # The cost, stated rather than hidden: version 18 is now neither expected nor
+    # flagged, so if the phantom row ever DISAPPEARS from the operator's
+    # production database, nothing here reports it. That is the deliberate trade
+    # — a check that cannot pass on a clean install is worse than one blind to
+    # the removal of a row no source file claims.
     18: "progress flat telemetry tables",
 }
 
@@ -331,7 +347,21 @@ def _checksum_drift(
     return mismatches, unverifiable
 
 
-def _schema_migration_drift(actual: dict[int, str], expected: dict[int, str]) -> list[str]:
+def _schema_migration_drift(
+    actual: dict[int, str],
+    expected: dict[int, str],
+    accepted: dict[int, str],
+) -> list[str]:
+    """Compare a database's registry against the source manifest.
+
+    ``expected`` is what the source files REQUIRE; it alone decides "missing"
+    and "mismatch". ``accepted`` is what a database is ALLOWED to carry, and it
+    alone decides "unexpected". Callers widen it with
+    KNOWN_SCHEMA_MIGRATION_EXCEPTIONS. Keeping the two separate is what
+    apply_migrations.compute_plan already does with the same inputs. Both are
+    required: a default would have to pick one meaning for a dict whose whole
+    defect was being read with two.
+    """
     issues: list[str] = []
     for version in sorted(expected):
         if version not in actual:
@@ -340,7 +370,7 @@ def _schema_migration_drift(actual: dict[int, str], expected: dict[int, str]) ->
             issues.append(
                 f"mismatch {version}: db={actual[version]!r} source={expected[version]!r}"
             )
-    for version in sorted(set(actual) - set(expected)):
+    for version in sorted(set(actual) - set(accepted)):
         issues.append(f"unexpected {version}:{actual[version]}")
     return issues
 
@@ -365,8 +395,11 @@ def check_schema_migrations(db_url: str, repo_root: Path | None = None) -> Check
         actual = _parse_schema_migration_rows(proc.stdout)
         if repo_root is not None:
             expected = _source_schema_migrations(repo_root)
-            expected.update(KNOWN_SCHEMA_MIGRATION_EXCEPTIONS)
-            drift = _schema_migration_drift(actual, expected)
+            # Exceptions widen what a database MAY carry; they never add to what
+            # it MUST carry. See KNOWN_SCHEMA_MIGRATION_EXCEPTIONS for why, and
+            # for the cost. Mirrors apply_migrations.compute_plan.
+            accepted = {**KNOWN_SCHEMA_MIGRATION_EXCEPTIONS, **expected}
+            drift = _schema_migration_drift(actual, expected, accepted)
             if drift:
                 return CheckResult(
                     name, mode, Status.FAIL,
@@ -424,7 +457,20 @@ def _scan_insert_column_refs(src_dirs: list[Path]) -> dict[tuple[str, str], set[
 
 
 def _fetch_table_columns(db_url: str, schema: str, table: str) -> set[str] | None:
-    """Return the set of column names for a table, or None on lookup failure."""
+    """Return the set of column names for a table, or None when it is absent.
+
+    RAISES ``RuntimeError`` when the lookup itself failed (psql rc != 0:
+    unreachable database, bad DSN, permission denied).
+
+    Until 2026-09-09 that case also returned None, which collapsed "the table is
+    not there" into "I could not look" — and the caller skipped both. Against an
+    unreachable database every table was therefore skipped and ``column_drift``
+    reported a green PASS over zero verified columns. That is instrumentation
+    failing toward "healthy", which .github/workflows/tests.yml states twice is
+    forbidden here: the check must fail toward "unknown". Raising matches
+    ``_query_applied_checksums``, which already fails loudly on the same
+    condition rather than returning an empty result a caller reads as clean.
+    """
     proc = subprocess.run(
         ["psql", db_url, "-Atqc",
          f"SELECT column_name FROM information_schema.columns "
@@ -432,7 +478,10 @@ def _fetch_table_columns(db_url: str, schema: str, table: str) -> set[str] | Non
         capture_output=True, text=True, timeout=5,
     )
     if proc.returncode != 0:
-        return None
+        raise RuntimeError(
+            f"column lookup for {schema}.{table} failed at {_redact(db_url)}: "
+            f"{proc.stderr.strip()}"
+        )
     cols = {line.strip().lower() for line in proc.stdout.splitlines() if line.strip()}
     return cols or None
 
@@ -456,10 +505,25 @@ def check_column_drift(db_url: str, repo_root: Path) -> CheckResult:
 
     missing: list[str] = []
     total_refs = 0
+    resolved_tables = 0
     for (schema, table), cols in sorted(refs.items()):
-        existing = _fetch_table_columns(db_url, schema, table)
+        try:
+            existing = _fetch_table_columns(db_url, schema, table)
+        except RuntimeError as exc:
+            # Not a SKIP and not a PASS: we could not determine whether the code
+            # matches the DB, and "could not check" must never render as
+            # "checked, fine". Same posture as check_migration_checksum_drift
+            # and check_schema_migrations on an unreachable database.
+            return CheckResult(
+                name, mode, Status.FAIL,
+                "could not read table columns — column drift state is UNKNOWN",
+                detail=str(exc),
+            )
         if existing is None:
-            continue  # table absent or lookup error; other checks own that
+            # Table genuinely absent (psql succeeded, returned nothing). No check
+            # here verifies table existence, so this is a gap, not a handoff.
+            continue
+        resolved_tables += 1
         total_refs += len(cols)
         for col in sorted(cols):
             if col not in existing:
@@ -471,9 +535,13 @@ def check_column_drift(db_url: str, repo_root: Path) -> CheckResult:
             f"code references {len(missing)} column(s) missing from DB",
             detail="\n".join(missing),
         )
+    # Count the tables actually resolved, not the tables referenced. The old
+    # wording ("across {len(refs)} table(s)") claimed to have checked every
+    # referenced table even when it had verified none of them.
     return CheckResult(
         name, mode, Status.PASS,
-        f"all {total_refs} INSERT-referenced columns exist across {len(refs)} table(s)",
+        f"all {total_refs} INSERT-referenced columns exist across "
+        f"{resolved_tables} table(s)",
     )
 
 
