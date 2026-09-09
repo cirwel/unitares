@@ -2038,9 +2038,11 @@ class TestSupersedes:
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
 
         # tag "permanent" → get_lifecycle_policy returns "permanent"
-        # (Note: PERMANENT_TYPES uses "architecture_decision" but the handler's
-        # VALID_DISCOVERY_TYPES uses "architectural_decision" — using the tag
-        # path avoids that existing inconsistency.)
+        # (This note used to record the type/handler mismatch as an "existing
+        # inconsistency" to route around. It was a bug: PERMANENT_TYPES named a
+        # value DiscoveryType cannot hold, so type-based permanence was dead
+        # for every architectural decision. Fixed 2026-09-08; the tag path is
+        # still the right fixture here because this test is about tags.)
         permanent_predecessor = DiscoveryNode(
             id="perm-1",
             agent_id="other-agent",
