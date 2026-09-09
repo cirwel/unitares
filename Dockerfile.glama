@@ -1,0 +1,20 @@
+# Independent single-container installation; normal Compose stays unchanged.
+FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
+WORKDIR /app
+COPY requirements-docker.txt constraints.txt ./
+COPY elixir/lease_plane/ elixir/lease_plane/
+COPY elixir/unitares_sdk/ elixir/unitares_sdk/
+COPY db/postgres/ db/postgres/
+COPY docker/glama/install.sh docker/glama/install.sh
+RUN bash docker/glama/install.sh
+COPY docker/glama/supervise.py docker/glama/supervise.py
+COPY src/ src/
+COPY governance_core/ governance_core/
+COPY agents/ agents/
+COPY config/ config/
+COPY dashboard/ dashboard/
+COPY skills/ skills/
+COPY VERSION .
+ENV PATH="/opt/unitares/bin:/opt/elixir/bin:/usr/lib/postgresql/18/bin:$PATH" PYTHONUNBUFFERED=1
+VOLUME ["/data"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/opt/unitares/bin/python", "/app/docker/glama/supervise.py"]

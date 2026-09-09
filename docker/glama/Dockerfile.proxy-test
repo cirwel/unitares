@@ -1,0 +1,7 @@
+# Test the same outer mcp-proxy command used by Glama. Test-only image.
+FROM node:24-trixie-slim AS proxy
+RUN npm install --global mcp-proxy@6.4.3
+FROM unitares-glama:local
+COPY --from=proxy /usr/local/bin/node /usr/local/bin/node
+COPY --from=proxy /usr/local/lib/node_modules/mcp-proxy /opt/mcp-proxy
+ENTRYPOINT ["node", "/opt/mcp-proxy/dist/bin/mcp-proxy.mjs", "--", "/usr/bin/tini", "--", "/opt/unitares/bin/python", "/app/docker/glama/supervise.py"]
