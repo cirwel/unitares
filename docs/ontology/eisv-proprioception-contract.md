@@ -711,8 +711,8 @@ streams require new hardware — is unsound if derived from the July window.
 calibration scoping; individuality remains UNIDENTIFIED** (corrected 2026-07-31;
 this row previously read "REFUTED BY CONSTRUCTION" and overstated).
 The mechanism is real and re-verified: `cal_I` carries 50–60% of I
-(`src/behavioral_sensor.py:147,149`) and comes from `get_mean_calibration_error`
-(`src/mcp_handlers/updates/context.py:85`), which takes no `agent_id` — it averages
+(`_compute_I` in `src/behavioral_sensor.py`) and comes from `get_mean_calibration_error`
+(`src/mcp_handlers/updates/context.py`), which takes no `agent_id` — it averages
 bins from a module-level singleton keyed by confidence range only, and `agent_id`
 appears **zero** times in `src/calibration.py`. Every agent receives the identical
 scalar on the same tick.

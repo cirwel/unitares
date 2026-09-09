@@ -23,7 +23,7 @@ stable anchor: `UNITARES_CLIENT_SESSION_ID = agent:/thread-<id>` (`dispatch_beam
 lib/dispatch/session.ex:460`, gated by `UNITARES_ORCHESTRATED=1`). That anchor is a
 **client_session_id**, which rides the 24h **sliding** session TTL
 (`SESSION_TTL_HOURS=24`; PG lookups filter `expires_at > now()`,
-`db/mixins/session.py:101`). The anchor is **not** continuity_token-backed, and
+`src/db/mixins/session.py`, `get_active_sessions_for_identity`). The anchor is **not** continuity_token-backed, and
 dispatch never passes a token.
 
 Consequence: a thread idle **>24h** loses its session binding; the next turn presents
