@@ -745,6 +745,28 @@ def _validate_session_key(session_key: str) -> str:
     return session_key
 
 
+async def _refresh_session_ttl(session_key: str) -> None:
+    """SLIDING TTL: refresh the Redis session expiry on every cache hit (v2.5.5).
+
+    Best-effort side effect. The swallowing `except Exception: pass` is part
+    of the contract and stays inside this helper: a Redis hiccup must never
+    turn a successful resume into a failure. Extracted from
+    resolve_session_identity (2026-09-08) with no behavior change.
+    """
+    try:
+
+        from src.cache.redis_client import get_redis
+
+        raw_redis = await get_redis()
+
+        if raw_redis:
+            await raw_redis.expire(f"session:{session_key}", GovernanceConfig.SESSION_TTL_SECONDS)
+
+    except Exception:
+
+        pass
+
+
 async def resolve_session_identity(
 
     session_key: str,
@@ -1046,19 +1068,7 @@ async def resolve_session_identity(
                             traj_result = await _soft_verify_trajectory(agent_uuid, trajectory_signature, "redis")
 
                             # SLIDING TTL: Refresh Redis expiry on every hit (v2.5.5)
-
-                            try:
-
-                                from src.cache.redis_client import get_redis
-
-                                raw_redis = await get_redis()
-
-                                if raw_redis:
-                                    await raw_redis.expire(f"session:{session_key}", GovernanceConfig.SESSION_TTL_SECONDS)
-
-                            except Exception:
-
-                                pass
+                            await _refresh_session_ttl(session_key)
 
 
 
