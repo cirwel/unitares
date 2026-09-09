@@ -334,8 +334,7 @@ except Exception as exc:
 tools = data.get("tools") or []
 count = data.get("count") or len(tools)
 total = data.get("total_available", "?")
-mode = data.get("mode", "?")
-print("Tools: " + str(count) + "/" + str(total) + " (" + str(mode) + " mode)")
+print("Tools: " + str(count) + "/" + str(total))
 def tool_name_desc(tool):
     if not isinstance(tool, dict):
         return str(tool), ""
@@ -345,13 +344,10 @@ def tool_name_desc(tool):
         return str(fn.get("name", "?")), str(fn.get("description", ""))
     # Fallback: flat shape
     return str(tool.get("name", "?")), str(tool.get("description") or tool.get("hint") or "")
-for tool in tools[:20]:
+for tool in tools:
     name, desc = tool_name_desc(tool)
     first_line = desc.split(".")[0][:60]
     print("  " + name.ljust(32) + " " + first_line)
-more = len(tools) - 20
-if more > 0:
-    print("  ... +" + str(more) + " more")
 '
 }
 

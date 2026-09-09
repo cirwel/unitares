@@ -363,6 +363,10 @@ def first_party_tool_surface():
     Restores with ``setdefault`` so a tool the test itself registers under a
     lifted name wins.
     """
+    # Settle the mounted registry too: full discovery no longer masks plugin
+    # registrations retained there from collection or earlier plugin tests.
+    from src import mcp_server
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
     from src.mcp_handlers import TOOL_HANDLERS
     from src.mcp_handlers.decorators import (
         _TOOL_DEFINITIONS,
@@ -378,9 +382,16 @@ def first_party_tool_surface():
     lifted_handlers = {
         name: TOOL_HANDLERS.pop(name) for name in foreign if name in TOOL_HANDLERS
     }
+    mounted = mcp_server.mcp._tool_manager._tools
+    first_party = set(_TOOL_DEFINITIONS) | set(AGENT_WORKFLOW_ALIASES)
+    lifted_mounted = {
+        name: mounted.pop(name) for name in list(mounted) if name not in first_party
+    }
     try:
         yield
     finally:
+        for name, tool in lifted_mounted.items():
+            mounted.setdefault(name, tool)
         for name, definition in lifted_definitions.items():
             _TOOL_DEFINITIONS.setdefault(name, definition)
         for name, handler in lifted_handlers.items():

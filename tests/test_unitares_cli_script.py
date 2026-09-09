@@ -237,15 +237,8 @@ def test_health_reports_status_and_version(cli_env):
 def test_tools_lists_core_governance_tools(cli_env):
     result = _run(cli_env, "tools")
     assert "Tools:" in result.stdout
-    # The /v1/tools REST surface lists what the running mode advertises. The
-    # sacrificial server inherits the process default, standard: the five-tool
-    # checkpoint loop plus the three capabilities with no other advertised
-    # route (shared memory, structured review, advisory inference), under
-    # their workflow names. The lite-only names (onboard, health_check,
-    # list_tools) are not listed but stay callable by name -- the onboard test
-    # below goes through one -- so nothing is asserted about their absence:
-    # descriptions may mention them.
-    assert "(standard mode)" in result.stdout
+    # The current server exposes the complete catalog, with no mode selector.
+    assert " mode)" not in result.stdout
     for name in (
         "start_session",
         "identity",
@@ -257,6 +250,10 @@ def test_tools_lists_core_governance_tools(cli_env):
         "update_finding",
         "request_review",
         "consult",
+        "admin",
+        "agent",
+        "observe",
+        "list_tools",
     ):
         assert name in result.stdout, name
 

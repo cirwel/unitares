@@ -152,21 +152,18 @@ sharing one accountable record. Plain-language definition:
 
 ## Tools
 
-Fifteen tools are advertised by default: the checkpoint loop (`start_session`,
-`identity`, `sync_state`, `record_result`, `check_working_state`), shared memory
-(`search_shared_memory`, `store_finding`, `update_finding`, `knowledge`), review
-(`request_review`, `dialectic`), `consult`, `self_recovery`, `describe_tool`, and
-`health_check`.
+One complete catalog is advertised to every client. Start with the checkpoint
+loop (`start_session`, `identity`, `sync_state`, `record_result`,
+`check_working_state`), shared memory, review, `consult`, and `self_recovery`.
+The lifecycle, observation, configuration, calibration, export, and admin tools
+are available in the same catalog. Installed plugins extend it automatically.
 
-`GOVERNANCE_TOOL_MODE` picks a different profile: `minimal` advertises the five
-checkpoint names alone, `lite` advertises 29, and `full` advertises every name
-the server can dispatch — the **42 tools** in the runtime registry plus the 8
-workflow aliases that carry the agent-facing names, 50 in all. A profile decides
-what `tools/list` advertises, never what dispatches — but schema-driven clients
-(Claude Code, Codex, Cursor) only offer the model what discovery returns, so an
-unadvertised tool is unreachable from them in practice.
-Profiles vary by release, including the tag the quickstart pins; the
-[installation guide](docs/manual/02-install.md) has the per-release detail.
+No tool mode is needed. Legacy `GOVERNANCE_TOOL_MODE` settings are accepted but
+ignored. Use `list_tools(category=...)` to browse a topic and
+`describe_tool(tool_name=..., action=...)` for full parameter details.
+Primary workflow names are preferred; raw names remain callable and discoverable
+for compatibility. Authorization is enforced on each action, independently of
+visibility.
 
 The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
 check-ins, heartbeats, and knowledge participation for resident agents. For a

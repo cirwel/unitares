@@ -9,6 +9,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
+
 
 def _definitions():
     from src.tool_schemas import get_tool_definitions
@@ -58,13 +60,13 @@ def test_server_advertises_the_default_profile_and_still_dispatches_the_rest():
     from src import mcp_server
     from src.tool_modes import STANDARD_MODE_TOOLS, TOOL_MODE
 
-    assert TOOL_MODE == "standard"
+    assert TOOL_MODE == "full"
     listed = {tool.name for tool in asyncio.run(mcp_server.mcp.list_tools())}
     registered = set(mcp_server.mcp._tool_manager._tools)
     assert STANDARD_MODE_TOOLS <= listed
     assert listed <= registered
     for name in ("observe", "list_tools", "onboard"):
-        assert name not in listed, f"{name} is not part of the default profile"
+        assert name in listed, f"{name} must be discoverable"
         assert name in registered, f"{name} must still dispatch by name"
     # self_recovery moved into the default profile: the server names it to
     # paused agents (mcp_handlers/updates/phases.py, support/agent_auth.py),
@@ -92,7 +94,7 @@ def test_server_carries_instructions_naming_the_unadvertised_surface():
     assert instructions, "the server must ship an instructions string"
     assert instructions == build_server_instructions()
     assert "start_session" in instructions
-    assert "callable by name" in instructions
+    assert "complete catalog" in instructions
 
 
 if __name__ == "__main__":  # pragma: no cover

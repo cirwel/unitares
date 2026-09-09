@@ -31,18 +31,17 @@ def test_full_mode_is_unfiltered():
 
 
 def test_minimal_advertises_exactly_the_five():
-    assert advertised_tool_names("minimal") == MINIMAL_MODE_TOOLS
-    assert len(MINIMAL_MODE_TOOLS) == 5
+    assert advertised_tool_names("minimal") is None
 
 
 def test_lite_advertises_lite_mode_tools():
-    assert advertised_tool_names("lite") == LITE_MODE_TOOLS
+    assert advertised_tool_names("lite") is None
 
 
 def test_mode_is_read_at_call_time(monkeypatch):
     """A process that changes the mode sees it on the next listing."""
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "minimal")
-    assert advertised_tool_names() == MINIMAL_MODE_TOOLS
+    assert advertised_tool_names() is None
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
     assert advertised_tool_names() is None
 
@@ -53,7 +52,7 @@ def test_filter_keeps_order_and_drops_unadvertised():
         for name in ("knowledge", "sync_state", "list_tools", "start_session")
     ]
     kept = [tool.name for tool in filter_listed_tools(tools, "minimal")]
-    assert kept == ["sync_state", "start_session"]
+    assert kept == ["knowledge", "sync_state", "list_tools", "start_session"]
     assert [tool.name for tool in filter_listed_tools(tools, "full")] == [
         "knowledge", "sync_state", "list_tools", "start_session",
     ]
@@ -79,7 +78,7 @@ async def test_subclass_filters_list_tools_only(monkeypatch):
 
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "minimal")
     assert [tool.name for tool in await server.list_tools()] == [
-        "start_session", "identity",
+        "start_session", "knowledge", "identity", "list_tools",
     ]
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
     assert len(await server.list_tools()) == 4

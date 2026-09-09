@@ -1,25 +1,7 @@
-"""Advertise-only tool modes for the FastMCP ``/mcp/`` mount.
+"""Complete MCP discovery with compact schema annotations.
 
-``GOVERNANCE_TOOL_MODE`` decides what ``tools/list`` shows. It must not decide
-what dispatches. Until the 2026-09 surface cut the FastMCP registrars applied
-the mode at *registration* time, so on the streamable-HTTP mount a
-``register=True`` handler outside the mode came back ``Unknown tool`` (verified
-2026-08-11 against the deployed server; see
-``tests/test_lite_wire_surface.py``). REST ``/v1/tools/call`` and the stdio
-server never had that coupling: both dispatch any registered name and filter
-only their listing. This module gives the FastMCP mount the same shape:
-
-- ``src/tool_registration.py`` registers every ``register=True`` handler and
-  every workflow alias with FastMCP regardless of mode.
-- :func:`mode_filtered_server_class` wraps the high-level server so its
-  ``list_tools()`` advertises only the mode's public surface
-  (``src.interface_contract.get_public_tool_definitions``), the same predicate
-  the REST and stdio listings use.
-
-The filter fails open toward *listing*: if the advertised surface cannot be
-computed, the full registered surface is advertised rather than nothing.
-Hiding everything would strand a schema-driven client; over-listing costs
-orientation noise only.
+Legacy class/function names are retained for embedded hosts. Mode arguments
+are ignored; registration determines reachability and discovery alike.
 """
 
 from __future__ import annotations
@@ -35,31 +17,12 @@ logger = get_logger(__name__)
 
 
 def advertised_tool_names(mode: Optional[str] = None) -> Optional[set[str]]:
-    """Names ``tools/list`` may show in ``mode``; ``None`` means unfiltered.
+    """Compatibility API: the complete registered MCP catalog is unfiltered.
 
-    ``mode`` defaults to the live ``src.tool_modes.TOOL_MODE`` read at call
-    time (not import time) so a process that changes the mode - tests do -
-    sees the change on the next listing. ``full`` and an empty computed
-    surface both return ``None``: an empty set means the surface could not be
-    determined, never that the deployment offers nothing.
+    Also preserves tools contributed by installed federation plugins; a static
+    first-party allowlist must never hide a dynamically registered capability.
     """
-    from src import tool_modes
-
-    resolved = (mode or tool_modes.TOOL_MODE or "full").lower()
-    if resolved == "full":
-        return None
-
-    from src.interface_contract import get_public_tool_definitions
-
-    names = {tool.name for tool in get_public_tool_definitions(resolved)}
-    if not names:
-        logger.warning(
-            "tool mode %r advertises no tools; listing the full registered "
-            "surface instead of an empty tools/list",
-            resolved,
-        )
-        return None
-    return names
+    return None
 
 
 def filter_listed_tools(tools: Iterable[Any], mode: Optional[str] = None) -> list[Any]:

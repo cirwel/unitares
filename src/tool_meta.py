@@ -63,7 +63,7 @@ CATEGORIES: Tuple[str, ...] = (
 class ToolMeta:
     """Everything the discovery surfaces say about one advertised name.
 
-    category:   list_tools(category=...) filter, and a GOVERNANCE_TOOL_MODE value.
+    category:   list_tools(category=...) browsing filter.
     tier:       essential (used in every session) / common / advanced (operator,
                 maintenance, specialist); list_tools tier filters and describe_tool.
     operation:  read / write / admin. A router carries the most privileged class

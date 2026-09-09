@@ -1,9 +1,9 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.5.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.6.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
-not one transport. For a selected tool mode, the server advertises the same
+not one transport. The server advertises the same
 callable names and source input schemas through:
 
 - Streamable HTTP MCP at `/mcp/`
@@ -11,7 +11,7 @@ callable names and source input schemas through:
 - local stdio discovery
 
 The checked-in [`interface-contract.v1.json`](interface-contract.v1.json) is the
-machine-readable `lite` contract. A live client negotiates the same contract by
+machine-readable complete contract. A live client negotiates the same contract by
 calling `list_tools(lite=true)` and reading `interface_contract`; no repository
 tag lookup or private server import is required. Its `surface_sha256` changes
 whenever the ordered capability records change. CI compares that artifact with
@@ -29,7 +29,7 @@ first-class public spelling such as `start_session` or `sync_state`; a
 `canonical_tool` is the underlying registered tool. Both are dispatched by the
 same server authority.
 
-For the declared mode, a listed capability is:
+A listed capability is:
 
 1. advertised by each local public discovery surface;
 2. accepted by the common dispatcher; and
@@ -49,28 +49,25 @@ check-ins, or honors a returned policy action outside UNITARES-governed writes.
 Those are host-integration capabilities, documented separately in the
 [client capability matrix](integration/CLIENT_CAPABILITY_MATRIX.md).
 
-## Modes and compatibility
+## One catalog and compatibility
 
-`minimal`, `standard`, `lite`, and `full` are server-selected discovery
-profiles. They decide what `tools/list` advertises, not what dispatches: every
-registered name and every workflow alias is callable by name in every profile
-on every transport. `standard` is the server default and advertises fifteen names:
-the checkpoint loop (`start_session`, `identity`, `sync_state`,
-`record_result`, `check_working_state`) plus `search_shared_memory`,
-`store_finding`, `update_finding`, `request_review`, `consult`, and
-`self_recovery`, `knowledge`, `dialectic`, `describe_tool`, and `health_check`. `minimal`
-advertises the checkpoint loop alone. The checked-in artifact uses `lite`, the
-wider agent-facing profile; full mode adds administrative and specialist
-tools. The live handshake (`list_tools(lite=true)`) reports the profile the
-server runs, so a `minimal` deployment answers with five capabilities and its
-own surface hash while still dispatching the lite names.
+Interface release 1.6.0 advertises every registered tool and primary workflow
+alias on every transport. No mode selection is required. Legacy
+`GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
+but ignored, including the former operator profiles. They were discovery
+filters, never authorization boundaries. Existing action authorization and
+identity gates remain in force.
 
-Because a schema-driven client offers the model only the names discovery
-returned, the profile is a capability boundary for such clients even though it
-is not one for dispatch. The server therefore states its profile, and what it
-is withholding, in the MCP `instructions` string returned at connect. That
-string is orientation, not contract: it is not part of the surface hash and
-may be reworded in any release.
+The retained `mode` contract field always reports `full`. All legacy mode
+values produce the same surface hash. `list_tools(lite=true)` is the compact
+view of this complete catalog; `lite` controls response detail, not capability
+availability. Category and tier filters are optional browsing aids.
+
+Raw implementation names remain discoverable and callable so existing clients
+can upgrade independently. Prefer primary workflow names for normalized
+lifecycle responses. Specialized raw operations remain first-class where their
+parameters or behavior differ. Consolidated routers expose their action
+parameters through `describe_tool(tool_name=..., action=...)`.
 
 Adding a compatible capability increments the contract version. Renaming,
 removing, or changing the meaning of an existing capability requires a new
@@ -82,7 +79,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.5.0` is the negotiated interface release. Compatible additions
+- `version: 1.6.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
