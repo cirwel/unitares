@@ -62,6 +62,10 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 - [`PLAYBOOK.md`](install/PLAYBOOK.md) — bare-metal install playbook (Homebrew Postgres, native Python). Docker path is in the repo README. **Live reference** — keep this current.
 - [`cross-machine-surface.md`](install/cross-machine-surface.md) — *point-in-time install-surface audit (2026-04-24), preserved as a record.* Inventory of machine-varying values; useful background for a cross-machine setup, but the install path itself is `PLAYBOOK.md`, not this.
 
+### `deployment/` — hosted installation
+
+- [`glama.md`](deployment/glama.md) — private Glama image, persistent storage, validation, and deployment prerequisites.
+
 ### `integration/` — MCP and client wiring
 
 - [`MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) — Streamable HTTP MCP endpoints, stdio bridges, and hosted/client-neutral setup
