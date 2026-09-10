@@ -7,25 +7,27 @@ purpose and links to the precise version at every step.
 
 ## The product in one sentence
 
-**UNITARES is a self-hosted, MCP-native operating layer for accountable,
-long-running AI agents.** It acts as a flight recorder and bounded circuit
-breaker: agents check in with it as they work; it keeps a
-longitudinal score of whether each agent's claims match its recorded results,
-can refuse further governed writes when policy pauses an agent, requires a
-written reflection — and
-optionally a structured peer review — before that agent can resume, and leaves
-an auditable record plus a shared memory that every other agent on the fleet
-can search.
+**UNITARES is a self-hosted federation kernel for agent identity, claims and
+evidence, review, outcomes, and reconstruction.** Different harnesses retain
+their own execution loops while sharing an attributed record through MCP/HTTP.
 
-Everything else in the repository — EISV, coherence, dialectic, the ontology —
-is internal machinery for four verbs: **record, score, interrupt, remember.**
+“Kernel” describes the shared accountability boundary. It is not a claim that
+UNITARES owns execution, replicates state across independent servers, or has
+proved better outcomes than a structured handoff. Its current mechanisms map
+to five questions:
 
-| Verb | What it means | Where it lives |
+| Question | Deployed mechanism | Boundary |
 |---|---|---|
-| **Record** | Every write is bound to a process identity; claims, outcomes, and decisions are retained with provenance. | identity layer, `audit.events`, [telemetry envelope](ontology/eisv-telemetry-envelope-v1.md) |
-| **Score** | Each check-in updates a four-coordinate state estimate: is work advancing, do claims match results, how far off the agent's own baseline, running hot vs. careful. | [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) |
-| **Interrupt** | A priority ladder returns proceed / guide / pause with a named reason; a paused agent's further check-ins are refused until it recovers. | `src/monitor_decision.py`, `src/mcp_handlers/lifecycle/self_recovery.py` |
-| **Remember** | Findings, reviews, and resolutions land in a provenance-aware knowledge graph the next agent searches before repeating the mistake. | [`KNOWLEDGE_GRAPH_SEMANTICS.md`](dev/KNOWLEDGE_GRAPH_SEMANTICS.md) |
+| **Who said it?** | Fresh process identity and explicit lineage. | Lineage links work; it does not confer authority or make two processes one identity. |
+| **What supports it?** | Check-ins, attributed findings, corrections, and provenance. | Claims and evidence use existing records; this wording introduces no new object schema or automatic evidence verification. |
+| **Who challenged it?** | Structured review records, disagreement, conditions, and resolution. | A reviewer must participate; requesting review is not completing review. |
+| **What happened?** | Typed outcome events and prediction binding. | Caller reports need independent evidence to establish correctness. |
+| **What can a successor recover?** | Shared-memory search, knowledge reads, review records, and history export. | Reconstruction is assembled by clients; complete reconstruction and superiority over Git plus handoff remain unmeasured. |
+
+See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md) for actual
+tool names and service prerequisites. Behavioral state estimation, policy,
+recovery, and calibration remain part of the system. They interpret the record
+and gate governed operations; they are not substitutes for evidence.
 
 ## MCP-native, not MCP-only
 
@@ -64,8 +66,8 @@ no imports from Core internals, and no privileged measurement or policy path.
 
 ## One governed incident, end to end
 
-The chain below is the product. Each step is deployed behavior with a source
-location; none of it is aspirational.
+The chain below illustrates the deployed checkpoint and recovery workflow.
+It is one use of the shared record, not a requirement to invoke every capability.
 
 1. **An agent onboards** and receives a process identity. From here on, every
    write it makes is attributable to that specific process, not to a display
@@ -99,13 +101,11 @@ The customer is **one operator running several long-lived autonomous agents**
 operator controls. It is a self-hosted, MCP-native operating layer, not an
 agent framework and not a hosted platform.
 
-The end state it buys: the operator can leave a fleet running and
-
-- nothing writes without an accountable identity,
-- an agent that starts confidently failing is interrupted mid-run instead of
-  after the visible breakage, and
-- on return there is a record of what every agent claimed, what actually
-  happened, and why the server intervened.
+The operational goal is an attributable record of claims, reported outcomes,
+reviews, and policy decisions that a later process or operator can inspect.
+Configured identity gates enforce accountable writes, and policy can interrupt
+governed operations. Detecting a confidently failing agent before damage, or
+improving outcomes by pausing it, has not been established.
 
 It occupies the gap the other layers leave open: **evals** judge the model
 before deployment, **guardrails and sandboxes** judge each action as it

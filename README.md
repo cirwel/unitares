@@ -1,28 +1,22 @@
 <div align="center">
 
-<img alt="UNITARES: infrastructure for long-lived AI-agent fleets" src="docs/assets/hero-v3.png" width="100%">
+### A federation kernel for accountable AI agents.
 
-### Infrastructure for long-lived AI agents.
-
-Identity, memory, and evidence that outlive the process.
+Identity, claims and evidence, review, outcomes, and reconstruction across agent runtimes.
 
 </div>
 
-You leave three agents running overnight. By morning one has spent six hours
-confidently building on a wrong assumption, another restarted twice and came
-back as a fresh process wearing the same display name, and the third repeated a
-mistake the first one already hit and wrote up.
+UNITARES is a self-hosted MCP server that gives agents a shared, attributed
+record while they keep their own reasoning loops and tools. A new process can
+recover what earlier processes claimed, inspect the evidence and disagreement,
+and continue the work with its own identity.
 
-Every individual tool call was permitted. Your traces record what each run did.
-Neither answers the question you actually had:
-
-> **Is this the same agent as yesterday, and is it working the way it usually
-> works?**
-
-UNITARES answers that one. Your agents check in as they work; the server keeps an
-accountable, replayable record of what each process claimed, what evidence
-backed the claim, and what it decided to do about it — on hardware you control,
-with no outbound vendor dependency.
+Here, **federation kernel** means this shared accountability boundary across
+harnesses. It does not promise autonomous cross-server replication or a new
+agent runtime. The deployed building blocks are process identities, check-ins,
+attributed findings, structured reviews, outcome events, and history retrieval.
+Reconstruction uses those records; its fidelity and benefit over Git plus a
+structured handoff still need comparative evaluation.
 
 **Status:** v2.22.0. Running continuously since November 2025.
 
@@ -45,19 +39,21 @@ with no outbound vendor dependency.
 
 | What you get | The mechanism |
 |---|---|
-| **Nothing writes anonymously.** "Which agent said this, and is it the same one that ran yesterday?" gets an answer instead of a display name. | `start_session` binds every later write to a process instance. Reads can stay open; writes are proof-carrying under `STRICT_IDENTITY_REQUIRED`. |
-| **A record you can replay** — the claim, the evidence behind it, the verdict, and the recovery. | `sync_state` records what the process says it did and how confident it is. `record_result` attaches tests, exit codes, and reviews to that claim, with provenance kept. |
-| **A verdict with a named cause**, not a score to interpret. | Each check-in returns `proceed`, `guide`, or `pause`, always with the reason and the next step. |
-| **A brake at the governed surface.** | A pause refuses that agent's further governed writes until it submits a reflection that passes a quality check — optionally routed to another agent, who can impose conditions on the resumed agent's next check-ins. Actions outside that surface remain yours to honor. |
-| **Memory that outlives the process.** Restarts don't reset what the fleet knows. | Findings land in a shared, attributed knowledge graph that the next agent searches before repeating the work. |
+| **Identity** — who made the claim? | `start_session(force_new=true)` binds a fresh process; retain `client_session_id` for later calls. Real lineage links inherited work, not authority or sameness. Write enforcement depends on the configured identity gates. |
+| **Claims and evidence** — what was asserted, and what supports it? | `sync_state` records a work report; `store_finding` and `update_finding` retain attributed knowledge and corrections. Supply evidence and provenance explicitly. |
+| **Review** — what was challenged, and on what terms? | `request_review` opens a structured review; `dialectic` records positions, disagreement, conditions, and resolution. A request alone is not a completed review. |
+| **Outcomes** — what actually happened? | `record_result` records typed outcomes; an explicit `prediction_id` links a result to the prediction it grades. A stored outcome does not independently verify the caller's report. |
+| **Reconstruction** — what should the next process recover? | `search_shared_memory`, knowledge reads, review history, and `export` expose retained records. Clients assemble relevant claims, evidence, corrections, and unresolved disagreement; there is no single reconstruction tool. |
 
 <div align="center">
   <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
 </div>
 
-All of it is retained in your own PostgreSQL and readable through MCP, HTTP, or
-the self-hosted dashboard. Identity, telemetry, evidence, and policy history
-never leave your machine.
+The core record is retained in your deployment and accessible through MCP,
+HTTP, and the self-hosted dashboard. Core storage needs no external model
+provider. Optional cloud consultation and configured integrations can send
+submitted content outside the deployment; their privacy and authorization
+settings apply.
 
 Clients can treat the policy action, reason, and next step as the stable
 contract; the enforcement record rides alongside it. Operators can additionally
@@ -154,23 +150,40 @@ sharing one accountable record. Plain-language definition:
 
 ## Tools
 
-One complete catalog is advertised to every client. Start with the checkpoint
-loop (`start_session`, `identity`, `sync_state`, `record_result`,
-`check_working_state`), shared memory, review, `consult`, and `self_recovery`.
-The lifecycle, observation, configuration, calibration, export, and admin tools
-are available in the same catalog. Installed plugins extend it automatically.
+Start with the five-part workflow above. Behavioral state estimation, policy
+and recovery remain deployed capabilities; inference, diagnostics, calibration,
+configuration, exports, and administration support more specialized workflows.
+The [capability and deployment guide](docs/CAPABILITIES_AND_DEPLOYMENT.md) maps
+the core workflow to real tools and explains which services each profile needs.
 
-No tool mode is needed. Legacy `GOVERNANCE_TOOL_MODE` settings are accepted but
-ignored. Use `list_tools(category=...)` to browse a topic and
-`describe_tool(tool_name=..., action=...)` for full parameter details.
-Primary workflow names are preferred; raw names remain callable and discoverable
-for compatibility. Authorization is enforced on each action, independently of
-visibility.
+One complete catalog advertises every registered tool and primary workflow
+alias. **Core and advanced are reading paths, not visibility or permission
+modes.** No tool mode is needed; legacy `GOVERNANCE_TOOL_MODE` settings are
+ignored. `list_tools(category=...)` browses the catalog, and
+`describe_tool(tool_name=..., action=...)` returns full parameter details.
+Primary workflow names are preferred; raw names remain available for
+compatibility. Each action retains its authorization requirements.
 
-The public [`unitares-sdk`](agents/sdk/README.md) handles connection, identity,
-check-ins, heartbeats, and knowledge participation for resident agents. For a
-durable resident, preserve its identity anchor with `identity(agent_uuid=...)`
-rather than minting a new one each run.
+The public [unitares-sdk](agents/sdk/README.md) supports client
+integration. Ordinary fresh processes onboard fresh; dedicated resident
+substrate identities follow their adapter's explicit contract. A display name,
+UUID alone, or old continuity token does not establish cross-process identity.
+
+## Deployment profiles
+
+- **Local operator:** the release-tagged Compose quickstart provisions PostgreSQL
+  with AGE/pgvector, Redis, the lease plane, and the server.
+- **Private Glama installation:** the separate storage-backed bundle provides
+  those backing services behind stdio. Persist `/data`; see the
+  [Glama guide](docs/deployment/glama.md) for build, validation, and upgrade limits.
+- **Client of an existing deployment:** connect over MCP/HTTP using that
+  operator's access policy; installing a client does not provision the server.
+
+A bare Python process with missing storage dependencies can expose discovery
+without usable durable operations. It is not a supported lightweight core
+installation. Neither bundle includes an inference provider, automated reviewer
+fleet, or resident fleet by default. Catalog visibility does not establish
+service readiness or successful execution.
 
 ## Evidence and limits
 
