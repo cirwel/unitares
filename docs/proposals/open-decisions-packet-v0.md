@@ -68,8 +68,14 @@ analysis, its corrected permutation assumptions and its synthetic validation;
 the non-normative annotation and the test that pins it; the split between
 findings and sign-off; the split-by-observability wiring with installer coverage
 preserved and deployment reporting advisory at the start; and the rule-scoped
-exceptions plus the non-growing baseline — is follow-up outside this pull
-request. Entry 4 is the one row whose present state is directly checkable, and
+exceptions plus the non-growing baseline, with attribution preserved and the
+nonportable executable examples corrected — is follow-up outside this pull
+request. That last element maps onto material entry 7 already inventories: the
+operator-home path occurrences, one of which is a configuration value inside a
+plist snippet, which is an executable example in the sense that copying it runs
+it. Entry 7's option F is the severable form of exactly that work, and the
+resolution takes it alongside the other two mechanisms rather than instead of
+them. Entry 4 is the one row whose present state is directly checkable, and
 part of what it names already exists: `dashboard/tests/residents-empty-roster.test.js`
 carries an empty-roster spec, a foreign-roster spec and a `/v1/residents` outage
 spec, and the dashboard suite is green at 14 files and 65 tests, re-run at this
