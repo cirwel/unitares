@@ -8,12 +8,12 @@ Identity, claims and evidence, review, outcomes, and reconstruction across agent
 
 UNITARES is a self-hosted MCP server that gives agents a shared, attributed
 record while they keep their own reasoning loops and tools. A new process can
-recover what earlier processes claimed, inspect the evidence and disagreement,
-and continue the work with its own identity.
+recover durable claims earlier processes stored, inspect the retained evidence
+and disagreement, and continue the work with its own identity.
 
-Here, **federation kernel** means this shared accountability boundary across
-harnesses. It does not promise autonomous cross-server replication or a new
-agent runtime. The deployed building blocks are process identities, check-ins,
+Here, **federation kernel** means many independent agent runtimes and harnesses
+sharing one operator-controlled server and authority domain. It does not promise
+autonomous cross-server replication or a new agent runtime. The deployed building blocks are process identities, check-ins,
 attributed findings, structured reviews, outcome events, and history retrieval.
 Reconstruction uses those records; its fidelity and benefit over Git plus a
 structured handoff still need comparative evaluation.
@@ -40,10 +40,10 @@ structured handoff still need comparative evaluation.
 | What you get | The mechanism |
 |---|---|
 | **Identity** — who made the claim? | `start_session(force_new=true)` binds a fresh process; retain `client_session_id` for later calls. Real lineage links inherited work, not authority or sameness. Write enforcement depends on the configured identity gates. |
-| **Claims and evidence** — what was asserted, and what supports it? | `sync_state` records a work report; `store_finding` and `update_finding` retain attributed knowledge and corrections. Supply evidence and provenance explicitly. |
+| **Claims and evidence** — what was asserted, and what supports it? | `sync_state` submits a work report from which durable state is derived; it does not retain the original report text. `store_finding` and `update_finding` retain durable attributed claims and corrections. Supply evidence and provenance explicitly. |
 | **Review** — what was challenged, and on what terms? | `request_review` opens a structured review; `dialectic` records positions, disagreement, conditions, and resolution. A request alone is not a completed review. |
 | **Outcomes** — what actually happened? | `record_result` records typed outcomes; an explicit `prediction_id` links a result to the prediction it grades. A stored outcome does not independently verify the caller's report. |
-| **Reconstruction** — what should the next process recover? | `search_shared_memory`, knowledge reads, review history, and `export` expose retained records. Clients assemble relevant claims, evidence, corrections, and unresolved disagreement; there is no single reconstruction tool. |
+| **Reconstruction** — what should the next process recover? | `search_shared_memory`, knowledge reads, review history, `export`, and operator-gated outcome-evidence reads expose different retained records. Clients assemble them; there is no single reconstruction tool or guarantee that the original check-in text survives. |
 
 <div align="center">
   <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
@@ -156,8 +156,8 @@ configuration, exports, and administration support more specialized workflows.
 The [capability and deployment guide](docs/CAPABILITIES_AND_DEPLOYMENT.md) maps
 the core workflow to real tools and explains which services each profile needs.
 
-One complete catalog advertises every registered tool and primary workflow
-alias. **Core and advanced are reading paths, not visibility or permission
+One complete catalog advertises every registered-and-mounted public tool,
+including primary workflow aliases. **Core and advanced are reading paths, not visibility or permission
 modes.** No tool mode is needed; legacy `GOVERNANCE_TOOL_MODE` settings are
 ignored. `list_tools(category=...)` browses the catalog, and
 `describe_tool(tool_name=..., action=...)` returns full parameter details.

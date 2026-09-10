@@ -1,13 +1,14 @@
 # Public presentation audit — 2026-09-10
 
 Scope: README, product definition, package/MCP metadata, discovery contract,
-and repository-owned Glama artifacts. Documentation and descriptive metadata
-only; no tool registration, routing, schema/default, tier, authorization,
+repository-owned Glama artifacts, and deterministic public-positioning drift
+checks. No tool registration, routing, schema/default, tier, authorization,
 storage, deployment command, or inference behavior changes.
 
 ## Evidence and findings
 
-- Source baseline: `d97a958c` on `origin/master`. README led with infrastructure
+- Source baseline: `d97a958c` on `origin/master`; the branch was later rebased
+  through `c5226a2b`. README led with infrastructure
   and a same-agent question; product definition led with record/score/interrupt/
   remember. Neither gave reconstruction an explicit place in the public workflow.
 - `pyproject.toml` described runtime telemetry and policy feedback;
@@ -29,8 +30,10 @@ storage, deployment command, or inference behavior changes.
   installation inputs are `Dockerfile.glama`, `docker/glama/build-spec.json`,
   and `docker/glama/environment-schema.json`. The replacement build spec has
   `pinnedCommit: null`; the deployment operator must pin a reviewed commit.
-- Open PR #2158 edits tool/alias descriptions and skill artifacts. This patch
-  avoids those files; alias repair is separate from the product framing here.
+- Open PR #2158 edits tool/alias descriptions and the same freshness-stamped
+  skills that cite `src/tool_modes.py`. The two runtime changes remain separate,
+  but #2158 must merge first; this branch must then rebase and restamp the
+  combined skill digests before it can be declared ready.
 
 ## Concrete change plan and patch coverage
 
@@ -42,11 +45,34 @@ storage, deployment command, or inference behavior changes.
 | Separate discovery from readiness | Interface contract prose, capability guide | Core is a reading path; tiers, ordered capabilities, input schemas and hashes remain unchanged. |
 | Clarify installation and external processing | README, capability guide, Glama guide | Compose, private bundle, and existing-server client profiles distinguished; incomplete storage setup is not sold as lightweight core. |
 | Prepare directory correction | Glama guide | Replacement summary and verification checklist available without publishing or changing account configuration. |
+| Keep the framing from drifting again | `check_doc_drift.py`, focused tests | Repeated public surfaces retain the core concepts plus single-authority, retention, backend, provider-hosting, and unmeasured-benefit caveats. |
+
+## Dogfood and structured review receipt
+
+- The live public workflow successfully created a fresh process identity, ran a
+  local advisory `consult`, and completed governed review session
+  `e9bb8272f69786d7` through an independent orchestrated reviewer. The resolution
+  was `resume` with conditions requiring sentence-level traceability, accurate
+  identity/storage/data boundaries, no measured-benefit claim, and passing
+  interface/freshness validation.
+- Local consult `292546c9-ac17-4857-85f0-0eceb09c1540` returned `defer` and raised
+  scope, identity, dependency, data-locality, and falsifiability concerns. Its
+  generic diagram requirement was not treated as authority; the actual diff was
+  checked against each concern and the existing workflow/profile tables.
+- A two-seat Codex council found one mounted-versus-registered overclaim and four
+  deeper reconstruction boundaries. The patch now says discovery is the
+  registered-and-mounted public intersection, original `sync_state` report text
+  is not retained as history, PostgreSQL-only knowledge cannot traverse the
+  successor edge of a superseded finding, Glama is provider-hosted, and federation
+  means many runtimes sharing one operator-controlled server/authority domain.
+- The council's topicality condition produced an executable conformance check in
+  the existing CI doc-drift gate rather than another prose promise.
 
 ## Verification and follow-through
 
 Before commit: inspect the diff, validate local Markdown targets and JSON/TOML,
-verify Python differs only in the instructions string, and run the repository
+verify production Python differs only in the instructions string (the other
+Python change is the CI drift check and its tests), and run the repository
 required test-cache gate plus discovery/instructions checks. Preserve the
 machine-readable interface artifact and Glama build/environment values.
 
@@ -57,9 +83,11 @@ that the directory regenerated its copy or deployed the new bundle. No Glama
 account mutation, paid provisioning, or publication is part of this patch.
 
 Remaining independent work: evaluate reconstruction against Git plus structured
-handoff; verify deployed catalog parity with recorded transport/build context;
-validate optional inference and completed reviewer flows in the target
-installation. Those are not evidence supplied by this documentation change.
+handoff; decide whether original check-in report text should become a durable
+record; close the PostgreSQL supersession-successor gap or keep AGE as the
+documented traversal backend; verify deployed catalog parity with recorded
+transport/build context; validate optional inference and completed reviewer flows
+in the target installation. Those are not evidence supplied by this change.
 
 ## Local validation receipt
 
@@ -67,8 +95,11 @@ installation. Those are not evidence supplied by this documentation change.
   using system Python 3.14. The first attempt selected a repository virtual
   environment without pytest; it did not execute tests.
 - Focused tool-mode/listing tests: 51 passed.
-- Python AST comparison: no change outside the MCP instructions string.
+- Production Python AST comparison: no change outside the MCP instructions
+  string. The diagnostic checker and its focused tests are CI-only additions.
 - JSON/TOML parsing and edited-document local link checks passed; interface and
   Glama configuration artifacts are byte-identical to the source baseline.
 - Generated flags, ports, and tool-edge references are fresh; diff whitespace
   check passed. No container or live Glama validation was rerun for text edits.
+- Follow-up drift-guard tests: 21 passed across the new public-positioning
+  contract, freshness ceiling, and existing code/doc claims.

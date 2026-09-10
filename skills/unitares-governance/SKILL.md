@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for the UNITARES governance framework. Use this
   as the entrypoint when you need the overall model and route into the split
   governance skills.
-last_verified: "2026-09-09"
+last_verified: "2026-09-10"
 freshness_days: 35
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -35,14 +35,14 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "430c2b2b206ecd99"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/tool_modes.py: "aa75ef30ee2c2383"
+  unitares/src/tool_modes.py: "166b063599b40353"
   unitares/src/mcp_handlers/identity/session.py: "cc60f281b7fc3276"
   unitares/src/mcp_handlers/schemas/identity.py: "6a02e1c69d225e98"
   unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
-  unitares/skills/governance-lifecycle/SKILL.md: "369104e7ede17ffc"
+  unitares/skills/governance-lifecycle/SKILL.md: "85fd047ad474b7b8"
   unitares/skills/governance-fundamentals/SKILL.md: "0882c59b887935f7"
   unitares/skills/knowledge-graph/SKILL.md: "0375796f3d565498"
   unitares/skills/dialectic-reasoning/SKILL.md: "2ce6f72e994d2a44"
