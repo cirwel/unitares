@@ -36,17 +36,41 @@ from src.tool_modes import (
 
 
 class TestUnifiedCatalog:
-    @pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full", "operator_readonly", "operator_recovery", "core", "unknown"])
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            "minimal",
+            "standard",
+            "lite",
+            "full",
+            "operator_readonly",
+            "operator_recovery",
+            "core",
+            "unknown",
+        ],
+    )
     def test_legacy_modes_cannot_hide_capabilities(self, mode):
         from src.tool_modes import advertised_tool_names_full
+
         assert get_tools_for_mode(mode) == advertised_tool_names_full()
-        for name in ("agent", "observe", "admin", "config", "list_tools", "dialectic", "self_recovery"):
+        for name in (
+            "agent",
+            "observe",
+            "admin",
+            "config",
+            "list_tools",
+            "dialectic",
+            "self_recovery",
+        ):
             assert should_include_tool(name, mode=mode)
 
-    @pytest.mark.parametrize("setting", [None, "minimal", "standard", "lite", "operator_readonly", "unknown"])
+    @pytest.mark.parametrize(
+        "setting", [None, "minimal", "standard", "lite", "operator_readonly", "unknown"]
+    )
     def test_environment_cannot_fragment_the_catalog(self, monkeypatch, setting):
         import importlib
         import src.tool_modes as module
+
         if setting is None:
             monkeypatch.delenv("GOVERNANCE_TOOL_MODE", raising=False)
         else:
@@ -63,8 +87,14 @@ class TestUnifiedCatalog:
 
     def test_legacy_constants_share_one_first_party_catalog(self):
         from src.tool_meta import TOOL_META_BY_NAME
-        for names in (MINIMAL_MODE_TOOLS, STANDARD_MODE_TOOLS, LITE_MODE_TOOLS,
-                      OPERATOR_READONLY_MODE_TOOLS, OPERATOR_RECOVERY_MODE_TOOLS):
+
+        for names in (
+            MINIMAL_MODE_TOOLS,
+            STANDARD_MODE_TOOLS,
+            LITE_MODE_TOOLS,
+            OPERATOR_READONLY_MODE_TOOLS,
+            OPERATOR_RECOVERY_MODE_TOOLS,
+        ):
             assert names == set(TOOL_META_BY_NAME)
 
 
@@ -136,8 +166,17 @@ class TestToolCategories:
     """Tests for TOOL_CATEGORIES groupings."""
 
     def test_has_expected_categories(self):
-        expected = ["core", "identity", "admin", "export", "config",
-                    "lifecycle", "observability", "knowledge", "dialectic"]
+        expected = [
+            "core",
+            "identity",
+            "admin",
+            "export",
+            "config",
+            "lifecycle",
+            "observability",
+            "knowledge",
+            "dialectic",
+        ]
         for cat in expected:
             assert cat in TOOL_CATEGORIES, f"Category '{cat}' should exist"
 
@@ -233,9 +272,7 @@ class TestIsClaudeDesktopClient:
         """The mechanism stays wired: the guard is a fast path, not a removal."""
         import src.tool_modes as tool_modes
 
-        monkeypatch.setattr(
-            tool_modes, "CLAUDE_DESKTOP_EXCLUDED_TOOLS", {"sync_state"}
-        )
+        monkeypatch.setattr(tool_modes, "CLAUDE_DESKTOP_EXCLUDED_TOOLS", {"sync_state"})
         monkeypatch.setattr(tool_modes, "is_claude_desktop_client", lambda: True)
         assert tool_modes.should_include_tool("sync_state", mode="standard") is False
         assert (
@@ -252,32 +289,41 @@ class TestIsClaudeDesktopClient:
 class TestServerInstructions:
     """The MCP `instructions` string is the one in-band surface description.
 
-    A mode filters tools/list, so an unadvertised capability is unreachable for
-    a schema-driven client. `instructions` reaches every client in the
-    initialize response, before any tool call, and is where a narrow profile
-    says what else the server does.
+    Legacy mode names all produce the same mounted public catalog.
+    `instructions` reaches every client in the initialize response, before any
+    tool call, and states the product and dependency boundaries around it.
     """
 
     def test_names_the_workflow_on_every_profile(self):
         for mode in ("minimal", "standard", "lite", "full"):
             text = build_server_instructions(mode)
-            for name in ("start_session", "sync_state", "record_result",
-                         "check_working_state"):
+            for name in (
+                "start_session",
+                "sync_state",
+                "record_result",
+                "check_working_state",
+            ):
                 assert name in text, f"{name} missing from {mode} instructions"
 
     def test_instructions_explain_one_catalog(self):
         for mode in ("minimal", "standard", "lite", "full"):
             text = build_server_instructions(mode)
             assert text == build_server_instructions()
-            assert "every registered tool" in text
+            assert "every registered-and-mounted public tool" in text
             assert "settings are ignored" in text
             assert "authorization" in text
             assert "Not listed here" not in text
 
     def test_no_empty_clause_on_any_known_mode(self):
         """A profile with nothing to disclose must not emit a dangling list."""
-        for mode in ("minimal", "standard", "lite", "full",
-                     "operator_readonly", "operator_recovery"):
+        for mode in (
+            "minimal",
+            "standard",
+            "lite",
+            "full",
+            "operator_readonly",
+            "operator_recovery",
+        ):
             text = build_server_instructions(mode)
             assert ": ." not in text, f"empty disclosure clause in {mode}"
             for line in text.splitlines():
