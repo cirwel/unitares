@@ -49,6 +49,11 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 - [`s21-session-resolution-bypass-incident.md`](s21-session-resolution-bypass-incident.md) — S21 incident record
 - [`v7-fhat-spec-v5-amendment.md`](v7-fhat-spec-v5-amendment.md) — v5 amendment to v7 spec
 
+**External prior-art and competitive triage** (inputs to the paper's §10 spine):
+- [`trajectory-identity-prior-art-2026-06.md`](trajectory-identity-prior-art-2026-06.md) — foundational-theory anchors and their verdicts
+- [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md) — runtime-governance neighbors: MI9 (head-to-head) and Auton (different layer)
+- [`neohorse-1-triage-2026-09.md`](neohorse-1-triage-2026-09.md) — NeoHorse-1 (arXiv:2609.08183); training-plane neighbor, not encroaching, but it collides on the word *harness*
+
 **Dated records**:
 - [`ledger-triage-2026-06-11.md`](ledger-triage-2026-06-11.md) — read-only triage of the deferred/blocked `plan.md` rows against their unblock triggers
 - [`glossary-drift-audit-2026-06-20.md`](glossary-drift-audit-2026-06-20.md) — the point-in-time vocabulary sweep that seeded [`glossary.md`](glossary.md)
