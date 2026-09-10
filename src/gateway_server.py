@@ -25,7 +25,7 @@ if _src_dir not in sys.path:
 
 # `src/` (not the repo root) is what this script guarantees on sys.path, so
 # import the compat shim by its src-relative name to match `from gateway.x`.
-from mcp_compat import FastMCP, server_supports_kwarg
+from mcp_compat import FastMCP, run_server, server_supports_kwarg
 
 from gateway.client import GovernanceMCPClient
 from gateway.constants import GATEWAY_HOST, GATEWAY_PORT, GOVERNANCE_URL
@@ -120,10 +120,7 @@ def main():
     logger.info("Proxying to governance at %s", args.governance_url)
     logger.info("Tools: status, checkin, search, note, query, help")
 
-    mcp.settings.host = args.host
-    mcp.settings.port = args.port
-
-    mcp.run(transport="streamable-http")
+    run_server(mcp, "streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

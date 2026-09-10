@@ -73,6 +73,7 @@ __all__ = [
     "MCP_MAJOR",
     "server_supports_kwarg",
     "tool_decorator_supports_kwarg",
+    "run_server",
     "get_tool_input_schema",
     "set_tool_input_schema",
     "lowlevel_server",
@@ -108,6 +109,42 @@ def tool_decorator_supports_kwarg(name: str) -> bool:
         return name in inspect.signature(_ServerClass.tool).parameters
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+def run_server(mcp: Any, transport: str, *, host: str, port: int) -> None:
+    """Run the high-level server on ``transport``, bound to ``host``/``port``.
+
+    The bind address moved between majors. 1.x carried ``host`` and ``port`` on
+    the server's ``settings`` object, which callers mutated before ``run()``.
+    2.x dropped both fields from ``Settings`` entirely and takes them as
+    ``run()`` keyword arguments, forwarded to the transport coroutine
+    (``run_streamable_http_async(host=..., port=...)``).
+
+    This seam does not degrade when it is missed. Assigning ``settings.host``
+    under 2.x raises ``ValueError: "Settings" object has no field "host"`` from
+    pydantic before the listener is ever opened, so the process dies at startup
+    and launchd respawns it forever with nothing bound. That is a silent outage
+    for any surface whose health is inferred from a sibling port.
+
+    Resolved by asking the installed ``Settings`` model which contract it
+    implements, rather than branching on :data:`MCP_MAJOR` — same reasoning as
+    :func:`mcp_httpx`, and it stays correct if the field returns in a later
+    major.
+    """
+    settings = getattr(mcp, "settings", None)
+    fields = (
+        getattr(type(settings), "model_fields", None) if settings is not None else None
+    )
+
+    if isinstance(fields, dict) and "host" in fields:
+        # mcp 1.x — the transport reads the bind address off settings.
+        settings.host = host
+        settings.port = port
+        mcp.run(transport=transport)
+        return
+
+    # mcp 2.x — the bind address is a run-time argument.
+    mcp.run(transport=transport, host=host, port=port)
 
 
 def _tool_schema_attr(tool: Any) -> str:

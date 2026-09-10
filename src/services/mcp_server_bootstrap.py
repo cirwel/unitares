@@ -171,11 +171,27 @@ def load_entrypoint_plugins() -> bool:
 
 
 def sync_declared_host(mcp: Any, host: str) -> None:
-    """Keep FastMCP's declared host aligned with the uvicorn bind host."""
+    """Keep the server's declared host aligned with the uvicorn bind host.
+
+    Only mcp 1.x carries ``host`` on ``settings``. 2.x removed the field and
+    takes the bind address as a run-time argument instead (see
+    ``src.mcp_compat.run_server``), so this has always been a no-op there — but
+    it reached that no-op by catching pydantic's ValueError, which reads in the
+    log exactly like a real sync failure. Ask the model which contract it
+    implements so the 2.x path is a deliberate skip, and keep the guard for
+    everything else that can go wrong on 1.x.
+    """
+    settings = getattr(mcp, "settings", None)
+    fields = getattr(type(settings), "model_fields", None) if settings is not None else None
+    if not isinstance(fields, dict) or "host" not in fields:
+        logger.debug(
+            "Server settings declare no host field; bind host is applied at run time"
+        )
+        return
     try:
-        mcp.settings.host = host
+        settings.host = host
     except Exception as exc:
-        logger.debug("Could not sync mcp.settings.host to %s: %s", host, exc)
+        logger.debug("Could not sync settings.host to %s: %s", host, exc)
 
 
 def _cleanup_stale_agent_locks(project_root: Path) -> None:

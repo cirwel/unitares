@@ -165,6 +165,110 @@ def test_no_call_site_builds_its_injected_client_outside_the_resolver():
     )
 
 
+# --- server bind-address contract --------------------------------------------
+#
+# The canary fixture below drives uvicorn against ``streamable_http_app()``
+# directly, which is why it cannot see this seam: production calls ``run()``,
+# and only ``run()`` cares where the bind address comes from. 1.x read it off
+# ``settings``; 2.x removed those fields and takes them as ``run()`` kwargs.
+# Assigning the 1.x way under 2.x raises before the listener opens, so the
+# process dies at startup and a keepalive respawns it indefinitely.
+
+
+def test_no_call_site_assigns_a_settings_field_the_installed_model_lacks():
+    """Every ``*.settings.<field> = ...`` in src/ must name a real field.
+
+    This is the structural form of the bind-address break. A call site that
+    assigns a field the resolved ``Settings`` model does not declare raises
+    ``ValueError`` from pydantic at startup, and because CI resolves ``mcp``
+    fresh from its allowed range, that can happen with no commit to blame.
+    Wrapping the assignment in ``try/except`` hides it rather than fixing it,
+    so guarded sites are offenders here too — the seam belongs in
+    ``src/mcp_compat.run_server``.
+    """
+    import ast
+
+    from src.mcp_compat import FastMCP
+
+    probe = FastMCP(name="settings-field-probe")
+    settings = getattr(probe, "settings", None)
+    fields = getattr(type(settings), "model_fields", None) if settings is not None else None
+    if not isinstance(fields, dict):
+        pytest.skip("installed high-level server exposes no pydantic Settings model")
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    offenders = []
+    for py in sorted((root / "src").rglob("*.py")):
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Attribute)
+                    and target.value.attr == "settings"
+                    and target.attr not in fields
+                ):
+                    offenders.append(
+                        f"{py.relative_to(root)}:{target.lineno} "
+                        f".settings.{target.attr}"
+                    )
+
+    assert not offenders, (
+        "These call sites assign a Settings field the installed mcp "
+        f"({sorted(fields)}) does not declare, which raises at startup:\n  "
+        + "\n  ".join(offenders)
+        + "\nRoute the bind address through src.mcp_compat.run_server instead."
+    )
+
+
+def test_run_server_binds_on_the_installed_major():
+    """``run_server`` must actually open a listener on the requested port.
+
+    Covers the half the app-level fixture cannot: that whichever contract the
+    installed major implements, the bind address survives the call to
+    ``run()`` and something is listening where the caller asked.
+    """
+    from src.mcp_compat import FastMCP, run_server
+
+    server = FastMCP(name="bind-probe")
+
+    @server.tool()
+    def ping() -> str:
+        return "pong"
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    thread = threading.Thread(
+        target=run_server,
+        args=(server, "streamable-http"),
+        kwargs={"host": "127.0.0.1", "port": port},
+        daemon=True,
+    )
+    thread.start()
+
+    deadline = time.monotonic() + 20
+    bound = False
+    while time.monotonic() < deadline:
+        with socket.socket() as probe:
+            probe.settimeout(0.5)
+            if probe.connect_ex(("127.0.0.1", port)) == 0:
+                bound = True
+                break
+        time.sleep(0.1)
+
+    assert bound, (
+        f"run_server did not bind 127.0.0.1:{port} within 20s on the installed "
+        "mcp major; the bind address is not reaching the transport."
+    )
+
+
 # --- real-transport end-to-end (mock-free) -----------------------------------
 
 
