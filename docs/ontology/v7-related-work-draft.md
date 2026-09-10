@@ -104,6 +104,18 @@ goal/spec-conformance drift. **Auton** (arXiv:2602.23720) is adjacent, not
 competitive (a different layer), and is cited as such. (Full triage:
 `competitive-analysis-2026-06.md`.)
 
+A third neighbor sits on the **training** plane. **NeoHorse-1**
+(arXiv:2609.08183, Sep 2026) converts a routing harness's per-turn records —
+predicted capability demand, selected service tier, the resulting interaction —
+into the next post-training mixture. UNITARES reads the same kind of record and
+produces a runtime state estimate instead: same evidence substrate, different
+consumer, no contested claim. Cite it as a neighbor rather than a head-to-head,
+and **disambiguate "harness" on first use** — NeoHorse's harness looks down at a
+model pool, ours looks across an agent's trajectory. Do not import its
+recursive-self-improvement banner; the protocol that would license such a claim
+here is preregistered and unread (`self-improvement-loop-evaluation-v0.md`).
+(Full triage: `neohorse-1-triage-2026-09.md`.)
+
 ## 10.6 Gaps this work identifies
 
 Two gaps surfaced by the prior-art audit are worth stating explicitly, as they
