@@ -404,7 +404,13 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
     )
     auto_export_on_significance: bool = Field(
         default=False,
-        description="If true, automatically export governance history when thermodynamically significant events occur."
+        description=(
+            "If true, write a governance history export whenever this check-in "
+            "is judged significant: a risk spike, a coherence drop, a void "
+            "threshold crossing, a circuit-breaker trip, or a pause/reject "
+            "decision. Defaults to false; use export for a deliberate one-off "
+            "dump of the same history."
+        ),
     )
     require_strong_identity: Union[bool, str, None] = Field(
         default=False,
