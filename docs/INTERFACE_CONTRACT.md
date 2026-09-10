@@ -49,10 +49,23 @@ check-ins, or honors a returned policy action outside UNITARES-governed writes.
 Those are host-integration capabilities, documented separately in the
 [client capability matrix](integration/CLIENT_CAPABILITY_MATRIX.md).
 
+## Core workflow and advanced capabilities
+
+The [capability guide](CAPABILITIES_AND_DEPLOYMENT.md) presents identity,
+claims/evidence, review, outcomes, and reconstruction as the core reading path.
+These are conceptual groupings of existing operations, not new tool names,
+permission levels, installation modes, or changes to this versioned contract.
+The existing `essential`, `common`, and `advanced` discovery tiers remain
+unchanged. A listed tool is dispatchable, but successful execution still
+depends on storage, identity/authorization, and any configured inference or
+reviewer services. Tool counts alone establish none of those conditions.
+
 ## One catalog and compatibility
 
-Interface release 1.6.0 advertises every registered tool and primary workflow
-alias on every transport. No mode selection is required. Legacy
+Interface release 1.6.0 advertises every registered-and-mounted public tool,
+including primary workflow aliases, on every transport. A definition registered
+after server mounting is omitted rather than advertised without a dispatch path.
+No mode selection is required. Legacy
 `GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
 but ignored, including the former operator profiles. They were discovery
 filters, never authorization boundaries. Existing action authorization and

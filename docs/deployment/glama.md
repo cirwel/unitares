@@ -5,6 +5,48 @@ remain unchanged. Each installation owns its database, identity keys, Redis
 bindings and lease plane. Never configure the directory listing with an
 operator's production service credentials.
 
+## Public description and capability scope
+
+Suggested directory description:
+
+> UNITARES is a self-hostable federation kernel for AI-agent identity, claims and
+> evidence, review, outcomes, and reconstruction. Agents keep their own runtimes
+> while sharing an attributed record through MCP. Fresh processes receive fresh
+> identities; explicit lineage links inherited work. The private bundle supplies
+> durable storage and coordination services. Advisory inference requires a
+> configured provider, and completing peer review requires a reviewer.
+
+On Glama this is a private provider-hosted deployment: Glama runs the compute and
+stores the persistent volume, while the operator controls account configuration
+and deployment credentials. Optional inference and integrations have their own
+network-egress and processing policies.
+
+The [capability and deployment guide](../CAPABILITIES_AND_DEPLOYMENT.md) maps
+this framing to existing tools. Reconstruction means client retrieval of
+findings, review records, and history, not a new tool or a validated claim of
+complete recall. Core versus advanced capabilities are reading paths within one
+catalog, not different tool modes or authorization levels.
+
+The listing combines repository material with platform-generated copy and
+cached inspection results. Updating this repository does not update all those
+surfaces automatically. When refreshing the listing:
+
+1. Correct any claim that restarted agent processes remain the same identity.
+   A still-running client's binding surviving a server restart is a different case.
+2. Remove blanket claims that no data can leave the deployment: optional
+   cloud inference and configured integrations have their own processing policy.
+3. Pin the reviewed commit and use the bundled build/environment inputs below;
+   do not restore the old bare-process command and dummy database settings.
+4. Record build commit, transport, interface version/hash, and dependency health
+   alongside discovery. Compare actual names, not an unexplained tool count.
+5. Validate durable store/read/restart operations as well as discovery. Report
+   inference availability and completed review separately from a stored request.
+
+`glama.json` is maintainer ownership metadata; it is not a capability manifest
+or deployment profile. Historical 14/52/no-tools observations do not define
+supported editions. The documented failure below demonstrates missing backing
+dependencies in one build, not the cause of every count discrepancy.
+
 ## Reproduced defect (2026-09-08)
 
 PR #2112 merged at 17:53:23 UTC. The later Glama test
