@@ -484,7 +484,10 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "naming a still-live parent is rejected as coincidental and the claim "
             "cleared, unless spawn_reason marks a dispatched child or a "
             "compaction continuation. Use identity to inspect or rename an "
-            "existing binding."
+            "existing binding. onboard is this same call under its canonical "
+            "name and returns the raw payload; this name adds the digest "
+            "envelope (next_action, state_summary) and keeps the raw payload "
+            "under raw_governance."
         ),
         experience=True),
     "sync_state": ToolAlias(
@@ -498,7 +501,10 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "which refuses and points at start_session. simulate_update previews "
             "a proposed check-in without advancing state, though it still "
             "appends an audit event; check_working_state reads the current "
-            "verdict without writing. "
+            "verdict without writing. process_agent_update is this same check-in "
+            "under its canonical name and returns the raw payload; this name adds "
+            "the digest envelope (next_action, state_summary, risk_summary) and "
+            "keeps the raw payload under raw_governance. "
             f"{EISV_INLINE_SUMMARY}"
         ),
         param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
@@ -516,7 +522,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "be sure the reading is yours. lite=false returns the full "
             "canonical payload under raw_governance, which is where mode and "
             "basin live. Use sync_state to also "
-            "log work and get a proceed or pause decision. "
+            "log work and get a proceed or pause decision. get_governance_metrics "
+            "is this same read under its canonical name and always returns the "
+            "raw payload; this name returns the digest envelope instead. "
             f"{EISV_INLINE_SUMMARY}"
         ),
         experience=True),
@@ -586,7 +594,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "and refuses under strict identity from an ephemeral session. "
             "Provenance cannot be self-attested here: verification_source is "
             "forced and provenance keys in detail are stripped. Use store_finding "
-            "for durable knowledge. "
+            "for durable knowledge. outcome_event is this same write under its "
+            "canonical name and returns the raw payload; this name adds the "
+            "digest envelope and keeps the raw payload under raw_governance. "
             f"{EISV_INLINE_SUMMARY}"
         ),
         experience=True),
