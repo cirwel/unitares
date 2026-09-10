@@ -1,57 +1,36 @@
 # Open decisions packet — seven operator calls, packaged
 
-**Status:** decision packet, raised 2026-09-09. Each of the seven entries is
-the operator's call. On 2026-09-10 the operator returned resolutions for all
-seven, under their own heading, "My recommended resolutions for the seven
-questions"; they are reproduced verbatim in *Operator resolutions, 2026-09-10*,
-immediately below this header. Everything below that section is the evidence
-layer, written before the resolutions and unchanged by them. **Nothing here is
-implemented.** No resolution is written into the repo as settled, no threshold is
-adjusted, no registered instrument is touched, and no recommendation in this file
-became a decision by being agreed with. What that section is: a dated record of
-what the deciding authority said, in their words. What it is not: a consensus, a
-ratification of any recommendation in this file, or work performed. And because
-none of the seven is implemented, every entry's *Default if silent* clause still
-describes what is happening in the repository today — those clauses are the
-present state, not a counterfactual the resolutions have retired. Where an item
-says SETTLED, that word attaches to a *verified fact*, never to the operator's
-disposition of it.
+**Status:** decision packet, raised 2026-09-09. All seven decisions remain
+open. The table below records Codex's review recommendations, relayed into this
+packet on 2026-09-10; it does not record operator approval. **Nothing here is
+implemented.** No registered instrument, threshold or production gate changes.
+The operator's request to correct this packet authorizes these documentation
+fixes, not adoption of the seven recommendations. Each *Default if silent*
+clause continues to describe the unimplemented state. SETTLED labels a verified
+fact, never the operator's disposition of a recommendation.
 **Shape:** follows the contract in `docs/proposals/operator-decision-packet-v0.md`
 — options, recommendation, reversibility and blast radius, default-if-silent.
 Worked precedent for the same form:
 `docs/proposals/outcome-fixture-conflation-decision-packet-v0.md`.
 **Raised by:** a Claude Code session, branch `claude/operator-decision-packet-9ddfuq`.
-**Evidence provenance:** every option set below is derived from files and
-commands in this repository, read directly. No option was synthesised from a
-model's output, and no advisory mechanism was consulted while writing it.
-**Recommendations:** each is labelled non-binding. Their *inputs* are sourced
-from the evidence cited beside them. Their *ranking* — whether three edits are
-proportionate where one would do, whether a gate should block or advise — is
-appetite, and is the operator's. The operator exercised it on 2026-09-10. On
-several entries their resolution names the option a recommendation here named,
-and that coincidence is the largest attribution hazard in this file: those
-entries are resolved because the operator resolved them, never because this file
-recommended them. No count of the convergence is given, because the
-correspondence is not one-to-one and the recommendations themselves are still
-being corrected — entry 3's recommendation urges D + E *with F as a separate
-yes* while the resolution takes D + E and not F; entry 4 declines to recommend
-on its first question and recommends C on its second; entry 7's resolution
-combines two mechanisms. Read each resolution against its own entry rather than
-against a tally.
+**Evidence provenance:** the original packet and the Codex review are
+agent-authored analyses of the cited repository sources and command results.
+Review recommendations are attributed separately from observations and policy.
+**Recommendations:** non-binding, including the independent review's table
+below. Agreement between agent passes does not supply operator authorization.
 
 ---
 
-## Operator resolutions, 2026-09-10
+## Codex review recommendations — recorded 2026-09-10
 
-The operator returned the table below on 2026-09-10, under their own heading,
-"My recommended resolutions for the seven questions." It is reproduced verbatim
-and in their order, which is this packet's order. Each of the seven entries is
-the operator's call; this section records what they said, and records it as
-theirs. The same message also reported read-only checks run against the
-operator's own deployment; those are recorded, with their provenance, in *What
-this packet could not establish*.
+Codex authored the following table in its review of PR #2156 at `13126863`,
+under the heading "My recommended resolutions for the seven questions." The
+operator relayed that review; relaying it did not make its recommendations
+operator decisions. The rows retain the review's wording. Codex also performed
+the read-only deployment checks reported at the end of this packet; those are
+agent observations, not operator-authored reports.
 
-| Entry | Item | The operator's resolution, verbatim |
+| Entry | Item | Codex's recommendation, verbatim |
 |---|---|---|
 | 1 | D4 — "same family" | A: exact winner-name identity, disclosed as a dated clarification informed by the original "stable argmax" wording. Pin the candidate set. |
 | 2 | D6 — stratified null | B: predeclare a supplementary within-agent analysis without changing the registered verdict. Correct its permutation assumptions and validate it synthetically first. |
@@ -61,49 +40,23 @@ this packet could not establish*.
 | 6 | D1 — doctor placement | D: check source/schema compatibility in CI and deployment drift on the deployed database. Preserve installer coverage; start deployment reporting as advisory. |
 | 7 | D7 — historical documents | Combine rule-scoped exceptions with a non-growing baseline for historical review language. Preserve attribution and correct nonportable executable examples. |
 
-**Recording a resolution is not implementing it.** No row above is implemented,
-and nothing in this pull request implements one. The work each row names — the
-dated clarification and the candidate-set pin; the supplementary within-agent
-analysis, its corrected permutation assumptions and its synthetic validation;
-the non-normative annotation and the test that pins it; the split between
-findings and sign-off; the split-by-observability wiring with installer coverage
-preserved and deployment reporting advisory at the start; and the rule-scoped
-exceptions plus the non-growing baseline, with attribution preserved and the
-nonportable executable examples corrected — is follow-up outside this pull
-request. That last element maps onto material entry 7 already inventories: the
-operator-home path occurrences, one of which is a configuration value inside a
-plist snippet, which is an executable example in the sense that copying it runs
-it. Entry 7's option F is the severable form of exactly that work, and the
-resolution takes it alongside the other two mechanisms rather than instead of
-them. Entry 4 is the one row whose present state is directly checkable, and
-part of what it names already exists: `dashboard/tests/residents-empty-roster.test.js`
-carries an empty-roster spec, a foreign-roster spec and a `/v1/residents` outage
-spec, and the dashboard suite is green at 14 files and 65 tests, re-run at this
-commit. Those specs drive one pane, so what is outstanding on entry 4 is the
-page-wide form of the same assertions and the clearly-identified synthetic
-fallback data. Each entry below states its own reversibility and blast radius,
-and those still apply to the work, not to the record of the decision.
+**Recording a recommendation neither approves nor implements it.** None of
+these seven decisions is settled by this review. Implementation belongs in
+follow-up work under the applicable authorization and pre-registration rules.
+In particular, the review does not enable the production verification floor or
+amend the December verdict.
 
-Three points of care for whoever picks that work up.
+Entry 3 recommends preserving unrounded values for boundary decisions; merely
+widening printed precision (option F) would not discharge that recommendation.
+Entry 2 recommends synthetic validation that exercises between-agent effects,
+within-agent effects and degenerate strata. An i.i.d. generator alone does not
+cover those cases; suitable synthetic fixtures are part of that proposed work.
 
-- **The resolutions are not the recommendations, even where they coincide.** On
-  several entries the operator named the option a recommendation named. That is
-  two independent statements agreeing, not one statement made twice. The
-  authority is the operator's message of 2026-09-10; cite that, never the
-  recommendation.
-- **Entry 3's resolution is not option F.** The recommendation urged F — widening
-  the printed precision — as a separate yes. The operator's resolution instead
-  says "Preserve unrounded values for boundary decisions." Implement that
-  sentence. Do not record option F as resolved, and do not treat a formatting
-  change as discharging it.
-- **Entry 2's "validate it synthetically first" meets a limit that entry already
-  documents.** That entry's option E records that the synthetic cohort builder
-  draws its latent i.i.d. per cluster and assigns agents round-robin — zero agent
-  effect by construction — so a synthetic validation will show the stratified and
-  global nulls behaving alike unless an agent random effect is added first. The
-  resolution does not say to add one. That is a gap for the implementer to raise
-  with the operator, not one to close by reading in an instruction that is not
-  there.
+The dashboard already has passing tests for the residents pane; this does not
+establish page-wide coverage or correct fallback behavior. The review reproduced
+zero panels for empty and foreign rosters and three maintainer-named panels on a
+roster outage. Those observations motivate the proposed follow-up rather than
+establishing that it is complete.
 
 ---
 
@@ -471,37 +424,44 @@ non-authoritative second column reported beside the registered result?
   per-stratum factorials — is a design question the operator has not been asked.
   The two rules disagree exactly on two-unit strata: the first excludes them,
   the second admits one as a factor of two.
-- **Whether `alpha` is attainable is arithmetic; the frozen geometry clears it
-  and the December geometry is unrecorded.** Whichever sizing rule a stratified
-  mode encoded, the quantity that decides whether the registered `alpha=0.05` is
-  reachable at all is the joint permutation count G, because the identity
-  permutation is in the draw pool and ties the observed statistic exactly:
-  `build_matrix_row` takes `observed_best_delta` from `build_model_scores` under
-  the same `(beats_baseline, auc_delta, brier_improvement)` maximum that
-  `_best_delta_value` recomputes inside the loop, on the same `train_fraction`
-  and `min_feature_rows`, so under the identity the permuted rows are the
-  original rows. Verified by reading both call sites and by enumerating all 3!
-  permutations of a constructed three-cluster cohort, where the identity
-  returned exactly `observed_best_delta`. The exact permutation floor is
-  therefore 1/G, and the shipped estimator tracks it rather than dropping below
-  it: at B resamples the identity arrives about B/G times, so the reported p
-  sits near (B/G + 1)/(B + 1). It is the geometry that bounds the p from below,
-  not the resample count. At the registered B = 400
-  (`--selective-null-resamples 400`), G = 16 gives about 0.065 and cannot clear
-  alpha, while G = 32 gives about 0.034 and does; the joint count has to reach
-  about twenty, and the exact figure moves with the resample count, so there is
-  no resample-independent threshold to quote. Attainability is also not power
-  and not validity, and neither has been computed for a stratified mode on any
-  cohort. On the frozen slice attainability is already settled by counts that
-  survived transcription: `Bad clusters` 28–29 over `Agents` 16 — that column is
-  `count_bad_clusters`'s distinct-bad-agent count, every cluster key carries its
-  agent, and each agent's stratum holds at least its own bad clusters — and no
-  way of splitting 28 clusters among 16 agents puts the product of per-stratum
-  factorials below 2^12 = 4096. What is unrecorded is the December cohort's own
-  geometry: total `Null clusters` per agent was dropped from the frozen
-  transcription, and `docs/operations/falsifiability-power-audit-2026-08-23.md`
-  files it and the cluster-size distribution together under "Not fixed here,"
-  recoverable only by a live re-run the same audit says is not justified.
+- **Exact enumeration and Monte Carlo sampling have different resolution.**
+  For G equally weighted joint permutations, including the identity, the exact
+  tail probability is at least 1/G. Equality requires that only the identity
+  is as extreme as the observed statistic; ties or other extreme permutations
+  raise it. Thus G >= 20 is necessary, not sufficient, for an exact p <= 0.05.
+  The joint count is the product of per-stratum factorials; identical feature
+  blocks may yield identical statistics under different permutations.
+
+  The shipped estimator instead draws B random permutations with replacement
+  and reports `(K + 1) / (B + 1)`, where K counts sampled statistics at least
+  as extreme as observed. Its numerical minimum is 1/(B + 1), not 1/G.
+  Conditional on exact tail probability q, K is binomial with parameters B and
+  q. `(B/G + 1)/(B + 1)` is its expectation only when q = 1/G; it is not a
+  sample-by-sample lower bound. A Monte Carlo estimate can fall below the exact
+  tail probability. At B = 400 it clears 0.05 whenever K <= 19, including on
+  some draws with G = 16 and q = 1/16.
+
+  A database-free illustration of that sampling arithmetic (not a cohort read
+  or a run of the fitted-model harness):
+
+  ```python
+  import random
+
+  rng = random.Random(8)
+  # Sixteen equally likely permutations; only index 0 is extreme.
+  k = sum(rng.randrange(16) == 0 for _ in range(400))
+  assert k == 16
+  assert (k + 1) / 401 < 0.05 < 1 / 16
+  ```
+
+  The frozen counts, 28–29 bad clusters across 16 bad agents, imply at least
+  2^12 = 4096 joint permutations: each bad cluster belongs to one agent, and
+  spreading 28 clusters as evenly as possible minimizes the product of the
+  factorials. That rules out an insufficient permutation count as the sole
+  obstacle for that frozen slice. It establishes neither an attainable small
+  tail probability for its statistic nor power or validity. The December
+  cohort's per-agent geometry remains unknown; no live re-run is authorized by
+  this observation.
 - **A dated precedent went the other way on this same instrument.** The power
   audit found the baseline anti-predictive (frozen baseline AUC 0.427–0.435),
   noted "a below-chance reference can change both observed deltas and the
@@ -524,10 +484,10 @@ non-authoritative second column reported beside the registered result?
 | # | Option | What it does | What it costs |
 |---|---|---|---|
 | **A** | **Change nothing; name the confound as a limitation in the December report.** | The registered null decides conditions 1 and 2 as written; the report adds the unit-of-resampling limitation to the disclosures it already owes, citing the 2026-08-23 Unit check by name. Exactly the anti-predictive-baseline precedent. | Asymmetric. Costs nothing on a FAIL — the Unit check already caps a non-detection below `REFUTED`, and the null cannot reach condition 3. On a PASS there is no guard at all, and the existence proof above shows the missing guard is demonstrably missing, not merely theoretically. |
-| **B** | **Declare a within-agent null now as a second, non-authoritative column.** | A within-agent permutation mode behind a flag, plus a dated declaration in the stop rule: the registered agent-blind null decides all four PASS conditions; the stratified column is computed at the read from the same cohort and reported beside it without authority. | Real code: a mode in `estimate_selective_null`, a sizing rule for stratified permutation — the three-unit minimum per stratum or a floor on the joint permutation count, a design call not yet made — a CLI flag, updated reading instructions, and four tests that call the estimator (plus two on the qualifier path). A permanent declaration that cannot be un-declared. The degeneracy cost is narrower and more conditional than an earlier draft had it: only single-cluster agents permute to themselves, a two-cluster agent contributes a factor of two, and the frozen slice's recorded counts already force a joint count of at least 4096. But a floor that clears alpha and a null that moves most of the cohort are different conditions — in a geometry of five two-cluster agents out of sixteen, eleven strata are still frozen — and how the December cohort's clusters fall across agents cannot be known today. |
-| **C** | **Amend the registered read so the within-agent null decides.** | A PR against `REGISTERED_READ_MANIFEST` and the stop rule, disclosed as a protocol deviation. | One-way door and the most expensive branch. A decision-rule change by an analyst who has already seen the frozen slice, so the design-system audit's own **Decision rule** check ("fixed before the read") fails and the amendment precedent ("before any enrollment") is unavailable. Its direction on the verdict is not established: two mechanisms run opposite — stratifying removes between-agent spread from the null, which would cut p, while coarser per-stratum resolution raises the attainable floor — and neither has been computed on any cohort, because no stratified mode exists to compute one with. What survives without the direction is when the instrument was chosen: after the frozen slice was seen, which is an analyst choice made with the answer already in view, and that objection holds whichever way the change cuts. Forecloses A and B. |
-| **D** | **Fix the reference instead of the permutation unit.** | Give the baseline the agent information it lacks — `_fit_group_rates` builds it from a one-line key function, `score_deltas_vs_baseline` already takes `baseline_name`, and `agent_id` is on the row and outside `PRIOR_STATE_FIELDS`, so it survives permutation intact. Report an agent-aware reference as a non-authoritative second column. | Addresses the other half of the same diagnosed defect and is cheaper than B — no stratified sizing rule to design or defend. Its edge on degeneracy is smaller than an earlier draft credited it with — two-cluster agents do permute, and the frozen slice's recorded counts already clear the floor — but how the December cohort's clusters fall across agents is the number this entry records as unrecoverable, so on that axis D's advantage over B is undetermined rather than removed. But it is the less-examined lever: no written criterion in the repo points at it the way the Unit check points at the permutation unit, and the anti-predictive-baseline finding was itself deferred rather than acted on. |
-| **E** | **Characterise it synthetically first, decide later.** | Use the database-free `scripts/analysis/ablation_power_probe.py` path to establish seed sensitivity at the frozen geometry, with zero live-data access. | Spends the scarce resource, which is the pre-read window, and buys less than an earlier draft credited it with: formability at a given geometry is closed-form arithmetic — the product of per-stratum factorials against the floor — and the frozen geometry's own recorded counts already settle it, so what a synthetic run is left to establish is seed sensitivity. And it cannot answer what matters: `synthesize_cohort` draws its latent i.i.d. per cluster and assigns agents round-robin — zero agent effect by construction — so without a new agent random effect it will show the stratified and global nulls behaving alike. The deadline does not move while it runs. |
+| **B** | **Declare a within-agent null now as a second, non-authoritative column.** | A within-agent permutation mode behind a flag, plus a dated declaration in the stop rule: the registered agent-blind null decides all four PASS conditions; the stratified column is computed at the read from the same cohort and reported beside it without authority. | Real code: a mode in `estimate_selective_null`, a sizing rule for stratified permutation — the three-unit minimum per stratum or a floor on the joint permutation count, a design call not yet made — a CLI flag, updated reading instructions, and four tests that call the estimator (plus two on the qualifier path). A permanent declaration that cannot be un-declared. The degeneracy cost is narrower and more conditional than an earlier draft had it: only single-cluster agents permute to themselves, a two-cluster agent contributes a factor of two, and the frozen slice's recorded counts already force a joint count of at least 4096. But enough joint permutations and a null that moves most of the cohort are different conditions — in a geometry of five two-cluster agents out of sixteen, eleven strata are still frozen — and how the December cohort's clusters fall across agents cannot be known today. |
+| **C** | **Amend the registered read so the within-agent null decides.** | A PR against `REGISTERED_READ_MANIFEST` and the stop rule, disclosed as a protocol deviation. | One-way door and the most expensive branch. A decision-rule change by an analyst who has already seen the frozen slice, so the design-system audit's own **Decision rule** check ("fixed before the read") fails and the amendment precedent ("before any enrollment") is unavailable. Its direction on the verdict is not established: stratification changes the permutation distribution, but neither its tail probability nor its effect on this verdict has been computed. No stratified mode exists yet. Fewer admissible permutations can limit exact resolution; this does not determine the direction of the tail probability. What survives without the direction is when the instrument was chosen: after the frozen slice was seen, which is an analyst choice made with the answer already in view, and that objection holds whichever way the change cuts. Forecloses A and B. |
+| **D** | **Fix the reference instead of the permutation unit.** | Give the baseline the agent information it lacks — `_fit_group_rates` builds it from a one-line key function, `score_deltas_vs_baseline` already takes `baseline_name`, and `agent_id` is on the row and outside `PRIOR_STATE_FIELDS`, so it survives permutation intact. Report an agent-aware reference as a non-authoritative second column. | Addresses the other half of the same diagnosed defect and is cheaper than B — no stratified sizing rule to design or defend. Its edge on degeneracy is smaller than an earlier draft credited it with — two-cluster agents do permute, and the frozen slice's recorded counts rule out too few joint permutations as the sole obstacle — but how the December cohort's clusters fall across agents is the number this entry records as unrecoverable, so on that axis D's advantage over B is undetermined rather than removed. But it is the less-examined lever: no written criterion in the repo points at it the way the Unit check points at the permutation unit, and the anti-predictive-baseline finding was itself deferred rather than acted on. |
+| **E** | **Characterise it synthetically first, decide later.** | Use the database-free `scripts/analysis/ablation_power_probe.py` path to establish seed sensitivity at the frozen geometry, with zero live-data access. | Spends the scarce resource, which is the pre-read window, and buys less than an earlier draft credited it with: the number of admissible permutations follows from per-stratum counts, but that number alone does not establish the tail probability, power or validity. Synthetic runs can examine degeneracy, calibration and seed sensitivity. And it cannot answer what matters: `synthesize_cohort` draws its latent i.i.d. per cluster and assigns agents round-robin — zero agent effect by construction — so without a new agent random effect it will show the stratified and global nulls behaving alike. The deadline does not move while it runs. |
 | **F** | **Run as registered; if the read PASSes, compute the within-agent null as a disclosed post-hoc robustness check before publishing.** | Costs no pre-read window, no code today, and no permanent declaration, while answering the exact asymmetry that argues against A. Nothing in the three governing documents forbids it: the design-system audit's Protocol check requires analysis changes be "prevented or fully disclosed," and the stop rule's binding sentence is "Do not adjust these **thresholds** after seeing the read," which a column with no authority does not do. | It is post-hoc, and a reader may discount it for that reason no matter how it is disclosed — the whole point of pre-declaring is that pre-declaration is credible in a way disclosure is not. It also depends on the December author remembering to do it, with nothing written down today that obliges them. |
 
 ### Recommendation (non-binding)
@@ -658,25 +618,14 @@ survives the deadline; nothing else cheap does.
   one flat key list and runs one `rng.shuffle` over it — so a stratified null does
   not automatically inherit it, and which sizing rule it would take instead is a
   design call the operator has not been asked to make.
-- **Corrected against a review of this entry, which put the bar at twenty joint
-  permutations, and against a draft that "corrected" it to nineteen.** Both
-  stated a resample-independent threshold, and there is none. The identity
-  permutation is drawn like any other and ties the observed statistic, so the
-  exact floor is 1/G in the joint permutation count G and the estimator's reported
-  p sits near (B/G + 1)/(B + 1) at B resamples. At the registered B = 400 the
-  first G that clears `alpha=0.05` is 21; the bar is about twenty and moves with
-  the resample count. The conclusion is unchanged — with all two-unit strata the
-  attainable counts are powers of two, so 16 fails and 32 is the first to clear —
-  but the figure is not a constant and is not quoted as one.
-- **New, and it narrows what this entry can say is unknown:** the frozen slice's
-  attainability does not depend on the dropped column. `Bad clusters` 28–29 sit
-  over `Agents` 16 in the frozen table, `count_bad_clusters` keys clusters by
-  `(agent, prior-state snapshot)` so every bad cluster belongs to exactly one
-  agent, and each agent's stratum holds at least its own bad clusters. No
-  splitting of 28 clusters among 16 agents puts the product of per-stratum
-  factorials below 2^12 = 4096, which clears the floor with room. This was derived
-  and brute-forced for this packet; it settles the frozen geometry only, and the
-  December cohort's remains open.
+- **Corrected on follow-up review:** earlier text treated the expected Monte
+  Carlo estimate `(B/G + 1)/(B + 1)` as a hard lower bound and claimed G = 16
+  could not clear alpha at B = 400. Exact enumeration has lower bound 1/G;
+  random sampling has numerical minimum 1/(B + 1). The reproducible example
+  above gives 17/401 = 0.04239 with exact probability 1/16 = 0.0625.
+  The earlier statements that 21 is the first attainable G, or that the frozen
+  count alone settles attainability, are withdrawn. Joint count bounds exact
+  resolution; the statistic's ties and tail probabilities still matter.
 - **Corrected:** "because it makes PASS strictly harder" stood flatly in option
   C's cost cell and in the recommendation while the flag below already labelled
   the same claim an expectation never computed on any cohort. The packet hedged in
@@ -1756,7 +1705,7 @@ between them is the operator's and is not made here.**
 | # | Option | What it does | What it costs |
 |---|---|---|---|
 | **A** | **Arm nothing; correct the ledger and stop.** Amend the drift-ledger migrations row to name which of the four CI could ever observe, so the next agent does not re-derive it. | Honours the restraint #2145 and #2149 declared, without asserting it as policy. One table row. | The live gaps stay open indefinitely. A migration that fails to apply against a fresh Postgres still merges green. Code naming a column the schema lacks still merges green — the class behind three incidents in three weeks. And the two deployment-only checks keep running nowhere, including on the deployed host the operator's own findings job already polls. |
-| **B** | **Wire the operator findings job to run these four local checks. Touch CI not at all.** Either reclassify the deployment-only checks to operator mode, or widen the job's filter to a named allowlist. | Zero contributor blast radius, one edit, and the **only** move that reaches the deployed database where two of the four can actually fail. On the packet's own reasoning this is arguably dominant over any CI-only arming. | Reclassifying removes a check from `--mode local`, which is what the adopter installer runs, so an adopter's install report loses that line; widening the filter avoids the trade at the cost of a second mechanism. And whatever these four find goes into the governance stream on the next cycle. On the operator's report of 2026-09-10 — their deployment, read-only runs by hand, reproduced nowhere here — the registry, column and constraint checks pass there and checksums cover 7 of 68 migrations, so an immediate backlog is less likely than an earlier draft assumed. A pass is not an undrifted database: the constraint check tracks only `ALTER TABLE … ADD CONSTRAINT`, the column check returns PASS over referenced tables that are absent, and 61 versions stay unanchored — that last is incomplete coverage, not drift. |
+| **B** | **Wire the operator findings job to run these four local checks. Touch CI not at all.** Either reclassify the deployment-only checks to operator mode, or widen the job's filter to a named allowlist. | Zero contributor blast radius, one edit, and the **only** move that reaches the deployed database where two of the four can actually fail. On the packet's own reasoning this is arguably dominant over any CI-only arming. | Reclassifying removes a check from `--mode local`, which is what the adopter installer runs, so an adopter's install report loses that line; widening the filter avoids the trade at the cost of a second mechanism. And whatever these four find goes into the governance stream on the next cycle. On Codex's review relayed on 2026-09-10 — read-only checks against the operator's deployment, not independently reproduced by the packet author — the registry, column and constraint checks pass there and checksums cover 7 of 68 migrations, so an immediate backlog is less likely than an earlier draft assumed. A pass is not an undrifted database: the constraint check tracks only `ALTER TABLE … ADD CONSTRAINT`, the column check returns PASS over referenced tables that are absent, and 61 versions stay unanchored — that last is incomplete coverage, not drift. |
 | **C** | **Arm `column_drift` only, in CI.** One file under `tests/` that skips at module level when the test DB is unreachable (`can_connect_to_test_db`, the pattern 333 tests already use — the skip has to be the caller's, because since #2149 the check itself returns FAIL rather than SKIP on an unreachable database), bootstraps the schema, runs the check, and asserts three things: status is PASS; no referenced table was absent; and the column count the check reports equals the count `_scan_insert_column_refs` produces in the same run. The third assertion is the one that carries the gate — a status assertion alone is satisfied by a PASS over zero compared columns. | Arms the one check that is genuinely non-tautological in CI, and leaves the other three exactly as they are. Runtime negligible. | In blocking form it is a new way for someone else's PR to go red. It is **not** only triggerable by a genuine defect, and the swallowed-migration vector cuts both ways: a swallowed migration that drops a column from a table that is present leaves the CI database missing a column the code correctly references, and the assertion goes red on whichever contributor's PR is running — a red build its author did not cause and cannot fix; a swallowed migration that drops a whole table goes **green** today over silently reduced coverage, and goes red only because the coverage assertion is there. Converting that second class of false green into author-innocent red is the point of the coverage assertion and is also its whole cost. Two further costs sit on that assertion. It is green only if CI's bootstrap actually creates all 29 referenced tables, which was **not** established here — recomputing the expected count inside the test run guards against the scanner's own count drifting and does nothing about an incomplete bootstrap, so C may need one observed run against CI before the assertion can be armed at all. And the counts exist only as interpolated text in the PASS message, so a one-file test has to parse that string; the structured alternative is a doctor edit plus an inversion of the unit test that pins today's PASS-on-absent-table. Does nothing for the migration-facing checks. |
 | **D** | **Split by observability: each check goes where it can see something.** `column_drift` → a CI test as in C, coverage assertion included. `schema_migrations` → a step in the docker-quickstart workflow against the real adopter database. `constraint_drift` and `migration_checksum_drift` → the operator findings job as in B, because their signal is a property of the deployed database. | The only option that closes both the CI gap and the operator-dark gap, and it matches each check to its trigger. | Three edits across three files. The docker-quickstart step is advisory until branch protection adds the context — path-filtered workflows need skipped-equals-success handling to be required at all, and only the operator can make that change. Needs an inline import block in both CI homes. Carries B's adopter-report trade, and C's assertion cost — five edits across five files rather than three, if `column_drift`'s coverage assertion takes the structured-count route instead of parsing the PASS message. |
 | **E** | **Arm all four in one new DB-backed CI job.** | Uniform treatment. | Buys one permanently meaningless green: `migration_checksum_drift` cannot produce a drift signal there under any bootstrap the repo ships, so the job reports a passing content-anchoring check over zero anchored migrations. That is instrumentation failing toward healthy — the posture the workflow states twice is forbidden and that #2149 just spent a fix removing from `column_drift`. `constraint_drift` adds a near-tautology on top. Duplicates a database CI already has twice over, and is advisory until branch protection is edited. |
@@ -1809,7 +1758,7 @@ written down says.
 
 **A:** none — one documentation table row. **B:** this operator's deployed host
 only; the findings stream gains four checks that have never run from it, and the
-operator reports having run them there once by hand on 2026-09-10 with no drift
+Codex review reports having run them there once, relayed on 2026-09-10 with no drift
 returned — so the stream is unlikely to open with a backlog, though a hand-run
 pass does not make the deployed schema undrifted. Plus the adopter install report, unless
 the filter-widening variant is chosen. **C:** every contributor's PR, in blocking
@@ -1873,11 +1822,11 @@ writes down the part that is expensive to rediscover.
 - **Flag carried, and answered from outside the repository:** the repository ships
   only a launchd plist **template**. Nothing in the tree establishes that the
   findings job is loaded on the operator's machine, and this environment cannot
-  check; the operator reports (2026-09-10) that it is loaded, scheduled hourly,
-  last exit code 0. The two sources stay apart: the schedule is their report, and
+  check; Codex reports in the review relayed on 2026-09-10 that it is loaded, scheduled hourly,
+  last exit code 0. The two sources stay apart: the schedule is the reviewing agent's observation, and
   the repository's inability to establish it is unchanged. The *mechanism* is
   fully confirmed here — the mode filter and all four `mode="local"` declarations
-  — and it now composes with their report into an unconditional statement rather
+  — and it now composes with that observation into a dated statement rather
   than a conditional one: the job runs, and it runs none of the four. **An exit
   code of 0 from it therefore carries no information about schema drift** and must
   never be read as though it did.
@@ -2367,154 +2316,45 @@ the local path.
 
 ---
 
-# What this packet could not establish
+# Evidence gaps and review observations
 
-Seven things, as raised on 2026-09-09. Each is named with why, so the operator
-knows which are questions about the repository and which are questions only they
-can answer. On 2026-09-10 the operator ran read-only checks against their own
-deployment and reported the results; items 2, 3 and 5 carry those reports, dated
-and marked as the operator's, because this environment reached no database and
-reproduced none of them. None of the three is thereby closed: each says what its
-report settles and what it leaves open, and item 5 is now open on a different
-quantity than the one it was raised for. Items 1, 4, 6 and 7 are not answered by
-the message — item 4's text was sharpened by this round's corrections, but the
-question it asks is untouched — and the note after item 7 says why.
+The original packet author could not access the deployed database. Codex later
+performed read-only checks during its independent review of PR #2156 at
+`13126863`; the review was relayed into this packet on 2026-09-10. These are
+agent-authored observations from that review, not operator decisions or fresh
+measurements taken by this documentation correction.
 
-1. **Whether the restraint declared in PRs #2145 and #2149 is standing policy
-   (entry 6).** It exists only in those two commit messages. A grep across every
-   tracked Markdown file for such a rule returns nothing — not in `CLAUDE.md`,
-   `AGENTS.md`, `CONTRIBUTING.md`, or `docs/dev/DRIFT_LEDGER.md`. Whether merging
-   them adopted their self-restraint as a rule is a question of intent, and it
-   needs the operator's memory rather than the repository.
+1. **Standing policy behind #2145/#2149:** still unestablished. Statements about
+   those PRs' scope do not by themselves establish a standing prohibition on
+   arming checks. Codex's placement recommendation does not decide that policy.
+2. **Findings automation:** Codex observed the launchd job loaded and scheduled
+   hourly, with last exit code 0. The source filter selects operator-mode checks
+   and excludes all four local-mode drift checks. The job's exit code therefore
+   supplies no evidence of schema drift or its absence.
+3. **Deployed drift:** the read-only registry, column and constraint checks
+   passed. The checksum check reported 7 of 68 migrations content-anchored and
+   61 unverifiable. Those 61 are incomplete coverage, not drift; checksums must
+   not be backfilled from current source to manufacture historical evidence.
+   The checks' parser and coverage limitations remain.
+4. **December per-agent geometry:** still unknown. The product of per-stratum
+   factorials counts admissible permutations; it does not establish power or a
+   small tail probability. The frozen counts supply a lower bound on that
+   slice's permutation count, not December's. No early live cohort read was run.
+5. **Column coverage:** the actual live review output was "all 225
+   INSERT-referenced columns exist across 29 table(s)". This resolves the
+   deployed coverage question at that observation time. CI coverage remains to
+   be measured. Separately, Codex reproduced a missing-table counterexample
+   returning PASS with zero columns across zero tables; a future gate must
+   check coverage and missing required tables explicitly, not just PASS status.
+6. **Older authorship and edit history:** the original packet checkout was
+   shallow; upstream evidence is required for claims predating its reachable
+   history. The review's operational checks do not answer those history questions.
+7. **Product and enforcement policy:** Codex recommended treating the advertised
+   dashboard as adopter-facing and preserving historical attribution through
+   scoped exceptions and a non-growing baseline. These remain recommendations;
+   neither a general standard nor operator adoption is established by their
+   inclusion here.
 
-2. **Whether the operator's findings automation is actually running on the
-   deployed host (entry 6) — answered by the operator, 2026-09-10.** The operator
-   reports that the findings job is loaded, is scheduled hourly, and that its last
-   exit code was 0. That is a report about a host this environment cannot reach;
-   the repository still ships a launchd plist **template** only, so no schedule is
-   verifiable from the tree. What the tree establishes is unchanged and was
-   re-read at this commit: `scripts/ops/doctor_findings.py` drops every check
-   whose mode is not `operator`, and all four drift checks — `schema_migrations`,
-   `column_drift`, `migration_checksum_drift`, `constraint_drift` — are registered
-   `mode="local"`. The two compose into the consequence this item existed to
-   expose: the job is loaded and hourly, and by its own filter it executes none of
-   the four. **An exit code of 0 from it carries no information about schema
-   drift**, and must never be cited as though it did.
-
-3. **Whether the deployed database is currently drifted (entry 6) — answered in
-   part by the operator, 2026-09-10.** The operator reports that the registry,
-   column and constraint checks pass against the deployed database, and that
-   checksums cover 7 of 68 migrations with 61 remaining unverifiable. Provenance:
-   read-only runs on the operator's own deployment, reported here; no database was
-   reachable from this environment, so none of it is reproduced. Those runs did
-   not come from the hourly findings job, which executes none of the four (item
-   2). Two things follow, and they are different findings.
-
-   **61 unverifiable is incomplete coverage, not drift.** The operator says so,
-   and the instrument says so in its own source: `check_migration_checksum_drift`
-   returns PASS over rows applied before the migration that added the checksum
-   column, and its PASS detail reads "These were applied before checksums existed,
-   so what ran is unknowable. This is the honest state, not a defect to fix —
-   never back-fill from source files." That number is coverage telemetry. It
-   authorises nothing, and it must never be quoted as a drift count or a defect
-   count.
-
-   **The counts reconcile against this checkout, which is arithmetic and not
-   verification of that database.** There are 67 migration files here (slots 018
-   and 019 absent, highest 069); 67 plus the single accepted-but-not-expected
-   version in `KNOWN_SCHEMA_MIGRATION_EXCEPTIONS` is 68; and the slots
-   post-dating the checksum column, added by 062, are 063 through 069 — exactly
-   the seven anchored. That the 68th row on that database is in fact that
-   exception was not queried here.
-
-   What is now on record is that these four checks were run against that database
-   once: three returned no drift, and the checksum check returned a coverage
-   figure rather than a drift finding. That is not the same as an undrifted
-   database. Every blind spot entry 6 names — the constraint check's `ALTER TABLE
-   … ADD CONSTRAINT`-only scope, the column check's absent-table gap (item 5), 61
-   unanchored versions — is unchanged by a pass. Entry 6's option B cost cell
-   carries the same report, with the same provenance and the same caveat; the two
-   were reconciled rather than left to disagree.
-
-4. **The December cohort's per-agent cluster geometry (entry 2).** Given a
-   geometry, formability and the attainable floor are one closed-form check — the
-   product of per-stratum factorials — and the frozen slice's own recorded counts
-   already clear it. The December cohort's counts do not exist yet, and its
-   predecessor's were not kept: total `Null clusters` per agent was dropped from
-   the frozen transcription, the cluster-size distribution with it, and the power
-   audit files both as unrecoverable without a live re-run it says is not
-   justified. So whether a within-agent null could be formed there, and what
-   resolution it would have if it were, are both open.
-   The stop rule separately forbids refreshing the condition-3 feasibility
-   diagnostic with live data before the read, and this packet did not.
-
-5. **What coverage `column_drift` reaches against a real database (entry 6) —
-   the greenness half answered on the operator's report, 2026-09-10; the coverage
-   half opened here.** The operator reports that the column check passes against
-   their deployed database. That is their report about a host this environment
-   cannot reach, and it retires the doubt this item was raised for: the "green on
-   arrival" statement is a static approximation over the schema and all 67
-   migrations, is labelled as one everywhere it appears, and the one live run that
-   exists does not contradict it. No live database was reachable here, then or
-   now, so the approximation stays labelled as one.
-
-   Greenness is not the quantity that decides entry 6, and that half is
-   established here rather than reported. `check_column_drift` in
-   `scripts/dev/unitares_doctor.py` skips a table `psql` reports as absent — its
-   own comment calls that "a gap, not a handoff" — and its PASS line counts the
-   tables it resolved, not the tables the code references. Driven with every table
-   absent it returns PASS reading "all 0 INSERT-referenced columns exist across 0
-   table(s)", reproduced at this commit. A PASS is therefore emitted at any
-   coverage down to zero resolved tables, so the open number is how many of the 29
-   referenced tables (225 columns, re-scanned at this commit) actually resolve —
-   on CI's bootstrapped test database and on the deployed one. Neither can be read
-   from the repo, and both are what a coverage assertion would be calibrated
-   against. Anyone quoting this item should quote both halves: a green column
-   check establishes that the resolved tables carry the referenced columns, and
-   nothing at all about a table that is not there.
-
-6. **Authorship and edit history of the two colliding lines (entry 5), and
-   provenance generally.** This checkout is shallow — 60 commits, a graft root
-   that adds the whole repository as new files — so local `git log` and `git blame`
-   establish nothing about any file older than three days. What could be
-   established came from upstream. Any future claim about when a line was written
-   needs a full clone.
-
-7. **Which operative test defines "adopter-facing" (entry 4), and whether
-   operator-local paths outrank the review register (entry 7).** Both are product
-   intent, both have two coherent readings live in the tree today, and neither is
-   written down. These are not gaps in the investigation; they are the decisions.
-
-**Items 1, 4, 6 and 7 are not resolved by the 2026-09-10 message.** Each was
-checked rather than assumed.
-
-- **Item 1.** Re-grepped at this commit: no tracked Markdown states the restraint
-  as a rule, and the only tracked file that mentions PRs #2145 and #2149 at all is
-  this packet. The entry-6 resolution selects an arming option, which disposes of
-  the restraint for this instance without saying whether it is standing policy.
-  The next agent that wants to arm something meets the same question.
-- **Item 4.** Nothing in the message supplies the missing per-agent cluster
-  geometry, and the entry-2 resolution presupposes its absence: "validate it
-  synthetically first" is the substitute for the number, not a way of obtaining
-  it.
-- **Item 6.** The checkout is still shallow, and the commit count has drifted past
-  the packet's own frozen figures — entry 5's *Established* and item 6 above each
-  record 60, entry 7's *Default if silent* records 59, and `git rev-list --count
-  HEAD` returns 63 at this commit.
-  All three recorded figures are left as written rather than silently rewritten,
-  because the claim all three support — a shallow clone, so `git log` and `git
-  blame` establish nothing about any older line — does not depend on which is
-  quoted. Nothing in the message bears on it.
-- **Item 7.** The entry-4 and entry-7 resolutions dispose of both instances: the
-  advertised dashboard, and the historical documents. Neither states the general
-  test. "Treat the advertised dashboard as adopter-facing" is a ruling on that
-  artifact, not a declaration that the advertisement test is the operative one;
-  and combining rule-scoped exceptions with a non-growing baseline is a mechanism
-  that leaves the operator-paths-versus-register ranking unasked. The next case
-  arrives with the same question unwritten.
-
-One further note on scope, stated because it bounds every entry above: **no
-option in this packet was tested by running it.** Every option set is derived
-from files read directly and from commands run read-only. Nothing here edited the
-pre-registered stop rule, ran any analysis script against live data, or wrote
-anything the 2026-12-01 read will select.
+No proposed instrument or production change was implemented by this packet.
+The synthetic sampling example above and the review's read-only checks do not
+modify a registered rule or supply a new December cohort analysis.
