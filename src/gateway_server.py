@@ -29,6 +29,7 @@ from mcp_compat import FastMCP, run_server, server_supports_kwarg
 
 from gateway.client import GovernanceMCPClient
 from gateway.constants import GATEWAY_HOST, GATEWAY_PORT, GOVERNANCE_URL
+from mcp_listen_config import build_transport_security_settings
 from gateway import tools
 
 # Logging
@@ -39,11 +40,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("gateway")
 
-# FastMCP (1.x) / MCPServer (2.x) server. 2.x dropped the `host` constructor
-# kwarg (host is applied at run time), so pass it only when supported.
+# FastMCP (1.x) / MCPServer (2.x) server. 2.x dropped the `host` and
+# `transport_security` constructor kwargs — both are applied at run time by
+# `run_server()` — so pass them here only when the installed major accepts them.
 _gw_kwargs = {"name": "unitares-gateway"}
 if server_supports_kwarg("host"):
     _gw_kwargs["host"] = GATEWAY_HOST
+if server_supports_kwarg("transport_security"):
+    _gw_kwargs["transport_security"] = build_transport_security_settings()
 mcp = FastMCP(**_gw_kwargs)
 
 # Shared client instance (created at startup)
@@ -120,7 +124,13 @@ def main():
     logger.info("Proxying to governance at %s", args.governance_url)
     logger.info("Tools: status, checkin, search, note, query, help")
 
-    run_server(mcp, "streamable-http", host=args.host, port=args.port)
+    run_server(
+        mcp,
+        "streamable-http",
+        host=args.host,
+        port=args.port,
+        transport_security=build_transport_security_settings(),
+    )
 
 
 if __name__ == "__main__":

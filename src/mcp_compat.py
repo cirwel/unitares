@@ -74,6 +74,8 @@ __all__ = [
     "server_supports_kwarg",
     "tool_decorator_supports_kwarg",
     "run_server",
+    "set_declared_host",
+    "settings_fields",
     "get_tool_input_schema",
     "set_tool_input_schema",
     "lowlevel_server",
@@ -111,13 +113,49 @@ def tool_decorator_supports_kwarg(name: str) -> bool:
         return False
 
 
-def run_server(mcp: Any, transport: str, *, host: str, port: int) -> None:
+def settings_fields(mcp: Any) -> dict[str, Any] | None:
+    """The installed server's declared ``Settings`` fields, or ``None``.
+
+    ``None`` means the object exposes no pydantic settings model at all, which
+    is both the 2.x shape and what a stand-in test double looks like.
+    """
+    settings = getattr(mcp, "settings", None)
+    if settings is None:
+        return None
+    fields = getattr(type(settings), "model_fields", None)
+    return fields if isinstance(fields, dict) else None
+
+
+def set_declared_host(mcp: Any, host: str) -> bool:
+    """Align 1.x's ``settings.host`` with the bind host. Returns whether it applied.
+
+    This module is the only sanctioned place in the tree that writes a
+    ``settings`` field, and ``test_no_call_site_assigns_a_settings_field_the_installed_model_lacks``
+    enforces that by exempting this file and nothing else. Call sites ask here
+    rather than assigning, so a future major that renames the field is a change
+    in one place instead of a startup crash in several.
+    """
+    fields = settings_fields(mcp)
+    if fields is None or "host" not in fields:
+        return False
+    mcp.settings.host = host
+    return True
+
+
+def run_server(
+    mcp: Any,
+    transport: str,
+    *,
+    host: str,
+    port: int,
+    transport_security: Any = None,
+) -> None:
     """Run the high-level server on ``transport``, bound to ``host``/``port``.
 
     The bind address moved between majors. 1.x carried ``host`` and ``port`` on
     the server's ``settings`` object, which callers mutated before ``run()``.
-    2.x dropped both fields from ``Settings`` entirely and takes them as
-    ``run()`` keyword arguments, forwarded to the transport coroutine
+    2.x dropped both fields from ``Settings`` and takes them as ``run()`` keyword
+    arguments, forwarded to the transport coroutine
     (``run_streamable_http_async(host=..., port=...)``).
 
     This seam does not degrade when it is missed. Assigning ``settings.host``
@@ -126,25 +164,45 @@ def run_server(mcp: Any, transport: str, *, host: str, port: int) -> None:
     and launchd respawns it forever with nothing bound. That is a silent outage
     for any surface whose health is inferred from a sibling port.
 
-    Resolved by asking the installed ``Settings`` model which contract it
-    implements, rather than branching on :data:`MCP_MAJOR` — same reasoning as
-    :func:`mcp_httpx`, and it stays correct if the field returns in a later
-    major.
-    """
-    settings = getattr(mcp, "settings", None)
-    fields = (
-        getattr(type(settings), "model_fields", None) if settings is not None else None
-    )
+    ``transport_security`` is a correctness argument on 2.x, not optional
+    hardening. Handing the low-level app a localhost ``host`` with no security
+    settings makes it auto-enable DNS-rebinding protection with a hardcoded
+    ``allowed_hosts`` of localhost only::
 
-    if isinstance(fields, dict) and "host" in fields:
-        # mcp 1.x — the transport reads the bind address off settings.
-        settings.host = host
-        settings.port = port
+        if transport_security is None and host in ("127.0.0.1", "localhost", "::1"):
+
+    A server behind a tunnel or reverse proxy that preserves the external
+    ``Host`` then answers ``421 Misdirected Request`` on every MCP call while
+    custom routes such as ``/health`` keep returning 200, so both the deploy
+    check and the status table read healthy. Pass the deployment's real settings
+    (``src.mcp_listen_config.build_transport_security_settings``) so the
+    operator keeps the documented allowlist and opt-out. 1.x never reached that
+    branch, so omitting it here would also make the two majors disagree on the
+    same call path.
+
+    The 1.x/2.x choice is resolved by asking the installed ``Settings`` model
+    which fields it declares, rather than branching on :data:`MCP_MAJOR` — same
+    reasoning as :func:`mcp_httpx`, and it stays correct if a field returns in a
+    later major. It is deliberately not wrapped in a ``TypeError`` retry: the
+    call blocks for the life of the process, so such a guard would also swallow
+    unrelated ``TypeError``s raised inside request handlers much later.
+    """
+    fields = settings_fields(mcp)
+
+    if fields is not None and "host" in fields:
+        # mcp 1.x — the transport reads the bind address off settings, and
+        # security settings were supplied at construction.
+        set_declared_host(mcp, host)
+        if "port" in fields:
+            mcp.settings.port = port
         mcp.run(transport=transport)
         return
 
-    # mcp 2.x — the bind address is a run-time argument.
-    mcp.run(transport=transport, host=host, port=port)
+    # mcp 2.x — bind address and security settings are both run-time arguments.
+    kwargs: dict[str, Any] = {"host": host, "port": port}
+    if transport_security is not None:
+        kwargs["transport_security"] = transport_security
+    mcp.run(transport=transport, **kwargs)
 
 
 def _tool_schema_attr(tool: Any) -> str:

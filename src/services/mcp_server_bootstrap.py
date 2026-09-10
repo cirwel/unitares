@@ -181,15 +181,13 @@ def sync_declared_host(mcp: Any, host: str) -> None:
     implements so the 2.x path is a deliberate skip, and keep the guard for
     everything else that can go wrong on 1.x.
     """
-    settings = getattr(mcp, "settings", None)
-    fields = getattr(type(settings), "model_fields", None) if settings is not None else None
-    if not isinstance(fields, dict) or "host" not in fields:
-        logger.debug(
-            "Server settings declare no host field; bind host is applied at run time"
-        )
-        return
+    from src.mcp_compat import set_declared_host
+
     try:
-        settings.host = host
+        if not set_declared_host(mcp, host):
+            logger.debug(
+                "Server settings declare no host field; bind host is applied at run time"
+            )
     except Exception as exc:
         logger.debug("Could not sync settings.host to %s: %s", host, exc)
 
