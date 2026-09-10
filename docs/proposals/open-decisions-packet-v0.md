@@ -1,11 +1,21 @@
 # Open decisions packet — seven operator calls, packaged
 
-**Status:** decision packet, raised 2026-09-09. **This document decides
-nothing.** Every one of the seven items below is the operator's call and is
-left open. Nothing here is written into the repo as settled, no threshold is
-adjusted, no registered instrument is touched, and no recommendation in this
-file is a decision. Where an item says SETTLED, that word attaches to a
-*verified fact*, never to the operator's disposition of it.
+**Status:** decision packet, raised 2026-09-09. Each of the seven entries is
+the operator's call. On 2026-09-10 the operator returned resolutions for all
+seven, under their own heading, "My recommended resolutions for the seven
+questions"; they are reproduced verbatim in *Operator resolutions, 2026-09-10*,
+immediately below this header. Everything below that section is the evidence
+layer, written before the resolutions and unchanged by them. **Nothing here is
+implemented.** No resolution is written into the repo as settled, no threshold is
+adjusted, no registered instrument is touched, and no recommendation in this file
+became a decision by being agreed with. What that section is: a dated record of
+what the deciding authority said, in their words. What it is not: a consensus, a
+ratification of any recommendation in this file, or work performed. And because
+none of the seven is implemented, every entry's *Default if silent* clause still
+describes what is happening in the repository today — those clauses are the
+present state, not a counterfactual the resolutions have retired. Where an item
+says SETTLED, that word attaches to a *verified fact*, never to the operator's
+disposition of it.
 **Shape:** follows the contract in `docs/proposals/operator-decision-packet-v0.md`
 — options, recommendation, reversibility and blast radius, default-if-silent.
 Worked precedent for the same form:
@@ -17,7 +27,77 @@ model's output, and no advisory mechanism was consulted while writing it.
 **Recommendations:** each is labelled non-binding. Their *inputs* are sourced
 from the evidence cited beside them. Their *ranking* — whether three edits are
 proportionate where one would do, whether a gate should block or advise — is
-appetite, and is the operator's.
+appetite, and is the operator's. The operator exercised it on 2026-09-10. On
+several entries their resolution names the option a recommendation here named,
+and that coincidence is the largest attribution hazard in this file: those
+entries are resolved because the operator resolved them, never because this file
+recommended them. No count of the convergence is given, because the
+correspondence is not one-to-one and the recommendations themselves are still
+being corrected — entry 3's recommendation urges D + E *with F as a separate
+yes* while the resolution takes D + E and not F; entry 4 declines to recommend
+on its first question and recommends C on its second; entry 7's resolution
+combines two mechanisms. Read each resolution against its own entry rather than
+against a tally.
+
+---
+
+## Operator resolutions, 2026-09-10
+
+The operator returned the table below on 2026-09-10, under their own heading,
+"My recommended resolutions for the seven questions." It is reproduced verbatim
+and in their order, which is this packet's order. Each of the seven entries is
+the operator's call; this section records what they said, and records it as
+theirs. The same message also reported read-only checks run against the
+operator's own deployment; those are recorded, with their provenance, in *What
+this packet could not establish*.
+
+| Entry | Item | The operator's resolution, verbatim |
+|---|---|---|
+| 1 | D4 — "same family" | A: exact winner-name identity, disclosed as a dated clarification informed by the original "stable argmax" wording. Pin the candidate set. |
+| 2 | D6 — stratified null | B: predeclare a supplementary within-agent analysis without changing the registered verdict. Correct its permutation assumptions and validate it synthetically first. |
+| 3 | D5 — redundant condition | D + E: annotate the implication without removing condition 2, and test it. Preserve unrounded values for boundary decisions. |
+| 4 | D3 — dashboard scope | Treat the advertised dashboard as adopter-facing. Require passing empty-roster, foreign-roster, and outage tests; use synthetic, clearly identified fallback data. |
+| 5 | D2 — review versus permission | C: technical review establishes findings; enabling the production verification floor requires explicit operator sign-off. |
+| 6 | D1 — doctor placement | D: check source/schema compatibility in CI and deployment drift on the deployed database. Preserve installer coverage; start deployment reporting as advisory. |
+| 7 | D7 — historical documents | Combine rule-scoped exceptions with a non-growing baseline for historical review language. Preserve attribution and correct nonportable executable examples. |
+
+**Recording a resolution is not implementing it.** No row above is implemented,
+and nothing in this pull request implements one. The work each row names — the
+dated clarification and the candidate-set pin; the supplementary within-agent
+analysis, its corrected permutation assumptions and its synthetic validation;
+the non-normative annotation and the test that pins it; the split between
+findings and sign-off; the split-by-observability wiring with installer coverage
+preserved and deployment reporting advisory at the start; and the rule-scoped
+exceptions plus the non-growing baseline — is follow-up outside this pull
+request. Entry 4 is the one row whose present state is directly checkable, and
+part of what it names already exists: `dashboard/tests/residents-empty-roster.test.js`
+carries an empty-roster spec, a foreign-roster spec and a `/v1/residents` outage
+spec, and the dashboard suite is green at 14 files and 65 tests, re-run at this
+commit. Those specs drive one pane, so what is outstanding on entry 4 is the
+page-wide form of the same assertions and the clearly-identified synthetic
+fallback data. Each entry below states its own reversibility and blast radius,
+and those still apply to the work, not to the record of the decision.
+
+Three points of care for whoever picks that work up.
+
+- **The resolutions are not the recommendations, even where they coincide.** On
+  several entries the operator named the option a recommendation named. That is
+  two independent statements agreeing, not one statement made twice. The
+  authority is the operator's message of 2026-09-10; cite that, never the
+  recommendation.
+- **Entry 3's resolution is not option F.** The recommendation urged F — widening
+  the printed precision — as a separate yes. The operator's resolution instead
+  says "Preserve unrounded values for boundary decisions." Implement that
+  sentence. Do not record option F as resolved, and do not treat a formatting
+  change as discharging it.
+- **Entry 2's "validate it synthetically first" meets a limit that entry already
+  documents.** That entry's option E records that the synthetic cohort builder
+  draws its latent i.i.d. per cluster and assigns agents round-robin — zero agent
+  effect by construction — so a synthetic validation will show the stratified and
+  global nulls behaving alike unless an agent random effect is added first. The
+  resolution does not say to add one. That is a gap for the implementer to raise
+  with the operator, not one to close by reading in an instruction that is not
+  there.
 
 ---
 
@@ -369,12 +449,53 @@ non-authoritative second column reported beside the registered result?
   §6.3 as a recorded methodological preference, not a precedent in force. Grouped
   CV and a within-agent null are also different instruments that happen to point
   the same way.
-- **Feasibility is unknowable today.** `estimate_selective_null` refuses below
-  three permutable units; a stratified null needs that per stratum. The deciding
-  number is total `Null clusters` per agent, which the frozen transcription
-  dropped and which `docs/operations/falsifiability-power-audit-2026-08-23.md`
-  lists as unrecoverable without a live re-run the same audit says is not
-  justified.
+- **The three-unit constant is a global pool check, and what would replace it
+  under stratification is a design call, not a code fact.**
+  `estimate_selective_null` does decline below three permutable units — that
+  reading was right; what it understated is what declining looks like
+  downstream. The branch raises nothing: it returns `resamples=0,
+  selective_p=None`, which `classify_inference_with_selective_null` reads as
+  `UNASSESSED` and the qualifier renders as a sentence saying the row licenses
+  no inferential conclusion (reproduced here on a two-cluster cohort). The check
+  itself, `if len(keys) < 3`, is one test on the single agent-blind shuffle
+  pool: the shipped code builds one flat list of cluster keys and runs one
+  `rng.shuffle` over all of it, so there are no strata for a per-stratum rule to
+  govern. Whether a stratified mode would carry the constant per stratum, or
+  replace it with a floor on the joint permutation count — the product of the
+  per-stratum factorials — is a design question the operator has not been asked.
+  The two rules disagree exactly on two-unit strata: the first excludes them,
+  the second admits one as a factor of two.
+- **Whether `alpha` is attainable is arithmetic; the frozen geometry clears it
+  and the December geometry is unrecorded.** Whichever sizing rule a stratified
+  mode encoded, the quantity that decides whether the registered `alpha=0.05` is
+  reachable at all is the joint permutation count G, because the identity
+  permutation is in the draw pool and ties the observed statistic exactly:
+  `build_matrix_row` takes `observed_best_delta` from `build_model_scores` under
+  the same `(beats_baseline, auc_delta, brier_improvement)` maximum that
+  `_best_delta_value` recomputes inside the loop, on the same `train_fraction`
+  and `min_feature_rows`, so under the identity the permuted rows are the
+  original rows. Verified by reading both call sites and by enumerating all 3!
+  permutations of a constructed three-cluster cohort, where the identity
+  returned exactly `observed_best_delta`. The exact permutation floor is
+  therefore 1/G, and the shipped estimator tracks it rather than dropping below
+  it: at B resamples the identity arrives about B/G times, so the reported p
+  sits near (B/G + 1)/(B + 1). It is the geometry that bounds the p from below,
+  not the resample count. At the registered B = 400
+  (`--selective-null-resamples 400`), G = 16 gives about 0.065 and cannot clear
+  alpha, while G = 32 gives about 0.034 and does; the joint count has to reach
+  about twenty, and the exact figure moves with the resample count, so there is
+  no resample-independent threshold to quote. Attainability is also not power
+  and not validity, and neither has been computed for a stratified mode on any
+  cohort. On the frozen slice attainability is already settled by counts that
+  survived transcription: `Bad clusters` 28–29 over `Agents` 16 — that column is
+  `count_bad_clusters`'s distinct-bad-agent count, every cluster key carries its
+  agent, and each agent's stratum holds at least its own bad clusters — and no
+  way of splitting 28 clusters among 16 agents puts the product of per-stratum
+  factorials below 2^12 = 4096. What is unrecorded is the December cohort's own
+  geometry: total `Null clusters` per agent was dropped from the frozen
+  transcription, and `docs/operations/falsifiability-power-audit-2026-08-23.md`
+  files it and the cluster-size distribution together under "Not fixed here,"
+  recoverable only by a live re-run the same audit says is not justified.
 - **A dated precedent went the other way on this same instrument.** The power
   audit found the baseline anti-predictive (frozen baseline AUC 0.427–0.435),
   noted "a below-chance reference can change both observed deltas and the
@@ -397,10 +518,10 @@ non-authoritative second column reported beside the registered result?
 | # | Option | What it does | What it costs |
 |---|---|---|---|
 | **A** | **Change nothing; name the confound as a limitation in the December report.** | The registered null decides conditions 1 and 2 as written; the report adds the unit-of-resampling limitation to the disclosures it already owes, citing the 2026-08-23 Unit check by name. Exactly the anti-predictive-baseline precedent. | Asymmetric. Costs nothing on a FAIL — the Unit check already caps a non-detection below `REFUTED`, and the null cannot reach condition 3. On a PASS there is no guard at all, and the existence proof above shows the missing guard is demonstrably missing, not merely theoretically. |
-| **B** | **Declare a within-agent null now as a second, non-authoritative column.** | A within-agent permutation mode behind a flag, plus a dated declaration in the stop rule: the registered agent-blind null decides all four PASS conditions; the stratified column is computed at the read from the same cohort and reported beside it without authority. | Real code: a mode in `estimate_selective_null`, a per-stratum minimum-unit rule, a CLI flag, updated reading instructions, and four tests that call the estimator (plus two on the qualifier path). A permanent declaration that cannot be un-declared. And the column may come out degenerate: agents contributing one or two clusters can only permute to themselves, pushing the stratified p toward 1.0 — and whether the December cohort has the geometry cannot be known today. |
-| **C** | **Amend the registered read so the within-agent null decides.** | A PR against `REGISTERED_READ_MANIFEST` and the stop rule, disclosed as a protocol deviation. | One-way door and the most expensive branch. A decision-rule change by an analyst who has already seen the frozen slice, so the design-system audit's own **Decision rule** check ("fixed before the read") fails and the amendment precedent ("before any enrollment") is unavailable. Because it makes PASS strictly harder it reads as steering toward the kill criterion — the mirror image of p-hacking, not a defence against it. Forecloses A and B. |
-| **D** | **Fix the reference instead of the permutation unit.** | Give the baseline the agent information it lacks — `_fit_group_rates` builds it from a one-line key function, `score_deltas_vs_baseline` already takes `baseline_name`, and `agent_id` is on the row and outside `PRIOR_STATE_FIELDS`, so it survives permutation intact. Report an agent-aware reference as a non-authoritative second column. | Addresses the other half of the same diagnosed defect and is cheaper than B — no per-stratum minimum-unit rule, and it does not have B's degeneracy blocker. But it is the less-examined lever: no written criterion in the repo points at it the way the Unit check points at the permutation unit, and the anti-predictive-baseline finding was itself deferred rather than acted on. |
-| **E** | **Characterise it synthetically first, decide later.** | Use the database-free `scripts/analysis/ablation_power_probe.py` path to establish formability and seed sensitivity at the frozen geometry, with zero live-data access. | Spends the scarce resource, which is the pre-read window. And it cannot answer what matters: `synthesize_cohort` draws its latent i.i.d. per cluster and assigns agents round-robin — zero agent effect by construction — so without a new agent random effect it will show the stratified and global nulls behaving alike. The deadline does not move while it runs. |
+| **B** | **Declare a within-agent null now as a second, non-authoritative column.** | A within-agent permutation mode behind a flag, plus a dated declaration in the stop rule: the registered agent-blind null decides all four PASS conditions; the stratified column is computed at the read from the same cohort and reported beside it without authority. | Real code: a mode in `estimate_selective_null`, a sizing rule for stratified permutation — the three-unit minimum per stratum or a floor on the joint permutation count, a design call not yet made — a CLI flag, updated reading instructions, and four tests that call the estimator (plus two on the qualifier path). A permanent declaration that cannot be un-declared. The degeneracy cost is narrower and more conditional than an earlier draft had it: only single-cluster agents permute to themselves, a two-cluster agent contributes a factor of two, and the frozen slice's recorded counts already force a joint count of at least 4096. But a floor that clears alpha and a null that moves most of the cohort are different conditions — in a geometry of five two-cluster agents out of sixteen, eleven strata are still frozen — and how the December cohort's clusters fall across agents cannot be known today. |
+| **C** | **Amend the registered read so the within-agent null decides.** | A PR against `REGISTERED_READ_MANIFEST` and the stop rule, disclosed as a protocol deviation. | One-way door and the most expensive branch. A decision-rule change by an analyst who has already seen the frozen slice, so the design-system audit's own **Decision rule** check ("fixed before the read") fails and the amendment precedent ("before any enrollment") is unavailable. Its direction on the verdict is not established: two mechanisms run opposite — stratifying removes between-agent spread from the null, which would cut p, while coarser per-stratum resolution raises the attainable floor — and neither has been computed on any cohort, because no stratified mode exists to compute one with. What survives without the direction is when the instrument was chosen: after the frozen slice was seen, which is an analyst choice made with the answer already in view, and that objection holds whichever way the change cuts. Forecloses A and B. |
+| **D** | **Fix the reference instead of the permutation unit.** | Give the baseline the agent information it lacks — `_fit_group_rates` builds it from a one-line key function, `score_deltas_vs_baseline` already takes `baseline_name`, and `agent_id` is on the row and outside `PRIOR_STATE_FIELDS`, so it survives permutation intact. Report an agent-aware reference as a non-authoritative second column. | Addresses the other half of the same diagnosed defect and is cheaper than B — no stratified sizing rule to design or defend. Its edge on degeneracy is smaller than an earlier draft credited it with — two-cluster agents do permute, and the frozen slice's recorded counts already clear the floor — but how the December cohort's clusters fall across agents is the number this entry records as unrecoverable, so on that axis D's advantage over B is undetermined rather than removed. But it is the less-examined lever: no written criterion in the repo points at it the way the Unit check points at the permutation unit, and the anti-predictive-baseline finding was itself deferred rather than acted on. |
+| **E** | **Characterise it synthetically first, decide later.** | Use the database-free `scripts/analysis/ablation_power_probe.py` path to establish seed sensitivity at the frozen geometry, with zero live-data access. | Spends the scarce resource, which is the pre-read window, and buys less than an earlier draft credited it with: formability at a given geometry is closed-form arithmetic — the product of per-stratum factorials against the floor — and the frozen geometry's own recorded counts already settle it, so what a synthetic run is left to establish is seed sensitivity. And it cannot answer what matters: `synthesize_cohort` draws its latent i.i.d. per cluster and assigns agents round-robin — zero agent effect by construction — so without a new agent random effect it will show the stratified and global nulls behaving alike. The deadline does not move while it runs. |
 | **F** | **Run as registered; if the read PASSes, compute the within-agent null as a disclosed post-hoc robustness check before publishing.** | Costs no pre-read window, no code today, and no permanent declaration, while answering the exact asymmetry that argues against A. Nothing in the three governing documents forbids it: the design-system audit's Protocol check requires analysis changes be "prevented or fully disclosed," and the stop rule's binding sentence is "Do not adjust these **thresholds** after seeing the read," which a column with no authority does not do. | It is post-hoc, and a reader may discount it for that reason no matter how it is disclosed — the whole point of pre-declaring is that pre-declaration is credible in a way disclosure is not. It also depends on the December author remembering to do it, with nothing written down today that obliges them. |
 
 ### Recommendation (non-binding)
@@ -417,9 +538,10 @@ on the project's own precedent: the same audit found a defect in the same
 instrument and deliberately left it for prospective testing, and A costs nothing
 on a FAIL. **F** is the honest middle: it buys most of B's protection at
 zero pre-read cost and pays for it in credibility. What I would *not* recommend
-is **C**: a stricter null chosen after seeing the frozen slice's smallest
-selective p is an analyst choice steering toward closure, and steering toward
-the conservative answer is not a defence.
+is **C**: a null chosen after seeing the frozen slice's smallest selective p is
+an analyst choice made with the answer already in view. Whether it is even the
+stricter instrument is not established, and that it may not be removes the one
+mitigating reading rather than repairing it.
 
 ### Reversibility
 
@@ -475,8 +597,12 @@ survives the deadline; nothing else cheap does.
   inside its **withdrawn** 2026-07-31 section, measured on the contaminated
   all-scope cohort, which the document itself calls "not a transferable bound
   for trusted anchors." The seed-sensitivity *argument* (fewer permutable units
-  per stratum → more seed variance) stands on its own; the number does not carry
-  the authority an earlier draft gave it.
+  per stratum → more seed variance) stands on its own, and its shape is legible
+  from the code: the estimator draws a fresh shuffle each resample, so with few
+  joint permutations it is resampling a small group with replacement and seed
+  variance is a property of that group's size. No seed sweep was run for this
+  packet and no variance was computed, so the magnitude is unquantified. The
+  number does not carry the authority an earlier draft gave it.
 - **Corrected:** "five locked tests" — four call the estimator, a fifth
   constructs the dataclass directly, and a sixth on the same qualifier path was
   unnamed. "Exactly two consumers" is true only if indirect calls count; the
@@ -491,7 +617,15 @@ survives the deadline; nothing else cheap does.
   expectation about a statistic that has never been computed on any cohort — not
   a code property. It is also the claim doing the work: it is why `CLAUDE.md`'s
   "do not weaken, re-run or refresh" is said not to reach the change, and why C
-  reads as steering toward closure. Hedged here.
+  reads as steering toward closure. Hedged here, and struck from option C's cost
+  cell and from the recommendation, which had both gone on asserting it flatly.
+  The `CLAUDE.md` clause named just above is a dependency this entry does not in
+  fact carry: no surviving passage in entry 2 argues from the strengthening
+  claim that "do not weaken, re-run or refresh" fails to reach the change, and a
+  search of the packet finds that argument only in entries 1 and 3, where it is
+  made about different options. With the direction unestablished, whether a
+  stratified null would count as a weakening under that standard is unestablished
+  too — a question for the operator, not a settled exemption.
 - **Flag carried:** reading the Unit check as *condemning* this null rather than
   *describing* it is an interpretation. The `(agent, prior-state snapshot)` block
   is the code's own remedy for repeated rows — `count_bad_clusters` says so. The
@@ -509,6 +643,47 @@ survives the deadline; nothing else cheap does.
   two-sided defect; F was foreclosed by an assertion that after the read "only a
   fresh registration survives," which none of the three governing documents
   supports. Both are added above.
+- **Corrected, and it is material to options B, D and E:** "`estimate_selective_null`
+  refuses below three permutable units; a stratified null needs that per stratum"
+  understated the first half and overstated the second. It does decline, and what
+  declining looks like is `resamples=0, selective_p=None` read as `UNASSESSED`
+  (reproduced here on a two-cluster cohort; nothing is raised). But the constant
+  governs one global shuffle pool, not per-group counts — the shipped code builds
+  one flat key list and runs one `rng.shuffle` over it — so a stratified null does
+  not automatically inherit it, and which sizing rule it would take instead is a
+  design call the operator has not been asked to make.
+- **Corrected against a review of this entry, which put the bar at twenty joint
+  permutations, and against a draft that "corrected" it to nineteen.** Both
+  stated a resample-independent threshold, and there is none. The identity
+  permutation is drawn like any other and ties the observed statistic, so the
+  exact floor is 1/G in the joint permutation count G and the estimator's reported
+  p sits near (B/G + 1)/(B + 1) at B resamples. At the registered B = 400 the
+  first G that clears `alpha=0.05` is 21; the bar is about twenty and moves with
+  the resample count. The conclusion is unchanged — with all two-unit strata the
+  attainable counts are powers of two, so 16 fails and 32 is the first to clear —
+  but the figure is not a constant and is not quoted as one.
+- **New, and it narrows what this entry can say is unknown:** the frozen slice's
+  attainability does not depend on the dropped column. `Bad clusters` 28–29 sit
+  over `Agents` 16 in the frozen table, `count_bad_clusters` keys clusters by
+  `(agent, prior-state snapshot)` so every bad cluster belongs to exactly one
+  agent, and each agent's stratum holds at least its own bad clusters. No
+  splitting of 28 clusters among 16 agents puts the product of per-stratum
+  factorials below 2^12 = 4096, which clears the floor with room. This was derived
+  and brute-forced for this packet; it settles the frozen geometry only, and the
+  December cohort's remains open.
+- **Corrected:** "because it makes PASS strictly harder" stood flatly in option
+  C's cost cell and in the recommendation while the flag below already labelled
+  the same claim an expectation never computed on any cohort. The packet hedged in
+  one place and asserted in two. Both assertions are removed, and the objection to
+  C now rests on when the instrument was chosen, which holds whichever way the
+  change cuts. The direction is not asserted the other way either: that
+  stratification shrinks the null and cuts p is an inference, and the opposing
+  resolution effect is equally uncomputed.
+- **Flag carried:** option E's cost cell rests on a reading of `synthesize_cohort`
+  — latent drawn i.i.d. per cluster, agents assigned round-robin — that this pass
+  did not re-verify, since `scripts/analysis/ablation_power_probe.py` was out of
+  scope. The formability half of E's stated purpose is corrected above on
+  arithmetic alone, which needs no run.
 
 ---
 
@@ -803,8 +978,14 @@ assertions?
   is a partially-sanitised real capture.
 - **The snapshot is not passive.** `withFallback(liveFn, snapFn)` in
   `dashboard/redesign/data.js` returns the snapshot on any live-endpoint throw or
-  null. The empty-roster case is safe (an empty array is not null, so live wins);
-  an outage is not. The route is auth-gated, but the trusted-network bypass in
+  null. The empty-roster case is safe (an empty array is not null, so live wins),
+  and so is a foreign roster; an outage is not, and it has two shapes. Driving
+  `residentPanels()` in jsdom: with all five endpoints down the pane falls back
+  and renders all six maintainer resident names under a `snapshot` badge; with
+  `/v1/residents` alone down and the other four answering, the roster reads
+  *unknown* rather than empty, three maintainer-named panels render, and the
+  source badge still reads `live` — no snapshot involved in the worse-labelled
+  of the two. The route is auth-gated, but the trusted-network bypass in
   `src/http_routes/access.py` covers six networks — loopback v4 and v6, Tailscale
   CGNAT, and all three RFC1918 blocks — and applies whenever strict REST auth is
   not required, which is the default when no MCP bearer is configured. The
@@ -815,6 +996,29 @@ assertions?
   hardcodes three resident-named endpoints and three name lookups plus a literal
   pairs list. The PR body defers this question explicitly and names both halves
   of the tension independently.
+- **Those six literals nonetheless do not reach an adopter's DOM today, and a
+  shipped spec already says so.** Each of them sits inside a function that
+  returns nothing when its datum is falsy, and #2150's roster gate in `data.js`
+  withholds exactly those data — established by driving `residents.js` in jsdom
+  against an empty roster and against a foreign one, with and without
+  `snapshot.js` loaded, on the live path in every case (the source badge reads
+  `live`, so nothing passes vacuously off the snapshot). `dashboard/tests/residents-empty-roster.test.js`
+  asserts this at pane scope for the empty and the foreign roster and passes
+  today; the dashboard suite is 14 files, 65 tests, green at this commit. The
+  residue is page-wide and sits elsewhere: five renderable copy strings naming a
+  resident — `metrics.js`'s pane eyebrow and its empty-series message,
+  `risk.js`'s empty-trend message, `adjudication.js`'s blurb and its empty-queue
+  message. Of the remaining section files only `activity.js` carries a
+  non-comment occurrence, and it does not render: the lowercase event-type keys
+  `sentinel_finding` / `sentinel_alarm_finding` in its `ICON` map, read as
+  `ICON[e.type]`, so the glyph reaches the DOM and the key does not. The one
+  path by which a name could reach the pane as data rather than as a literal —
+  the System Health panel renders each `/health/deep` check key through
+  `esc(name)` — is closed at source: the probe in
+  `src/services/runtime_queries.py` builds a fixed set of twelve check keys
+  (`primary_db`, `audit_db`, `calibration_db`, `calibration`, `redis_cache`,
+  `identity_continuity`, `knowledge_graph`, `agent_metadata`, `data_directory`,
+  `telemetry`, `lease_plane`, `pi_connectivity`), none of them roster-derived.
 - **The dashboard's enforcement today is vitest, and it is recent.** The
   `dashboard` job runs lint and tests; its own comment records that six spec
   files added in Aug 2026 "ran nowhere." A spec already documents the snapshot
@@ -830,7 +1034,7 @@ assertions?
 |---|---|---|---|
 | **A** | **In, and guarded.** Declare the image adopter-facing; fleet-neutrality scope stops tracking `pyproject.toml` and starts tracking the image COPY list; a JS-capable scanner is written; the guard's dashboard exemption is deleted. | Mechanical enforcement on the surface an adopter lands on. | A net-new scanner, not a config change. A naive port is worse than nothing: the dashboard legitimately writes resident-shaped words in route strings and section headings, and the Python guard's own history records substring matching flagging 31 places of which one was real. It also forces the `snapshot.js` question immediately — a real capture naming residents cannot survive a neutrality rule — so A silently includes that work. Highest total cost. |
 | **B** | **In, tested not guarded.** Declare the boundary and hold it by test, on the #2150 pattern: dashboard changes touching resident-shaped data carry an empty-roster / foreign-roster spec. Amend the guard comment to say the dashboard is in scope but out of this instrument's reach, and why. | Cheapest of the "in" options — zero new tooling, one paragraph, one comment correction. | Enforcement is author-authored: a hardcoded name in a *new* dashboard section is caught only if someone writes the spec for it. That is precisely the blind spot the fleet guard exists to close, accepted knowingly. Leaves today's hardcoded endpoints and lookups in place with no scheduled removal. |
-| **C** | **In, enforced at the rendered output.** One residentless / foreign-roster jsdom spec that renders the page and asserts no roster identity string reaches the DOM. | Mechanical without a source scanner: a new hardcoded section fails it without anyone writing a spec for that section, and it is immune to the literal-matching problem that sinks a naive JS port, because it inspects output values rather than source tokens. The harness exists — one spec already drives `data.js` through a stubbed fetch under an empty roster, another builds a JSDOM document from the page source. | Not free: `residents.js` hardcodes all six names today, so such a spec starts red. It would have to ship as a scheduled-removal instrument (skipped or xfail with a dated removal note) rather than a green gate on day one — which is an honest cost, and also a smaller one than A's scanner. |
+| **C** | **In, enforced at the rendered output.** One page-wide jsdom spec that, under an empty roster and under a foreign roster, asserts no maintainer resident name reaches the DOM — the outage path excepted, where an unknown roster renders named panels by design and a shipped spec already ratifies that. | Catches a name no source scanner can see — one computed, concatenated, or served out of `snapshot.js` — because it inspects output values rather than source tokens, so it is immune to the literal-matching problem that sinks a naive JS port. Coverage is bounded by what a spec actually drives: the roster states it fixtures, the sections its driver mounts, the stub shapes it supplies. A new section is covered only if the driver enumerates it. | Not free, and not for the reason an earlier draft gave. `residents.js`'s six literals are already gated: under an empty roster and under a foreign roster none of them renders, because each sits inside a function that returns nothing when the roster gate withholds its datum. `dashboard/tests/residents-empty-roster.test.js` asserts that at pane scope and passes — shipped and green, not red. What starts red is the *page*-wide form, and it starts red in three other sections: `metrics.js` (pane eyebrow, empty-series message), `risk.js` (empty-trend message), `adjudication.js` (blurb, empty-queue message). Five copy strings, none of them dispatch — a five-string edit that rides in the same commit, not a dated scheduled-removal instrument. The real cost is the harness, which does not exist: no spec builds a document from `app.html`, sections mount lazily per tab, each needs its own `DATA` stub shape, and `app.html` pulls Chart.js from a CDN. |
 | **D** | **Out, and written down.** Declare the published image an operator/reference artifact; `dashboard/` is exempt like `agents/`. | Cheapest to write, ratifies the guard comment's current wording, and the archaeology stops because the answer is on the page. It is not self-contradictory: the manual's own line calls the dashboard a view that "gives **operators** a human view of the fleet," which is the reading this option depends on, and the guard's existing rationale — a deploy script for this operator's fleet is supposed to name this operator's fleet — is the same argument extended. | Leaves the landing page at `/` outside every correctness rule the project applies to what it ships, and leaves `snapshot.js` shipping the maintainer's live capture into every released image with no rule against it. Removes the standard that made the #2150 fix required, so the next such defect arrives with nothing behind it. |
 | **E** | **Move the artifact instead of the rule.** Drop `COPY dashboard/` (or put it behind a build arg), so the boundary question is moot for the published artifact. | Routes degrade gracefully — the handler already returns a 404 JSON body when a file is absent. | The 712 KB of assets is not the cost. The cost is a product retraction: README, the manual and the public site all advertise the dashboard as a shipped capability, and `docs/PRODUCTION_SNAPSHOT.md` shows it. All three need correcting, and un-retracting a published capability claim later is costlier than making it. The only option that forecloses the others. |
 
@@ -843,12 +1047,19 @@ obvious one. Both readings are internally coherent; A, B and C follow from the
 advertisement test, D follows from the reference-artifact test, and E sidesteps
 both.
 
-**On Q2, conditional on Q1 landing "in": C, then B.** The reason is that C gets
-A's mechanical coverage at closer to B's price, and it is immune to the specific
-failure mode the Python guard's history documents, because it asserts on
-rendered values rather than source tokens. Named cost: C starts red and must
-ship as a dated scheduled-removal instrument, which is a weaker thing than a
-green gate and should be described as such. B is the honest floor if that is
+**On Q2, conditional on Q1 landing "in": C, then B.** C and A cover
+overlapping but partly disjoint ground, and C does not subsume A. A render
+assertion sees a name produced by any mechanism, including one the snapshot
+serves, and it is immune to the specific failure mode the Python guard's history
+documents, because it asserts on rendered values rather than source tokens. It
+is blind to a name that never renders — and `data.js`'s roster gate is exactly
+that: `inRoster(...)` and `fromResidents(...)` are name-keyed dispatch that
+emits nothing under an empty roster, which is the construct the fleet rule names
+first. A render assertion's green is also conditional on the roster states and
+sections a spec drives; a scanner's green is unconditional over the tree. Named
+cost: C's page-wide form starts red on five copy strings across three sections
+and needs a page harness that does not exist yet, so it is green on day one only
+if the copy fix rides with it. B is the honest floor if that is
 more appetite than this deserves; it forecloses nothing in C.
 
 One observation that shapes A and C either way: the spec that *enforces*
@@ -870,9 +1081,18 @@ It is also not literally cost-free: the bundle spans 18 data domains whose
 branches the existing vitest specs discriminate on, so a synthetic replacement
 must preserve every shape those specs distinguish.
 
-What is fair to say: it is required under A and C, effectively required under B,
-and merely desirable under D — and it is the one item here that reaches an
-adopter's screen rather than a contributor's habits.
+What is fair to say: it is required under A, and merely desirable under B, C and
+D — and it is the one item here that reaches an adopter's screen rather than a
+contributor's habits. Under A a source scanner reads `snapshot.js` directly,
+where the six names sit as seventeen quoted literals, so there it is
+unavoidable. B and C do not force it, and for the same reason in both: run the
+empty-roster and the foreign-roster cases with `snapshot.js` loaded and the live
+branch still wins (an empty array is not null), so no snapshot-sourced name
+reaches the DOM. The snapshot renders only on the outage path, and neither
+instrument can assert against that path, because rendering a named panel on an
+unknown roster is deliberate. An earlier draft had this "required under A and C,
+effectively required under B," which charged C for a cost it does not impose and
+left B charged for the same one on the same refuted ground.
 
 ### Reversibility
 
@@ -895,8 +1115,14 @@ the database, a migration, or the MCP surface.
 decides whether what it renders about *their* fleet is held to a correctness
 rule. Under the default posture (no MCP bearer → strict REST not required →
 trusted-network bypass across six networks), a loopback or LAN adopter is served
-`snapshot.js`, and any `/v1/residents` error renders the maintainer's residents
-as theirs.
+`snapshot.js`. Two distinct failures put the maintainer's residents on that
+adopter's screen, and the milder-looking one is the worse of the two. With every
+governance endpoint down the pane falls back and renders all six names under a
+`snapshot` badge, which at least says the data is not theirs. With
+`/v1/residents` alone failing and the rest answering, the roster reads unknown,
+three maintainer-named panels render, and the badge reads `live` — the badge
+that tells an operator these residents are theirs. No snapshot is involved in
+that one.
 **Future contributors** — whether a change under `dashboard/redesign/` owes an
 empty-roster spec, or whether #2150 was a one-off courtesy. This is the recurring
 cost: with no answer, each session re-derives the question from the same two
@@ -918,10 +1144,17 @@ Nothing blocks, and five things continue.
 1. **No CI job will ever fail on a resident name in the dashboard**, and not
    because anyone decided so. Even a well-meaning future session that adds
    `dashboard` to `--paths` gets a green run over an unexamined tree.
-2. **`snapshot.js` keeps shipping**, and every adopter whose `/v1/residents`
-   throws on a default non-strict install sees the maintainer's residents as
-   their fleet, badged as a snapshot. The empty-roster case is safe; the outage
-   case is not, and no spec covers it.
+2. **`snapshot.js` keeps shipping**, and an adopter on a default non-strict
+   install can be shown the maintainer's residents as their fleet in two ways.
+   With every governance endpoint down, the pane falls back and renders all six
+   names under a `snapshot` badge. With `/v1/residents` alone down and the rest
+   answering, the roster reads unknown, three maintainer-named panels render,
+   and the badge reads `live` — no snapshot involved, and this is the variant an
+   earlier draft did not name. The empty-roster and foreign-roster cases are
+   safe. A spec does cover the outage state and ratifies it deliberately:
+   `residents-empty-roster.test.js`'s fourth test asserts the three panels still
+   render on a `/v1/residents` outage, because an unknown roster is not an empty
+   one. What no spec covers is the DOM consequence of that design.
 3. **#2150 does not generalise.** Three panels are gated; three hardcoded
    resident endpoints and three name lookups remain, and the next dashboard
    section starts from zero with no standard behind it.
@@ -935,10 +1168,12 @@ Nothing blocks, and five things continue.
    detector's relevant-files list and adding a line pulls in six Elixir suites,
    three of which fail (#2152).
 
-**What silence also buys, which an earlier draft omitted:** the recommendation
-above says the mechanical instrument should come "once the redesign's section
-layout has stopped moving." If layout instability is a reason to defer C or A, it
-is also a reason silence is not purely lossy. Nothing here decays on a clock — no
+**What silence also buys, though not by the argument an earlier draft used:**
+that draft quoted the recommendation above as holding that the mechanical
+instrument should wait until the redesign's section layout settles. It says
+nothing of the kind, and no sentence of that shape appears anywhere in this
+packet — the quotation was of nothing, and the deferral argument resting on it
+is withdrawn. What survives without it: nothing here decays on a clock — no
 release, migration or published contract depends on it. It is a decision that
 keeps, which is exactly why it keeps being re-derived until it is written down.
 
@@ -995,6 +1230,68 @@ keeps, which is exactly why it keeps being re-derived until it is written down.
 - **Resolved:** option C (rendered-output enforcement) was absent from an earlier
   set, which made "B over A" look forced; and Q1 was declared near-settled rather
   than presented as the fork it is.
+- **Corrected, and it refutes the stated cause of option C's price:**
+  `residents.js`'s six name literals do not reach the DOM under an empty or a
+  foreign roster. Each sits inside a function that returns nothing when its datum
+  is falsy, and #2150's roster gate in `data.js` withholds exactly those data —
+  established by driving `residents.js` in jsdom against both roster states, with
+  and without `snapshot.js` loaded. `dashboard/tests/residents-empty-roster.test.js`
+  already asserts option C's claim at pane scope and passes. The refuted cause was
+  load-bearing: it was why C "starts red" and therefore had to ship as a dated
+  scheduled-removal instrument. C's page-wide form does start red — on five copy
+  strings in `metrics.js`, `risk.js` and `adjudication.js`, none of them dispatch.
+  That is a five-string edit, not an instrument.
+- **Corrected:** the harness option C needs does not exist. No spec builds a
+  document from `app.html`; `dashboard/tests/telemetry-health.test.js` reads it as
+  a string and asserts substrings against it — the source-token method C is
+  offered as an alternative to. Every spec hand-writes its own mount fragment,
+  sections mount lazily per tab, and `app.html` pulls Chart.js from a CDN. "The
+  harness exists" was half true and was carrying half of C's price.
+- **Corrected, and it withdraws a claimed subsumption:** C does not deliver "A's
+  mechanical coverage." A rendered-output assertion is blind to name-keyed
+  dispatch that emits nothing, and `data.js`'s `inRoster(...)` / `fromResidents(...)`
+  is exactly that — the construct the fleet rule names first. The two instruments
+  overlap; neither contains the other.
+- **Corrected:** the snapshot replacement is not required under C, and not under
+  B either. With `snapshot.js` loaded, the empty-roster and the foreign-roster
+  cases still take the live branch, so no snapshot-sourced name reaches the DOM,
+  and B asserts over the same two roster states C does. It stays required under A,
+  where a scanner reads the bundle's seventeen quoted name literals directly.
+- **Corrected, and it names the worse case:** the outage in "Default if silent"
+  is not one failure but two. With `/v1/residents` alone down and the other four
+  endpoints answering, the roster reads unknown, every label passes the gate, and
+  three maintainer-named panels render under a `live` source badge rather than a
+  `snapshot` one — the badge that tells an operator these residents are theirs.
+- **Corrected:** the "What silence also buys" paragraph quoted a sentence that
+  does not exist. "Once the redesign's section layout has stopped moving" appears
+  nowhere else in this packet and the D3 recommendation contains no deferral of
+  that shape. The paragraph argued from a quotation of itself.
+- **Closed, having been carried as an open flag in an earlier draft:** whether
+  `/health/deep` can put a resident name in the pane as data rather than as a
+  literal. It cannot on any roster. `residents.js`'s System Health panel renders
+  each check key through `esc(name)`, and the probe in
+  `src/services/runtime_queries.py` builds a fixed set of twelve keys — none
+  roster-derived, none varying with `UNITARES_RESIDENTS`. The earlier draft
+  stubbed the endpoint and left the question open; it is settled by reading the
+  producer.
+- **Flag carried:** under a foreign roster the residents pane renders nothing at
+  all for the adopter's own residents — `residents.js` has no path to display a
+  resident it does not name by literal, and a two-name foreign roster produced
+  zero resident panels in the run above. The pane is fleet-neutral by omission,
+  which is a different property from being fleet-general. That breaks no current
+  rule, and it is named because B and C both certify the pane on an assertion
+  that a foreign roster produces no maintainer name — it produces no name at all.
+- **Flag carried, stated as an inference:** that fixing the five copy strings
+  makes a page-wide assertion green. `residents.js` was driven in jsdom across
+  four roster states; the other thirteen section files were swept for non-comment
+  resident-name occurrences rather than executed, which makes the inference strong
+  but not a run. The one non-comment occurrence outside the five strings is
+  `activity.js`'s `ICON` map, whose lowercase event-type keys `sentinel_finding`
+  and `sentinel_alarm_finding` are read as `ICON[e.type]` and render as a glyph —
+  so a page-wide assertion has to match the label form rather than a
+  case-insensitive substring, or exclude that map explicitly. The cost of a
+  page-wide driver — one `DATA` stub shape per section, a `Chart` stub for
+  `risk.js` — remains a projection, not a measurement.
 
 ---
 
@@ -1127,7 +1424,7 @@ verification-lane name (`live` + `verifier`).
 | # | Option | What it does | What it costs |
 |---|---|---|---|
 | **A** | **One referent: the phrase means the subagent review, and the 2026-06-26 review closed the gate.** Delete the human-owner parenthetical; mark the gate discharged. | Consistent with the corpus and with the 2026-06-17 definition *of the phrase*. | It is **not** consistent with what that same document says about authority. A review discharging a load-bearing gate is precisely what "authority transition … should bottleneck on the operator" and "forcing a [review] to 'decide' it just launders a guess as consensus" foreclose. This is the only option that changes what an agent may do to a running deployment: it lets an agent clear the enable-gate on a review it convenes and synthesises itself. The review being credited is the one whose third lane is unrecorded. |
-| **B** | **Two gates, two names.** Keep the phrase for the subagent review; rename the prospective gate to operator sign-off, in this file, in the sibling, in `docs/proposals/resolved/demotion-review-2026-08-16.md`, and in the `docs/proposals/README.md` status rows. | Both mechanisms survive with distinct names, and the enable-gate on the live flag is unambiguously a human act. | Four files plus two index rows — the largest edit surface here. Each edited file trips the guard, so the PR must also settle strip-or-allowlist for each. It converts a soft pending item into a named, visible commitment on one person's queue. |
+| **B** | **Two gates, two names.** Keep the phrase for the subagent review; rename the prospective gate to operator sign-off, in this file, in the sibling, in `docs/proposals/resolved/demotion-review-2026-08-16.md`, and in the `docs/proposals/README.md` status rows. | Both mechanisms survive with distinct names, and the enable-gate on the live flag is unambiguously a human act. | Four files plus two index rows — the largest edit surface here. Each edited file trips the guard, so the PR must also settle strip-or-allowlist for each — a cost that exists only while the guard fires on the next touch, so under either form of entry 7's option E it drops and B's surface is four files plus two index rows. It converts a soft pending item into a named, visible commitment on one person's queue. |
 | **C** | **Split the gate by act.** The review suffices for the merge-time safety-envelope check on the blend formula (a coherence check, which the 2026-06-17 partition calls legitimately convergent); operator sign-off is required for the live enable (an authority/blast act). | Derived from the standard the operator already wrote, and it is the only option that matches the partition rather than collapsing it. Smaller than B: the sibling's enable line and one sentence here. | It introduces a two-tier gate where the document has one, so the distinction must be stated crisply or it becomes a new ambiguity. It also still needs the phrase disambiguated wherever both senses appear. |
 | **D** | **Perform or decline the sign-off now.** Since "the owners" resolves to the person reading this packet, the gate can simply be discharged or explicitly declined, dated, in the sibling. | Removes the open item entirely at the lowest edit cost of any option that resolves anything. | It answers the *gate* without answering the *word*, so the two-referent collision survives and the next reader hits it again. And discharging it is a live decision about a production actuator, which is exactly the class this packet must not pre-empt. |
 | **E** | **Allowlist the file as a frozen record; change nothing else.** One line in `scripts/dev/repo-scope-allow.txt`. | Cheapest by far. And the allowlist's precedent genuinely fits better than an earlier draft allowed (see the correction below): its first block covers frozen technical records whose *subject* is not the review process, and `docs/proposals/README.md` marks this file parked. | It resolves nothing. The two referents survive intact, the ambiguity that reaches the live flag survives, and the same question returns on the next read. It also silences Rules 1, 2, 3 and 6 on that file forever (see entry 7). |
@@ -1191,7 +1488,10 @@ already treats false pauses as worth gating on.
 
 The guard is diff-scoped, so the file stays grandfathered indefinitely — verified
 both ways: a clean-tree staged run reports clean, and an explicit run on this file
-reports the violation. The phrase goes on naming both a review an agent ran and a
+reports the violation. Both files this entry turns on are among the 22 that entry 7
+bounds, so entry 7's option E — either form — removes the next-touch clock the second
+forecast below rests on. That call is made there and its effect lands here. The
+phrase goes on naming both a review an agent ran and a
 sign-off the operator did not give, in one document, with a shallow-checkout
 reader unable to tell them apart.
 
@@ -1306,8 +1606,12 @@ at all?
   — reproduced independently at 225 column references across 29 tables — and
   compares them against `information_schema` on the live DB. The code side does
   **not** come from the migrations, so this is a genuine two-source comparison
-  that a migration-built CI database renders exactly. Its three named incidents
-  (2026-04-17, 2026-04-19, 2026-05-07) are all of that shape.
+  that a migration-built CI database renders exactly — **for the tables that
+  resolve.** Over a table absent from the database there is no comparison at all:
+  the loop skips it before counting anything, so the property that justifies
+  arming this one check is exactly the property a coverage assertion has to pin.
+  Its three named incidents (2026-04-17, 2026-04-19, 2026-05-07) are all of that
+  shape.
 - **`check_schema_migrations` is tautological in CI on two of three branches.**
   The DB rows come from the same registry inserts the source parser reads, so
   `mismatch` cannot fire; the database is created fresh per job, so `unexpected`
@@ -1364,13 +1668,45 @@ at all?
 - **CI's test database is not the adopter's database.** The test bootstrap
   swallows failing migrations, skips two schema files, and records no checksums;
   both shipped adopter paths use `ON_ERROR_STOP=1` and a different file order.
-- **`column_drift` is very likely green on arrival.** A static approximation that
-  parses every `CREATE TABLE` body and `ALTER TABLE ADD COLUMN` across the schema
-  and all 67 migrations, replays multi-clause alters, and matches the 225 INSERT-
-  referenced columns, resolves all 29 tables and finds **zero** candidate missing
-  columns. Two candidates from a cruder earlier pass were confirmed as parsing
-  artifacts of multi-column alters. Stated as a static approximation, not a run:
-  no live database was reachable here.
+- **`column_drift` is very likely green on arrival — and green is not the same as
+  covered.** A static approximation that parses every `CREATE TABLE` body and
+  `ALTER TABLE ADD COLUMN` across the schema and all 67 migrations, replays
+  multi-clause alters, and matches the 225 INSERT-referenced columns, resolves all
+  29 tables and finds **zero** candidate missing columns. Two candidates from a
+  cruder earlier pass were confirmed as parsing artifacts of multi-column alters.
+  Stated as a static approximation, not a run: no live database was reachable
+  here. What that approximation estimates is *full coverage* — 29 of 29 tables —
+  and a live PASS carries no such guarantee (next bullet).
+- **As written, `column_drift` returns PASS over zero compared columns when the
+  referenced tables are absent.** `_fetch_table_columns` returns `cols or None`
+  after a psql call that succeeded and returned nothing, and the loop skips on
+  None *before* incrementing either counter — so an empty database yields
+  `Status.PASS`, "all 0 INSERT-referenced columns exist across 0 table(s)", in a
+  run whose scanner found 29 referenced tables and 225 column references across
+  `src/` and `governance_core/`. Reproduced here against the real repo tree with a
+  stub psql exiting 0 on empty output; no live database was reachable, so the
+  reproduction is stubbed and is stated as one. The degradation is graded, not
+  binary: a stub resolving exactly one of the 29 tables also returns PASS, "all 7
+  INSERT-referenced columns exist across 1 table(s)". #2149 does not cover this —
+  it made the psql-rc-non-zero path raise, and that path does FAIL correctly
+  ("could not read table columns — column drift state is UNKNOWN", reproduced with
+  a stub exiting 2). The absent-table branch is deliberate and pinned by
+  `test_check_column_drift_skips_table_lookup_failure` in
+  `tests/test_unitares_doctor_script.py`, which asserts PASS and "0
+  INSERT-referenced columns", so arming a coverage floor inside the doctor means
+  inverting an existing test.
+- **The check reports no coverage quantity a test can read structurally.**
+  `CheckResult` carries name, mode, status, message and detail; the resolved-table
+  and reference counts are local variables interpolated into the PASS message and
+  then discarded, absent from the missing-columns FAIL branch, and absent from
+  `--json`, which serialises the dataclass plus the status value. A coverage
+  assertion therefore either parses the PASS message or the doctor grows a
+  structured count that flows through the existing serialisation. Which of those
+  is proportionate is a judgement, not a code fact, and it is the operator's. The
+  29/225 figures are what such an assertion is calibrated against; recomputing
+  them inside the test run keeps it from going stale as the scanner's input
+  changes, but it does not establish that a bootstrapped database resolves all 29,
+  which the closing list leaves open.
 - **There is no per-check selection flag.** The doctor's argparse accepts only
   `--mode {local,operator,all}`, `--json`, `--no-color`, `--db-url`,
   `--redis-url`, `--attest`. Arming means adding a selector or writing an inline
@@ -1414,9 +1750,9 @@ between them is the operator's and is not made here.**
 | # | Option | What it does | What it costs |
 |---|---|---|---|
 | **A** | **Arm nothing; correct the ledger and stop.** Amend the drift-ledger migrations row to name which of the four CI could ever observe, so the next agent does not re-derive it. | Honours the restraint #2145 and #2149 declared, without asserting it as policy. One table row. | The live gaps stay open indefinitely. A migration that fails to apply against a fresh Postgres still merges green. Code naming a column the schema lacks still merges green — the class behind three incidents in three weeks. And the two deployment-only checks keep running nowhere, including on the deployed host the operator's own findings job already polls. |
-| **B** | **Wire the operator findings job to run these four local checks. Touch CI not at all.** Either reclassify the deployment-only checks to operator mode, or widen the job's filter to a named allowlist. | Zero contributor blast radius, one edit, and the **only** move that reaches the deployed database where two of the four can actually fail. On the packet's own reasoning this is arguably dominant over any CI-only arming. | Reclassifying removes a check from `--mode local`, which is what the adopter installer runs, so an adopter's install report loses that line; widening the filter avoids the trade at the cost of a second mechanism. And if the deployed database is currently drifted — nobody has checked, because nothing has run these — this posts findings into the governance stream on the next cycle. |
-| **C** | **Arm `column_drift` only, in CI.** One file under `tests/` that skips when the test DB is unreachable (the pattern 333 tests already use), bootstraps the schema, and asserts the check does not FAIL. | Arms the one check that is genuinely non-tautological in CI, and leaves the other three exactly as they are. Runtime negligible. | In blocking form it is a new way for someone else's PR to go red. It is **not** only triggerable by a genuine defect: because the test bootstrap swallows a failing migration, a bootstrap failure leaves the CI database missing a column the code correctly references, and the assertion goes red on whichever contributor's PR is running — a red build its author did not cause and cannot fix. Does nothing for the migration-facing checks. |
-| **D** | **Split by observability: each check goes where it can see something.** `column_drift` → a CI test as in C. `schema_migrations` → a step in the docker-quickstart workflow against the real adopter database. `constraint_drift` and `migration_checksum_drift` → the operator findings job as in B, because their signal is a property of the deployed database. | The only option that closes both the CI gap and the operator-dark gap, and it matches each check to its trigger. | Three edits across three files. The docker-quickstart step is advisory until branch protection adds the context — path-filtered workflows need skipped-equals-success handling to be required at all, and only the operator can make that change. Needs an inline import block in both CI homes. Carries B's adopter-report trade. |
+| **B** | **Wire the operator findings job to run these four local checks. Touch CI not at all.** Either reclassify the deployment-only checks to operator mode, or widen the job's filter to a named allowlist. | Zero contributor blast radius, one edit, and the **only** move that reaches the deployed database where two of the four can actually fail. On the packet's own reasoning this is arguably dominant over any CI-only arming. | Reclassifying removes a check from `--mode local`, which is what the adopter installer runs, so an adopter's install report loses that line; widening the filter avoids the trade at the cost of a second mechanism. And whatever these four find goes into the governance stream on the next cycle. On the operator's report of 2026-09-10 — their deployment, read-only runs by hand, reproduced nowhere here — the registry, column and constraint checks pass there and checksums cover 7 of 68 migrations, so an immediate backlog is less likely than an earlier draft assumed. A pass is not an undrifted database: the constraint check tracks only `ALTER TABLE … ADD CONSTRAINT`, the column check returns PASS over referenced tables that are absent, and 61 versions stay unanchored — that last is incomplete coverage, not drift. |
+| **C** | **Arm `column_drift` only, in CI.** One file under `tests/` that skips at module level when the test DB is unreachable (`can_connect_to_test_db`, the pattern 333 tests already use — the skip has to be the caller's, because since #2149 the check itself returns FAIL rather than SKIP on an unreachable database), bootstraps the schema, runs the check, and asserts three things: status is PASS; no referenced table was absent; and the column count the check reports equals the count `_scan_insert_column_refs` produces in the same run. The third assertion is the one that carries the gate — a status assertion alone is satisfied by a PASS over zero compared columns. | Arms the one check that is genuinely non-tautological in CI, and leaves the other three exactly as they are. Runtime negligible. | In blocking form it is a new way for someone else's PR to go red. It is **not** only triggerable by a genuine defect, and the swallowed-migration vector cuts both ways: a swallowed migration that drops a column from a table that is present leaves the CI database missing a column the code correctly references, and the assertion goes red on whichever contributor's PR is running — a red build its author did not cause and cannot fix; a swallowed migration that drops a whole table goes **green** today over silently reduced coverage, and goes red only because the coverage assertion is there. Converting that second class of false green into author-innocent red is the point of the coverage assertion and is also its whole cost. Two further costs sit on that assertion. It is green only if CI's bootstrap actually creates all 29 referenced tables, which was **not** established here — recomputing the expected count inside the test run guards against the scanner's own count drifting and does nothing about an incomplete bootstrap, so C may need one observed run against CI before the assertion can be armed at all. And the counts exist only as interpolated text in the PASS message, so a one-file test has to parse that string; the structured alternative is a doctor edit plus an inversion of the unit test that pins today's PASS-on-absent-table. Does nothing for the migration-facing checks. |
+| **D** | **Split by observability: each check goes where it can see something.** `column_drift` → a CI test as in C, coverage assertion included. `schema_migrations` → a step in the docker-quickstart workflow against the real adopter database. `constraint_drift` and `migration_checksum_drift` → the operator findings job as in B, because their signal is a property of the deployed database. | The only option that closes both the CI gap and the operator-dark gap, and it matches each check to its trigger. | Three edits across three files. The docker-quickstart step is advisory until branch protection adds the context — path-filtered workflows need skipped-equals-success handling to be required at all, and only the operator can make that change. Needs an inline import block in both CI homes. Carries B's adopter-report trade, and C's assertion cost — five edits across five files rather than three, if `column_drift`'s coverage assertion takes the structured-count route instead of parsing the PASS message. |
 | **E** | **Arm all four in one new DB-backed CI job.** | Uniform treatment. | Buys one permanently meaningless green: `migration_checksum_drift` cannot produce a drift signal there under any bootstrap the repo ships, so the job reports a passing content-anchoring check over zero anchored migrations. That is instrumentation failing toward healthy — the posture the workflow states twice is forbidden and that #2149 just spent a fix removing from `column_drift`. `constraint_drift` adds a near-tautology on top. Duplicates a database CI already has twice over, and is advisory until branch protection is edited. |
 
 ### Recommendation (non-binding)
@@ -1425,8 +1761,10 @@ between them is the operator's and is not made here.**
 The evidence-sourced part: the four checks are not one thing, and treating them
 as one is what makes this look expensive. Once separated by what each can
 observe, three have an obvious home and the fourth has an obvious non-home. The
-part that is appetite and not evidence: that three edits across three files is
-proportionate here rather than one. Nothing in the code decides that.
+part that is appetite and not evidence: that three edits across three files —
+five across five, if `column_drift`'s coverage assertion takes the
+structured-count route rather than parsing the PASS message — is proportionate
+here rather than one. Nothing in the code decides that.
 
 B is worth weighing seriously on its own. It is one edit, has zero contributor
 blast radius, and is the only move that reaches the deployed database where
@@ -1445,7 +1783,12 @@ host.
 ### Reversibility
 
 Reversible under every option, and none forecloses another. Every move is
-deleting a CI step, deleting a test file, or reverting a mode string; there is no
+deleting a CI step, deleting a test file, or reverting a mode string — with one
+exception, if C's coverage assertion takes the structured-count route: reverting
+then also means removing a field from `CheckResult` in
+`scripts/dev/unitares_doctor.py` and restoring
+`test_check_column_drift_skips_table_lookup_failure`, neither of which is a CI
+step, a test-file deletion or a mode string. There is no
 data migration, no external state, and no registered instrument (this touches
 nothing the 2026-12-01 read selects). C is a subset of D, and D is E minus the
 check E should not arm. The one asymmetric cost is social rather than technical:
@@ -1459,11 +1802,17 @@ written down says.
 ### Blast radius
 
 **A:** none — one documentation table row. **B:** this operator's deployed host
-only; the findings stream gains checks nobody has run, so if the deployed schema
-is drifted it says so on the next cycle. Plus the adopter install report, unless
+only; the findings stream gains four checks that have never run from it, and the
+operator reports having run them there once by hand on 2026-09-10 with no drift
+returned — so the stream is unlikely to open with a backlog, though a hand-run
+pass does not make the deployed schema undrifted. Plus the adopter install report, unless
 the filter-widening variant is chosen. **C:** every contributor's PR, in blocking
 form, via a new condition on a required status context — firing on a genuine
-defect, and also on a bootstrap failure the PR author did not cause. **D:** C's
+defect, and also on a bootstrap failure the PR author did not cause. With the
+coverage assertion it fires additionally on an incompletely bootstrapped CI
+database — a wider and differently-caused red than a single bootstrap-dropped
+column; without the assertion it does not fire at all when the referenced tables
+are absent, which is the failure mode and not the safe side. **D:** C's
 radius plus B's, plus an advisory signal on `db/postgres/**` PRs. **E:** one extra
 runner per PR for every contributor, plus the reputational cost of a green check
 that means nothing. Code surface throughout is
@@ -1515,12 +1864,17 @@ writes down the part that is expensive to rediscover.
 - **Corrected:** the open-PR claim was stale. At time of writing
   `CIRWEL/unitares` has **zero** open PRs. An earlier pass saw two, neither of
   which touched this surface; the conclusion was right and its evidence was stale.
-- **Flag carried, could not be established from the repo:** the repository ships
+- **Flag carried, and answered from outside the repository:** the repository ships
   only a launchd plist **template**. Nothing in the tree establishes that the
-  findings job is actually loaded on the operator's machine, and this environment
-  cannot check. The *mechanism* is fully confirmed — the mode filter and all four
-  `mode="local"` declarations — so **if** it runs, it skips all four. The text
-  above says "the operator findings job" rather than asserting a running daemon.
+  findings job is loaded on the operator's machine, and this environment cannot
+  check; the operator reports (2026-09-10) that it is loaded, scheduled hourly,
+  last exit code 0. The two sources stay apart: the schedule is their report, and
+  the repository's inability to establish it is unchanged. The *mechanism* is
+  fully confirmed here — the mode filter and all four `mode="local"` declarations
+  — and it now composes with their report into an unconditional statement rather
+  than a conditional one: the job runs, and it runs none of the four. **An exit
+  code of 0 from it therefore carries no information about schema drift** and must
+  never be read as though it did.
 - **Corrected, practical:** the doctor's default DB URL uses `localhost` while the
   compose file publishes on the IPv4 loopback address only. If `localhost`
   resolves to the IPv6 loopback first on the runner, psql fails — which renders as
@@ -1548,6 +1902,51 @@ writes down the part that is expensive to rediscover.
   CI. Its absence made a three-edit CI split look like the only way to close
   anything. The blocking/advisory axis was likewise decided silently; it is handed
   over above.
+- **Corrected, and it was the load-bearing defect in this entry's option set:**
+  option C's gate — "asserts the check does not FAIL" — is satisfied by a PASS
+  over **zero** compared columns. `check_column_drift` skips an absent table
+  before incrementing either counter, so an empty database returns `Status.PASS`,
+  "all 0 INSERT-referenced columns exist across 0 table(s)". Reproduced here
+  against the real repo tree with a stub psql exiting 0 on empty output; no live
+  database was reachable, so the reproduction is stubbed and is stated as such.
+  The gate was load-bearing for C and for D, which routes `column_drift` into it:
+  as written, both options bought a green that asserted nothing. The corrected
+  gate is three assertions, not one.
+- **Corrected, and it reverses an earlier bootstrap-vector correction rather than
+  extending it:** option C's cost cell named only the false-red half of the
+  swallowed-migration vector. A swallowed migration that drops a column from a
+  table that is present does go red on an innocent contributor's PR. One that
+  drops a whole *table* goes **green** today, over silently reduced coverage. The
+  coverage assertion converts that second class into reds. Both directions now sit
+  in the cost cell, because that cell is the comparison surface.
+- **Confirmed against source, and it narrows what #2149 is credited with:** the
+  distinction from #2149 holds. #2149 made the psql-rc-non-zero path raise, and
+  that path does FAIL correctly — reproduced with a stub exiting 2. The rc-0-empty
+  path is a different branch of the same function and #2149 did not touch it. That
+  branch is deliberate and pinned by
+  `test_check_column_drift_skips_table_lookup_failure`, so arming a coverage floor
+  inside the doctor rather than inside the new test means inverting an existing
+  test.
+- **Flag carried, could not be established here:** what coverage a real database
+  yields. `pg_isready -h localhost -p 5432` returns no response, so every
+  `column_drift` result recorded in this entry comes from a stubbed psql, and the
+  resolved-table count on CI's bootstrapped test database and on the deployed one
+  is unknown. The consequence is stated in C's cost cell rather than hidden: the
+  coverage assertion is green only if CI's bootstrap creates all 29 referenced
+  tables, and recomputing the expected count in the test run does not establish
+  that — it guards against the scanner's count drifting, which is a different
+  risk.
+- **Stated as an inference, not a finding:** that exact equality between the count
+  the check reports and the count the scanner produces is the right strictness.
+  Equality is self-maintaining and hardcodes nothing, but it converts "code
+  references a table the schema never creates" — a real defect of a different
+  class, which nothing currently checks — into a `column_drift` red. That is a
+  routing judgement and it is the operator's.
+- **Flag carried:** option E is faulted above for instrumentation failing toward
+  healthy. C and D carried a second instance of that same posture until the
+  coverage assertion was added — a green over zero compared columns is the same
+  defect E is judged for — so the fault that distinguishes E only distinguishes it
+  once C and D assert coverage.
 
 ---
 
@@ -1587,8 +1986,15 @@ first rather than embedded in a recommendation.
 For the tracked documents that already trip Rule 5 — and so red-CI on any future
 touch — do we batch-allowlist them, strip the register out of them, scope the
 guard so legacy debt stops blocking unrelated edits, or first make the allowlist
-rule-scoped so an entry added for the register stops silencing the other five
+rule-scoped so an entry added for the register stops silencing the other four
 rules on the same file?
+
+Two clarifications the options table depends on. The count is four — Rules 1, 2, 3
+and 6; this line said five until it was checked against the guard. And "scope the
+guard" is two levers, not one: matching only added lines and checking in a baseline
+answer differently on renames, on the rules that never see a diff line, and on what
+happens the next time someone regenerates an artifact under gate pressure. The
+options table splits them.
 
 ### Established
 
@@ -1597,7 +2003,12 @@ rules on the same file?
   an explicit list. There is no sweep-everything mode, no scheduled job, and no
   test asserting the tree is guard-clean.
 - **Bounded by running the guard over every tracked file: 23 violations in 22
-  files, all Rule 5.** No Rule 1/2/3/4/6 violation exists anywhere in the tree
+  files, all Rule 5 — but not one class.** 22 are register-check hits; exactly one
+  is an operator-home-path hit, in `docs/proposals/surface-lease-plane-v0.md`,
+  which carries register hits as well. Rule 5 is four independent case-sensitive
+  greps, not one check, so any remedy taking "Rule 5" as its unit acts on both
+  sub-items at once — and a remedy scoped to the register sub-check alone clears
+  21 files, not 22. No Rule 0/1/2/3/4/6 violation exists anywhere in the tree
   today. Reproduced for this packet.
 - **21 of the 22 are frozen by the repo's own status tags; exactly one is tagged
   Active** in `docs/proposals/README.md` — with the caveat below that the mapping
@@ -1611,16 +2022,26 @@ rules on the same file?
   introduce. The diff selects files; it never scopes the match.
 - **`--diff-filter=ACMR` includes renames**, so the repo's own archival workflow —
   relocating a resolved proposal into `docs/proposals/resolved/` — is itself a
-  guard-tripping action for the 15 non-resolved files.
+  guard-tripping action for the 15 non-resolved files. Under added-line scoping
+  this does not clear; it inverts into a hole. A pure rename is collected under its
+  new path and carries **zero added lines** — reproduced for this packet in a
+  throwaway repository — so a file's content violations travel with it unexamined
+  wherever it lands. The path-matched rules still see the destination; the content
+  rules see nothing.
 - **"A gutting rewrite" overstates the strip cost for half the set:** only four
   exact phrases plus one path shape trip Rule 5, and bare product vocabulary
   passes. Eleven of the 22 carry two or fewer trigger occurrences.
 - **Rule 5's regexes are CASE-SENSITIVE**, which changes what a strip means.
-  Reproduced for this packet: across the 22 flagged files the guard sees **141**
-  occurrences while the register's real footprint is **177**. Capitalised forms do
-  not trip it at all. So a strip sized to the guard's hit count leaves the register
-  visibly present, and a lowercase-only strip inside one file produces a
-  self-contradicting document.
+  Re-reproduced for this packet at **137** guard-visible occurrences against **173**
+  actual, over the same 22 files and the register check's four literal alternatives;
+  counting all four Rule 5 sub-checks instead gives 142 against 179. An earlier
+  draft's 141 of 177 reproduces under neither framing, and the tree state that run
+  was taken against is out of reach here — the checkout is shallow and each of the
+  22 carries exactly one commit, the graft root. That figure is carried as
+  unreproduced, not as wrong. **The delta reproduces exactly: 36.** Capitalised
+  forms do not trip the guard at all. So a strip sized to the guard's hit count
+  leaves the register visibly present, and a lowercase-only strip inside one file
+  produces a self-contradicting document.
 - **The register's real extent is wider than the guard-visible set**, and it is
   not confined to documents. Sixteen further tracked files carry only capitalised
   forms and are guard-clean today — including shipped source, several test files,
@@ -1628,7 +2049,13 @@ rules on the same file?
   case-sensitivity above.
 - **The allowlist is rule-blind, and that has already leaked.** The allow check
   short-circuits at the top of the per-file loop, *before* Rule 1 — so a path added
-  for the register also exempts that file from Rules 1, 2, 3 and 6 forever. Not
+  for the register also exempts that file from Rules 1, 2, 3 and 6 forever. Four
+  rules — and the escape hatch carries no rule scope anywhere in the guard, which is
+  what option D has to thread. Rule 0 reads `.gitignore` outside the per-file loop
+  and no entry can reach it. Rule 4 runs after the loop with its own allow test
+  against one fixed path, so an entry added for one of these documents cannot
+  silence the named-resident scan — but an entry added for
+  `config/governance_config.py` itself would. Not
   hypothetical: a file allowlisted 2026-06-28 for the register carries two
   operator-home-path occurrences that the entry silences, one of them a
   configuration value inside a plist snippet.
@@ -1669,33 +2096,73 @@ rules on the same file?
 |---|---|---|---|
 | **A** | **Batch-allowlist all 22 under a fourth dated criterion block.** | One commit to the allowlist. Every latent trip clears at once. | Because the allow check short-circuits before Rule 1, all 22 become permanently exempt from Rules 1/2/3/6 — including the operator-home-path occurrences, which go from "flagged on next touch" to "silenced forever." Allowlists the one file both written sources call living. Takes the list from 7 to 29 entries, against its own header's "rare" and "prefer moving the file out." Cheapest to execute, weakest fit to what was written. |
 | **B** | **Allowlist the frozen files; strip the Active one.** | Applies the criterion against the README status tags. | The Active file carries 18 register occurrences, many inside dated frozen sections embedded in a living document, so a literal strip rewrites past findings inside a file classed living — the falsification the 2026-08-13 note forbids, reached from the other direction. Inherits A's rule-blindness for every entry added. Needs the two lease-plane files adjudicated (see the flag below). |
-| **C** | **Strip the register from all 22; add nothing to the allowlist.** | Maximal fidelity to the guard's stated purpose. | Most of the guard-visible occurrences are a **lane attribution**, not a stylistic tic — which reviewer found what, in dated records. That is precisely what the operator wrote "would falsify the record" about, and it re-opens a criterion already decided three times. And because the regexes are case-sensitive, stripping the 141 guard-visible occurrences does **not** leave the tree clean of the register: 36 more sit in the same 22 files in capitalised form, and 16 further tracked files — including source and tests — carry only capitalised forms. Largest diff, highest archaeology cost, only option that forecloses the others. |
+| **C** | **Strip the register from all 22; add nothing to the allowlist.** | Maximal fidelity to the guard's stated purpose. | Most of the guard-visible occurrences are a **lane attribution**, not a stylistic tic — which reviewer found what, in dated records. That is precisely what the operator wrote "would falsify the record" about, and it re-opens a criterion already decided three times. And because the regexes are case-sensitive, stripping the 137 guard-visible occurrences does **not** leave the tree clean of the register: 36 more sit in the same 22 files in capitalised form, and 16 further tracked files — including source and tests — carry only capitalised forms. Largest diff, highest archaeology cost, only option that forecloses the others. |
 | **D** | **Make the allowlist rule-scoped first, then apply B under the narrowed form.** | Accept `<path> <rule>` entries, defaulting a bare path to all-rules for backward compatibility; re-tag the existing seven; add the frozen set as rule-5-only. Strip only what the criterion does not cover. | Touches the guard script, which has no test today — roughly a day rather than an hour. Does not by itself settle the lease-plane pair or the Active file; it makes those calls safe to defer, not decided. Adds a second column to a format written by hand. |
-| **E** | **Scope the guard to the diff, or add a baseline ratchet.** | The standard remedy for legacy lint debt: match only added lines, or check in the 23 known violations as a baseline and fail only on new ones. | Clears all 22 latent gates, adds zero allowlist entries, keeps every future violation caught, preserves every record verbatim — and, decisively, requires no answer to the frozen/living question at all. Cost: it is a real change to a guard with no test, and a baseline file is a second thing to keep honest. A whitespace-only reflow of a legacy line would read as "added" under line-scoping. |
+| **E1** | **Match only added lines.** | Keep collection as it is; run the content rules against the diff hunks rather than the whole file. | Not applicable to four of the seven rules: Rule 0 reads `.gitignore` outside the per-file loop, Rules 1 and 2 match on path and basename, and Rule 4 is a whole-file AST parse — so it is a per-rule decision, not one knob. For the three rules it does reach it opens two holes. A pure rename is collected under its new path with **zero added lines** (reproduced), so a file's content violations travel with it unexamined wherever it lands — the path-matched rules still see the destination, the content rules see nothing. And deleting the lines around a violation leaves it in place with nothing added, so "the file was edited and CI passed" stops implying the file is clean. Requires no answer to the frozen/living question. A whitespace-only reflow of a legacy line reads as "added" under line-scoping, but that false positive is the lesser problem. |
+| **E2** | **A non-growing baseline for the register sub-check only.** | One record per known violation — path, sub-check id, and a hash of the matched line with whitespace runs collapsed. Collection and full-content grepping unchanged: a register hit whose key is baselined is suppressed, one whose key is absent fails. Every other rule, and Rule 5's other three sub-checks, run on full content. | Strictly narrower than the allowlist, whose short-circuit sits above Rule 1, and it requires no answer to the frozen/living question. Clears **21 of the 22** latent gates, not all 22: the one file that also carries an operator-home-path hit keeps that hit enforced and surfaces on its next touch, so F stops being severable under E2. Costs a 22-record baseline file, roughly forty lines of bash (estimated from reading the guard, not from writing the change), the first tests any part of this guard has had, and one trusted whole-tree run to generate the keys. Non-growth must be machine-enforced or it is only a convention — the repo already runs a path-keyed baseline whose non-growth rule lives in a comment, and it absorbs new hits in an already-listed file. |
 | **F** | **Strip only the operator-home-path occurrences; defer the register question entirely.** | Roughly seven occurrences across two files — five in one flagged document, two in a file the allowlist has already silenced. | An hour-scale change needing no decision about frozen versus living, no guard change, and no allowlist edit. But it answers only the sub-item whose severity is the open first question above — so if the answer to that question is "one class," F addresses a fraction and leaves the rest exactly as it is. |
 | **G** | **Move the frozen records out of the public repository**, per the allowlist header's own stated first preference and the guard's own remedy text. | The operator's written first-preference remedy, applied. | Whether frozen review records belong in the agnostic repo at all is a product-intent call. It loses the records from the repo's own history-in-place, and five runtime source comments cite five of these documents. Named here because dropping it from the set settles it silently in favour of keeping them. |
 | **H** | **Do nothing; decide per-file at next touch.** | Whoever next edits one reads the criterion and picks, as happened three times already. | Every touch — a typo fix, a status refresh, or the normal archival rename — becomes a red gate on a violation the author did not introduce, decided under time pressure with the failure text's one-liner as the only guidance. That is how the existing allowlist grew, and the rule-blindness compounds silently with each ad-hoc entry. Zero cost today; the bill arrives repeatedly at the least convenient moment. |
 
 ### Recommendation (non-binding)
 
-**E**, and it is a recommendation whose *inputs* are the guard's own confirmed
-behaviour, not a severity ranking. The reason: this entry's own established facts
-say the harm is that "a one-character edit anywhere in one of the 22 fails CI on a
-violation the edit did not introduce." E is the option aimed straight at that
-harm. It clears every latent gate, adds nothing to a rule-blind allowlist,
-preserves every record verbatim, and — this is what distinguishes it — requires no
-answer to the frozen/living question, which is the expensive judgement everything
-else in this list depends on. Option D already puts editing the guard on the
-table, so "we shouldn't touch the guard" is not a reason to prefer another.
+**E2**, the baseline half of what an earlier draft carried as a single option E —
+and it is a recommendation whose *inputs* are the guard's own confirmed behaviour,
+not a severity ranking. The reason: this entry's own established facts say the harm
+is that "a one-character edit anywhere in one of the 22 fails CI on a violation the
+edit did not introduce." E2 is aimed straight at that harm. It clears 21 of the 22
+latent gates — every file whose only hit is the register — adds nothing to a
+rule-blind allowlist, preserves every record verbatim, and — this is what
+distinguishes it — requires no answer to the frozen/living question, which is the
+expensive judgement everything else in this list depends on. Option D already puts
+editing the guard on the table, so "we shouldn't touch the guard" is not a reason to
+prefer another.
 
-Named cost: E changes a guard that has no test today, so it needs one; and a
-baseline is a second artifact to keep honest. **D** is the right second choice if
-the rule-blindness matters more than the legacy debt — it is the only option that
-stops an entry added for the register from silencing four other rules. **F** is
-worth taking under any option *if* the answer to the first question is that
-operator paths outrank the register; it is severable and cheap. **A** is cheapest
-and fits the written rule worst. **C** should not be taken without first reckoning
-with the case-sensitivity finding, which means it does not do what it claims.
+**E1 is not recommended, and the split is the finding.** Added-line scoping is
+undefined for four of the seven rules, and for the rest a pure rename carries zero
+added lines — so the archival rename this entry lists as a *cost* of the status quo
+becomes, under E1, the edit whose content nothing examines.
+
+Three design points carry E2's weight, and each is a call the operator makes by
+choosing it. Key on content, not line numbers, so an edit above a violation does not
+invalidate it. Key on a hash, not the phrase, because a verbatim baseline would
+itself trip Rule 5 and would have to join the guard's self-exemption list — a new
+permanently exempt file. Key on the sub-check, not the rule: the 23 violations are
+22 register hits plus one operator-home-path hit, so a baseline at Rule-5
+granularity silences that path hit permanently, which is the harm this entry charges
+option A with. E2 admits the register sub-check only.
+
+Both halves have precedent inside this guard's own machinery. Its CI workflow
+already exempts one Rule 5 sub-check for pull-request bodies behind a marker while
+stating that the operator-path and session-link checks always run, because exempting
+them is how a session link reached public history once already. And the sibling
+guard in the same workflow already runs a baseline — reported, deliberately
+non-failing, keyed by path alone, so a second violation added to an already-listed
+file passes as "known," with its non-growth rule living in a comment. That is the
+failure mode E2 is built against, running in this repo today.
+
+Named cost: E2 changes a guard that has no test today, so it needs one; it adds a
+22-record baseline file; and non-growth has to be enforced by machine twice, because
+either mechanism alone is only a convention. In the guard: when the baseline is
+itself in the collected set, read its base-ref copy and fail on any key present at
+HEAD and absent at base — additions refused, deletions allowed. CI already checks out
+at full depth, so the base blob is there; under an explicit file list there is no
+base ref and the check skips. In a test: assert the record count against a literal,
+so growing the baseline means editing a number in a test in the same pull request —
+a reviewable diff rather than a regenerated artifact — and assert every baselined key
+still matches something in the tree, so a stripped violation's dead key is caught
+rather than banked as a free slot. That an agent under a red gate would regenerate
+rather than fix is a forecast, stated as one; it is the same forecast this entry
+already makes about option H. **D** is the right second choice if the rule-blindness
+matters more than the legacy debt — it is the only option that stops an entry added
+for the register from silencing four other rules. **F** changes character under E2:
+the one violation E2 does not clear is the operator-home path, so if a guard-clean
+tree is the goal, E2 and F ship together. If the answer to the first question is that
+this is one class with no sub-item outranking another, leaving that gate live is a
+coherent outcome and F stays optional — the conditional is stated rather than
+resolved here. **A** is cheapest and fits the written rule worst. **C** should not be
+taken without first reckoning with the case-sensitivity finding, which means it does
+not do what it claims.
 
 Two sub-calls need no decision either way and ride any option: **the seven
 `resolved/` files** are the same class as two paths already allowlisted under the
@@ -1707,10 +2174,18 @@ but "lossless" is the wrong word.
 
 ### Reversibility
 
-Mostly reversible. Allowlist entries are single lines, and the guard re-flags a
-file immediately on removal. D's rule-scoping is additive and backward-compatible.
-E is a guard change, revertible in one commit, though a checked-in baseline
-outlives its revert unless deleted with it. Strips are reversible in git but
+Mostly reversible, with one correction to an earlier draft. Allowlist entries are
+single lines, but **removing one re-flags nothing** until that file is next touched:
+collection yields only diffed paths, and the allowlist file is itself on the guard's
+self-exemption list, so deleting a line puts only an exempt file in the diff.
+Allowlist decisions are cheap to reverse on paper and invisible in effect — the same
+defect a baseline has, and the reason E2's non-growth check must read the base-ref
+copy rather than trust the file in front of it. D's rule-scoping is additive and
+backward-compatible. E1 is a guard change, revertible in one commit. E2 is not
+symmetric with it: the baseline file, the in-guard subset check and the count
+assertion in a test are three artifacts whose revert has to be coordinated, and a
+checked-in baseline outlives its revert unless deleted with it. Strips are
+reversible in git but
 semantically one-way: once a lane attribution becomes "refuted on review," the
 attribution is gone from the readable record and restoring it means PR
 archaeology — the cost the 2026-08-13 note names. C is therefore the only option
@@ -1721,14 +2196,21 @@ entry ranks last in the packet.
 ### Blast radius
 
 (1) **The public repository** — the operator-home-path occurrences are already
-published and stay published under A, B, E and H. Whether that is the item that
-matters most is the first question above. (2) **Future contributors and agent
+published and stay published under A, B, E1 and H. Under E2 they are not: the path
+sub-check keeps running on full content, so the five in the flagged document surface
+on that file's next touch exactly as today, and the two in the already-allowlisted
+file stay silenced regardless. Whether that is the item that matters most is the
+first question above. (2) **Future contributors and agent
 sessions** — 22 files are latent red gates, and the surprise lands on whoever
 touches the file, not on whoever created the violation. (3) **This operator** —
 the archaeology cost per ad-hoc decision, and the growth of a rule-blind
 allowlist. No runtime, no schema, no test and no registered instrument is touched
 by any option, with one narrow exception: one dormant shell gate checks for the
 existence of one of the 22 files, which matters only under an archival rename.
+(4) **Entry 5** — both files that entry turns on are among the 22, and its
+Default-if-silent rests on the guard firing on their next touch. Either form of E
+deletes that clock, so choosing E here decides that entry 5 will not be forced by a
+gate.
 
 ### Default if silent
 
@@ -1737,7 +2219,9 @@ against any of the 22 — this branch's diff against master is empty and there a
 zero open PRs — the guard is diff-scoped with no sweep mode, no scheduled job, and
 no test asserting cleanliness. So the set stays invisible until someone touches a
 file. None of the 22 was touched in the 59 commits available in this shallow
-clone; **that window is three days long, so it measures nothing about how dormant
+clone — re-measured here at 63, the figure having been frozen before later commits
+landed, with the claim itself unchanged: each of the 22 still shows exactly one
+commit, the graft root. **That window is three days long, so it measures nothing about how dormant
 these documents are.** It establishes only that the default is currently costing
 nothing observable, not that it is safe.
 
@@ -1767,12 +2251,17 @@ the local path.
   sentence of occurrence counts. The Active file carries **18**, not 17. An
   internal inconsistency (47 vs 48 for the same file) is resolved at 48 register
   occurrences plus five path occurrences.
-- **Corrected, and it is material to option C:** the Rule 5 regexes are
-  case-sensitive. Reproduced for this packet at 141 guard-visible of 177 actual
-  occurrences in the 22 files, plus 16 further tracked files — source, tests, an
-  ops script, Elixir tests — carrying only capitalised forms and therefore
-  guard-clean. "Strip 141 and the tree is fully clean" is false; it leaves the tree
-  guard-clean while the register remains visibly present.
+- **Corrected, and it is material to option C — carried as unreproduced rather than
+  wrong:** the Rule 5 regexes are case-sensitive. Re-reproduced at 137 guard-visible
+  of 173 actual occurrences in the 22 files — 142 of 179 counting all four Rule 5
+  sub-checks — so an earlier draft's 141 of 177 reproduces under neither framing.
+  Why the figures differ could not be established: the checkout is shallow and each
+  of the 22 carries exactly one commit, so no earlier revision is reachable. The
+  36-occurrence delta the argument against C rests on reproduces exactly, so that
+  argument stands and only the absolutes move. Plus 16 further tracked files —
+  source, tests, an ops script, Elixir tests — carrying only capitalised forms and
+  therefore guard-clean. "Strip 137 and the tree is fully clean" is false; it leaves
+  the tree guard-clean while the register remains visibly present.
 - **Corrected:** "triples the list (7 → 29)" is a 4.1× increase. The direction of
   the argument is unaffected. Corrected: the `--no-verify` remedy comes from the
   hook wrapper, not the guard's failure text, so the predicted silent outcome is
@@ -1794,7 +2283,8 @@ the local path.
 - **Flag carried:** the BLAST claim that "no test is touched by any option" is
   literally true (the source references are docstring and comment citations), but
   one dormant shell gate checks for one of the 22 files by path. Recorded above.
-- **Resolved:** options E (diff-scope or baseline), F (paths-only strip) and G
+- **Resolved, then half-reopened:** options E (split on review into E1, added-line
+  scoping, and E2, a register-scoped baseline), F (paths-only strip) and G
   (move the files out — the operator's own written first preference) were absent.
   Their absence made D the cheapest option protecting the thing an earlier draft
   had decided mattered most, which is the option set doing work the operator should
@@ -1805,13 +2295,84 @@ the local path.
   the refusal to read a three-day commit window as evidence of dormancy is the
   measurement-authority discipline applied correctly — no capability is proposed
   for retirement on any count anywhere in this packet.
+- **Corrected on review, and it is material to the options table:** option E as first
+  written bundled two mechanisms behind one letter, one cost cell and one
+  recommendation — added-line scoping and a checked-in baseline. They fail
+  differently and are not substitutable, so the operator was choosing a letter rather
+  than a mechanism. Split into E1 and E2. Its cost claim "keeps every future
+  violation caught" was false for both: added-line scoping is undefined for Rules 0,
+  1, 2 and 4, and a pure rename is collected with zero added lines (reproduced in a
+  throwaway repository); a baseline catches nothing new unless non-growth is enforced
+  by machine.
+- **Corrected on review — the 23 violations are not one class.** 22 are
+  register-check hits; exactly one is an operator-home-path hit, in
+  `docs/proposals/surface-lease-plane-v0.md`, which carries register hits too. Rule 5
+  is four independent greps, so every option taking "Rule 5" as its unit — A, B, and
+  E as first written — silences the path sub-item along with the register, which
+  re-opens this entry's own first question. The options table never stated the split.
+  It is why the recommendation is E2 scoped to the register sub-check, why the figure
+  is 21 of 22 files rather than all 22, and why F stops being severable under it.
+- **REFUTED — Reversibility asserted a behaviour the guard does not have.** "The
+  guard re-flags a file immediately on removal" of an allowlist entry is false:
+  collection yields only diffed paths and the allowlist file is on the guard's
+  self-exemption list, so deleting a line re-checks nothing until the previously
+  allowlisted file is next touched. It was load-bearing as the implicit reassurance
+  that allowlist decisions are cheaply reversible — they are cheap to write and
+  invisible to verify, which is the same defect a baseline has.
+- **Corrected on review, and a proposed correction refuted with it:** the second
+  question said an allowlist entry silences "the other five rules" while the
+  Established bullet and the recommendation said four. Four is right — Rules 1, 2, 3
+  and 6. A review draft proposed raising all of them to five on the ground that Rule
+  4 has its own allow test; it does, but that test is called on one fixed path
+  (`config/governance_config.py`), never on the file an entry was added for, so no
+  entry on one of these documents can reach it. Rule 0 is unreachable by any entry.
+  The accurate residue — the escape hatch has no rule scope anywhere, including
+  Rule 4's separate check — is recorded in the Established bullet, because it is what
+  option D has to thread.
+- **Corrected on review, and carried as unreproduced rather than wrong:** the
+  case-sensitivity figures. Re-running the register check's four literal alternatives
+  over the same 22 files gives 137 guard-visible of 173 actual, and 142 of 179
+  counting all four Rule 5 sub-checks — neither is 141 of 177. The shallow checkout
+  puts every earlier tree state out of reach, so why the figures differ could not be
+  established here. The 36-occurrence delta the argument against C rests on
+  reproduces exactly, so that argument stands and only the absolute figures move;
+  C's cost cell and the correction bullet above both carried 141 and now carry 137.
+- **Flag carried, cross-entry and previously unnamed:** both files entry 5 turns on
+  are among the 22, and entry 5's Default-if-silent rests on the guard firing on
+  their next touch. Either form of E deletes that clock, so choosing E here decides —
+  silently, unless stated — that entry 5 will never be forced by a gate. Recorded in
+  both entries.
+- **Confirmed on review, and not novel:** the shape E2 takes — one sub-check exempted
+  while the others keep running on full content — is already enforced by this guard's
+  own CI on pull-request bodies, with the incident that motivated it written into the
+  workflow. And the repo already runs a baseline ratchet that leaks exactly as
+  predicted: keyed by path alone, reported non-failing, its non-growth rule living in
+  a comment, so a second violation in an already-listed file passes as known. E's
+  cost cell called a baseline "a second thing to keep honest" while the repo's
+  existing one shows that keeping one honest by convention does not hold. That is why
+  E2's cost names an enforcement mechanism instead of an intention.
+- **Flag carried — two inputs to E2 are design reasoning, not observation.** The bash
+  line count and test count are estimates from reading the guard, not from writing
+  the change; and that an agent under a red gate would regenerate the baseline rather
+  than fix the violation is a forecast, the same one this entry already makes about
+  option H. Whether F becomes mandatory under E2 follows from the 22/1 split only if
+  a guard-clean tree is the goal — the conditional is stated in the recommendation
+  rather than resolved.
 
 ---
 
 # What this packet could not establish
 
-Seven things. Each is named with why, so the operator knows which are questions
-about the repository and which are questions only they can answer.
+Seven things, as raised on 2026-09-09. Each is named with why, so the operator
+knows which are questions about the repository and which are questions only they
+can answer. On 2026-09-10 the operator ran read-only checks against their own
+deployment and reported the results; items 2, 3 and 5 carry those reports, dated
+and marked as the operator's, because this environment reached no database and
+reproduced none of them. None of the three is thereby closed: each says what its
+report settles and what it leaves open, and item 5 is now open on a different
+quantity than the one it was raised for. Items 1, 4, 6 and 7 are not answered by
+the message — item 4's text was sharpened by this round's corrections, but the
+question it asks is untouched — and the note after item 7 says why.
 
 1. **Whether the restraint declared in PRs #2145 and #2149 is standing policy
    (entry 6).** It exists only in those two commit messages. A grep across every
@@ -1821,27 +2382,90 @@ about the repository and which are questions only they can answer.
    needs the operator's memory rather than the repository.
 
 2. **Whether the operator's findings automation is actually running on the
-   deployed host (entry 6).** The repository ships a launchd plist **template**
-   only. The mechanism is fully confirmed — the mode filter, and all four checks
-   declared local — so *if* it runs, it skips all four. Whether it runs cannot be
-   checked from this environment and is not in the tree.
+   deployed host (entry 6) — answered by the operator, 2026-09-10.** The operator
+   reports that the findings job is loaded, is scheduled hourly, and that its last
+   exit code was 0. That is a report about a host this environment cannot reach;
+   the repository still ships a launchd plist **template** only, so no schedule is
+   verifiable from the tree. What the tree establishes is unchanged and was
+   re-read at this commit: `scripts/ops/doctor_findings.py` drops every check
+   whose mode is not `operator`, and all four drift checks — `schema_migrations`,
+   `column_drift`, `migration_checksum_drift`, `constraint_drift` — are registered
+   `mode="local"`. The two compose into the consequence this item existed to
+   expose: the job is loaded and hourly, and by its own filter it executes none of
+   the four. **An exit code of 0 from it carries no information about schema
+   drift**, and must never be cited as though it did.
 
-3. **Whether the deployed database is currently drifted (entry 6).** Nobody has
-   checked, because nothing has ever run these checks against it. Two of the four
-   can only ever detect anything there. Establishing it needs a live database this
-   environment cannot reach.
+3. **Whether the deployed database is currently drifted (entry 6) — answered in
+   part by the operator, 2026-09-10.** The operator reports that the registry,
+   column and constraint checks pass against the deployed database, and that
+   checksums cover 7 of 68 migrations with 61 remaining unverifiable. Provenance:
+   read-only runs on the operator's own deployment, reported here; no database was
+   reachable from this environment, so none of it is reproduced. Those runs did
+   not come from the hourly findings job, which executes none of the four (item
+   2). Two things follow, and they are different findings.
 
-4. **The December cohort's per-agent cluster geometry (entry 2).** The number
-   that decides whether a within-agent null can even be formed — total `Null
-   clusters` per agent — was dropped from the frozen transcription and is recorded
-   as unrecoverable without a live re-run the power audit says is not justified.
+   **61 unverifiable is incomplete coverage, not drift.** The operator says so,
+   and the instrument says so in its own source: `check_migration_checksum_drift`
+   returns PASS over rows applied before the migration that added the checksum
+   column, and its PASS detail reads "These were applied before checksums existed,
+   so what ran is unknowable. This is the honest state, not a defect to fix —
+   never back-fill from source files." That number is coverage telemetry. It
+   authorises nothing, and it must never be quoted as a drift count or a defect
+   count.
+
+   **The counts reconcile against this checkout, which is arithmetic and not
+   verification of that database.** There are 67 migration files here (slots 018
+   and 019 absent, highest 069); 67 plus the single accepted-but-not-expected
+   version in `KNOWN_SCHEMA_MIGRATION_EXCEPTIONS` is 68; and the slots
+   post-dating the checksum column, added by 062, are 063 through 069 — exactly
+   the seven anchored. That the 68th row on that database is in fact that
+   exception was not queried here.
+
+   What is now on record is that these four checks were run against that database
+   once: three returned no drift, and the checksum check returned a coverage
+   figure rather than a drift finding. That is not the same as an undrifted
+   database. Every blind spot entry 6 names — the constraint check's `ALTER TABLE
+   … ADD CONSTRAINT`-only scope, the column check's absent-table gap (item 5), 61
+   unanchored versions — is unchanged by a pass. Entry 6's option B cost cell
+   carries the same report, with the same provenance and the same caveat; the two
+   were reconciled rather than left to disagree.
+
+4. **The December cohort's per-agent cluster geometry (entry 2).** Given a
+   geometry, formability and the attainable floor are one closed-form check — the
+   product of per-stratum factorials — and the frozen slice's own recorded counts
+   already clear it. The December cohort's counts do not exist yet, and its
+   predecessor's were not kept: total `Null clusters` per agent was dropped from
+   the frozen transcription, the cluster-size distribution with it, and the power
+   audit files both as unrecoverable without a live re-run it says is not
+   justified. So whether a within-agent null could be formed there, and what
+   resolution it would have if it were, are both open.
    The stop rule separately forbids refreshing the condition-3 feasibility
    diagnostic with live data before the read, and this packet did not.
 
-5. **Whether `column_drift` is green against a real database (entry 6).** No live
-   database was reachable here. The "green on arrival" statement is a static
-   approximation over the schema and all 67 migrations, and is labelled as one
-   everywhere it appears.
+5. **What coverage `column_drift` reaches against a real database (entry 6) —
+   the greenness half answered on the operator's report, 2026-09-10; the coverage
+   half opened here.** The operator reports that the column check passes against
+   their deployed database. That is their report about a host this environment
+   cannot reach, and it retires the doubt this item was raised for: the "green on
+   arrival" statement is a static approximation over the schema and all 67
+   migrations, is labelled as one everywhere it appears, and the one live run that
+   exists does not contradict it. No live database was reachable here, then or
+   now, so the approximation stays labelled as one.
+
+   Greenness is not the quantity that decides entry 6, and that half is
+   established here rather than reported. `check_column_drift` in
+   `scripts/dev/unitares_doctor.py` skips a table `psql` reports as absent — its
+   own comment calls that "a gap, not a handoff" — and its PASS line counts the
+   tables it resolved, not the tables the code references. Driven with every table
+   absent it returns PASS reading "all 0 INSERT-referenced columns exist across 0
+   table(s)", reproduced at this commit. A PASS is therefore emitted at any
+   coverage down to zero resolved tables, so the open number is how many of the 29
+   referenced tables (225 columns, re-scanned at this commit) actually resolve —
+   on CI's bootstrapped test database and on the deployed one. Neither can be read
+   from the repo, and both are what a coverage assertion would be calibrated
+   against. Anyone quoting this item should quote both halves: a green column
+   check establishes that the resolved tables carry the referenced columns, and
+   nothing at all about a table that is not there.
 
 6. **Authorship and edit history of the two colliding lines (entry 5), and
    provenance generally.** This checkout is shallow — 60 commits, a graft root
@@ -1854,6 +2478,34 @@ about the repository and which are questions only they can answer.
    operator-local paths outrank the review register (entry 7).** Both are product
    intent, both have two coherent readings live in the tree today, and neither is
    written down. These are not gaps in the investigation; they are the decisions.
+
+**Items 1, 4, 6 and 7 are not resolved by the 2026-09-10 message.** Each was
+checked rather than assumed.
+
+- **Item 1.** Re-grepped at this commit: no tracked Markdown states the restraint
+  as a rule, and the only tracked file that mentions PRs #2145 and #2149 at all is
+  this packet. The entry-6 resolution selects an arming option, which disposes of
+  the restraint for this instance without saying whether it is standing policy.
+  The next agent that wants to arm something meets the same question.
+- **Item 4.** Nothing in the message supplies the missing per-agent cluster
+  geometry, and the entry-2 resolution presupposes its absence: "validate it
+  synthetically first" is the substitute for the number, not a way of obtaining
+  it.
+- **Item 6.** The checkout is still shallow, and the commit count has drifted past
+  the packet's own frozen figures — entry 5's *Established* and item 6 above each
+  record 60, entry 7's *Default if silent* records 59, and `git rev-list --count
+  HEAD` returns 63 at this commit.
+  All three recorded figures are left as written rather than silently rewritten,
+  because the claim all three support — a shallow clone, so `git log` and `git
+  blame` establish nothing about any older line — does not depend on which is
+  quoted. Nothing in the message bears on it.
+- **Item 7.** The entry-4 and entry-7 resolutions dispose of both instances: the
+  advertised dashboard, and the historical documents. Neither states the general
+  test. "Treat the advertised dashboard as adopter-facing" is a ruling on that
+  artifact, not a declaration that the advertisement test is the operative one;
+  and combining rule-scoped exceptions with a non-growing baseline is a mechanism
+  that leaves the operator-paths-versus-register ranking unasked. The next case
+  arrives with the same question unwritten.
 
 One further note on scope, stated because it bounds every entry above: **no
 option in this packet was tested by running it.** Every option set is derived
