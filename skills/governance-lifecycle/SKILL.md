@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-09"
+last_verified: "2026-09-10"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -36,7 +36,7 @@ source_digests:
   unitares/src/mcp_handlers/core.py: "d7d09d260fedd7ec"
   unitares/src/mcp_handlers/identity/handlers.py: "c5bd71f4ab659d05"
   unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
-  unitares/src/mcp_handlers/tool_stability.py: "430c2b2b206ecd99"
+  unitares/src/mcp_handlers/tool_stability.py: "5d1343b5e5297202"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
   unitares/src/mcp_handlers/updates/phases.py: "0c28700d12434e77"
   unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
@@ -45,7 +45,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "15b30d47a10463f5"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "9bfffd3b09f6cc0f"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "aa75ef30ee2c2383"
+  unitares/src/tool_modes.py: "7de09a87c8ef1abb"
   unitares/src/tool_mode_listing.py: "e14ecf4249c3007b"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
 ---
