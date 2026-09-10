@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-09"
+last_verified: "2026-09-10"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -45,7 +45,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "15b30d47a10463f5"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "9bfffd3b09f6cc0f"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "aa75ef30ee2c2383"
+  unitares/src/tool_modes.py: "166b063599b40353"
   unitares/src/tool_mode_listing.py: "e14ecf4249c3007b"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
 ---
@@ -285,7 +285,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
 - `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
-- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `reassign`). Advertised on the default `standard` since 2026-09-08: `request_review` pins `action="request"`, so without the router you could open a review and reach none of the actions that finish one
+- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `reassign`). Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
 - `export()` — Export session history
 
 ### Specialized

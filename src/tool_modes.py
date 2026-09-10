@@ -1,7 +1,7 @@
 """One complete public tool catalog; legacy mode APIs are compatibility shims.
 
 GOVERNANCE_TOOL_MODE no longer selects capabilities. Every transport advertises
-all registered tools and primary workflow aliases. Authorization belongs to the
+the complete mounted public catalog, including primary workflow aliases. Authorization belongs to the
 dispatch pipeline, never to discovery. Keep the old imports/arguments so deployed
 adapters can upgrade independently; category/tier filters belong to list_tools.
 """
@@ -46,15 +46,15 @@ def get_tools_for_mode(mode: str = "full") -> Set[str]:
 
 def build_server_instructions(mode: str = None) -> str:
     """Registry-free orientation, safe during server initialization."""
-    return """UNITARES: a self-hosted federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. Agents keep their own runtimes; the kernel provides a shared accountability record.
+    return """UNITARES: a self-hosted federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. Many independent agent runtimes share one operator-controlled server and authority domain; the kernel provides their shared accountability record and does not replicate state across independent servers.
 
-Fresh processes get fresh identities; real lineage records inherited work, not authority or cross-process sameness. Bind once with start_session(force_new=true) and keep the returned client_session_id; pass it on every later call so writes are attributable. sync_state is the check-in and returns the state estimate, a policy action, and a named reason. record_result grades a check-in against a real outcome — without outcomes the estimate is self-report. check_working_state reads the verdict without writing.
+Fresh processes get fresh identities; real lineage records inherited work, not authority or cross-process sameness. Bind once with start_session(force_new=true) and keep the returned client_session_id; pass it on every later call so writes are attributable. sync_state submits a work report for state derivation and returns the state estimate, a policy action, and a named reason; the original report text is not retained as durable history. record_result grades a check-in against a real outcome — without outcomes the estimate is self-report. check_working_state reads the verdict without writing.
 
-search_shared_memory reads the cross-agent knowledge graph and store_finding / update_finding write to it; search before you write. request_review opens a structured review and dialectic reads and advances it (action=get / thesis / antithesis / synthesis / list / reassign). consult asks an advisory model. self_recovery is how a paused agent gets moving again.
+search_shared_memory reads the cross-agent knowledge graph and store_finding / update_finding retain durable claims and corrections; search before you write. Full replacement-link traversal requires the AGE backend. request_review opens a structured review and dialectic reads and advances it (action=get / thesis / antithesis / synthesis / list / reassign). consult asks an advisory model. self_recovery is how a paused agent gets moving again.
 
-Reconstruct prior work with shared-memory retrieval, review records, and export history; clients assemble the record, and there is no single reconstruction tool. Core workflow and advanced capabilities are reading paths, not tool filters. Behavioral state estimation, policy/recovery, inference, diagnostics, calibration, and administration remain available. Durable operations require configured storage; consult needs configured inference and completed peer review needs a reviewer. Advertising a tool does not establish dependency readiness.
+Reconstruct prior work from retained shared-memory records, review records, export history, and authorized outcome-evidence reads; clients assemble across their different retention and authorization boundaries, and there is no single reconstruction tool. Core workflow and advanced capabilities are reading paths, not tool filters. Behavioral state estimation, policy/recovery, inference, diagnostics, calibration, and administration remain available. Durable operations require configured storage; consult needs configured inference and completed peer review needs a reviewer. Advertising a tool does not establish dependency readiness.
 
-One complete catalog advertises every registered tool and primary workflow alias. No tool mode is needed; legacy GOVERNANCE_TOOL_MODE settings are ignored. agent, observe, calibration, config, export, and admin expose lifecycle, diagnostics, calibration, configuration, history, and maintenance. Each action retains its own authorization requirements.
+One complete catalog advertises every registered-and-mounted public tool, including primary workflow aliases. No tool mode is needed; legacy GOVERNANCE_TOOL_MODE settings are ignored. agent, observe, calibration, config, export, and admin expose lifecycle, diagnostics, calibration, configuration, history, and maintenance. Each action retains its own authorization requirements.
 
 Prefer the workflow names above; their raw implementations remain available for compatibility and specialized callers. list_tools groups the catalog by category and tier. Parameter descriptions are abridged to their first sentence; describe_tool(tool_name=..., action=...) returns full details and the parameters one router action takes."""
 

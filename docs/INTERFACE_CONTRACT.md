@@ -62,8 +62,10 @@ reviewer services. Tool counts alone establish none of those conditions.
 
 ## One catalog and compatibility
 
-Interface release 1.6.0 advertises every registered tool and primary workflow
-alias on every transport. No mode selection is required. Legacy
+Interface release 1.6.0 advertises every registered-and-mounted public tool,
+including primary workflow aliases, on every transport. A definition registered
+after server mounting is omitted rather than advertised without a dispatch path.
+No mode selection is required. Legacy
 `GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
 but ignored, including the former operator profiles. They were discovery
 filters, never authorization boundaries. Existing action authorization and

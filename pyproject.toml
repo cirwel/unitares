@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "governance-mcp"
 version = "2.22.0"
-description = "UNITARES federation kernel: agent identity, evidence, review, outcomes, and reconstruction over MCP"
+description = "UNITARES federation kernel: agent identity, claims and evidence, review, outcomes, and reconstruction over MCP"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

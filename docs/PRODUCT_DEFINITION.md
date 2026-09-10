@@ -11,18 +11,19 @@ purpose and links to the precise version at every step.
 evidence, review, outcomes, and reconstruction.** Different harnesses retain
 their own execution loops while sharing an attributed record through MCP/HTTP.
 
-“Kernel” describes the shared accountability boundary. It is not a claim that
-UNITARES owns execution, replicates state across independent servers, or has
-proved better outcomes than a structured handoff. Its current mechanisms map
-to five questions:
+Here federation means many independent runtimes and harnesses sharing one
+operator-controlled server and authority domain. “Kernel” describes that shared
+accountability boundary. It is not a claim that UNITARES owns execution,
+replicates state across independent servers, or has proved better outcomes than
+a structured handoff. Its current mechanisms map to five questions:
 
 | Question | Deployed mechanism | Boundary |
 |---|---|---|
 | **Who said it?** | Fresh process identity and explicit lineage. | Lineage links work; it does not confer authority or make two processes one identity. |
-| **What supports it?** | Check-ins, attributed findings, corrections, and provenance. | Claims and evidence use existing records; this wording introduces no new object schema or automatic evidence verification. |
+| **What supports it?** | Derived check-in state, durable attributed findings, corrections, and provenance. | The original `sync_state` report text is transient; durable claims require a finding. This wording introduces no new object schema or automatic evidence verification. |
 | **Who challenged it?** | Structured review records, disagreement, conditions, and resolution. | A reviewer must participate; requesting review is not completing review. |
 | **What happened?** | Typed outcome events and prediction binding. | Caller reports need independent evidence to establish correctness. |
-| **What can a successor recover?** | Shared-memory search, knowledge reads, review records, and history export. | Reconstruction is assembled by clients; complete reconstruction and superiority over Git plus handoff remain unmeasured. |
+| **What can a successor recover?** | Shared-memory search, knowledge reads, review records, history export, and authorized outcome-evidence reads. | Reconstruction is assembled by clients across different retention and authorization boundaries; complete reconstruction and superiority over Git plus handoff remain unmeasured. |
 
 See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md) for actual
 tool names and service prerequisites. Behavioral state estimation, policy,
