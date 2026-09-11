@@ -36,13 +36,18 @@ and use the ship helper:
   do not ask for a second confirmation just to push or open the draft PR.
 - `./scripts/dev/ship.sh --plan "commit message"` previews the delivery route
 - `./scripts/dev/ship.sh "commit message"` is the default route: a **draft PR for
-  every change**, per `docs/operations/github-workflow-conventions.md` (the
-  operator is the merge gate). Runtime/detached work mints a fresh agent-prefixed
-  branch; non-runtime work on a named branch opens the draft PR on that branch
+  every change**, marked complete for the autonomous merge conductor per
+  `docs/operations/github-workflow-conventions.md`. Runtime/detached work mints
+  a fresh agent-prefixed branch; non-runtime work on a named branch opens the
+  queued draft PR on that branch
+- until conductor execution and the required App-bound `agent-review` check are live, a
+  human maintainer remains the merge gate for those marked drafts
+- `./scripts/dev/ship.sh --draft-pr "commit message"` opens an unqueued/manual
+  draft when the change must not enter autonomous review
 - `./scripts/dev/ship.sh --direct "commit message"` opts out for docs/tests-only
   pushes where you knowingly skip the PR
-- `./scripts/dev/ship.sh --auto-merge "commit message"` opts into
-  auto-merge-on-green; use only when the operator explicitly asks, not by default
+- `./scripts/dev/ship.sh --auto-merge "commit message"` is a deprecated alias
+  for the same queued-draft path; it no longer pre-arms GitHub directly
 
 If the operator asked to clean the workspace, or if you are finishing a task
 whose intended work is already committed/stashed, run:

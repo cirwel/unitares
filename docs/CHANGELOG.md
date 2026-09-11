@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No unreleased changes yet. New entries accumulate here until the next release bump._
+### Added
+
+- **delivery/operations:** add a report-only-by-default serial merge conductor with independent identical-evidence two-family review through a privilege-separated reviewer UID/worker, deterministic root-surface escalation (including transitive merge/claim-lease authority), distinct review/root GitHub Apps, a least-privilege resident GitHub token, OS-root-only branch-protection mutation, SHA- and App-bound review/root checks, required conversation resolution, a complete final arm-boundary sweep, required-only CI gating, recoverable update/root-proof failures, isolated/no-site root-attested Python/import roots, direct attested author claim-registry reads, cross-host lease-plane serialization with a live two-process race test, and an in-place resident migration from the legacy PR babysitter.
 
 ---
 
