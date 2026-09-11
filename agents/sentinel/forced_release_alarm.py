@@ -84,6 +84,8 @@ class ForcedReleaseAlarm:
     summary: str
     fingerprint: str
     extra: dict[str, Any] = field(default_factory=dict)
+    record_kind: str = "finding"
+    requires_adjudication: bool = True
 
 
 async def poll_forced_release_alarms(
@@ -218,6 +220,8 @@ def _ad_hoc_alarm(row) -> ForcedReleaseAlarm:
         severity="high",
         summary=f"forced release: {surface_id} (lease {row['lease_id']})",
         fingerprint=f"forced_release:ad_hoc:{row['event_id']}",
+        record_kind="action_receipt",
+        requires_adjudication=False,
         extra={
             "event_id": str(row["event_id"]),
             "ts": row["ts"].isoformat() if row["ts"] else None,
@@ -263,6 +267,8 @@ def _batch_alarm(row) -> ForcedReleaseAlarm:
         severity="medium",
         summary=f"deprecation sweep complete: kind={kind} count={count}",
         fingerprint=f"forced_release:deprecation_batch:{depr_id}",
+        record_kind="action_receipt",
+        requires_adjudication=False,
         extra={
             "deprecation_id": str(depr_id),
             "kind": kind,
