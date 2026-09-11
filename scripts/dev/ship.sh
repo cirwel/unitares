@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # ship.sh — agent-friendly commit-and-deliver
 #
-# Default delivery is a draft PR for everything — Codex and Claude share one
-# contract so concurrent sessions stay predictable and the operator is the
-# merge gate (docs/operations/github-workflow-conventions.md). In `auto` mode:
+# Default delivery is an autonomous-queue draft PR for everything — Codex and
+# Claude share one contract so concurrent sessions stay predictable while an
+# independent reviewer, not the author, controls landing
+# (docs/operations/github-workflow-conventions.md). In `auto` mode:
 #   - Runtime code (agents/, src/mcp_handlers/, src/mcp_server*, src/core.py,
 #     src/background_tasks.py) and detached HEAD work → fresh agent-prefixed
 #     branch + draft PR.
@@ -11,9 +12,9 @@
 #
 # Multiple agents push to this repo concurrently, so every change wants a
 # rollback artifact (the PR) and cross-agent visibility. Draft PRs make work
-# visible without pretending it is ready to merge. Use --direct to opt out
-# (docs/tests only), or --auto-merge when the operator explicitly wants
-# auto-merge-on-green.
+# visible while the merge conductor waits for CI and independent review. Use
+# --draft-pr for an unqueued/manual hold, --direct to opt out (docs/tests only),
+# or --auto-merge as a deprecated alias for the same queued-draft path.
 #
 # Usage:
 #   ./scripts/dev/ship.sh "commit message"
@@ -32,6 +33,7 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$PROJECT_ROOT"
+AUTO_MARKER='<!-- unitares-merge-intent: autonomous -->'
 
 # Source operator secrets (LEASE_PLANE_BEARER_TOKEN, etc.) so the lease-advisory
 # helper below can authenticate. The lease plane fails closed without a token,
@@ -151,13 +153,13 @@ usage: ship.sh [--stage-all] [--draft-pr|--open-pr|--auto-merge|--direct] "commi
        ship.sh [--stage-all] --plan "commit message"
 
 Modes:
-  auto         draft PR for everything (the default convention); runtime/detached
-               work mints a fresh agent-prefixed branch, other work uses the
-               current branch. --direct opts out for docs/tests-only pushes.
-  --draft-pr  commit, push current/new branch, and open a draft PR
+  auto         autonomously queued draft PR for everything (the default);
+               runtime/detached work mints a fresh agent-prefixed branch,
+               other work uses the current branch.
+  --draft-pr  commit, push current/new branch, and open an unqueued draft PR
   --open-pr   commit, push current/new branch, and open a ready PR
   --auto-merge
-               commit, push current/new branch, open a ready PR, and enable auto-merge
+               deprecated alias for the autonomous queued-draft path
   --direct    commit and push the current branch; refuses detached HEAD
   --stage-all stage the full current worktree before classifying/committing.
                With --plan, previews that route without mutating the index.
@@ -256,16 +258,28 @@ if [[ "$MODE" == "invalid" ]]; then
     echo "invalid UNITARES_SHIP_MODE; expected auto, draft-pr, open-pr, auto-merge, or direct" >&2
     exit 2
 fi
+if [[ "$MODE" == "auto_merge" ]]; then
+    echo "[ship] warning: --auto-merge is deprecated; it now creates a queued draft and never arms GitHub directly. The queue marker is inert until the merge conductor is activated." >&2
+fi
 
 DELIVERY="$MODE"
 FORCE_AUTO_BRANCH=0
+AUTONOMOUS_QUEUE=0
 if [[ "$MODE" == "auto" ]]; then
-    # Draft PR for everything: every session lands work as a draft PR regardless
-    # of agent or whether the change is runtime or docs/tests, so the operator
-    # stays the merge gate. Runtime and detached work additionally mint a fresh
-    # agent-prefixed branch; non-runtime work on a named feature branch opens the
-    # draft PR on that branch. --direct opts out for docs/tests-only pushes.
+    # Draft PR for everything, marked complete for the resident merge conductor.
+    # The conductor keeps authoring and review authority separate, waits for CI,
+    # and escalates root/control surfaces instead of landing them automatically.
     DELIVERY="draft_pr"
+    AUTONOMOUS_QUEUE=1
+    if [[ "$KIND" == "runtime" || "$DETACHED" == "1" ]]; then
+        FORCE_AUTO_BRANCH=1
+    fi
+elif [[ "$MODE" == "auto_merge" ]]; then
+    # The old direct pre-arm can bypass review before the status gate is
+    # installed and can create a second armed PR. Preserve CLI compatibility by
+    # routing it to the safe queue; the conductor owns Ready/arm.
+    DELIVERY="draft_pr"
+    AUTONOMOUS_QUEUE=1
     if [[ "$KIND" == "runtime" || "$DETACHED" == "1" ]]; then
         FORCE_AUTO_BRANCH=1
     fi
@@ -298,6 +312,7 @@ if [[ "$PLAN_ONLY" == "1" ]]; then
     echo "mode=$MODE"
     echo "delivery=$DELIVERY"
     echo "force_auto_branch=$FORCE_AUTO_BRANCH"
+    echo "autonomous_queue=$AUTONOMOUS_QUEUE"
     echo "stage_all=$STAGE_ALL"
     exit 0
 fi
@@ -384,7 +399,8 @@ create_auto_branch_if_needed() {
 
 create_or_show_pr() {
     local pr_kind="$1"
-    local pr_title pr_body pr_url existing_url
+    local pr_title pr_body pr_url existing_url existing_body existing_labels
+    local existing_is_draft="" existing_auto_merge="" queue_label_count updated_body
 
     # GitHub caps PR titles at 256 chars; conventional-commit subjects are
     # ~72. Use only the first line so multi-line commit messages (subject +
@@ -394,6 +410,57 @@ create_or_show_pr() {
 
     existing_url=$(gh pr view --json url --jq .url 2>/dev/null || true)
     if [[ -n "$existing_url" ]]; then
+        existing_body=$(gh pr view --json body --jq .body)
+        if [[ "$AUTONOMOUS_QUEUE" == "1" ]]; then
+            if [[ "$existing_body" != *"$AUTO_MARKER"* ]]; then
+                # Labels are a set-valued GitHub mutation, so this cannot
+                # overwrite a maintainer's concurrent PR-body edit. New PRs
+                # retain the creation-time marker; existing PRs use the other
+                # queue signal the conductor already understands.
+                queue_label_count=$(gh label list --search merge:auto --limit 100 \
+                    --json name --jq 'map(select(.name == "merge:auto")) | length')
+                case "$queue_label_count" in
+                    0)
+                        echo "[ship] left unqueued: merge:auto label not installed" >&2
+                        ;;
+                    1)
+                        gh pr edit --add-label merge:auto >/dev/null
+                        echo "[ship] added autonomous queue label to existing PR"
+                        ;;
+                    *)
+                        echo "[ship] could not determine whether merge:auto is installed" >&2
+                        return 1
+                        ;;
+                esac
+            fi
+        elif [[ "$pr_kind" == "draft_pr" || "$pr_kind" == "open_pr" ]]; then
+            existing_is_draft=$(gh pr view --json isDraft --jq .isDraft)
+            existing_auto_merge=$(gh pr view --json autoMergeRequest --jq '.autoMergeRequest != null')
+            # Explicit manual delivery also works idempotently on an existing
+            # PR: remove both supported ordinary queue signals and explicitly
+            # take it out of auto-merge before applying the requested manual
+            # draft/Ready state. Default queueing preserves an existing
+            # maintainer-owned Ready/arm state; the active conductor parks it
+            # itself before any fresh review.
+            if [[ "$existing_auto_merge" == "true" ]]; then
+                gh pr merge --disable-auto >/dev/null
+            fi
+            if [[ "$existing_body" == *"$AUTO_MARKER"* ]]; then
+                updated_body="${existing_body//$AUTO_MARKER/}"
+                gh pr edit --body "$updated_body" >/dev/null
+            fi
+            existing_labels=$(gh pr view --json labels --jq '.labels[].name')
+            if grep -Fxq 'merge:auto' <<< "$existing_labels"; then
+                gh pr edit --remove-label merge:auto >/dev/null
+            fi
+        fi
+        if [[ "$pr_kind" == "draft_pr" && "$AUTONOMOUS_QUEUE" != "1" ]]; then
+            if [[ "$existing_is_draft" != "true" ]]; then
+                gh pr ready --undo >/dev/null
+            fi
+        elif [[ "$pr_kind" == "open_pr" && "$existing_is_draft" == "true" ]]; then
+            gh pr ready >/dev/null
+        fi
         echo "[ship] PR already exists for $BRANCH"
         echo "$existing_url"
         return 0
@@ -401,15 +468,17 @@ create_or_show_pr() {
 
     case "$pr_kind" in
         draft_pr)
-            pr_body="Auto-shipped by ship.sh as a draft PR. Local work is visible; mark ready after validation/review."
+            if [[ "$AUTONOMOUS_QUEUE" == "1" ]]; then
+                pr_body="Auto-shipped by ship.sh as a completed draft PR. The autonomous merge conductor will wait for CI, independent review, and deterministic policy gates before readying or merging it.
+
+$AUTO_MARKER"
+            else
+                pr_body="Auto-shipped by ship.sh as an unqueued draft PR. It requires an explicit merge decision."
+            fi
             pr_url=$(gh pr create --draft --title "$pr_title" --body "$pr_body")
             ;;
         open_pr)
             pr_body="Auto-shipped by ship.sh as an open PR. CI gate applies."
-            pr_url=$(gh pr create --title "$pr_title" --body "$pr_body")
-            ;;
-        auto_merge)
-            pr_body="Auto-shipped by ship.sh. Auto-merge requested; CI gate applies."
             pr_url=$(gh pr create --title "$pr_title" --body "$pr_body")
             ;;
         *)
@@ -419,10 +488,6 @@ create_or_show_pr() {
     esac
     echo "$pr_url"
 
-    if [[ "$pr_kind" == "auto_merge" ]]; then
-        gh pr merge --auto --squash "$pr_url" || \
-            echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
-    fi
 }
 
 case "$DELIVERY" in
