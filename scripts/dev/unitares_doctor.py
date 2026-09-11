@@ -11,8 +11,8 @@ Modes:
     local      Checks needed for local adoption (postgres + schema + Redis
                continuity + anchor dir). Sufficient for a fresh-machine
                bring-up where the agent client spawns governance directly.
-    operator   Adds HTTP/launchd checks: 8767 listening, PID file, LaunchAgent
-               loaded, resident-agent plists, cloudflared sidecar.
+    operator   Adds HTTP/launchd checks: governance port listening, PID file,
+               LaunchAgent loaded, resident-agent plists, cloudflared sidecar.
     all        local + operator. Default.
 
 Stdlib-only. Safe to run before `pip install -e .` finishes — used to verify
@@ -50,8 +50,61 @@ RESIDENT_LAUNCHD_SLOTS = (
 )
 ANCHOR_DIR = Path.home() / ".unitares"
 SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
-HTTP_HEALTH_URL = "http://127.0.0.1:8767/health/live"
-HTTP_RESIDENTS_URL = "http://127.0.0.1:8767/v1/residents"
+# Path to the port registry, as a module attribute so the degraded path can be
+# exercised. A fallback nothing can reach is a fallback nobody has tested.
+PORTS_CATALOG_PATH = Path(__file__).resolve().parent / "ports_catalog.py"
+
+
+def _governance_port(default: int = 8767, path: Path | None = None) -> int:
+    """The governance port, from the repo's declared registry.
+
+    `scripts/dev/ports_catalog.py` exists precisely because each service's port
+    lives somewhere different and the documentation drifted to listing two of
+    five live ports. This file held a fourth copy of the literal across four
+    sites, which is the same drift one layer down, so it reads the registry
+    instead of re-declaring the number.
+
+    Falls back to the literal rather than failing: the doctor is stdlib-only and
+    must run on a half-installed tree, so a missing or renamed registry has to
+    degrade to a working check rather than to no check.
+
+    Deliberately NOT read from `UNITARES_MCP_PORT`. That variable exists only in
+    `scripts/ops/deploy-mcp.sh`, where it builds that script's own health-probe
+    URL; the server takes `--port`, the LaunchAgent passes 8767 literally, and
+    `src/mcp_server.py` defaults to 8767. Honouring it here would invent a
+    deployment-wide contract that does not exist and would point this check at a
+    port nothing binds.
+    """
+    try:
+        # Loaded by explicit path, not `import ports_catalog`. A bare import
+        # only resolves when this file runs AS a script, because that is what
+        # puts its own directory on sys.path — so the registry would be read in
+        # production and silently skipped under any other loader, including the
+        # tests. A check that reads the source of truth only sometimes is worse
+        # than one that never does, because nothing reports the difference.
+        import importlib.util as _ilu
+        registry = path or PORTS_CATALOG_PATH
+        if not registry.exists():
+            return default
+        _spec = _ilu.spec_from_file_location("_ports_catalog", registry)
+        if _spec is None or _spec.loader is None:
+            return default
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        PORTS = _mod.PORTS
+    except Exception:
+        return default
+    for entry in PORTS:
+        if entry.get("service", "").startswith("UNITARES governance"):
+            port = entry.get("port")
+            if isinstance(port, int):
+                return port
+    return default
+
+
+MCP_PORT = _governance_port()
+HTTP_HEALTH_URL = f"http://127.0.0.1:{MCP_PORT}/health/live"
+HTTP_RESIDENTS_URL = f"http://127.0.0.1:{MCP_PORT}/v1/residents"
 # The streamable-HTTP MCP route. Unlike the custom routes above it is the one
 # path the SDK's DNS-rebinding protection validates the Host on, which is why
 # check_mcp_route_gate probes it specifically.
@@ -1046,16 +1099,17 @@ def check_secrets_file() -> CheckResult:
 
 
 def check_http_listening() -> CheckResult:
-    """Is something accepting TCP connections on 8767? Fast signal, separate
-    from HTTP responsiveness so a slow event loop doesn't masquerade as a
-    dead server."""
+    """Is something accepting TCP connections on the governance port? Fast
+    signal, separate from HTTP responsiveness so a slow event loop doesn't
+    masquerade as a dead server."""
     name, mode = "http_listening", "operator"
     try:
-        with socket.create_connection(("127.0.0.1", 8767), timeout=1):
-            return CheckResult(name, mode, Status.PASS, "TCP listener on 127.0.0.1:8767")
+        with socket.create_connection(("127.0.0.1", MCP_PORT), timeout=1):
+            return CheckResult(name, mode, Status.PASS,
+                               f"TCP listener on 127.0.0.1:{MCP_PORT}")
     except (ConnectionError, socket.timeout, OSError) as e:
         return CheckResult(name, mode, Status.FAIL,
-                           "no TCP listener on 8767", detail=str(e))
+                           f"no TCP listener on {MCP_PORT}", detail=str(e))
 
 
 def check_http_health() -> CheckResult:
@@ -1162,6 +1216,14 @@ def check_mcp_route_gate() -> CheckResult:
     Statuses are whitelisted, not blacklisted. 400 is the healthy answer here
     (the session layer rejecting a GET with no session id), which means the Host
     was accepted; 404 and 5xx are failures, not "some other status".
+
+    **Not in conflict with the health watchdog, which counts 401 as alive.**
+    `scripts/ops/health_watchdog.sh` probes bearer-gated surfaces and treats a
+    401 as healthy, correctly: it asks whether a service is *up*, and a gate
+    that answers proves that it is. This check asks whether a *named host* is
+    accepted, which a 401 cannot answer because it is returned before the Host
+    is ever examined. Same status, two questions, two right answers. Do not
+    "reconcile" them by making either match the other.
     """
     name, mode = "mcp_route_gate", "operator"
     configured = _configured_external_host()
@@ -1181,9 +1243,9 @@ def check_mcp_route_gate() -> CheckResult:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    url = f"http://127.0.0.1:8767{MCP_ROUTE_PATH}"
+    url = f"http://127.0.0.1:{MCP_PORT}{MCP_ROUTE_PATH}"
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", 8767, timeout=5)
+        conn = http.client.HTTPConnection("127.0.0.1", MCP_PORT, timeout=5)
         try:
             conn.request("GET", MCP_ROUTE_PATH, headers=headers)
             resp = conn.getresponse()

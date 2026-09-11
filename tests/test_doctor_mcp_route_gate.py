@@ -144,7 +144,7 @@ def test_probe_carries_the_external_host_to_the_local_listener(doctor, monkeypat
     assert _headers(conn)["Host"] == "gov.example.org"
     assert conn.sent["path"] == doctor.MCP_ROUTE_PATH
     # Connecting to the external host would make this a tunnel test.
-    assert ctor.call_args.args[:2] == ("127.0.0.1", 8767)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
 
 
 def test_probe_sends_a_visible_bearer_token(doctor, monkeypatch):
@@ -278,6 +278,68 @@ def test_malformed_response_is_caught_not_raised(doctor, monkeypatch):
     monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "gov.example.org")
     result, _, _ = _run(doctor, exc=http.client.BadStatusLine("garbage"))
     assert result.status is doctor.Status.FAIL
+
+
+# --- the port comes from the registry, not a fifth copy of the literal ------
+
+def test_governance_port_is_read_from_the_ports_registry(doctor):
+    """scripts/dev/ports_catalog.py is the declared single source of truth.
+
+    It exists because the port documentation drifted to listing two of five
+    live ports. This file used to hold a fourth copy of the literal across four
+    sites, which is the same drift one layer down.
+    """
+    assert doctor._governance_port(default=-1) != -1, (
+        "the doctor no longer resolves the governance port from ports_catalog.PORTS"
+    )
+    assert doctor.MCP_PORT == doctor._governance_port()
+    assert str(doctor.MCP_PORT) in doctor.HTTP_HEALTH_URL
+
+
+def test_port_actually_follows_the_registry_not_a_coincidence(doctor, tmp_path):
+    """Derivation, proved against a registry that says something else.
+
+    The live registry and the fallback are both 8767, so equality alone cannot
+    distinguish a real lookup from a re-hardcoded literal.
+    """
+    fake = tmp_path / "ports_catalog.py"
+    fake.write_text(
+        'PORTS = [{"port": 9001, "service": "UNITARES governance MCP", '
+        '"host": "governance host", "source": "x", "verify": None}]\n'
+    )
+    assert doctor._governance_port(default=-1, path=fake) == 9001
+
+
+def test_module_port_is_wired_to_the_helper(doctor):
+    """Asserted against source, and the reason is a real limit, not laziness.
+
+    MCP_PORT is computed once at import, so no in-process test can tell a
+    derived 8767 from a re-typed one — patching after import changes nothing.
+    This pins the wiring; the test above pins the derivation.
+    """
+    import ast
+    from pathlib import Path as _P
+    tree = ast.parse(_P(doctor.__file__).read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "MCP_PORT" for t in node.targets
+        ):
+            assert isinstance(node.value, ast.Call), (
+                "MCP_PORT is assigned a literal again; it must come from "
+                "_governance_port() so ports_catalog.py stays the source of truth"
+            )
+            return
+    pytest.fail("MCP_PORT is no longer assigned at module scope")
+
+
+def test_missing_registry_degrades_to_a_working_default(doctor, monkeypatch, tmp_path):
+    """The doctor is stdlib-only and must run on a half-installed tree.
+
+    Asserted against a sentinel rather than 8767, so the test cannot pass by
+    the registry happening to hold the same number as the fallback.
+    """
+    monkeypatch.setattr(doctor, "PORTS_CATALOG_PATH", tmp_path / "gone.py")
+    assert doctor._governance_port(default=9999) == 9999
 
 
 # --- registration -----------------------------------------------------------
