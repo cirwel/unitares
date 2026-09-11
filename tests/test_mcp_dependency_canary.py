@@ -165,6 +165,236 @@ def test_no_call_site_builds_its_injected_client_outside_the_resolver():
     )
 
 
+# --- server bind-address contract --------------------------------------------
+#
+# The canary fixture below drives uvicorn against ``streamable_http_app()``
+# directly, which is why it cannot see this seam: production calls ``run()``,
+# and only ``run()`` cares where the bind address comes from. 1.x read it off
+# ``settings``; 2.x removed those fields and takes them as ``run()`` kwargs.
+# Assigning the 1.x way under 2.x raises before the listener opens, so the
+# process dies at startup and a keepalive respawns it indefinitely.
+
+
+# ``src/mcp_compat.py`` IS the seam. It is the one file allowed to write a
+# ``settings`` field, behind its own field check; every other site asks it.
+_SETTINGS_SEAM = "src/mcp_compat.py"
+
+
+def _settings_assignment_offenders(tree, label):
+    """Assignments to a ``settings`` field, including through a local alias.
+
+    Two shapes reach the same attribute: ``mcp.settings.host = x`` and the
+    aliased ``s = mcp.settings`` followed by ``s.host = x``. Matching only the
+    first makes this check vacuous the moment anyone refactors to a local, so
+    aliases are resolved first.
+
+    Known blind spots, left deliberately rather than chased into a half
+    type-checker: ``setattr(mcp.settings, "host", x)``, an alias parked on an
+    attribute (``self._s = mcp.settings``), and ``AnnAssign``. This guard is a
+    tripwire for the ordinary shapes, not a proof of absence — the seam in
+    ``mcp_compat`` is what actually makes those unnecessary.
+    """
+    import ast
+
+    aliases = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        source_is_settings = (
+            isinstance(value, ast.Attribute) and value.attr == "settings"
+        ) or (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "getattr"
+            and len(value.args) >= 2
+            and isinstance(value.args[1], ast.Constant)
+            and value.args[1].value == "settings"
+        )
+        if source_is_settings:
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    aliases.add(t.id)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            base = target.value
+            # Only names actually bound FROM a `.settings` in this file count.
+            # Treating every variable literally named `settings` as an mcp
+            # settings object would fail CI on unrelated future code such as
+            # `settings = load_config(); settings.timeout = 5`.
+            hit = (isinstance(base, ast.Attribute) and base.attr == "settings") or (
+                isinstance(base, ast.Name) and base.id in aliases
+            )
+            if hit:
+                offenders.append((f"{label}:{target.lineno}", target.attr))
+    return offenders
+
+
+def test_the_settings_assignment_matcher_is_not_vacuous():
+    """The guard below is only worth running if its matcher actually matches.
+
+    Both shapes must be caught. The aliased form is the one the seam itself is
+    written in, so a matcher blind to it would pass against any tree and prove
+    nothing.
+    """
+    import ast
+
+    direct = ast.parse("mcp.settings.host = h\n")
+    aliased = ast.parse('s = getattr(mcp, "settings", None)\ns.port = p\n')
+    unrelated = ast.parse("cfg.other.host = h\n")
+
+    assert [a for _, a in _settings_assignment_offenders(direct, "d")] == ["host"]
+    assert [a for _, a in _settings_assignment_offenders(aliased, "a")] == ["port"]
+    assert _settings_assignment_offenders(unrelated, "u") == []
+
+
+def test_no_call_site_assigns_a_settings_field_the_installed_model_lacks():
+    """Every ``settings`` field written outside the seam must really exist.
+
+    This is the structural form of the bind-address break. A call site that
+    assigns a field the resolved ``Settings`` model does not declare raises
+    ``ValueError`` from pydantic at startup, and because CI resolves ``mcp``
+    fresh from its allowed range, that can happen with no commit to blame.
+    Wrapping the assignment in ``try/except`` hides it rather than fixing it,
+    so guarded sites are offenders too — the seam belongs in ``mcp_compat``.
+    """
+    import ast
+
+    from src.mcp_compat import FastMCP, settings_fields
+
+    fields = settings_fields(FastMCP(name="settings-field-probe"))
+    if fields is None:
+        pytest.skip("installed high-level server exposes no pydantic Settings model")
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    offenders = []
+    for py in sorted((root / "src").rglob("*.py")):
+        rel = py.relative_to(root).as_posix()
+        if rel == _SETTINGS_SEAM:
+            continue
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        offenders += [
+            f"{where} .settings.{attr}"
+            for where, attr in _settings_assignment_offenders(tree, rel)
+            if attr not in fields
+        ]
+
+    assert not offenders, (
+        "These call sites assign a Settings field the installed mcp "
+        f"({sorted(fields)}) does not declare, which raises at startup:\n  "
+        + "\n  ".join(offenders)
+        + f"\nRoute it through {_SETTINGS_SEAM} instead."
+    )
+
+
+def test_installed_transport_accepts_the_arguments_run_server_sends():
+    """The SDK must still ACCEPT host, port and transport_security by those names.
+
+    The dispatch test below proves ``run_server`` sends the right call; it
+    cannot prove the installed ``mcp`` takes it, because the probe's ``run()``
+    swallows any keyword. That gap is exactly what produced the crash loop this
+    seam exists to prevent, and a third argument widens it: if a later major
+    renames ``transport_security``, a suite that only checks intent stays green
+    while the service dies at startup.
+
+    Bind against the real coroutine's signature — no socket, no thread, and no
+    listener left running, which a server started through ``run()`` cannot be
+    told to stop.
+    """
+    from src.mcp_compat import FastMCP, settings_fields
+
+    server = FastMCP(name="signature-probe")
+    fields = settings_fields(server)
+    if fields is not None and "host" in fields:
+        pytest.skip("mcp 1.x carries the bind address on settings, not run()")
+
+    # run_server sends these through run(), so run() must still forward them:
+    # either by **kwargs or by naming them. A major that stops doing both
+    # passes the signature check below and still crash-loops.
+    run_params = inspect.signature(type(server).run).parameters
+    forwards = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in run_params.values()
+    ) or all(n in run_params for n in ("host", "port", "transport_security"))
+    assert forwards, (
+        "The installed mcp run() neither accepts **kwargs nor names host/port/"
+        "transport_security, so src/mcp_compat.run_server's kwargs go nowhere."
+    )
+
+    target = type(server).run_streamable_http_async
+    params = inspect.signature(target).parameters
+    missing = [
+        name for name in ("host", "port", "transport_security") if name not in params
+    ]
+    assert not missing, (
+        f"The installed mcp transport no longer accepts {missing} by name; "
+        "src/mcp_compat.run_server sends them as run() kwargs, so this is a "
+        "startup crash, not a deprecation. Port the seam."
+    )
+    inspect.signature(target).bind_partial(
+        host="127.0.0.1", port=8768, transport_security=None
+    )
+
+
+def test_run_server_routes_bind_address_and_security_on_the_installed_major():
+    """``run_server`` must deliver host, port AND transport security.
+
+    Security settings are correctness here, not hardening. Under 2.x the
+    low-level app auto-enables DNS-rebinding protection with a hardcoded
+    localhost allowlist whenever it is handed a localhost host and no settings,
+    which answers 421 to every externally-addressed MCP call while custom routes
+    like ``/health`` keep returning 200. Dropping the argument would restore a
+    service that every health check calls up and no external client can use.
+
+    Driven against a probe carrying the *installed* server's real settings
+    object, so the branch under test is the one this deployment takes. No
+    socket: a listener started through ``run()`` cannot be shut down again from
+    the caller, and the end-to-end bind is already covered below.
+    """
+    from src.mcp_compat import FastMCP, run_server, settings_fields
+
+    recorded = {}
+
+    class _Probe:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def run(self, **kwargs):
+            recorded.update(kwargs)
+
+    probe = _Probe(FastMCP(name="dispatch-probe").settings)
+    security = object()
+
+    run_server(
+        probe,
+        "streamable-http",
+        host="10.11.12.13",
+        port=45671,
+        transport_security=security,
+    )
+
+    fields = settings_fields(probe)
+    if fields is not None and "host" in fields:  # mcp 1.x
+        assert probe.settings.host == "10.11.12.13"
+        assert probe.settings.port == 45671
+        assert recorded == {"transport": "streamable-http"}
+    else:  # mcp 2.x
+        assert recorded == {
+            "transport": "streamable-http",
+            "host": "10.11.12.13",
+            "port": 45671,
+            "transport_security": security,
+        }
+
+
 # --- real-transport end-to-end (mock-free) -----------------------------------
 
 

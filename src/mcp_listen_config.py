@@ -65,17 +65,10 @@ def build_transport_security_settings() -> TransportSecuritySettings:
     by setting UNITARES_MCP_DNS_REBIND_PROTECTION=off — the correct fix is
     normally to add that host to UNITARES_MCP_ALLOWED_HOSTS instead.
     """
-    base_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
-    extra_hosts = split_csv_env("UNITARES_MCP_ALLOWED_HOSTS")
-    allowed_hosts = base_hosts + extra_hosts
+    allowed_hosts = LOCALHOST_ALLOWED_HOSTS + split_csv_env("UNITARES_MCP_ALLOWED_HOSTS")
 
-    base_origins = [
-        "http://127.0.0.1:*",
-        "http://localhost:*",
-        "http://[::1]:*",
-    ]
-    extra_origins = split_csv_env("UNITARES_MCP_ALLOWED_ORIGINS")
-    allowed_origins = base_origins + extra_origins
+    allowed_origins = list(LOCALHOST_ALLOWED_ORIGINS)
+    allowed_origins += split_csv_env("UNITARES_MCP_ALLOWED_ORIGINS")
     if env_truthy("UNITARES_MCP_ALLOW_NULL_ORIGIN", default=True):
         allowed_origins.append("null")
 
@@ -84,6 +77,88 @@ def build_transport_security_settings() -> TransportSecuritySettings:
         allowed_hosts=allowed_hosts,
         allowed_origins=allowed_origins,
     )
+
+
+# Always allowed, on every surface. Shared by both builders below so that
+# adding an entry cannot silently apply to only one of them.
+LOCALHOST_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+LOCALHOST_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+]
+
+
+def build_gateway_transport_security_settings() -> TransportSecuritySettings:
+    """TransportSecuritySettings for the reduced gateway surface on :8768.
+
+    Deliberately NOT :func:`build_transport_security_settings`, on two points
+    where the gateway's threat model differs from the full server's:
+
+    **Hosts come from ``UNITARES_GATEWAY_ALLOWED_HOSTS`` first.**
+    ``scripts/ops/start_unitares.sh`` exports ``UNITARES_MCP_ALLOWED_HOSTS``
+    process-wide, so an operator admitting an external client to this six-tool
+    surface would otherwise admit the same host to the 76-tool one. The gateway
+    exists to give weak clients a *narrower* surface; a shared allowlist inverts
+    that. The shared var is still the fallback, so a deployment that wants one
+    list keeps it by setting nothing.
+
+    **The opaque ``null`` origin is NOT allowed by default.**
+    The shared builder appends it for ``file://`` connectors, which suits the
+    governance server's client mix. This port is reachable from a browser, so
+    allowing ``null`` lets sandboxed iframe or ``file://`` page content drive
+    every gateway tool, including the two that write through the proxy. Opt in
+    explicitly with ``UNITARES_GATEWAY_ALLOW_NULL_ORIGIN`` if a real client
+    needs it.
+
+    **No shared variable can widen this surface.** Localhost is always allowed;
+    origins widen only with ``UNITARES_GATEWAY_ALLOWED_ORIGINS``; and whether
+    the checks run at all is decided by
+    :func:`gateway_dns_rebinding_protection_enabled`, which reads only the
+    gateway's own variable. The full server's three knobs — its host list, its
+    rebinding hatch and its null-origin default — are all inert here by design.
+    """
+    # PRESENCE, not truthiness. Set-but-empty must mean "localhost only,
+    # ignore the shared list" — otherwise there is no way to say it, because
+    # the governance plist template instructs operators to put tunnel hosts in
+    # the shared var for their Claude.ai/Perplexity connectors, so on a real
+    # host that list is already populated and this surface would inherit all
+    # of it without anyone choosing that.
+    if os.environ.get("UNITARES_GATEWAY_ALLOWED_HOSTS") is not None:
+        extra_hosts = split_csv_env("UNITARES_GATEWAY_ALLOWED_HOSTS")
+    else:
+        extra_hosts = split_csv_env("UNITARES_MCP_ALLOWED_HOSTS")
+
+    allowed_origins = list(LOCALHOST_ALLOWED_ORIGINS)
+    allowed_origins += split_csv_env("UNITARES_GATEWAY_ALLOWED_ORIGINS")
+    if env_truthy("UNITARES_GATEWAY_ALLOW_NULL_ORIGIN", default=False):
+        allowed_origins.append("null")
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=gateway_dns_rebinding_protection_enabled(),
+        allowed_hosts=LOCALHOST_ALLOWED_HOSTS + extra_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
+def gateway_dns_rebinding_protection_enabled() -> bool:
+    """Whether Host/Origin validation is enforced on the gateway surface.
+
+    Deliberately NOT :func:`dns_rebinding_protection_enabled`.
+    ``UNITARES_MCP_DNS_REBIND_PROTECTION`` is the documented escape hatch for
+    the full server — its own docstring tells operators to reach for it when a
+    client sends a Host they cannot enumerate. Before the mcp 2.x upgrade that
+    var was inert for this port: the gateway never called a builder, and the
+    SDK's auto-enable could not be switched off at all. Honouring it here would
+    mean an operator who once used the hatch for :8767 had silently opened
+    :8768 to any Host and any browser Origin, including the opaque ``null``
+    this surface otherwise refuses.
+
+    Off only via ``UNITARES_GATEWAY_DNS_REBIND_PROTECTION``, so turning the
+    gateway's protection off is always a decision about the gateway.
+    """
+    raw = os.environ.get("UNITARES_GATEWAY_DNS_REBIND_PROTECTION", "").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def dns_rebinding_protection_enabled() -> bool:
