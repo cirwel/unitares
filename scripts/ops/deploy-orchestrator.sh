@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deploy the BEAM agent orchestrator (com.unitares.agent-orchestrator, :8789)
-# from its DEDICATED worktree ~/projects/unitares-orchestrator.
+# from its DEDICATED worktree ~/projects/unitares-orchestrator-deploy.
 #
 # Why this service was outside the sweep until now: it is the one BEAM service
 # NOT pinned to unitares-deploy. That is deliberate — pinning it there would
@@ -38,7 +38,7 @@
 set -euo pipefail
 
 REPO="${UNITARES_REPO:-$HOME/projects/unitares}"
-DEPLOY="${UNITARES_ORCHESTRATOR_DEPLOY:-$HOME/projects/unitares-orchestrator}"
+DEPLOY="${UNITARES_ORCHESTRATOR_DEPLOY:-$HOME/projects/unitares-orchestrator-deploy}"
 APP_SUBDIR="elixir/agent_orchestrator"
 LABEL="com.unitares.agent-orchestrator"
 PLIST="${UNITARES_ORCHESTRATOR_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
