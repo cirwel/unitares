@@ -126,6 +126,36 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 # 403 gone -> Host gate open. 401 -> auth gate is on (expected before the client sends a valid bearer/OAuth access token).
 ```
 
+### When nothing can connect
+
+Diagnose the gate before touching credentials. `python3
+scripts/dev/unitares_doctor.py --mode operator` runs `mcp_route_gate`, which
+probes the local listener carrying the public `Host` and names which gate is
+closed. Set `UNITARES_DOCTOR_PUBLIC_URL` when the public authority differs from
+the OAuth issuer; the check skips rather than guesses if neither is set.
+
+Three things make a lockout harder than it needs to be, and all three have a
+standing answer:
+
+- **421 is not an auth failure and no credential fixes it.** DNS-rebinding
+  protection validates the `Host` on `/mcp/` only, so `/health` and every other
+  custom route keeps returning 200 while MCP calls are refused, and both the
+  deploy check and the status table read green. Add the hostname to
+  `UNITARES_MCP_ALLOWED_HOSTS`.
+- **Do not let OAuth be the only credential.** `UNITARES_MCP_BEARER_TOKENS` is
+  an independent path, and comma-separated values rotate without a restart. Keep
+  one set so a connector problem is never a total lockout.
+- **Loopback and UDS are the break-glass path.** They are trusted-network
+  sources that no remote gate reaches, so an operator on the server's own
+  machine always has a way in.
+
+OAuth state cannot strand you across a restart: client registrations and tokens
+are in-memory and reset when the process does (`src/oauth_provider.py`). If
+provider construction fails, the server logs that it is serving with **no auth
+gate** and starts anyway; set `UNITARES_OAUTH_REQUIRED=1` to fail startup
+instead — down rather than open, at the cost of a launchd respawn loop until the
+config is fixed.
+
 ## Agent Identity
 
 For a fresh process, call `start_session(force_new=true)`. If the process is continuing prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`.

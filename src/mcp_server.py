@@ -161,7 +161,39 @@ if _oauth_issuer_url:
         )
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
     except Exception as e:
-        print(f"[FastMCP] OAuth setup failed, continuing without auth: {e}", file=sys.stderr, flush=True)
+        # An operator who set the issuer URL asked for an auth gate. Swallowing
+        # the failure and serving anyway is silent in both directions: it hides
+        # a lockout from whoever is debugging one, and it hides an ungated MCP
+        # route from whoever thinks auth is on. Default behaviour is unchanged
+        # (start without auth, because an unreachable server helps nobody), but
+        # say so in terms that cannot be skimmed past.
+        #
+        # UNITARES_OAUTH_REQUIRED=1 inverts the trade for deployments that would
+        # rather be down than open. Stated plainly: this raises during module
+        # import, so the process exits before binding and launchd respawns it
+        # into the same failure. That is the point — the outage is loud and the
+        # surface is never unauthenticated — but it is a real cost, which is why
+        # it is opt-in. Read via os.environ rather than mcp_listen_config's
+        # env_truthy because the flag catalog scopes that helper to its own
+        # module, and a call from here would leave the flag out of FLAGS.md.
+        if os.environ.get("UNITARES_OAUTH_REQUIRED", "").lower() in ("true", "1", "yes"):
+            print(
+                "[FastMCP] OAuth setup FAILED and UNITARES_OAUTH_REQUIRED is set "
+                f"— refusing to start unauthenticated: {e}",
+                file=sys.stderr, flush=True,
+            )
+            raise
+        print(
+            "[FastMCP] WARNING: OAuth setup FAILED — starting with NO AUTH GATE "
+            f"on the MCP route despite UNITARES_OAUTH_ISSUER_URL being set: {e}",
+            file=sys.stderr, flush=True,
+        )
+        print(
+            "[FastMCP] WARNING: set UNITARES_OAUTH_REQUIRED=1 to fail startup "
+            "instead of serving unauthenticated, or UNITARES_MCP_BEARER_TOKENS "
+            "for a second credential that does not depend on OAuth.",
+            file=sys.stderr, flush=True,
+        )
         _oauth_provider = None
         _auth_settings = None
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -51,6 +52,10 @@ ANCHOR_DIR = Path.home() / ".unitares"
 SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
 HTTP_HEALTH_URL = "http://127.0.0.1:8767/health/live"
 HTTP_RESIDENTS_URL = "http://127.0.0.1:8767/v1/residents"
+# The streamable-HTTP MCP route. Unlike the custom routes above it is the one
+# path the SDK's DNS-rebinding protection validates the Host on, which is why
+# check_mcp_route_gate probes it specifically.
+MCP_ROUTE_PATH = "/mcp/"
 PID_FILE_REL = "data/.mcp_server.pid"
 GOVERNANCE_LAUNCHD_LABEL = "com.unitares.governance-mcp"
 KNOWN_SCHEMA_MIGRATION_EXCEPTIONS = {
@@ -1081,6 +1086,113 @@ def _http_health_available(timeout: float = 1.0) -> bool:
             return resp.status == 200
     except Exception:
         return False
+
+
+def _configured_external_host() -> tuple[str, str] | None:
+    """The public authority this deployment expects clients to arrive on.
+
+    Returned as ``(host, source_env_var)``. ``UNITARES_DOCTOR_PUBLIC_URL`` wins
+    so an operator can probe a tunnel hostname that is not the OAuth issuer;
+    otherwise the issuer URL is the one place the public authority is already
+    written down. A bare hostname is accepted and read as https.
+    """
+    for var in ("UNITARES_DOCTOR_PUBLIC_URL", "UNITARES_OAUTH_ISSUER_URL"):
+        raw = os.environ.get(var, "").strip()
+        if not raw:
+            continue
+        parsed = urllib.parse.urlsplit(raw if "://" in raw else f"https://{raw}")
+        if parsed.netloc:
+            return parsed.netloc, var
+    return None
+
+
+def _mcp_auth_configured() -> bool:
+    return bool(
+        os.environ.get("UNITARES_OAUTH_ISSUER_URL", "").strip()
+        or os.environ.get("UNITARES_MCP_BEARER_TOKENS", "").strip()
+    )
+
+
+def check_mcp_route_gate() -> CheckResult:
+    """Which gate, if any, is closed on /mcp/ for a client arriving externally.
+
+    This is the check /health cannot be: DNS-rebinding protection validates the
+    request ``Host`` on the MCP route only, so a deployment whose allowlist does
+    not carry the public hostname answers 421 on every MCP call while /health
+    and every other custom route keeps returning 200. Both the deploy check and
+    the status table then read healthy against a server nothing can reach, which
+    is the failure documented in ``src/mcp_compat.py`` — and no credential ever
+    fixes it, so an operator chasing it through OAuth is chasing the wrong gate.
+
+    The probe goes to the LOCAL listener carrying the external Host, not through
+    the tunnel. That is deliberate: it is the same request the SDK validates, it
+    needs neither egress nor the tunnel to be up, and a pass therefore means the
+    allowlist is right rather than that the tunnel happened to be healthy.
+
+    401 is a PASS. An auth gate that answers is working; this check grades
+    reachability, not whether the caller holds a credential.
+    """
+    name, mode = "mcp_route_gate", "operator"
+    configured = _configured_external_host()
+    if configured is None:
+        return CheckResult(
+            name, mode, Status.SKIP,
+            "no public hostname configured — nothing to validate the Host against",
+            detail="set UNITARES_DOCTOR_PUBLIC_URL (or UNITARES_OAUTH_ISSUER_URL) "
+                   "to the authority external clients connect on",
+        )
+    external_host, source = configured
+    url = f"http://127.0.0.1:8767{MCP_ROUTE_PATH}"
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", 8767, timeout=5)
+        try:
+            conn.request("GET", MCP_ROUTE_PATH, headers={
+                "Host": external_host,
+                "Accept": "application/json, text/event-stream",
+            })
+            status = conn.getresponse().status
+        finally:
+            conn.close()
+    except (socket.timeout, ConnectionError, OSError) as e:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"{url} unreachable on the loopback listener",
+            detail=str(e),
+        )
+
+    if status == 421:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"MCP route returns 421 for Host {external_host} — DNS-rebinding allowlist rejects it",
+            detail=f"{external_host} came from {source}. /health stays 200 through this, so "
+                   "every health surface reads green. Add the host to "
+                   "UNITARES_MCP_ALLOWED_HOSTS and restart; "
+                   "UNITARES_MCP_DNS_REBIND_PROTECTION=off is the blunt escape hatch, "
+                   "not the fix.",
+        )
+    if status == 403:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"MCP route returns 403 for Host {external_host} — host gate closed",
+            detail=f"{external_host} came from {source}. Add it to UNITARES_MCP_ALLOWED_HOSTS "
+                   "and restart.",
+        )
+    if status == 401:
+        return CheckResult(
+            name, mode, Status.PASS,
+            f"MCP route reachable as {external_host}; auth gate answering (401)",
+        )
+    if not _mcp_auth_configured():
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"MCP route answers {status} as {external_host} with no auth gate configured",
+            detail="neither UNITARES_OAUTH_ISSUER_URL nor UNITARES_MCP_BEARER_TOKENS is set, "
+                   "so a reachable public route is ungated",
+        )
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"MCP route reachable as {external_host} (status {status})",
+    )
 
 
 def _pid_file_context(service_active: bool) -> str:
@@ -3146,6 +3258,7 @@ def build_checks(
         Check("secrets_file", "local", check_secrets_file),
         Check("http_listening", "operator", check_http_listening),
         Check("http_health", "operator", check_http_health),
+        Check("mcp_route_gate", "operator", check_mcp_route_gate),
         Check("pid_file", "operator",
               lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded())),
         Check("launchagent_loaded", "operator", lambda: check_launchagent(loaded())),
