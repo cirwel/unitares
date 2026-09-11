@@ -72,6 +72,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic3ClassTest do
 
     assert alarm.kind == "deprecation_batch"
     assert alarm.severity == "medium"
+    assert alarm.record_kind == "action_receipt"
+    assert alarm.requires_adjudication == false
     assert alarm.summary == "deprecation sweep complete: kind=dialectic count=12"
     assert alarm.fingerprint == "forced_release:deprecation_batch:depr-uuid-1"
     assert alarm.extra.deprecation_id == "depr-uuid-1"
@@ -161,6 +163,8 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic3ClassTest do
 
     assert alarm.kind == "conflict_batch"
     assert alarm.severity == "medium"
+    assert alarm.record_kind == "finding"
+    assert alarm.requires_adjudication == true
     assert alarm.summary == "held-by-other conflicts: dialectic:/conflict_test (count=7)"
     # Fingerprint includes last_ts so a later cycle yields a distinct alarm.
     # The timestamp MUST render in Python's isoformat shape ("+00:00", not

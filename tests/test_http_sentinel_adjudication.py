@@ -213,6 +213,7 @@ from src.http_api import (  # noqa: E402
 
 LEASE_ID = "17546f52-370d-4274-9d5b-0c233f09590c"
 LEASE_ID_2 = "a2d89680-0f3a-48e5-b51a-50684f70bfd9"
+FORCED_EVENT_ID = "5bb82bc0-5692-420b-a52a-c16b3efe0188"
 
 
 def _lease_row(**over):
@@ -277,18 +278,30 @@ class TestReportLatency:
 def _fr_event(fp, lease_id=LEASE_ID, surface="resident:/sentinel_cycle",
               event_ts="2026-07-31T21:08:05Z", ts="2026-07-31T21:08:31+00:00"):
     e = _event(fp, msg=f"forced release: {surface} (lease {lease_id})", ts=ts)
-    e["details"].update({"lease_id": lease_id, "surface_id": surface, "ts": event_ts})
+    e["details"].update({
+        "finding_type": "forced_release_anomaly",
+        "lease_id": lease_id,
+        "surface_id": surface,
+        "ts": event_ts,
+        "record_kind": "finding",
+        "requires_adjudication": True,
+    })
     return e
 
 
 class TestQueueEvidenceEnrichment:
-    def _get_queue(self, client, events, lease_rows):
+    def _get_queue(self, client, events, lease_rows, receipt_authority=None):
+        receipt_authority = receipt_authority or AsyncMock(
+            return_value={"forced_events": {}, "deprecations": {}}
+        )
         with patch("src.audit_db.query_audit_events_async",
                    AsyncMock(return_value=events)), \
              patch("src.http_api._adjudicated_sentinel_fingerprints",
                    AsyncMock(return_value=set())), \
              patch("src.http_api._adjudication_progress",
                    AsyncMock(return_value=dict(PROGRESS))), \
+             patch("src.http_api._fetch_sentinel_receipt_authority",
+                   receipt_authority), \
              patch("src.http_api._fetch_lease_rows", lease_rows):
             return client.get("/v1/sentinel/adjudication-queue?limit=5")
 
@@ -331,3 +344,38 @@ class TestQueueEvidenceEnrichment:
         q = r.json()["queue"]
         assert len(q) == 1
         assert q[0]["evidence"]["assessment"] == "check_error"
+
+    def test_legacy_forced_release_receipt_is_not_an_unresolved_queue_item(self, client):
+        receipt = _fr_event(f"forced_release:ad_hoc:{FORCED_EVENT_ID}")
+        receipt["details"]["finding_type"] = "ad_hoc"
+        receipt["details"]["event_id"] = FORCED_EVENT_ID
+        receipt["details"].pop("record_kind")
+        receipt["details"].pop("requires_adjudication")
+        fetch = AsyncMock(return_value={LEASE_ID: _lease_row()})
+        authority = AsyncMock(
+            return_value={
+                "forced_events": {
+                    FORCED_EVENT_ID: {
+                        "event_id": FORCED_EVENT_ID,
+                        "event_type": "forced",
+                        "event_lease_id": LEASE_ID,
+                        "event_surface_id": "resident:/sentinel_cycle",
+                        "lease_id": LEASE_ID,
+                        "lease_surface_id": "resident:/sentinel_cycle",
+                        "release_reason": "forced",
+                        "original_ttl_s": 300,
+                        "held_s": Decimal("600"),
+                        "holder_pid_null": True,
+                    }
+                },
+                "deprecations": {},
+            }
+        )
+
+        r = self._get_queue(
+            client, [receipt, _event("fp-finding")], fetch, authority
+        )
+
+        assert [item["fingerprint"] for item in r.json()["queue"]] == ["fp-finding"]
+        authority.assert_awaited_once()
+        fetch.assert_not_called()

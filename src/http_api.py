@@ -1826,6 +1826,9 @@ _SENTINEL_FINDING_EVENT_TYPES = ("sentinel_finding", "sentinel_alarm_finding")
 # Default severities the operator cares about when reviewing "did I miss
 # something across restarts?" — the load-bearing findings.
 _SENTINEL_BACKLOG_DEFAULT_SEVERITIES = frozenset({"high", "critical"})
+_FORCED_RELEASE_MESSAGE_PREFIX = "forced release:"
+_DEPRECATION_SWEEP_MESSAGE_PREFIX = "deprecation sweep complete:"
+_SENTINEL_EVENT_SCAN_LIMIT = 10_000
 
 
 async def http_post_metric(request):
@@ -2952,6 +2955,260 @@ async def http_substrate_dark_sessions(request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 
+def _sentinel_receipt_candidate(details: dict) -> Optional[str]:
+    """Recognize a receipt shape before authoritative checking."""
+    finding_type = str(
+        details.get("finding_type") or details.get("alarm_kind") or ""
+    ).strip().lower()
+    message = str(details.get("message") or "")
+    fingerprint = str(details.get("fingerprint") or "")
+    if (
+        finding_type == "ad_hoc"
+        and fingerprint.startswith("forced_release:ad_hoc:")
+        and message.startswith(_FORCED_RELEASE_MESSAGE_PREFIX)
+    ):
+        return "ad_hoc"
+    if (
+        finding_type == "deprecation_batch"
+        and fingerprint.startswith("forced_release:deprecation_batch:")
+        and message.startswith(_DEPRECATION_SWEEP_MESSAGE_PREFIX)
+    ):
+        return "deprecation_batch"
+    return None
+
+
+def _shape_sentinel_record(event: dict, details: dict) -> dict:
+    return {
+        "timestamp": event.get("timestamp"),
+        "severity": details.get("severity"),
+        "finding_type": details.get("finding_type") or details.get("alarm_kind"),
+        "violation_class": details.get("violation_class"),
+        "message": details.get("message"),
+        "agent_id": event.get("agent_id"),
+        "agent_name": details.get("agent_name"),
+        "fingerprint": details.get("fingerprint"),
+        "event_id": event.get("event_id"),
+        "record_kind": "finding",
+        "requires_adjudication": True,
+        "change_token": details.get("change_token"),
+        "surface_id": details.get("surface_id"),
+        "blocking_lease_id": details.get("blocking_lease_id"),
+        "multiple": details.get("multiple", details.get("escalation_multiple")),
+        "elapsed_seconds": details.get("elapsed_seconds", details.get("blocked_seconds")),
+        "escalation_multiple": details.get(
+            "escalation_multiple", details.get("multiple")
+        ),
+        "blocked_seconds": details.get("blocked_seconds", details.get("elapsed_seconds")),
+    }
+
+
+def _assess_authoritative_forced_release(row: Optional[dict], details: dict) -> dict:
+    """Require one exact forced event plus its matching durable lease row."""
+    event_id = str(details.get("event_id") or "").lower()
+    lease_id = str(details.get("lease_id") or "").lower()
+    surface_id = str(details.get("surface_id") or "")
+    fingerprint = str(details.get("fingerprint") or "")
+    if (
+        not _UUID_RE.match(event_id)
+        or not _UUID_RE.match(lease_id)
+        or fingerprint != f"forced_release:ad_hoc:{event_id}"
+    ):
+        return {"kind": "forced_release", "assessment": "lookup_mismatch"}
+    if row is None:
+        return {"kind": "forced_release", "assessment": "no_event_row"}
+    if (
+        row.get("event_id") != event_id
+        or row.get("event_type") != "forced"
+        or row.get("event_lease_id") != lease_id
+        or row.get("event_surface_id") != surface_id
+    ):
+        return {"kind": "forced_release", "assessment": "lookup_mismatch"}
+    if row.get("lease_id") != lease_id:
+        return {"kind": "forced_release", "assessment": "no_lease_row"}
+    lease_row = {
+        "surface_id": row.get("lease_surface_id"),
+        "release_reason": row.get("release_reason"),
+        "original_ttl_s": row.get("original_ttl_s"),
+        "held_s": row.get("held_s"),
+        "holder_pid_null": row.get("holder_pid_null"),
+    }
+    evidence = _assess_forced_release_row(lease_row, surface_id)
+    evidence["event_match"] = evidence.get("assessment") == "event_recorded"
+    return evidence
+
+
+def _assess_authoritative_deprecation(row: Optional[dict], details: dict) -> dict:
+    """Require an exact completed deprecation batch and event count."""
+    deprecation_id = str(details.get("deprecation_id") or "").lower()
+    fingerprint = str(details.get("fingerprint") or "")
+    try:
+        claimed_count = int(details.get("count"))
+    except (TypeError, ValueError):
+        claimed_count = -1
+    if (
+        not _UUID_RE.match(deprecation_id)
+        or fingerprint != f"forced_release:deprecation_batch:{deprecation_id}"
+    ):
+        return {"kind": "deprecation_sweep", "assessment": "lookup_mismatch"}
+    if row is None:
+        return {"kind": "deprecation_sweep", "assessment": "no_deprecation_row"}
+    if (
+        row.get("deprecation_id") != deprecation_id
+        or row.get("sweep_completed_at") is None
+        or row.get("surface_kind") != details.get("kind")
+        or int(row.get("event_count") or 0) != claimed_count
+    ):
+        return {"kind": "deprecation_sweep", "assessment": "lookup_mismatch"}
+    return {
+        "kind": "deprecation_sweep",
+        "assessment": "event_recorded",
+        "surface_kind": row.get("surface_kind"),
+        "event_count": claimed_count,
+    }
+
+
+async def _fetch_sentinel_receipt_authority(
+    event_ids: list[str], deprecation_ids: list[str]
+) -> dict:
+    """Fetch authoritative event/deprecation rows for receipt classification."""
+    from src.db import get_db
+
+    db = get_db()
+    forced_rows = []
+    deprecation_rows = []
+    async with db.acquire() as conn:
+        if event_ids:
+            forced_rows = await conn.fetch(
+                """SELECT e.event_id::text AS event_id, e.event_type,
+                          e.lease_id::text AS event_lease_id,
+                          e.surface_id AS event_surface_id,
+                          l.lease_id::text AS lease_id,
+                          l.surface_id AS lease_surface_id,
+                          l.release_reason,
+                          l.holder_pid IS NULL AS holder_pid_null,
+                          l.original_ttl_s,
+                          EXTRACT(epoch FROM (l.released_at - l.acquired_at)) AS held_s
+                   FROM lease_plane.lease_plane_events e
+                   LEFT JOIN lease_plane.surface_leases l ON l.lease_id = e.lease_id
+                   WHERE e.event_id = ANY($1::uuid[])
+                     AND e.event_type = 'forced'""",
+                event_ids,
+            )
+        if deprecation_ids:
+            deprecation_rows = await conn.fetch(
+                """SELECT ds.deprecation_id::text AS deprecation_id,
+                          ds.surface_kind, ds.sweep_completed_at,
+                          COUNT(e.event_id)::int AS event_count
+                   FROM lease_plane.deprecated_schemes ds
+                   LEFT JOIN lease_plane.lease_plane_events e
+                     ON e.event_type = 'lease.deprecation_swept'
+                    AND e.payload->>'deprecation_id' = ds.deprecation_id::text
+                   WHERE ds.deprecation_id = ANY($1::uuid[])
+                   GROUP BY ds.deprecation_id, ds.surface_kind,
+                            ds.sweep_completed_at""",
+                deprecation_ids,
+            )
+    return {
+        "forced_events": {row["event_id"]: dict(row) for row in forced_rows},
+        "deprecations": {
+            row["deprecation_id"]: dict(row) for row in deprecation_rows
+        },
+    }
+
+
+async def _classify_sentinel_event_records(
+    events: list[dict],
+) -> list[tuple[dict, dict, dict]]:
+    """Shape records and verify receipt candidates against lease-plane state.
+
+    Sender-provided classification fields are audit metadata only. Candidates
+    become receipts only after an exact authoritative event/batch match;
+    malformed references, mismatches, and lookup failures remain findings.
+    """
+    classified = []
+    receipt_targets = []
+    event_ids = set()
+    deprecation_ids = set()
+    for event in events:
+        details = event.get("details") or {}
+        record = _shape_sentinel_record(event, details)
+        classified.append((event, details, record))
+        candidate_kind = _sentinel_receipt_candidate(details)
+        if candidate_kind:
+            receipt_targets.append((record, details, candidate_kind))
+            identifier_key = (
+                "event_id" if candidate_kind == "ad_hoc" else "deprecation_id"
+            )
+            identifier = str(details.get(identifier_key) or "").lower()
+            if _UUID_RE.match(identifier):
+                identifiers = (
+                    event_ids if candidate_kind == "ad_hoc" else deprecation_ids
+                )
+                identifiers.add(identifier)
+
+    if receipt_targets:
+        try:
+            authority = await _fetch_sentinel_receipt_authority(
+                sorted(event_ids), sorted(deprecation_ids)
+            )
+        except Exception as err:
+            logger.warning(f"Sentinel receipt authority check failed: {err}")
+            authority = None
+        for record, details, candidate_kind in receipt_targets:
+            if authority is None:
+                evidence = {"kind": candidate_kind, "assessment": "check_error"}
+            elif candidate_kind == "ad_hoc":
+                event_id = str(details.get("event_id") or "").lower()
+                evidence = _assess_authoritative_forced_release(
+                    authority["forced_events"].get(event_id), details
+                )
+            else:
+                deprecation_id = str(details.get("deprecation_id") or "").lower()
+                evidence = _assess_authoritative_deprecation(
+                    authority["deprecations"].get(deprecation_id), details
+                )
+            record["evidence"] = evidence
+            if evidence.get("assessment") == "event_recorded":
+                record["record_kind"] = "action_receipt"
+                record["requires_adjudication"] = False
+    return classified
+
+
+def _group_sentinel_incidents(
+    findings: list[dict], *, timeline_complete: bool
+) -> list[dict]:
+    """Collapse repeated emissions into one fingerprint incident + timeline."""
+    incidents: dict[str, dict] = {}
+    for finding in findings:
+        fingerprint = finding.get("fingerprint")
+        if not fingerprint:
+            continue
+        incident = incidents.get(fingerprint)
+        if incident is None:
+            incident = {
+                "fingerprint": fingerprint,
+                "finding_type": finding.get("finding_type"),
+                "severity": finding.get("severity"),
+                "message": finding.get("message"),
+                "first_seen": finding.get("timestamp"),
+                "last_seen": finding.get("timestamp"),
+                "occurrence_count": 0,
+                "timeline_complete": timeline_complete,
+                "timeline": [],
+            }
+            incidents[fingerprint] = incident
+        incident["timeline"].append(finding)
+        incident["occurrence_count"] += 1
+
+    for incident in incidents.values():
+        incident["timeline"].sort(
+            key=lambda entry: str(entry.get("timestamp") or ""), reverse=True
+        )
+        incident["last_seen"] = incident["timeline"][0].get("timestamp")
+        incident["first_seen"] = incident["timeline"][-1].get("timestamp")
+    return list(incidents.values())
+
+
 async def http_sentinel_backlog(request):
     """GET /v1/sentinel/backlog?window_hours=168&limit=200&severity=high — durable backlog.
 
@@ -2993,45 +3250,78 @@ async def http_sentinel_backlog(request):
         start_time = (
             datetime.now(timezone.utc) - timedelta(hours=window_hours)
         ).isoformat()
-        # Over-fetch before the in-Python severity filter so the cap still
-        # yields up to `limit` matching rows.
+        # Scan a bounded but large window before in-Python classification. The
+        # response reports truncation explicitly so incident timelines and
+        # pending totals are never presented as complete when the cap is hit.
+        scan_limit = max(limit * 4, _SENTINEL_EVENT_SCAN_LIMIT)
         events = await query_audit_events_async(
             event_types=list(_SENTINEL_FINDING_EVENT_TYPES),
             start_time=start_time,
             order="desc",
-            limit=max(limit * 4, limit),
+            limit=scan_limit,
         )
 
-        findings = []
-        for e in events:
-            details = e.get("details") or {}
-            severity = details.get("severity")
-            if severity_filter is not None and severity not in severity_filter:
-                continue
-            findings.append({
-                "timestamp": e.get("timestamp"),
-                "severity": severity,
-                "finding_type": details.get("finding_type") or details.get("alarm_kind"),
-                "violation_class": details.get("violation_class"),
-                "message": details.get("message"),
-                "agent_id": e.get("agent_id"),
-                "agent_name": details.get("agent_name"),
-                "fingerprint": details.get("fingerprint"),
-                "event_id": e.get("event_id"),
-            })
-            if len(findings) >= limit:
-                break
+        eligible_events = [
+            event
+            for event in events
+            if severity_filter is None
+            or (event.get("details") or {}).get("severity") in severity_filter
+        ]
+        classified_events = await _classify_sentinel_event_records(eligible_events)
+        records = []
+        finding_rows = []
+        receipt_rows = []
+        for _event, _details, record in classified_events:
+            records.append(record)
+            if record["record_kind"] == "action_receipt":
+                receipt_rows.append(record)
+            else:
+                finding_rows.append(record)
+
+        findings = records[:limit]
+        unresolved_findings = finding_rows[:limit]
+        action_receipts = receipt_rows[:limit]
+        scan_truncated = len(events) >= scan_limit
+        grouped_incidents = _group_sentinel_incidents(
+            finding_rows, timeline_complete=not scan_truncated
+        )
+        incidents = grouped_incidents[:limit]
+        results_truncated = any(
+            len(rows) > limit
+            for rows in (records, finding_rows, receipt_rows, grouped_incidents)
+        )
 
         return JSONResponse({
             "success": True,
             "window_hours": window_hours,
             "severity": "all" if severity_filter is None else sorted(severity_filter),
+            # Legacy raw-record page view retained for compatibility.
             "count": len(findings),
             "findings": findings,
+            "unresolved_count": len(finding_rows),
+            "unresolved_findings": unresolved_findings,
+            "incident_count": len(grouped_incidents),
+            "incidents": incidents,
+            "receipt_count": len(receipt_rows),
+            "action_receipts": action_receipts,
+            "scan_truncated": scan_truncated,
+            "scan_limit": scan_limit,
+            "results_truncated": results_truncated,
+            "totals_are_lower_bounds": scan_truncated,
         })
     except Exception as e:
         logger.error(f"Error reading sentinel backlog: {e}")
-        return JSONResponse({"success": False, "error": str(e), "findings": []}, status_code=500)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": str(e),
+                "findings": [],
+                "unresolved_findings": [],
+                "incidents": [],
+                "action_receipts": [],
+            },
+            status_code=500,
+        )
 
 
 # --- Sentinel finding adjudication (dashboard widget backend) ----------------
@@ -3137,8 +3427,6 @@ async def _adjudication_progress() -> dict:
 # Deterministic SQL only — the free path. Evidence is additive: it never gates
 # whether a finding is shown, and enrichment failure is reported as its own
 # state (``check_error``) rather than silently rendering like "no check".
-
-_FORCED_RELEASE_MESSAGE_PREFIX = "forced release:"
 
 # Strict UUID shape. Finding payloads are ingestible via /api/findings (bearer
 # or trusted network, NOT operator-gated), so lease_id is not trustworthy: one
@@ -3278,18 +3566,25 @@ async def http_sentinel_adjudication_queue(request):
             event_types=list(_SENTINEL_FINDING_EVENT_TYPES),
             start_time=start_time,
             order="desc",
-            limit=1000,
+            limit=_SENTINEL_EVENT_SCAN_LIMIT,
         )
+        scan_truncated = len(events) >= _SENTINEL_EVENT_SCAN_LIMIT
         adjudicated = await _adjudicated_sentinel_fingerprints()
 
+        eligible_events = [
+            event
+            for event in events
+            if (event.get("details") or {}).get("severity")
+            in _SENTINEL_BACKLOG_DEFAULT_SEVERITIES
+        ]
+        classified_events = await _classify_sentinel_event_records(eligible_events)
         seen: set = set()
         queue = []
         pending_total = 0
         evidence_targets = []
-        for e in events:
-            details = e.get("details") or {}
+        for _event, details, classified_record in classified_events:
             severity = details.get("severity")
-            if severity not in _SENTINEL_BACKLOG_DEFAULT_SEVERITIES:
+            if classified_record["record_kind"] == "action_receipt":
                 continue
             fp = details.get("fingerprint")
             if not fp or fp in seen:
@@ -3300,13 +3595,15 @@ async def http_sentinel_adjudication_queue(request):
             pending_total += 1
             if len(queue) < limit:
                 item = {
-                    "timestamp": e.get("timestamp"),
+                    "timestamp": classified_record.get("timestamp"),
                     "severity": severity,
                     "finding_type": details.get("finding_type") or details.get("alarm_kind"),
                     "violation_class": details.get("violation_class"),
                     "message": details.get("message"),
                     "agent_name": details.get("agent_name"),
                     "fingerprint": fp,
+                    "record_kind": "finding",
+                    "requires_adjudication": True,
                 }
                 queue.append(item)
                 if str(details.get("message") or "").startswith(_FORCED_RELEASE_MESSAGE_PREFIX):
@@ -3322,6 +3619,8 @@ async def http_sentinel_adjudication_queue(request):
             "window_hours": window_hours,
             "queue": queue,
             "pending_total": pending_total,
+            "pending_total_is_lower_bound": scan_truncated,
+            "scan_truncated": scan_truncated,
             "dismiss_reasons": list(_ADJUDICATION_DISMISS_REASONS),
             "progress": await _adjudication_progress(),
         })

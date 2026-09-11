@@ -62,7 +62,10 @@ def test_ad_hoc_fingerprint_is_event_id_only():
         "surface_kind": "dialectic",
         "ts": datetime(2026, 5, 5, 9, 0, 0, tzinfo=UTC),
     }
-    assert _ad_hoc_alarm(row).fingerprint == "forced_release:ad_hoc:e1"
+    alarm = _ad_hoc_alarm(row)
+    assert alarm.fingerprint == "forced_release:ad_hoc:e1"
+    assert alarm.record_kind == "action_receipt"
+    assert alarm.requires_adjudication is False
 
 
 def test_deprecation_batch_fingerprint_is_depr_id_only():
@@ -74,7 +77,10 @@ def test_deprecation_batch_fingerprint_is_depr_id_only():
         "last_ts": datetime(2026, 5, 5, 9, 0, 0, tzinfo=UTC),
         "sweep_completed_at": datetime(2026, 5, 5, 10, 0, 0, tzinfo=UTC),
     }
-    assert _batch_alarm(row).fingerprint == "forced_release:deprecation_batch:d1"
+    alarm = _batch_alarm(row)
+    assert alarm.fingerprint == "forced_release:deprecation_batch:d1"
+    assert alarm.record_kind == "action_receipt"
+    assert alarm.requires_adjudication is False
 
 
 def test_conflict_batch_fingerprint_uses_plus_offset_iso():
@@ -88,10 +94,13 @@ def test_conflict_batch_fingerprint_uses_plus_offset_iso():
         "first_ts": datetime(2026, 5, 5, 8, 0, 0, tzinfo=UTC),
         "last_ts": datetime(2026, 5, 5, 9, 0, 0, tzinfo=UTC),
     }
+    alarm = _conflict_alarm(row)
     assert (
-        _conflict_alarm(row).fingerprint
+        alarm.fingerprint
         == "forced_release:conflict_batch:dialectic:/conflict_test:2026-05-05T09:00:00+00:00"
     )
+    assert alarm.record_kind == "finding"
+    assert alarm.requires_adjudication is True
 
 
 def test_conflict_batch_fingerprint_with_microseconds():
