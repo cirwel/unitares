@@ -111,9 +111,12 @@ def build_gateway_transport_security_settings() -> TransportSecuritySettings:
     explicitly with ``UNITARES_GATEWAY_ALLOW_NULL_ORIGIN`` if a real client
     needs it.
 
-    Everything else is shared: localhost is always allowed, protection follows
-    ``UNITARES_MCP_DNS_REBIND_PROTECTION``, and origins may be widened with
-    ``UNITARES_GATEWAY_ALLOWED_ORIGINS``.
+    **No shared variable can widen this surface.** Localhost is always allowed;
+    origins widen only with ``UNITARES_GATEWAY_ALLOWED_ORIGINS``; and whether
+    the checks run at all is decided by
+    :func:`gateway_dns_rebinding_protection_enabled`, which reads only the
+    gateway's own variable. The full server's three knobs — its host list, its
+    rebinding hatch and its null-origin default — are all inert here by design.
     """
     # PRESENCE, not truthiness. Set-but-empty must mean "localhost only,
     # ignore the shared list" — otherwise there is no way to say it, because

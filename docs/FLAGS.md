@@ -93,7 +93,7 @@ index; that one is the curated decision record.
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
-| `UNITARES_GATEWAY_ALLOWED_HOSTS` | varies: `None (no reader fallback)` (src/mcp_listen_config.py:124); `[] (via split_csv_env)` (src/mcp_listen_config.py:125) | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
+| `UNITARES_GATEWAY_ALLOWED_HOSTS` | varies: `None (no reader fallback)` (src/mcp_listen_config.py:127); `[] (via split_csv_env)` (src/mcp_listen_config.py:128) | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOW_NULL_ORIGIN` | `False` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the gateway surface | src/mcp_listen_config.py |
