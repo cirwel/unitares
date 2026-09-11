@@ -218,6 +218,54 @@ def mcp_bearer_required() -> bool:
     return bool(mcp_bearer_tokens())
 
 
+def oauth_gate_required() -> bool:
+    """True when the operator demanded an auth gate on ``/mcp`` or no service.
+
+    Deliberately NOT read inside the OAuth-construction branch in
+    ``src/mcp_server.py``. A flag named "required" that goes inert when
+    ``UNITARES_OAUTH_ISSUER_URL`` is missing fails open on exactly the mistake
+    it guards against: misspell the issuer variable and the server would start
+    ungated with the safety flag set and nothing said.
+    """
+    return env_truthy("UNITARES_OAUTH_REQUIRED")
+
+
+def auth_gate_refusal(
+    *,
+    provider_present: bool,
+    issuer_set: bool,
+    setup_error_name: Optional[str] = None,
+) -> Optional[str]:
+    """The startup refusal message, or ``None`` to serve.
+
+    Lives here rather than inline in ``src/mcp_server.py`` so the decision can
+    be exercised directly. The inline version was covered only by assertions
+    against the module's own source text, which is weaker than it looks: it
+    passed unchanged when the refusal was guarded by ``if False``.
+
+    A bearer allowlist satisfies the requirement. What the flag demands is an
+    auth gate on the MCP route, not OAuth specifically, so an operator who has
+    rotated to a bearer credential is not held down by it.
+    """
+    if not oauth_gate_required():
+        return None
+    if provider_present or mcp_bearer_tokens():
+        return None
+    if setup_error_name:
+        cause = f"OAuth provider construction failed ({setup_error_name})"
+    elif issuer_set:
+        cause = "the OAuth provider was not constructed"
+    else:
+        cause = "UNITARES_OAUTH_ISSUER_URL is unset"
+    return (
+        "UNITARES_OAUTH_REQUIRED is set but no auth gate was established for the "
+        f"MCP route: {cause}, and UNITARES_MCP_BEARER_TOKENS is empty. Refusing "
+        "to serve unauthenticated. Note this flag must be in the process "
+        "environment (LaunchAgent plist or shell export); ~/.env.mcp is loaded "
+        "later and cannot reach it."
+    )
+
+
 _TRUTHY = {"1", "true", "yes", "on"}
 _WARNED_REST_STRICT_VALUES: set[str] = set()
 _FALSY = {"0", "false", "no", "off"}

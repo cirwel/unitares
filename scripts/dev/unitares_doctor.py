@@ -1095,22 +1095,44 @@ def _configured_external_host() -> tuple[str, str] | None:
     so an operator can probe a tunnel hostname that is not the OAuth issuer;
     otherwise the issuer URL is the one place the public authority is already
     written down. A bare hostname is accepted and read as https.
+
+    Built from ``parsed.hostname`` rather than ``parsed.netloc``: netloc retains
+    userinfo, so a tunnel URL carrying basic-auth credentials would be echoed
+    into this check's message and detail — which the new docs tell operators to
+    read and paste while debugging a lockout — and sent as a malformed ``Host``
+    value besides. ``hostname`` also lowercases, which matters because the
+    allowlist comparison downstream is exact.
     """
     for var in ("UNITARES_DOCTOR_PUBLIC_URL", "UNITARES_OAUTH_ISSUER_URL"):
         raw = os.environ.get(var, "").strip()
         if not raw:
             continue
         parsed = urllib.parse.urlsplit(raw if "://" in raw else f"https://{raw}")
-        if parsed.netloc:
-            return parsed.netloc, var
+        host = parsed.hostname
+        if not host:
+            continue
+        if ":" in host:          # IPv6 literal — re-bracket for the header
+            host = f"[{host}]"
+        try:
+            port = parsed.port
+        except ValueError:       # non-numeric port in the configured value
+            port = None
+        return (f"{host}:{port}" if port else host), var
     return None
 
 
-def _mcp_auth_configured() -> bool:
-    return bool(
-        os.environ.get("UNITARES_OAUTH_ISSUER_URL", "").strip()
-        or os.environ.get("UNITARES_MCP_BEARER_TOKENS", "").strip()
-    )
+def _doctor_visible_bearer_token() -> str | None:
+    """First token from the bearer allowlist, if this process can see it.
+
+    Usually it cannot: the server gets ``UNITARES_MCP_BEARER_TOKENS`` from its
+    LaunchAgent plist, not from the operator's shell. That asymmetry is the
+    reason the 401 branch below has to stay honest instead of guessing.
+    """
+    for tok in os.environ.get("UNITARES_MCP_BEARER_TOKENS", "").split(","):
+        tok = tok.strip()
+        if tok:
+            return tok
+    return None
 
 
 def check_mcp_route_gate() -> CheckResult:
@@ -1121,16 +1143,25 @@ def check_mcp_route_gate() -> CheckResult:
     not carry the public hostname answers 421 on every MCP call while /health
     and every other custom route keeps returning 200. Both the deploy check and
     the status table then read healthy against a server nothing can reach, which
-    is the failure documented in ``src/mcp_compat.py`` — and no credential ever
-    fixes it, so an operator chasing it through OAuth is chasing the wrong gate.
+    is the failure documented in ``src/mcp_compat.py``.
 
-    The probe goes to the LOCAL listener carrying the external Host, not through
-    the tunnel. That is deliberate: it is the same request the SDK validates, it
-    needs neither egress nor the tunnel to be up, and a pass therefore means the
-    allowlist is right rather than that the tunnel happened to be healthy.
+    The probe goes to the LOCAL listener carrying the external Host, so it needs
+    neither egress nor the tunnel to be up.
 
-    401 is a PASS. An auth gate that answers is working; this check grades
-    reachability, not whether the caller holds a credential.
+    **The gate ordering is load-bearing and is not the SDK's.** This repo mounts
+    its own adapter (``src/services/mcp_transport_service.py``), which runs
+    ``authorize_mcp_request`` BEFORE ``session_manager.handle_request`` — and the
+    421 lives inside the latter. So an unauthenticated probe against a gated
+    deployment stops at 401 having learned nothing about the Host allowlist. A
+    credential is sent when this process can see one; when it cannot, 401 is
+    reported as inconclusive rather than as health. Grading it PASS would print
+    green over exactly the population this check exists for: public, tunneled,
+    authenticated deployments are the ones that can be 421-locked-out, and they
+    are the ones that can only answer 401 to an anonymous probe.
+
+    Statuses are whitelisted, not blacklisted. 400 is the healthy answer here
+    (the session layer rejecting a GET with no session id), which means the Host
+    was accepted; 404 and 5xx are failures, not "some other status".
     """
     name, mode = "mcp_route_gate", "operator"
     configured = _configured_external_host()
@@ -1142,56 +1173,99 @@ def check_mcp_route_gate() -> CheckResult:
                    "to the authority external clients connect on",
         )
     external_host, source = configured
+    token = _doctor_visible_bearer_token()
+    headers = {
+        "Host": external_host,
+        "Accept": "application/json, text/event-stream",
+        "User-Agent": "unitares-doctor",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     url = f"http://127.0.0.1:8767{MCP_ROUTE_PATH}"
     try:
         conn = http.client.HTTPConnection("127.0.0.1", 8767, timeout=5)
         try:
-            conn.request("GET", MCP_ROUTE_PATH, headers={
-                "Host": external_host,
-                "Accept": "application/json, text/event-stream",
-            })
+            conn.request("GET", MCP_ROUTE_PATH, headers=headers)
             status = conn.getresponse().status
         finally:
             conn.close()
-    except (socket.timeout, ConnectionError, OSError) as e:
+    except socket.timeout:
+        # Mirrors check_http_health: a stalled event loop is a latency finding,
+        # not a down finding, and calling it "unreachable" sends the operator to
+        # launchd instead of the error log.
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{MCP_ROUTE_PATH} did not respond within 5s",
+            detail="event loop may be saturated by a slow handler — check "
+                   "mcp_server_error.log before suspecting the listener",
+        )
+    except (ConnectionError, OSError, http.client.HTTPException, ValueError) as e:
         return CheckResult(
             name, mode, Status.FAIL,
             f"{url} unreachable on the loopback listener",
             detail=str(e),
         )
 
+    origin = f"{external_host} came from {source}."
     if status == 421:
         return CheckResult(
             name, mode, Status.FAIL,
             f"MCP route returns 421 for Host {external_host} — DNS-rebinding allowlist rejects it",
-            detail=f"{external_host} came from {source}. /health stays 200 through this, so "
-                   "every health surface reads green. Add the host to "
-                   "UNITARES_MCP_ALLOWED_HOSTS and restart; "
+            detail=f"{origin} /health stays 200 through this, so every health surface "
+                   "reads green. Add the host to UNITARES_MCP_ALLOWED_HOSTS and restart. "
+                   "An allowlist entry without a port does not match a Host that carries "
+                   "one; use an explicit host:port or a host:* wildcard. "
                    "UNITARES_MCP_DNS_REBIND_PROTECTION=off is the blunt escape hatch, "
                    "not the fix.",
         )
-    if status == 403:
-        return CheckResult(
-            name, mode, Status.FAIL,
-            f"MCP route returns 403 for Host {external_host} — host gate closed",
-            detail=f"{external_host} came from {source}. Add it to UNITARES_MCP_ALLOWED_HOSTS "
-                   "and restart.",
-        )
     if status == 401:
-        return CheckResult(
-            name, mode, Status.PASS,
-            f"MCP route reachable as {external_host}; auth gate answering (401)",
-        )
-    if not _mcp_auth_configured():
+        if token:
+            return CheckResult(
+                name, mode, Status.FAIL,
+                f"MCP route rejected the doctor's bearer token as {external_host}",
+                detail=f"{origin} The token in this process's UNITARES_MCP_BEARER_TOKENS is "
+                       "not one the server accepts, so the Host allowlist could not be "
+                       "reached. Reconcile the token with the server's own value.",
+            )
         return CheckResult(
             name, mode, Status.WARN,
-            f"MCP route answers {status} as {external_host} with no auth gate configured",
-            detail="neither UNITARES_OAUTH_ISSUER_URL nor UNITARES_MCP_BEARER_TOKENS is set, "
-                   "so a reachable public route is ungated",
+            f"inconclusive — the auth gate answered 401 for {external_host} before the Host was validated",
+            detail=f"{origin} This repo's adapter runs the bearer/OAuth gate ahead of the "
+                   "SDK's Host check, so an anonymous probe learns nothing about the "
+                   "allowlist. Put a valid token in this process's "
+                   "UNITARES_MCP_BEARER_TOKENS and re-run, or compare the host against "
+                   "UNITARES_MCP_ALLOWED_HOSTS by hand. On an OAuth-only deployment there "
+                   "is no token to borrow and the hand check is the only route.",
+        )
+    if status in (200, 400):
+        # Past Host validation: 400 is the session layer refusing a GET with no
+        # session id, which is what a healthy gated route answers.
+        if token:
+            return CheckResult(
+                name, mode, Status.PASS,
+                f"MCP route accepts Host {external_host} past the auth gate (status {status})",
+            )
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"MCP route answers {status} as {external_host} without challenging an anonymous caller",
+            detail=f"{origin} The Host allowlist is fine, but nothing gated the request: no "
+                   "bearer allowlist is active and no OAuth provider was constructed. If "
+                   "UNITARES_OAUTH_ISSUER_URL is set on the server, provider construction "
+                   "failed at startup — check stderr for the NO AUTH GATE warning.",
+        )
+    if status == 403 or status == 404 or status >= 500:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"MCP route answers {status} as {external_host}",
+            detail=f"{origin} Not a Host-allowlist verdict: the SDK answers 421 for a "
+                   "rejected Host and 403 only for a rejected Origin, which this probe "
+                   "does not send. A 403 here points at a proxy or a scope rule, 404 at a "
+                   "route that is not mounted, 5xx at the adapter or the session manager.",
         )
     return CheckResult(
-        name, mode, Status.PASS,
-        f"MCP route reachable as {external_host} (status {status})",
+        name, mode, Status.WARN,
+        f"MCP route answers an unclassified {status} as {external_host}",
+        detail=origin,
     )
 
 

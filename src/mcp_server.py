@@ -127,6 +127,7 @@ SERVER_BUILD_SHA = load_build_sha_from_repo(project_root)
 # ============================================================================
 
 from src.mcp_listen_config import (
+    auth_gate_refusal,
     build_transport_security_settings,
     default_listen_host,
 )
@@ -136,6 +137,8 @@ _oauth_issuer_url = os.environ.get("UNITARES_OAUTH_ISSUER_URL")
 _oauth_provider = None
 _auth_settings = None
 _OAUTH_REQUIRED_SCOPES = ["mcp:tools"]
+
+_oauth_setup_error: Exception | None = None
 
 if _oauth_issuer_url:
     try:
@@ -168,24 +171,14 @@ if _oauth_issuer_url:
         # (start without auth, because an unreachable server helps nobody), but
         # say so in terms that cannot be skimmed past.
         #
-        # UNITARES_OAUTH_REQUIRED=1 inverts the trade for deployments that would
-        # rather be down than open. Stated plainly: this raises during module
-        # import, so the process exits before binding and launchd respawns it
-        # into the same failure. That is the point — the outage is loud and the
-        # surface is never unauthenticated — but it is a real cost, which is why
-        # it is opt-in. Read via os.environ rather than mcp_listen_config's
-        # env_truthy because the flag catalog scopes that helper to its own
-        # module, and a call from here would leave the flag out of FLAGS.md.
-        if os.environ.get("UNITARES_OAUTH_REQUIRED", "").lower() in ("true", "1", "yes"):
-            print(
-                "[FastMCP] OAuth setup FAILED and UNITARES_OAUTH_REQUIRED is set "
-                f"— refusing to start unauthenticated: {e}",
-                file=sys.stderr, flush=True,
-            )
-            raise
+        # Only the exception TYPE is printed. AuthSettings is a pydantic model
+        # and a ValidationError echoes the offending input verbatim, so a
+        # resource/issuer URL carrying userinfo would otherwise land in a log
+        # that gets pasted into issues.
+        _oauth_setup_error = e
         print(
-            "[FastMCP] WARNING: OAuth setup FAILED — starting with NO AUTH GATE "
-            f"on the MCP route despite UNITARES_OAUTH_ISSUER_URL being set: {e}",
+            "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
+            f"despite UNITARES_OAUTH_ISSUER_URL being set ({type(e).__name__})",
             file=sys.stderr, flush=True,
         )
         print(
@@ -196,6 +189,32 @@ if _oauth_issuer_url:
         )
         _oauth_provider = None
         _auth_settings = None
+
+# Fail closed, for deployments that would rather be down than open. The
+# predicate lives in mcp_listen_config so it can be exercised directly; the
+# flag is read there, outside this module's issuer branch, so a misspelled
+# issuer variable cannot silently disarm it.
+#
+# The cost, stated rather than discovered: this raises during module import, so
+# the process exits before binding and launchd — KeepAlive with no
+# ThrottleInterval — respawns it every ten seconds indefinitely. That outage is
+# NOT self-announcing. src/mcp_compat.py records the precedent: a startup death
+# here reads as healthy on any surface whose status is inferred from a sibling
+# port, and the gateway's /health on :8768 is hardcoded to "ok".
+#
+# It is also wider than the MCP route. This process also serves /health*, the
+# /v1 REST surface, the EISV websocket, the dashboard and the UDS resident
+# listener, each with its own independent gate and none of them dependent on
+# OAuth. Refusing to start takes all of them down for a fault in one. That blast
+# radius is why this is opt-in rather than the default, and why a route-scoped
+# refusal (503 on /mcp alone) is the better long-term shape.
+_auth_refusal = auth_gate_refusal(
+    provider_present=_oauth_provider is not None,
+    issuer_set=bool(_oauth_issuer_url),
+    setup_error_name=type(_oauth_setup_error).__name__ if _oauth_setup_error else None,
+)
+if _auth_refusal:
+    raise RuntimeError(_auth_refusal)
 
 # Create the FastMCP server
 # Default bind: 127.0.0.1 (see default_listen_host). LAN/tunnel: set UNITARES_BIND_ALL_INTERFACES=1

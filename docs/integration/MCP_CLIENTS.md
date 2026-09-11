@@ -123,7 +123,8 @@ outside:
 
 ```bash
 curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
-# 403 gone -> Host gate open. 401 -> auth gate is on (expected before the client sends a valid bearer/OAuth access token).
+# 401 -> auth gate is on (expected before the client sends a valid bearer/OAuth access token).
+# 421 -> the Host is not on the allowlist. 403 is an Origin rejection, not a Host one.
 ```
 
 ### When nothing can connect
@@ -134,27 +135,48 @@ probes the local listener carrying the public `Host` and names which gate is
 closed. Set `UNITARES_DOCTOR_PUBLIC_URL` when the public authority differs from
 the OAuth issuer; the check skips rather than guesses if neither is set.
 
-Three things make a lockout harder than it needs to be, and all three have a
-standing answer:
+Give that probe a credential if you can. This server runs its bearer/OAuth gate
+*ahead* of the SDK's `Host` check, so an anonymous probe stops at 401 having
+learned nothing about the allowlist — the check reports that as inconclusive
+rather than as health. Export a valid `UNITARES_MCP_BEARER_TOKENS` value in the
+shell you run the doctor from and it reaches the `Host` check. On an OAuth-only
+deployment there is no token to borrow, and comparing the hostname against
+`UNITARES_MCP_ALLOWED_HOSTS` by hand is the only route.
+
+Three things make a lockout harder than it needs to be:
 
 - **421 is not an auth failure and no credential fixes it.** DNS-rebinding
   protection validates the `Host` on `/mcp/` only, so `/health` and every other
   custom route keeps returning 200 while MCP calls are refused, and both the
   deploy check and the status table read green. Add the hostname to
-  `UNITARES_MCP_ALLOWED_HOSTS`.
+  `UNITARES_MCP_ALLOWED_HOSTS`. An entry without a port does not match a `Host`
+  that carries one, so use an explicit `host:port` or a `host:*` wildcard.
 - **Do not let OAuth be the only credential.** `UNITARES_MCP_BEARER_TOKENS` is
   an independent path, and comma-separated values rotate without a restart. Keep
-  one set so a connector problem is never a total lockout.
-- **Loopback and UDS are the break-glass path.** They are trusted-network
-  sources that no remote gate reaches, so an operator on the server's own
-  machine always has a way in.
+  one set, and keep a copy somewhere you can reach while locked out.
+- **`/mcp` has no loopback or UDS bypass, by design.** `check_mcp_bearer` has no
+  trusted-network branch, because a hosted server sees only its proxy's address;
+  every request to `/mcp` authenticates, over UDS as much as over TCP. The
+  loopback, RFC1918 and Tailscale bypass exists on the REST surface only — and
+  setting `UNITARES_MCP_BEARER_TOKENS` flips REST into strict posture, which
+  removes it there too. So the break-glass is a credential you kept, not a
+  network position; for REST specifically, `UNITARES_REST_STRICT=0` restores the
+  bypass.
 
 OAuth state cannot strand you across a restart: client registrations and tokens
 are in-memory and reset when the process does (`src/oauth_provider.py`). If
 provider construction fails, the server logs that it is serving with **no auth
-gate** and starts anyway; set `UNITARES_OAUTH_REQUIRED=1` to fail startup
-instead — down rather than open, at the cost of a launchd respawn loop until the
-config is fixed.
+gate** and starts anyway.
+
+`UNITARES_OAUTH_REQUIRED=1` makes it refuse to start instead, and is satisfied by
+a bearer allowlist as well as by OAuth — what it requires is a gate on `/mcp`,
+not OAuth specifically. It must be in the process environment (LaunchAgent plist
+or a shell export); `~/.env.mcp` is loaded after import and cannot reach it.
+Weigh the cost before setting it: the process exits before binding, launchd
+respawns it every ten seconds indefinitely, and that outage is not
+self-announcing, because the gateway's `/health` on `:8768` is hardcoded to `ok`.
+It also stops `/v1`, the websocket, the dashboard and the UDS resident listener,
+none of which depend on OAuth.
 
 ## Agent Identity
 
