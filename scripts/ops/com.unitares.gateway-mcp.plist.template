@@ -58,6 +58,27 @@
              upstream governance server when its /mcp gate is enabled. -->
         <key>UNITARES_MCP_BEARER_TOKEN</key>
         <string></string>
+        <!-- This surface is localhost-only until you widen it. The SDK locks a
+             localhost server to Host: localhost/127.0.0.1, so a client reaching
+             :8768 through a tunnel gets 421 on every MCP call while /health
+             still answers 200. Add the tunnel host here, with and without the
+             port wildcard:
+                 your-gateway-host.example.org,your-gateway-host.example.org:*
+             Deliberately SEPARATE from UNITARES_MCP_ALLOWED_HOSTS, which
+             start_unitares.sh exports process-wide: widening that one would
+             also admit the host to the full 76-tool server on :8767. This
+             gateway exists to be the narrower surface. Unset = fall back to
+             the shared list. -->
+        <key>UNITARES_GATEWAY_ALLOWED_HOSTS</key>
+        <string></string>
+        <!-- Browser origins allowed to call the gateway. The opaque "null"
+             origin (file:// pages, sandboxed iframes) is NOT allowed by
+             default here, unlike on the governance server: this port is
+             browser-reachable and two of the six tools write. Set
+             UNITARES_GATEWAY_ALLOW_NULL_ORIGIN=1 only for a real file://
+             client. -->
+        <key>UNITARES_GATEWAY_ALLOWED_ORIGINS</key>
+        <string></string>
         <key>PYTHONPATH</key>
         <string>__UNITARES_ROOT__/src</string>
         <key>HOME</key>

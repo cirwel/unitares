@@ -86,6 +86,54 @@ def build_transport_security_settings() -> TransportSecuritySettings:
     )
 
 
+def build_gateway_transport_security_settings() -> TransportSecuritySettings:
+    """TransportSecuritySettings for the reduced gateway surface on :8768.
+
+    Deliberately NOT :func:`build_transport_security_settings`, on two points
+    where the gateway's threat model differs from the full server's:
+
+    **Hosts come from ``UNITARES_GATEWAY_ALLOWED_HOSTS`` first.**
+    ``scripts/ops/start_unitares.sh`` exports ``UNITARES_MCP_ALLOWED_HOSTS``
+    process-wide, so an operator admitting an external client to this six-tool
+    surface would otherwise admit the same host to the 76-tool one. The gateway
+    exists to give weak clients a *narrower* surface; a shared allowlist inverts
+    that. The shared var is still the fallback, so a deployment that wants one
+    list keeps it by setting nothing.
+
+    **The opaque ``null`` origin is NOT allowed by default.**
+    The shared builder appends it for ``file://`` connectors, which suits the
+    governance server's client mix. This port is reachable from a browser, so
+    allowing ``null`` lets sandboxed iframe or ``file://`` page content drive
+    every gateway tool, including the two that write through the proxy. Opt in
+    explicitly with ``UNITARES_GATEWAY_ALLOW_NULL_ORIGIN`` if a real client
+    needs it.
+
+    Everything else is shared: localhost is always allowed, protection follows
+    ``UNITARES_MCP_DNS_REBIND_PROTECTION``, and origins may be widened with
+    ``UNITARES_GATEWAY_ALLOWED_ORIGINS``.
+    """
+    base_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    extra_hosts = split_csv_env("UNITARES_GATEWAY_ALLOWED_HOSTS") or split_csv_env(
+        "UNITARES_MCP_ALLOWED_HOSTS"
+    )
+
+    base_origins = [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+    ]
+    extra_origins = split_csv_env("UNITARES_GATEWAY_ALLOWED_ORIGINS")
+    allowed_origins = base_origins + extra_origins
+    if env_truthy("UNITARES_GATEWAY_ALLOW_NULL_ORIGIN", default=False):
+        allowed_origins.append("null")
+
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=dns_rebinding_protection_enabled(),
+        allowed_hosts=base_hosts + extra_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
 def dns_rebinding_protection_enabled() -> bool:
     """Whether Host/Origin validation is enforced on the MCP transports.
 

@@ -187,6 +187,12 @@ def _settings_assignment_offenders(tree, label):
     aliased ``s = mcp.settings`` followed by ``s.host = x``. Matching only the
     first makes this check vacuous the moment anyone refactors to a local, so
     aliases are resolved first.
+
+    Known blind spots, left deliberately rather than chased into a half
+    type-checker: ``setattr(mcp.settings, "host", x)``, an alias parked on an
+    attribute (``self._s = mcp.settings``), and ``AnnAssign``. This guard is a
+    tripwire for the ordinary shapes, not a proof of absence — the seam in
+    ``mcp_compat`` is what actually makes those unnecessary.
     """
     import ast
 
@@ -218,8 +224,12 @@ def _settings_assignment_offenders(tree, label):
             if not isinstance(target, ast.Attribute):
                 continue
             base = target.value
+            # Only names actually bound FROM a `.settings` in this file count.
+            # Treating every variable literally named `settings` as an mcp
+            # settings object would fail CI on unrelated future code such as
+            # `settings = load_config(); settings.timeout = 5`.
             hit = (isinstance(base, ast.Attribute) and base.attr == "settings") or (
-                isinstance(base, ast.Name) and base.id in aliases | {"settings"}
+                isinstance(base, ast.Name) and base.id in aliases
             )
             if hit:
                 offenders.append((f"{label}:{target.lineno}", target.attr))
@@ -283,6 +293,41 @@ def test_no_call_site_assigns_a_settings_field_the_installed_model_lacks():
         f"({sorted(fields)}) does not declare, which raises at startup:\n  "
         + "\n  ".join(offenders)
         + f"\nRoute it through {_SETTINGS_SEAM} instead."
+    )
+
+
+def test_installed_transport_accepts_the_arguments_run_server_sends():
+    """The SDK must still ACCEPT host, port and transport_security by those names.
+
+    The dispatch test below proves ``run_server`` sends the right call; it
+    cannot prove the installed ``mcp`` takes it, because the probe's ``run()``
+    swallows any keyword. That gap is exactly what produced the crash loop this
+    seam exists to prevent, and a third argument widens it: if a later major
+    renames ``transport_security``, a suite that only checks intent stays green
+    while the service dies at startup.
+
+    Bind against the real coroutine's signature — no socket, no thread, and no
+    listener left running, which a server started through ``run()`` cannot be
+    told to stop.
+    """
+    from src.mcp_compat import FastMCP, settings_fields
+
+    server = FastMCP(name="signature-probe")
+    if settings_fields(server) is not None and "host" in settings_fields(server):
+        pytest.skip("mcp 1.x carries the bind address on settings, not run()")
+
+    target = type(server).run_streamable_http_async
+    params = inspect.signature(target).parameters
+    missing = [
+        name for name in ("host", "port", "transport_security") if name not in params
+    ]
+    assert not missing, (
+        f"The installed mcp transport no longer accepts {missing} by name; "
+        "src/mcp_compat.run_server sends them as run() kwargs, so this is a "
+        "startup crash, not a deprecation. Port the seam."
+    )
+    inspect.signature(target).bind_partial(
+        host="127.0.0.1", port=8768, transport_security=None
     )
 
 

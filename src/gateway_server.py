@@ -29,7 +29,7 @@ from mcp_compat import FastMCP, run_server, server_supports_kwarg
 
 from gateway.client import GovernanceMCPClient
 from gateway.constants import GATEWAY_HOST, GATEWAY_PORT, GOVERNANCE_URL
-from mcp_listen_config import build_transport_security_settings
+from mcp_listen_config import build_gateway_transport_security_settings
 from gateway import tools
 
 # Logging
@@ -43,11 +43,16 @@ logger = logging.getLogger("gateway")
 # FastMCP (1.x) / MCPServer (2.x) server. 2.x dropped the `host` and
 # `transport_security` constructor kwargs — both are applied at run time by
 # `run_server()` — so pass them here only when the installed major accepts them.
+# Built once, at import, and reused at run time. Reading the env twice would
+# let a later dotenv load or a test that patches it mid-process hand 1.x
+# (constructor) and 2.x (run-time) different allowlists.
+GATEWAY_TRANSPORT_SECURITY = build_gateway_transport_security_settings()
+
 _gw_kwargs = {"name": "unitares-gateway"}
 if server_supports_kwarg("host"):
     _gw_kwargs["host"] = GATEWAY_HOST
 if server_supports_kwarg("transport_security"):
-    _gw_kwargs["transport_security"] = build_transport_security_settings()
+    _gw_kwargs["transport_security"] = GATEWAY_TRANSPORT_SECURITY
 mcp = FastMCP(**_gw_kwargs)
 
 # Shared client instance (created at startup)
@@ -129,7 +134,7 @@ def main():
         "streamable-http",
         host=args.host,
         port=args.port,
-        transport_security=build_transport_security_settings(),
+        transport_security=GATEWAY_TRANSPORT_SECURITY,
     )
 
 

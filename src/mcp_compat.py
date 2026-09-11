@@ -164,21 +164,23 @@ def run_server(
     and launchd respawns it forever with nothing bound. That is a silent outage
     for any surface whose health is inferred from a sibling port.
 
-    ``transport_security`` is a correctness argument on 2.x, not optional
-    hardening. Handing the low-level app a localhost ``host`` with no security
-    settings makes it auto-enable DNS-rebinding protection with a hardcoded
-    ``allowed_hosts`` of localhost only::
+    ``transport_security`` decides whether the surface is reachable at all.
+    Handing the app a localhost ``host`` with no settings makes it auto-enable
+    DNS-rebinding protection with a hardcoded localhost-only allowlist::
 
         if transport_security is None and host in ("127.0.0.1", "localhost", "::1"):
 
-    A server behind a tunnel or reverse proxy that preserves the external
-    ``Host`` then answers ``421 Misdirected Request`` on every MCP call while
-    custom routes such as ``/health`` keep returning 200, so both the deploy
-    check and the status table read healthy. Pass the deployment's real settings
-    (``src.mcp_listen_config.build_transport_security_settings``) so the
-    operator keeps the documented allowlist and opt-out. 1.x never reached that
-    branch, so omitting it here would also make the two majors disagree on the
-    same call path.
+    Anything reaching the server through a tunnel that preserves the external
+    ``Host`` then gets ``421 Misdirected Request`` on every MCP call, while
+    custom routes such as ``/health`` keep returning 200 — so the deploy check
+    and the status table both read healthy.
+
+    This is NOT a 2.x regression, and the difference matters: mcp 1.26's
+    ``FastMCP.__init__`` carries the byte-identical auto-enable block, so a
+    localhost server constructed without settings was already locked down on
+    1.x. The majors agree. What passing real settings buys is an allowlist the
+    operator can widen at all, instead of one hardcoded in the SDK — so do not
+    "restore 1.x parity" by deleting this argument.
 
     The 1.x/2.x choice is resolved by asking the installed ``Settings`` model
     which fields it declares, rather than branching on :data:`MCP_MAJOR` — same
@@ -190,11 +192,15 @@ def run_server(
     fields = settings_fields(mcp)
 
     if fields is not None and "host" in fields:
-        # mcp 1.x — the transport reads the bind address off settings, and
-        # security settings were supplied at construction.
+        # mcp 1.x — the transport reads all of this off settings before run().
         set_declared_host(mcp, host)
         if "port" in fields:
             mcp.settings.port = port
+        if transport_security is not None and "transport_security" in fields:
+            # Usually already supplied at construction on 1.x, but this helper
+            # is public: a caller that only passes it here must not silently
+            # get an unprotected transport.
+            mcp.settings.transport_security = transport_security
         mcp.run(transport=transport)
         return
 
