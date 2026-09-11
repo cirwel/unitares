@@ -99,7 +99,7 @@ done
 # --detach is mandatory: git allows one checkout of a branch per repo and the
 # dev checkout at $REPO is itself sitting ON master, so branch-mode `worktree
 # add` would die with "already used by worktree at ...". Same reason
-# unitares-orchestrator and the bridge are detached.
+# unitares-orchestrator-deploy and the bridge are detached.
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY" --detach
 PREV="$DEPLOY_LIB_PREV"
 HEAD_SHA="$(git -C "$DEPLOY" rev-parse HEAD)"

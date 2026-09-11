@@ -91,7 +91,7 @@ COMPONENTS=(
 # to elixir/agent_orchestrator so the verdict tracks ITS code, not the 200+
 # unrelated commits the shared tree accumulates — that subdir has not changed
 # since 2026-06-29, so this reads CURRENT*, which is the honest answer.
-"agent-orchestrator|com.unitares.agent-orchestrator|$H/projects/unitares-orchestrator|elixir/agent_orchestrator|restart|8789"
+"agent-orchestrator|com.unitares.agent-orchestrator|$H/projects/unitares-orchestrator-deploy|elixir/agent_orchestrator|restart|8789"
 # Its own repo (cirwel/unitares-discord-bridge) on `main`, and its own deploy
 # worktree — base_ref() below already resolves main-vs-master, so the row needs
 # no special casing. Pointed here rather than at the dev checkout so the verdict

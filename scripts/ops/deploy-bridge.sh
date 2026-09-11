@@ -73,7 +73,7 @@ deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY/.venv/bin/python3" \
 # --detach is mandatory, not stylistic: git allows one checkout of a branch per
 # repo, and the dev checkout at $REPO is itself sitting ON `main`. A branch-mode
 # `worktree add` would die with "already used by worktree at ..." the first time
-# this ever ran. Same reason unitares-orchestrator is detached.
+# this ever ran. Same reason unitares-orchestrator-deploy is detached.
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY" --detach --branch main
 PREV="$DEPLOY_LIB_PREV"
 
