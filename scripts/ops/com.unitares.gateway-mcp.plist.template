@@ -67,8 +67,10 @@
              Deliberately SEPARATE from UNITARES_MCP_ALLOWED_HOSTS, which
              start_unitares.sh exports process-wide: widening that one would
              also admit the host to the full 76-tool server on :8767. This
-             gateway exists to be the narrower surface. Unset = fall back to
-             the shared list. -->
+             gateway exists to be the narrower surface.
+             Precedence is by PRESENCE, not value. Present and empty, as
+             shipped below, means localhost only and the shared list is
+             ignored. DELETE this key entirely to inherit the shared list. -->
         <key>UNITARES_GATEWAY_ALLOWED_HOSTS</key>
         <string></string>
         <!-- Browser origins allowed to call the gateway. The opaque "null"
@@ -76,7 +78,9 @@
              default here, unlike on the governance server: this port is
              browser-reachable and two of the six tools write. Set
              UNITARES_GATEWAY_ALLOW_NULL_ORIGIN=1 only for a real file://
-             client. -->
+             client. Likewise the gateway's Host/Origin checks are turned off
+             only by UNITARES_GATEWAY_DNS_REBIND_PROTECTION=off, never by the
+             full server's UNITARES_MCP_DNS_REBIND_PROTECTION. -->
         <key>UNITARES_GATEWAY_ALLOWED_ORIGINS</key>
         <string></string>
         <key>PYTHONPATH</key>

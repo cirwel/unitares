@@ -313,8 +313,21 @@ def test_installed_transport_accepts_the_arguments_run_server_sends():
     from src.mcp_compat import FastMCP, settings_fields
 
     server = FastMCP(name="signature-probe")
-    if settings_fields(server) is not None and "host" in settings_fields(server):
+    fields = settings_fields(server)
+    if fields is not None and "host" in fields:
         pytest.skip("mcp 1.x carries the bind address on settings, not run()")
+
+    # run_server sends these through run(), so run() must still forward them:
+    # either by **kwargs or by naming them. A major that stops doing both
+    # passes the signature check below and still crash-loops.
+    run_params = inspect.signature(type(server).run).parameters
+    forwards = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in run_params.values()
+    ) or all(n in run_params for n in ("host", "port", "transport_security"))
+    assert forwards, (
+        "The installed mcp run() neither accepts **kwargs nor names host/port/"
+        "transport_security, so src/mcp_compat.run_server's kwargs go nowhere."
+    )
 
     target = type(server).run_streamable_http_async
     params = inspect.signature(target).parameters
