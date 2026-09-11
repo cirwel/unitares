@@ -164,12 +164,12 @@ if _oauth_issuer_url:
         )
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
     except Exception as e:
-        # An operator who set the issuer URL asked for an auth gate. Swallowing
-        # the failure and serving anyway is silent in both directions: it hides
-        # a lockout from whoever is debugging one, and it hides an ungated MCP
-        # route from whoever thinks auth is on. Default behaviour is unchanged
-        # (start without auth, because an unreachable server helps nobody), but
-        # say so in terms that cannot be skimmed past.
+        # An operator who set the issuer URL asked for an auth gate. Serving
+        # /mcp unauthenticated anyway answers a different question than the one
+        # they asked, so the route now closes instead: authorize_mcp_request
+        # reads gate_unavailable and answers 503. The process stays up, because
+        # every other surface here has its own gate and none of them depend on
+        # OAuth. A bearer allowlist still overrides the closure.
         #
         # Only the exception TYPE is printed. AuthSettings is a pydantic model
         # and a ValidationError echoes the offending input verbatim, so a
@@ -178,13 +178,14 @@ if _oauth_issuer_url:
         _oauth_setup_error = e
         print(
             "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
-            f"despite UNITARES_OAUTH_ISSUER_URL being set ({type(e).__name__})",
+            f"and is now CLOSED (503) rather than served open ({type(e).__name__})",
             file=sys.stderr, flush=True,
         )
         print(
-            "[FastMCP] WARNING: set UNITARES_OAUTH_REQUIRED=1 to fail startup "
-            "instead of serving unauthenticated, or UNITARES_MCP_BEARER_TOKENS "
-            "for a second credential that does not depend on OAuth.",
+            "[FastMCP] WARNING: set UNITARES_MCP_BEARER_TOKENS for a credential "
+            "that does not depend on OAuth and reopens /mcp, or fix the OAuth "
+            "configuration and restart. UNITARES_OAUTH_REQUIRED=1 additionally "
+            "refuses to start the process at all.",
             file=sys.stderr, flush=True,
         )
         _oauth_provider = None
@@ -364,6 +365,10 @@ async def main():
                 oauth_provider=_oauth_provider,
                 auth_settings=_auth_settings,
                 required_scopes=tuple(_OAUTH_REQUIRED_SCOPES),
+                # A configured gate that failed to build closes /mcp rather
+                # than serving it open. Scoped to the route: every other
+                # surface on this process keeps its own gate.
+                gate_unavailable=_oauth_setup_error is not None,
             ),
             host=args.host,
             port=args.port,

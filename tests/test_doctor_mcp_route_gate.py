@@ -61,9 +61,11 @@ def _clean_env(monkeypatch):
 class _FakeConn:
     """Stands in for http.client.HTTPConnection, recording what was sent."""
 
-    def __init__(self, status: int | None = None, exc: Exception | None = None):
+    def __init__(self, status: int | None = None, exc: Exception | None = None,
+                 body: bytes = b""):
         self._status = status
         self._exc = exc
+        self._body = body
         self.sent: dict | None = None
 
     def request(self, method, path, headers=None):
@@ -72,15 +74,15 @@ class _FakeConn:
         self.sent = {"method": method, "path": path, "headers": headers or {}}
 
     def getresponse(self):
-        return SimpleNamespace(status=self._status)
+        return SimpleNamespace(status=self._status, read=lambda n=None: self._body)
 
     def close(self):
         pass
 
 
-def _run(doctor, *, status=None, exc=None):
+def _run(doctor, *, status=None, exc=None, body=b""):
     """Run the check against a fake connection. Returns (result, conn, ctor)."""
-    conn = _FakeConn(status=status, exc=exc)
+    conn = _FakeConn(status=status, exc=exc, body=body)
     with patch("http.client.HTTPConnection") as ctor:
         ctor.return_value = conn
         result = doctor.check_mcp_route_gate()
@@ -223,6 +225,27 @@ def test_403_does_not_claim_the_host_allowlist_is_the_remedy(doctor, monkeypatch
     monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "gov.example.org")
     result, _, _ = _run(doctor, status=403)
     assert "UNITARES_MCP_ALLOWED_HOSTS" not in result.detail
+
+
+def test_closed_gate_503_names_the_gate_not_the_host(doctor, monkeypatch):
+    """The route refusing to serve ungated is a different finding from a Host problem."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "gov.example.org")
+    result, _, _ = _run(
+        doctor, status=503,
+        body=b'{"error": "auth_unavailable", "detail": "..."}',
+    )
+    assert result.status is doctor.Status.FAIL
+    assert "CLOSED" in result.message
+    assert "UNITARES_MCP_BEARER_TOKENS" in result.detail
+    assert "UNITARES_MCP_ALLOWED_HOSTS" not in result.detail
+
+
+def test_plain_503_is_not_read_as_a_closed_gate(doctor, monkeypatch):
+    """Session exhaustion answers 503 too; it needs a different remedy."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "gov.example.org")
+    result, _, _ = _run(doctor, status=503, body=b'{"error": "Too many open sessions"}')
+    assert result.status is doctor.Status.FAIL
+    assert "CLOSED" not in result.message
 
 
 def test_unclassified_status_warns(doctor, monkeypatch):

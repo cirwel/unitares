@@ -164,19 +164,27 @@ Three things make a lockout harder than it needs to be:
   bypass.
 
 OAuth state cannot strand you across a restart: client registrations and tokens
-are in-memory and reset when the process does (`src/oauth_provider.py`). If
-provider construction fails, the server logs that it is serving with **no auth
-gate** and starts anyway.
+are in-memory and reset when the process does (`src/oauth_provider.py`).
 
-`UNITARES_OAUTH_REQUIRED=1` makes it refuse to start instead, and is satisfied by
-a bearer allowlist as well as by OAuth — what it requires is a gate on `/mcp`,
-not OAuth specifically. It must be in the process environment (LaunchAgent plist
-or a shell export); `~/.env.mcp` is loaded after import and cannot reach it.
-Weigh the cost before setting it: the process exits before binding, launchd
-respawns it every ten seconds indefinitely, and that outage is not
-self-announcing, because the gateway's `/health` on `:8768` is hardcoded to `ok`.
-It also stops `/v1`, the websocket, the dashboard and the UDS resident listener,
-none of which depend on OAuth.
+If provider construction fails, `/mcp` **closes rather than opening**. The route
+answers `503 auth_unavailable`, because serving it unauthenticated would answer a
+different question than the one `UNITARES_OAUTH_ISSUER_URL` asked, and on a
+public deployment that means the whole tool catalog and the knowledge graph. The
+closure is scoped to that route: `/health*`, `/v1`, the websocket, the dashboard
+and the UDS resident listener keep their own gates, which is why the process
+stays up instead of refusing to start. Setting `UNITARES_MCP_BEARER_TOKENS`
+reopens `/mcp` with a credential that does not depend on OAuth, so hardening
+never locks you out on its own.
+
+`UNITARES_OAUTH_REQUIRED=1` goes further and refuses to start the process at all.
+It is satisfied by a bearer allowlist as well as by OAuth — what it requires is a
+gate on `/mcp`, not OAuth specifically — and it must be in the process
+environment (LaunchAgent plist or a shell export), since `~/.env.mcp` is loaded
+after import and cannot reach it. Weigh it against the route-scoped closure
+above, which already prevents an unauthenticated `/mcp`: the process-level
+refusal exits before binding, launchd respawns it every ten seconds
+indefinitely, and that outage is not self-announcing, because the gateway's
+`/health` on `:8768` is hardcoded to `ok`.
 
 ## Agent Identity
 

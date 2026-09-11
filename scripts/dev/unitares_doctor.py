@@ -1186,7 +1186,12 @@ def check_mcp_route_gate() -> CheckResult:
         conn = http.client.HTTPConnection("127.0.0.1", 8767, timeout=5)
         try:
             conn.request("GET", MCP_ROUTE_PATH, headers=headers)
-            status = conn.getresponse().status
+            resp = conn.getresponse()
+            status = resp.status
+            # Bounded: a 503 from the closed-gate path names itself in the body,
+            # and a 503 from session exhaustion does not. Without this they are
+            # the same number and the operator gets the wrong remedy.
+            body = resp.read(512).decode("utf-8", "replace")
         finally:
             conn.close()
     except socket.timeout:
@@ -1252,6 +1257,16 @@ def check_mcp_route_gate() -> CheckResult:
                    "bearer allowlist is active and no OAuth provider was constructed. If "
                    "UNITARES_OAUTH_ISSUER_URL is set on the server, provider construction "
                    "failed at startup — check stderr for the NO AUTH GATE warning.",
+        )
+    if status == 503 and "auth_unavailable" in body:
+        return CheckResult(
+            name, mode, Status.FAIL,
+            f"MCP route is CLOSED for {external_host} — its configured OAuth gate failed to build",
+            detail=f"{origin} The route answers 503 rather than serving unauthenticated. "
+                   "This is the server refusing to answer a question it cannot gate, not a "
+                   "Host problem. Set UNITARES_MCP_BEARER_TOKENS to reopen it with a "
+                   "credential that does not depend on OAuth, or fix the OAuth "
+                   "configuration and restart; stderr names the exception type.",
         )
     if status == 403 or status == 404 or status >= 500:
         return CheckResult(
