@@ -15,6 +15,7 @@ this table cannot silently disagree with the code.
 | `8766` | Anima MCP (physical edge testbed) | edge host (Raspberry Pi) | `anima-mcp` service config (external repo) |
 | `8767` | UNITARES governance MCP | governance host | `src/mcp_server.py` — `DEFAULT_PORT` |
 | `8768` | Gateway (weak external tier only) | governance host | `src/gateway/constants.py` — `GATEWAY_PORT` (`GATEWAY_PORT` env, default 8768) |
+| `8770` | Wave 3A handlers (BEAM) | governance host | `elixir/wave3a_handlers/config/config.exs` — `WAVE_3A_HANDLERS_PORT` default |
 | `8788` | Surface lease plane + governed-effect plane (BEAM) | governance host | `LEASE_PLANE_BASE_URL` default — `src/services/runtime_queries.py` |
 | `8789` | Agent orchestrator (BEAM) | governance host | `AGENT_ORCHESTRATOR_URL` default — `src/mcp_handlers/dialectic/orchestrator_dispatch.py` |
 | `8790` | Dialectic-live (Phoenix/LiveView, BEAM) | governance host | `scripts/ops/com.unitares.dialectic-live.plist.template` |
