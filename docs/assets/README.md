@@ -46,14 +46,15 @@ after it is rendered.
 Regenerate after a copy or palette change, from `scripts/dev/brand/`:
 
 ```bash
-python3 glyphs.py && python3 compose.py && python3 favicon_bold.py   # SVGs
-python3 build_artboards.py                                           # canvas artboards
+python3 glyphs.py && python3 compose.py && python3 favicon_bold.py   # SVGs into docs/assets
 python3 render_social_preview.py                                     # PNG via headless Chrome
 ```
 
 `glyphs.py` downloads Bodoni Moda from the google/fonts repository on first use
-into the gitignored `fonts/` directory, licence alongside. The renderer needs
-Google Chrome and Pillow; it is a maintainer tool, not part of any install path.
+into the gitignored `fonts/` directory, licence alongside. The renderer builds the card page around
+`unitares-lockup.svg`, needs Google Chrome and Pillow, and is a maintainer tool,
+not part of any install path. The tagline it prints is a constant at the top of
+`render_social_preview.py`; change it there when the README's changes.
 
 ## Asset inventory
 

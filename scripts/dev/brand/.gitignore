@@ -1,4 +1,6 @@
 fonts/
 *.png
+*.html
+*.part
 glyphs.json
 unitares-*.svg
