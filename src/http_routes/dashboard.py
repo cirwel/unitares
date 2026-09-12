@@ -21,7 +21,17 @@ logger = get_logger(__name__)
 # presentation, and are therefore served only to an authenticated caller.
 # The deeper fix is for the fallback bundle to hold synthetic data instead of
 # a real capture; until then it is gated like the endpoints it mirrors.
-_AUTHENTICATED_ONLY_FILES = {"snapshot.js"}
+#
+# The test is the DATA CLASS, not the file extension. snapshot.js was gated
+# first because a .js file under a public shell is what a "static assets are
+# public" reading waves through, but preview.html carries the same capture in
+# a literal FLEET array — resident names, EISV vectors, coherence, silence —
+# and PLAN.md describes the operator's own fleet. Both were public because the
+# gate was a filename set and nobody re-read it when siblings landed beside
+# the file it named. Neither is referenced at runtime: app.html does not load
+# them, no section module imports them, and nothing links them from a served
+# page, so gating them takes no rendering path with it.
+_AUTHENTICATED_ONLY_FILES = {"snapshot.js", "preview.html", "PLAN.md"}
 
 
 # Dashboard endpoint

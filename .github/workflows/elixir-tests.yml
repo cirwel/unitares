@@ -14,7 +14,13 @@ name: Elixir Tests
 #
 #   elixir-changes  always runs; scripts/ci/elixir_paths_changed.py decides
 #                   whether the change reaches any suite (an undeterminable
-#                   change set counts as relevant, never as skippable).
+#                   change set counts as relevant, never as skippable). A PUSH
+#                   to master/main is relevant whatever it touched (#2152):
+#                   path analysis answers "could this diff have broken a
+#                   suite?", and a defect inside a suite answers to neither, so
+#                   master reported green every day over three real lease_plane
+#                   failures it never ran. Pull requests stay gated, and the
+#                   merge re-checks what the PR was allowed to skip.
 #   <app jobs>      run when the detector says relevant, and also when the
 #                   detector job itself did not succeed -- a flaky detector
 #                   costs a full run, never a skipped suite. Otherwise they

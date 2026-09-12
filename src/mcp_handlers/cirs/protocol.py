@@ -16,10 +16,11 @@ Modules:
   cirs_resonance          — resonance_alert + stability_restored handlers
 """
 
-from typing import Dict, Any, Sequence
+from typing import Dict, Any, Sequence, get_args
 
 from mcp.types import TextContent
 from ..decorators import mcp_tool
+from ..schemas.core import CirsProtocolParams
 from ..utils import error_response
 
 # --- cirs_types (leaf) ---
@@ -116,19 +117,72 @@ _CIRS_DISPATCHERS = {
     "coherence_report": handle_coherence_report,
     "boundary_contract": handle_boundary_contract,
     "governance_action": handle_governance_action,
+    # Routed here but NOT in CirsProtocolParams.protocol, so validate_params
+    # refuses them before dispatch on every transport: unreachable through this
+    # tool, and listed in docs/operations/dormant-capability-registry.md as
+    # "verify before cut". They are still emitted internally — cirs/hooks.py
+    # calls storage._emit_resonance_alert / _emit_stability_restored directly,
+    # never these handlers. Do not name them in a recovery hint (#2165) and do
+    # not source the telemetry vocabulary from them; see _VALIDATED_PROTOCOLS.
     "resonance_alert": handle_resonance_alert,
     "stability_restored": handle_stability_restored,
 }
 
+# The protocols a caller can actually select, read from the validated schema
+# rather than from _CIRS_DISPATCHERS, which is wider. Recovery hints must name
+# only these: #2165 ("point every response hint at a name a client can call")
+# is an ancestor of this change, and hint_target_advertisement.py does not scan
+# `available_protocols`, so nothing else would catch a hint naming a value
+# validation rejects.
+_VALIDATED_PROTOCOLS: tuple = get_args(
+    CirsProtocolParams.model_fields["protocol"].annotation
+)
 
-@mcp_tool("cirs_protocol", timeout=15.0, description="CIRS Protocol: Unified multi-agent coordination (void alerts, state announce, coherence, boundaries, governance)")
+
+# known_actions is the union of the `action` vocabularies the SELECTABLE
+# protocols route on: void.py and state.py take emit/query, coherence.py
+# compute/query, boundary.py set/get/list, governance_action.py
+# initiate/respond/query/status. This tool is not an action_router — `protocol`
+# picks the sub-handler and each sub-handler validates `action` itself — so,
+# like self_recovery, the set is declared by hand for the tool_usage telemetry
+# clamp. Without it the recorder treats the tool as single-purpose and drops the
+# sub-action, so a call WOULD have recorded no discriminator (no call has been
+# observed yet, so this is a prospective blind spot, not an observed loss — see
+# the changelog entry for the classification). Nothing here refuses on it: the
+# declaration is not a gate, and each protocol keeps answering an action outside
+# its own subset with valid_actions. There is no default_action because no
+# selectable protocol defaults one, so an action-less call audits as no
+# sub-action, which is what it is. tests/test_tool_usage_payload.py holds this
+# set to the selectable handlers' own refusal vocabularies.
+#
+# Two consumers read it beyond the clamp, so a new action has to be classified,
+# not just declared. stakes_table.py classifies this tool PER ACTION (reads
+# baseline, writes high) rather than under one tool-level key, because these
+# nine are not uniform; add a row there for any action added here, or the
+# #775 coverage guards will fail. And the recorder records `protocol` alongside
+# `action` (services/tool_usage_recorder.py _SECONDARY_SELECTOR_FIELDS), since
+# four protocols share `query` and two share `emit`.
+@mcp_tool(
+    "cirs_protocol",
+    timeout=15.0,
+    description="CIRS Protocol: Unified multi-agent coordination (void alerts, state announce, coherence, boundaries, governance)",
+    known_actions={
+        "emit", "query", "compute", "set", "get", "list",
+        "initiate", "respond", "status",
+    },
+)
 async def handle_cirs_protocol(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     CIRS Protocol - Unified entry point for multi-agent coordination.
 
-    Use 'protocol' to select which operation:
-    - void_alert, state_announce, coherence_report, boundary_contract,
-      governance_action, resonance_alert, stability_restored
+    Use 'protocol' to select which operation, and 'action' within it:
+    - void_alert, state_announce: emit, query
+    - coherence_report: compute (target_agent_id required), query
+    - boundary_contract: set, get, list
+    - governance_action: initiate, respond, query, status
+
+    There is no protocol that takes every action; an action outside the chosen
+    protocol's own set is refused with that protocol's valid_actions.
     """
     protocol = arguments.get("protocol")
 
@@ -136,7 +190,7 @@ async def handle_cirs_protocol(arguments: Dict[str, Any]) -> Sequence[TextConten
         return [error_response(
             "Missing 'protocol' parameter",
             recovery={
-                "available_protocols": list(_CIRS_DISPATCHERS.keys()),
+                "available_protocols": list(_VALIDATED_PROTOCOLS),
                 "example": "cirs_protocol(protocol='void_alert', action='query')"
             }
         )]
@@ -147,7 +201,7 @@ async def handle_cirs_protocol(arguments: Dict[str, Any]) -> Sequence[TextConten
         return [error_response(
             f"Unknown protocol: {protocol}",
             recovery={
-                "available_protocols": list(_CIRS_DISPATCHERS.keys()),
+                "available_protocols": list(_VALIDATED_PROTOCOLS),
                 "example": "cirs_protocol(protocol='void_alert', action='query')"
             }
         )]

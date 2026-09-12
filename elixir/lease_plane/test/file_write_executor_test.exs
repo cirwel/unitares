@@ -16,12 +16,39 @@ defmodule UnitaresLeasePlane.FileWriteExecutorTest do
     surface
   end
 
+  # This module is the only one that overrides the executor's payload ceiling,
+  # so it forces a known default going IN and puts back what it found on the way
+  # OUT. Resetting only on entry is not enough: whatever the LAST test in this
+  # module sets stays set for the whole rest of the run, and ExUnit shuffles
+  # tests within a module, so on the seeds that happen to run the ceiling test
+  # last its 8-byte override escapes into every sibling module.
+  #
+  # That is #2152. Three governed_effect_test file_writes — payloads of 15, 28
+  # and 22 bytes — came back {:error, :payload_too_large}, and master could not
+  # see it because the Elixir suites are path-gated and skip on most pushes.
+  # file_write_executor_commit_test.exs already carried a hand-written delete
+  # against "the ceiling override" leaking from a sibling; this closes it at the
+  # source instead.
   setup do
+    previous = %{
+      commit: Application.get_env(:lease_plane, :execute_file_write_commit_enabled),
+      max_bytes: Application.get_env(:lease_plane, :file_write_payload_max_bytes)
+    }
+
     # default state for the commit-disabled fail-safe
     Application.delete_env(:lease_plane, :execute_file_write_commit_enabled)
     Application.delete_env(:lease_plane, :file_write_payload_max_bytes)
+
+    on_exit(fn ->
+      restore_env(:execute_file_write_commit_enabled, previous.commit)
+      restore_env(:file_write_payload_max_bytes, previous.max_bytes)
+    end)
+
     :ok
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:lease_plane, key)
+  defp restore_env(key, value), do: Application.put_env(:lease_plane, key, value)
 
   @tag :tmp_dir
   test "dry-run validates + reads pre-image but writes NOTHING", %{tmp_dir: dir} do

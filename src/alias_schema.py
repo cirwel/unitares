@@ -13,6 +13,8 @@ from src.schema_brief import (
     BRIEF_BUDGET,
     DEFAULT_FIELD_DESCRIPTION_MODE,
     apply_field_description_mode,
+    resolve_brief_budget,
+    resolve_field_description_mode,
 )
 
 
@@ -168,8 +170,19 @@ def build_alias_input_schema(
     actual_schema: dict,
     *,
     inject_action: bool,
+    field_descriptions: str | None = None,
+    budget: int | None = None,
 ) -> dict:
-    """Return the exact alias wire schema used by registration and discovery."""
+    """Return the exact alias wire schema used by registration and discovery.
+
+    The property overrides land in the same field-description mode as the
+    catalog they are applied to — ``UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS``
+    unless a mode is passed — so the schema built here is the one every
+    transport advertises. The ``/mcp/`` registrar copies it onto the registered
+    tool rather than re-applying the overrides to FastMCP's regenerated schema;
+    until 2026-09-11 it did the latter, which was the only reason the two
+    surfaces could disagree on an alias in a non-default mode.
+    """
     alias_schema = copy.deepcopy(actual_schema)
     if inject_action and alias_schema:
         properties = alias_schema.get("properties", {})
@@ -189,5 +202,10 @@ def build_alias_input_schema(
                 for value in required
                 if value != "action" and value not in dropped
             ]
-    apply_alias_schema_property_overrides(alias_name, alias_schema)
+    apply_alias_schema_property_overrides(
+        alias_name,
+        alias_schema,
+        field_descriptions=resolve_field_description_mode(field_descriptions),
+        budget=resolve_brief_budget(budget),
+    )
     return alias_schema

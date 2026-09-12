@@ -26,6 +26,42 @@ def test_registry_counter_reports_tools():
     assert any(module.startswith("knowledge") for module in breakdown)
 
 
+def test_breakdown_buckets_routers_by_declaring_module():
+    """An ``action_router``'s handler is defined inside decorators.py, so a
+    breakdown keyed on ``handler.__module__`` filed the eight consolidated
+    routers under ``decorators`` (F10 of the 2026-09-12 tool-surface audit).
+    The bucket is the module that declared the tool."""
+    breakdown = diag_count_tools.get_tool_breakdown()
+
+    assert "decorators" not in breakdown
+    assert "consolidated" in breakdown
+
+
+def test_breakdown_files_a_plugin_router_under_the_plugin():
+    """The same distinction keeps a plugin's router out of the governance
+    buckets: a router declared from another package counts against that
+    package, not against ``decorators``."""
+    import types
+
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, action_router
+
+    module = types.ModuleType("fake_governance_plugin.handlers")
+    module.__dict__["action_router"] = action_router
+    exec(
+        "async def _ping(arguments):\n"
+        "    return []\n"
+        "action_router('count_probe_plugin_router', actions={'ping': _ping})\n",
+        module.__dict__,
+    )
+    try:
+        breakdown = diag_count_tools.get_tool_breakdown()
+    finally:
+        _TOOL_DEFINITIONS.pop("count_probe_plugin_router", None)
+
+    assert breakdown.get("fake_governance_plugin.handlers") == 1
+    assert "decorators" not in breakdown
+
+
 def test_resolve_reports_available_count():
     result = diag_count_tools.resolve_tool_count()
 

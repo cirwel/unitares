@@ -24,11 +24,25 @@ from src.mcp_handlers.schemas.router_actions import (
 from src.tool_schemas import advertised_input_schema, get_pydantic_schemas, get_tool_definitions
 
 
+# Tools that declare an action vocabulary but dispatch on a SECOND selector
+# first, so an action-keyed field map cannot describe any single call. For
+# `cirs_protocol`, `protocol` picks the sub-handler and every flat parameter is
+# scoped by protocol rather than by action, so a union keyed on `action`
+# asserted call shapes the handlers refuse; see the comment on
+# `CirsProtocolParams`. Exempt from the ACTION_FIELDS requirement, and held to
+# actually having that second selector by
+# `test_two_level_tools_really_have_a_second_selector` — this set is not a
+# parking space for an ordinary router that nobody wanted to declare.
+_TWO_LEVEL_TOOLS = frozenset({"cirs_protocol"})
+
+
 def _routers():
     """(tool name, routed actions, parameter model) for every action tool."""
     models = get_pydantic_schemas()
     out = []
     for name in sorted(get_tool_registry()):
+        if name in _TWO_LEVEL_TOOLS:
+            continue
         definition = get_tool_definition(name)
         actions = getattr(definition, "known_actions", None) if definition else None
         model = models.get(name)
@@ -124,6 +138,42 @@ def test_narrowing_actually_narrows_somewhere(name, actions, model):
     full = len(schema.get("properties", {}))
     sizes = [len(narrow_schema_to_action(schema, model, a)["properties"]) for a in actions]
     assert min(sizes) < full, f"{name}: no action narrows the {full}-field schema"
+
+
+@pytest.mark.parametrize("name", sorted(_TWO_LEVEL_TOOLS))
+def test_two_level_tools_really_have_a_second_selector(name):
+    """The exemption has to be earned, not asserted.
+
+    A tool skips the ACTION_FIELDS requirement only because its parameters are
+    scoped by a selector other than `action`. Hold it to that: the model must
+    carry a required multi-valued Literal that is not `action`, and it must not
+    declare ACTION_FIELDS after all — a declaration here would silently put
+    describe_tool back into the narrowing mode this exemption exists to avoid.
+    """
+    definition = get_tool_definition(name)
+    assert definition is not None, f"{name} is not registered"
+    assert definition.known_actions, (
+        f"{name} declares no known_actions, so it needs no exemption"
+    )
+
+    model = get_pydantic_schemas()[name]
+    assert declared_action_fields(model) is None, (
+        f"{name} declares ACTION_FIELDS while claiming the two-level exemption; "
+        "remove one or the other"
+    )
+
+    schema = model.model_json_schema()
+    required = set(schema.get("required") or ())
+    selectors = [
+        field
+        for field in required
+        if field != "action"
+        and len((schema["properties"][field].get("enum") or [])) > 1
+    ]
+    assert selectors, (
+        f"{name} has no required multi-valued selector besides `action`, so it "
+        "is an ordinary router and must declare ACTION_FIELDS"
+    )
 
 
 def test_common_fields_are_identity_and_selection_only():

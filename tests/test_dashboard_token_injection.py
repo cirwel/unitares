@@ -17,6 +17,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from src.http_routes import dashboard as dashboard_routes
 from src.http_routes.dashboard import http_dashboard_redesign, http_phase
 
 TOKEN = "sekrit-local-token"  # noqa: S105 - test fixture, not a real credential
@@ -102,6 +103,32 @@ def test_snapshot_bundle_is_not_public():
     r = _redesign_client(("203.0.113.7", 44444)).get("/dashboard/redesign/snapshot.js")
     assert r.status_code == 401
     assert "SNAPSHOT" not in r.text
+
+
+@pytest.mark.parametrize("path", ["preview.html", "PLAN.md"])
+def test_reference_artifacts_are_not_public(path):
+    """preview.html and PLAN.md are the same data class as snapshot.js: a
+    literal fleet capture and a description of the operator's own fleet. They
+    shipped public because the gate was a filename set and these landed beside
+    the file it named. Nothing loads either at runtime, so gating them takes no
+    rendering path with it."""
+    r = _redesign_client(("203.0.113.7", 44444)).get(f"/dashboard/redesign/{path}")
+    assert r.status_code == 401
+
+
+@pytest.mark.parametrize("path", ["preview.html", "PLAN.md"])
+def test_reference_artifacts_served_to_trusted_caller(path):
+    r = _redesign_client(("127.0.0.1", 50000)).get(f"/dashboard/redesign/{path}")
+    assert r.status_code == 200
+
+
+def test_gate_covers_every_reference_artifact_under_the_shell():
+    """A filename set is only as good as its next reader. This pins the whole
+    set, so a file added beside these three fails here rather than shipping
+    public, which is exactly how preview.html and PLAN.md got out."""
+    assert dashboard_routes._AUTHENTICATED_ONLY_FILES == {
+        "snapshot.js", "preview.html", "PLAN.md",
+    }
 
 
 def test_presentation_assets_stay_public():
