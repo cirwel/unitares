@@ -604,3 +604,136 @@ def test_every_advertised_value_survives_both_validation_boundaries():
         "went unchecked for them. Extend _candidate_values, or name the construct "
         f"deliberately ({len(unsynthesizable)}):\n  " + "\n  ".join(unsynthesizable)
     )
+
+
+# ---------------------------------------------------------------------------
+# The invariant's own sensitivity
+# ---------------------------------------------------------------------------
+# Every entry is a way the invariant above was once blind, found by mutation
+# rather than by reading, and each was fixed. Committing them is what keeps the
+# fixes fixed: a later tidy-up of _candidate_values that reintroduces a cap,
+# drops nested exploration, or softens the exemption check would still pass the
+# invariant itself, because the catalog is correct today. Only a test that
+# BREAKS the catalog and demands a failure can see that kind of decay.
+#
+# Each mutation is applied to the live mount and restored in a finally block, so
+# no other test observes it. Each also names the gate that must catch it: an
+# unqualified pytest.raises(AssertionError) would pass if the invariant failed
+# for any reason at all, including the wrong one, which is the same lenience
+# this section exists to prevent.
+
+_HANDLER_GATE = "values the handler's own model refuses"
+_TRANSPORT_GATE = "values its own argument model refuses"
+
+_REVIEW_ROUND_MUTATIONS = {
+    "an advertised maximum above the handler's": (
+        "property", "delegate_inference", "timeout_s",
+        {"type": "integer", "minimum": 5, "maximum": 99999},
+        _HANDLER_GATE,
+    ),
+    "an advertised maxLength above the handler's": (
+        "property", "record_progress_pulse", "metric_name",
+        {"type": "string", "minLength": 1, "maxLength": 99999},
+        _HANDLER_GATE,
+    ),
+    "a minimum above the handler's maximum": (
+        "property", "delegate_inference", "timeout_s",
+        {"type": "integer", "minimum": 99999},
+        _HANDLER_GATE,
+    ),
+    "a bogus enum member in a non-first position": (
+        "property", "sync_state", "task_type",
+        {"type": "string", "enum": ["mixed", "not_a_task_type"]},
+        _HANDLER_GATE,
+    ),
+    "a type the wrapper's argument model refuses": (
+        "property", "delegate_inference", "prompt",
+        {"type": "array", "items": {"type": "integer"}, "minItems": 1},
+        _TRANSPORT_GATE,
+    ),
+    "a bogus enum member on a field inside a nested model": (
+        "nested", "start_session", ("BootstrapStateParams", "task_type"),
+        {"type": "string", "enum": ["mixed", "not_a_task_type"]},
+        _HANDLER_GATE,
+    ),
+    "an array cardinality above the handler's": (
+        "nested", "start_session", ("BootstrapStateParams", "ethical_drift"),
+        {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 99},
+        _HANDLER_GATE,
+    ),
+    "a field of an object inside an array whose maxLength overshoots": (
+        "nested", "sync_state", ("ToolResultEvidence", "summary"),
+        {"type": "string", "maxLength": 99999},
+        _HANDLER_GATE,
+    ),
+    "an exemption whose advertised branch no longer exists": (
+        "property", "simulate_update", "confidence",
+        {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]},
+        "exemptions were never reached",
+    ),
+    "a required field the helper cannot synthesize": (
+        "property", "delegate_inference", "prompt",
+        {"type": "string", "pattern": "^x+$"},
+        "cannot synthesize",
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "direction", sorted(_REVIEW_ROUND_MUTATIONS), ids=lambda label: label.replace(" ", "-")
+)
+def test_the_invariant_fails_when_the_catalog_is_broken(direction):
+    """Break the advertised schema in one known way; the invariant must fail."""
+    import copy
+
+    from src import mcp_server
+
+    import re
+
+    kind, tool_name, location, replacement, expected_gate = (
+        _REVIEW_ROUND_MUTATIONS[direction]
+    )
+    parameters = mcp_server.mcp._tool_manager.get_tool(tool_name).parameters
+    if kind == "property":
+        container, key = parameters["properties"], location
+    else:
+        model_name, key = location
+        container = parameters["$defs"][model_name]["properties"]
+    original = copy.deepcopy(container[key])
+
+    container[key] = replacement
+    try:
+        with pytest.raises(AssertionError, match=re.escape(expected_gate)):
+            test_every_advertised_value_survives_both_validation_boundaries()
+    finally:
+        container[key] = original
+
+    # Restoration is part of the contract: a mutation that leaked would make
+    # every later test in the session observe a broken catalog.
+    test_every_advertised_value_survives_both_validation_boundaries()
+
+
+def test_a_widened_handler_invalidates_the_exemption():
+    """The exemption records that the handler REFUSES a value; accepting it must fail.
+
+    Separate from the mutations above because it breaks the handler rather than
+    the catalog. It is the direction the first exemption guard could not see:
+    exempted values skipped handler validation, so nothing learned the handler
+    had changed.
+    """
+    from pydantic import ConfigDict, create_model
+
+    from src.tool_schemas import get_pydantic_schemas
+
+    schemas = get_pydantic_schemas()
+    permissive = create_model("WidenedHandler", __config__=ConfigDict(extra="allow"))
+    for canonical in sorted({tool for tool, _ in _ADVERTISED_STRING_WIDER_THAN_HANDLER}):
+        original = schemas[canonical]
+        schemas[canonical] = permissive
+        try:
+            with pytest.raises(AssertionError, match="handler now ACCEPTS"):
+                test_every_advertised_value_survives_both_validation_boundaries()
+        finally:
+            schemas[canonical] = original
+
+    test_every_advertised_value_survives_both_validation_boundaries()
