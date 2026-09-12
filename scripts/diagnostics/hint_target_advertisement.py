@@ -3,10 +3,21 @@
 
 HINT_KEYS is a heuristic seed list, not proof that a value reaches a caller.
 The scan follows literals, nested containers, local value bindings and local
-return builders under those keys. Bare names count only in structured
-related_tools lists. Other prose needs an adjacent tool( call shape. Dynamic
+return builders under those keys. Bare names count only in structured name
+fields (STRUCTURED_NAME_KEYS: related_tools, tools, related_to, depends_on and
+the workflow lists). Other prose needs an adjacent tool( call shape. Dynamic
 strings, arbitrary data flow, argument validation and path conditions are not
 proven. Comments and docstrings are not seed values.
+
+The handler tree is not the only source of served names: src/tool_meta.py
+declares the relationship graph list_tools serves under `relationships`, and
+the handler that emits it only re-exports the table, so that file is scanned
+too (EXTRA_SCAN_FILES). Until 2026-09-12 bare names were admitted under
+related_tools alone and list_tools(lite=false) was naming 30 dispatch-only
+twins in four fields the scan could not see -- a hand-written categories
+block (`tools`), the WORKFLOWS constant, next_steps, and related_to /
+depends_on -- while --fail-on-finding reported clean (F1 of
+docs/operations/tool-surface-audit-2026-09-12.md).
 
 Emitter resolution conservatively follows plain, imported and attribute calls
 up to three hops. Same-name functions can be conflated; unresolved paths and
@@ -67,12 +78,21 @@ import sys
 import tokenize
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Set
+from typing import Dict, Iterator, List, Optional, Set, Tuple
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 HANDLER_ROOT = PROJECT_ROOT / "src" / "mcp_handlers"
+
+#: Files outside the handler tree whose name lists reach a caller, relative to
+#: PROJECT_ROOT. src/tool_meta.py declares `related_to` / `depends_on` for
+#: every advertised tool; introspection/tool_catalog.py re-exports the table
+#: and list_tools serves it, so a dispatch-only twin declared there is a dead
+#: end the handler tree alone cannot show. Resolved at scan time and skipped
+#: when absent, so a synthetic tree in tests is not contaminated by the real
+#: table.
+EXTRA_SCAN_FILES: Tuple[str, ...] = ("src/tool_meta.py",)
 
 #: Exit status when the handler tree could not be read.
 EXIT_REGISTRY_UNAVAILABLE = 2
@@ -89,15 +109,34 @@ EXIT_DEAD_END_HINT = 3
 # that this scan could not see, found only by reading the files around a
 # related_tools hit. Seeding them costs nothing now -- those sites are fixed --
 # and closes the gap for the next one.
+#: Fields that hold tool NAMES rather than prose: a literal list of names, or
+#: a mapping whose values are such lists. A bare name is admitted here without
+#: the call regex, because the field is by contract a list of tools.
+#:
+#: Until 2026-09-12 only `related_tools` was seeded, and list_tools(lite=false)
+#: named 30 dispatch-only twins in fields the scan never read: `tools` (its
+#: hand-written categories block and getting_started.next_steps), `related_to`
+#: / `depends_on` (the relationship graph, declared in src/tool_meta.py) and
+#: WORKFLOWS in introspection/tool_catalog.py, served under `workflows`.
+#: WORKFLOWS is seeded by its constant name because the scan follows
+#: file-local bindings only and the response dict reaches it through a
+#: module attribute.
+STRUCTURED_NAME_KEYS: Set[str] = {
+    "related_tools", "tools", "related_to", "depends_on", "workflows", "WORKFLOWS",
+}
+
 HINT_KEYS: Set[str] = {
     "action_required", "all_inline", "fix", "guidance", "hint", "hints",
     "how_to_strengthen", "next_action", "next_step", "next_steps", "open_one",
     "quick_action", "raw_governance_hint", "recovery", "recovery_hint",
-    "related_tools", "suggested_actions",
+    "suggested_actions",
     "remediation", "resolution", "suggestion", "suggestions", "whose_move",
     "next_call", "recommended_action", "call", "safe_options", "note",
     "recommendation", "tip", "what_you_can_do", "workflow", "message",
     "error", "how_to", "instructions",
+    # A name field may also carry a call shape (`agent(action='list')`), and
+    # that call is held to the same advertised-router-and-action standard.
+    *STRUCTURED_NAME_KEYS,
 }
 
 #: A hint reads as a call: the tool name immediately followed by an open paren.
@@ -260,6 +299,44 @@ def _string_constants(node: ast.AST, bindings=None, seen=None) -> Iterator[ast.C
             yield from _string_constants(value, bindings, seen)
     for child in ast.iter_child_nodes(node):
         yield from _string_constants(child, bindings, seen)
+
+
+def _name_list_constants(node: ast.AST, bindings=None, seen=None) -> Iterator[ast.Constant]:
+    """String constants in a structured name field.
+
+    Follows literal lists, tuples and sets, the VALUES of a literal dict (its
+    keys are labels: WORKFLOWS is keyed by workflow name, not by tool), a
+    name bound to one of those, a starred spread, and a call to a file-local
+    builder that returns one. Any other expression stops the walk. A name
+    field is a literal by contract, and _string_constants' broader walk would
+    read `sorted(t["name"] for t in tools_list)` -- list_tools' not_advertised
+    block -- as the tool "name".
+    """
+    seen = set() if seen is None else seen
+    if id(node) in seen:
+        return
+    seen.add(id(node))
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            yield node
+        return
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        for element in node.elts:
+            yield from _name_list_constants(element, bindings, seen)
+        return
+    if isinstance(node, ast.Dict):
+        for value in node.values:
+            yield from _name_list_constants(value, bindings, seen)
+        return
+    if isinstance(node, ast.Starred):
+        yield from _name_list_constants(node.value, bindings, seen)
+        return
+    if bindings:
+        name = node.id if isinstance(node, ast.Name) else (
+            node.func.id if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) else None
+        )
+        for value in bindings.get(name, ()):
+            yield from _name_list_constants(value, bindings, seen)
 
 
 def _value_bindings(tree: ast.AST) -> Dict[str, List[ast.AST]]:
@@ -493,6 +570,26 @@ def _reachable_predicate(mode: str):
     return reachable
 
 
+def scanned_sources() -> Dict[str, ast.AST]:
+    """Every scanned source, parsed, keyed by its PROJECT_ROOT-relative path.
+
+    The handler tree plus EXTRA_SCAN_FILES. Raises OSError when the handler
+    tree is empty, so an unreadable tree reports unknown rather than clean.
+    """
+    paths = sorted(HANDLER_ROOT.rglob("*.py"))
+    if not paths:
+        raise OSError(f"No handler source files found under {HANDLER_ROOT}")
+    paths += [
+        path for path in (PROJECT_ROOT / relative for relative in EXTRA_SCAN_FILES)
+        if path.is_file()
+    ]
+    trees: Dict[str, ast.AST] = {}
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        trees[path.relative_to(PROJECT_ROOT).as_posix()] = tree
+    return trees
+
+
 def collect_hint_sites(roster: Set[str]) -> Dict[str, Set[tuple]]:
     """Map each rostered tool name to (site, action, emitter) triples.
 
@@ -505,16 +602,11 @@ def collect_hint_sites(roster: Set[str]) -> Dict[str, Set[tuple]]:
 
     # Two passes: the index must see every file's call graph before any hint is
     # resolved, because a helper's emitter is usually in another module.
-    trees: Dict[str, ast.AST] = {}
+    trees = scanned_sources()
     index = _EmitterIndex()
-    for path in sorted(HANDLER_ROOT.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        relative = path.relative_to(PROJECT_ROOT).as_posix()
-        trees[relative] = tree
+    for relative, tree in trees.items():
         index.add(relative, tree)
 
-    if not trees:
-        raise OSError(f"No handler source files found under {HANDLER_ROOT}")
     for relative, tree in trees.items():
         bindings = _value_bindings(tree)
         for value in _hint_value_nodes(tree):
@@ -534,8 +626,10 @@ def collect_hint_sites(roster: Set[str]) -> Dict[str, Set[tuple]]:
         # regex, and legacy aliases are part of the callable-name roster. An
         # entry off the roster is kept too: the field holds tool names, so a
         # name nothing answers to is a dead end the roster test cannot reach.
-        for value in _hint_value_nodes(tree, {"related_tools"}):
-            for constant in _string_constants(value, bindings):
+        # A call shape in such a list is not a bare name (TOOL_NAME_SHAPE
+        # rejects the paren); the call-regex pass above already judged it.
+        for value in _hint_value_nodes(tree, STRUCTURED_NAME_KEYS):
+            for constant in _name_list_constants(value, bindings):
                 if constant.value in roster or TOOL_NAME_SHAPE.match(constant.value):
                     emitters = index.emitters(relative, constant.lineno)
                     sites.setdefault(constant.value, set()).add((

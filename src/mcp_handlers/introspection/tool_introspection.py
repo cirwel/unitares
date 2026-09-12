@@ -409,25 +409,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             if not category_name or not isinstance(category_name, str):
                 category_name = "unknown"
             tool_info["category"] = category_name
-            # Add category metadata for better UX
-            category_meta_dict = {
-                "identity": {"icon": "🚀", "name": "Identity & Onboarding"},
-                "core": {"icon": "💬", "name": "Core Governance"},
-                "lifecycle": {"icon": "👥", "name": "Agent Lifecycle"},
-                "knowledge": {"icon": "💡", "name": "Knowledge Graph"},
-                "observability": {"icon": "👁️", "name": "Observability"},
-                "export": {"icon": "📊", "name": "Export & History"},
-                "config": {"icon": "⚙️", "name": "Configuration"},
-                "admin": {"icon": "🔧", "name": "Admin & Diagnostics"},
-                "workspace": {"icon": "📁", "name": "Workspace"},
-                "dialectic": {"icon": "💭", "name": "Dialectic"}
-            }
-            if category_name in category_meta_dict:
-                category_meta = category_meta_dict[category_name]
-            else:
-                # Fallback for unknown categories - category_name is guaranteed to be a string here
-                fallback_name = category_name.title() if isinstance(category_name, str) else "Other"
-                category_meta = {"icon": "🔹", "name": fallback_name}
+            # Category label from the one presentation table (tool_catalog);
+            # an unknown category gets a neutral label, never a crash.
+            category_meta = tool_catalog.category_presentation(category_name)
             tool_info["category_icon"] = category_meta["icon"]
             tool_info["category_name"] = category_meta["name"]
         tools_list.append(tool_info)
@@ -497,7 +481,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "onboard", "identity", "process_agent_update",
                 "get_governance_metrics", "list_tools", "describe_tool",
                 "agent", "knowledge", "dialectic", "health_check",
-                "store_knowledge_graph", "search_knowledge_graph", "leave_note",
+                "search_knowledge_graph", "leave_note",
             ]
             lite_tools.sort(key=lambda x: order.index(x["name"]) if x["name"] in order else 99)
         
@@ -582,9 +566,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
                 "consult": "(brief:str, purpose?:str, effort?:str, privacy?:str, allow_degraded?:bool, response_mode?:'compact'|'full')",
                 "request_review": "(issue_description:str, reasoning?:str, use_brief_as_thesis?:bool — the brief is the thesis by default; false keeps the two-call flow)",
-                "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
+                # Keyed by a name on the wire or a call shape against one;
+                # the legacy twin store_knowledge_graph sat here until
+                # 2026-09-12 and is not a name an MCP client can call.
+                "knowledge(action='store')": "(summary:str, tags?:list, severity?:str, details?:str)",
                 "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
-                "knowledge_search": "(action='search', query?:str, tags?:list, limit?:int, include_details?:bool)",
+                "knowledge(action='search')": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
                 "leave_note": "(summary:str, tags?:list)"
             },
             "more": "list_tools(lite=false) for all tools with full category details",
@@ -663,6 +650,44 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except Exception:
             pass  # Graceful degradation - skip grouping if stats unavailable
     
+    # `categories` is derived from the tools this response lists, so it can
+    # only name what `tools` already names: every entry is on this
+    # deployment's wire by construction, and a filter (tier, category)
+    # narrows it the same way. Ordered by the presentation priority.
+    #
+    # Until 2026-09-12 this was a hand-written dict beside the derived
+    # `categories_summary` of the compact view. It predated the router
+    # consolidation: 30 of its 47 names were dispatch-only twins (`list_agents`,
+    # `store_knowledge_graph`, `get_server_info`, ...) that return Unknown tool
+    # on the /mcp/ mount, and it omitted every router and workflow alias (F1
+    # of docs/operations/tool-surface-audit-2026-09-12.md).
+    listed_names = [t["name"] for t in tools_list]
+    categories_block: Dict[str, Dict[str, Any]] = {}
+    for t in tools_list:
+        cat = t.get("category") or "other"
+        if cat not in categories_block:
+            presentation = tool_catalog.category_presentation(cat)
+            categories_block[cat] = {
+                "name": f"{presentation['icon']} {presentation['name']}",
+                "description": presentation["description"],
+                "tools": [],
+                "priority": presentation["priority"],
+                "for_new_agents": presentation["for_new_agents"],
+            }
+        categories_block[cat]["tools"].append(t["name"])
+    categories_block = dict(
+        sorted(categories_block.items(), key=lambda item: item[1]["priority"])
+    )
+    # `relationships` carries records for the names listed above only. The
+    # catalog also holds records for plugin-provided tools; a deployment
+    # without the plugin would otherwise describe relationships of a tool it
+    # cannot dispatch.
+    tool_relationships = {
+        name: tool_relationships[name]
+        for name in listed_names
+        if name in tool_relationships
+    }
+
     tools_info = {
         "success": True,
         "server_version": mcp_server.SERVER_VERSION,
@@ -682,89 +707,10 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "category_filter": category_filter,
             "progressive": progressive,
         },
-        "categories": {
-            "identity": {
-                "name": "🚀 Identity & Onboarding",
-                "description": "Get started - create your identity and set up your session",
-                "tools": ["onboard", "identity"],
-                "priority": 1,
-                "for_new_agents": True
-            },
-            "core": {
-                "name": "💬 Core Governance",
-                "description": "Main tools for sharing work and getting feedback",
-                "tools": ["process_agent_update", "get_governance_metrics", "simulate_update"],
-                "priority": 2,
-                "for_new_agents": True
-            },
-            "lifecycle": {
-                "name": "👥 Agent Lifecycle",
-                "description": "Manage agents, view metadata, and handle agent states",
-                "tools": ["list_agents", "get_agent_metadata", "update_agent_metadata", "archive_agent", "delete_agent", "archive_old_test_agents", "mark_response_complete", "self_recovery"],
-                "priority": 3,
-                "for_new_agents": False
-            },
-            "knowledge": {
-                "name": "💡 Knowledge Graph",
-                "description": "Store and search discoveries, insights, and notes",
-                "tools": ["store_knowledge_graph", "search_knowledge_graph", "get_knowledge_graph", "list_knowledge_graph", "get_discovery_details", "leave_note", "update_discovery_status_graph"],
-                "priority": 4,
-                "for_new_agents": False
-            },
-            "observability": {
-                "name": "👁️ Observability",
-                "description": "Monitor agents, compare patterns, and detect anomalies",
-                "tools": ["observe_agent", "compare_agents", "compare_me_to_similar", "detect_anomalies", "aggregate_metrics"],
-                "priority": 5,
-                "for_new_agents": False
-            },
-            "export": {
-                "name": "📊 Export & History",
-                "description": "Export governance history and system data",
-                "tools": ["get_system_history", "export_to_file"],
-                "priority": 6,
-                "for_new_agents": False
-            },
-            "config": {
-                "name": "⚙️ Configuration",
-                "description": "Configure thresholds and system settings",
-                "tools": ["get_thresholds", "set_thresholds"],
-                "priority": 7,
-                "for_new_agents": False
-            },
-            "admin": {
-                "name": "🔧 Admin & Diagnostics",
-                "description": "System administration, health checks, and diagnostics",
-                "tools": ["reset_monitor", "get_server_info", "health_check", "check_calibration", "update_calibration_ground_truth", "get_telemetry_metrics", "get_tool_usage_stats", "list_tools", "describe_tool", "cleanup_stale_locks", "backfill_calibration_from_dialectic", "validate_file_path"],
-                "priority": 8,
-                "for_new_agents": False
-            },
-            "workspace": {
-                "name": "📁 Workspace",
-                "description": "Workspace health and file validation",
-                "tools": ["get_workspace_health"],
-                "priority": 9,
-                "for_new_agents": False
-            },
-            "dialectic": {
-                "name": "💭 Dialectic",
-                "description": "Structured peer review and recovery protocol",
-                "tools": ["request_dialectic_review", "submit_thesis", "submit_antithesis", "submit_synthesis", "dialectic"],
-                "priority": 10,
-                "for_new_agents": False
-            }
-        },
+        "categories": categories_block,
         "category_descriptions": {
-            "identity": "🚀 Start here! Create your identity and get ready-to-use templates",
-            "core": "💬 Your main tools - share work, get feedback, check your state",
-            "lifecycle": "👥 Manage agents and view agent metadata",
-            "knowledge": "💡 Store discoveries, search insights, leave notes",
-            "observability": "👁️ Monitor agents, compare patterns, detect issues",
-            "export": "📊 Export history and system data",
-            "config": "⚙️ Configure thresholds and settings",
-            "admin": "🔧 System administration and diagnostics",
-            "workspace": "📁 Workspace health and validation",
-            "dialectic": "💭 View archived dialectic sessions"
+            cat: f"{p['icon']} {p['description']}"
+            for cat, p in tool_catalog.CATEGORY_PRESENTATION.items()
         },
         "getting_started": {
             "path": tool_catalog.getting_started_path(),
@@ -784,12 +730,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "next_steps": [
                 {
                     "category": "lifecycle",
-                    "tools": ["list_agents"],
+                    "tools": ["agent(action='list')"],
                     "why": "See who else is here"
                 },
                 {
                     "category": "knowledge",
-                    "tools": ["store_knowledge_graph", "leave_note"],
+                    "tools": ["store_finding", "leave_note"],
                     "why": "Save discoveries and insights"
                 }
             ]
@@ -821,47 +767,50 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "lite_mode": "Use list_tools(lite=true) for the compact listing (truncated hints and a category summary; no relationship map or tool map) - better for local/smaller models",
             "describe_tool": "Use describe_tool(tool_name, lite=true) for simplified schemas with fewer parameters"
         },
-        # Visual tool relationship map (v2.5.0+)
+        # Visual tool relationship map (v2.5.0+). Names on the wire only, or
+        # call shapes against a router on it: the ten dispatch-only twins it
+        # drew until 2026-09-12 (list_agents, observe_agent, export_to_file,
+        # delete_agent, ...) were Unknown tool on /mcp/.
         "tool_map": """
-┌─────────────────────────────────────────────────────────────────────┐
-│                        TOOL RELATIONSHIP MAP                        │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  🚀 START                                                           │
-│     │                                                               │
-│     ▼                                                               │
-│  ┌───────────────┐                                                  │
-│  │ start_session │────────────┐                                     │
-│  └───────┬───────┘            │                                     │
-│       │                       ▼                                     │
-│       │              ┌──────────────┐                               │
-│       │              │   identity   │ ◄── name yourself             │
-│       │              └──────────────┘                               │
-│       │                                                             │
-│       ▼                                                             │
-│  ┌────────────────────────┐       ┌─────────────────────────────┐  │
-│  │ sync_state             │◄─────►│ check_working_state         │  │
-│  │ (main check-in)        │       │ (view state)                │  │
-│  └───────────┬────────────┘       └─────────────────────────────┘  │
-│              │                                                      │
-│              ├───────────────────────────────────────┐              │
-│              │                                       │              │
-│              ▼                                       ▼              │
-│  ┌───────────────────────┐              ┌────────────────────────┐ │
-│  │ KNOWLEDGE GRAPH       │              │ OBSERVABILITY          │ │
-│  ├───────────────────────┤              ├────────────────────────┤ │
-│  │ search_shared_memory  │              │ list_agents            │ │
-│  │ knowledge             │              │ observe_agent          │ │
-│  │ leave_note            │              │ compare_agents         │ │
-│  │ get_discovery_details │              │ detect_anomalies       │ │
-│  └───────────────────────┘              └────────────────────────┘ │
-│                                                                     │
-│  ─────────────────────────────────────────────────────────────────  │
-│  ADMIN/CONFIG: health_check, get_thresholds, describe_tool         │
-│  EXPORT: get_system_history, export_to_file                        │
-│  LIFECYCLE: archive_agent, delete_agent, update_agent_metadata     │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                        TOOL RELATIONSHIP MAP                         │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  🚀 START                                                            │
+│     │                                                                │
+│     ▼                                                                │
+│  ┌───────────────┐                                                   │
+│  │ start_session │────────────┐                                      │
+│  └───────┬───────┘            │                                      │
+│          │                    ▼                                      │
+│          │           ┌──────────────┐                                │
+│          │           │   identity   │ ◄── name yourself              │
+│          │           └──────────────┘                                │
+│          │                                                           │
+│          ▼                                                           │
+│  ┌────────────────────────┐       ┌─────────────────────────────┐    │
+│  │ sync_state             │◄─────►│ check_working_state         │    │
+│  │ (main check-in)        │       │ (read the verdict)          │    │
+│  └───────────┬────────────┘       └─────────────────────────────┘    │
+│              │                                                       │
+│              ├───────────────────────────────────────┐               │
+│              │                                       │               │
+│              ▼                                       ▼               │
+│  ┌────────────────────────────┐   ┌────────────────────────────────┐ │
+│  │ KNOWLEDGE GRAPH            │   │ OBSERVABILITY                  │ │
+│  ├────────────────────────────┤   ├────────────────────────────────┤ │
+│  │ search_shared_memory       │   │ agent(action='list')           │ │
+│  │ store_finding              │   │ observe(action='agent')        │ │
+│  │ knowledge                  │   │ observe(action='compare')      │ │
+│  │ leave_note                 │   │ observe(action='anomalies')    │ │
+│  └────────────────────────────┘   └────────────────────────────────┘ │
+│                                                                      │
+│  ────────────────────────────────────────────────────────────────    │
+│  ADMIN/CONFIG: health_check, get_thresholds, describe_tool, admin    │
+│  EXPORT: export(action='history'), export(action='file')             │
+│  LIFECYCLE: agent (action=get | update | archive | delete)           │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
 """
     }
 
