@@ -13,14 +13,31 @@ response (an unknown action returns ``recovery.valid_actions``) rather than
 hardcoded here — hardcoding would just reintroduce the drift this test exists
 to prevent.
 
+TWO DESCRIPTIONS EXIST PER ROUTER, AND ONLY ONE IS SERVED
+---------------------------------------------------------
+``get_tool_description`` returns what ``@mcp_tool`` recorded, which for an
+``action_router`` is the text ``action_router`` derives from the action map, so
+it names every routed action by construction. That text is NOT what any client
+reads. Every one of these eight routers has a ``*Params`` model and sits in
+``TOOL_ORDER``, and for such a name ``get_tool_definitions`` takes the
+description from ``src/tool_descriptions.py`` first; the derived text is only
+reached by the auto-discovery branch for tools outside ``TOOL_ORDER``. So the
+derived-text tests below pin the DERIVATION, and the served-text tests pin what
+an agent actually reads. Both are needed, and conflating them is how this file
+came to look protective while checking a string nobody is shown.
+
 A third guard lived here until 2026-09-12: the hand-maintained
 ``TOOL_DESCRIPTION_OVERRIDES`` entry for a router outranked the derived
 description in ``list_tools``, and the ``dialectic`` entry advertised ``vote``
 (removed) and omitted ``quick`` (routed) long after the derived text was
-corrected. list_tools now serves the wire's first line for every advertised
-name and the override table may not carry one, so that class is closed
-structurally — see the parity tests in tests/test_describe_tool_drift.py
-(``test_override_table_carries_no_advertised_name`` and neighbours).
+corrected. That table may no longer carry an advertised name
+(``test_override_table_carries_no_advertised_name`` in
+tests/test_describe_tool_drift.py), which closes the override vector but NOT
+the class: the served text in ``src/tool_descriptions.py`` is hand-authored and
+nothing derives it from the action map, so an action added to a router without a
+description edit is invisible again. ``test_served_description_*`` below is the
+replacement guard, and it is deliberately on the served text rather than the
+derived text the removed guard's neighbours check.
 """
 
 from __future__ import annotations
@@ -75,4 +92,71 @@ async def test_dialectic_describes_quick_and_drops_dead_vote():
     assert "vote" not in desc, (
         "dialectic must not advertise 'vote' — there is no vote handler "
         "(the quorum_voting phase is vestigial)"
+    )
+
+
+def _served_description(tool: str) -> str:
+    """The description this deployment actually advertises for ``tool``."""
+    import src.tool_modes
+    from src.interface_contract import get_public_tool_definitions
+
+    for definition in get_public_tool_definitions(src.tool_modes.TOOL_MODE):
+        if definition.name == tool:
+            return definition.description or ""
+    raise AssertionError(f"{tool} is not advertised; the roster changed")
+
+
+# Routers whose served description does not yet name every routed action.
+# Measured 2026-09-12: admin omits connections, debug_context, telemetry,
+# tool_usage and workspace_health; knowledge omits supersede. Neither is a
+# regression from the F2 change — neither name had a catalog override, so
+# list_tools was already serving this same text for them. They are recorded
+# here rather than silently fixed because the wire descriptions are authored
+# prose (#2148/#2151/#2158) and rewriting them is a content decision, not a
+# parity fix. Shrink this set; never grow it.
+SERVED_ACTION_COVERAGE_GAPS = {"admin", "knowledge"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", CONSOLIDATED_TOOLS)
+async def test_served_description_names_every_routed_action(tool):
+    """What a client reads must name every action it can route.
+
+    dialectic is the case that makes this worth pinning: its catalog override
+    listed all eight actions, and when #2176 made list_tools serve the wire
+    text instead, `reassign` stopped being named anywhere an agent looks. The
+    repair was to the served text, so the guard belongs there too.
+    """
+    actions = await _routed_actions(tool)
+    assert actions, f"{tool} reported no valid_actions"
+    served = _served_description(tool)
+    missing = sorted(a for a in actions if a not in served)
+    if tool in SERVED_ACTION_COVERAGE_GAPS:
+        pytest.xfail(f"{tool} has a known served-text coverage gap: {missing}")
+    assert not missing, (
+        f"{tool} is advertised to clients with a description that omits routed "
+        f"actions {missing}. The served text lives in src/tool_descriptions.py "
+        f"(or _INFERENCE_DESCRIPTION_OVERRIDES there); the derived text that "
+        f"names every action is not what ships. Served text: {served!r}"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", CONSOLIDATED_TOOLS)
+async def test_served_description_names_no_phantom_action(tool):
+    """The direction the removed override guard protected, on the served text.
+
+    An advertised description may abbreviate, but must never instruct a caller
+    to pass an action that does not route — that is the `dialectic(action='vote')`
+    defect, and it is worse than an omission because the caller acts on it.
+    """
+    import re
+
+    actions = set(await _routed_actions(tool))
+    served = _served_description(tool)
+    claimed = set(re.findall(r"action=['\"](\w+)['\"]", served))
+    phantom = sorted(claimed - actions)
+    assert not phantom, (
+        f"{tool} is advertised with action(s) {phantom} that do not route. "
+        f"Routed: {sorted(actions)}. Served text: {served!r}"
     )
