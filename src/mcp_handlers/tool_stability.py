@@ -101,7 +101,10 @@ _SINCE_ADMIN_ROUTER = datetime(2026, 6, 29)            # ebc30169, admin router 
 # by test_no_alias_name_is_also_a_registered_tool.
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Identity tools - all point to identity() (the primary identity tool)
-    # NOTE: who_am_i has its own handler in admin.py, so NOT aliased
+    # NOTE: who_am_i no longer exists: no handler, not registered, not aliased,
+    # so a call to it is an unknown tool. identity() replaced it; see the
+    # tool-registry entry in docs/CHANGELOG.md. (An earlier note here said it
+    # had its own handler in admin.py; no such handler exists.)
     #
     # Common intuitive aliases for agent "status" checking
     "status": ToolAlias(
@@ -232,7 +235,8 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         deprecated_since=_SINCE_HISTORY_FLOOR,
         migration_note="API keys deprecated - UUID is now auth. Use identity() to see your agent_uuid."
     ),
-    # NOTE: who_am_i is NOT aliased - it has its own handler in admin.py
+    # NOTE: who_am_i is not aliased because it no longer exists; see the note
+    # at the top of this table.
 
     # Recovery tools - consolidated recovery hierarchy (Jan 2026)
     #
