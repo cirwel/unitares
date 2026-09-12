@@ -178,6 +178,36 @@ class TestToolOrderSchemaSync:
         finally:
             _TOOL_DEFINITIONS.pop("unordered_plugin_router", None)
 
+    def test_tool_declared_in_config_is_held_to_the_core_tool_order_guard(self):
+        """``config`` ships in the wheel, so a tool declared under it is core.
+
+        The other side of the plugin exemption above. Until 2026-09-12 the
+        first-party roots were ``src`` and ``governance_core`` only, so this
+        declaration passed as a plugin's: no error, and the tool advertised
+        with the empty stub schema this guard exists to refuse. No tool is
+        declared under ``config`` today; this pins which side of the guard one
+        would land on.
+        """
+        import types
+
+        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, mcp_tool
+
+        module = types.ModuleType("config.probe_handlers")
+        module.__dict__["mcp_tool"] = mcp_tool
+        exec(
+            "@mcp_tool('unordered_config_tool')\n"
+            "async def handle_unordered_config_tool(arguments):\n"
+            "    return []\n",
+            module.__dict__,
+        )
+        try:
+            with pytest.raises(
+                RuntimeError, match=r"missing from TOOL_ORDER.*unordered_config_tool"
+            ):
+                get_tool_definitions()
+        finally:
+            _TOOL_DEFINITIONS.pop("unordered_config_tool", None)
+
     @pytest.mark.parametrize(
         ("tool_name", "default_action", "actions"),
         [
