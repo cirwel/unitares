@@ -21,8 +21,10 @@ API. Reconstruction is a client workflow over them, not a single RPC or a
 promise that all prior context is recoverable. The original `sync_state` report
 text is not part of the persisted state history, and exported governance history
 does not include shared knowledge. Preserve source IDs and gaps when summarizing.
-Comparative reconstruction fidelity, correction propagation, and benefit over
-Git plus structured handoff remain evaluation questions.
+Comparative reconstruction fidelity and correction propagation remain
+evaluation questions. The rehearsal that exists scores both arms against the
+same declared facts, which is a harness check rather than a comparison: a
+handoff written in advance necessarily contains what its author put in it.
 
 Use `describe_tool(tool_name=..., action=...)` for the full schema of the action
 you need. Primary workflow names and canonical implementations are both public;
