@@ -3,11 +3,12 @@
 # Runs every 5 minutes via launchd. Logs failures to /tmp/unitares_health.log.
 # Exits silently on success — only writes when something is wrong.
 #
-# The probe roster is NOT maintained here. It comes from the port registry in
-# scripts/dev/ports_catalog.py, because a hand-kept list is how port 8768
-# crash-looped for eight days unnoticed: this script checked two services while
-# the registry declared six, and the hourly deploy doctor reported every surface
-# healthy — truthfully, because 8768 was not one of its surfaces.
+# The governance-host probe roster is NOT maintained here. It comes from the
+# port registry in scripts/dev/ports_catalog.py, because a hand-kept list is how
+# port 8768 crash-looped for eight days unnoticed: this script checked two
+# services while the registry declared six, and the hourly deploy doctor
+# reported every surface healthy — truthfully, because 8768 was not one of its
+# surfaces.
 #
 # Add a service to PORTS with a `health` block and it is monitored from the next
 # run. Forget to, and tests/test_ports_catalog_health_coverage.py fails.
@@ -20,8 +21,8 @@ PYTHON="${UNITARES_PYTHON:-python3}"
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 
 # Probe one URL. Unlike a bare 200 test, `accepted` is a comma-separated list:
-# the orchestrator is bearer-gated and answers 401 to an unauthenticated probe,
-# which means alive. A dead port answers neither — curl reports 000.
+# the agent orchestrator is bearer-gated and answers 401 to an unauthenticated
+# probe, which means alive. A dead port answers neither — curl reports 000.
 check() {
     local name="$1" url="$2" accepted="${3:-200}" timeout="${4:-5}"
     local code
@@ -34,39 +35,58 @@ check() {
 }
 
 failures=0
+governance_ok=0
 
-# --- roster, from the registry ------------------------------------------------
+# --- governance-host roster, from the registry --------------------------------
 roster=""
+roster_err=""
 if [ -f "$REPO/scripts/dev/ports_catalog.py" ]; then
-    roster=$("$PYTHON" "$REPO/scripts/dev/ports_catalog.py" --health-probes 2>/dev/null)
+    # stderr is kept, not discarded: when this fails, why it failed is the one
+    # thing an operator needs at 3am, and this branch is meant to be the loud one.
+    roster_err=$("$PYTHON" "$REPO/scripts/dev/ports_catalog.py" --health-probes 2>&1 >/tmp/.unitares_roster.$$)
+    roster=$(cat /tmp/.unitares_roster.$$ 2>/dev/null)
+    rm -f /tmp/.unitares_roster.$$
 fi
 
 if [ -n "$roster" ]; then
     while IFS=$'\t' read -r name url accepted; do
         [ -n "$url" ] || continue
-        check "$name" "$url" "$accepted" || failures=$((failures + 1))
+        if check "$name" "$url" "$accepted"; then
+            case "$url" in *:8767/*) governance_ok=1 ;; esac
+        else
+            failures=$((failures + 1))
+        fi
     done <<< "$roster"
 else
     # Never degrade silently — an empty roster would otherwise read as "nothing
     # is wrong" while monitoring nothing at all, which is the exact failure this
     # script exists to catch.
-    echo "[$(ts)] FAIL health-watchdog roster — ports_catalog.py produced no probes (repo: $REPO); falling back to governance only" >> "$LOG"
+    echo "[$(ts)] FAIL health-watchdog roster — ports_catalog.py produced no probes (repo: $REPO): ${roster_err:-no stderr}" >> "$LOG"
     failures=$((failures + 1))
-    check "governance (fallback)" "${GOVERNANCE_HEALTH_URL:-http://localhost:8767/health}" 200 \
-        || failures=$((failures + 1))
+    if check "governance (fallback)" "${GOVERNANCE_HEALTH_URL:-http://localhost:8767/health}" 200; then
+        governance_ok=1
+    else
+        failures=$((failures + 1))
+    fi
 fi
 
-# --- edge node, opt-in --------------------------------------------------------
-# Anima runs on a separate host (e.g. a Pi over Tailscale), so it is not in the
-# governance-host roster. Set ANIMA_HEALTH_URL to enable; unset disables, because
-# the localhost default rarely runs Anima.
-if [ -n "$ANIMA_HEALTH_URL" ]; then
-    check "anima" "$ANIMA_HEALTH_URL" 200 10 || failures=$((failures + 1))
-fi
+# --- edge node ----------------------------------------------------------------
+# Anima runs on a separate host (e.g. a Pi over Tailscale), so it is deliberately
+# not in the governance-host roster. The hardcoded default is KEPT: the live
+# com.unitares.health-watchdog.plist sets no EnvironmentVariables, so making this
+# opt-in would silently stop monitoring that is working today — the exact failure
+# class this script exists to prevent. See the "Deferred" note in
+# docs/install/cross-machine-surface.md; removing the default is a follow-up that
+# must come AFTER the operator sets the env var, not before.
+ANIMA_HEALTH_URL="${ANIMA_HEALTH_URL:-http://localhost:8766/health}"
+check "anima" "$ANIMA_HEALTH_URL" 200 10 || failures=$((failures + 1))
 
 # --- PostgreSQL, via the governance health detail -----------------------------
+# Gated on the GOVERNANCE probe specifically, not on the aggregate. With six
+# rostered services, an aggregate gate would let a routine dialectic-live or
+# wave3a restart suppress a real pool problem for the whole window.
 GOVERNANCE_HEALTH_URL="${GOVERNANCE_HEALTH_URL:-http://localhost:8767/health}"
-if [ $failures -eq 0 ]; then
+if [ "$governance_ok" -eq 1 ]; then
     db_status=$(curl -s --max-time 5 "$GOVERNANCE_HEALTH_URL" 2>/dev/null | "$PYTHON" -c "
 import sys, json
 try:

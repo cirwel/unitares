@@ -16,6 +16,7 @@ adding a service to PORTS without deciding how it is monitored now fails here
 rather than in production eight days later.
 """
 
+import importlib.util
 import pathlib
 import re
 import subprocess
@@ -27,13 +28,23 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 CATALOG = REPO / "scripts" / "dev" / "ports_catalog.py"
 WATCHDOG = REPO / "scripts" / "ops" / "health_watchdog.sh"
 
-sys.path.insert(0, str(REPO / "scripts" / "dev"))
+
+def _catalog():
+    """Load ports_catalog by path, without touching sys.path.
+
+    `scripts/dev/` holds 60+ generically-named modules (version_manager,
+    flag_catalog, glossary_data). Inserting it on sys.path at module scope
+    would shadow any future same-named module in src/ for the rest of the
+    pytest session, surfacing as a failure in an unrelated test file.
+    """
+    spec = importlib.util.spec_from_file_location("_ports_catalog_under_test", CATALOG)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _ports():
-    import ports_catalog
-
-    return ports_catalog.PORTS
+    return _catalog().PORTS
 
 
 def test_every_governance_surface_has_a_health_probe():
@@ -47,6 +58,19 @@ def test_every_governance_surface_has_a_health_probe():
         p["port"] for p in _ports()
         if p.get("host") == "governance host" and "health" not in p
     ]
+    malformed = []
+    for p in _ports():
+        h = p.get("health")
+        if h is None:
+            continue
+        if not isinstance(h, dict) or not h.get("path") or not h.get("expect"):
+            malformed.append(p["port"])
+    assert not malformed, (
+        f"Ports {malformed} have a `health` block missing `path` or `expect`. "
+        "health_probes() indexes both directly, so one malformed entry raises "
+        "KeyError and collapses the roster for EVERY service at once."
+    )
+
     assert not undeclared, (
         f"Ports {undeclared} are on the governance host but declare no `health` "
         "block in scripts/dev/ports_catalog.py. Add one (or an explicit "
@@ -58,7 +82,7 @@ def test_every_governance_surface_has_a_health_probe():
 
 def test_probe_roster_is_not_empty_and_covers_declared_surfaces():
     """The emitter must actually emit. An empty roster reads as 'all clear'."""
-    import ports_catalog
+    ports_catalog = _catalog()
 
     expected = {
         p["port"] for p in _ports()
@@ -74,7 +98,7 @@ def test_probe_roster_is_not_empty_and_covers_declared_surfaces():
 
 def test_probe_roster_cli_matches_the_api():
     """The watchdog shells out, so the CLI path is the one that must work."""
-    import ports_catalog
+    ports_catalog = _catalog()
 
     proc = subprocess.run(
         [sys.executable, str(CATALOG), "--health-probes"],
@@ -94,26 +118,30 @@ def test_probe_roster_cli_matches_the_api():
 def test_watchdog_reads_the_registry_instead_of_its_own_list():
     """The whole point: no second roster to forget to update.
 
-    A bare `8767`-style literal creeping back into the probe path is the
-    regression — the script may still reference a port in its fallback and in
-    the database-detail read, but it must source its roster from the catalog.
+    Asserted as a positive property rather than by grepping for port literals.
+    A pattern match on `87xx` would miss a regrown probe on 9000, on 5432, or
+    one introduced through a new env var the way ANIMA_HEALTH_URL is — and this
+    PR argues at length that a guard which cannot fail is worse than none.
+
+    Exactly three `check` call sites are legitimate: the roster loop, the
+    degraded-path fallback, and the edge node. A fourth means a hand-kept list
+    has grown back.
     """
     text = WATCHDOG.read_text(encoding="utf-8")
     assert "--health-probes" in text, (
-        "health_watchdog.sh no longer reads the roster from ports_catalog.py. "
+        "health_watchdog.sh no longer reads its roster from ports_catalog.py. "
         "A hand-kept probe list is the defect this test exists to prevent."
     )
-    # Ports named outside the documented fallback/db lines would mean a second
-    # roster has grown back.
-    stray = [
+
+    call_sites = [
         ln.strip() for ln in text.splitlines()
-        if re.search(r"87[0-9]{2}", ln)
-        and "GOVERNANCE_HEALTH_URL" not in ln
-        and not ln.strip().startswith("#")
+        if re.match(r'^\s*(if\s+)?check\s+"', ln)
     ]
-    assert not stray, (
-        "These lines hardcode a port outside the governance fallback:\n  "
-        + "\n  ".join(stray)
+    assert len(call_sites) == 3, (
+        "Expected exactly 3 `check` call sites (roster loop, fallback, edge "
+        f"node); found {len(call_sites)}:\n  " + "\n  ".join(call_sites)
+        + "\nA new one means a second roster has grown back here instead of "
+        "being declared in ports_catalog.py."
     )
 
 
