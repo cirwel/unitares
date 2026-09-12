@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-10"
+last_verified: "2026-09-12"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
@@ -20,7 +20,7 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "15b30d47a10463f5"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "ad771f5e33e75c31"
   unitares/src/mcp_handlers/dialectic/session.py: "8065938fced23b6f"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
@@ -29,7 +29,7 @@ source_digests:
   unitares/src/mcp_handlers/schemas/dialectic.py: "0e7bcaa2ebbd1e97"
   unitares/src/mcp_handlers/tool_stability.py: "5d1343b5e5297202"
   unitares/src/mcp_handlers/identity/operator.py: "cc2698ddc37a4091"
-  unitares/src/mcp_handlers/lifecycle/query.py: "40460dab6d3a64c1"
+  unitares/src/mcp_handlers/lifecycle/query.py: "d2a87c234d9c4d76"
 ---
 
 # Dialectic Reasoning

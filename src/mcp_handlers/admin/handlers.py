@@ -528,7 +528,7 @@ async def handle_get_workspace_health(arguments: Dict[str, Any]) -> Sequence[Tex
             f"Error checking workspace health: {str(e)}",
             recovery={
                 "action": "Check system configuration and try again",
-                "related_tools": ["health_check", "get_server_info"]
+                "related_tools": ["health_check", "admin"]
             }
         )]
 
@@ -700,10 +700,10 @@ async def handle_validate_file_path(arguments: Dict[str, Any]) -> Sequence[TextC
             "status": "warning",
             "warning": warning,
             "file_path": file_path,
-            "recommendation": "Consider using store_knowledge_graph() for insights/discoveries, or consolidate into existing approved docs",
+            "recommendation": "Consider using knowledge(action='store') for insights/discoveries, or consolidate into existing approved docs",
             "guidance": guidance,
-            "related_tools": ["store_knowledge_graph", "list_knowledge_graph", "search_knowledge_graph"],
-            "quick_action": "For insights/discoveries, use: store_knowledge_graph(discovery_type='insight', summary='...', tags=[...])"
+            "related_tools": ["knowledge", "search_knowledge_graph"],
+            "quick_action": "For insights/discoveries, use: knowledge(action='store', discovery_type='insight', summary='...', tags=[...])"
         })
     
     return success_response({

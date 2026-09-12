@@ -644,7 +644,7 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             error_category="auth_error",
             recovery={
                 "action": "Use self-recovery tools instead",
-                "related_tools": ["self_recovery_review", "quick_resume", "check_recovery_options"],
+                "related_tools": ["self_recovery"],
             }
         )]
     

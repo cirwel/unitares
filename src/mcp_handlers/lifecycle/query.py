@@ -1295,13 +1295,13 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
                 return [error_response(
                     f"Agent not found: '{target_agent}'. Use UUID or label.",
                     recovery={
-                        "action": "Use list_agents() to find valid agent IDs",
-                        "tip": "Labels are case-sensitive. Use list_agents(named_only=true) to see agents with labels.",
+                        "action": "Use agent(action='list') to find valid agent IDs",
+                        "tip": "Labels are case-sensitive. Use agent(action='list', named_only=true) to see agents with labels.",
                         "note": "If you just set a label with identity(name='...'), it may take a moment to persist. Try again in a few seconds."
                     },
                     details={
                         "searched_in": "in-memory cache (Redis + live metadata)",
-                        "suggestion": "Use UUID from list_agents() output, or wait a moment if you just set a label"
+                        "suggestion": "Use UUID from agent(action='list') output, or wait a moment if you just set a label"
                     }
                 )]
     else:

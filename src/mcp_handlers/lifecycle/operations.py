@@ -232,13 +232,12 @@ async def handle_mark_response_complete(arguments: Dict[str, Any]) -> Sequence[T
                 for d in open_discoveries
             ],
             "suggested_actions": [
-                "Mark as resolved: update_discovery_status_graph(discovery_id='...', status='resolved')",
-                "Add correction: store_knowledge_graph(response_to={discovery_id='...', response_type='correction'}, ...)",
-                "Archive if obsolete: update_discovery_status_graph(discovery_id='...', status='archived')"
+                "Mark as resolved: knowledge(action='update', discovery_id='...', status='resolved')",
+                "Add correction: knowledge(action='store', response_to={discovery_id='...', response_type='correction'}, ...)",
+                "Archive if obsolete: knowledge(action='update', discovery_id='...', status='archived')"
             ],
             "related_tools": [
-                "update_discovery_status_graph",
-                "store_knowledge_graph",
+                "knowledge",
                 "search_knowledge_graph"
             ],
             "tip": "Resolving discoveries helps maintain knowledge graph quality. Use response_to for corrections or additions."

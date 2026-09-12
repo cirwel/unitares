@@ -91,6 +91,16 @@ jobs:
       run: |
         python scripts/diagnostics/validate_tool_modes.py
 
+    - name: Hints must name the advertised catalog
+      # A response that says "call list_agents()" is an instruction, and a
+      # schema-driven MCP client can only call what tools/list returned. This
+      # fails on any scanned hint field naming a tool the catalog omits, and
+      # on a KNOWN_DEAD_ENDS entry that no longer matches, so an accepted
+      # exception cannot rot into a silent one. The inventory reached zero on
+      # 2026-09-11; wiring it here is what keeps it there.
+      run: |
+        python3 scripts/diagnostics/hint_target_advertisement.py --fail-on-finding
+
     - name: Dead-code gate (unused imports)
       run: |
         pip install "ruff>=0.15"

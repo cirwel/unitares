@@ -701,7 +701,7 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                 f"Agent '{agent_id}' is deleted and cannot be used.",
                 recovery={
                     "action": "Cannot recover deleted agents",
-                    "related_tools": ["list_agents"],
+                    "related_tools": ["agent"],
                     "workflow": "Deleted agents are permanently removed. Use list_agents to see available agents."
                 },
                 context={

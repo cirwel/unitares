@@ -1,8 +1,9 @@
 """Static hint inventory: syntax, conservative reachability and action coverage.
 
 A green test suite verifies the instrument, not a clean default tool surface.
-The expanded field/name inventory intentionally leaves unreviewed candidates
-outside the four-entry ledger inherited from #2119.
+The inventory reached zero on 2026-09-11 and the guard is wired into CI, so
+these tests prove the scan still fires -- against synthetic findings, because a
+test that reads live findings deletes itself the moment the tree becomes clean.
 """
 
 import subprocess
@@ -98,32 +99,123 @@ class TestLedger:
             assert ":" in site and site.startswith("src/"), (tool, site)
             assert action is None or isinstance(action, str)
 
-    def test_broader_inventory_exposes_unreviewed_default_candidates(self):
+    def test_the_inventory_is_empty_and_the_guard_passes(self):
+        """The backlog is cleared, so the guard is now an actual gate.
+
+        These three assertions replaced their inverses. Until the candidates
+        were resolved the suite pinned "a backlog exists" -- correct while it
+        did, and a test that has to fail the moment someone fixes the thing it
+        describes. Now the invariant is the useful direction: every name a
+        scanned hint field points at is on the catalog, and --fail-on-finding
+        exits 0, which is what makes it safe to wire into CI.
+        """
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--fail-on-finding"],
             capture_output=True, text=True, cwd=project_root,
         )
-        assert result.returncode == scanner.EXIT_DEAD_END_HINT, result.stderr
-        assert "UNREVIEWED hint candidate" in result.stderr
+        assert result.returncode == 0, result.stderr
+        assert "UNREVIEWED hint candidate" not in result.stderr
         assert "STALE ledger" not in result.stderr
+        assert not scanner.find_dead_end_hints("standard")
 
-    def test_the_guard_fails_on_an_unlisted_finding(self, monkeypatch):
-        # Emptying the ledger must make the known findings unlisted, not silent.
-        monkeypatch.setattr(scanner, "KNOWN_DEAD_ENDS", {})
-        findings = scanner.find_dead_end_hints("standard")
-        seen = scanner.finding_keys(findings)
-        assert seen, "expected the known dead ends to still be reported"
-        assert seen - set(scanner.KNOWN_DEAD_ENDS)
+    def test_a_new_dead_end_still_fails_the_guard(self, monkeypatch):
+        """An empty inventory must be a gate, not a disabled check.
 
-    def test_the_ledger_matches_what_is_reported(self):
-        # A stale entry is a lie about outstanding work; the guard reports it.
-        findings = scanner.find_dead_end_hints("standard")
-        seen = scanner.finding_keys(findings)
-        assert set(scanner.KNOWN_DEAD_ENDS) <= seen, (
-            "Stale reviewed candidates: "
-            f"{sorted(set(scanner.KNOWN_DEAD_ENDS) - seen)}"
+        Proven against a synthetic finding rather than against real backlog:
+        relying on live findings makes the guard's own regression test
+        disappear exactly when the tree becomes clean.
+        """
+        planted = scanner.DeadEndHint(
+            tool="a_tool_the_catalog_does_not_have",
+            sites=["src/mcp_handlers/core.py:1"],
+            actions=[],
+            advertised_alias=None,
+            # finding_keys is built from `calls`, not `sites`: the ledger is
+            # keyed per (tool, site, action) so one site can be accepted for
+            # one action and stay open for another.
+            calls=[{"site": "src/mcp_handlers/core.py:1",
+                    "action": None,
+                    "advertised_alias": None}],
         )
-        assert seen - set(scanner.KNOWN_DEAD_ENDS), "new scope must not be silently accepted"
+        monkeypatch.setattr(scanner, "KNOWN_DEAD_ENDS", {})
+        seen = scanner.finding_keys([planted])
+        assert seen, "a planted finding must produce a key"
+        assert seen - set(scanner.KNOWN_DEAD_ENDS), (
+            "an unlisted finding must remain unaccepted"
+        )
+
+    def test_a_stale_ledger_entry_is_reported(self, monkeypatch):
+        """An accepted entry that no longer matches is a lie about open work."""
+        monkeypatch.setattr(
+            scanner,
+            "KNOWN_DEAD_ENDS",
+            {("gone", "src/mcp_handlers/core.py:1", None): "x" * 50},
+        )
+        seen = scanner.finding_keys(scanner.find_dead_end_hints("standard"))
+        assert set(scanner.KNOWN_DEAD_ENDS) - seen, (
+            "a ledger entry with no matching finding must be detectable"
+        )
+
+
+class TestUnregisteredNames:
+    """`related_tools` naming something that is not a tool at all.
+
+    A different failure from "registered but not advertised", and invisible to
+    the roster test, which can only ask whether a KNOWN tool is advertised.
+    Found 2026-09-12 in four entries: `ping_agent`, and the three
+    `register=False` internal delegates `self_recovery_review`,
+    `quick_resume` and `check_recovery_options` -- the same dangling-delegate
+    defect already recorded in introspection/tool_catalog.py.
+    """
+
+    def test_a_tool_shaped_name_is_admitted(self):
+        assert scanner.TOOL_NAME_SHAPE.match("check_recovery_options")
+        assert scanner.TOOL_NAME_SHAPE.match("observe")
+
+    def test_a_call_expression_is_not_a_bare_name(self):
+        # cirs/coherence.py puts a whole call in the list. The call regex
+        # already covers it; admitting it here would double-report it under a
+        # name no roster can match.
+        assert not scanner.TOOL_NAME_SHAPE.match("state_announce(action='query')")
+
+    def test_an_unregistered_name_outranks_alias_coverage(self):
+        """kind must not claim a router covers a name nothing answers to."""
+        planted = scanner.DeadEndHint(
+            tool="no_such_tool",
+            sites=["src/mcp_handlers/core.py:1"],
+            calls=[{"site": "src/mcp_handlers/core.py:1", "action": None,
+                    "advertised_alias": "agent"}],
+            registered=False,
+        )
+        assert planted.kind == "names_no_such_tool"
+
+    def test_every_bare_related_tools_entry_resolves(self):
+        """The invariant the four fixes established, checked at the source.
+
+        Not via find_dead_end_hints: that suppresses a site whose emitter no
+        caller can reach, which is right for an advertisement question and
+        wrong here. A name nothing answers to is broken wherever it sits.
+        """
+        import ast
+
+        from src.mcp_handlers.decorators import get_tool_registry
+        from src.mcp_handlers.tool_stability import list_all_aliases
+
+        roster = set(get_tool_registry()) | set(list_all_aliases())
+        dangling = []
+        for path in sorted(scanner.HANDLER_ROOT.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            relative = path.relative_to(scanner.PROJECT_ROOT).as_posix()
+            bindings = scanner._value_bindings(tree)
+            for value in scanner._hint_value_nodes(tree, {"related_tools"}):
+                for constant in scanner._string_constants(value, bindings):
+                    if constant.value in roster:
+                        continue
+                    if scanner.TOOL_NAME_SHAPE.match(constant.value):
+                        dangling.append(f"{relative}:{constant.lineno} {constant.value!r}")
+        assert not dangling, (
+            "related_tools names no registered tool or alias at: " + "; ".join(dangling)
+        )
 
 
 class TestNoRegression:
