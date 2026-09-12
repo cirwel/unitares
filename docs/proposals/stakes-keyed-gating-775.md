@@ -116,7 +116,9 @@ authoritative serialization point.
 
 ## Classification summary
 
-92 entries (22 high, 70 baseline). High = destructive/irreversible ops,
+86 entries (19 high, 67 baseline) as of 2026-09-12; `python -m
+src.mcp_handlers.stakes_table` prints the current split, and is the number to
+trust when this line has aged. High = destructive/irreversible ops,
 fleet/global mutations, governance-state changes applied to other agents,
 single-writer surfaces, and dialectic resolution. Everything else is observed
 by the substrate sink, not pre-gated. See `stakes_table.py` for the full list

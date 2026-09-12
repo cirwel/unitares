@@ -116,21 +116,35 @@ def test_identity_lifecycle_is_baseline():
 
 
 def test_destructive_and_fleet_ops_are_high():
+    """These are DELIBERATE high classifications, not fail-closed accidents.
+
+    Every case asserts membership in ``_HIGH`` as well as the resolved level.
+    Asserting the level alone is vacuous against deletion: an absent key also
+    resolves to "high", so dropping ("admin", "reset_monitor") outright left
+    this test green (measured 2026-09-12). That is the same blind spot that let
+    thirteen alias entries look load-bearing for as long as they did, and the
+    reason to state the property as "explicitly classified" rather than "reads
+    as high". Deletion is separately caught by
+    test_registered_action_vocabularies_match_stakes_table and by
+    test_every_known_action_is_classified_by_the_stakes_table.
+    """
     for key in (("agent", "delete"), ("agent", "archive"),
                 ("knowledge", "cleanup"), ("knowledge", "supersede"),
                 ("calibration", "rebuild"), ("config", "set"),
                 ("dialectic", "synthesis")):
+        assert key in _HIGH, key
         assert get_action_stakes(*key) == "high", key
     for tool in ("archive_orphan_agents", "set_thresholds", "cirs_protocol"):
+        assert (tool, None) in _HIGH, tool
         assert get_action_stakes(tool, None) == "high", tool
-    # reset_monitor / cleanup_stale_locks are aliases of admin actions. They
-    # carry no tool-level entry (a bare lookup on the alias name would only be
-    # reporting the fail-closed default), so the call-level resolver — which
-    # canonicalizes first — is what proves them high.
+    # reset_monitor / cleanup_stale_locks are aliases of admin actions and carry
+    # no entry of their own, so what has to hold is that the name dispatch
+    # lands on is the classified one. A bare lookup on the alias would only be
+    # reporting the fail-closed default.
     for alias, canonical in (("reset_monitor", ("admin", "reset_monitor")),
                              ("cleanup_stale_locks", ("admin", "cleanup_locks"))):
         assert _resolve_canonical_and_action(alias, {}) == canonical, alias
-        assert get_action_stakes(*canonical) == "high", canonical
+        assert canonical in _HIGH, canonical
         assert get_call_stakes_requirement(alias, {}) == "high", alias
 
 
@@ -199,12 +213,20 @@ def test_every_table_key_names_a_registered_tool():
     to load. Thirteen such entries had accumulated by 2026-09-12 (F6 of the
     tool-surface audit), every one an alias of a router action the table
     already classified. The failure message names the canonical key to use.
+
+    "Registered" is not quite the property: alias resolution runs first, so a
+    name that is BOTH registered and alias-shadowed would still be dispatched
+    past. What has to hold is that a key is the name dispatch actually lands
+    on, which is what the ``canonical == tool`` half asserts. The two
+    conditions cannot diverge today — ``test_no_alias_name_is_also_a_registered_tool``
+    keeps the alias table and the registry disjoint — so this is a guard
+    against that invariant being relaxed, not a live defect.
     """
     stale = []
     for tool, action in stakes_table._STAKES:
-        if tool in _TOOL_DEFINITIONS:
-            continue
         canonical, canonical_action = _resolve_canonical_and_action(tool, {})
+        if tool in _TOOL_DEFINITIONS and canonical == tool:
+            continue
         key = tool if action is None else f"{tool}:{action}"
         resolved = canonical if canonical_action is None else f"{canonical}:{canonical_action}"
         stale.append(f"{key} -> {resolved}")

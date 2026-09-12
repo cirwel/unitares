@@ -42,9 +42,11 @@ The fail-closed default is the #425-faithful choice: a newly added tool/action
 that is genuinely low-stakes is over-classified as high until someone lists it
 here — a deliberate friction that forces classification rather than letting an
 unclassified high-stakes path slip through as low-stakes. `test_stakes_table.py`
-asserts every *registered* tool/action is explicitly present, so the fail-closed
-default only ever bites truly unregistered names — and, in the other direction,
-that every key here names a registered dispatch tool. Keys are CANONICAL names
+asserts every *first-party registered* tool/action is explicitly present, so the
+fail-closed default only ever bites names outside that surface: genuinely
+unregistered names, and the external-plugin tools described below — and, in the
+other direction, that every key here names a registered dispatch tool that
+dispatch actually resolves to. Keys are CANONICAL names
 only: `get_call_stakes_requirement` canonicalizes an alias before it looks the
 call up, so an entry keyed on an alias (`reset_monitor`, `submit_thesis`, ...)
 is never consulted and would only pad `export_table()`. External-plugin tools
