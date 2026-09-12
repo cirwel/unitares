@@ -201,8 +201,10 @@ def test_unusual_filename_under_a_suite_is_relevant(repo: Path):
 
 @pytest.mark.parametrize("base", ["", "0000000000000000000000000000000000000000"])
 def test_decide_is_fail_safe_without_a_base(repo: Path, base: str):
+    # pull_request, not push: push short-circuits to relevant before any
+    # analysis, so it cannot exercise the undeterminable-change-set path.
     head = _git(repo, "rev-parse", "HEAD")
-    relevant, reason = paths_changed.decide("push", base, head, cwd=str(repo))
+    relevant, reason = paths_changed.decide("pull_request", base, head, cwd=str(repo))
     assert relevant is True
     assert "undeterminable" in reason
 
@@ -213,8 +215,30 @@ def test_decide_is_fail_safe_when_base_is_unreachable(repo: Path):
     head = _git(repo, "rev-parse", "HEAD")
     missing = "1" * 40
     assert paths_changed.changed_paths(missing, head, cwd=str(repo)) is None
-    relevant, _ = paths_changed.decide("push", missing, head, cwd=str(repo))
+    relevant, _ = paths_changed.decide("pull_request", missing, head, cwd=str(repo))
     assert relevant is True
+
+
+def test_push_is_relevant_even_when_nothing_reaches_a_suite(repo: Path):
+    # #2152: a defect inside a suite is invisible to path analysis, so every
+    # merge re-runs everything. The docs-only diff below is exactly the shape
+    # that kept master green for a month over three real lease_plane failures.
+    base = _git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, "docs/only.md", "docs\n", "docs only")
+    assert paths_changed.decide("pull_request", base, head, cwd=str(repo))[0] is False
+    relevant, reason = paths_changed.decide("push", base, head, cwd=str(repo))
+    assert relevant is True
+    assert "regardless of paths" in reason
+
+
+def test_push_decision_needs_no_git_work(repo: Path, monkeypatch):
+    # The short-circuit must not depend on the diff being computable: a push
+    # whose base is gone still runs the suites, and does so without a fetch.
+    def _explode(*_args, **_kwargs):  # pragma: no cover - only runs on failure
+        raise AssertionError("decide('push') must not inspect the change set")
+
+    monkeypatch.setattr(paths_changed, "changed_paths", _explode)
+    assert paths_changed.decide("push", "", "HEAD", cwd=str(repo))[0] is True
 
 
 def test_main_writes_github_output(repo: Path, tmp_path: Path, monkeypatch):
@@ -357,3 +381,17 @@ def test_workflow_wires_detector_gate_and_every_suite():
     assert any(
         "NEEDS_JSON" in (step.get("env") or {}) for step in run_steps
     ), "the gate step must receive toJSON(needs) as NEEDS_JSON"
+
+
+def test_push_trigger_is_restricted_to_protected_branches():
+    # decide() reads only the event name, so "event == push" means "protected
+    # branch" ONLY while the trigger stays restricted to these two. Widen the
+    # trigger and every feature-branch push runs all six suites.
+    data = yaml.safe_load(WORKFLOW.read_text())
+    triggers = data.get("on", data.get(True))
+    push_branches = set((triggers["push"] or {}).get("branches") or [])
+    assert push_branches, "on.push.branches must be explicit, not empty"
+    assert push_branches <= {"master", "main"}, (
+        "elixir_paths_changed.decide() treats every push as a protected-branch "
+        f"push; restrict on.push.branches or teach it the ref. Found: {sorted(push_branches)}"
+    )
