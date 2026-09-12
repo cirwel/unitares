@@ -115,8 +115,39 @@ def test_destructive_and_fleet_ops_are_high():
                 ("dialectic", "synthesis")):
         assert get_action_stakes(*key) == "high", key
     for tool in ("archive_orphan_agents", "reset_monitor", "set_thresholds",
-                 "cirs_protocol", "cleanup_stale_locks"):
+                 "cleanup_stale_locks"):
         assert get_action_stakes(tool, None) == "high", tool
+
+
+def test_cirs_protocol_is_classified_per_action_not_by_one_blanket_key():
+    """Its nine actions are not uniform, so one tool-level key cannot describe
+    them. ``self_recovery`` keeps a tool-level key because check / quick /
+    review really are uniformly baseline; this tool mixes reads with writes.
+
+    Asserts MEMBERSHIP, not the resolved level. Resolution falls back to
+    ``(tool, None)`` and then fail-closed to "high", so a resolved-level
+    assertion on the high side passes even if the row is deleted — the vacuity
+    that a blanket key hid here in the first place. The baseline side is
+    checked both ways, because there a resolved-level assertion is meaningful:
+    fail-closed would produce "high" and fail.
+    """
+    writes = {"emit", "compute", "set", "initiate", "respond"}
+    reads = {"query", "get", "list", "status"}
+
+    for action in writes:
+        assert ("cirs_protocol", action) in _HIGH, action
+    for action in reads:
+        assert ("cirs_protocol", action) in _BASELINE, action
+        assert get_action_stakes("cirs_protocol", action) == "baseline", action
+
+    # No blanket key left to mask an unclassified action.
+    assert ("cirs_protocol", None) not in stakes_table._STAKES
+    # An action-less call still fails closed, which is the safe direction.
+    assert get_action_stakes("cirs_protocol", None) == "high"
+
+    from src.mcp_handlers.decorators import get_tool_definition
+
+    assert writes | reads == set(get_tool_definition("cirs_protocol").known_actions)
 
 
 # ---------------------------------------------------------------------------
