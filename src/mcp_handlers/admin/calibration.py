@@ -448,7 +448,7 @@ async def handle_update_calibration_ground_truth(arguments: Dict[str, Any]) -> S
                     (f" for agent {agent_id}" if agent_id else ""),
                     details={
                         "suggestion": "Check timestamp format (ISO) and ensure decision was logged",
-                        "related_tools": ["get_telemetry_metrics"]
+                        "related_tools": ["admin"]
                     }
                 )]
             

@@ -21,9 +21,34 @@ coverage does not justify a blind text replacement: alias schemas can hide
 parameters (check_working_state hides agent_id), and response contracts differ.
 
 The four profile-only candidates inherited from #2119 are resolved by the complete catalog.
-The broader scan also reports previously unseen candidates. --fail-on-finding
-therefore currently exits 3: those sites have not been accepted or fixed. Do
-not broaden the surface or rubber-stamp a baseline to make it green.
+The 37 candidates the broader scan then surfaced are resolved too: every one
+named a pre-consolidation twin (list_agents, get_server_info,
+store_knowledge_graph, ...) whose capability now lives behind an advertised
+router, so the hints name the router and action instead. --fail-on-finding
+exits 0 and is wired into the smoke job, which is the only state in which it
+is a gate rather than a report. KNOWN_DEAD_ENDS is empty and should stay that
+way: it exists so a deliberate exception is written down with a reason, not so
+a baseline can be rubber-stamped green. Do not broaden the surface to clear a
+finding either.
+
+Two of those 37 were not renames and are worth knowing about, because they are
+the shape a blind replacement gets wrong. `get_agent_api_key` has no handler
+at all -- it is an alias entry pointing at `identity`, which returns a uuid and
+has no API-key parameter -- so two hints were instructing a call that cannot
+dispatch, for a credential the alias's own migration note calls deprecated.
+Those needed the guidance corrected to the current UUID-is-auth model, not the
+name swapped.
+
+Clearing those exposed a third class the roster test structurally could not
+see: a `related_tools` entry naming no tool at all. The roster test asks
+whether a KNOWN tool is advertised, so `ping_agent` (no handler, no alias) and
+the three `register=False` delegates `self_recovery_review`, `quick_resume`
+and `check_recovery_options` fell out of the scan entirely (found
+2026-09-12) -- the same dangling-delegate defect that
+introspection/tool_catalog.py already records. All four are fixed, and
+TOOL_NAME_SHAPE now admits such names, reported as `names_no_such_tool`,
+because no catalog change can make one dispatch: the guidance itself has to
+be rewritten.
 
 Usage:
     python3 scripts/diagnostics/hint_target_advertisement.py --classify
@@ -59,10 +84,16 @@ EXIT_DEAD_END_HINT = 3
 #: reads. Add a key here when a new response field starts carrying prose that
 #: names tools; leaving one out under-reports. Inclusion is a candidate, not proof
 #: of serialization into a response.
+# `suggested_actions` and `quick_action` were added 2026-09-11: both carried
+# real pre-consolidation call text (lifecycle/operations.py, admin/handlers.py)
+# that this scan could not see, found only by reading the files around a
+# related_tools hit. Seeding them costs nothing now -- those sites are fixed --
+# and closes the gap for the next one.
 HINT_KEYS: Set[str] = {
     "action_required", "all_inline", "fix", "guidance", "hint", "hints",
     "how_to_strengthen", "next_action", "next_step", "next_steps", "open_one",
-    "raw_governance_hint", "recovery", "recovery_hint", "related_tools",
+    "quick_action", "raw_governance_hint", "recovery", "recovery_hint",
+    "related_tools", "suggested_actions",
     "remediation", "resolution", "suggestion", "suggestions", "whose_move",
     "next_call", "recommended_action", "call", "safe_options", "note",
     "recommendation", "tip", "what_you_can_do", "workflow", "message",
@@ -145,6 +176,15 @@ KNOWN_DEAD_ENDS: Dict[tuple, str] = {}
 #: unusable as one, so it cannot collide with the roster.
 MIDDLEWARE_SENTINEL = "*middleware*"
 
+#: `related_tools` is by contract a list of tool names, so an entry outside the
+#: roster is not a naming choice to argue about -- it names nothing at all, and
+#: no rewrite of the catalog can make it dispatch. The roster test alone cannot
+#: see those: it asks whether a KNOWN tool is advertised, so a name that was
+#: never a tool falls out of the scan entirely. This shape admits them. It is
+#: deliberately loose (any lowercase identifier) because the field should carry
+#: nothing else; a non-name string landing here is itself worth a look.
+TOOL_NAME_SHAPE = re.compile(r"[a-z][a-z0-9_]{2,}\Z")
+
 
 @dataclass(frozen=True)
 class DeadEndHint:
@@ -161,9 +201,15 @@ class DeadEndHint:
     advertised_alias: Optional[str] = None
     advertised_aliases: List[str] = field(default_factory=list)
     calls: List[dict] = field(default_factory=list)
+    #: False when the name is not a registered tool and not an alias of one.
+    #: A different failure from "registered but not advertised": there is no
+    #: router to point the hint at, so the guidance itself has to be rewritten.
+    registered: bool = True
 
     @property
     def kind(self) -> str:
+        if not self.registered:
+            return "names_no_such_tool"
         if self.calls and all(call["advertised_alias"] for call in self.calls):
             return "names_unadvertised_twin"
         if self.advertised_aliases:
@@ -485,10 +531,12 @@ def collect_hint_sites(roster: Set[str]) -> Dict[str, Set[tuple]]:
                             )
                         )
         # Structured name lists are unambiguous; they do not need a call
-        # regex, and legacy aliases are part of the callable-name roster.
+        # regex, and legacy aliases are part of the callable-name roster. An
+        # entry off the roster is kept too: the field holds tool names, so a
+        # name nothing answers to is a dead end the roster test cannot reach.
         for value in _hint_value_nodes(tree, {"related_tools"}):
             for constant in _string_constants(value, bindings):
-                if constant.value in roster:
+                if constant.value in roster or TOOL_NAME_SHAPE.match(constant.value):
                     emitters = index.emitters(relative, constant.lineno)
                     sites.setdefault(constant.value, set()).add((
                         f"{relative}:{constant.lineno}", None,
@@ -565,6 +613,7 @@ def find_dead_end_hints(mode: str) -> List[DeadEndHint]:
             DeadEndHint(
                 tool=tool, sites=sites, actions=actions, advertised_alias=alias,
                 advertised_aliases=aliases, calls=calls,
+                registered=tool in roster,
             )
         )
     return sorted(findings, key=lambda f: (-len(f.sites), f.tool))
@@ -590,6 +639,9 @@ def _render(findings: List[DeadEndHint], mode: str, classify: bool) -> None:
             ("no advertised name resolved by the alias map "
              "(inspect router paths and caller context)",
              [f for f in findings if f.kind == "no_mapped_advertised_name"]),
+            ("names no registered tool and no alias of one "
+             "(rewrite the guidance; there is no router to point at)",
+             [f for f in findings if f.kind == "names_no_such_tool"]),
         ]
         if classify
         else [("", findings)]

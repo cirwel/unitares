@@ -99,7 +99,7 @@ async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
             "Threshold modification is admin-only. Only agents with the 'admin' tag can modify thresholds.",
             recovery={
                 "action": "Threshold modification requires an operator-granted 'admin' tag. Contact the system administrator.",
-                "related_tools": ["get_thresholds", "get_agent_metadata"],
+                "related_tools": ["get_thresholds", "agent"],
                 "note": "This restriction prevents agents from modifying critical governance parameters"
             }
         )]

@@ -654,7 +654,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             },
             recovery={
                 "action": recovery_hint,
-                "related_tools": ["health_check", "get_connection_status"],
+                "related_tools": ["health_check", "admin"],
                 "workflow": [
                     "1. Check provider configuration",
                     "2. Verify model is available (`ollama list` for local)",

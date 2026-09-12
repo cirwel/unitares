@@ -87,7 +87,7 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             "target_agent_id required: specify which agent to observe",
             recovery={
                 "action": "Provide target_agent_id (UUID or label) of the agent to observe",
-                "related_tools": ["list_agents"],
+                "related_tools": ["agent"],
                 "example": "observe(action='agent', target_agent_id='<agent-label>')"
             }
         )]
@@ -98,7 +98,7 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     if not agent_id:
         return [error_response(
             f"Agent '{target}' not found in active metadata. They may need to check in first.",
-            recovery={"related_tools": ["list_agents"]}
+            recovery={"related_tools": ["agent"]}
         )]
     
     include_history = arguments.get("include_history", True)
@@ -111,7 +111,7 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         return [error_response(
             f"Observation snapshot for agent '{target}' is not available yet.",
             recovery={
-                "related_tools": ["get_governance_metrics", "list_agents"],
+                "related_tools": ["get_governance_metrics", "agent"],
                 "hint": "Have the agent check in, or retry after background metadata/state loading catches up.",
             },
         )]
@@ -260,7 +260,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             "At least 2 agent_ids required for comparison",
             recovery={
                 "action": "Provide at least 2 agent_ids in the agent_ids array",
-                "related_tools": ["list_agents"],
+                "related_tools": ["agent"],
                 "workflow": "1. Call list_agents to see available agents 2. Select 2+ agent_ids to compare"
             }
         )]
@@ -349,7 +349,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             f"Could not load data for at least 2 agents. Loaded: {len(agents_data)}",
             recovery={
                 "action": "Ensure agents exist and have state. Some agents may need initial process_agent_update call.",
-                "related_tools": ["list_agents", "get_governance_metrics", "process_agent_update"],
+                "related_tools": ["agent", "get_governance_metrics", "process_agent_update"],
                 "workflow": "1. Call list_agents to verify agents exist 2. Call get_governance_metrics to check if agents have state 3. Call process_agent_update if agents need initialization"
             }
         )]

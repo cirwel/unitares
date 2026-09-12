@@ -3125,7 +3125,7 @@ def _authorize_high_severity_update(
                         f"Allowed values: {allowed_list}"
                     ),
                     "related_tools": [
-                        "get_discovery_details",
+                        "knowledge",
                         "search_knowledge_graph",
                     ],
                 },
@@ -3143,7 +3143,7 @@ def _authorize_high_severity_update(
                         "agent's discovery"
                     ),
                     "related_tools": [
-                        "get_discovery_details",
+                        "knowledge",
                         "search_knowledge_graph",
                     ],
                 },

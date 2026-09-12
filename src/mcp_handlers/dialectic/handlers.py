@@ -774,7 +774,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 agent_id for agent_id in [paused_agent_id, reviewer_agent_id] if agent_id
             ]
             recommended_action = (
-                "Paused agent and reviewer should negotiate via submit_synthesis() until convergence."
+                "Paused agent and reviewer should negotiate via dialectic(action='synthesis') until convergence."
             )
     elif phase == "failed" and awaiting_facilitation:
         required_role = "reviewer_or_operator"

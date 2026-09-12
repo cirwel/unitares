@@ -494,9 +494,14 @@ async def handle_process_agent_update(arguments: Dict[str, Any]) -> Sequence[Tex
             f"Authentication failed: {str(e)}",
             details={"error_type": "authentication_error"},
             recovery={
-                "action": "Provide a valid API key for this agent",
-                "related_tools": ["get_agent_api_key"],
-                "workflow": "1. Use get_agent_api_key to retrieve your key 2. Include api_key in your request"
+                "action": "Bind an identity for this process, then retry",
+                "related_tools": ["start_session", "identity"],
+                "workflow": (
+                    "1. start_session(force_new=true) and keep the returned "
+                    "client_session_id 2. pass client_session_id on this call. "
+                    "API keys are deprecated: the agent_uuid is the auth "
+                    "credential, and no tool returns a full key."
+                )
             }
         )]
     except ValueError as e:
@@ -539,7 +544,7 @@ async def handle_process_agent_update(arguments: Dict[str, Any]) -> Sequence[Tex
             details={"error_type": "unexpected_error"},
             recovery={
                 "action": "Check server logs for details. If this persists, try restarting the MCP server",
-                "related_tools": ["health_check", "get_server_info"],
+                "related_tools": ["health_check", "admin"],
                 "workflow": "1. Check system health 2. Review server logs 3. Restart MCP server if needed"
             }
         )]
