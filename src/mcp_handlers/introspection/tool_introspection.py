@@ -149,6 +149,38 @@ def _not_advertised_summary(tools_list, mode: str) -> dict:
     }
 
 
+LITE_HINT_BUDGET = 100
+
+
+def lite_hint(text: str, budget: int = LITE_HINT_BUDGET) -> str:
+    """The compact view's one-line ``hint``: ``text`` clipped to ``budget``.
+
+    Clipped at a word boundary rather than mid-word. Measured 2026-09-12,
+    after orientation began serving the wire's first line: 30 of 50 hints cut
+    inside a word ("...without running a cycle, writing anyth"), because the
+    authored first lines run 390 to 1098 characters and every one of the 50
+    exceeds this budget. The boundary costs a few characters and is never
+    worse to read.
+
+    A boundary is honoured only in the last 40% of the budget. A first line
+    whose opening is one unbroken token — a URL, a long identifier — would
+    otherwise collapse to a stub far shorter than the budget, and a clipped
+    token carries more than that.
+
+    This does NOT shorten the underlying text, which is the separate and
+    larger question: the authored first lines are written for a client reading
+    a full schema, and whether they should also be written to survive a
+    100-character cut is a content decision for the descriptions themselves.
+    """
+    if len(text) <= budget:
+        return text
+    clipped = text[:budget]
+    boundary = clipped.rfind(" ")
+    if boundary >= budget * 0.6:
+        clipped = clipped[:boundary]
+    return clipped.rstrip().rstrip(",;:") + "..."
+
+
 def _orientation_description(
     tool_name: str,
     wire_descriptions: Dict[str, str],
@@ -167,16 +199,39 @@ def _orientation_description(
     so it is not consulted.
 
     A registered name the deployment does not advertise (a plugin tool
-    registered after the server mounted its table, or the degraded path where
-    the public catalog is unavailable) keeps the pre-existing fallback chain
-    minus the override: the schema catalog, then the decorator description,
-    then a generic placeholder.
+    registered after the server mounted its table) keeps the pre-existing
+    fallback chain minus the override: the alias note below, then the schema
+    catalog, then the decorator description, then a generic placeholder.
+
+    The alias link is load-bearing rather than defensive. A workflow alias is
+    in ``registered_tool_names`` unconditionally, but it reaches
+    ``wire_descriptions`` only through ``build_alias_tool_definition``, which
+    ``get_public_tool_definitions`` skips with ``except KeyError`` when the
+    alias's implementation tool is missing from the schema catalog — the
+    partial-catalog case that module documents as deliberately supported for
+    embedded consumers. An alias is in neither the schema catalog nor the
+    decorator registry, so without this link all eight would render as
+    ``Tool: sync_state`` there, where the pre-2026-09-12 override table showed
+    a curated line. ``migration_note`` is the same authority the wire itself
+    would have used, so the degraded surface now says what the healthy one says.
+
+    Note on a failure mode this does NOT cover, so nobody re-derives it: if
+    ``get_public_tool_definitions`` were to RAISE, this helper is never reached.
+    ``get_interface_contract_summary`` calls the same function unguarded a few
+    lines earlier in the handler, so the whole call fails first. The reachable
+    degradation is a partial return, not an unavailable catalog.
     """
     from src.tool_schemas import first_line
     from ..decorators import get_tool_description
+    from ..tool_stability import resolve_tool_alias
 
+    description = wire_descriptions.get(tool_name)
+    if not description:
+        _, alias_info = resolve_tool_alias(tool_name)
+        if alias_info is not None:
+            description = alias_info.migration_note
     description = (
-        wire_descriptions.get(tool_name)
+        description
         or catalog_descriptions.get(tool_name)
         or get_tool_description(tool_name)
     )
@@ -410,7 +465,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         lite_tools = [
             {
                 "name": t["name"],
-                "hint": t["description"][:100] + ("..." if len(t["description"]) > 100 else ""),
+                "hint": lite_hint(t["description"]),
                 "tier": t.get("tier", "common"),  # essential/common/advanced
                 "op": t.get("op", "read"),  # read/write/admin
                 "stability": t.get("stability"),  # stable/beta/experimental

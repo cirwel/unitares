@@ -636,10 +636,20 @@ async def test_list_tools_describes_every_advertised_name_as_the_wire_does():
 
 
 @pytest.mark.asyncio
-async def test_list_tools_lite_hint_is_the_wire_first_line_truncated():
-    """The compact view's ``hint`` is the same line, cut at 100 characters."""
+async def test_list_tools_lite_hint_is_the_wire_first_line_clipped_at_a_word():
+    """The compact ``hint`` is the wire's first line, clipped at a word boundary.
+
+    Asserted as properties rather than by re-running the clipper, which would
+    only restate the implementation. Every advertised first line exceeds the
+    budget, so the interesting content is the shape of the cut: measured
+    2026-09-12, 30 of 50 hints landed inside a word before the clipper was
+    made boundary-aware.
+    """
     import json
-    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+    from src.mcp_handlers.introspection.tool_introspection import (
+        LITE_HINT_BUDGET,
+        handle_list_tools,
+    )
 
     wire = _wire_first_lines()
     hints = {
@@ -647,14 +657,98 @@ async def test_list_tools_lite_hint_is_the_wire_first_line_truncated():
         for tool in json.loads((await handle_list_tools({"lite": True}))[0].text)["tools"]
     }
     assert set(wire) <= set(hints)
-    drifted = {
-        name: {"hint": hints[name], "tools/list": wire[name]}
-        for name, line in wire.items()
-        if hints[name] != line[:100] + ("..." if len(line) > 100 else "")
-    }
-    assert not drifted, (
-        f"lite hints that are not the wire's first line:\n{json.dumps(drifted, indent=2)}"
+
+    problems = {}
+    for name, line in wire.items():
+        got = hints[name]
+        if len(line) <= LITE_HINT_BUDGET:
+            if got != line:
+                problems[name] = "short first line must be served whole"
+            continue
+        if not got.endswith("..."):
+            problems[name] = "a clipped hint must end with an ellipsis"
+            continue
+        body = got[: -len("...")]
+        if not line.startswith(body):
+            problems[name] = "hint is not a prefix of the wire's first line"
+        elif len(body) > LITE_HINT_BUDGET:
+            problems[name] = f"hint body is {len(body)} chars, over budget"
+        elif body and body[-1].isalnum() and line[len(body)].isalnum():
+            problems[name] = f"hint cuts mid-word: ...{body[-25:]!r}"
+    assert not problems, (
+        f"lite hint defects:\n{json.dumps(problems, indent=2)}"
     )
+
+
+def test_lite_hint_keeps_a_long_unbroken_token_rather_than_a_stub():
+    """A first line that opens with one long token is clipped, not gutted.
+
+    The word-boundary rule is bounded for this reason: honouring a boundary at
+    character 4 would return four characters where the budget allows a hundred,
+    and a clipped identifier still carries more than that.
+    """
+    from src.mcp_handlers.introspection.tool_introspection import (
+        LITE_HINT_BUDGET,
+        lite_hint,
+    )
+
+    unbroken = "word " + "x" * 300
+    got = lite_hint(unbroken)
+    assert len(got) == LITE_HINT_BUDGET + len("..."), got
+    assert got.startswith("word xxx")
+
+    assert lite_hint("short enough") == "short enough"
+    assert lite_hint("a " * 80).endswith("...")
+
+
+@pytest.mark.asyncio
+async def test_workflow_aliases_keep_a_real_description_under_a_partial_catalog(
+    monkeypatch,
+):
+    """An alias the schema catalog cannot build still describes itself.
+
+    ``get_public_tool_definitions`` skips an alias with ``except KeyError``
+    when its implementation tool is absent from the catalog, the partial-catalog
+    case that module documents as deliberately supported. The alias stays in
+    ``registered_tool_names`` regardless, and it is in neither the schema
+    catalog nor the decorator registry, so between 2026-09-12 and this test all
+    eight rendered as ``Tool: sync_state`` there — where the override table had
+    previously supplied a curated line. The fallback reads the same
+    ``migration_note`` the wire itself would have used.
+    """
+    import json
+
+    import src.tool_schemas as tool_schemas
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+    from src.mcp_handlers.tool_stability import (
+        AGENT_WORKFLOW_ALIASES,
+        resolve_tool_alias,
+    )
+
+    implementations = {resolve_tool_alias(a)[0] for a in AGENT_WORKFLOW_ALIASES}
+    complete = tool_schemas.get_tool_definitions
+
+    def partial_catalog(*args, **kwargs):
+        return [t for t in complete(*args, **kwargs) if t.name not in implementations]
+
+    monkeypatch.setattr(tool_schemas, "get_tool_definitions", partial_catalog)
+
+    listed = {
+        tool["name"]: tool["description"]
+        for tool in json.loads((await handle_list_tools({"lite": False}))[0].text)["tools"]
+    }
+    placeholders = sorted(
+        alias
+        for alias in AGENT_WORKFLOW_ALIASES
+        if listed.get(alias, "").startswith("Tool: ")
+    )
+    assert not placeholders, (
+        f"these workflow aliases lost their description when the schema catalog "
+        f"could not build them: {placeholders}"
+    )
+    for alias in AGENT_WORKFLOW_ALIASES:
+        _, alias_info = resolve_tool_alias(alias)
+        assert listed[alias] == alias_info.migration_note.split("\n")[0].strip()
 
 
 @pytest.mark.asyncio
