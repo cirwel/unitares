@@ -60,10 +60,10 @@ gates.
 
 | File | Purpose | When to Edit |
 |------|---------|--------------|
-| Pydantic `*Params` model + `src/tool_descriptions.py` + `TOOL_ORDER` | Tool schema, description, listing order | Always - defines the tool |
+| Pydantic `*Params` model + `src/tool_descriptions.py` | Tool schema and description | Always - defines the tool |
 | `src/mcp_handlers/<subpackage>/*.py` | Handler implementations with `@mcp_tool` | Always - implements the logic |
 | `src/tool_registration.py` | Auto-registration pass + `TOOLS_NEEDING_SESSION_INJECTION` | Rarely - session injection, registration behavior |
-| `src/tool_meta.py` | Category, tier, operation and stability | Always - one metadata record per tool |
+| `src/tool_meta.py` | Category, tier, operation, stability and listing order — `TOOL_ORDER` in `src/tool_schemas.py` is `list(WIRE_ORDER)`, derived from the record order, never edited by hand | Always - one `ToolMeta` record per tool |
 
 ### Key Modules
 
@@ -87,24 +87,27 @@ gates.
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator
 
-**The both-places rule, now enforced:** a core tool needs a `*Params` schema
-(via `TOOL_ORDER`) AND `@mcp_tool` with `register=True` (default). Omitting
-either is a startup error as of 2026-08-29 —
-`_validate_consolidated_tool_order` in `src/tool_schemas.py` refuses to build
-the tool list when a registered, non-hidden, core-handler tool is missing from
-`TOOL_ORDER`.
+**The both-places rule, now enforced:** a core tool needs a `ToolMeta` record
+in `src/tool_meta.py` AND `@mcp_tool` with `register=True` (default). The
+record is what puts the tool on the wire list: `TOOL_ORDER` in
+`src/tool_schemas.py` is `list(WIRE_ORDER)`, the registered records in the
+order they appear, and is never edited by hand. Omitting either is a startup
+error as of 2026-08-29 — `_validate_consolidated_tool_order` in
+`src/tool_schemas.py` refuses to build the tool list when a registered,
+non-hidden, core-handler tool has no record and is therefore missing from the
+derived `TOOL_ORDER`.
 
 This used to be a silent softening: `get_tool_definitions` auto-discovered the
 tool and served an open `{"properties": {}, "additionalProperties": true}`
 schema. That is worse than it sounds, because `validate_params` resolves the
-real `*Params` model **by tool name** regardless of `TOOL_ORDER` — so the wire
+real `*Params` model **by tool name**, never via `TOOL_ORDER` — so the wire
 advertised "any parameters accepted" and the server then rejected the call
 against a schema the caller was never shown. Six tools sat in that state. The
 guard originally covered action routers only, which is exactly how
 single-purpose tools drifted out unnoticed.
 
 If a tool is only ever reached through a consolidated router, the fix is
-`register=False`, not a `TOOL_ORDER` entry. Plugin tools are exempt from the
+`register=False`, not a `ToolMeta` record. Plugin tools are exempt from the
 guard and keep the auto-discovery path; a plugin that wants a real advertised
 schema calls `register_extra_schemas`.
 
@@ -265,9 +268,10 @@ the module that **declared** the tool. It is filled in automatically:
 `decorators.list_plugin_registered_tools()` returns everything declared outside `src.` /
 `governance_core.`. Two consumers:
 
-- `tool_schemas._is_core_handler` — only a tool this repo ships must appear in
-  `TOOL_ORDER`; a plugin keeps the auto-discovery path and supplies its own
-  schemas via `tool_schemas.register_extra_schemas()`.
+- `tool_schemas._is_core_handler` — only a tool this repo ships must carry a
+  `ToolMeta` record (and so appear in the derived `TOOL_ORDER`); a plugin keeps
+  the auto-discovery path and supplies its own schemas via
+  `tool_schemas.register_extra_schemas()`.
 - `tests/conftest.py::first_party_tool_surface` — a fixture that lifts foreign
   registrations out for the duration of a test, so a surface-drift assertion
   compares the surface this repo ships. `tests/test_describe_tool_drift.py` and
