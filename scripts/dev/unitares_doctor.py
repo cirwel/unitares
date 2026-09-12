@@ -1655,8 +1655,12 @@ def check_tool_edge_index_fresh(repo_root: Path) -> CheckResult:
     return _check_generated_doc_fresh(
         "tool_edge_index_fresh", repo_root,
         "scripts/dev/tool_edge_index.py", "docs/dev/TOOL_EDGE_INDEX.md",
+        # Covers BOTH exit-2 causes. Naming only the dependency one would
+        # assert "not installed" about a machine whose real problem is an
+        # unimportable handler package; the detail line carries which it was.
         cannot_look_message=(
-            "generator dependencies not installed (requirements-full.txt)"
+            "generator could not look — missing dependency "
+            "(requirements-full.txt) or unimportable handler package"
         ),
     )
 

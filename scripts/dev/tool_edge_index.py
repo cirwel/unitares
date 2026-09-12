@@ -46,15 +46,22 @@ Exit codes:
     0 — index written, or up to date under --check
     1 — index is stale (--check)
         or the snapshot contains error-severity findings (--lint)
-    2 — cannot look: a dependency is not installed. Either the handler package
-        itself failed to import, or a third-party module the handler walk or
-        the production registrar needs is missing (``prometheus_client`` on a
-        core-only install). Distinct from 1 so a caller can tell "cannot look"
-        from "looked and found drift"; the doctor SKIPs on 2 rather than
-        reporting a false failure. A defect inside the repo — a deleted
-        ``src`` module, an ``ImportError: cannot import name`` — is not this:
-        the generator looked and found it, so it stays a finding
-        (``missing_dependency`` draws the line).
+    2 — cannot look: nothing was compared, for one of two reasons.
+        (a) A third-party module the handler walk or the production registrar
+            needs is not installed (``prometheus_client`` on a core-only
+            install). ``missing_dependency`` identifies these.
+        (b) ``src.mcp_handlers`` itself did not import. That one IS a defect in
+            the tree, but it is reported here rather than as a finding because
+            it leaves no registry to read: there is no index to render and so
+            nothing to compare. The message says so and does not advise
+            installing anything.
+        Distinct from 1 so a caller can tell "cannot look" from "looked and
+        found drift"; the doctor SKIPs on 2 rather than reporting a false
+        failure. A defect in a *walked submodule* is neither case: the
+        registries still load, so the generator looks, and it is recorded as a
+        ``DISPATCH_IMPORT_FAILURE`` finding (``missing_dependency`` draws that
+        line — a missing ``src.*`` module and an ``ImportError: cannot import
+        name`` both stay findings there).
 
 Reproducibility — why ``--check`` has to agree across interpreters:
     The committed index must come out byte-identical from every supported
@@ -1466,18 +1473,23 @@ def stale_report(current: str, generated: str, *, limit: int = DIFF_LINE_LIMIT) 
     return "\n".join(lines)
 
 
+INSTALL_REMEDY = "install requirements-full.txt to generate or check this index"
+
+
 def _cannot_look(reason: str) -> int:
     """Exit 2: the run declined, and nothing was compared.
+
+    ``reason`` carries its own remedy, because the two exit-2 causes need
+    opposite advice: an absent dependency is fixed by installing, while an
+    unimportable handler package is a code defect that installing cannot
+    touch. Telling a reader to install their way out of a broken re-export
+    sends them to the wrong place entirely.
 
     The doctor reads exit 2 as SKIP and classifies a run by its LAST stderr
     line (``unitares_doctor._generator_crashed``), so this is printed last and
     does not open with an exception name.
     """
-    print(
-        f"cannot look: {reason} — install requirements-full.txt to generate "
-        "or check this index",
-        file=sys.stderr,
-    )
+    print(f"cannot look: {reason}", file=sys.stderr)
     return 2
 
 
@@ -1497,9 +1509,15 @@ def main() -> int:
     try:
         tools, aliases, failures, unbound = collect()
     except MissingDependency as exc:
-        return _cannot_look(str(exc))
+        return _cannot_look(f"{exc} — {INSTALL_REMEDY}")
     except ImportError as exc:
-        return _cannot_look(f"the handler package did not import ({exc})")
+        # Not a missing dependency: src.mcp_handlers itself did not import, so
+        # there is no registry to read and nothing to compare. A code defect,
+        # which is why this deliberately does not advise installing anything.
+        return _cannot_look(
+            f"src.mcp_handlers did not import ({exc}) — this is a defect in "
+            "the tree, not a missing dependency; no index could be built"
+        )
 
     try:
         if args.json or args.lint:
@@ -1507,7 +1525,7 @@ def main() -> int:
         else:
             content = render(tools, aliases, failures, unbound)
     except MissingDependency as exc:
-        return _cannot_look(str(exc))
+        return _cannot_look(f"{exc} — {INSTALL_REMEDY}")
 
     if args.json or args.lint:
         if args.json:

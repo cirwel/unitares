@@ -577,11 +577,18 @@ def test_committed_index_locates_code_by_file_and_symbol_only(audit_snapshot):
 
 GENERATOR = REPO / "scripts" / "dev" / "tool_edge_index.py"
 BLOCK_ENV = "TEST_EDGE_INDEX_BLOCK_MODULE"
+BREAK_ENV = "TEST_EDGE_INDEX_BREAK_FACADE"
 
 
 def _generator_shim(root: pathlib.Path) -> pathlib.Path:
     """Install ``root/scripts/dev/tool_edge_index.py``: a shim that runs the
-    real generator with the module named in ``BLOCK_ENV`` made unimportable.
+    real generator under one of two simulated failures.
+
+    ``BLOCK_ENV`` makes a named module unimportable, standing in for a package
+    that is not installed. ``BREAK_ENV`` makes ``src.mcp_handlers`` itself
+    raise ``ImportError: cannot import name``, standing in for a broken
+    re-export in the facade — a defect in the tree rather than a missing
+    dependency, and the one exit-2 cause that installing cannot fix.
 
     Same relative path the doctor invokes, so ``check_tool_edge_index_fresh``
     can be pointed at ``root`` and exercised end to end against the real
@@ -592,6 +599,7 @@ def _generator_shim(root: pathlib.Path) -> pathlib.Path:
     script.write_text(
         textwrap.dedent(
             f"""
+            import importlib.abc
             import os
             import runpy
             import sys
@@ -599,6 +607,20 @@ def _generator_shim(root: pathlib.Path) -> pathlib.Path:
             blocked = os.environ.get({BLOCK_ENV!r})
             if blocked:
                 sys.modules[blocked] = None
+
+            if os.environ.get({BREAK_ENV!r}):
+                class _BrokenFacade(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname == "src.mcp_handlers":
+                            raise ImportError(
+                                "cannot import name 'probe' from "
+                                "'src.mcp_handlers.core'",
+                                name=fullname,
+                            )
+                        return None
+
+                sys.meta_path.insert(0, _BrokenFacade())
+
             sys.argv = [{str(GENERATOR)!r}, *sys.argv[1:]]
             runpy.run_path({str(GENERATOR)!r}, run_name="__main__")
             """
@@ -608,10 +630,21 @@ def _generator_shim(root: pathlib.Path) -> pathlib.Path:
     return script
 
 
-def _run_shim(script: pathlib.Path, *args: str, blocked: str | None = None):
-    env = {key: value for key, value in os.environ.items() if key != BLOCK_ENV}
+def _run_shim(
+    script: pathlib.Path,
+    *args: str,
+    blocked: str | None = None,
+    break_facade: bool = False,
+):
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in (BLOCK_ENV, BREAK_ENV)
+    }
     if blocked:
         env[BLOCK_ENV] = blocked
+    if break_facade:
+        env[BREAK_ENV] = "1"
     return subprocess.run(
         [sys.executable, str(script), *args],
         capture_output=True,
@@ -777,6 +810,31 @@ def test_every_mode_declines_with_exit_2_when_the_registrar_dependency_is_absent
     assert unitares_doctor._generator_crashed(result.stderr) is False
 
 
+def test_an_unimportable_handler_package_is_not_reported_as_a_missing_dependency(
+    tmp_path,
+):
+    """Exit 2 has two causes and they need opposite advice.
+
+    A broken re-export in ``src/mcp_handlers/__init__.py`` leaves no registry
+    to read, so it exits 2 like an absent dependency does — but installing
+    cannot fix a code defect, and telling the reader to install sends them at
+    the wrong thing. The message must name the tree as the problem and must
+    not prescribe a package install.
+    """
+    result = _run_shim(_generator_shim(tmp_path), "--check", break_facade=True)
+    assert result.returncode == 2, (
+        f"expected 2, got {result.returncode}\nstderr: {result.stderr}"
+    )
+    last = [line for line in result.stderr.splitlines() if line.strip()][-1]
+    assert last.startswith("cannot look:"), last
+    assert "src.mcp_handlers did not import" in last
+    assert "defect in the tree" in last
+    assert tei.INSTALL_REMEDY not in last, (
+        "a broken re-export was reported as something an install would fix"
+    )
+    assert tei.STALE_VERDICT not in result.stderr + result.stdout
+
+
 def test_doctor_skips_when_the_generator_cannot_look_and_passes_when_it_can(
     tmp_path, monkeypatch
 ):
@@ -794,8 +852,18 @@ def test_doctor_skips_when_the_generator_cannot_look_and_passes_when_it_can(
     assert "requirements-full.txt" in blocked.message
     assert "stale" not in blocked.message
     assert tei.STALE_VERDICT not in (blocked.detail or "")
+    # The SKIP message covers both exit-2 causes, so which one occurred has to
+    # come from the detail, or the doctor would assert "not installed" about a
+    # machine whose real problem is a broken handler package.
     assert "prometheus_client" in (blocked.detail or "")
 
     monkeypatch.delenv(BLOCK_ENV)
+    monkeypatch.setenv(BREAK_ENV, "1")
+    broken = unitares_doctor.check_tool_edge_index_fresh(tmp_path)
+    assert broken.status == unitares_doctor.Status.SKIP, (broken.message, broken.detail)
+    assert "stale" not in broken.message
+    assert "defect in the tree" in (broken.detail or "")
+
+    monkeypatch.delenv(BREAK_ENV)
     control = unitares_doctor.check_tool_edge_index_fresh(tmp_path)
     assert control.status == unitares_doctor.Status.PASS, (control.message, control.detail)
