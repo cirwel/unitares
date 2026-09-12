@@ -106,17 +106,6 @@ def _served_description(tool: str) -> str:
     raise AssertionError(f"{tool} is not advertised; the roster changed")
 
 
-# Routers whose served description does not yet name every routed action.
-# Measured 2026-09-12: admin omits connections, debug_context, telemetry,
-# tool_usage and workspace_health; knowledge omits supersede. Neither is a
-# regression from the F2 change — neither name had a catalog override, so
-# list_tools was already serving this same text for them. They are recorded
-# here rather than silently fixed because the wire descriptions are authored
-# prose (#2148/#2151/#2158) and rewriting them is a content decision, not a
-# parity fix. Shrink this set; never grow it.
-SERVED_ACTION_COVERAGE_GAPS = {"admin", "knowledge"}
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", CONSOLIDATED_TOOLS)
 async def test_served_description_names_every_routed_action(tool):
@@ -126,13 +115,20 @@ async def test_served_description_names_every_routed_action(tool):
     listed all eight actions, and when #2176 made list_tools serve the wire
     text instead, `reassign` stopped being named anywhere an agent looks. The
     repair was to the served text, so the guard belongs there too.
+
+    This ran with a ``SERVED_ACTION_COVERAGE_GAPS`` xfail set for admin and
+    knowledge until 2026-09-12, covering six omitted actions. Five of them had
+    no advertised standalone route either — get_connection_status,
+    get_telemetry_metrics, get_tool_usage_stats, debug_request_context and
+    supersede_discovery are all unadvertised — so for those the router's
+    description was the only place a client could learn the capability existed
+    at all; only workspace_health had an advertised alternative. That is why
+    the exemption is gone rather than renewed: an omission here is a failure.
     """
     actions = await _routed_actions(tool)
     assert actions, f"{tool} reported no valid_actions"
     served = _served_description(tool)
     missing = sorted(a for a in actions if a not in served)
-    if tool in SERVED_ACTION_COVERAGE_GAPS:
-        pytest.xfail(f"{tool} has a known served-text coverage gap: {missing}")
     assert not missing, (
         f"{tool} is advertised to clients with a description that omits routed "
         f"actions {missing}. The served text lives in src/tool_descriptions.py "
