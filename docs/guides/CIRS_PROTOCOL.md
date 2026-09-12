@@ -16,9 +16,9 @@ CIRS has five protocols, each handling a different coordination concern:
 |----------|---------|---------|
 | **void_alert** | Broadcast void state warnings | `emit`, `query` |
 | **state_announce** | Share EISV + trajectory with peers | `emit`, `query` |
-| **coherence_report** | Compute pairwise agent similarity | `emit`, `query` |
+| **coherence_report** | Compute pairwise agent similarity | `compute`, `query` |
 | **boundary_contract** | Define trust policies between agents | `set`, `get`, `list` |
-| **governance_action** | Coordinate governance requests | `emit`, `query` |
+| **governance_action** | Coordinate governance requests | `initiate`, `respond`, `query`, `status` |
 
 All protocols are accessed via the `cirs_protocol` tool:
 ```
@@ -67,11 +67,11 @@ Returns recent state announcements from all agents.
 
 Computes pairwise similarity between agents.
 
-**Emit:**
+**Compute:**
 ```
-cirs_protocol(protocol="coherence_report", action="emit")
+cirs_protocol(protocol="coherence_report", action="compute", target_agent_id="...")
 ```
-Calculates similarity against all recently active agents using weighted EISV comparison: 25% E, 35% I, 25% S, 15% V, plus regime match, verdict match, and trajectory similarity.
+Calculates similarity against one named agent using weighted EISV comparison: 25% E, 35% I, 25% S, 15% V, plus regime match, verdict match, and trajectory similarity. `target_agent_id` is required. This protocol has no `emit` action.
 
 **Query:**
 ```
@@ -117,15 +117,23 @@ cirs_protocol(protocol="boundary_contract", action="list")
 
 Broadcasts governance coordination requests (recovery conditions, pauses, state sync).
 
-**Emit:**
+**Initiate:**
 ```
-cirs_protocol(protocol="governance_action", action="emit", ...)
+cirs_protocol(protocol="governance_action", action="initiate", action_type="void_intervention", target_agent_id="...")
+```
+
+**Respond** to an action addressed to you, and read one back:
+```
+cirs_protocol(protocol="governance_action", action="respond", action_id="...", accept=True)
+cirs_protocol(protocol="governance_action", action="status", action_id="...")
 ```
 
 **Query:**
 ```
 cirs_protocol(protocol="governance_action", action="query")
 ```
+
+This protocol has no `emit` action.
 
 ---
 

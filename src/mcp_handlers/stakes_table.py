@@ -63,8 +63,14 @@ STAKES_LEVELS = ("baseline", "high")
 # OTHER agents, single-writer surfaces, and dialectic resolution. Everything
 # else is "baseline" — observed by the substrate sink (#669), not pre-gated.
 #
-# Keys are (canonical_tool_name, action) for action-router tools, or
-# (canonical_tool_name, None) for single-purpose tools.
+# Keys are (canonical_tool_name, action) for a tool that routes actions, or
+# (canonical_tool_name, None) for a tool-level classification that covers every
+# call. A tool-level key is NOT limited to single-purpose tools: `self_recovery`
+# declares a three-action vocabulary and carries one, which is honest because
+# check / quick / review are uniformly baseline self-governance. It stops being
+# honest the moment a tool's actions disagree — `cirs_protocol` mixes four reads
+# with five writes, so it is classified per action below rather than covered by
+# one key that would gate its reads as boundary writes.
 _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
     # knowledge — destructive / override mutations (store/update are routine)
     ("knowledge", "cleanup"),
@@ -87,10 +93,20 @@ _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
     # standalone reset_monitor / cleanup_stale_locks classification)
     ("admin", "reset_monitor"),
     ("admin", "cleanup_locks"),
+    # cirs_protocol — writes that other agents read. `emit` publishes a void or
+    # state announcement into the shared buffer peers consume, `compute` stores
+    # a pairwise coherence report, `set` replaces a trust contract, and
+    # `initiate` / `respond` move cross-agent intervention state. Its reads are
+    # in _BASELINE; this tool was covered by one tool-level high key until the
+    # action vocabulary made the read/write split machine-readable.
+    ("cirs_protocol", "emit"),
+    ("cirs_protocol", "compute"),
+    ("cirs_protocol", "set"),
+    ("cirs_protocol", "initiate"),
+    ("cirs_protocol", "respond"),
     # single-purpose admin / destructive / pause-state tools
     ("archive_old_test_agents", None),
     ("archive_orphan_agents", None),
-    ("cirs_protocol", None),
     ("cleanup_stale_locks", None),
     ("operator_resume_agent", None),
     ("reset_monitor", None),
@@ -147,6 +163,13 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("admin", "telemetry"),
     ("admin", "debug_context"),
     ("admin", "validate_path"),
+    # cirs_protocol — reads. Querying announcements, reading one boundary
+    # contract or listing them, and reading a governance action's status change
+    # nothing; the writes are in _HIGH.
+    ("cirs_protocol", "query"),
+    ("cirs_protocol", "get"),
+    ("cirs_protocol", "list"),
+    ("cirs_protocol", "status"),
     # dialectic — participation + reads (resolution is in _HIGH)
     ("dialectic", "get"),
     ("dialectic", "list"),

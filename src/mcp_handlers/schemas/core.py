@@ -576,6 +576,24 @@ class OutcomeEventParams(AgentIdentityMixin):
 
 class CirsProtocolParams(AgentIdentityMixin):
     """Parameters for cirs_protocol"""
+    # Deliberately NO ACTION_FIELDS. The declaration means "which of these flat
+    # parameters belongs to which action" (schemas/router_actions.py), and this
+    # tool cannot answer that with an action-keyed map: `protocol` selects the
+    # sub-handler and every parameter here is scoped by PROTOCOL, not by action
+    # (`severity` is void_alert's, `target_agent_id` is coherence_report's and
+    # boundary_contract's). An action-keyed union therefore describes no single
+    # call. Declaring one was tried and reverted in review: it flipped
+    # describe_tool into narrowing mode, where `narrow_schema_to_action` pins
+    # `action` and leaves `protocol` its full enum, so the per-action view
+    # asserted pairs the handlers refuse (protocol="void_alert", action="list"),
+    # named `target_agent_id` for the three query protocols that ignore it, and
+    # presented `set`/`respond`/`status` as parameterless. It also added an
+    # unknown-action refusal where the full schema used to be returned. Without
+    # it describe_tool serves the flat union and claims nothing about
+    # applicability, which is true. A per-(protocol, action) declaration would
+    # need a second selector in router_actions.py; until then the mapping lives
+    # in the `action` description below and in docs/guides/CIRS_PROTOCOL.md.
+    # tests/test_router_action_fields.py::_TWO_LEVEL_TOOLS records the exemption.
     protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(
         ...,
         description=(
@@ -583,7 +601,22 @@ class CirsProtocolParams(AgentIdentityMixin):
             "for provenance-tagged pairwise state similarity; v2 excludes legacy C(V)."
         ),
     )
-    action: Optional[str] = Field(None, description="Action within the protocol (emit/query/compute/set/get/initiate/respond)")
+    action: Optional[str] = Field(
+        None,
+        description=(
+            "Sub-action within the selected protocol. void_alert and "
+            "state_announce take emit or query; coherence_report takes compute "
+            "or query; boundary_contract takes set, get or list; "
+            "governance_action takes initiate, respond, query or status. A "
+            "protocol answers an action outside its own set with valid_actions."
+        ),
+        json_schema_extra={
+            "brief": (
+                "Sub-action within the chosen protocol: emit, query, compute, "
+                "set, get, list, initiate, respond or status."
+            )
+        },
+    )
     target_agent_id: Optional[str] = Field(
         None,
         description="Target agent (for the coherence_report pairwise-similarity protocol)",
