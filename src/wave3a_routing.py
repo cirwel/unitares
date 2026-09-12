@@ -10,8 +10,9 @@ transport wrapper (``src/mcp_server.py::get_tool_wrapper``) and
 ``dispatch_tool``. For every dispatch:
 
 - If ``tool_name`` is NOT in the table → the existing Python in-process
-  dispatch fires, unchanged. This is the hot path for ~100 tools NOT in
-  Wave 3a scope and MUST stay O(1) cheap (a single dict lookup).
+  dispatch fires, unchanged. This is the hot path for every tool NOT in
+  Wave 3a scope (the whole advertised surface, until a cutover adds a row)
+  and MUST stay O(1) cheap (a single dict lookup).
 - If ``tool_name`` IS in the table → the wrapper consults the BEAM proxy.
   On BEAM success the Python implementation MUST NOT be touched. On BEAM
   failure/timeout/envelope-invalid the wrapper MUST fall back to Python

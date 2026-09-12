@@ -116,7 +116,7 @@ authoritative serialization point.
 
 ## Classification summary
 
-86 entries (19 high, 67 baseline) as of 2026-09-12; `python -m
+94 entries (23 high, 71 baseline) as of 2026-09-12; `python -m
 src.mcp_handlers.stakes_table` prints the current split, and is the number to
 trust when this line has aged. High = destructive/irreversible ops,
 fleet/global mutations, governance-state changes applied to other agents,

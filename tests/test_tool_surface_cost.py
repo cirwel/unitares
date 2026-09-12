@@ -31,11 +31,18 @@ def test_default_measurement_matches_the_sdk_list_result(monkeypatch):
     assert measured.total_bytes > sum(tool.total_bytes for tool in measured.tools)
 
 
-def test_source_catalog_is_an_explicit_different_measurement():
+def test_source_catalog_and_final_listing_measure_the_same_bytes():
+    """The /mcp/ registrar advertises the catalog schema verbatim (F12).
+
+    Until 2026-09-11 this asserted ``!=``: FastMCP's regenerated schemas dropped
+    bounds, defaults and ``$defs``, and the ~5 KB gap was measured here without
+    saying what was in it. A difference now means a registration route bypassed
+    ``_advertise_catalog_schema`` in src/tool_registration.py.
+    """
     mounted = cost.measure_profile("standard")
     catalog = cost.measure_profile("standard", "catalog")
     assert mounted.tool_count == catalog.tool_count
-    assert mounted.total_bytes != catalog.total_bytes
+    assert mounted.total_bytes == catalog.total_bytes
 
 
 def test_missing_dependencies_are_unknown_and_cannot_pass_the_ladder(monkeypatch):
