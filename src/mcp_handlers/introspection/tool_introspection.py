@@ -599,6 +599,15 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     categories_block = dict(
         sorted(categories_block.items(), key=lambda item: item[1]["priority"])
     )
+    # `relationships` carries records for the names listed above only. The
+    # catalog also holds records for plugin-provided tools; a deployment
+    # without the plugin would otherwise describe relationships of a tool it
+    # cannot dispatch.
+    tool_relationships = {
+        name: tool_relationships[name]
+        for name in listed_names
+        if name in tool_relationships
+    }
 
     tools_info = {
         "success": True,
@@ -653,14 +662,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             ]
         },
         "workflows": workflows,
-        # Records for the names listed above only. The catalog also carries
-        # records for plugin-provided tools; a deployment without the plugin
-        # would otherwise describe relationships of a tool it cannot dispatch.
-        "relationships": {
-            name: tool_relationships[name]
-            for name in listed_names
-            if name in tool_relationships
-        },
+        "relationships": tool_relationships,
         "note": (
             "Use this tool to discover available capabilities. MCP protocol also provides tool "
             "definitions, but this provides categorized overview useful for onboarding. Use "
