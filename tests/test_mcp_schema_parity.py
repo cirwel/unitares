@@ -300,8 +300,23 @@ def test_extra_argument_passthrough_survives_the_schema_replacement():
 # one of the values tried.
 #
 # Measured 2026-09-12 on the full surface: 507 properties across 50 tools,
-# 964 boundary values, none unsynthesizable, none rejected by the transport,
-# and six rejected by a handler for the one recorded catalog imprecision below.
+# 964 boundary values, none rejected by the transport, and six rejected by a
+# handler for the recorded catalog imprecision below.
+#
+# WHAT THIS DOES NOT CATCH, stated so the green result is not over-read. It
+# probes only the boundaries the advertised schema NAMES, so it is structurally
+# blind to a bound the advertised side omits or cannot express:
+#   - a handler bound with no advertised counterpart, e.g. an advertised
+#     `maximum` deleted while the handler keeps it;
+#   - a bound the schema emits in a form JSON Schema ignores. This is LIVE, not
+#     hypothetical: the check-in `complexity`/`confidence` bound is emitted as
+#     Pydantic `ge`/`le`, so 99.0 is advertised-legal and the handler refuses
+#     it, and this test passes because it only ever tries 1.0 there;
+#   - an optional nested field whose construct the helper does not model. This
+#     is also live: `ToolResultEvidence.observed_at` (format date-time) yields no
+#     candidates and is skipped without being recorded.
+# Closing these needs decisions this file should not make silently; see the
+# knowledge-graph record superseding 2026-09-12T18:41:44.
 
 _UNSYNTHESIZABLE = object()
 
@@ -312,20 +327,25 @@ _UNSYNTHESIZABLE = object()
 # cannot be chosen without deciding which violations are acceptable to miss,
 # which is a standard this file has no business setting quietly.
 
-# Advertised string branches the handler is stricter than. These parameters take
-# a number in [0, 1], a named level ("trivial" ... "very_high"), or a
-# {"value": N, "scale": M} object, and the handler's own validator says so — but
-# the advertised schema carries a bare `string` branch with no enum, so it tells
-# a caller that any string is legal and dispatch then refuses "x".
+# Advertised string branches the handler is stricter than. The canonical
+# process_agent_update and simulate_update models accept a number or a numeric
+# string such as "0.5" and refuse everything else, named levels and
+# {"value", "scale"} objects included; only the sync_state alias path normalizes
+# those upstream. But the advertised schema carries a bare `string` branch with
+# no enum, so it tells a caller any string is legal and the handler refuses "x".
 #
 # This is a real imprecision in the CATALOG, not something the schema swap
 # introduced: stdio and REST have advertised the same bare branch all along,
 # and docs/interface-contract.v1.json hashes it. Narrowing it is a contract
-# change that moves every input_schema_sha256 and needs an interface release, so
-# it is a decision rather than a fix to fold into a test. Recorded here, keyed
-# on the canonical tool, so the exception is named and counted instead of
-# silently passing; only STRING values are exempted, so a regression on the
-# numeric branch of these same parameters still fails.
+# change that moves those input_schema_sha256 values and needs an interface
+# release, so it is a decision rather than a fix to fold into a test. Recorded
+# here so the exception is named and counted instead of silently passing.
+#
+# Two limits of this exemption, both measured. It does NOT guard the numeric
+# branch: that bound is emitted as Pydantic `ge`/`le`, which JSON Schema ignores,
+# so the numeric branch is already out of step and this test cannot see it. And
+# it covers every string, so narrowing the branch to the named-level enum would
+# still pass here even though these canonical handlers refuse named levels.
 _ADVERTISED_STRING_WIDER_THAN_HANDLER = frozenset({
     ("process_agent_update", "complexity"),
     ("process_agent_update", "confidence"),
@@ -477,11 +497,13 @@ def test_every_advertised_value_survives_both_validation_boundaries():
 
     An action-injecting alias strips ``action`` from its advertised schema
     while the router's model requires it, so the injected action is supplied
-    here exactly as dispatch supplies it. Without that, all 48 alias properties
-    fail on a missing field rather than on anything this test is about.
+    here exactly as dispatch supplies it. Without that, the 57 properties of the
+    four action-injecting aliases fail on a missing field rather than on
+    anything this test is about.
 
-    A property the helper cannot synthesize is counted and named rather than
-    silently passed over, so this cannot decay into a test that checks nothing.
+    A TOP-LEVEL property the helper cannot synthesize is counted and named rather
+    than silently passed over. An optional NESTED field it cannot synthesize is
+    not yet counted; see the module comment above the helpers for that gap.
     Measured 2026-09-12: 507 properties, 964 boundary values, none
     unsynthesizable, none rejected outside the recorded exemption.
     """
@@ -596,9 +618,13 @@ def test_every_advertised_value_survives_both_validation_boundaries():
     # No allowance for constructs the helper cannot model. A tolerated fraction
     # would be a deciding standard chosen silently — how much of the surface is
     # acceptable to leave unchecked — and this repo requires such a standard to
-    # be stated as a choice rather than absorbed. So a new `pattern` or `format`
-    # fails here, and the fix is to model it or to name it, not to fall inside
-    # a threshold.
+    # be stated as a choice rather than absorbed. So a `pattern` or `format` on a
+    # TOP-LEVEL property fails here. The same construct on an optional field
+    # inside a nested model does not reach this list today: the object walk
+    # skips a field with no candidates without recording it, which is how
+    # ToolResultEvidence.observed_at (format date-time) goes unchecked. Counting
+    # those would fail immediately on that field and needs a decision about
+    # whether `format` is an assertion or only an annotation.
     assert not unsynthesizable, (
         "advertised properties the helper cannot synthesize, so the invariant "
         "went unchecked for them. Extend _candidate_values, or name the construct "
