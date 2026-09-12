@@ -4,7 +4,8 @@ Inert by default: nothing gates on these results yet. This PR ships the
 classification half of #775 (the load-bearing artifact) and parks the gate
 mechanism pending the Wave-3 BEAM-port sequencing. These tests pin the table's
 completeness (every registered surface is a deliberate classification, not a
-fail-closed accident) and the resolver's alias/override/fail-closed semantics.
+fail-closed accident), its exactness (every key names a registered tool, never
+an alias) and the resolver's alias/override/fail-closed semantics.
 """
 
 from __future__ import annotations
@@ -26,21 +27,29 @@ from src.mcp_handlers.stakes_table import (
 )
 from src.mcp_handlers.decorators import (
     _TOOL_DEFINITIONS,
+    _is_first_party_module,
     _resolve_canonical_and_action,
     get_call_stakes_requirement,
     mcp_tool,
 )
 
-# External-plugin surfaces this server does not own. They register only when an
-# external package (e.g. unitares_pi_plugin) is importable, so they are NOT
-# enumerated in the core stakes table — they intentionally fall to the
-# fail-closed "high" default until an operator classifies them when the gate is
-# built. The module filter below excludes external SINGLE-PURPOSE tools
-# automatically (their handler module is outside ``src.``); external
-# action_routers like ``pi`` need this explicit allowlist because every
-# action_router wrapper's module is ``src.mcp_handlers.decorators`` regardless
-# of where its action handlers live.
-_EXTERNAL_PLUGIN_TOOLS = {"pi", "pi_restart_service"}
+
+def _is_core_tool(td) -> bool:
+    """Whether this repo declared ``td`` — the surface the table enumerates.
+
+    External-plugin tools (e.g. ``unitares_pi_plugin``'s ``pi`` router and
+    ``pi_restart_service``) register into the same ``_TOOL_DEFINITIONS`` when
+    that package is importable, but they are NOT enumerated in the core stakes
+    table: they intentionally fall to the fail-closed "high" default until an
+    operator classifies them when the gate is built. Provenance is read from
+    the declaring module the decorator recorded (``ToolDefinition.source_module``),
+    never from ``handler.__module__`` — every ``action_router`` handler is
+    defined in ``src.mcp_handlers.decorators``, so the latter would call a
+    plugin's router first-party, and this file used to carry a hand-kept
+    allowlist of plugin routers to compensate.
+    """
+    return _is_first_party_module(td.source_module)
+
 
 # Derive bounded action vocabularies from the registered tools. ``action_router``
 # populates ``known_actions`` directly from its live routing map; a hand-rolled
@@ -50,9 +59,7 @@ _EXTERNAL_PLUGIN_TOOLS = {"pi", "pi_restart_service"}
 CORE_ACTION_VOCABULARIES = {
     name: td.known_actions
     for name, td in _TOOL_DEFINITIONS.items()
-    if td.known_actions
-    and name not in _EXTERNAL_PLUGIN_TOOLS
-    and (getattr(td.handler, "__module__", "") or "").startswith("src.")
+    if td.known_actions and _is_core_tool(td)
 }
 
 
@@ -114,9 +121,17 @@ def test_destructive_and_fleet_ops_are_high():
                 ("calibration", "rebuild"), ("config", "set"),
                 ("dialectic", "synthesis")):
         assert get_action_stakes(*key) == "high", key
-    for tool in ("archive_orphan_agents", "reset_monitor", "set_thresholds",
-                 "cirs_protocol", "cleanup_stale_locks"):
+    for tool in ("archive_orphan_agents", "set_thresholds", "cirs_protocol"):
         assert get_action_stakes(tool, None) == "high", tool
+    # reset_monitor / cleanup_stale_locks are aliases of admin actions. They
+    # carry no tool-level entry (a bare lookup on the alias name would only be
+    # reporting the fail-closed default), so the call-level resolver — which
+    # canonicalizes first — is what proves them high.
+    for alias, canonical in (("reset_monitor", ("admin", "reset_monitor")),
+                             ("cleanup_stale_locks", ("admin", "cleanup_locks"))):
+        assert _resolve_canonical_and_action(alias, {}) == canonical, alias
+        assert get_action_stakes(*canonical) == "high", canonical
+        assert get_call_stakes_requirement(alias, {}) == "high", alias
 
 
 # ---------------------------------------------------------------------------
@@ -150,23 +165,21 @@ def test_registered_action_vocabularies_match_stakes_table():
 
 
 def test_every_core_tool_is_known_to_the_table():
-    """Every CORE governance tool (handler defined under ``src.``) is a
+    """Every CORE governance tool (declared under this repo's packages) is a
     deliberate classification, so the fail-closed default only ever catches a
     genuinely unclassified name — never a core surface.
 
     External-plugin tools (e.g. the ``unitares_pi_plugin`` device tools, whose
-    handler module is not under ``src.``) are intentionally excluded: they fall
-    to the fail-closed ``high`` default until an operator classifies them when
-    the gate is built. Filtering by handler module keeps this test deterministic
-    regardless of which plugins another test in the same process imported."""
+    declaring module is not under ``src.``) are intentionally excluded: they
+    fall to the fail-closed ``high`` default until an operator classifies them
+    when the gate is built. Filtering by declaring module keeps this test
+    deterministic regardless of which plugins another test in the same process
+    imported."""
     action_tools = set(CORE_ACTION_VOCABULARIES)
     unknown = []
     for name, td in _TOOL_DEFINITIONS.items():
-        if name in _EXTERNAL_PLUGIN_TOOLS:
-            continue  # external action_router — fail-closed-high by design
-        module = getattr(td.handler, "__module__", "") or ""
-        if not module.startswith("src."):
-            continue  # external single-purpose tool — fail-closed-high by design
+        if not _is_core_tool(td):
+            continue  # external tool — fail-closed-high by design
         if name in action_tools:
             continue  # covered per-action or tool-level by the test above
         if (name, None) not in stakes_table._STAKES:
@@ -174,6 +187,30 @@ def test_every_core_tool_is_known_to_the_table():
     assert not unknown, (
         f"core single-purpose tools missing a stakes classification: "
         f"{sorted(unknown)} — add them to stakes_table._HIGH or _BASELINE"
+    )
+
+
+def test_every_table_key_names_a_registered_tool():
+    """table -> registered, the reverse of the two coverage tests above.
+
+    ``get_call_stakes_requirement`` canonicalizes an alias before it looks the
+    call up, so a table entry keyed on an alias name is never consulted — it
+    only pads ``export_table()``, the serialization a non-Python gate is meant
+    to load. Thirteen such entries had accumulated by 2026-09-12 (F6 of the
+    tool-surface audit), every one an alias of a router action the table
+    already classified. The failure message names the canonical key to use.
+    """
+    stale = []
+    for tool, action in stakes_table._STAKES:
+        if tool in _TOOL_DEFINITIONS:
+            continue
+        canonical, canonical_action = _resolve_canonical_and_action(tool, {})
+        key = tool if action is None else f"{tool}:{action}"
+        resolved = canonical if canonical_action is None else f"{canonical}:{canonical_action}"
+        stale.append(f"{key} -> {resolved}")
+    assert stale == [], (
+        "stakes table keys that are not registered dispatch tools "
+        f"(shown with the canonical key the name resolves to): {sorted(stale)}"
     )
 
 
