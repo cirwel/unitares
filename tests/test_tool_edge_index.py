@@ -22,6 +22,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import textwrap
 import types
 
 import pytest
@@ -103,8 +104,10 @@ def test_handler_modules_all_import(collected):
     """A module the generator cannot import is a hole in the index.
 
     The generator reports these rather than failing, so the doc stays honest
-    when a dependency is missing. In this repo, on the test environment's
-    dependency floor, there should be none.
+    when the tree is broken. A third-party module that is not installed is
+    the one exception: that is "cannot look" and exits 2 (the *Cannot look*
+    tests at the end of this file). In this repo, on the test environment's
+    dependency floor, there should be neither.
     """
     _tools, _aliases, failures, _unbound = collected
     assert not failures, f"handler modules failed to import: {failures}"
@@ -556,3 +559,164 @@ def test_committed_index_locates_code_by_file_and_symbol_only(audit_snapshot):
         for tool in dispatch["tools"]
         for edge in tool["actions"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Cannot look: a dependency that is not installed is exit 2, never a verdict.
+# The exposure half builds the wire catalog through the production registrar,
+# which imports the Prometheus metrics registry — a requirements-full.txt
+# dependency. With only requirements-core.txt installed the generator used to
+# fold the ModuleNotFoundError into the findings (EXPOSURE_COLLECTION_FAILURE
+# plus one ORIENTATION_NAME_NOT_ON_WIRE per tool: 2 errors, 46 warnings) and
+# then compare, so --check called a current index stale and the doctor's
+# tool_edge_index_fresh reported FAIL where it should SKIP (tool-surface audit
+# 2026-09-12, F3). Simulated in a subprocess by blocking the import:
+# ``sys.modules[name] = None`` is how CPython spells "not installed", and it
+# raises the same ModuleNotFoundError (``.name`` set) a bare venv does.
+# ---------------------------------------------------------------------------
+
+GENERATOR = REPO / "scripts" / "dev" / "tool_edge_index.py"
+BLOCK_ENV = "TEST_EDGE_INDEX_BLOCK_MODULE"
+
+
+def _generator_shim(root: pathlib.Path) -> pathlib.Path:
+    """Install ``root/scripts/dev/tool_edge_index.py``: a shim that runs the
+    real generator with the module named in ``BLOCK_ENV`` made unimportable.
+
+    Same relative path the doctor invokes, so ``check_tool_edge_index_fresh``
+    can be pointed at ``root`` and exercised end to end against the real
+    generator and the real committed index.
+    """
+    script = root / "scripts" / "dev" / "tool_edge_index.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import os
+            import runpy
+            import sys
+
+            blocked = os.environ.get({BLOCK_ENV!r})
+            if blocked:
+                sys.modules[blocked] = None
+            sys.argv = [{str(GENERATOR)!r}, *sys.argv[1:]]
+            runpy.run_path({str(GENERATOR)!r}, run_name="__main__")
+            """
+        ),
+        encoding="utf-8",
+    )
+    return script
+
+
+def _run_shim(script: pathlib.Path, *args: str, blocked: str | None = None):
+    env = {key: value for key, value in os.environ.items() if key != BLOCK_ENV}
+    if blocked:
+        env[BLOCK_ENV] = blocked
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=120,
+        env=env,
+    )
+
+
+def test_missing_dependency_is_drawn_by_package_not_by_exception_type():
+    """Only a ModuleNotFoundError for a module outside the repo's packages is
+    "not installed". A missing ``src`` module and a bad name are defects in
+    the tree — the generator looked and found them — and stay findings."""
+    absent = ModuleNotFoundError("No module named 'prometheus_client'", name="prometheus_client")
+    assert tei.missing_dependency(absent) == "prometheus_client"
+    assert tei.missing_dependency(ModuleNotFoundError("x", name="pkg.sub")) == "pkg.sub"
+    assert tei.missing_dependency(ModuleNotFoundError("x", name="src.gone")) is None
+    assert tei.missing_dependency(ModuleNotFoundError("x", name="governance_core.gone")) is None
+    assert tei.missing_dependency(ModuleNotFoundError("x")) is None
+    assert tei.missing_dependency(ImportError("cannot import name 'x' from 'src.y'", name="src.y")) is None
+    assert tei.missing_dependency(TypeError("not an import failure")) is None
+
+    err = tei.MissingDependency("prometheus_client", absent)
+    assert isinstance(err, ImportError)
+    assert err.module == "prometheus_client"
+    assert "prometheus_client" in str(err) and "ModuleNotFoundError" in str(err)
+
+
+def test_wire_catalog_raises_for_an_absent_dependency_and_records_a_tree_defect(monkeypatch):
+    """In-process, both sides of the line ``missing_dependency`` draws.
+
+    Absent dependency: the registrar is re-imported with ``prometheus_client``
+    blocked, exactly the core-only import chain, and the collector must raise
+    rather than hand back an empty catalog. Tree defect: the registrar module
+    itself is blocked, and that IS recorded as a collection failure — with the
+    wire-derived findings withheld, since nothing was looked at.
+    """
+    monkeypatch.delitem(sys.modules, "src.tool_registration", raising=False)
+    monkeypatch.delitem(sys.modules, "src.metrics_registry", raising=False)
+    monkeypatch.setitem(sys.modules, "prometheus_client", None)
+    with pytest.raises(tei.MissingDependency) as raised:
+        tei._collect_wire_catalog()
+    assert raised.value.module == "prometheus_client"
+    assert isinstance(raised.value.__cause__, ModuleNotFoundError)
+
+    monkeypatch.setitem(sys.modules, "src.tool_registration", None)
+    catalog, failures = tei._collect_wire_catalog()
+    assert catalog == {}
+    assert len(failures) == 1 and "src.tool_registration" in failures[0]
+
+    tools, aliases, import_failures, unbound = tei.collect()
+    dispatch = tei.build_dispatch_snapshot(tools, aliases, import_failures, unbound)
+    exposure = tei.build_exposure_snapshot(tools, aliases)
+    assert exposure["collection_failures"] == failures
+    codes = [finding.code for finding in tei.lint_snapshots(dispatch, exposure)]
+    assert codes == ["EXPOSURE_COLLECTION_FAILURE"], codes
+
+
+@pytest.mark.parametrize("mode", ["--check", "--lint", "--json"])
+def test_every_mode_declines_with_exit_2_when_the_registrar_dependency_is_absent(
+    tmp_path, mode
+):
+    """The audit's reproduction, per mode: exit 2 and no verdict — never the
+    exit 1 that means "looked and found drift" (or, under --lint, "found
+    errors"). Nothing derived from the empty catalog is printed, --json emits
+    no partial snapshot, and the last stderr line is one the doctor will not
+    mistake for a crash."""
+    import unitares_doctor
+
+    result = _run_shim(_generator_shim(tmp_path), mode, blocked="prometheus_client")
+    assert result.returncode == 2, (
+        f"expected 2 (cannot look), got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    combined = result.stdout + result.stderr
+    assert tei.STALE_VERDICT not in combined
+    assert "EXPOSURE_COLLECTION_FAILURE" not in combined
+    assert "ORIENTATION_NAME_NOT_ON_WIRE" not in combined
+    assert result.stdout.strip() == "", "a partial snapshot or verdict was emitted"
+    last = [line for line in result.stderr.splitlines() if line.strip()][-1]
+    assert last.startswith("cannot look:"), last
+    assert "prometheus_client" in last and "requirements-full.txt" in last
+    assert unitares_doctor._generator_crashed(result.stderr) is False
+
+
+def test_doctor_skips_when_the_generator_cannot_look_and_passes_when_it_can(
+    tmp_path, monkeypatch
+):
+    """End to end through the doctor's own check, against the real generator
+    and the real committed index. Blocked: SKIP, with the missing module named
+    in the detail. Unblocked through the same shim: PASS. Never FAIL — that is
+    the false verdict the audit reproduced on a core-only machine."""
+    import unitares_doctor
+
+    _generator_shim(tmp_path)
+
+    monkeypatch.setenv(BLOCK_ENV, "prometheus_client")
+    blocked = unitares_doctor.check_tool_edge_index_fresh(tmp_path)
+    assert blocked.status == unitares_doctor.Status.SKIP, (blocked.message, blocked.detail)
+    assert "requirements-full.txt" in blocked.message
+    assert "stale" not in blocked.message
+    assert tei.STALE_VERDICT not in (blocked.detail or "")
+    assert "prometheus_client" in (blocked.detail or "")
+
+    monkeypatch.delenv(BLOCK_ENV)
+    control = unitares_doctor.check_tool_edge_index_fresh(tmp_path)
+    assert control.status == unitares_doctor.Status.PASS, (control.message, control.detail)

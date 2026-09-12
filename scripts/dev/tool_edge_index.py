@@ -23,9 +23,18 @@ and are fully live. ``docs/operations/dormant-capability-registry.md`` records
 5+ such false positives from an earlier static pass. Reading the registry cannot
 make that class of error, because it reports what actually registered.
 
-Imports the handler package only — no DB, no Redis, no running server. Needs
-``requirements-core.txt`` (mcp, pydantic, numpy, PyYAML), the same floor CI
-already installs.
+Imports the handler package and the production registrar — no DB, no Redis, no
+running server. Needs ``requirements-full.txt``, the set CI's smoke job
+installs. The dispatch half runs on ``requirements-core.txt`` alone, but the
+exposure half builds the wire catalog through ``src/tool_registration.py``,
+which imports the Prometheus metrics registry (``prometheus-client``, a
+full-only dependency). A dependency that is not installed makes every mode exit
+2 (*Exit codes* below) instead of folding the failure into the findings and
+comparing anyway. Until 2026-09-11 it did the latter: on a core-only install
+the missing module became ``EXPOSURE_COLLECTION_FAILURE`` plus one
+``ORIENTATION_NAME_NOT_ON_WIRE`` per tool, and ``--check`` called a current
+index stale (F3 of the 2026-09-12 tool-surface audit,
+``docs/operations/tool-surface-audit-2026-09-12.md``).
 
 Usage:
     python3 scripts/dev/tool_edge_index.py            # write the index
@@ -37,9 +46,15 @@ Exit codes:
     0 — index written, or up to date under --check
     1 — index is stale (--check)
         or the snapshot contains error-severity findings (--lint)
-    2 — handler package not importable (dependencies absent). Distinct from 1 so
-        a caller can tell "cannot look" from "looked and found drift"; the
-        doctor SKIPs on 2 rather than reporting a false failure.
+    2 — cannot look: a dependency is not installed. Either the handler package
+        itself failed to import, or a third-party module the handler walk or
+        the production registrar needs is missing (``prometheus_client`` on a
+        core-only install). Distinct from 1 so a caller can tell "cannot look"
+        from "looked and found drift"; the doctor SKIPs on 2 rather than
+        reporting a false failure. A defect inside the repo — a deleted
+        ``src`` module, an ``ImportError: cannot import name`` — is not this:
+        the generator looked and found it, so it stays a finding
+        (``missing_dependency`` draws the line).
 
 Reproducibility — why ``--check`` has to agree across interpreters:
     The committed index must come out byte-identical from every supported
@@ -167,6 +182,47 @@ class AuditFinding:
     subject: str
     message: str
     evidence: dict[str, Any] = field(default_factory=dict)
+
+
+# Top-level packages that live in this tree: the shipped ones (pyproject.toml,
+# ``[tool.setuptools.packages.find]``) plus the repo-local ones a handler could
+# reach. A ``ModuleNotFoundError`` naming anything else is a dependency that is
+# not installed on this machine, not a hole in the tree.
+_REPO_PACKAGES = frozenset(
+    {"src", "governance_core", "config", "agents", "scripts", "tests"}
+)
+
+
+class MissingDependency(ImportError):
+    """A third-party module the generator needs is not installed.
+
+    Raised instead of being folded into a snapshot, so ``main`` can exit 2:
+    "cannot look" is not "looked and found drift". A failure that IS recorded
+    as a finding means the generator ran and found the tree broken; this means
+    it could not look at all on this machine.
+    """
+
+    def __init__(self, module: str, cause: BaseException):
+        super().__init__(
+            f"{module} is not installed ({type(cause).__name__}: {cause})",
+            name=module,
+        )
+        self.module = module
+
+
+def missing_dependency(exc: BaseException) -> str | None:
+    """The third-party module ``exc`` says is absent; None for anything else.
+
+    Only a ``ModuleNotFoundError`` for a module outside this repo's packages
+    qualifies. A missing ``src.*`` module and an ``ImportError: cannot import
+    name`` are defects in the tree: the generator looked and found them, and
+    they stay findings.
+    """
+    if not isinstance(exc, ModuleNotFoundError) or not exc.name:
+        return None
+    if exc.name.partition(".")[0] in _REPO_PACKAGES:
+        return None
+    return exc.name
 
 
 def _jsonable(value: Any) -> Any:
@@ -322,7 +378,11 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
     Walks every submodule under ``src.mcp_handlers`` so a tool registered by a
     module that ``__init__`` does not re-export is still counted. Import
     failures are collected, never swallowed — a module this generator could not
-    import is a hole in the index and is reported as one.
+    import is a hole in the index and is reported as one. The one exception is
+    a third-party module that is not installed on this machine: that is
+    "cannot look", not a hole, and is raised as ``MissingDependency`` so the
+    run exits 2 instead of comparing an incomplete index against the
+    committed one.
     """
     # Entry-point plugins register into the same registries the shipped tools
     # use, and this index describes the repo, not the machine. Refuse them at
@@ -340,6 +400,9 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
         try:
             importlib.import_module(info.name)
         except Exception as exc:  # noqa: BLE001 — reported, not suppressed
+            missing = missing_dependency(exc)
+            if missing:
+                raise MissingDependency(missing, exc) from exc
             failures.append(f"{info.name}: {type(exc).__name__}: {exc}")
 
     from src.mcp_handlers.decorators import (
@@ -604,6 +667,10 @@ def _collect_wire_catalog() -> tuple[dict[str, dict[str, Any]], list[str]]:
     what the MCP protocol advertises before dispatch, including the narrowed
     workflow-alias schemas. Building it through the same registration functions
     avoids a second implementation of alias-schema policy in this audit.
+
+    Raises ``MissingDependency`` when a third-party module the registrar needs
+    is not installed. Any other failure is returned in ``failures`` as
+    evidence, with an empty catalog.
     """
     failures: list[str] = []
     try:
@@ -646,6 +713,13 @@ def _collect_wire_catalog() -> tuple[dict[str, dict[str, Any]], list[str]]:
             }
         return catalog, failures
     except Exception as exc:  # noqa: BLE001 — evidence, not silent fallback
+        missing = missing_dependency(exc)
+        if missing:
+            # The registrar imports the Prometheus metrics registry, a
+            # requirements-full.txt dependency, so a core-only install lands
+            # here. Refuse to look rather than hand back an empty catalog,
+            # which reads as every orientation name having left the wire.
+            raise MissingDependency(missing, exc) from exc
         failures.append(f"{type(exc).__name__}: {exc}")
         return {}, failures
 
@@ -817,7 +891,10 @@ def lint_snapshots(
             "error",
             "EXPOSURE_COLLECTION_FAILURE",
             "exposure",
-            "The production registration path could not be snapshotted.",
+            (
+                "The production registration path could not be snapshotted; "
+                "the wire-derived checks are withheld."
+            ),
             failure=failure,
         )
 
@@ -907,6 +984,15 @@ def lint_snapshots(
                 superseded_by=superseded_by,
             )
 
+    if exposure["collection_failures"]:
+        # Every check from here on reads the wire catalog. With none collected
+        # the mode tables show every name as declared-only and the orientation
+        # view shows every name as off the wire: dozens of findings that each
+        # restate "the catalog is empty", which the error above says once. A
+        # missing dependency never reaches this point (exit 2); this is the
+        # registrar failing on a machine that has its dependencies.
+        return _sorted_findings(findings)
+
     for mode, mode_view in sorted(exposure["modes"].items()):
         if mode_view["declared_only"]:
             add(
@@ -973,6 +1059,10 @@ def lint_snapshots(
                 mode=mode,
             )
 
+    return _sorted_findings(findings)
+
+
+def _sorted_findings(findings: list[AuditFinding]) -> list[AuditFinding]:
     severity_order = {"error": 0, "warning": 1, "info": 2}
     return sorted(
         findings,
@@ -1357,6 +1447,21 @@ def stale_report(current: str, generated: str, *, limit: int = DIFF_LINE_LIMIT) 
     return "\n".join(lines)
 
 
+def _cannot_look(reason: str) -> int:
+    """Exit 2: the run declined, and nothing was compared.
+
+    The doctor reads exit 2 as SKIP and classifies a run by its LAST stderr
+    line (``unitares_doctor._generator_crashed``), so this is printed last and
+    does not open with an exception name.
+    """
+    print(
+        f"cannot look: {reason} — install requirements-full.txt to generate "
+        "or check this index",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true", help="exit 1 if the index is stale")
@@ -1372,16 +1477,20 @@ def main() -> int:
 
     try:
         tools, aliases, failures, unbound = collect()
+    except MissingDependency as exc:
+        return _cannot_look(str(exc))
     except ImportError as exc:
-        print(
-            f"cannot import the handler package ({exc}) — install "
-            "requirements-core.txt to generate or check this index",
-            file=sys.stderr,
-        )
-        return 2
+        return _cannot_look(f"the handler package did not import ({exc})")
+
+    try:
+        if args.json or args.lint:
+            audit = build_audit_snapshot(tools, aliases, failures, unbound)
+        else:
+            content = render(tools, aliases, failures, unbound)
+    except MissingDependency as exc:
+        return _cannot_look(str(exc))
 
     if args.json or args.lint:
-        audit = build_audit_snapshot(tools, aliases, failures, unbound)
         if args.json:
             json.dump(audit, sys.stdout, indent=2, ensure_ascii=False)
             print()
@@ -1403,7 +1512,6 @@ def main() -> int:
                 return 1
         return 0
 
-    content = render(tools, aliases, failures, unbound)
     if args.check:
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
         if current != content:
