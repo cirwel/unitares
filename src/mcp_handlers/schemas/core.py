@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Union, Literal, Dict, Any, List
+from typing import Optional, Union, Literal, Dict, Any, List, ClassVar, Mapping, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -576,6 +576,25 @@ class OutcomeEventParams(AgentIdentityMixin):
 
 class CirsProtocolParams(AgentIdentityMixin):
     """Parameters for cirs_protocol"""
+    # Which of these flat parameters each action uses — the declaration
+    # SelfRecoveryParams carries, see schemas/router_actions.py. The tool is
+    # not an action_router: `protocol` selects the sub-handler and `action` is
+    # routed one level down, so the keys are the union across protocols and
+    # `protocol` itself belongs to every action. Only parameters on this
+    # schema are named; the sub-handlers read more than the wire declares.
+    # tests/test_router_action_fields.py holds the keys to the decorator's
+    # known_actions.
+    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "emit": ("protocol", "severity"),
+        "query": ("protocol", "target_agent_id", "limit"),
+        "compute": ("protocol", "target_agent_id"),
+        "set": ("protocol",),
+        "get": ("protocol", "target_agent_id"),
+        "list": ("protocol",),
+        "initiate": ("protocol", "target_agent_id"),
+        "respond": ("protocol",),
+        "status": ("protocol",),
+    }
     protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(
         ...,
         description=(
@@ -583,7 +602,22 @@ class CirsProtocolParams(AgentIdentityMixin):
             "for provenance-tagged pairwise state similarity; v2 excludes legacy C(V)."
         ),
     )
-    action: Optional[str] = Field(None, description="Action within the protocol (emit/query/compute/set/get/initiate/respond)")
+    action: Optional[str] = Field(
+        None,
+        description=(
+            "Sub-action within the selected protocol. void_alert and "
+            "state_announce take emit or query; coherence_report takes compute "
+            "or query; boundary_contract takes set, get or list; "
+            "governance_action takes initiate, respond, query or status. A "
+            "protocol answers an action outside its own set with valid_actions."
+        ),
+        json_schema_extra={
+            "brief": (
+                "Per-protocol sub-action: emit, query, compute, set, get, list, "
+                "initiate, respond or status. Full mapping in describe_tool."
+            )
+        },
+    )
     target_agent_id: Optional[str] = Field(
         None,
         description="Target agent (for the coherence_report pairwise-similarity protocol)",

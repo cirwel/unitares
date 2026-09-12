@@ -115,6 +115,71 @@ def test_self_recovery_declares_its_vocabulary():
     assert build_tool_usage_payload("self_recovery", {"action": "review"})["action"] == "review"
 
 
+def test_cirs_protocol_declares_its_vocabulary():
+    """Declared by hand, like self_recovery. ``cirs_protocol`` selects a
+    ``protocol`` first and routes ``action`` one level down, so it is not an
+    action_router and carried no vocabulary: the clamp treated it as
+    single-purpose and every call landed as one undifferentiated row
+    (tool-surface audit F4). The protocol selector is not part of the
+    discriminator — the resolver keys on ``action``/``op`` only, and the
+    selector must not reach the column any more than any other argument."""
+    payload = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "void_alert", "action": "emit"}
+    )
+    assert payload == {"action": "emit", "action_source": "explicit"}
+
+    for protocol, action in (
+        ("coherence_report", "compute"),
+        ("boundary_contract", "list"),
+        ("governance_action", "status"),
+    ):
+        recorded = build_tool_usage_payload(
+            "cirs_protocol", {"protocol": protocol, "action": action}
+        )
+        assert recorded["action"] == action, (protocol, action)
+        assert protocol not in str(recorded)
+
+    stray = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "void_alert", "action": "broadcast"}
+    )
+    assert stray["action"] == "action_unlisted"
+    assert "broadcast" not in str(stray)
+
+    # No protocol on the validated path defaults an action, so an action-less
+    # call (which the handler refuses) audits as no sub-action rather than as
+    # an invented default.
+    assert build_tool_usage_payload("cirs_protocol", {"protocol": "void_alert"}) is None
+
+
+@pytest.mark.asyncio
+async def test_cirs_protocol_vocabulary_is_what_its_handlers_route():
+    """The set is hand-declared, so it is held to the handler bodies rather
+    than to the schema prose (which listed seven of the nine). Every protocol
+    handler that takes an action refuses an unroutable one with its own
+    ``valid_actions``; the union of those IS the vocabulary. A sub-action
+    added to a handler without being declared would audit as
+    ``action_unlisted`` from the day it ships, and this is what says so."""
+    import json
+
+    from src.mcp_handlers.cirs.protocol import _CIRS_DISPATCHERS
+    from src.mcp_handlers.decorators import get_tool_definition
+
+    # The one protocol with no sub-action: it emits on every call and reads
+    # no ``action`` at all.
+    actionless = {"stability_restored"}
+    routed = set()
+    for protocol, handler in _CIRS_DISPATCHERS.items():
+        if protocol in actionless:
+            continue
+        result = await handler.__wrapped__({"action": "__unroutable__"})
+        body = json.loads(result[0].text)
+        valid = (body.get("recovery") or {}).get("valid_actions")
+        assert valid, f"{protocol} did not refuse an unroutable action with valid_actions"
+        routed.update(valid)
+
+    assert routed == set(get_tool_definition("cirs_protocol").known_actions)
+
+
 # ---------------------------------------------------------------------------
 # Drift guards — a new action must not become silently unauditable
 # ---------------------------------------------------------------------------
@@ -126,7 +191,7 @@ def test_every_action_router_declares_its_vocabulary():
 
     routers = {
         "knowledge", "agent", "calibration", "config", "export",
-        "observe", "admin", "dialectic", "self_recovery",
+        "observe", "admin", "dialectic", "self_recovery", "cirs_protocol",
     }
     for name in routers:
         td = _TOOL_DEFINITIONS.get(name)
@@ -216,7 +281,9 @@ _FORBIDDEN = {
 }
 
 
-@pytest.mark.parametrize("tool_name", ["dialectic", "request_review", "knowledge", "onboard"])
+@pytest.mark.parametrize(
+    "tool_name", ["dialectic", "request_review", "knowledge", "onboard", "cirs_protocol"]
+)
 def test_no_non_allowlisted_argument_ever_reaches_the_payload(tool_name):
     arguments = {"action": "request", **_FORBIDDEN}
     payload = build_tool_usage_payload(tool_name, arguments) or {}
