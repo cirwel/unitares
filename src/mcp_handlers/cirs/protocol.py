@@ -148,12 +148,20 @@ _VALIDATED_PROTOCOLS: tuple = get_args(
 # clamp. Without it the recorder treats the tool as single-purpose and drops the
 # sub-action, so a call WOULD have recorded no discriminator (no call has been
 # observed yet, so this is a prospective blind spot, not an observed loss — see
-# the changelog entry for the classification). It is the clamp only, never a
-# gate: nothing here refuses on it, and each protocol keeps answering an action
-# outside its own subset with valid_actions. There is no default_action because
-# no selectable protocol defaults one, so an action-less call audits as no
+# the changelog entry for the classification). Nothing here refuses on it: the
+# declaration is not a gate, and each protocol keeps answering an action outside
+# its own subset with valid_actions. There is no default_action because no
+# selectable protocol defaults one, so an action-less call audits as no
 # sub-action, which is what it is. tests/test_tool_usage_payload.py holds this
 # set to the selectable handlers' own refusal vocabularies.
+#
+# Two consumers read it beyond the clamp, so a new action has to be classified,
+# not just declared. stakes_table.py classifies this tool PER ACTION (reads
+# baseline, writes high) rather than under one tool-level key, because these
+# nine are not uniform; add a row there for any action added here, or the
+# #775 coverage guards will fail. And the recorder records `protocol` alongside
+# `action` (services/tool_usage_recorder.py _SECONDARY_SELECTOR_FIELDS), since
+# four protocols share `query` and two share `emit`.
 @mcp_tool(
     "cirs_protocol",
     timeout=15.0,

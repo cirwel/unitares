@@ -122,16 +122,18 @@ def test_cirs_protocol_declares_its_vocabulary():
     single-purpose and dropped the sub-action, so a call would have recorded no
     discriminator (tool-surface audit F4).
 
-    The protocol selector is deliberately NOT recorded: ``_ALLOWED_PAYLOAD_KEYS``
-    admits only action/canonical_tool/action_source. So this records the second
-    dispatch level and not the first, and ``action="query"`` still merges the
-    four protocols that route it. Recording the selector too would be a
-    deliberate allowlist widening, not a side effect of this test.
+    Both dispatch levels are recorded, because for a two-level tool the
+    sub-action alone is not the discriminator: four protocols route ``query``
+    and two route ``emit``.
     """
     payload = build_tool_usage_payload(
         "cirs_protocol", {"protocol": "void_alert", "action": "emit"}
     )
-    assert payload == {"action": "emit", "action_source": "explicit"}
+    assert payload == {
+        "action": "emit",
+        "action_source": "explicit",
+        "protocol": "void_alert",
+    }
 
     stray = build_tool_usage_payload(
         "cirs_protocol", {"protocol": "void_alert", "action": "broadcast"}
@@ -139,19 +141,53 @@ def test_cirs_protocol_declares_its_vocabulary():
     assert stray["action"] == "action_unlisted"
     assert "broadcast" not in str(stray)
 
-    # No selectable protocol defaults an action, so an action-less call (which
-    # the handler refuses) audits as no sub-action rather than as an invented
-    # default. resonance_alert DOES default to "query", which is why the
-    # decorator declares no default_action only for the selectable set.
-    assert build_tool_usage_payload("cirs_protocol", {"protocol": "void_alert"}) is None
+    # An action-less call still records the selector, because the selector is
+    # what chose the handler. No selectable protocol defaults an action, so the
+    # action stays absent rather than being invented; resonance_alert DOES
+    # default to "query", which is why the decorator declares no default_action
+    # only for the selectable set.
+    assert build_tool_usage_payload("cirs_protocol", {"protocol": "void_alert"}) == {
+        "protocol": "void_alert"
+    }
 
-    # The merge this does not resolve, pinned so it is a known residual rather
-    # than a surprise in SQL.
-    assert build_tool_usage_payload(
+    # The merge the selector exists to resolve: same action, different handler.
+    void_query = build_tool_usage_payload(
         "cirs_protocol", {"protocol": "void_alert", "action": "query"}
-    ) == build_tool_usage_payload(
+    )
+    coherence_query = build_tool_usage_payload(
         "cirs_protocol", {"protocol": "coherence_report", "action": "query"}
     )
+    assert void_query != coherence_query
+    assert void_query["protocol"] == "void_alert"
+    assert coherence_query["protocol"] == "coherence_report"
+
+
+def test_the_protocol_selector_is_clamped_to_the_schema_literal():
+    """Same discipline as the action clamp, one level up: the vocabulary is read
+    from ``CirsProtocolParams.protocol`` rather than hand-listed, so the column
+    can never carry a token dispatch would reject, and a caller cannot make the
+    selector a cardinality bomb."""
+    unroutable = build_tool_usage_payload(
+        # Routed by _CIRS_DISPATCHERS but absent from the validated Literal.
+        "cirs_protocol", {"protocol": "resonance_alert", "action": "emit"}
+    )
+    assert unroutable["protocol"] == "protocol_unlisted"
+    assert "resonance" not in str(unroutable)
+
+    bomb = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "Z" * 5000, "action": "emit"}
+    )
+    assert bomb["protocol"] == "protocol_unlisted"
+
+    # Case and surrounding whitespace normalize rather than clamping, matching
+    # the handler, which lowers and strips before dispatch.
+    assert build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "  VOID_ALERT  ", "action": "emit"}
+    )["protocol"] == "void_alert"
+
+    # A single-purpose tool that happens to receive a `protocol` kwarg gains no
+    # key: the selector is recorded only for a tool declared to dispatch on one.
+    assert build_tool_usage_payload("onboard", {"protocol": "void_alert"}) is None
 
 
 @pytest.mark.asyncio
@@ -300,10 +336,6 @@ _FORBIDDEN = {
     "client_session_id": "sess-1",
     "target_agent_id": "another-agent",
     "name": "Some Display Name",
-    # A bounded server-side selector is still a caller-supplied argument: the
-    # column carries the sub-action, never the routing key that chose the
-    # handler. Covers every parametrized tool rather than cirs_protocol alone.
-    "protocol": "void_alert",
 }
 
 
@@ -325,7 +357,7 @@ def test_no_non_allowlisted_argument_ever_reaches_the_payload(tool_name, action)
     arguments = {"action": action, **_FORBIDDEN}
     payload = build_tool_usage_payload(tool_name, arguments) or {}
 
-    assert set(payload) <= {"action", "canonical_tool", "action_source"}
+    assert set(payload) <= {"action", "canonical_tool", "action_source", "protocol"}
     flat = " ".join(payload.values())
     for value in _FORBIDDEN.values():
         assert str(value) not in flat
