@@ -14,7 +14,7 @@ from .utils import error_response
 RECOVERY_PATTERNS = {
     "agent_not_found": {
         "action": "Call any tool to auto-create identity, then use identity() to name yourself",
-        "related_tools": ["identity", "list_agents"],
+        "related_tools": ["identity", "agent"],
         "workflow": [
             "1. Call process_agent_update() or any tool - identity auto-creates",
             "2. Call identity(name='your_name') to set your display name",
@@ -23,7 +23,7 @@ RECOVERY_PATTERNS = {
     },
     "agent_not_registered": {
         "action": "Call any tool to auto-create identity, then use identity() to name yourself",
-        "related_tools": ["identity", "list_agents"],
+        "related_tools": ["identity", "agent"],
         "workflow": [
             "1. Call process_agent_update() or any tool - identity auto-creates",
             "2. Call identity(name='your_name') to set your display name",
@@ -50,7 +50,7 @@ RECOVERY_PATTERNS = {
     },
     "ownership_required": {
         "action": "You can only modify your own resources",
-        "related_tools": ["identity", "list_agents"],
+        "related_tools": ["identity", "agent"],
         "workflow": [
             "1. Call identity() to verify your bound identity",
             "2. Ensure the resource belongs to your agent_uuid",
@@ -68,7 +68,7 @@ RECOVERY_PATTERNS = {
     },
     "timeout": {
         "action": "This may indicate a blocking operation or system overload. Try again with simpler parameters.",
-        "related_tools": ["health_check", "get_server_info"],
+        "related_tools": ["health_check", "admin"],
         "workflow": [
             "1. Wait a few seconds and retry",
             "2. Check system health with health_check",
@@ -96,7 +96,7 @@ RECOVERY_PATTERNS = {
     },
     "system_error": {
         "action": "Check system health and retry",
-        "related_tools": ["health_check", "get_server_info"],
+        "related_tools": ["health_check", "admin"],
         "workflow": [
             "1. Check system health",
             "2. Wait a few seconds",
@@ -105,7 +105,7 @@ RECOVERY_PATTERNS = {
     },
     "resource_not_found": {
         "action": "Verify the resource ID exists",
-        "related_tools": ["list_agents", "search_knowledge_graph"],
+        "related_tools": ["agent", "search_knowledge_graph"],
         "workflow": [
             "1. Check if resource exists",
             "2. Verify resource ID format",
@@ -114,9 +114,9 @@ RECOVERY_PATTERNS = {
     },
     "not_connected": {
         "action": "Check MCP server connection status",
-        "related_tools": ["get_connection_status", "health_check"],
+        "related_tools": ["admin", "health_check"],
         "workflow": [
-            "1. Call get_connection_status() to verify connection",
+            "1. Call admin(action='connections') to verify connection",
             "2. Check if MCP server is running",
             "3. Verify MCP configuration in client settings",
             "4. Retry your request"
@@ -133,7 +133,7 @@ RECOVERY_PATTERNS = {
     },
     "session_mismatch": {
         "action": "Verify your session identity matches",
-        "related_tools": ["identity", "get_connection_status"],
+        "related_tools": ["identity", "admin"],
         "workflow": [
             "1. Call identity() to check your resolved identity",
             "2. Ensure client_session_id or continuity_token matches your active session",

@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-10"
+last_verified: "2026-09-12"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -33,17 +33,17 @@ source_files:
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
 source_digests:
-  unitares/src/mcp_handlers/core.py: "d7d09d260fedd7ec"
+  unitares/src/mcp_handlers/core.py: "451b8f3d9dd2ce80"
   unitares/src/mcp_handlers/identity/handlers.py: "c5bd71f4ab659d05"
-  unitares/src/mcp_handlers/admin/handlers.py: "d7dec13e6a422b43"
+  unitares/src/mcp_handlers/admin/handlers.py: "0fd585a11c0db7ea"
   unitares/src/mcp_handlers/tool_stability.py: "5d1343b5e5297202"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
-  unitares/src/mcp_handlers/updates/phases.py: "0c28700d12434e77"
+  unitares/src/mcp_handlers/updates/phases.py: "6d1d40ca0f0a3449"
   unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
-  unitares/src/mcp_handlers/updates/enrichments.py: "f91c10502c48275b"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "15b30d47a10463f5"
-  unitares/src/mcp_handlers/lifecycle/self_recovery.py: "9bfffd3b09f6cc0f"
+  unitares/src/mcp_handlers/updates/enrichments.py: "0aec78c062f4af99"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "ad771f5e33e75c31"
+  unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/tool_modes.py: "0f922d11fa4ac843"
   unitares/src/tool_mode_listing.py: "e14ecf4249c3007b"

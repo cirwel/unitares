@@ -690,10 +690,23 @@ def enrich_onboarding_info(ctx: UpdateContext) -> None:
                 ctx.response_data["api_key_hint"] = api_key_hint
                 ctx.response_data["_onboarding"] = {
                     "api_key_hint": api_key_hint,
-                    "message": "API key created (use get_agent_api_key to retrieve full key)",
+                    # Do not assert a key was created: this branch also runs for
+                    # a new agent that got none, and agents are no longer minted
+                    # with the api_key the party HMAC needs (skills/
+                    # dialectic-reasoning/SKILL.md). Report what is actually
+                    # here, and name the credential that actually authenticates.
+                    "message": (
+                        "Legacy API key on record; the agent_uuid is what "
+                        "authenticates"
+                        if api_key_hint
+                        else "Identity established; the agent_uuid is what "
+                             "authenticates"
+                    ),
                     "next_steps": [
-                        "Call get_agent_api_key(agent_id) to retrieve your full API key",
-                        "Identity auto-binds on first tool call - API key auto-retrieved for all subsequent calls",
+                        "Keep the returned client_session_id and pass it on "
+                        "later calls in this process",
+                        "Identity auto-binds on first tool call - no explicit "
+                        "binding needed",
                     ],
                     "identity_binding": {
                         "auto": True,

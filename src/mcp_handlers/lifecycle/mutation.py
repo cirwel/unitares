@@ -243,7 +243,7 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             details={"error_type": "agent_already_archived", "agent_id": agent_id, "status": meta.status},
             recovery={
                 "action": "Agent is already archived",
-                "related_tools": ["get_agent_metadata", "list_agents"],
+                "related_tools": ["agent"],
                 "workflow": ["1. Check agent status with get_agent_metadata", "2. Archived agents cannot be archived again"]
             }
         )]
@@ -269,7 +269,7 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
                 details={"agent_id": agent_id, "liveness_signals": live_signals},
                 recovery={
                     "action": "Confirm the agent is really idle, then re-issue with force=true",
-                    "related_tools": ["observe", "ping_agent", "get_agent_metadata"],
+                    "related_tools": ["observe", "agent"],
                     "workflow": [
                         "1. Check recent activity: observe(action='agent', target_agent_id='...')",
                         "2. If genuinely done, archive with force=true",
@@ -376,7 +376,7 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
             f"Cannot delete pioneer agent '{agent_id}'",
             recovery={
                 "action": "Pioneer agents are protected from deletion. Use archive_agent instead.",
-                "related_tools": ["archive_agent"],
+                "related_tools": ["agent"],
                 "workflow": ["1. Call archive_agent to archive instead of delete", "2. Pioneer agents preserve system history"]
             }
         )]
