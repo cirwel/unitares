@@ -20,8 +20,12 @@ Here, **federation kernel** means many independent agent runtimes and harnesses
 sharing one operator-controlled server and authority domain. It does not promise
 autonomous cross-server replication or a new agent runtime. The deployed building blocks are process identities, check-ins,
 attributed findings, structured reviews, outcome events, and history retrieval.
-Reconstruction uses those records; its fidelity and benefit over Git plus a
-structured handoff still need comparative evaluation.
+Reconstruction reads those records. A running process can query them mid-task,
+across repositories and across agents, and where the graph backend is enabled
+it can follow a claim to the correction that superseded it. A repository
+history plus a handoff written in advance answers a narrower question, since it
+is static and holds only what its author knew to record. Whether reconstruction
+recovers more in practice still needs comparative evaluation.
 
 **Status:** v2.22.0. Running continuously since November 2025.
 
