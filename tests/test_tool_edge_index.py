@@ -622,6 +622,31 @@ def _run_shim(script: pathlib.Path, *args: str, blocked: str | None = None):
     )
 
 
+def test_repo_packages_covers_every_top_level_package_in_the_tree():
+    """``_REPO_PACKAGES`` is what separates a tree defect from an absent
+    dependency, so it must not fall behind the tree.
+
+    A new top-level package missing from the set reads as a third-party
+    module: a real defect inside it would exit 2, the doctor would SKIP, and
+    the defect would go quiet. Silence is the worse direction, which is why
+    this asserts coverage rather than equality — a package that loses its
+    ``__init__.py`` leaves a harmless extra entry, and failing the suite for
+    that would buy no safety.
+    """
+    on_disk = {
+        path.name
+        for path in REPO.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    }
+    assert on_disk, "no top-level package found; this guard is inert"
+    missing = on_disk - tei._REPO_PACKAGES
+    assert not missing, (
+        f"top-level package(s) {sorted(missing)} are not in _REPO_PACKAGES, so "
+        "a missing module inside them would be misread as an uninstalled "
+        "dependency and exit 2 instead of being reported as a tree defect"
+    )
+
+
 def test_missing_dependency_is_drawn_by_package_not_by_exception_type():
     """Only a ModuleNotFoundError for a module outside the repo's packages is
     "not installed". A missing ``src`` module and a bad name are defects in
@@ -641,20 +666,10 @@ def test_missing_dependency_is_drawn_by_package_not_by_exception_type():
     assert "prometheus_client" in str(err) and "ModuleNotFoundError" in str(err)
 
 
-# Every finding code that reads the wire catalog. With no catalog collected
-# these would each restate "the catalog is empty"; lint_snapshots withholds
-# them behind the one EXPOSURE_COLLECTION_FAILURE error.
-WIRE_DERIVED_CODES = frozenset(
-    {
-        "MODE_DECLARED_UNADVERTISED",
-        "MODE_UNDECLARED_ADVERTISED",
-        "ORIENTATION_NAME_NOT_ON_WIRE",
-        "WIRE_NAME_NOT_IN_ORIENTATION",
-        "DESCRIBE_SCHEMA_WIDER_THAN_WIRE",
-        "WIRE_ALIAS_ACTION_EXPOSED",
-        "HIDDEN_TOOL_ADVERTISED",
-    }
-)
+# The generator declares which codes read the wire catalog; this test module
+# consumes that declaration rather than keeping a second copy that could drift
+# from the set actually withheld.
+WIRE_DERIVED_CODES = frozenset(tei.WIRE_DERIVED_FINDING_CODES)
 
 
 def test_wire_catalog_raises_for_an_absent_dependency_and_records_a_tree_defect(
@@ -694,9 +709,45 @@ def test_wire_catalog_raises_for_an_absent_dependency_and_records_a_tree_defect(
     # The empty catalog DOES make every orientation name look off the wire;
     # that is what must not become findings.
     assert exposure["orientation"]["full_orientation_only"], "nothing to withhold"
-    codes = {finding.code for finding in tei.lint_snapshots(dispatch, exposure)}
+    found = tei.lint_snapshots(dispatch, exposure)
+    codes = {finding.code for finding in found}
     assert "EXPOSURE_COLLECTION_FAILURE" in codes
     assert not codes & WIRE_DERIVED_CODES, sorted(codes & WIRE_DERIVED_CODES)
+
+    # The withholding must be machine-readable: a consumer has to be able to
+    # read WHICH checks did not run, rather than infer it from their absence.
+    collection = [f for f in found if f.code == "EXPOSURE_COLLECTION_FAILURE"]
+    assert len(collection) == 1, "exactly one primary failure, not one per check"
+    withheld = collection[0].evidence["withheld_checks"]
+    assert set(withheld) == WIRE_DERIVED_CODES
+    assert collection[0].evidence["failure"] == failures[0]
+
+
+def test_declared_wire_derived_codes_match_what_is_actually_withheld():
+    """The declaration must not drift from the code.
+
+    ``WIRE_DERIVED_FINDING_CODES`` is published as evidence, so a code that
+    lint_snapshots emits after the early return but is not in the tuple would
+    be advertised as withheld while still firing — and one that no longer
+    exists would be advertised as withheld forever. Both are read off the
+    source of the function that does the withholding.
+    """
+    import inspect
+
+    source = inspect.getsource(tei.lint_snapshots)
+    _before, separator, after = source.partition('if exposure["collection_failures"]:')
+    assert separator, "the early return moved; this guard is reading the wrong code"
+    emitted_after = set(re.findall(r'"([A-Z][A-Z_]{4,})"', after))
+
+    declared = set(tei.WIRE_DERIVED_FINDING_CODES)
+    assert declared <= emitted_after, (
+        f"declared as withheld but not emitted after the early return: "
+        f"{sorted(declared - emitted_after)}"
+    )
+    assert emitted_after <= declared, (
+        f"emitted after the early return but not declared as withheld: "
+        f"{sorted(emitted_after - declared)}"
+    )
 
 
 @pytest.mark.parametrize("mode", ["--check", "--lint", "--json"])

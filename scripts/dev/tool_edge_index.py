@@ -193,6 +193,23 @@ _REPO_PACKAGES = frozenset(
 )
 
 
+# Finding codes whose only data source is the wire catalog. When the catalog
+# could not be built, each would fire for every name and restate the one fact
+# that the catalog is empty, burying the actual error. They are withheld, and
+# named in the collection-failure finding's evidence so the withholding is
+# machine-readable rather than an absence a consumer has to infer — a producer
+# may narrow what it reports, but not quietly.
+WIRE_DERIVED_FINDING_CODES = (
+    "DESCRIBE_SCHEMA_WIDER_THAN_WIRE",
+    "HIDDEN_TOOL_ADVERTISED",
+    "MODE_DECLARED_UNADVERTISED",
+    "MODE_UNDECLARED_ADVERTISED",
+    "ORIENTATION_NAME_NOT_ON_WIRE",
+    "WIRE_ALIAS_ACTION_EXPOSED",
+    "WIRE_NAME_NOT_IN_ORIENTATION",
+)
+
+
 class MissingDependency(ImportError):
     """A third-party module the generator needs is not installed.
 
@@ -893,9 +910,10 @@ def lint_snapshots(
             "exposure",
             (
                 "The production registration path could not be snapshotted; "
-                "the wire-derived checks are withheld."
+                "the wire-derived checks below are withheld, not passed."
             ),
             failure=failure,
+            withheld_checks=list(WIRE_DERIVED_FINDING_CODES),
         )
 
     for cycle in _alias_cycles(
@@ -985,11 +1003,12 @@ def lint_snapshots(
             )
 
     if exposure["collection_failures"]:
-        # Every check from here on reads the wire catalog. With none collected
-        # the mode tables show every name as declared-only and the orientation
-        # view shows every name as off the wire: dozens of findings that each
-        # restate "the catalog is empty", which the error above says once. A
-        # missing dependency never reaches this point (exit 2); this is the
+        # Every check from here on reads the wire catalog, and every code they
+        # emit is in WIRE_DERIVED_FINDING_CODES, which the error above names as
+        # withheld. With no catalog the mode tables show every name as
+        # declared-only and the orientation view shows every name as off the
+        # wire: dozens of findings that each restate "the catalog is empty".
+        # A missing dependency never reaches this point (exit 2); this is the
         # registrar failing on a machine that has its dependencies.
         return _sorted_findings(findings)
 
