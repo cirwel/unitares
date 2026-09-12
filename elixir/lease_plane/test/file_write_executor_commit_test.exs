@@ -49,7 +49,10 @@ defmodule UnitaresLeasePlane.FileWriteExecutorCommitTest do
   end
 
   setup %{tmp_dir: dir} do
-    # reset any env a sibling test file may have leaked (e.g. the ceiling override)
+    # Defense in depth. The ceiling override this line was written against is
+    # now restored on exit by file_write_executor_test.exs (#2152); the reset
+    # stays so a future sibling override cannot silently reject these
+    # payloads the way it did the governed-effect ones.
     Application.delete_env(:lease_plane, :file_write_payload_max_bytes)
     Application.put_env(:lease_plane, :effect_file_ops, FakeFileOps)
     Application.put_env(:lease_plane, :effect_repo, FakeRepo)
