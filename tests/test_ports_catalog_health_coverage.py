@@ -109,23 +109,33 @@ def test_probe_roster_cli_matches_the_api():
     assert len(lines) == len(ports_catalog.health_probes("governance"))
     for ln in lines:
         parts = ln.split("\t")
-        assert len(parts) == 3, f"expected 3 tab-separated fields, got {len(parts)}: {ln!r}"
-        name, url, accepted = parts
+        assert len(parts) == 4, f"expected 4 tab-separated fields, got {len(parts)}: {ln!r}"
+        name, url, accepted, role = parts
         assert name and url.startswith("http://127.0.0.1:")
         assert all(c.strip().isdigit() for c in accepted.split(","))
+
+
+# The three probes the script is allowed to name directly. Everything else must
+# come from the registry. This IS a hand-maintained list, deliberately: a roster
+# in the script fails OPEN (a forgotten service is silently unmonitored), while
+# a roster in the test fails CLOSED (the build breaks and someone decides). The
+# asymmetry is the whole argument for the coverage test above.
+EXPECTED_CHECK_SITES = {
+    "$name",                   # the roster loop, one call for every registry row
+    "governance (fallback)",   # degraded path, when the registry is unreadable
+    "anima",                   # edge node on another host — see the script
+}
 
 
 def test_watchdog_reads_the_registry_instead_of_its_own_list():
     """The whole point: no second roster to forget to update.
 
-    Asserted as a positive property rather than by grepping for port literals.
-    A pattern match on `87xx` would miss a regrown probe on 9000, on 5432, or
-    one introduced through a new env var the way ANIMA_HEALTH_URL is — and this
-    PR argues at length that a guard which cannot fail is worse than none.
-
-    Exactly three `check` call sites are legitimate: the roster loop, the
-    degraded-path fallback, and the edge node. A fourth means a hand-kept list
-    has grown back.
+    Asserted as the SET of probe names, not their count. A count is a lossy
+    hash of the list and is blind to substitution — deleting the anima probe
+    and adding a hand-kept one in its place keeps the total at three, which is
+    exactly the regression this guard was written after. Matching anywhere on
+    the line rather than at its start also catches ``if ! check "..."`` and a
+    call that follows an assignment.
     """
     text = WATCHDOG.read_text(encoding="utf-8")
     assert "--health-probes" in text, (
@@ -133,15 +143,43 @@ def test_watchdog_reads_the_registry_instead_of_its_own_list():
         "A hand-kept probe list is the defect this test exists to prevent."
     )
 
-    call_sites = [
-        ln.strip() for ln in text.splitlines()
-        if re.match(r'^\s*(if\s+)?check\s+"', ln)
+    found = {
+        m.group(1)
+        for ln in text.splitlines()
+        if not ln.strip().startswith("#")
+        for m in [re.search(r'\bcheck\s+"([^"]*)"', ln)]
+        if m
+    }
+    added = found - EXPECTED_CHECK_SITES
+    removed = EXPECTED_CHECK_SITES - found
+    assert not added and not removed, (
+        "The set of direct `check` call sites changed.\n"
+        f"  added:   {sorted(added) or 'none'}\n"
+        f"  removed: {sorted(removed) or 'none'}\n"
+        "An addition means a hand-kept probe grew back instead of being "
+        "declared in ports_catalog.py. A removal means a probe was dropped — "
+        "the anima one has already been lost this way once. If the change is "
+        "intended, update EXPECTED_CHECK_SITES deliberately."
+    )
+
+
+def test_exactly_one_registry_entry_claims_the_governance_role():
+    """The watchdog finds the governance probe by role, so the role must be unique.
+
+    Keying off `:8767/` in the URL instead would re-create the coupling this
+    registry removes, and fail silently: if the governance port moved, the
+    Postgres-pool read would simply never run and the script would exit 0
+    having written nothing.
+    """
+    governance = [
+        p["port"] for p in _ports()
+        if (p.get("health") or {}).get("role") == "governance"
     ]
-    assert len(call_sites) == 3, (
-        "Expected exactly 3 `check` call sites (roster loop, fallback, edge "
-        f"node); found {len(call_sites)}:\n  " + "\n  ".join(call_sites)
-        + "\nA new one means a second roster has grown back here instead of "
-        "being declared in ports_catalog.py."
+    assert len(governance) == 1, (
+        f"Expected exactly one entry with role='governance', found {governance}. "
+        "Zero means health_watchdog.sh cannot locate the governance probe and "
+        "the pool check silently never runs; more than one makes which URL it "
+        "uses depend on registry order."
     )
 
 

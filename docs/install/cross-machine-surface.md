@@ -49,6 +49,8 @@ Applying the fix as written (`${ANIMA_HEALTH_URL:-}`, skip if unset) silently st
 
 Option 2 is cleanest for cross-machine portability. Not applied in this PR because it requires an operator-side change (creating the `.local` file) that coincides with the script change.
 
+**2026-09-11:** attempted in PR #2163 and reverted in review. The PR removed the hardcoded default without the operator-side step, which would have silently ended anima/Lumen monitoring on the first run after deploy — `com.unitares.health-watchdog.plist` still sets no `EnvironmentVariables`, verified that day. Path 1's ordering is the load-bearing part: the plist gains the var *before* the script loses the default, never the reverse. Recorded here because this note reads as advice, and a diff is easier to read than a doc.
+
 ---
 
 ## TEMPLATE GAP (gitignored plists with no in-repo template)

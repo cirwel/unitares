@@ -41,22 +41,42 @@ governance_ok=0
 roster=""
 roster_err=""
 if [ -f "$REPO/scripts/dev/ports_catalog.py" ]; then
+    # mktemp under the private per-user TMPDIR launchd already provides: a
+    # predictable /tmp name is symlink-followable by `>`, and /tmp's sticky bit
+    # stops deletion of others' files, not creation of your own link.
+    # `|| roster_file=/dev/null` keeps an unwritable or full disk on the loud
+    # branch rather than aborting the whole run.
+    roster_file=$(mktemp "${TMPDIR:-/tmp}/unitares_roster.XXXXXX") || roster_file=/dev/null
+    trap 'rm -f "$roster_file"' EXIT
     # stderr is kept, not discarded: when this fails, why it failed is the one
     # thing an operator needs at 3am, and this branch is meant to be the loud one.
-    roster_err=$("$PYTHON" "$REPO/scripts/dev/ports_catalog.py" --health-probes 2>&1 >/tmp/.unitares_roster.$$)
-    roster=$(cat /tmp/.unitares_roster.$$ 2>/dev/null)
-    rm -f /tmp/.unitares_roster.$$
+    roster_err=$("$PYTHON" "$REPO/scripts/dev/ports_catalog.py" --health-probes 2>&1 >"$roster_file")
+    roster=$(cat "$roster_file" 2>/dev/null)
 fi
 
 if [ -n "$roster" ]; then
-    while IFS=$'\t' read -r name url accepted; do
+    while IFS=$'\t' read -r name url accepted role; do
         [ -n "$url" ] || continue
         if check "$name" "$url" "$accepted"; then
-            case "$url" in *:8767/*) governance_ok=1 ;; esac
+            # Keyed off the registry's role marker, never off a port literal.
+            # Matching the port here would be the same hand-kept coupling this
+            # script exists to remove, in a quieter place: if the governance
+            # port moved, the pool read below would simply never run and the
+            # script would exit 0 having written nothing.
+            if [ "$role" = "governance" ]; then
+                governance_ok=1
+                GOVERNANCE_HEALTH_URL="$url"
+            fi
         else
             failures=$((failures + 1))
         fi
     done <<< "$roster"
+    if [ "$governance_ok" -eq 0 ]; then
+        # A roster with no governance probe means the registry lost its role
+        # marker. Silence here would suppress the pool check invisibly.
+        echo "[$(ts)] FAIL health-watchdog roster — no probe declares role=governance; the Postgres pool check cannot run" >> "$LOG"
+        failures=$((failures + 1))
+    fi
 else
     # Never degrade silently — an empty roster would otherwise read as "nothing
     # is wrong" while monitoring nothing at all, which is the exact failure this
@@ -85,7 +105,6 @@ check "anima" "$ANIMA_HEALTH_URL" 200 10 || failures=$((failures + 1))
 # Gated on the GOVERNANCE probe specifically, not on the aggregate. With six
 # rostered services, an aggregate gate would let a routine dialectic-live or
 # wave3a restart suppress a real pool problem for the whole window.
-GOVERNANCE_HEALTH_URL="${GOVERNANCE_HEALTH_URL:-http://localhost:8767/health}"
 if [ "$governance_ok" -eq 1 ]; then
     db_status=$(curl -s --max-time 5 "$GOVERNANCE_HEALTH_URL" 2>/dev/null | "$PYTHON" -c "
 import sys, json

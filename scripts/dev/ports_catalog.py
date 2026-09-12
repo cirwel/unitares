@@ -52,7 +52,16 @@ PORTS = [
         "host": "governance host",
         "source": "`src/mcp_server.py` — `DEFAULT_PORT`",
         "verify": "src/mcp_server.py",
-        "health": {"path": "/health", "expect": [200], "scope": "governance"},
+        # `role: governance` is what health_watchdog.sh keys its Postgres-pool
+        # read off. Matching the port in the script instead would re-create the
+        # coupling this registry exists to remove — and fail silently, because
+        # a pool check that never runs writes nothing at all.
+        "health": {
+            "path": "/health",
+            "expect": [200],
+            "scope": "governance",
+            "role": "governance",
+        },
     },
     {
         "port": 8768,
@@ -131,18 +140,24 @@ def health_probes(scope: str = "governance") -> list[dict]:
             "port": p["port"],
             "url": f"http://127.0.0.1:{p['port']}{h['path']}",
             "expect": h["expect"],
+            "role": h.get("role", ""),
         })
     return out
 
 
 def render_health_probes(scope: str = "governance") -> str:
-    """The probe roster as TSV: name, url, accepted codes (comma-joined).
+    """The probe roster as TSV: name, url, accepted codes, role.
+
+    The fourth column carries the consumer-facing role (currently only
+    ``governance``) so the watchdog can find the governance probe without
+    matching a port number — which would be the same hand-kept coupling in a
+    quieter place.
 
     Consumed by ``scripts/ops/health_watchdog.sh``. Tab-separated because
     service names contain spaces and parentheses.
     """
     return "\n".join(
-        f"{d['name']}\t{d['url']}\t{','.join(str(c) for c in d['expect'])}"
+        f"{d['name']}\t{d['url']}\t{','.join(str(c) for c in d['expect'])}\t{d['role']}"
         for d in health_probes(scope)
     )
 
