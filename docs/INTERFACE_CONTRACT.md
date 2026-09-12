@@ -108,12 +108,13 @@ The two identifiers serve different jobs:
   routes, adding the `list` and `status` the description omitted, and
   `describe_tool(tool_name="cirs_protocol", action=...)` answers per action;
   only that digest moves, and no parameter name, type, default or
-  requiredness changes; 1.8.0, 2026-09-12: `cirs_protocol` declares the 24
+  requiredness changes; 1.8.0, 2026-09-12: `cirs_protocol` declares the 33
   parameters its protocol handlers read, which the MCP argument model had
-  dropped before dispatch, and `limit` advertises the handlers' default of 50
-  in place of null, which the middleware had delivered to `int()` and so
-  failed every query action through dispatch; additive, and again only that
-  digest moves).
+  dropped before dispatch; `limit` advertises the handlers' default of 50 in
+  place of null, which the middleware had delivered to `int()` and so failed
+  every query action through dispatch; and `protocol` admits
+  `resonance_alert` and `stability_restored`, which dispatch already routed
+  and the Literal had omitted; additive, and again only that digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

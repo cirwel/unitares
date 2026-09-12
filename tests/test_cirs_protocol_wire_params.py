@@ -2,8 +2,9 @@
 
 ``cirs_protocol`` routes ``protocol`` to one of seven handlers, and each handler
 reads its own arguments straight off the dict. Until 2026-09-12 the wire schema
-declared five of those keys. Two things follow from an undeclared key, and this
-module holds the schema to both:
+declared three of the thirty-six keys those handlers read, and its ``protocol``
+Literal admitted five of the seven the table routes. Two things follow from an
+undeclared key, and this module holds the schema to both:
 
 1. FastMCP builds the ``/mcp/`` argument model from the declared properties and
    discards any other key before dispatch, so a caller's ``since_hours``,
@@ -50,26 +51,56 @@ ACTIONLESS = {"stability_restored": ("emit",)}
 
 
 def _admitted_protocols() -> tuple[str, ...]:
-    """The protocols the schema's Literal admits (the dispatch table may route more)."""
+    """The protocols the schema's Literal admits — which is what a caller can
+    reach, whatever the dispatch table routes. The two are held equal by
+    test_protocol_literal_names_every_routed_protocol; parametrizing on the
+    Literal rather than on the table means a protocol dropped from the schema
+    stops being surveyed loudly, at that test, rather than silently here."""
     return get_args(CirsProtocolParams.model_fields["protocol"].annotation)
 
 
 def _keys_read(handler) -> dict[str, list]:
     """``{key: [source defaults]}`` for every ``arguments.get("key"[, default])``
-    in the handler's module. A default of None means the call had none."""
-    tree = ast.parse(inspect.getsource(sys.modules[handler.__module__]))
+    this handler reaches. A default of None means the call had none.
+
+    Scoped to the handler's own call graph, not to its module: a protocol
+    entry point typically reads nothing itself and hands ``arguments`` to a
+    per-action helper (``_handle_void_alert_query``), while ``resonance.py``
+    holds two protocol handlers whose parameters are NOT interchangeable. So
+    walk from the handler's function definition into the module-level
+    functions it calls, transitively."""
+    module = sys.modules[handler.__module__]
+    tree = ast.parse(inspect.getsource(module))
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     keys: dict[str, set] = {}
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+    seen: set[str] = set()
+    pending = [handler.__name__]  # @wraps keeps the wrapped function's name
+    while pending:
+        name = pending.pop()
+        if name in seen or name not in functions:
             continue
-        if node.func.attr != "get" or not isinstance(node.func.value, ast.Name):
-            continue
-        if node.func.value.id != "arguments" or not node.args:
-            continue
-        if not isinstance(node.args[0], ast.Constant):
-            continue
-        default = ast.unparse(node.args[1]) if len(node.args) > 1 else None
-        keys.setdefault(node.args[0].value, set()).add(default)
+        seen.add(name)
+        for node in ast.walk(functions[name]):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name):
+                pending.append(node.func.id)
+                continue
+            if not isinstance(node.func, ast.Attribute) or node.func.attr != "get":
+                continue
+            if not isinstance(node.func.value, ast.Name):
+                continue
+            if node.func.value.id != "arguments" or not node.args:
+                continue
+            if not isinstance(node.args[0], ast.Constant):
+                continue
+            default = ast.unparse(node.args[1]) if len(node.args) > 1 else None
+            keys.setdefault(node.args[0].value, set()).add(default)
+    assert seen, f"{handler.__name__} was not found in {module.__name__}"
     return {key: sorted(defaults, key=str) for key, defaults in keys.items()}
 
 
@@ -93,11 +124,32 @@ async def _vocabulary(protocol: str) -> tuple[str, ...]:
 
 
 def test_the_scan_sees_the_handlers():
-    """Guard the inventory itself: an empty scan would pass every test below."""
+    """Guard the inventory itself: an empty scan would pass every test below.
+
+    void_alert also proves the walk follows calls — the entry point reads only
+    ``action`` and hands ``arguments`` to a per-action helper."""
     read = _keys_read(_CIRS_DISPATCHERS["void_alert"])
     assert {"since_hours", "filter_agent_id", "limit", "severity"} <= set(read)
     assert read["limit"] == ["50"]
     assert read["since_hours"] == ["1.0"]
+
+
+def test_the_scan_is_per_handler_not_per_module():
+    """resonance.py holds both oscillation handlers and their parameters are
+    not interchangeable: stability_restored emits and never queries, so
+    attributing resonance_alert's query window to it would classify a
+    parameter under an action that cannot read it."""
+    assert "max_age_minutes" in _keys_read(_CIRS_DISPATCHERS["resonance_alert"])
+    assert "max_age_minutes" not in _keys_read(_CIRS_DISPATCHERS["stability_restored"])
+    assert "tau_settled" in _keys_read(_CIRS_DISPATCHERS["stability_restored"])
+
+
+def test_protocol_literal_names_every_routed_protocol():
+    """Until 2026-09-12 the Literal admitted five of the seven protocols
+    ``_CIRS_DISPATCHERS`` routes, so resonance_alert and stability_restored
+    were refused by validate_params on every transport ("Invalid value for
+    'protocol'") while the tool's own recovery text advertised them."""
+    assert set(_admitted_protocols()) == set(_CIRS_DISPATCHERS)
 
 
 # --- the schema declares what the handlers read ---
@@ -188,6 +240,15 @@ SAMPLE_VALUES = {
     "as_initiator": False,
     "as_target": False,
     "status_filter": "pending",
+    "oi": 0.8,
+    "phase": "rising",
+    "tau_current": 0.5,
+    "beta_current": 0.7,
+    "flips": 4,
+    "duration_updates": 12,
+    "max_age_minutes": 15,
+    "tau_settled": 0.45,
+    "beta_settled": 0.65,
 }
 
 
@@ -222,8 +283,10 @@ def test_fastmcp_argument_model_keeps_every_declared_parameter():
         {"protocol": "governance_action", "action": "status", "action_id": "abc"},
         {"protocol": "boundary_contract", "action": "set", "trust_default": "full",
          "trust_overrides": {"a2": "none"}},
+        {"protocol": "resonance_alert", "action": "query", "max_age_minutes": 15},
     ],
-    ids=["void_alert.query", "governance_action.status", "boundary_contract.set"],
+    ids=["void_alert.query", "governance_action.status", "boundary_contract.set",
+         "resonance_alert.query"],
 )
 async def test_mcp_wire_delivers_the_parameters_to_dispatch(monkeypatch, arguments):
     """End to end through the registered FastMCP tool: ``Tool.run`` validates
@@ -299,6 +362,14 @@ async def test_dispatch_validation_carries_explicit_filters_to_the_handler():
     )
     assert body["success"] is False
     assert "not found" in body["error"]
+
+    # resonance_alert is admitted by the schema and reaches its own handler
+    # (validate_params refused the protocol outright before 2026-09-12).
+    body = await through_dispatch_validation(
+        {"protocol": "resonance_alert", "action": "query", "max_age_minutes": 15}
+    )
+    assert body["success"] is True, body
+    assert body["cirs_protocol"] == "RESONANCE_ALERT"
 
 
 @pytest.mark.asyncio
