@@ -15,11 +15,23 @@ machine-readable complete contract. A live client negotiates the same contract b
 calling `list_tools(lite=true)` and reading `interface_contract`; no repository
 tag lookup or private server import is required. Its `surface_sha256` changes
 whenever the ordered capability records change. CI compares that artifact with
-the live catalog. These hashes do not certify byte-identical MCP schemas:
-FastMCP regenerates schemas from typed wrappers, including defaults and schema
-structure. Use `scripts/diagnostics/tool_surface_cost.py --surface mcp` for the
-final local MCP definitions; `--surface catalog` explicitly measures this
-source layer. Neither command is a probe of a deployed peer.
+the live catalog. Each `input_schema_sha256` is taken over the catalog schema,
+and that schema is what every transport advertises byte for byte. FastMCP
+derives a schema of its own from each tool's typed wrapper, and that derivation
+drops bounds, concrete defaults and `$defs` (finding F12 of the 2026-09-12
+tool-surface audit: before 2026-09-11 a `/mcp/` client saw 106 defaults as
+`null` and no bound on `delegate_inference.timeout_s`), so the `/mcp/`
+registrar replaces it with the catalog schema after registration
+(`src/tool_registration.py`, `_advertise_catalog_schema`). Dispatch validation
+is unchanged: the wrapper's argument model still decides what the transport
+accepts, and the handler's Pydantic model enforces the advertised bounds.
+`tests/test_mcp_schema_parity.py` diffs the mounted listing against the
+catalog per tool and per property. The generated-title policy is the one step
+still applied per listing, so that it stays reversible.
+`scripts/diagnostics/tool_surface_cost.py --surface mcp` measures the final
+local MCP listing and `--surface catalog` the source layer; the two agree, and
+a gap between them is a finding rather than an expected difference. Neither
+command is a probe of a deployed peer.
 
 ## What v1 guarantees
 
@@ -115,9 +127,9 @@ schema. In 1.5.0, clients pinning hashes should re-pin against the current
 catalog. `UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS=full` restores authored
 descriptions; `UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores generated
 titles. Neither switch restores parameters removed in later releases or
-guarantees an older digest. The default title policy now applies after MCP
-schema regeneration as well as to the catalog. Titles are annotations, so
-that part preserves validation; schema fingerprints still change.
+guarantees an older digest. The default title policy applies on each MCP
+listing as well as to the catalog. Titles are annotations, so that part
+preserves validation; schema fingerprints still change.
 
 The 14 fields removed from `search_shared_memory` are `closure_class`,
 `closure_evidence`, `confidence`, `dry_run`, `include_response_chain`,

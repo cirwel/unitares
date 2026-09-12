@@ -10,6 +10,9 @@ FastMCP-registered tools:
 - ``auto_register_all_tools`` / ``_register_common_aliases`` — build typed
   FastMCP wrappers from the schema/alias registries and register them on the
   FastMCP instance.
+- ``_advertise_catalog_schema`` — after registration, replace the schema
+  FastMCP derived from the typed wrapper with the catalog schema, so ``/mcp/``
+  advertises the same bounds, defaults and ``$defs`` as stdio and REST.
 - ``_session_id_from_ctx`` — resolve a stable per-client session id for the
   session-injection wrappers.
 - ``TOOLS_NEEDING_SESSION_INJECTION`` / ``EXTRA_ARGUMENT_PASSTHROUGH_TOOLS`` —
@@ -30,6 +33,7 @@ and clear ``src.tool_registration._tool_wrappers_cache`` — not ``mcp_server``.
 
 from __future__ import annotations
 
+import copy
 import json
 import time
 from typing import Dict
@@ -44,7 +48,6 @@ from src.alias_schema import (
     ALIAS_SCHEMA_KEEP,
     ALIAS_SCHEMA_PROPERTY_OVERRIDES,
     _ALIAS_ALWAYS_KEEP,
-    apply_alias_schema_property_overrides as _apply_alias_schema_property_overrides,
     build_alias_input_schema,
 )
 from src.tool_annotations import tool_annotations
@@ -100,6 +103,76 @@ def _annotation_kwargs(tool_name: str) -> dict:
         return {}
     annotations = tool_annotations(tool_name)
     return {"annotations": annotations} if annotations is not None else {}
+
+
+def _registered_tool(mcp, tool_name: str):
+    """The internal FastMCP Tool registered under ``tool_name``, or ``None``.
+
+    ``None`` means the server object exposes no tool manager (a stand-in in
+    tests) or the name is not there; either way there is nothing to adjust.
+    """
+    manager = getattr(mcp, "_tool_manager", None)
+    if manager is None or not hasattr(manager, "get_tool"):
+        return None
+    return manager.get_tool(tool_name)
+
+
+def _advertise_catalog_schema(registered_tool, schema: dict) -> bool:
+    """Make the registered tool advertise ``schema`` — the catalog's — verbatim.
+
+    FastMCP derives ``Tool.parameters`` once, at registration, from the typed
+    wrapper's argument model. That derivation is lossy: bounds (``minimum``,
+    ``maxLength``, ...), concrete defaults, ``items``, ``additionalProperties``
+    and the ``$defs`` of nested models do not survive the signature round trip.
+    So until 2026-09-11 a ``/mcp/`` client saw 106 catalog defaults as ``null``
+    and no bound on ``delegate_inference.timeout_s``, while stdio and REST
+    clients, which are served the catalog, saw all of it — finding F12 of
+    docs/operations/tool-surface-audit-2026-09-12.md.
+
+    Replacing the dict makes ``/mcp/`` advertise the bytes the interface
+    contract hashes, and changes nothing about what the transport accepts: the
+    argument model is untouched, so ``enable_extra_argument_passthrough`` still
+    applies to it, and the advertised bounds are enforced where they always
+    were, by the handler's Pydantic model in ``validate_params``. Pinned by
+    tests/test_mcp_schema_parity.py.
+
+    WHY THAT IS SAFE, stated precisely, because the obvious version of this
+    sentence is false. Dispatch never consults this dict on either major:
+    ``Tool.run()`` validates through ``fn_metadata``, and FastMCP registers its
+    low-level ``call_tool`` with ``validate_input=False``. On mcp 1.x
+    ``list_tools()`` is then the only reader. On mcp 2.x it is NOT — the
+    streamable-HTTP modern path replays the server's own tools/list and hands
+    the advertised schema to ``validate_mcp_param_headers``
+    (``_streamable_http_modern.py`` -> ``mcp/shared/inbound.py``), which can
+    reject a call before dispatch. That path is inert here for a reason that is
+    a property of the SCHEMA'S CONTENT rather than of the transport or the
+    negotiated protocol version: it iterates only schema positions carrying an
+    ``x-mcp-header`` key, and no UNITARES schema has one, so the loop body
+    never runs. Prefer that reason to a protocol-version argument, which erodes
+    as clients upgrade.
+
+    The consequence to keep in mind before adding a keyword to the catalog:
+    Pydantic's regeneration used to DROP unknown keywords, so before this
+    change nothing a catalog declared could reach that path at all. Now the
+    catalog is the advertised schema, so a future ``x-mcp-header`` in it would
+    arm a live rejection path rather than being silently discarded.
+
+    Mutated in place only for symmetry with
+    ``apply_alias_schema_property_overrides``, which already edited this dict.
+    ``Tool`` is a plain unfrozen pydantic model on both majors, so assigning a
+    new dict would work identically; nothing here depends on the object's
+    identity. The ``deepcopy`` is likewise insurance rather than load-bearing —
+    ``advertised_input_schema`` already returns a fresh object graph per call —
+    and it is kept so that a future caching change upstream cannot alias the
+    catalog into FastMCP's tool.
+    """
+    parameters = getattr(registered_tool, "parameters", None)
+    if not isinstance(parameters, dict) or not isinstance(schema, dict):
+        return False
+    replacement = copy.deepcopy(schema)
+    parameters.clear()
+    parameters.update(replacement)
+    return True
 
 
 def _session_id_from_ctx(ctx: Context | None) -> str | None:
@@ -447,8 +520,10 @@ EXTRA_ARGUMENT_PASSTHROUGH_TOOLS = {
 # Alias-specific advertised schema overrides. The canonical knowledge router
 # remains full-by-default for compatibility; the task-verb read alias returns
 # its compact experience envelope unless the caller explicitly requests full.
-# FastMCP reconstructs schemas from wrapper signatures, so the override is
-# applied both before wrapper creation and to the registered Tool below.
+# The overrides are applied once, when build_alias_input_schema builds the
+# catalog alias schema; the registrar then advertises that schema verbatim
+# (_advertise_catalog_schema) instead of re-applying them to whatever FastMCP
+# reconstructed from the wrapper signature.
 def auto_register_all_tools(mcp, *, only_missing: bool = False):
     """
     Auto-register tools from tool_schemas.py with typed signatures.
@@ -481,7 +556,12 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
     from src.tool_mode_listing import advertised_tool_names
     from src.tool_modes import TOOL_MODE
 
-    tools = get_tool_definitions()
+    # Titles are kept here on purpose. The registered schema is what /mcp/
+    # advertises (see _advertise_catalog_schema), and the listing applies the
+    # title policy on every tools/list (src/tool_mode_listing.py); stripping at
+    # registration would make UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep a
+    # no-op on this transport.
+    tools = get_tool_definitions(property_titles="keep")
     registered_count = 0
     skipped_count = 0
     unadvertised_count = 0
@@ -527,28 +607,28 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
                 session_extractor=_session_id_from_ctx,
             )
 
-            # Register with FastMCP - it will infer schema from signature
+            # Register with FastMCP. It infers an argument model (what the
+            # transport accepts) from the signature; the schema it derives
+            # from that model is then replaced by the catalog's (what the
+            # transport advertises).
             mcp.tool(
                 description=description,
                 structured_output=False,
                 **_annotation_kwargs(tool_name),
             )(wrapper)
-            if tool_name in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
-                tool_manager = getattr(mcp, "_tool_manager", None)
-                registered_tool = (
-                    tool_manager.get_tool(tool_name)
-                    if tool_manager and hasattr(tool_manager, "get_tool")
-                    else None
+            registered_tool = _registered_tool(mcp, tool_name)
+            if registered_tool is None:
+                logger.warning(
+                    "Registered %s but the FastMCP tool manager does not expose "
+                    "it: /mcp/ will advertise the regenerated schema instead of "
+                    "the catalog's, and extra argument passthrough cannot be "
+                    "enabled",
+                    tool_name,
                 )
-                if registered_tool is None:
-                    logger.warning(
-                        "Failed to enable extra argument passthrough for %s: "
-                        "registered FastMCP tool not found",
-                        tool_name,
-                    )
-                else:
-                    enabled = enable_extra_argument_passthrough(registered_tool)
-                    if enabled:
+            else:
+                _advertise_catalog_schema(registered_tool, input_schema)
+                if tool_name in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
+                    if enable_extra_argument_passthrough(registered_tool):
                         logger.info(
                             "Enabled extra argument passthrough for %s",
                             tool_name,
@@ -586,15 +666,15 @@ def _register_common_aliases(mcp):
         create_typed_wrapper,
         enable_extra_argument_passthrough,
     )
-
-    from src.schema_brief import resolve_brief_budget, resolve_field_description_mode
     from src.tool_modes import TOOL_MODE
+    from src.tool_schemas import get_tool_definitions
 
-    # The overrides below run after get_tool_definitions has already trimmed
-    # the catalog, so they read the same knobs rather than reintroducing the
-    # full text on the aliases agents call most.
-    field_description_mode = resolve_field_description_mode()
-    brief_budget = resolve_brief_budget()
+    # One catalog build for every alias, titles kept for the reason given in
+    # auto_register_all_tools. Each alias schema is narrowed from it by
+    # build_alias_tool_definition, property overrides included, in the
+    # resolved field-description mode — so the schema advertised below is the
+    # same object REST and stdio serve, with nothing re-applied on top.
+    definitions = get_tool_definitions(property_titles="keep")
 
     # Every workflow alias is registered in every mode, for the same reason
     # every handler is: the mode filters tools/list, not dispatch. A lite-only
@@ -612,7 +692,9 @@ def _register_common_aliases(mcp):
             # The transport-neutral contract owns the alias schema. REST and
             # stdio discovery consume the same Tool definition. A missing
             # implementation schema leaves the alias unadvertised.
-            alias_tool = build_alias_tool_definition(alias_name)
+            alias_tool = build_alias_tool_definition(
+                alias_name, definitions=definitions
+            )
             actual_schema = get_tool_input_schema(alias_tool, {}) or {}
             wrapper = create_typed_wrapper(
                 tool_name=alias_name,
@@ -627,21 +709,10 @@ def _register_common_aliases(mcp):
                 structured_output=False,
                 **_annotation_kwargs(alias_name),
             )(wrapper)
-            tool_manager = getattr(mcp, "_tool_manager", None)
-            registered_tool = (
-                tool_manager.get_tool(alias_name)
-                if tool_manager and hasattr(tool_manager, "get_tool")
-                else None
-            )
+            registered_tool = _registered_tool(mcp, alias_name)
             if registered_tool is not None:
-                _apply_alias_schema_property_overrides(
-                    alias_name,
-                    getattr(registered_tool, "parameters", {}),
-                    field_descriptions=field_description_mode,
-                    budget=brief_budget,
-                )
-            if actual in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
-                if registered_tool is not None:
+                _advertise_catalog_schema(registered_tool, actual_schema)
+                if actual in EXTRA_ARGUMENT_PASSTHROUGH_TOOLS:
                     enable_extra_argument_passthrough(registered_tool)
             count += 1
         except Exception as e:

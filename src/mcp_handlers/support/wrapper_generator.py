@@ -8,7 +8,13 @@ Benefits:
 - Claude.ai sends parameters directly (no kwargs wrapper needed)
 - CLI's kwargs wrapping still works (dispatch_tool unwraps)
 - Proper IDE/client autocomplete from typed signatures
-- Schema metadata (descriptions, enums) preserved for MCP clients
+- Schema metadata (descriptions, enums) preserved on the argument model
+
+What the signature does NOT decide is the schema ``/mcp/`` advertises. The
+schema FastMCP derives from it loses bounds, concrete defaults and ``$defs``,
+so ``src/tool_registration.py`` replaces the registered tool's ``parameters``
+with the catalog schema after registration (``_advertise_catalog_schema``).
+The signature still decides what FastMCP accepts before dispatch.
 """
 
 import inspect
@@ -36,7 +42,11 @@ def create_typed_wrapper(
         session_extractor: Function to extract session_id from context (ctx -> str)
     
     Returns:
-        Async function with typed signature that FastMCP can introspect
+        Async function with typed signature that FastMCP can introspect. The
+        argument model FastMCP builds from it is the pre-dispatch validation
+        boundary; the schema it derives from that model is not what ``/mcp/``
+        advertises — the registrar swaps in ``input_schema`` itself afterwards
+        (see the module docstring).
     """
     properties = input_schema.get("properties", {})
     required = set(input_schema.get("required", []))

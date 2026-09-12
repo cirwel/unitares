@@ -35,13 +35,17 @@ def filter_listed_tools(tools: Iterable[Any], mode: Optional[str] = None) -> lis
 
 
 def apply_listed_schema_policy(tools: Iterable[Any]) -> list[Any]:
-    """Apply annotation policy after FastMCP regenerates its argument schemas.
+    """Apply the title policy to the advertised Tool objects on every listing.
 
-    Trimming the source catalog alone does not trim MCP: Pydantic puts titles
-    back when the registrar builds typed wrappers. Only copy the advertised
-    Tool objects here; the argument models and dispatch validators stay intact.
-    Reading the mode on each listing also makes ``keep`` reversible without
-    depending on a cached schema built under a previous setting.
+    The registrar hands FastMCP the catalog schema with generated titles still
+    present (``get_tool_definitions(property_titles="keep")`` in
+    ``src/tool_registration.py``), and this is where they come off — per call,
+    reading the mode each time, so ``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep``
+    stays reversible without depending on a cached schema built under a
+    previous setting. Only the advertised Tool objects are copied; the argument
+    models and dispatch validators stay intact. After this step the ``/mcp/``
+    listing is the catalog schema byte for byte
+    (tests/test_mcp_schema_parity.py).
     """
     mode = resolve_property_title_mode()
     result = []
