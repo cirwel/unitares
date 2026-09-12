@@ -7,9 +7,12 @@ bytes a client receives from `tools/list` before the agent has decided it wants
 any of them.
 
 The default surface is the final local MCP tools/list definition set, after
-FastMCP regenerates its typed wrappers and applies listing policy. --surface
-catalog explicitly measures the upstream source definitions instead. They
-are not interchangeable. Serialization is compact UTF-8 JSON for the result
+registration and listing policy. --surface catalog explicitly measures the
+upstream source definitions instead. Since 2026-09-11 the /mcp/ registrar
+advertises the catalog schema verbatim (src/tool_registration.py), so the two
+surfaces agree byte for byte; a difference between them is a finding -- a
+registration route that bypassed the registrar -- not an expected gap.
+Serialization is compact UTF-8 JSON for the result
 object; JSON-RPC IDs, transport framing, compression and client-added context
 are excluded. This does not sample a deployed server or start its lifespan.
 
@@ -83,8 +86,9 @@ def _definitions(mode: str, surface: str) -> list:
 
     This only constructs/list-tools on the local server object; it does not
     start its lifespan, connect a client, dispatch a tool, or contact a DB.
-    FastMCP regenerates schemas from typed wrappers, so the catalog is not an
-    interchangeable byte measurement.
+    The registrar replaces FastMCP's regenerated schema with the catalog's, so
+    the two surfaces measure the same bytes unless a registration route
+    bypassed it.
     """
     validate_mode(mode)
     if surface == "catalog":

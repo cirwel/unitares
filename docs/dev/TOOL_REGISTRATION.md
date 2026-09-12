@@ -348,17 +348,27 @@ parameter name, type, default or requiredness may move between `brief` and
 `full`.
 
 The complete descriptions remain on the Pydantic models and are served by
-`describe_tool(tool_name=..., action=...)`. The transport may regenerate
-schemas from those definitions; source-catalog equality is not a wire check.
+`describe_tool(tool_name=..., action=...)`. The `/mcp/` registrar advertises
+the catalog schema verbatim (`src/tool_registration.py`,
+`_advertise_catalog_schema`): FastMCP derives a schema from the typed wrapper's
+signature, that derivation loses bounds, concrete defaults and `$defs` (finding
+F12 of `docs/operations/tool-surface-audit-2026-09-12.md`), so the registrar
+replaces it after registration. Dispatch validation is unchanged — the
+wrapper's argument model still decides what the transport accepts, and the
+handler's Pydantic model enforces the advertised bounds. Source-catalog
+equality is therefore a wire check, pinned per tool and per property by
+`tests/test_mcp_schema_parity.py`.
 
 ### Generated titles and validation
 
 `src/schema_brief.py::apply_property_title_mode` removes generated `title`
-annotations by default. Catalog construction applies it upstream, and
-`src/tool_mode_listing.py` applies it again **after FastMCP regenerates its
-schemas**. The latter copies the advertised Tool objects; it does not mutate
-argument models or dispatch validation. A parameter named `title`, or a
-`title` inside caller defaults/examples, remains intact.
+annotations by default. Catalog construction applies it upstream; the `/mcp/`
+registrar hands FastMCP the catalog schema with the titles still present
+(`get_tool_definitions(property_titles="keep")`) and `src/tool_mode_listing.py`
+applies the policy **on every listing**, which is what keeps the switch below
+reversible on that transport. The latter copies the advertised Tool objects; it
+does not mutate argument models or dispatch validation. A parameter named
+`title`, or a `title` inside caller defaults/examples, remains intact.
 
 `UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores generated titles in the
 current listing. It does not restore a historical payload or fingerprint
