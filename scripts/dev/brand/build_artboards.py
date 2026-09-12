@@ -1,4 +1,8 @@
+import os
 import re
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+A = os.path.join("..", "..", "..", "docs", "assets")
 
 
 def svg_body(path, width=None, cls=""):
@@ -14,12 +18,12 @@ def svg_body(path, width=None, cls=""):
     return s.strip()
 
 
-LOCK_L = svg_body("unitares-lockup.svg", 420)
-LOCK_D = svg_body("unitares-lockup-dark.svg", 420)
-MARK_L = svg_body("unitares-mark.svg", 200)
-MARK_D = svg_body("unitares-mark-dark.svg", 200)
-FAV = svg_body("unitares-favicon.svg", 64)
-WM_ONLY = open("unitares-lockup.svg").read()
+LOCK_L = svg_body(os.path.join(A, "unitares-lockup.svg"), 420)
+LOCK_D = svg_body(os.path.join(A, "unitares-lockup-dark.svg"), 420)
+MARK_L = svg_body(os.path.join(A, "unitares-mark.svg"), 200)
+MARK_D = svg_body(os.path.join(A, "unitares-mark-dark.svg"), 200)
+FAV = svg_body(os.path.join(A, "unitares-favicon.svg"), 64)
+WM_ONLY = open(os.path.join(A, "unitares-lockup.svg")).read()
 
 FONTS = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500&family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500&display=swap">'
 
@@ -135,11 +139,11 @@ card_body = f"""
 <div style="width:1280px; height:640px; box-sizing:border-box; padding:56px 120px 48px; display:flex; flex-direction:column; justify-content:space-between; background:#F5F1E8;">
   <div style="display:flex; align-items:center; gap:24px;">
     <div class="rule"></div>
-    <div class="mono">Cirwel Research · Self-hosted · Apache-2.0</div>
+    <div class="mono">Cirwel Systems · Self-hosted · Apache-2.0</div>
     <div class="rule"></div>
   </div>
   <div style="display:flex; flex-direction:column; align-items:center; gap:28px;">
-    {svg_body("unitares-lockup.svg", 620)}
+    {svg_body(os.path.join(A, "unitares-lockup.svg"), 620)}
     <div style="font-size:44px; line-height:1.2; text-align:center; max-width:900px; text-wrap:pretty;">A federation kernel for accountable AI agents.</div>
     <div style="font-size:24px; line-height:1.3; text-align:center; color:#5C544A; font-style:italic;">Identity, claims and evidence, review, outcomes, and reconstruction across agent runtimes.</div>
   </div>
@@ -232,7 +236,7 @@ stage_b = f'<svg width="200" height="200" viewBox="0 0 200 200">{"".join(shapes)
 wm = re.sub(
     r'viewBox="0 0 493 96" width="493" height="96"',
     'viewBox="118 0 375 96" width="340" style="height:auto;display:block"',
-    open("unitares-lockup.svg").read(),
+    open(os.path.join(A, "unitares-lockup.svg")).read(),
 )
 wm = re.sub(r'<g transform="translate\(0 0\).*?</g>', "", wm, flags=re.S)
 stage_c = f'<div style="display:flex; flex-direction:column; gap:18px; align-items:center; width:100%;"><div style="height:1px; background:#C9C0AE; width:100%;"></div>{wm}<div style="height:1px; background:#C9C0AE; width:100%;"></div></div>'

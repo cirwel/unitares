@@ -48,10 +48,6 @@ structured handoff still need comparative evaluation.
 | **Outcomes** — what actually happened? | `record_result` records typed outcomes; an explicit `prediction_id` links a result to the prediction it grades. A stored outcome does not independently verify the caller's report. |
 | **Reconstruction** — what should the next process recover? | `search_shared_memory`, knowledge reads, review history, `export`, and operator-gated outcome-evidence reads expose different retained records. Clients assemble them; there is no single reconstruction tool or guarantee that the original check-in text survives. |
 
-<div align="center">
-  <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
-</div>
-
 The core record is retained in your deployment and accessible through MCP,
 HTTP, and the self-hosted dashboard. Core storage needs no external model
 provider. Optional cloud consultation and configured integrations can send

@@ -1,11 +1,15 @@
 import json
+import os
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+from brandfont import ensure_font  # noqa: E402
 from fontTools.ttLib import TTFont
 from fontTools.varLib.instancer import instantiateVariableFont
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.boundsPen import BoundsPen
 
-base = TTFont("fonts/BodoniModa.ttf")
+base = TTFont(ensure_font())
 inst = instantiateVariableFont(base, {"opsz": 96, "wght": 500})
 gs = inst.getGlyphSet()
 cmap = inst.getBestCmap()
@@ -17,14 +21,14 @@ feats = (
 )
 print("features:", feats)
 
-# small-caps mapping via GSUB single substitutions under 'smcp'
+# small-caps mapping for capitals via GSUB single substitutions under 'c2sc'
 smcp = {}
-if "smcp" in feats:
+if "c2sc" in feats:
     gsub = inst["GSUB"].table
     idx = [
         i
         for i, fr in enumerate(gsub.FeatureList.FeatureRecord)
-        if fr.FeatureTag == "smcp"
+        if fr.FeatureTag == "c2sc"
     ]
     for i in idx:
         for li in gsub.FeatureList.FeatureRecord[i].Feature.LookupListIndex:

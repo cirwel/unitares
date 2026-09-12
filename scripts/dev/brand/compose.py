@@ -1,4 +1,8 @@
 import json, math
+import os
+
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+ASSETS = os.path.join("..", "..", "..", "docs", "assets")
 
 g = json.load(open("glyphs.json"))
 G = g["glyphs"]
@@ -41,12 +45,14 @@ def svg(w, h, body, label):
     )
 
 
-open("unitares-mark.svg", "w").write(svg(200, 200, mark(OX, INK), "UNITARES mark"))
-open("unitares-mark-dark.svg", "w").write(
+open(os.path.join(ASSETS, "unitares-mark.svg"), "w").write(
+    svg(200, 200, mark(OX, INK), "UNITARES mark")
+)
+open(os.path.join(ASSETS, "unitares-mark-dark.svg"), "w").write(
     svg(200, 200, mark(CREAM, SEPIA), "UNITARES mark")
 )
 # favicon-scale: heavier hex so it survives 16-32px
-open("unitares-favicon.svg", "w").write(
+open(os.path.join(ASSETS, "unitares-favicon.svg"), "w").write(
     svg(
         64,
         64,
@@ -86,8 +92,10 @@ def lockup(u_fill, hex_stroke, wm_fill):
     return body
 
 
-open("unitares-lockup.svg", "w").write(svg(W, H, lockup(OX, INK, INK), "UNITARES"))
-open("unitares-lockup-dark.svg", "w").write(
+open(os.path.join(ASSETS, "unitares-lockup.svg"), "w").write(
+    svg(W, H, lockup(OX, INK, INK), "UNITARES")
+)
+open(os.path.join(ASSETS, "unitares-lockup-dark.svg"), "w").write(
     svg(W, H, lockup(CREAM, SEPIA, CREAM), "UNITARES")
 )
 print("lockup size", W, H, "wordmark width", round(wmw, 1))
