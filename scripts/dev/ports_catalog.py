@@ -15,9 +15,18 @@ Ports that live outside this repo (anima on the Pi) or only in a tracked plist
 template are recorded descriptively; everything with an in-repo literal is
 verified.
 
+Interpreter constraint: ``scripts/ops/health_watchdog.sh`` shells out to this
+module via bare ``python3``, which under launchd's minimal PATH is the system
+interpreter (3.9.6 on macOS), NOT the 3.12+ this project requires. So this file
+must stay syntax-compatible with the oldest ``python3`` a deployment might
+resolve — see ``test_catalog_compiles_under_the_system_interpreter``. The first
+3.12-only construct added here collapses the watchdog's roster to its fallback
+branch on every run: loud, but six monitored services drop to one.
+
 Usage:
     python3 scripts/dev/ports_catalog.py            # write the doc
     python3 scripts/dev/ports_catalog.py --check     # exit 1 if doc stale OR a source lost its port
+    python3 scripts/dev/ports_catalog.py --health-probes   # TSV roster for health_watchdog.sh
 """
 from __future__ import annotations
 
@@ -38,6 +47,12 @@ PORTS = [
         "host": "edge host (Raspberry Pi)",
         "source": "`anima-mcp` service config (external repo)",
         "verify": None,
+        # No roster probe. Anima runs on a separate host, so health_watchdog.sh
+        # checks it directly via ANIMA_HEALTH_URL rather than through this
+        # registry — see the anima block there. Declaring a `scope: "edge"`
+        # entry here would read as monitored while nothing emitted it, which
+        # masks the very gap this registry exists to close.
+        "health": None,
     },
     {
         "port": 8767,
@@ -45,6 +60,16 @@ PORTS = [
         "host": "governance host",
         "source": "`src/mcp_server.py` — `DEFAULT_PORT`",
         "verify": "src/mcp_server.py",
+        # `role: governance` is what health_watchdog.sh keys its Postgres-pool
+        # read off. Matching the port in the script instead would re-create the
+        # coupling this registry exists to remove — and fail silently, because
+        # a pool check that never runs writes nothing at all.
+        "health": {
+            "path": "/health",
+            "expect": [200],
+            "scope": "governance",
+            "role": "governance",
+        },
     },
     {
         "port": 8768,
@@ -52,6 +77,7 @@ PORTS = [
         "host": "governance host",
         "source": "`src/gateway/constants.py` — `GATEWAY_PORT` (`GATEWAY_PORT` env, default 8768)",
         "verify": "src/gateway/constants.py",
+        "health": {"path": "/health", "expect": [200], "scope": "governance"},
     },
     {
         "port": 8788,
@@ -59,6 +85,7 @@ PORTS = [
         "host": "governance host",
         "source": "`LEASE_PLANE_BASE_URL` default — `src/services/runtime_queries.py`",
         "verify": "src/services/runtime_queries.py",
+        "health": {"path": "/health", "expect": [200], "scope": "governance"},
     },
     {
         "port": 8789,
@@ -66,6 +93,14 @@ PORTS = [
         "host": "governance host",
         "source": "`AGENT_ORCHESTRATOR_URL` default — `src/mcp_handlers/dialectic/orchestrator_dispatch.py`",
         "verify": "src/mcp_handlers/dialectic/orchestrator_dispatch.py",
+        # `/v1/health` is the declared route (http_router.ex). There is no
+        # bare `/health`, so probing that would only prove "a socket speaks
+        # HTTP" — and would flip to 404 the day HTTPAuth grows the liveness
+        # exemption that lease_plane and wave3a already have.
+        # 401 is a HEALTHY answer: `plug(HTTPAuth)` runs before `plug(:dispatch)`,
+        # so every path 401s unauthenticated. Only a connection failure (curl
+        # reports 000) means down.
+        "health": {"path": "/v1/health", "expect": [200, 401], "scope": "governance"},
     },
     {
         "port": 8790,
@@ -73,8 +108,66 @@ PORTS = [
         "host": "governance host",
         "source": "`scripts/ops/com.unitares.dialectic-live.plist.template`",
         "verify": "scripts/ops/com.unitares.dialectic-live.plist.template",
+        "health": {"path": "/health", "expect": [200], "scope": "governance"},
+    },
+    {
+        "port": 8770,
+        "service": "Wave 3A handlers (BEAM)",
+        "host": "governance host",
+        "source": "`elixir/wave3a_handlers/config/config.exs` — `WAVE_3A_HANDLERS_PORT` default",
+        "verify": "elixir/wave3a_handlers/config/config.exs",
+        "health": {"path": "/health", "expect": [200], "scope": "governance"},
     },
 ]
+
+
+def health_probes(scope: str = "governance") -> list[dict]:
+    """Probe descriptors for every registry surface reachable in ``scope``.
+
+    The doc drift this generator was built to stop had a second victim nobody
+    noticed: ``scripts/ops/health_watchdog.sh`` hand-enumerated two services
+    while the registry declared six. Port 8768 crash-looped for eight days
+    behind that gap, and the hourly deploy doctor kept reporting every surface
+    healthy — truthfully, because 8768 was not one of its surfaces.
+
+    So the watchdog reads its roster from here instead of keeping its own.
+    Adding a service to ``PORTS`` now monitors it; forgetting to is caught by
+    ``tests/test_ports_catalog_health_coverage.py`` rather than by an outage.
+
+    ``expect`` is a list because reachable does not mean 200: the orchestrator
+    on 8789 is bearer-gated and answers 401 to an unauthenticated probe. A
+    genuinely dead port yields neither — curl reports 000.
+    """
+    out = []
+    for p in sorted(PORTS, key=lambda p: p["port"]):
+        h = p.get("health")
+        if not h or h.get("scope") != scope:
+            continue
+        out.append({
+            "name": p["service"],
+            "port": p["port"],
+            "url": f"http://127.0.0.1:{p['port']}{h['path']}",
+            "expect": h["expect"],
+            "role": h.get("role", ""),
+        })
+    return out
+
+
+def render_health_probes(scope: str = "governance") -> str:
+    """The probe roster as TSV: name, url, accepted codes, role.
+
+    The fourth column carries the consumer-facing role (currently only
+    ``governance``) so the watchdog can find the governance probe without
+    matching a port number — which would be the same hand-kept coupling in a
+    quieter place.
+
+    Consumed by ``scripts/ops/health_watchdog.sh``. Tab-separated because
+    service names contain spaces and parentheses.
+    """
+    return "\n".join(
+        f"{d['name']}\t{d['url']}\t{','.join(str(c) for c in d['expect'])}\t{d['role']}"
+        for d in health_probes(scope)
+    )
 
 
 def verify_sources() -> list[str]:
@@ -143,7 +236,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
                     help="exit 1 if the doc is stale or a source lost its port")
+    ap.add_argument("--health-probes", action="store_true",
+                    help="print the health-probe roster as TSV (name, url, accepted codes)")
     args = ap.parse_args()
+
+    if args.health_probes:
+        # Deliberately independent of verify_sources(): the watchdog must still
+        # get a roster when a cited source has drifted, or one registry typo
+        # would silently disable monitoring for every service at once.
+        print(render_health_probes())
+        return 0
 
     content = render()
     src_failures = verify_sources()
