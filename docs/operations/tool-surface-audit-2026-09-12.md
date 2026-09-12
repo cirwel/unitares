@@ -31,6 +31,7 @@ the baseline. All of them pass.
 | `scripts/diagnostics/update_docs_tool_count.py --check --require-registry` | documentation count correct |
 | `scripts/diagnostics/audit_tool_categories.py` | 0 non-existent names; eleven categories totalling 50 |
 | `scripts/diagnostics/hint_target_advertisement.py --fail-on-finding --classify` | no candidate advertisement mismatches |
+| `scripts/diagnostics/check_doc_health.py --strict` (ghost-tool scan: a backticked identifier with empty parentheses in docs that is neither a registered tool nor an alias) | clean; the first draft of this document tripped it on a non-tool function name, which is the rule working |
 | `python -m src.interface_contract` | byte-identical to `docs/interface-contract.v1.json` (1.6.0, 50 capabilities, `surface_sha256 3bf9f94d…`) |
 | `python -m src.mcp_handlers.stakes_table` | 99 entries (23 high, 76 baseline) |
 | `scripts/diagnostics/tool_surface_cost.py --surface mcp` | 50 tools, 133,061 bytes, identical for every legacy mode label |
@@ -192,8 +193,8 @@ routers included, and hold the set to registered names with a test.
 `get_tool_usage_stats`, `request_dialectic_review`, `submit_antithesis`,
 `submit_thesis`, `validate_file_path` (in `_BASELINE`). All thirteen are
 aliases; `get_call_stakes_requirement` canonicalizes before lookup, so the
-entries are never consulted, while `export_table()` — the porting contract for
-a non-Python gate — serializes them anyway. `tests/test_stakes_table.py` proves
+entries are never consulted, while the `export_table` serializer — the porting
+contract for a non-Python gate — emits them anyway. `tests/test_stakes_table.py` proves
 registered → table and not the reverse for tool-level keys. Option: prune, and
 add the reverse assertion.
 
@@ -285,7 +286,7 @@ in F5 and F11 are read from code paths, not exercised end to end.
 ## Validation receipt
 
 - `scripts/dev/tool_edge_index.py --check`, `--lint`, `--json`: up to date; 0/0/0; schema-valid.
-- `validate_tool_modes.py`, `validate_tool_registration.py`, `count_tools.py --json`, `update_docs_tool_count.py --check --require-registry`, `audit_tool_categories.py`, `hint_target_advertisement.py --fail-on-finding`: all pass.
+- `validate_tool_modes.py`, `validate_tool_registration.py`, `count_tools.py --json`, `update_docs_tool_count.py --check --require-registry`, `audit_tool_categories.py`, `hint_target_advertisement.py --fail-on-finding`, `check_doc_health.py --strict`: all pass.
 - `python -m src.interface_contract` diffed against `docs/interface-contract.v1.json`: identical.
 - In-process `describe_tool` × 167 and `list_tools` × 6: no failures.
 - Focused test files (`tests/test_tool_*.py`, `test_lite_wire_surface.py`,
