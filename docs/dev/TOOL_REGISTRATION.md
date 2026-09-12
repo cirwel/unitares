@@ -433,9 +433,19 @@ will complete successfully under every identity/state condition.
 inventory**. Its `HINT_KEYS` list is a heuristic seed, not proof that a value is
 serialized to a caller. It scans literals under keys such as `hint`, `next_call`,
 `safe_options[*].call`, `message`, and `related_tools`; follows local bindings
-and return builders; and handles nested lists/dicts/f-strings. Structured
-`related_tools` values can name tools without parentheses. Prose requires an
-adjacent `tool(` call shape, excluding the English plural `session(s)`.
+and return builders; and handles nested lists/dicts/f-strings. Structured name
+fields (`STRUCTURED_NAME_KEYS`: `related_tools`, `tools`, `related_to`,
+`depends_on`, and the workflow lists, including the `WORKFLOWS` constant in
+`introspection/tool_catalog.py`) can name tools without parentheses; a literal
+list, the values of a literal dict, or a name bound to one — never an arbitrary
+expression. Prose requires an adjacent `tool(` call shape, excluding the
+English plural `session(s)`. The scan covers the handler tree plus
+`src/tool_meta.py` (`EXTRA_SCAN_FILES`), where the `related_to` / `depends_on`
+fields that `list_tools` serves under `relationships` are declared. Until
+2026-09-12 bare names were admitted under `related_tools` only, and the full
+`list_tools` view carried 30 dispatch-only twins in fields the scan never read
+while `--fail-on-finding` reported clean; `tests/test_list_tools_names_the_wire.py`
+now holds the served payload to the mount directly.
 Comments and docstrings are not seed values. Dynamic string construction and
 arbitrary data flow remain outside the guarantee. JSON discloses these limits.
 

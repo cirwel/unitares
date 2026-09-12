@@ -75,7 +75,18 @@ class ToolMeta:
                 a workflow alias, which reports its implementation tool's.
     workflow_alias: one of AGENT_WORKFLOW_ALIASES; dispatches through the
                 implementation tool it is listed beside.
-    depends_on / related_to: the introspection catalog's relationship graph.
+    depends_on / related_to: the introspection catalog's relationship graph,
+                served by list_tools(lite=false) under `relationships`. Every
+                entry is a name on this roster or a call shape against a
+                router on it (`agent(action='list')`). Never a dispatch-only
+                twin (`list_agents`): REST and stdio resolve those through the
+                alias table, but the /mcp/ mount registers only the roster, so
+                a schema-driven client that follows such an entry gets
+                `Unknown tool`. Twelve records named one until 2026-09-12 (F1
+                of docs/operations/tool-surface-audit-2026-09-12.md).
+                tests/test_tool_registry_bookkeeping.py holds this, and
+                scripts/diagnostics/hint_target_advertisement.py scans this
+                file for it.
     """
 
     name: str
@@ -111,33 +122,33 @@ TOOL_META: Tuple[ToolMeta, ...] = (
     # -- Health and workspace
     # System status
     ToolMeta("health_check", category="admin", tier="essential", operation="read", stability=STABLE,
-             related_to=('get_server_info', 'get_telemetry_metrics')),
+             related_to=("admin(action='server_info')", "admin(action='telemetry')")),
     # Keeps register=True: the operator modes advertise it and do not carry admin
     ToolMeta("get_workspace_health", category="workspace", tier="common", operation="read", stability=BETA,
-             related_to=('health_check', 'get_server_info')),
+             related_to=('health_check', "admin(action='server_info')")),
     # -- The check-in loop
     # The check-in; implemented by process_agent_update
     ToolMeta("sync_state", category="core", tier="essential", operation="write", workflow_alias=True,
              related_to=('process_agent_update', 'check_working_state')),
     ToolMeta("process_agent_update", category="core", tier="common", operation="write", stability=STABLE,
-             related_to=('simulate_update', 'get_governance_metrics', 'get_system_history')),
+             related_to=('simulate_update', 'get_governance_metrics', "export(action='history')")),
     # Read the verdict without writing; implemented by get_governance_metrics
     ToolMeta("check_working_state", category="core", tier="essential", operation="read", workflow_alias=True,
              related_to=('get_governance_metrics', 'sync_state')),
     ToolMeta("get_governance_metrics", category="core", tier="common", operation="read", stability=STABLE,
-             related_to=('process_agent_update', 'observe_agent', 'get_system_history')),
+             related_to=('process_agent_update', "observe(action='agent')", "export(action='history')")),
     # -- Lifecycle and maintenance
     # Updates agent status
     ToolMeta("mark_response_complete", category="lifecycle", tier="common", operation="write", stability=BETA,
-             related_to=('process_agent_update', 'get_agent_metadata')),
+             related_to=('process_agent_update', "agent(action='get')")),
     # write: auto_recover=true resumes agents
     ToolMeta("detect_stuck_agents", category="observability", tier="advanced", operation="write", stability=BETA,
              related_to=('observe', 'agent')),
     ToolMeta("archive_old_test_agents", category="lifecycle", tier="advanced", operation="write", stability=BETA,
-             related_to=('archive_agent', 'list_agents')),
+             related_to=("agent(action='archive')", "agent(action='list')")),
     # Preview by default; archives on request
     ToolMeta("archive_orphan_agents", category="lifecycle", tier="advanced", operation="write", stability=BETA,
-             related_to=('agent', 'list_agents')),
+             related_to=('agent', "agent(action='list')")),
     # -- Simulation and thresholds
     # Dry-run, no state change
     ToolMeta("simulate_update", category="core", tier="advanced", operation="read", stability=EXPERIMENTAL,
@@ -164,10 +175,10 @@ TOOL_META: Tuple[ToolMeta, ...] = (
              related_to=('list_tools', 'describe_tool')),
     # -- Knowledge (flat)
     ToolMeta("search_knowledge_graph", category="knowledge", tier="common", operation="read", stability=STABLE,
-             related_to=('store_knowledge_graph', 'get_discovery_details')),
+             related_to=("knowledge(action='store')", "knowledge(action='details')")),
     # Not deprecated (operator decision, 2026-08-29): a first-class low-friction write
     ToolMeta("leave_note", category="knowledge", tier="essential", operation="write", stability=BETA,
-             related_to=('knowledge', 'store_knowledge_graph')),
+             related_to=('knowledge', "knowledge(action='store')")),
     # -- Inference
     ToolMeta("list_inference_hosts", category="inference", tier="common", operation="read", stability=BETA,
              related_to=('describe_inference_host', 'consult', 'call_model', 'delegate_inference')),
@@ -193,7 +204,7 @@ TOOL_META: Tuple[ToolMeta, ...] = (
              related_to=('identity', 'process_agent_update')),
     # Primary identity tool (auto-creates on first call); renamed from status
     ToolMeta("identity", category="identity", tier="essential", operation="read", stability=STABLE,
-             related_to=('onboard', 'process_agent_update', 'list_agents')),
+             related_to=('onboard', 'process_agent_update', "agent(action='list')")),
     # Binds the transport session to an identity (session-start hook)
     ToolMeta("bind_session", category="identity", tier="common", operation="write", stability=BETA,
              related_to=('onboard', 'identity', 'start_session')),
@@ -222,9 +233,10 @@ TOOL_META: Tuple[ToolMeta, ...] = (
     # Router: get reads; set writes (privileged)
     ToolMeta("config", category="config", tier="advanced", operation="write", stability=BETA,
              related_to=('get_thresholds', 'set_thresholds')),
-    # Router: history reads; file writes to disk
+    # Router: history reads; file writes to disk. Related to what its flat
+    # predecessor get_system_history was related to, not to its own action.
     ToolMeta("export", category="export", tier="advanced", operation="write", stability=BETA,
-             related_to=('get_system_history', 'observe')),
+             related_to=('get_governance_metrics', 'observe')),
     # Multi-agent coordination protocol state
     ToolMeta("cirs_protocol", category="core", tier="advanced", operation="write", stability=BETA,
              related_to=('dialectic', 'self_recovery')),
@@ -245,7 +257,7 @@ TOOL_META: Tuple[ToolMeta, ...] = (
              related_to=('dialectic', 'self_recovery', 'consult')),
     # Router: get / list read; request / thesis / antithesis / synthesis / reassign write
     ToolMeta("dialectic", category="dialectic", tier="common", operation="write", stability=BETA,
-             related_to=('request_dialectic_review', 'process_agent_update')),
+             related_to=('request_review', 'process_agent_update')),
     # Active agents with their EISV vectors
     ToolMeta("dashboard", category="observability", tier="advanced", operation="read", stability=BETA,
              related_to=('observe', 'health_check')),

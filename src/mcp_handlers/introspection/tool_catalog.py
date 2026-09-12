@@ -118,6 +118,93 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# One presentation record per src/tool_meta.py category: how list_tools
+# labels a category. Which tools sit in a category is the roster's business
+# (tool_meta.TOOL_CATEGORIES, read through TOOL_RELATIONSHIPS); nothing here
+# may name a tool.
+#
+# Until 2026-09-12 the full list_tools view carried a hand-written
+# `categories` dict beside the derived `categories_summary`. It predated the
+# router consolidation and was never regenerated: of the 47 names it listed,
+# 30 were dispatch-only twins an MCP client cannot call (`list_agents`,
+# `store_knowledge_graph`, `get_server_info`, `submit_thesis`, ...) and it
+# omitted 33 of the 50 advertised names, every router and workflow alias among
+# them (F1 of docs/operations/tool-surface-audit-2026-09-12.md). The labels
+# are what was worth keeping; they live here so the names cannot come back.
+#
+# `priority` orders the categories for a reader (identity first); it is not a
+# tier and nothing in the runtime branches on it. `for_new_agents` marks the
+# two categories the getting-started block points a fresh caller at.
+CATEGORY_PRESENTATION: Dict[str, Dict[str, Any]] = {
+    "identity": {
+        "icon": "🚀", "name": "Identity & Onboarding", "priority": 1, "for_new_agents": True,
+        "description": "Get started - create your identity and set up your session",
+    },
+    "core": {
+        "icon": "💬", "name": "Core Governance", "priority": 2, "for_new_agents": True,
+        "description": "Main tools for sharing work and getting feedback",
+    },
+    "lifecycle": {
+        "icon": "👥", "name": "Agent Lifecycle", "priority": 3, "for_new_agents": False,
+        "description": "Manage agents, view metadata, and handle agent states",
+    },
+    "knowledge": {
+        "icon": "💡", "name": "Knowledge Graph", "priority": 4, "for_new_agents": False,
+        "description": "Store and search discoveries, insights, and notes",
+    },
+    "observability": {
+        "icon": "👁️", "name": "Observability", "priority": 5, "for_new_agents": False,
+        "description": "Monitor agents, compare patterns, and detect anomalies",
+    },
+    "inference": {
+        "icon": "🧠", "name": "Inference", "priority": 6, "for_new_agents": False,
+        "description": "Ask an advisory model, and list the hosts that serve one",
+    },
+    "export": {
+        "icon": "📊", "name": "Export & History", "priority": 7, "for_new_agents": False,
+        "description": "Export governance history and system data",
+    },
+    "config": {
+        "icon": "⚙️", "name": "Configuration", "priority": 8, "for_new_agents": False,
+        "description": "Configure thresholds and system settings",
+    },
+    "admin": {
+        "icon": "🔧", "name": "Admin & Diagnostics", "priority": 9, "for_new_agents": False,
+        "description": "System administration, health checks, and diagnostics",
+    },
+    "workspace": {
+        "icon": "📁", "name": "Workspace", "priority": 10, "for_new_agents": False,
+        "description": "Workspace health and file validation",
+    },
+    "dialectic": {
+        "icon": "💭", "name": "Dialectic", "priority": 11, "for_new_agents": False,
+        "description": "Structured peer review and recovery protocol",
+    },
+}
+
+
+def category_presentation(category: str) -> Dict[str, Any]:
+    """The presentation record for ``category``, or a generic one for a
+    category the table does not know (a plugin's, or a typo the roster test
+    will catch): unknown categories get a neutral label, never a crash."""
+    record = CATEGORY_PRESENTATION.get(category)
+    if record is not None:
+        return record
+    label = category.title() if isinstance(category, str) and category else "Other"
+    return {
+        "icon": "🔹", "name": label, "priority": len(CATEGORY_PRESENTATION) + 1,
+        "for_new_agents": False, "description": f"{label} tools",
+    }
+
+
+# Served by list_tools(lite=false) under `workflows`. Every entry is an
+# advertised name or a call shape against an advertised router: a step a
+# schema-driven client can take from tools/list alone. Six entries named a
+# dispatch-only twin (`list_agents`, `observe_agent`, `aggregate_metrics`,
+# `detect_anomalies`, `get_system_history`, `export_to_file`) until
+# 2026-09-12; the hint scanner seeds WORKFLOWS by name, and
+# tests/test_list_tools_names_the_wire.py holds the served payload to the
+# mount.
 WORKFLOWS: Dict[str, List[str]] = {
     "model_help": [
         "consult",
@@ -127,14 +214,14 @@ WORKFLOWS: Dict[str, List[str]] = {
         "onboard",  # 🚀 Portal tool - call FIRST
         "process_agent_update",  # Start working
         "identity",  # (Optional) Check/name yourself later
-        "list_agents"  # See who else is here
+        "agent(action='list')",  # See who else is here
     ],
     "monitoring": [
-        "list_agents",
+        "agent(action='list')",
         "get_governance_metrics",
-        "observe_agent",
-        "aggregate_metrics",
-        "detect_anomalies"
+        "observe(action='agent')",
+        "observe(action='aggregate')",
+        "observe(action='anomalies')",
     ],
     "governance_cycle": [
         "process_agent_update",
@@ -145,9 +232,9 @@ WORKFLOWS: Dict[str, List[str]] = {
         "self_recovery"  # Resume if state is safe
     ],
     "export_analysis": [
-        "get_system_history",
-        "export_to_file"
-    ]
+        "export(action='history')",
+        "export(action='file')",
+    ],
 }
 
 
