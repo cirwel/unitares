@@ -29,7 +29,7 @@ seams stay visible instead of being rediscovered each incident.
 ```
 
 Key property: agents never talk to each other directly. Everything rendezvous
-through the hub and the DB. ~51 tools auto-register through one `@mcp_tool`
+through the hub and the DB. Every tool auto-registers through one `@mcp_tool`
 decorator and one dispatch path, so there is one registration truth, not one
 per handler.
 
