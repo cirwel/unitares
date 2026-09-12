@@ -300,14 +300,17 @@ def test_extra_argument_passthrough_survives_the_schema_replacement():
 # one of the values tried.
 #
 # Measured 2026-09-12 on the full surface: 507 properties across 50 tools,
-# 862 boundary values, none unsynthesizable, none rejected by the transport,
+# 964 boundary values, none unsynthesizable, none rejected by the transport,
 # and six rejected by a handler for the one recorded catalog imprecision below.
 
 _UNSYNTHESIZABLE = object()
 
-#: Cap on values tried per property, so a wide ``anyOf`` of enums cannot turn
-#: this into a combinatorial walk. Generous next to the widest real property.
-_MAX_CANDIDATES = 8
+# There is deliberately NO cap on values per property. A first draft capped at
+# eight, and the catalog immediately exceeded it: nine properties carry enums of
+# 9 to 15 members (``sync_state.task_type`` is 15), so the cap was silently
+# dropping members while a comment claimed every member was tried. A cap here
+# cannot be chosen without deciding which violations are acceptable to miss,
+# which is a standard this file has no business setting quietly.
 
 # Advertised string branches the handler is stricter than. These parameters take
 # a number in [0, 1], a named level ("trivial" ... "very_high"), or a
@@ -363,8 +366,8 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
         return [schema["const"]]
     if schema.get("enum"):
         # Every member: a bogus one added anywhere in the list must be caught,
-        # not only when it happens to be first.
-        return list(schema["enum"])[:_MAX_CANDIDATES]
+        # not only when it happens to be first or to fall inside a cap.
+        return list(schema["enum"])
 
     for keyword in ("anyOf", "oneOf"):
         if keyword in schema:
@@ -373,7 +376,7 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
                 if isinstance(branch, dict) and branch.get("type") == "null":
                     continue
                 values.extend(_candidate_values(branch, defs, depth + 1))
-            return values[:_MAX_CANDIDATES]
+            return values
 
     json_type = schema.get("type")
     if isinstance(json_type, list):
@@ -403,22 +406,46 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
     if json_type == "boolean":
         return [True, False]
     if json_type == "array":
-        values = []
-        if int(schema.get("minItems") or 0) == 0:
-            values.append([])
+        # Cardinality is a bound like any other: a schema saying exactly three
+        # items must not be answered with one. BootstrapStateParams.ethical_drift
+        # declares minItems and maxItems of 3, and an earlier draft handed it a
+        # single-element list, i.e. a value its own schema calls illegal.
         items = _candidate_values(schema.get("items") or {"type": "string"}, defs, depth + 1)
-        if items:
-            values.append([items[0]])
+        if not items:
+            return []
+        low = int(schema.get("minItems") or 0)
+        high = schema.get("maxItems")
+        high = high if isinstance(high, int) and high >= low else None
+        values: list = [[items[0]] * low]
+        if high is not None and high != low:
+            values.append([items[0]] * high)
+        # The shortest and longest arrays above test cardinality but carry only
+        # the first item candidate, and an empty one carries none. Every item
+        # candidate must also appear, at a length that holds an item, or the
+        # bounds of an object inside an array are generated and then discarded:
+        # an overshooting ToolResultEvidence.summary maxLength escaped exactly so.
+        item_length = max(low, 1)
+        if high is not None:
+            item_length = min(item_length, high)
+        if item_length:
+            values.extend([value] * item_length for value in items)
         return values
     if json_type == "object":
-        instance: dict[str, Any] = {}
         properties = schema.get("properties") or {}
+        base: dict[str, Any] = {}
         for name in schema.get("required") or []:
             nested = _candidate_values(properties.get(name) or {}, defs, depth + 1)
             if not nested:
                 return []
-            instance[name] = nested[0]
-        return [instance]
+            base[name] = nested[0]
+        # A nested field's bounds are as advertised as a top-level one's, and
+        # fourteen of them carry a constraint. Vary one at a time off the base,
+        # the same walk this test does at the top level.
+        instances = [base]
+        for name, definition in properties.items():
+            for value in _candidate_values(definition, defs, depth + 1):
+                instances.append({**base, name: value})
+        return instances
     if json_type == "null":
         return [None]
     return []
@@ -455,7 +482,7 @@ def test_every_advertised_value_survives_both_validation_boundaries():
 
     A property the helper cannot synthesize is counted and named rather than
     silently passed over, so this cannot decay into a test that checks nothing.
-    Measured 2026-09-12: 507 properties, 862 boundary values, none
+    Measured 2026-09-12: 507 properties, 964 boundary values, none
     unsynthesizable, none rejected outside the recorded exemption.
     """
     from src import mcp_server
@@ -467,7 +494,8 @@ def test_every_advertised_value_survives_both_validation_boundaries():
     unsynthesizable: list[str] = []
     transport_rejected: list[str] = []
     handler_rejected: list[str] = []
-    exempted: list[str] = []
+    stale_exemptions: list[str] = []
+    exercised_exemptions: set[tuple[str, str]] = set()
 
     for name, tool in sorted(mcp_server.mcp._tool_manager._tools.items()):
         schema = tool.parameters or {}
@@ -481,16 +509,23 @@ def test_every_advertised_value_survives_both_validation_boundaries():
         base: dict[str, Any] = {}
         if alias is not None and alias.inject_action:
             base["action"] = alias.inject_action
-        skip_tool = False
-        for required in schema.get("required") or []:
-            value = _synthesize(properties.get(required) or {}, defs)
-            if value is _UNSYNTHESIZABLE:
-                unsynthesizable.append(f"{name}.{required} (required)")
-                skip_tool = True
-                break
-            base[required] = value
-        if skip_tool:
+        # If a required field cannot be built, no instance for this tool is
+        # valid, so every one of its properties goes unchecked. Name all of
+        # them: recording only the required field would let the rest vanish
+        # from every counter while the report looked like one small gap.
+        unbuildable = [
+            required
+            for required in schema.get("required") or []
+            if _synthesize(properties.get(required) or {}, defs) is _UNSYNTHESIZABLE
+        ]
+        if unbuildable:
+            unsynthesizable.append(
+                f"{name}: required {unbuildable} cannot be synthesized, so all "
+                f"{len(properties)} of its properties went unchecked"
+            )
             continue
+        for required in schema.get("required") or []:
+            base[required] = _synthesize(properties.get(required) or {}, defs)
 
         for prop, definition in properties.items():
             candidates = _candidate_values(definition, defs)
@@ -511,15 +546,22 @@ def test_every_advertised_value_survives_both_validation_boundaries():
                 exempt = isinstance(value, str) and (
                     (canonical, prop) in _ADVERTISED_STRING_WIDER_THAN_HANDLER
                 )
-                if handler_model is not None and not exempt:
+                if handler_model is not None:
                     try:
                         handler_model.model_validate(instance)
                     except ValidationError as exc:
-                        handler_rejected.append(
-                            f"{name}.{prop}={shown} -> {canonical}: {exc.errors()[:1]}"
-                        )
+                        if not exempt:
+                            handler_rejected.append(
+                                f"{name}.{prop}={shown} -> {canonical}: {exc.errors()[:1]}"
+                            )
+                    else:
+                        # An exemption records that the handler REFUSES this.
+                        # If it now accepts, the entry describes nothing and has
+                        # to go, or it silently suppresses a real check forever.
+                        if exempt:
+                            stale_exemptions.append(f"{name}.{prop}={shown}")
                 if exempt:
-                    exempted.append(f"{name}.{prop}={shown}")
+                    exercised_exemptions.add((canonical, prop))
                 checked += 1
 
     assert not transport_rejected, (
@@ -533,17 +575,32 @@ def test_every_advertised_value_survives_both_validation_boundaries():
         f"({len(handler_rejected)}):\n  " + "\n  ".join(handler_rejected)
     )
     assert checked, "no advertised property was exercised; the check is vacuous"
-    # The exemption is only honest while it still describes something real. If
-    # the catalog is narrowed, or the handler widened, this fires and the entry
-    # comes out rather than sitting there implying a guard it no longer needs.
-    assert exempted, (
-        "no advertised value hit _ADVERTISED_STRING_WIDER_THAN_HANDLER, so the "
-        "exemption no longer describes the catalog. Delete the stale entries."
+
+    # The exemption stays honest only while it still describes something real,
+    # which takes two checks rather than one. Checking the handler still
+    # REFUSES catches a widened handler; requiring every declared entry to be
+    # exercised catches a narrowed catalog one entry at a time. A single
+    # "something matched" assertion caught neither: three stale entries would
+    # have sat behind one live one.
+    assert not stale_exemptions, (
+        "the handler now ACCEPTS values _ADVERTISED_STRING_WIDER_THAN_HANDLER "
+        "exempts, so those entries suppress a check that would pass. Remove them "
+        f"({len(stale_exemptions)}):\n  " + "\n  ".join(stale_exemptions)
     )
-    # A few unmodelled constructs are tolerable; a wave of them means the helper
-    # stopped keeping up with the catalog and the invariant is going unchecked.
-    assert len(unsynthesizable) <= checked // 20, (
-        f"{len(unsynthesizable)} of {checked + len(unsynthesizable)} advertised "
-        "properties could not be synthesized, so the invariant is largely "
-        f"unchecked. Extend _synthesize for: {unsynthesizable[:10]}"
+    unexercised = _ADVERTISED_STRING_WIDER_THAN_HANDLER - exercised_exemptions
+    assert not unexercised, (
+        "these exemptions were never reached, so the catalog no longer advertises "
+        f"the branch they excuse. Delete them: {sorted(unexercised)}"
+    )
+
+    # No allowance for constructs the helper cannot model. A tolerated fraction
+    # would be a deciding standard chosen silently — how much of the surface is
+    # acceptable to leave unchecked — and this repo requires such a standard to
+    # be stated as a choice rather than absorbed. So a new `pattern` or `format`
+    # fails here, and the fix is to model it or to name it, not to fall inside
+    # a threshold.
+    assert not unsynthesizable, (
+        "advertised properties the helper cannot synthesize, so the invariant "
+        "went unchecked for them. Extend _candidate_values, or name the construct "
+        f"deliberately ({len(unsynthesizable)}):\n  " + "\n  ".join(unsynthesizable)
     )
