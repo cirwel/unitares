@@ -278,3 +278,205 @@ def test_extra_argument_passthrough_survives_the_schema_replacement():
     assert accepted["harness_type"] == "r6_dogfood"
     assert "harness_type" not in tool.parameters["properties"]
     assert tool.parameters["properties"]["complexity"]["default"] == 0.5
+
+
+# ---------------------------------------------------------------------------
+# advertise-subset-of-accept
+# ---------------------------------------------------------------------------
+# Replacing the advertised schema made a tool's contract two objects rather than
+# one: the catalog schema says what a caller is told, and the wrapper's argument
+# model decides what the transport accepts. They are built from the same Pydantic
+# model, so they agree today, but nothing was checking that they still do — the
+# suite pinned exactly one instance of it (delegate_inference.timeout_s). The
+# direction that matters is advertise-narrow / accept-wide: a value the schema
+# calls legal must reach dispatch. The reverse is fine and deliberate, because
+# the wrapper widens types for coercion.
+#
+# Measured 2026-09-12 on the full surface: 507 properties across 50 tools, none
+# unsynthesizable, none rejected.
+
+_UNSYNTHESIZABLE = object()
+
+
+def _resolve_ref(schema: Any, defs: dict) -> Any:
+    """Follow ``$ref`` into ``$defs``; ``None`` for a ref this file cannot follow."""
+    for _ in range(10):
+        if not (isinstance(schema, dict) and "$ref" in schema):
+            return schema
+        ref = schema["$ref"]
+        if not ref.startswith("#/$defs/"):
+            return None
+        schema = defs.get(ref.rsplit("/", 1)[-1])
+    return schema
+
+
+def _synthesize(schema: Any, defs: dict, depth: int = 0) -> Any:
+    """A minimal value the advertised ``schema`` calls legal.
+
+    Deliberately minimal rather than random: the point is to exercise the
+    boundary a caller reading the schema would aim at — the shortest string, the
+    lowest permitted number, the first enum member — because those are where an
+    advertised bound and an accepting model are most likely to disagree.
+
+    Returns ``_UNSYNTHESIZABLE`` for a construct this helper does not model
+    (a ``pattern``, a ``format``, an unresolvable ref). That is a gap in the
+    helper, not a failure of the invariant, and the test reports the two
+    separately.
+    """
+    schema = _resolve_ref(schema, defs)
+    if not isinstance(schema, dict) or depth > 6:
+        return _UNSYNTHESIZABLE
+    if "const" in schema:
+        return schema["const"]
+    if schema.get("enum"):
+        return schema["enum"][0]
+    for keyword in ("anyOf", "oneOf"):
+        if keyword in schema:
+            branches = [
+                branch
+                for branch in schema[keyword]
+                if not (isinstance(branch, dict) and branch.get("type") == "null")
+            ] or schema[keyword]
+            for branch in branches:
+                value = _synthesize(branch, defs, depth + 1)
+                if value is not _UNSYNTHESIZABLE:
+                    return value
+            return _UNSYNTHESIZABLE
+
+    json_type = schema.get("type")
+    if isinstance(json_type, list):
+        json_type = next((t for t in json_type if t != "null"), None)
+
+    if json_type == "string":
+        if "pattern" in schema or schema.get("format"):
+            return _UNSYNTHESIZABLE
+        value = "x" * max(1, int(schema.get("minLength") or 1))
+        maximum = schema.get("maxLength")
+        return value[:maximum] if isinstance(maximum, int) else value
+    if json_type in ("integer", "number"):
+        lower = schema.get("minimum", schema.get("exclusiveMinimum"))
+        value = lower if isinstance(lower, (int, float)) else 1
+        if "exclusiveMinimum" in schema and schema.get("minimum") is None:
+            value += 1
+        upper = schema.get("maximum")
+        if isinstance(upper, (int, float)) and value > upper:
+            value = upper
+        return int(value) if json_type == "integer" else float(value)
+    if json_type == "boolean":
+        return True
+    if json_type == "array":
+        if int(schema.get("minItems") or 0) == 0:
+            return []
+        item = _synthesize(schema.get("items") or {"type": "string"}, defs, depth + 1)
+        return [] if item is _UNSYNTHESIZABLE else [item]
+    if json_type == "object":
+        instance: dict[str, Any] = {}
+        properties = schema.get("properties") or {}
+        for name in schema.get("required") or []:
+            value = _synthesize(properties.get(name) or {}, defs, depth + 1)
+            if value is _UNSYNTHESIZABLE:
+                return _UNSYNTHESIZABLE
+            instance[name] = value
+        return instance
+    if json_type == "null":
+        return None
+    return _UNSYNTHESIZABLE
+
+
+def test_every_advertised_value_survives_both_validation_boundaries():
+    """A value the mount calls legal must reach the handler, through both gates.
+
+    There are two, and they refuse different things, so the test reports them
+    separately because the fixes differ:
+
+    - ``fn_metadata.arg_model``, built from the typed wrapper's signature, is
+      what the transport applies before dispatch. It is deliberately WIDE (a
+      boolean parameter also accepts ``"true"``, a literal is widened to
+      ``str``), so a rejection here means the advertised schema is structurally
+      incompatible with the wrapper — the one way the schema swap could have
+      broken a caller that generated bindings from the listing.
+    - the handler's own params model, which ``validate_params`` applies, is
+      where the advertised bounds and enums are actually enforced. A rejection
+      here means the mount advertises a value that dies one layer deeper: the
+      shape a hand-authored override in ``ALIAS_SCHEMA_PROPERTY_OVERRIDES``
+      could produce, since those are written by hand rather than derived.
+
+    An action-injecting alias strips ``action`` from its advertised schema
+    while the router's model requires it, so the injected action is supplied
+    here exactly as dispatch supplies it. Without that, all 48 alias properties
+    fail on a missing field rather than on anything this test is about.
+
+    A property the helper cannot synthesize is counted and named rather than
+    silently passed over, so this cannot decay into a test that checks nothing.
+    Measured 2026-09-12: 507 properties, none unsynthesizable, none rejected.
+    """
+    from src import mcp_server
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+    from src.tool_schemas import get_pydantic_schemas
+
+    handler_models = get_pydantic_schemas()
+    checked = 0
+    unsynthesizable: list[str] = []
+    transport_rejected: list[str] = []
+    handler_rejected: list[str] = []
+
+    for name, tool in sorted(mcp_server.mcp._tool_manager._tools.items()):
+        schema = tool.parameters or {}
+        defs = schema.get("$defs") or {}
+        properties = schema.get("properties") or {}
+        canonical, alias = resolve_tool_alias(name)
+        handler_model = handler_models.get(canonical)
+
+        # Required properties ride along on every instance, or a model would
+        # reject for a missing field rather than for the property under test.
+        base: dict[str, Any] = {}
+        if alias is not None and alias.inject_action:
+            base["action"] = alias.inject_action
+        skip_tool = False
+        for required in schema.get("required") or []:
+            value = _synthesize(properties.get(required) or {}, defs)
+            if value is _UNSYNTHESIZABLE:
+                unsynthesizable.append(f"{name}.{required} (required)")
+                skip_tool = True
+                break
+            base[required] = value
+        if skip_tool:
+            continue
+
+        for prop, definition in properties.items():
+            value = _synthesize(definition, defs)
+            if value is _UNSYNTHESIZABLE:
+                unsynthesizable.append(f"{name}.{prop}")
+                continue
+            instance = {**base, prop: value}
+            try:
+                tool.fn_metadata.arg_model.model_validate(instance)
+            except ValidationError as exc:
+                transport_rejected.append(f"{name}.{prop}={value!r}: {exc.errors()[:1]}")
+            if handler_model is not None:
+                try:
+                    handler_model.model_validate(instance)
+                except ValidationError as exc:
+                    handler_rejected.append(
+                        f"{name}.{prop}={value!r} -> {canonical}: {exc.errors()[:1]}"
+                    )
+            checked += 1
+
+    assert not transport_rejected, (
+        "the mount advertises values its own argument model refuses, so a client "
+        "generating bindings from tools/list would build a call the transport "
+        f"rejects ({len(transport_rejected)}):\n  " + "\n  ".join(transport_rejected)
+    )
+    assert not handler_rejected, (
+        "the mount advertises values the handler's own model refuses, so a "
+        "schema-conforming call reaches dispatch and fails there "
+        f"({len(handler_rejected)}):\n  " + "\n  ".join(handler_rejected)
+    )
+    assert checked, "no advertised property was exercised; the check is vacuous"
+    # A few unmodelled constructs are tolerable; a wave of them means the helper
+    # stopped keeping up with the catalog and the invariant is going unchecked.
+    assert len(unsynthesizable) <= checked // 20, (
+        f"{len(unsynthesizable)} of {checked + len(unsynthesizable)} advertised "
+        "properties could not be synthesized, so the invariant is largely "
+        f"unchecked. Extend _synthesize for: {unsynthesizable[:10]}"
+    )
