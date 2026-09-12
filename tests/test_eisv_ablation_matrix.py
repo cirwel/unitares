@@ -726,6 +726,72 @@ def test_selective_null_reports_the_distribution_of_the_reported_maximum():
     assert null.p95 is not None and null.p95 >= null.median
 
 
+def _golden_rows():
+    """The fixture the characterization values below were derived from.
+
+    Shared by both seeds so a change to the fixture cannot silently move one
+    golden and leave the other looking stable.
+    """
+    return [
+        _row(
+            idx,
+            bad=(idx % 9 == 0),
+            risk=0.1 + (idx % 5) / 10.0,
+            agent=f"agent-{idx % 6}",
+        )
+        for idx in range(180)
+    ]
+
+
+@pytest.mark.parametrize(
+    "seed, clusters, median, p95, selective_p",
+    [
+        (7, 180, -0.049319727891, 0.20816326530599985, 0.2692307692307692),
+        (11, 180, -0.008503401361, 0.17482993197279983, 0.3076923076923077),
+    ],
+)
+def test_selective_null_is_pinned_at_a_fixed_seed(seed, clusters, median, p95, selective_p):
+    """CHARACTERIZATION. These numbers assert nothing about correctness; they
+    assert that the instrument is the same instrument.
+
+    Every other test on this estimator asserts shape — that a p-value exists,
+    that it lies in (0, 1], that p95 is at least the median. Shape survives a
+    changed statistic, a changed permutation stream, and a changed p-value
+    formula. The 2026-12-01 read runs from a checkout of master and its receipt
+    records parameters but no code version, so between now and then nothing
+    else would notice a refactor that moved these values.
+
+    The stream is a function of key ORDER and list LENGTH, not only of the seed:
+    random.shuffle consumes a draw count set by len(keys), and keys comes from
+    sorted(blocks, key=_cluster_sort_key). So a change to _cluster_key,
+    _cluster_sort_key, the <3-cluster branch, PRIOR_STATE_FIELDS, or
+    _best_delta_value moves these numbers even with the seed untouched. That is
+    what this test is for.
+
+    Two seeds, because a change can preserve one stream by coincidence and not
+    two.
+
+    If you are here because this test failed: do not re-derive the values to
+    make it pass. Establish first whether the registered read's output was meant
+    to change. If it was, re-derive them in the same commit and say in the
+    message what moved and why.
+    """
+    null = matrix_module.estimate_selective_null(
+        _golden_rows(),
+        observed_best_delta=0.05,
+        resamples=25,
+        seed=seed,
+        min_feature_rows=10,
+    )
+
+    assert null is not None
+    assert null.clusters == clusters
+    assert null.resamples == 25
+    assert null.median == median
+    assert null.p95 == p95
+    assert null.selective_p == selective_p
+
+
 def test_selective_null_reports_that_it_could_not_form_a_null():
     """A slice with no deltas must say so, not silently omit the null."""
     rows = [_row(idx, bad=False, risk=0.2) for idx in range(40)]
