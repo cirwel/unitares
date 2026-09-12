@@ -121,9 +121,7 @@ def _advertise_catalog_schema(registered_tool, schema: dict) -> bool:
     """Make the registered tool advertise ``schema`` — the catalog's — verbatim.
 
     FastMCP derives ``Tool.parameters`` once, at registration, from the typed
-    wrapper's argument model, and reads it in exactly one place: ``list_tools()``.
-    ``Tool.run()`` validates through ``fn_metadata`` and never consults it (the
-    same on mcp 1.x and 2.x). That derivation is lossy: bounds (``minimum``,
+    wrapper's argument model. That derivation is lossy: bounds (``minimum``,
     ``maxLength``, ...), concrete defaults, ``items``, ``additionalProperties``
     and the ``$defs`` of nested models do not survive the signature round trip.
     So until 2026-09-11 a ``/mcp/`` client saw 106 catalog defaults as ``null``
@@ -138,8 +136,35 @@ def _advertise_catalog_schema(registered_tool, schema: dict) -> bool:
     were, by the handler's Pydantic model in ``validate_params``. Pinned by
     tests/test_mcp_schema_parity.py.
 
-    Mutated in place, the way ``apply_alias_schema_property_overrides`` already
-    edited this dict: it is the object FastMCP holds, whichever major built it.
+    WHY THAT IS SAFE, stated precisely, because the obvious version of this
+    sentence is false. Dispatch never consults this dict on either major:
+    ``Tool.run()`` validates through ``fn_metadata``, and FastMCP registers its
+    low-level ``call_tool`` with ``validate_input=False``. On mcp 1.x
+    ``list_tools()`` is then the only reader. On mcp 2.x it is NOT — the
+    streamable-HTTP modern path replays the server's own tools/list and hands
+    the advertised schema to ``validate_mcp_param_headers``
+    (``_streamable_http_modern.py`` -> ``mcp/shared/inbound.py``), which can
+    reject a call before dispatch. That path is inert here for a reason that is
+    a property of the SCHEMA'S CONTENT rather than of the transport or the
+    negotiated protocol version: it iterates only schema positions carrying an
+    ``x-mcp-header`` key, and no UNITARES schema has one, so the loop body
+    never runs. Prefer that reason to a protocol-version argument, which erodes
+    as clients upgrade.
+
+    The consequence to keep in mind before adding a keyword to the catalog:
+    Pydantic's regeneration used to DROP unknown keywords, so before this
+    change nothing a catalog declared could reach that path at all. Now the
+    catalog is the advertised schema, so a future ``x-mcp-header`` in it would
+    arm a live rejection path rather than being silently discarded.
+
+    Mutated in place only for symmetry with
+    ``apply_alias_schema_property_overrides``, which already edited this dict.
+    ``Tool`` is a plain unfrozen pydantic model on both majors, so assigning a
+    new dict would work identically; nothing here depends on the object's
+    identity. The ``deepcopy`` is likewise insurance rather than load-bearing —
+    ``advertised_input_schema`` already returns a fresh object graph per call —
+    and it is kept so that a future caching change upstream cannot alias the
+    catalog into FastMCP's tool.
     """
     parameters = getattr(registered_tool, "parameters", None)
     if not isinstance(parameters, dict) or not isinstance(schema, dict):

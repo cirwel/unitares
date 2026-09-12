@@ -376,18 +376,28 @@ across unrelated changes. The final-listing tests check keep/strip/keep
 behavior independently of catalog policy. Dropping titles preserves
 validation but changes schema fingerprints.
 
-With MCP 2.1.1, brief descriptions and the current search alias, measured
-2026-09-08 as compact UTF-8 JSON `ListToolsResult` objects:
+With MCP 2.1.1 and brief descriptions, measured 2026-09-12 as compact UTF-8
+JSON `ListToolsResult` objects. There is one row because there is one surface:
+since interface release 1.6.0 every legacy profile advertises the same
+complete catalog, so the per-profile table this replaces had been reporting
+sizes no deployment serves.
 
-| Profile | Titles kept | Titles stripped | Saved |
+| `/mcp/` tools/list | Titles kept | Titles stripped | Saved by stripping |
 |---|---:|---:|---:|
-| `minimal` | 16,679 B | 14,945 B | 1,734 B |
-| `standard` | 52,469 B | 46,829 B | 5,640 B |
-| `lite` | 84,734 B | 75,576 B | 9,158 B |
-| `full` | 120,437 B | 107,189 B | 13,248 B |
+| 50 tools, complete catalog | 152,074 B | 138,454 B | 13,620 B |
 
-The earlier #2115 numbers measured the catalog and missed titles regenerated
-by FastMCP. Do not use them as measured MCP savings. `--boilerplate` now
+Schema parity costs 5,395 B of that, and the trade is a judgement worth
+stating rather than absorbing. Advertising the catalog verbatim grew the
+stripped listing from 133,059 B, about 4%, and handed back roughly two fifths
+of what title-stripping saves. What the bytes buy is 106 concrete defaults, the
+bounds on seven parameters, and four nested model definitions that a `/mcp/`
+client previously could not see at all. A client that cannot learn a delegated
+inference times out at 420 seconds is worse off than one paying 5 KB once per
+session. The alternative was not a cheaper parity but a different contract.
+
+The earlier #2115 numbers measured the catalog rather than the MCP listing.
+That distinction no longer exists, because the registrar now advertises the
+catalog itself, so the two surfaces measure the same bytes. `--boilerplate`
 applies the same recursive title transform to the explicitly selected layer.
 The null-union experiment remains diagnostic only: removing the `null`
 alternative changes validation and is not applied to the server.

@@ -11,7 +11,11 @@ registration and listing policy. --surface catalog explicitly measures the
 upstream source definitions instead. Since 2026-09-11 the /mcp/ registrar
 advertises the catalog schema verbatim (src/tool_registration.py), so the two
 surfaces agree byte for byte; a difference between them is a finding -- a
-registration route that bypassed the registrar -- not an expected gap.
+registration route that bypassed the registrar -- not an expected gap. That
+statement is scoped to the governance mount these registrars build. The
+separate gateway server constructs its own instance with hand-decorated tools
+and never calls them, so it is outside both surfaces rather than a violation
+of their agreement.
 Serialization is compact UTF-8 JSON for the result
 object; JSON-RPC IDs, transport framing, compression and client-added context
 are excluded. This does not sample a deployed server or start its lifespan.

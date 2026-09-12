@@ -197,6 +197,11 @@ def test_mount_listing_is_the_catalog_schema_verbatim(
     catalog = _catalog()
     mount = _fresh_mount()
 
+    # An empty catalog would satisfy every assertion below by having nothing to
+    # compare. The sibling tests pin the name sets, so a mount-only tool is
+    # already caught there; this closes the one vacuity that is not.
+    assert catalog, "no catalog tools were built; the comparison would be vacuous"
+
     differing = {
         name: _differing_properties(catalog[name], mount.get(name, {}))
         for name in sorted(catalog)
