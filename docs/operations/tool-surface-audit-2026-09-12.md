@@ -32,6 +32,7 @@ the baseline. All of them pass.
 | `scripts/diagnostics/audit_tool_categories.py` | 0 non-existent names; eleven categories totalling 50 |
 | `scripts/diagnostics/hint_target_advertisement.py --fail-on-finding --classify` | no candidate advertisement mismatches |
 | `scripts/diagnostics/check_doc_health.py --strict` (ghost-tool scan: a backticked identifier with empty parentheses in docs that is neither a registered tool nor an alias) | clean; the first draft of this document tripped it on a non-tool function name, which is the rule working |
+| `mcp-tdqs 0.2.0 lint` (Glama's reference grader, TDQS specification 1.3, deterministic stage only) against both transports | 0 errors, 0 warnings, 50 informational (no output schema on any tool); no tautology, no missing annotations, no undocumented parameters, no shadow candidates; see *Glama and TDQS* below |
 | `python -m src.interface_contract` | byte-identical to `docs/interface-contract.v1.json` (1.6.0, 50 capabilities, `surface_sha256 3bf9f94d…`) |
 | `python -m src.mcp_handlers.stakes_table` | 99 entries (23 high, 76 baseline) |
 | `scripts/diagnostics/tool_surface_cost.py --surface mcp` | 50 tools, 133,061 bytes, identical for every legacy mode label |
@@ -257,6 +258,104 @@ first-contact client that browses thresholds before `start_session` leaves an
 agent behind. Whether that is acceptable is a policy choice. The datum that
 would inform it — how many agent rows were minted by calls to these seven
 names — is answerable from `audit.tool_usage` and was not available here.
+
+## Glama and TDQS
+
+The Glama listing (`glama.ai/mcp/servers/cirwel/unitares`) grades this
+server's tool definitions with the Tool Definition Quality Score (TDQS). The
+listing could not be read from the audit environment: `glama.ai` is refused by
+the egress policy on both available fetch paths, so the page's current
+critique text and score are not reproduced here. The last score the repository
+records is **B 3.0/5.0**, quoted in #2148 (2026-09-10) before that change and
+#2151/#2158 rewrote every advertised description; whether the page has
+re-scored the rewritten surface is unknown from here.
+
+What could be done instead is to run the grader Glama uses. Its reference
+implementation (`mcp-tdqs`, specification 1.3) has a deterministic stage that
+needs no model: context signals, the two hard gates, the shadow prefilter and
+the checklist the specification ranks highest. That stage was run against both
+transports at the baseline: the `/mcp/` FastMCP mount, and the catalog path
+that stdio and `GET /v1/tools` serve, which is what Glama's container proxies.
+
+- Both: 50 tools, 0 errors, 0 warnings, 50 informational findings, all the same
+  rule, `no-output-schema`.
+- Every tool carries annotations, 100% schema description coverage, a
+  non-tautological description, and no flag. The shadow prefilter (a cheaper
+  sibling that may answer the same question) proposed no candidate pair.
+
+So nothing Glama grades deterministically is still open. Whatever the page
+says now comes from the two model-graded stages, and three facts about the
+specification bound what those can say about this surface:
+
+1. **The inputs are `tools/list` only** — name, title, description, input
+   schema, output schema, annotations. The `initialize` instructions string is
+   not among them. #2158 added a paragraph to `build_server_instructions`
+   naming the catalog's eleven areas so the 50-name roster would read as
+   purposeful; the grader never sees that paragraph. Anything meant for TDQS
+   has to be inside a tool definition.
+2. **Tool count is anchored on the raw number.** The coherence dimension
+   *Tool Count Appropriateness* scores 1 at "50+ tools", and coherence is 30%
+   of the overall score, one of four equally weighted dimensions. With the
+   other three at 5 the coherence ceiling is 4.0; with *Disambiguation* and
+   *Naming Consistency* at the 3 their anchors describe for eight alias/twin
+   pairs and a mix of verb-noun and bare-noun names, it is 3.0. Reaching tier
+   A (3.5) then needs a definition-quality score of about 3.7 on the 60% mean
+   + 40% minimum rollup, in which the single weakest tool carries 40% of the
+   weight. This is a fact about the grader's standard, not this audit's. The
+   measurement-authority rule applies in full: a grader's anchor is not a
+   reason to retire a capability, and no such recommendation is made.
+3. **The one lint note names a lever that exists.** Every tool lacks an
+   `outputSchema`, so each description carries the return-value burden alone.
+   The interface contract already defines the lifecycle success envelope
+   (`unitares.lifecycle-envelope.v1`: `success`, `tool`, `next_action`, and
+   the optional state, risk, recovery, memory and raw-governance fields) for
+   the four federation lifecycle capabilities. Declaring it as their output
+   schema is the specification's stated way to relieve those descriptions;
+   whether to do so is a decision point, because the registrar mounts every
+   tool with `structured_output=False` and an output schema commits the
+   server to returning structured content that validates against it.
+
+### F12 — the two transports advertise different parameter contracts (medium)
+
+Comparing the two `tools/list` dumps the grader was fed exposed a difference
+the interface contract only half-describes. `docs/INTERFACE_CONTRACT.md` says
+the hashes "do not certify byte-identical MCP schemas" because FastMCP
+regenerates schemas from typed wrappers. The regeneration also drops content:
+
+- twelve constraints present on the catalog schema are absent from the
+  `/mcp/` mount: `consult.brief` (length 1–32,000), `delegate_inference.prompt`
+  (length 1–100,000) and `.timeout_s` (5–420), `dashboard.limit` (1–100) and
+  `.offset` (≥0), `record_progress_pulse.metric_name` (length 1–128) and
+  `.value` (≥0);
+- 106 non-null defaults the catalog advertises are advertised as `null` on the
+  mount, among them `sync_state.complexity` 0.5, `sync_state.task_type`
+  "mixed", `check_working_state.lite` true, `archive_old_test_agents.dry_run`
+  true and `start_session.resume` true;
+- the `$defs` blocks on `start_session`, `sync_state`, `onboard` and
+  `process_agent_update` are dropped, and every `Optional` parameter becomes
+  an `anyOf` with a null member.
+
+Totals: 138,336 bytes on the catalog path against 132,943 on the mount, the
+five-kilobyte gap `tool_surface_cost.py` already reports without saying what
+is in it. The cause is structural: `create_typed_wrapper` builds a Python
+signature from the JSON schema and FastMCP rebuilds the schema from that
+signature, and neither bounds nor concrete defaults survive the round trip.
+A direct `/mcp/` client therefore cannot see that a check-in defaults to
+complexity 0.5, or that a delegated inference timeout is bounded, while a
+stdio or REST client can, and the grader's *Parameter Semantics* dimension is
+fed different inputs depending on which transport a registry indexes.
+
+Options: carry the constraints and defaults into the typed wrapper's
+`Annotated` field metadata; or overwrite the registered tool's `parameters`
+with the catalog schema after registration, which is what
+`_apply_alias_schema_property_overrides` already does for the alias
+descriptions. Either aligns the two transports; neither changes dispatch.
+
+Reproduce:
+
+```bash
+npx -y mcp-tdqs lint --command "python3 src/mcp_server_std.py" --format markdown
+```
 
 ## Telemetry: what a client pays at connect
 
