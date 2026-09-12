@@ -149,6 +149,40 @@ def _not_advertised_summary(tools_list, mode: str) -> dict:
     }
 
 
+def _orientation_description(
+    tool_name: str,
+    wire_descriptions: Dict[str, str],
+    catalog_descriptions: Dict[str, str],
+) -> str:
+    """The one-line description list_tools serves for ``tool_name``.
+
+    An advertised name gets the first line of the description ``tools/list``
+    serves for it, so the two discovery surfaces cannot disagree about the
+    same tool. Until 2026-09-12 ``tool_catalog.TOOL_DESCRIPTION_OVERRIDES``
+    outranked the wire here, and the rewrites of #2148, #2151 and #2158
+    corrected what an MCP client read while orientation kept the old
+    one-liners for 28 of the 50 advertised names (F2 of
+    docs/operations/tool-surface-audit-2026-09-12.md). The override table now
+    carries dispatch-only alias names only, which this listing never shows,
+    so it is not consulted.
+
+    A registered name the deployment does not advertise (a plugin tool
+    registered after the server mounted its table, or the degraded path where
+    the public catalog is unavailable) keeps the pre-existing fallback chain
+    minus the override: the schema catalog, then the decorator description,
+    then a generic placeholder.
+    """
+    from src.tool_schemas import first_line
+    from ..decorators import get_tool_description
+
+    description = (
+        wire_descriptions.get(tool_name)
+        or catalog_descriptions.get(tool_name)
+        or get_tool_description(tool_name)
+    )
+    return first_line(description) or f"Tool: {tool_name}"
+
+
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -191,14 +225,18 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     from src.tool_modes import TOOL_MODE, TOOL_TIERS
     interface_contract = get_interface_contract_summary(TOOL_MODE)
 
-    # Orientation and all transports share the same complete catalog.
+    # Orientation and all transports share the same complete catalog, and the
+    # definitions tools/list serves are also where each advertised name's
+    # description comes from (_orientation_description).
     try:
-        advertised_names = {
-            tool.name for tool in get_public_tool_definitions(TOOL_MODE)
-        } or None
+        public_definitions = list(get_public_tool_definitions(TOOL_MODE))
     except Exception:
-        advertised_names = None
+        public_definitions = []
+    advertised_names = {tool.name for tool in public_definitions} or None
     # An unavailable/empty schema catalog fails open to registration.
+    wire_descriptions = {
+        tool.name: tool.description or "" for tool in public_definitions
+    }
 
     # Deprecated tools - hidden from list_tools by default.
     # Two independent sources, and both are needed:
@@ -241,36 +279,21 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     tool_relationships = tool_catalog.TOOL_RELATIONSHIPS
     workflows = tool_catalog.WORKFLOWS
-    tool_descriptions = tool_catalog.TOOL_DESCRIPTION_OVERRIDES
-    
+
     # Build tools list from registered tools with metadata from decorators
-    from ..decorators import get_tool_timeout, get_tool_description
-    # Import tool schemas to get proper descriptions
+    from ..decorators import get_tool_timeout
+    # The schema catalog is the description fallback for a registered name
+    # the deployment does not advertise; an advertised name reads the wire
+    # definition itself (wire_descriptions).
     from src.tool_schemas import get_tool_definitions
-    schema_tools = {t.name: t.description for t in get_tool_definitions()}
-    
+    schema_tools = {t.name: t.description or "" for t in get_tool_definitions()}
+
     tools_list = []
     for tool_name in registered_tool_names:
-        # Priority: 1. tool_descriptions dict, 2. schema description, 3. decorator description, 4. fallback
-        # Check each source explicitly to avoid empty string issues
-        description = None
-        if tool_name in tool_descriptions and tool_descriptions[tool_name]:
-            description = tool_descriptions[tool_name]
-        elif tool_name in schema_tools and schema_tools[tool_name]:
-            description = schema_tools[tool_name]
-        else:
-            desc_from_decorator = get_tool_description(tool_name)
-            if desc_from_decorator:
-                description = desc_from_decorator
-        
-        # Fallback to generic description if none found
-        if not description:
-            description = f"Tool: {tool_name}"
-        
-        # Extract first line of description for brevity (full description available in tool schemas)
-        if description and '\n' in description:
-            description = description.split('\n')[0]
-        
+        description = _orientation_description(
+            tool_name, wire_descriptions, schema_tools
+        )
+
         # Determine tool tier
         tool_tier = "common"  # Default
         if tool_name in TOOL_TIERS["essential"]:
@@ -827,7 +850,11 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         stability = get_tool_stability(tool_name).value
 
         from src.tool_descriptions import TOOL_DESCRIPTIONS
-        from src.tool_schemas import advertised_input_schema, get_pydantic_schemas
+        from src.tool_schemas import (
+            advertised_input_schema,
+            first_line,
+            get_pydantic_schemas,
+        )
 
         schema_model = get_pydantic_schemas().get(tool_name)
         tool_schema = None
@@ -897,6 +924,11 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 tool_schema,
                 inject_action=bool(alias_info.inject_action),
             )
+            # A workflow alias describes itself with its migration note, which
+            # is the text tools/list serves for it (build_alias_tool_definition).
+            # The override table holds dispatch-only alias names only, so it
+            # answers here for names that are never on the wire (list_agents)
+            # and cannot put a second description on an advertised one.
             description = (
                 tool_catalog.TOOL_DESCRIPTION_OVERRIDES.get(requested_tool_name)
                 or alias_info.migration_note
@@ -956,7 +988,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     }
 
         if not include_full_description:
-            description = (description or "").splitlines()[0].strip() if description else ""
+            description = first_line(description)
 
         # Helper function to get common patterns (shared between both branches)
         def get_common_patterns(tool_name: str) -> dict:
@@ -1052,7 +1084,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
                 response_data = {
                     "tool": requested_tool_name,
-                    "description": (description or "").splitlines()[0].strip(),
+                    "description": first_line(description),
                     "tier": tool_tier,
                     "tier_note": tier_guidance.get(tool_tier, ""),
                     "operation": _describe_operation(requested_tool_name, tool_name, alias_info),  # read/write/admin
@@ -1113,7 +1145,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
                 response_data = {
                     "tool": requested_tool_name,
-                    "description": (description or "").splitlines()[0].strip(),
+                    "description": first_line(description),
                     "parameters": params_simple,
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }
