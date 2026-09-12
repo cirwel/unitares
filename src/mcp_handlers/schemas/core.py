@@ -580,20 +580,47 @@ class CirsProtocolParams(AgentIdentityMixin):
     # SelfRecoveryParams carries, see schemas/router_actions.py. The tool is
     # not an action_router: `protocol` selects the sub-handler and `action` is
     # routed one level down, so the keys are the union across protocols and
-    # `protocol` itself belongs to every action. Only parameters on this
-    # schema are named; the sub-handlers read more than the wire declares.
+    # `protocol` itself belongs to every action. `query` on void_alert and
+    # `query` on state_announce take different filters, so each field's
+    # description names the protocol that reads it.
+    #
+    # Every key a protocol handler reads is declared here, with the handler's
+    # own default where it has one. Two reasons, both load-bearing. The MCP
+    # wrapper builds FastMCP's argument model from these properties and drops
+    # any other key before dispatch (REST and in-process callers are merged
+    # back by the middleware, the /mcp/ transport is not). And the middleware
+    # hands the handler every declared field, None included, so a declared
+    # field's default is what the handler receives when the caller omits it:
+    # `limit` declared as Optional[int]=None reached `int(arguments.get(
+    # "limit", 50))` as None and every query action failed with a TypeError
+    # through dispatch, on every transport, until 2026-09-12. A field declared
+    # with no default must therefore be one the handler reads None-safely.
+    #
     # tests/test_router_action_fields.py holds the keys to the decorator's
-    # known_actions.
+    # known_actions; tests/test_cirs_protocol_wire_params.py holds the field
+    # list to the keys the protocol handlers actually read.
     ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
-        "emit": ("protocol", "severity"),
-        "query": ("protocol", "target_agent_id", "limit"),
+        "emit": (
+            "protocol", "severity", "context_ref",  # void_alert
+            "include_trajectory",  # state_announce
+        ),
+        "query": (
+            "protocol", "target_agent_id", "limit",
+            "filter_agent_id", "filter_severity", "since_hours",  # void_alert
+            "agent_ids", "regime", "max_risk", "min_coherence",  # state_announce
+            "source_agent_id", "min_similarity",  # coherence_report
+            "as_initiator", "as_target", "status_filter",  # governance_action
+        ),
         "compute": ("protocol", "target_agent_id"),
-        "set": ("protocol",),
+        "set": (
+            "protocol", "trust_default", "trust_overrides", "void_response_policy",
+            "max_delegation_complexity", "accept_coherence_threshold",
+        ),
         "get": ("protocol", "target_agent_id"),
         "list": ("protocol",),
-        "initiate": ("protocol", "target_agent_id"),
-        "respond": ("protocol",),
-        "status": ("protocol",),
+        "initiate": ("protocol", "target_agent_id", "action_type", "payload"),
+        "respond": ("protocol", "action_id", "accept", "response_data"),
+        "status": ("protocol", "action_id"),
     }
     protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(
         ...,
@@ -620,10 +647,155 @@ class CirsProtocolParams(AgentIdentityMixin):
     )
     target_agent_id: Optional[str] = Field(
         None,
-        description="Target agent (for the coherence_report pairwise-similarity protocol)",
+        description=(
+            "The other agent: coherence_report compute (and an optional query "
+            "filter), boundary_contract get, governance_action initiate."
+        ),
     )
-    severity: Optional[Literal["warning", "critical"]] = Field(None, description="Alert severity (for void_alert)")
-    limit: Optional[int] = Field(None, description="Max results for queries")
+    limit: int = Field(
+        50,
+        description="Max results for void_alert, state_announce and coherence_report query. Default 50.",
+    )
+    # --- void_alert ---
+    severity: Optional[Literal["warning", "critical"]] = Field(
+        None,
+        description="Alert severity for void_alert emit. Omit to auto-detect it from the void threshold.",
+    )
+    context_ref: Optional[str] = Field(
+        None,
+        description="Free-form reference attached to a void_alert emit (a task, file or ticket).",
+    )
+    filter_agent_id: Optional[str] = Field(
+        None,
+        description="Only alerts from this agent (void_alert query).",
+    )
+    filter_severity: Optional[str] = Field(
+        None,
+        description="Only alerts of this severity, warning or critical (void_alert query).",
+    )
+    since_hours: float = Field(
+        1.0,
+        description="Look-back window in hours for void_alert query. Default 1.0.",
+    )
+    # --- state_announce ---
+    include_trajectory: bool = Field(
+        True,
+        description="Attach the trajectory signature to a state_announce emit. Default true.",
+    )
+    agent_ids: Optional[List[str]] = Field(
+        None,
+        description="Only announcements from these agents (state_announce query).",
+    )
+    regime: Optional[str] = Field(
+        None,
+        description=(
+            "Only announcements in this regime: divergence, transition, "
+            "convergence or stable (state_announce query)."
+        ),
+    )
+    max_risk: Optional[float] = Field(
+        None,
+        description="Only announcements at or below this risk score (state_announce query).",
+    )
+    min_coherence: Optional[float] = Field(
+        None,
+        description=(
+            "Retired filter that state_announce query refuses with "
+            "UNSUPPORTED_COHERENCE_FILTER; filter by max_risk, regime or "
+            "agent_ids instead. Declared so the refusal reaches the caller on "
+            "every transport rather than the filter being silently ignored."
+        ),
+    )
+    # --- coherence_report ---
+    source_agent_id: Optional[str] = Field(
+        None,
+        description="Only reports computed by this agent (coherence_report query).",
+    )
+    min_similarity: Optional[float] = Field(
+        None,
+        description="Only reports at or above this similarity score (coherence_report query).",
+    )
+    # --- boundary_contract ---
+    trust_default: str = Field(
+        "partial",
+        description=(
+            "Default trust level for peers: full, partial, observe or none "
+            "(boundary_contract set). Default partial."
+        ),
+    )
+    trust_overrides: Dict[str, str] = Field(
+        {},
+        description=(
+            "Per-agent trust levels overriding trust_default, agent id to "
+            "level (boundary_contract set)."
+        ),
+    )
+    void_response_policy: str = Field(
+        "notify",
+        description=(
+            "How peers should respond to your void alerts: notify, assist, "
+            "isolate or coordinate (boundary_contract set). Default notify."
+        ),
+    )
+    max_delegation_complexity: float = Field(
+        0.5,
+        description=(
+            "Highest task complexity you accept by delegation, 0-1, clamped "
+            "(boundary_contract set). Default 0.5."
+        ),
+    )
+    accept_coherence_threshold: float = Field(
+        0.4,
+        description=(
+            "Lowest peer coherence you accept work from, 0-1, clamped "
+            "(boundary_contract set). Default 0.4."
+        ),
+    )
+    # --- governance_action ---
+    action_type: Optional[str] = Field(
+        None,
+        description=(
+            "Intervention to initiate: void_intervention, coherence_boost, "
+            "delegation_request, delegation_response or coordination_sync "
+            "(governance_action initiate)."
+        ),
+        # The enum is the description, and the full sentence overruns the
+        # advertised budget (src/schema_brief.py); the brief keeps every value.
+        json_schema_extra={
+            "brief": (
+                "governance_action initiate: void_intervention, coherence_boost, "
+                "delegation_request, delegation_response or coordination_sync."
+            )
+        },
+    )
+    payload: Dict[str, Any] = Field(
+        {},
+        description="Free-form data carried by the intervention (governance_action initiate).",
+    )
+    action_id: Optional[str] = Field(
+        None,
+        description="Id of the governance action to answer or look up (governance_action respond, status).",
+    )
+    accept: bool = Field(
+        False,
+        description="Accept (true) or reject (false) the governance action (governance_action respond). Default false.",
+    )
+    response_data: Dict[str, Any] = Field(
+        {},
+        description="Free-form data returned with the response (governance_action respond).",
+    )
+    as_initiator: bool = Field(
+        True,
+        description="Include actions you initiated (governance_action query). Default true.",
+    )
+    as_target: bool = Field(
+        True,
+        description="Include actions targeting you (governance_action query). Default true.",
+    )
+    status_filter: Optional[str] = Field(
+        None,
+        description="Only actions in this status: pending, accepted or rejected (governance_action query).",
+    )
 
 
 class ValidateFilePathParams(AgentIdentityMixin):

@@ -59,8 +59,10 @@ async def _handle_void_alert_emit(arguments: Dict[str, Any]) -> Sequence[TextCon
     if current_risk is None:
         current_risk = metrics.get("current_risk")
 
-    # Determine severity
-    severity_str = arguments.get("severity", "").lower()
+    # Determine severity. The dispatch middleware hands over every declared
+    # field, None included, so an omitted severity arrives as None, not as an
+    # absent key; `or ""` keeps the auto-detect branch reachable.
+    severity_str = (arguments.get("severity") or "").lower()
     if severity_str:
         if severity_str not in ("warning", "critical"):
             return [error_response(
@@ -115,7 +117,9 @@ async def _handle_void_alert_emit(arguments: Dict[str, Any]) -> Sequence[TextCon
 async def _handle_void_alert_query(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Handle VOID_ALERT query action"""
     filter_agent_id = arguments.get("filter_agent_id")
-    filter_severity_str = arguments.get("filter_severity", "").lower()
+    # None-safe for the same reason as severity in emit: a declared field the
+    # caller omitted arrives from the middleware as None.
+    filter_severity_str = (arguments.get("filter_severity") or "").lower()
     since_hours = float(arguments.get("since_hours", 1.0))
     limit = int(arguments.get("limit", 50))
 

@@ -6,7 +6,11 @@ server's own validation. A handler that reads such a key works over REST and
 in-process, where undeclared keys are merged back, and silently ignores it
 over the MCP wire. Two cases sat in that state until 2026-09-07:
 observe(action="telemetry") read window_hours / include_calibration, and
-describe_tool read include_schema / include_full_description.
+describe_tool read include_schema / include_full_description. cirs_protocol's
+seven protocol handlers read twenty-four more until 2026-09-12;
+tests/test_cirs_protocol_wire_params.py holds that schema to the handlers'
+source, and the representative keys below keep the registered argument model
+covered from here.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import pytest
 CASES = {
     "observe": {"window_hours": 48, "include_calibration": True},
     "describe_tool": {"include_schema": False, "include_full_description": False},
+    "cirs_protocol": {"since_hours": 5.0, "action_id": "abc", "trust_default": "full"},
 }
 
 
@@ -35,7 +40,11 @@ def test_fastmcp_argument_model_keeps_the_parameters(tool_name):
 
     tool = mcp_server.mcp._tool_manager.get_tool(tool_name)
     assert tool is not None
-    required_example = {"observe": {"action": "telemetry"}, "describe_tool": {"tool_name": "knowledge"}}[tool_name]
+    required_example = {
+        "observe": {"action": "telemetry"},
+        "describe_tool": {"tool_name": "knowledge"},
+        "cirs_protocol": {"protocol": "void_alert", "action": "query"},
+    }[tool_name]
     validated = tool.fn_metadata.arg_model.model_validate({**required_example, **CASES[tool_name]})
     dumped = validated.model_dump_one_level() if hasattr(validated, "model_dump_one_level") else validated.model_dump()
     for key, value in CASES[tool_name].items():
