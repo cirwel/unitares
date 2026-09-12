@@ -661,7 +661,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             for name in listed_names
             if name in tool_relationships
         },
-        "note": "Use this tool to discover available capabilities. MCP protocol also provides tool definitions, but this provides categorized overview useful for onboarding. Use 'essential_only=true' or 'tier=essential' to reduce cognitive load by showing only core workflow tools (~10 tools).",
+        "note": (
+            "Use this tool to discover available capabilities. MCP protocol also provides tool "
+            "definitions, but this provides categorized overview useful for onboarding. Use "
+            "'essential_only=true' or 'tier=essential' to reduce cognitive load by showing only the "
+            f"{len(TOOL_TIERS['essential'])} core workflow tools."
+        ),
         "quick_start": {
             "new_agent": [
                 "1. Call start_session(force_new=true) - creates a fresh process identity",
