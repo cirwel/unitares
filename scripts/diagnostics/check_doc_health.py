@@ -900,6 +900,23 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     # "can actuate" is earned. Producing a pause and delivering it are separate
     # events -- 195 of 218 recorded pauses (89.4%) were suppressed at the
     # 2026-08-06 audit.
+    # Scoped to the CALL form, deliberately, not to the protocol name near the
+    # word "emit". A proximity pattern would fire on the corrected prose itself
+    # ("this protocol has no `emit` action") and on the flat action list in
+    # docs/operations/tool-surface-audit-2026-09-12.md:145, which is a merged
+    # deliverable quoting the pre-correction vocabulary. The copyable call is
+    # what a reader actually re-introduces.
+    (
+        re.compile(
+            r"protocol=[\"']?(?:coherence_report|governance_action)[\"']?"
+            r"\s*,\s*action=[\"']emit[\"']",
+            re.IGNORECASE,
+        ),
+        "corrected: neither coherence_report nor governance_action has an "
+        "'emit' action — coherence_report takes compute/query and "
+        "governance_action takes initiate/respond/query/status "
+        "(see the CIRS per-protocol actions row in CANONICAL_SOURCES.md)",
+    ),
     (
         re.compile(r"working circuit breaker", re.IGNORECASE),
         "overclaim: the cited event records a verdict whose delivery was "

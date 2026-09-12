@@ -224,13 +224,65 @@ def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any
 # produced by the builder below can never reach the payload, even if someone
 # adds it to a Pydantic schema later. Enforced twice — the builder only ever
 # emits these, and `_sanitize_payload` drops anything else before the write.
-_ALLOWED_PAYLOAD_KEYS = frozenset({"action", "canonical_tool", "action_source"})
+
+# Tools that pick their handler with a SECOND bounded selector BEFORE `action`,
+# mapped to the parameter that does it. For a two-level tool the sub-action
+# alone is not the discriminator: `cirs_protocol` routes five protocols through
+# one `action` vocabulary, so `query` covers four of them and `emit` two, and a
+# row carrying only the action cannot answer "did an agent broadcast a void
+# alert". The selector is admitted on exactly the property that already admits
+# `action`: it resolves to a member of a bounded server-side vocabulary or to a
+# fixed marker, never to caller text. Authorship is not the test — `action` is
+# caller-supplied too. Add an entry only for a selector whose schema pins it to
+# a Literal; the vocabulary is read from that schema below, so it cannot drift
+# from what validation admits.
+_SECONDARY_SELECTOR_FIELDS: Dict[str, str] = {"cirs_protocol": "protocol"}
+
+_ALLOWED_PAYLOAD_KEYS = frozenset(
+    {"action", "canonical_tool", "action_source"}
+    | set(_SECONDARY_SELECTOR_FIELDS.values())
+)
 
 # Written instead of the caller's action string when the action does not
 # belong to the tool's own routing vocabulary (external plugin router, typo,
 # an action added without updating the router map). Closes the cardinality
 # hole where `dialectic(action="<4KB of junk>")` becomes a GROUP BY key.
 _ACTION_UNLISTED = "action_unlisted"
+
+# The same clamp, one level up: a selector value outside the schema's Literal.
+_SELECTOR_UNLISTED = "{field}_unlisted"
+
+_selector_vocabularies: Dict[str, frozenset] = {}
+
+
+def _selector_vocabulary(tool_name: str, field: str) -> frozenset:
+    """The values ``field`` accepts on ``tool_name``, read from the validated
+    schema rather than hand-listed, so the clamp cannot admit a token dispatch
+    would reject. Cached per (tool, field). Never raises: an unreadable schema
+    yields an empty set, which clamps every value rather than echoing one.
+    """
+    key = f"{tool_name}.{field}"
+    cached = _selector_vocabularies.get(key)
+    if cached is not None:
+        return cached
+    values: frozenset = frozenset()
+    try:
+        from typing import get_args
+
+        from src.tool_schemas import get_pydantic_schemas
+
+        model = get_pydantic_schemas().get(tool_name)
+        model_field = (getattr(model, "model_fields", {}) or {}).get(field)
+        if model_field is not None:
+            values = frozenset(
+                str(v).lower()
+                for v in get_args(model_field.annotation)
+                if isinstance(v, str)
+            )
+    except Exception as e:  # pragma: no cover - telemetry must never break a tool
+        logger.debug(f"selector vocabulary unavailable for {key} (non-fatal): {e}")
+    _selector_vocabularies[key] = values
+    return values
 
 # Defense in depth. Every value the builder emits is already a bounded
 # server-side literal (a routing-table key, a tool-registry name, or one of
@@ -284,7 +336,7 @@ def build_tool_usage_payload(
     ``_middleware_identity_result`` (attached in ``resolve_identity``, before
     the rebind) rather than the handler's later ``arguments["agent_id"]``.
 
-    Shape (max three keys, all ``str``, no nesting):
+    Shape (max four keys, all ``str``, no nesting):
 
       ``action``         the resolved sub-action, clamped to the tool's own
                          ``known_actions`` routing map, or ``action_unlisted``.
@@ -300,12 +352,25 @@ def build_tool_usage_payload(
                          ``dialectic`` defaults to ``list``, so without this a
                          router default is indistinguishable from an agent
                          explicitly asking.
+      ``protocol``       only for a tool in ``_SECONDARY_SELECTOR_FIELDS``,
+                         which picks its handler one level above ``action``.
+                         Clamped to the schema's own ``Literal`` or written as
+                         ``protocol_unlisted``. Without it ``cirs_protocol``
+                         rows merge the protocols that share an action token.
 
-    Deliberately absent: every caller-authored value. No ``continuity_token``
-    (a signed HMAC ownership proof, and a legal parameter on nearly every
-    tool), no free text (``issue_description``, ``reasoning``, ``reflection``,
-    ``query``, ...), no structures, no paths, and no identifiers that are
-    already columns (``agent_id``, ``client_session_id``).
+    The test is BOUNDEDNESS, not authorship. Every value here resolves to a
+    member of a server-side vocabulary (a routing-table key, a tool-registry
+    name) or to one of a few fixed markers, and ``_MAX_PAYLOAD_VALUE_LEN`` caps
+    it regardless. Saying "no caller-authored value" would be the wrong rule
+    and was never the real one: ``action`` is caller-supplied too, and is safe
+    because it is clamped, not because of who typed it.
+
+    Deliberately absent, by that rule: no ``continuity_token`` (a signed HMAC
+    ownership proof, and a legal parameter on nearly every tool), no free text
+    (``issue_description``, ``reasoning``, ``reflection``, ``query``, ...), no
+    structures, no paths, and no identifiers that are already columns
+    (``agent_id``, ``client_session_id``) — none of which is drawn from a
+    bounded set.
     """
     try:
         from src.mcp_handlers.decorators import (
@@ -337,6 +402,21 @@ def build_tool_usage_payload(
             # nothing: "absence means no sub-action" stays true.
             if "action" in payload and source:
                 payload["action_source"] = source
+
+        # Second dispatch level, for a tool that has one. Written whether or
+        # not an action resolved, because the selector is what chose the
+        # handler: an action-less call is still attributable to one protocol.
+        selector_field = _SECONDARY_SELECTOR_FIELDS.get(canonical or "")
+        if selector_field and isinstance(arguments, dict):
+            raw = arguments.get(selector_field)
+            if raw:
+                token = str(raw).strip().lower()
+                allowed = _selector_vocabulary(canonical, selector_field)
+                payload[selector_field] = (
+                    token
+                    if token in allowed
+                    else _SELECTOR_UNLISTED.format(field=selector_field)
+                )
 
         return _sanitize_payload(payload)
     except Exception as e:  # pragma: no cover - telemetry must never break a tool

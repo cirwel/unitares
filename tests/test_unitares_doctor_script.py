@@ -1588,13 +1588,58 @@ def test_constraint_drift_passes_when_present(doctor, monkeypatch, tmp_path):
 
 
 def test_constraint_drift_ignores_absent_table(doctor, monkeypatch, tmp_path):
-    """A table missing entirely is schema_migrations' failure, not this one."""
+    """A table missing entirely is schema_migrations' failure, not this one — so
+    it must not FAIL. It must also not be counted as verified: the verdict says
+    how many were compared and how many were skipped.
+
+    This assertion used to be made with a single constraint on an absent table,
+    which made PASS-over-nothing the pinned behaviour. The intent was right and
+    the fixture could not express it, because with one declared constraint
+    "absent tables do not fail" and "a verdict over zero comparisons" are the
+    same case. Two constraints separate them.
+    """
+    root = _migrations(tmp_path, {"010_x.sql": """
+        ALTER TABLE k.t ADD CONSTRAINT here_check CHECK (x > 0);
+        ALTER TABLE gone.t ADD CONSTRAINT c CHECK (x > 0);
+    """})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor, "_fetch_live_constraints", lambda _: {("k.t", "here_check")})
+    result = doctor.check_constraint_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.PASS
+    assert "1 of 2" in result.message
+    assert "1 skipped" in result.message
+
+
+def test_constraint_drift_does_not_pass_over_zero_comparisons(doctor, monkeypatch, tmp_path):
+    """The empty database is the case that produced the false green: every
+    declaring table absent, nothing compared, and a PASS reporting the
+    source-side count as if it had been verified. SKIP is what an instrument
+    that checked nothing owes the reader, and it is the status doctor_findings'
+    blindness guard can actually see.
+    """
     root = _migrations(tmp_path, {
         "010_x.sql": "ALTER TABLE gone.t ADD CONSTRAINT c CHECK (x > 0);"})
     monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
     monkeypatch.setattr(doctor, "_fetch_live_constraints", lambda _: {("k.other", "z")})
     result = doctor.check_constraint_drift("postgresql://x/y", root)
+    assert result.status == doctor.Status.SKIP
+    assert "none of the" in result.message and "could be compared" in result.message
+
+
+def test_constraint_drift_verdict_never_claims_more_than_it_compared(doctor, monkeypatch, tmp_path):
+    """A PASS may not name a count larger than the number of constraints whose
+    table was present. Pinned as an invariant rather than a string so a reworded
+    message cannot quietly restore the overclaim."""
+    root = _migrations(tmp_path, {"010_x.sql": """
+        ALTER TABLE k.t ADD CONSTRAINT a_check CHECK (x > 0);
+        ALTER TABLE gone.one ADD CONSTRAINT b_check CHECK (x > 0);
+        ALTER TABLE gone.two ADD CONSTRAINT c_check CHECK (x > 0);
+    """})
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/usr/bin/psql")
+    monkeypatch.setattr(doctor, "_fetch_live_constraints", lambda _: {("k.t", "a_check")})
+    result = doctor.check_constraint_drift("postgresql://x/y", root)
     assert result.status == doctor.Status.PASS
+    assert "3" not in result.message.split("of")[0]
 
 
 def test_constraint_drift_skips_without_psql(doctor, monkeypatch, tmp_path):

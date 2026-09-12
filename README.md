@@ -1,5 +1,10 @@
 <div align="center">
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/unitares-lockup-dark.svg">
+  <img src="docs/assets/unitares-lockup.svg" width="420" alt="UNITARES">
+</picture>
+
 ### A federation kernel for accountable AI agents.
 
 Identity, claims and evidence, review, outcomes, and reconstruction across agent runtimes.
@@ -15,21 +20,23 @@ Here, **federation kernel** means many independent agent runtimes and harnesses
 sharing one operator-controlled server and authority domain. It does not promise
 autonomous cross-server replication or a new agent runtime. The deployed building blocks are process identities, check-ins,
 attributed findings, structured reviews, outcome events, and history retrieval.
-Reconstruction uses those records; its fidelity and benefit over Git plus a
-structured handoff still need comparative evaluation.
+Reconstruction reads those records. A running process can query them mid-task,
+across repositories and across agents, and where the graph backend is enabled
+it can follow a claim to the correction that superseded it. A repository
+history plus a handoff written in advance answers a narrower question, since it
+is static and holds only what its author knew to record. Whether reconstruction
+recovers more in practice still needs comparative evaluation.
 
 **Status:** v2.22.0. Running continuously since November 2025.
 
 <div align="center">
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
-[![Python](https://img.shields.io/badge/python-3.12+-2f7d72?style=flat-square&labelColor=0f171f)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Apache_2.0-2f7d72?style=flat-square&labelColor=0f171f)](LICENSE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19647159.svg)](https://doi.org/10.5281/zenodo.19647159)
+[![Python](https://img.shields.io/badge/python-3.12+-5C544A?style=flat-square&labelColor=1A1612)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/license-Apache_2.0-5C544A?style=flat-square&labelColor=1A1612)](LICENSE)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19647159-7A1F1F?style=flat-square&labelColor=1A1612)](https://doi.org/10.5281/zenodo.19647159)
 
-[![Quickstart](https://img.shields.io/badge/▶-quickstart-5eead4?style=for-the-badge&labelColor=0f171f)](#quickstart)
-[![Evidence](https://img.shields.io/badge/evidence-check_it-f5a623?style=for-the-badge&labelColor=0f171f)](#evidence-and-limits)
-[![Docs](https://img.shields.io/badge/docs-read-7d8f97?style=for-the-badge&labelColor=0f171f)](docs/README.md)
+[Quickstart](#quickstart) · [Evidence and limits](#evidence-and-limits) · [Docs](docs/README.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md)
 
 </div>
 
@@ -44,10 +51,6 @@ structured handoff still need comparative evaluation.
 | **Review** — what was challenged, and on what terms? | `request_review` opens a structured review; `dialectic` records positions, disagreement, conditions, and resolution. A request alone is not a completed review. |
 | **Outcomes** — what actually happened? | `record_result` records typed outcomes; an explicit `prediction_id` links a result to the prediction it grades. A stored outcome does not independently verify the caller's report. |
 | **Reconstruction** — what should the next process recover? | `search_shared_memory`, knowledge reads, review history, `export`, and operator-gated outcome-evidence reads expose different retained records. Clients assemble them; there is no single reconstruction tool or guarantee that the original check-in text survives. |
-
-<div align="center">
-  <img src="docs/assets/flow.png" width="100%" alt="agent acts, checks in, receives state and policy, self-regulates, and leaves an audit trail">
-</div>
 
 The core record is retained in your deployment and accessible through MCP,
 HTTP, and the self-hosted dashboard. Core storage needs no external model

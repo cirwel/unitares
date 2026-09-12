@@ -248,7 +248,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         include_advanced (bool): If false, exclude Tier 3 (advanced) tools (default: true)
         tier (str): Filter by tier: "essential", "common", "advanced", or "all" (default: "all")
         category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
-        lite (bool): If true, return minimal response (names + descriptions only, ~500B vs ~4KB)
+        lite (bool): If true, return the compact listing: truncated hints and a category summary in place of full descriptions, the relationship map and the tool map (default: true)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
     """
     
@@ -459,7 +459,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         tools_list = order_tools_by_usage(tools_list, usage_data)
     
     # Count tools by tier
-    # LITE MODE: Return only ESSENTIAL tools (~1KB vs ~20KB)
+    # LITE MODE: every advertised tool that survived the filters above,
+    # compacted -- truncated hints, no relationship map or tool map.
     if lite_mode:
         # Import from single source of truth
         lite_tools = [
@@ -795,7 +796,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         },
         "workflows": workflows,
         "relationships": tool_relationships,
-        "note": "Use this tool to discover available capabilities. MCP protocol also provides tool definitions, but this provides categorized overview useful for onboarding. Use 'essential_only=true' or 'tier=essential' to reduce cognitive load by showing only core workflow tools (~10 tools).",
+        "note": (
+            "Use this tool to discover available capabilities. MCP protocol also provides tool "
+            "definitions, but this provides categorized overview useful for onboarding. Use "
+            "'essential_only=true' or 'tier=essential' to reduce cognitive load by showing only the "
+            f"{len(TOOL_TIERS['essential'])} core workflow tools."
+        ),
         "quick_start": {
             "new_agent": [
                 "1. Call start_session(force_new=true) - creates a fresh process identity",
@@ -812,7 +818,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             ]
         },
         "options": {
-            "lite_mode": "Use list_tools(lite=true) for minimal response (~2KB vs ~15KB) - better for local/smaller models",
+            "lite_mode": "Use list_tools(lite=true) for the compact listing (truncated hints and a category summary; no relationship map or tool map) - better for local/smaller models",
             "describe_tool": "Use describe_tool(tool_name, lite=true) for simplified schemas with fewer parameters"
         },
         # Visual tool relationship map (v2.5.0+)

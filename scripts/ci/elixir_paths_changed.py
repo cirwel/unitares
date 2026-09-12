@@ -8,6 +8,9 @@ The workflow therefore always runs, this script decides whether the suites
 are relevant to the change, and one always-present ``elixir-gate`` job is the
 single context worth requiring on master.
 
+Pushes to master/main skip the analysis entirely and always run: see
+``decide``.
+
 The decision is fail-safe: whenever the change set cannot be determined (a
 force-push whose ``before`` is unreachable, a branch-creation push, a fetch
 that fails), the answer is ``relevant=true`` so the suites run rather than
@@ -123,7 +126,24 @@ def changed_paths(base: str, head: str, cwd: str | None = None) -> list[str] | N
 
 
 def decide(event: str, base: str, head: str, cwd: str | None = None) -> tuple[bool, str]:
-    """Return (relevant, reason). Undeterminable change sets are relevant."""
+    """Return (relevant, reason). Undeterminable change sets are relevant.
+
+    A push is always relevant, whatever it touched. The workflow's ``push``
+    trigger is restricted to master/main (pinned by
+    ``test_push_trigger_is_restricted_to_protected_branches``), so this makes
+    every merge exercise all six suites.
+
+    Why (#2152): path analysis answers "could this diff have broken a suite?",
+    and a defect INSIDE a suite answers to neither. Three lease_plane tests
+    failed for a month-old test-lifecycle bug while Elixir Tests reported green
+    on master every day, because no master commit in that window touched a
+    relevant path. A skipped job and a passing job are not the same thing, and
+    on master only the second one is worth anything. Pull requests stay
+    path-gated: that is where the cost argument still holds, and a merge now
+    re-checks what the PR was allowed to skip.
+    """
+    if event == "push":
+        return True, "push to a protected branch; every suite runs regardless of paths (#2152)"
     paths = changed_paths(base, head, cwd)
     if paths is None:
         return True, f"change set undeterminable for {event} (base={base or 'empty'}); running the suites"
