@@ -292,10 +292,43 @@ def test_extra_argument_passthrough_survives_the_schema_replacement():
 # calls legal must reach dispatch. The reverse is fine and deliberate, because
 # the wrapper widens types for coercion.
 #
-# Measured 2026-09-12 on the full surface: 507 properties across 50 tools, none
-# unsynthesizable, none rejected.
+# Every value is taken at a BOUNDARY the schema names, not in the middle of the
+# range. The first draft of this test synthesized only the minimum, and a probe
+# showed what that misses: advertising `maximum: 99999` on a parameter the
+# handler caps at 420 passed, because the value tried was 5. An over-generous
+# advertised ceiling is the likelier drift of the two, so the ceiling has to be
+# one of the values tried.
+#
+# Measured 2026-09-12 on the full surface: 507 properties across 50 tools,
+# 862 boundary values, none unsynthesizable, none rejected by the transport,
+# and six rejected by a handler for the one recorded catalog imprecision below.
 
 _UNSYNTHESIZABLE = object()
+
+#: Cap on values tried per property, so a wide ``anyOf`` of enums cannot turn
+#: this into a combinatorial walk. Generous next to the widest real property.
+_MAX_CANDIDATES = 8
+
+# Advertised string branches the handler is stricter than. These parameters take
+# a number in [0, 1], a named level ("trivial" ... "very_high"), or a
+# {"value": N, "scale": M} object, and the handler's own validator says so — but
+# the advertised schema carries a bare `string` branch with no enum, so it tells
+# a caller that any string is legal and dispatch then refuses "x".
+#
+# This is a real imprecision in the CATALOG, not something the schema swap
+# introduced: stdio and REST have advertised the same bare branch all along,
+# and docs/interface-contract.v1.json hashes it. Narrowing it is a contract
+# change that moves every input_schema_sha256 and needs an interface release, so
+# it is a decision rather than a fix to fold into a test. Recorded here, keyed
+# on the canonical tool, so the exception is named and counted instead of
+# silently passing; only STRING values are exempted, so a regression on the
+# numeric branch of these same parameters still fails.
+_ADVERTISED_STRING_WIDER_THAN_HANDLER = frozenset({
+    ("process_agent_update", "complexity"),
+    ("process_agent_update", "confidence"),
+    ("simulate_update", "complexity"),
+    ("simulate_update", "confidence"),
+})
 
 
 def _resolve_ref(schema: Any, defs: dict) -> Any:
@@ -310,38 +343,37 @@ def _resolve_ref(schema: Any, defs: dict) -> Any:
     return schema
 
 
-def _synthesize(schema: Any, defs: dict, depth: int = 0) -> Any:
-    """A minimal value the advertised ``schema`` calls legal.
+def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
+    """Every boundary value the advertised ``schema`` calls legal.
 
-    Deliberately minimal rather than random: the point is to exercise the
-    boundary a caller reading the schema would aim at — the shortest string, the
-    lowest permitted number, the first enum member — because those are where an
-    advertised bound and an accepting model are most likely to disagree.
+    Boundaries rather than arbitrary values, because a bound and an accepting
+    model disagree at the edges or nowhere: the shortest AND longest permitted
+    string, the lowest AND highest permitted number, every enum member rather
+    than the first. Returns a list so one lenient value cannot mask a strict
+    one — the failure this replaced was exactly that.
 
-    Returns ``_UNSYNTHESIZABLE`` for a construct this helper does not model
-    (a ``pattern``, a ``format``, an unresolvable ref). That is a gap in the
-    helper, not a failure of the invariant, and the test reports the two
-    separately.
+    An empty list means the helper does not model the construct (a ``pattern``,
+    a ``format``, an unresolvable ref). That is a gap in the helper, not a
+    failure of the invariant, and the test reports the two separately.
     """
     schema = _resolve_ref(schema, defs)
     if not isinstance(schema, dict) or depth > 6:
-        return _UNSYNTHESIZABLE
+        return []
     if "const" in schema:
-        return schema["const"]
+        return [schema["const"]]
     if schema.get("enum"):
-        return schema["enum"][0]
+        # Every member: a bogus one added anywhere in the list must be caught,
+        # not only when it happens to be first.
+        return list(schema["enum"])[:_MAX_CANDIDATES]
+
     for keyword in ("anyOf", "oneOf"):
         if keyword in schema:
-            branches = [
-                branch
-                for branch in schema[keyword]
-                if not (isinstance(branch, dict) and branch.get("type") == "null")
-            ] or schema[keyword]
-            for branch in branches:
-                value = _synthesize(branch, defs, depth + 1)
-                if value is not _UNSYNTHESIZABLE:
-                    return value
-            return _UNSYNTHESIZABLE
+            values: list = []
+            for branch in schema[keyword]:
+                if isinstance(branch, dict) and branch.get("type") == "null":
+                    continue
+                values.extend(_candidate_values(branch, defs, depth + 1))
+            return values[:_MAX_CANDIDATES]
 
     json_type = schema.get("type")
     if isinstance(json_type, list):
@@ -349,38 +381,53 @@ def _synthesize(schema: Any, defs: dict, depth: int = 0) -> Any:
 
     if json_type == "string":
         if "pattern" in schema or schema.get("format"):
-            return _UNSYNTHESIZABLE
-        value = "x" * max(1, int(schema.get("minLength") or 1))
-        maximum = schema.get("maxLength")
-        return value[:maximum] if isinstance(maximum, int) else value
-    if json_type in ("integer", "number"):
-        lower = schema.get("minimum", schema.get("exclusiveMinimum"))
-        value = lower if isinstance(lower, (int, float)) else 1
-        if "exclusiveMinimum" in schema and schema.get("minimum") is None:
-            value += 1
-        upper = schema.get("maximum")
-        if isinstance(upper, (int, float)) and value > upper:
-            value = upper
-        return int(value) if json_type == "integer" else float(value)
-    if json_type == "boolean":
-        return True
-    if json_type == "array":
-        if int(schema.get("minItems") or 0) == 0:
             return []
-        item = _synthesize(schema.get("items") or {"type": "string"}, defs, depth + 1)
-        return [] if item is _UNSYNTHESIZABLE else [item]
+        shortest = max(1, int(schema.get("minLength") or 1))
+        lengths = {shortest}
+        longest = schema.get("maxLength")
+        if isinstance(longest, int) and longest >= shortest:
+            lengths.add(longest)
+        return ["x" * length for length in sorted(lengths)]
+    if json_type in ("integer", "number"):
+        cast = int if json_type == "integer" else float
+        bounds = set()
+        lower = schema.get("minimum", schema.get("exclusiveMinimum"))
+        if isinstance(lower, (int, float)):
+            bounds.add(lower + 1 if "exclusiveMinimum" in schema
+                       and schema.get("minimum") is None else lower)
+        upper = schema.get("maximum", schema.get("exclusiveMaximum"))
+        if isinstance(upper, (int, float)):
+            bounds.add(upper - 1 if "exclusiveMaximum" in schema
+                       and schema.get("maximum") is None else upper)
+        return [cast(bound) for bound in sorted(bounds)] or [cast(1)]
+    if json_type == "boolean":
+        return [True, False]
+    if json_type == "array":
+        values = []
+        if int(schema.get("minItems") or 0) == 0:
+            values.append([])
+        items = _candidate_values(schema.get("items") or {"type": "string"}, defs, depth + 1)
+        if items:
+            values.append([items[0]])
+        return values
     if json_type == "object":
         instance: dict[str, Any] = {}
         properties = schema.get("properties") or {}
         for name in schema.get("required") or []:
-            value = _synthesize(properties.get(name) or {}, defs, depth + 1)
-            if value is _UNSYNTHESIZABLE:
-                return _UNSYNTHESIZABLE
-            instance[name] = value
-        return instance
+            nested = _candidate_values(properties.get(name) or {}, defs, depth + 1)
+            if not nested:
+                return []
+            instance[name] = nested[0]
+        return [instance]
     if json_type == "null":
-        return None
-    return _UNSYNTHESIZABLE
+        return [None]
+    return []
+
+
+def _synthesize(schema: Any, defs: dict, depth: int = 0) -> Any:
+    """One legal value, for building the base instance a tool's required fields need."""
+    values = _candidate_values(schema, defs, depth)
+    return values[0] if values else _UNSYNTHESIZABLE
 
 
 def test_every_advertised_value_survives_both_validation_boundaries():
@@ -408,7 +455,8 @@ def test_every_advertised_value_survives_both_validation_boundaries():
 
     A property the helper cannot synthesize is counted and named rather than
     silently passed over, so this cannot decay into a test that checks nothing.
-    Measured 2026-09-12: 507 properties, none unsynthesizable, none rejected.
+    Measured 2026-09-12: 507 properties, 862 boundary values, none
+    unsynthesizable, none rejected outside the recorded exemption.
     """
     from src import mcp_server
     from src.mcp_handlers.tool_stability import resolve_tool_alias
@@ -419,6 +467,7 @@ def test_every_advertised_value_survives_both_validation_boundaries():
     unsynthesizable: list[str] = []
     transport_rejected: list[str] = []
     handler_rejected: list[str] = []
+    exempted: list[str] = []
 
     for name, tool in sorted(mcp_server.mcp._tool_manager._tools.items()):
         schema = tool.parameters or {}
@@ -444,23 +493,34 @@ def test_every_advertised_value_survives_both_validation_boundaries():
             continue
 
         for prop, definition in properties.items():
-            value = _synthesize(definition, defs)
-            if value is _UNSYNTHESIZABLE:
+            candidates = _candidate_values(definition, defs)
+            if not candidates:
                 unsynthesizable.append(f"{name}.{prop}")
                 continue
-            instance = {**base, prop: value}
-            try:
-                tool.fn_metadata.arg_model.model_validate(instance)
-            except ValidationError as exc:
-                transport_rejected.append(f"{name}.{prop}={value!r}: {exc.errors()[:1]}")
-            if handler_model is not None:
+            for value in candidates:
+                instance = {**base, prop: value}
+                shown = repr(value)
+                if len(shown) > 60:
+                    shown = f"{shown[:57]}... (len {len(value)})"
                 try:
-                    handler_model.model_validate(instance)
+                    tool.fn_metadata.arg_model.model_validate(instance)
                 except ValidationError as exc:
-                    handler_rejected.append(
-                        f"{name}.{prop}={value!r} -> {canonical}: {exc.errors()[:1]}"
+                    transport_rejected.append(
+                        f"{name}.{prop}={shown}: {exc.errors()[:1]}"
                     )
-            checked += 1
+                exempt = isinstance(value, str) and (
+                    (canonical, prop) in _ADVERTISED_STRING_WIDER_THAN_HANDLER
+                )
+                if handler_model is not None and not exempt:
+                    try:
+                        handler_model.model_validate(instance)
+                    except ValidationError as exc:
+                        handler_rejected.append(
+                            f"{name}.{prop}={shown} -> {canonical}: {exc.errors()[:1]}"
+                        )
+                if exempt:
+                    exempted.append(f"{name}.{prop}={shown}")
+                checked += 1
 
     assert not transport_rejected, (
         "the mount advertises values its own argument model refuses, so a client "
@@ -473,6 +533,13 @@ def test_every_advertised_value_survives_both_validation_boundaries():
         f"({len(handler_rejected)}):\n  " + "\n  ".join(handler_rejected)
     )
     assert checked, "no advertised property was exercised; the check is vacuous"
+    # The exemption is only honest while it still describes something real. If
+    # the catalog is narrowed, or the handler widened, this fires and the entry
+    # comes out rather than sitting there implying a guard it no longer needs.
+    assert exempted, (
+        "no advertised value hit _ADVERTISED_STRING_WIDER_THAN_HANDLER, so the "
+        "exemption no longer describes the catalog. Delete the stale entries."
+    )
     # A few unmodelled constructs are tolerable; a wave of them means the helper
     # stopped keeping up with the catalog and the invariant is going unchecked.
     assert len(unsynthesizable) <= checked // 20, (
