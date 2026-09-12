@@ -33,7 +33,8 @@ description in ``list_tools``, and the ``dialectic`` entry advertised ``vote``
 corrected. That table may no longer carry an advertised name
 (``test_override_table_carries_no_advertised_name`` in
 tests/test_describe_tool_drift.py), which closes the override vector but NOT
-the class: the served text in ``src/tool_descriptions.py`` is hand-authored and
+the class: the served text, authored in ``src/tool_descriptions.json`` or the
+Python override dict in ``src/tool_descriptions.py``, is hand-written and
 nothing derives it from the action map, so an action added to a router without a
 description edit is invisible again. ``test_served_description_*`` below is the
 replacement guard, and it is deliberately on the served text rather than the
@@ -117,13 +118,10 @@ async def test_served_description_names_every_routed_action(tool):
     repair was to the served text, so the guard belongs there too.
 
     This ran with a ``SERVED_ACTION_COVERAGE_GAPS`` xfail set for admin and
-    knowledge until 2026-09-12, covering six omitted actions. Five of them had
-    no advertised standalone route either — get_connection_status,
-    get_telemetry_metrics, get_tool_usage_stats, debug_request_context and
-    supersede_discovery are all unadvertised — so for those the router's
-    description was the only place a client could learn the capability existed
-    at all; only workspace_health had an advertised alternative. That is why
-    the exemption is gone rather than renewed: an omission here is a failure.
+    knowledge until 2026-09-12, covering six omitted actions. None of them was
+    undiscoverable by name: every router's advertised ``action`` enum lists all
+    of its routed actions. What an enum cannot carry is an action's contract —
+    what it does and what it requires — and that is the half this guard pins.
     """
     actions = await _routed_actions(tool)
     assert actions, f"{tool} reported no valid_actions"
@@ -131,9 +129,11 @@ async def test_served_description_names_every_routed_action(tool):
     missing = sorted(a for a in actions if a not in served)
     assert not missing, (
         f"{tool} is advertised to clients with a description that omits routed "
-        f"actions {missing}. The served text lives in src/tool_descriptions.py "
-        f"(or _INFERENCE_DESCRIPTION_OVERRIDES there); the derived text that "
-        f"names every action is not what ships. Served text: {served!r}"
+        f"actions {missing}. The served text is authored in "
+        f"src/tool_descriptions.json, or in _INFERENCE_DESCRIPTION_OVERRIDES in "
+        f"src/tool_descriptions.py, which wins for any name it carries; only the "
+        f"first non-empty line ships. The derived text that names every action "
+        f"is not what ships. Served text: {served!r}"
     )
 
 
