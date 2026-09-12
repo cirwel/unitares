@@ -289,22 +289,22 @@ def test_every_known_action_is_classified_by_the_stakes_table():
 
     External-plugin tools are exempt for the same reason ``test_stakes_table``
     exempts them: they are deliberately unenumerated and fail closed to "high"
-    until an operator classifies them. The exemption set is imported rather
-    than restated so the two tests cannot disagree about what "external" means.
-    Without this the assertion is order-dependent — ``pi`` only appears once
-    some other test in the process has imported ``unitares_pi_plugin``.
+    until an operator classifies them. Both tests decide "external" with the
+    same predicate over the declaring module the decorator recorded
+    (``ToolDefinition.source_module``), so they cannot disagree; reading
+    ``handler.__module__`` instead names ``decorators.py`` for every
+    action_router, a plugin's included, and needed a hand-kept allowlist.
+    Without the exemption the assertion is order-dependent — ``pi`` only
+    appears once some other test in the process has imported
+    ``unitares_pi_plugin``.
     """
     from src.mcp_handlers import stakes_table
-    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
-    from tests.test_stakes_table import _EXTERNAL_PLUGIN_TOOLS
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, _is_first_party_module
 
     unclassified = []
     for name, td in _TOOL_DEFINITIONS.items():
-        if name in _EXTERNAL_PLUGIN_TOOLS:
-            continue
-        module = getattr(td.handler, "__module__", "") or ""
-        if not module.startswith("src."):
-            continue  # external single-purpose tool — fail-closed-high by design
+        if not _is_first_party_module(td.source_module):
+            continue  # external tool — fail-closed-high by design
         for action in td.known_actions or ():
             if (
                 stakes_table.get_action_stakes(name, action) == "high"
