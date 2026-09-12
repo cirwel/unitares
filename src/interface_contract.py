@@ -49,7 +49,14 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # verbatim instead of FastMCP's lossy regeneration (audit finding F12). No
 # capability, name, schema or hash in this contract moved; the transport that
 # disagreed with it now agrees.
-INTERFACE_CONTRACT_VERSION = "1.6.0"
+# 1.7.0 (2026-09-12): cirs_protocol's action description names which
+# sub-action each protocol routes (list and status were missing). Its
+# input_schema_sha256 moves because descriptions live inside the hashed schema;
+# no parameter name, type, default or requiredness changes, and dispatch is
+# unchanged. Bumped because a moved digest is what tells a hash-pinning client
+# to re-pin (see the re-pin note in docs/INTERFACE_CONTRACT.md), not because
+# the catalog gained or lost anything.
+INTERFACE_CONTRACT_VERSION = "1.7.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
