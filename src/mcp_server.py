@@ -250,12 +250,6 @@ from src.tool_mode_listing import mode_filtered_server_class
 mcp = mode_filtered_server_class(FastMCP)(**_server_kwargs)
 
 
-# Custom decorator that disables outputSchema to avoid schema validation errors
-# FastMCP auto-generates outputSchema based on return type, but our tools return
-# complex dicts that don't match the simple {"result": string} schema.
-def tool_no_schema(description: str):
-    """Decorator for registering tools without outputSchema validation."""
-    return mcp.tool(description=description, structured_output=False)
 # ============================================================================
 # Tool Registration (extracted to src/tool_registration.py)
 # ============================================================================
@@ -269,19 +263,6 @@ from src.tool_registration import (
 
 auto_register_all_tools(mcp)
 _register_common_aliases(mcp)
-
-# ============================================================================
-# LEGACY MANUAL REGISTRATIONS (kept for reference, will be removed)
-# ============================================================================
-# The auto_register_all_tools() above handles all tools.
-# These manual registrations below are now redundant but kept temporarily
-# for any tools with special handling not captured above.
-
-# NOTE: hello/who_am_i removed Dec 2025 - identity auto-binds on first tool call
-# Use identity(name='...') for self-naming
-
-# REMOVED: All manual @tool_no_schema decorators
-# Tools are now auto-registered from tool_schemas.py
 
 # ============================================================================
 # Server Entry Point
