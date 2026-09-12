@@ -390,10 +390,21 @@ PRIOR_STATE_FIELDS = (
 class SelectiveNull:
     """Null distribution of the *reported* statistic: max delta over candidates.
 
-    The matrix reports `max(deltas)`, not a pre-registered candidate, so the
-    honest reference is the distribution of that maximum under no association --
-    not zero. With ~7 candidates on a few dozen paired rows, noise alone
-    routinely yields a sizeable best-candidate lift.
+    The matrix reports a max over candidates rather than a pre-registered one,
+    so the honest reference is the distribution of that maximum under no
+    association -- not zero. With ~7 candidates on a few dozen paired rows,
+    noise alone routinely yields a sizeable best-candidate lift.
+
+    The statistic is not `max(auc_delta)`, which this docstring claimed until
+    2026-09-12. `_best_delta_value` maxes on the tuple
+    `(beats_baseline, auc_delta, brier_improvement)` and returns that winner's
+    `auc_delta`, and `beats_baseline` is `auc_delta > 0 and brier_improvement >
+    0`. So whenever any candidate beats the baseline on both metrics the
+    statistic is the best AUC delta *among those*, which can sit below the
+    largest AUC delta in the set. Observed and null go through the same
+    function, so the comparison is consistent -- but the reported value is a
+    discontinuous function of Brier improvement, and a winner's identity can
+    flip on that sign.
 
     The permutation reassigns whole EISV readings between (agent, snapshot)
     clusters and leaves labels untouched. Two consequences make this the right
