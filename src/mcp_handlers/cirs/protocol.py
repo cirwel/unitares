@@ -121,14 +121,41 @@ _CIRS_DISPATCHERS = {
 }
 
 
-@mcp_tool("cirs_protocol", timeout=15.0, description="CIRS Protocol: Unified multi-agent coordination (void alerts, state announce, coherence, boundaries, governance)")
+# known_actions is the union of the `action` vocabularies the protocol handlers
+# route on: void.py, state.py and resonance.py take emit/query, coherence.py
+# compute/query, boundary.py set/get/list, governance_action.py
+# initiate/respond/query/status; stability_restored takes no action. This tool
+# is not an action_router — `protocol` picks the sub-handler and each
+# sub-handler validates `action` itself — so, like self_recovery, the set is
+# declared by hand for the tool_usage telemetry clamp. Without it the recorder
+# treated the tool as single-purpose and every call landed in audit.tool_usage
+# as one undifferentiated row (tool-surface audit F4, PR #2167). It is the
+# clamp only, never a gate: nothing here refuses on it, and each protocol keeps
+# answering an action outside its own subset with valid_actions. There is no
+# default_action because no protocol on the validated path defaults one, so an
+# action-less call audits as no sub-action, which is what it is.
+# tests/test_tool_usage_payload.py holds this set to the handler bodies.
+@mcp_tool(
+    "cirs_protocol",
+    timeout=15.0,
+    description="CIRS Protocol: Unified multi-agent coordination (void alerts, state announce, coherence, boundaries, governance)",
+    known_actions={
+        "emit", "query",  # void_alert, state_announce, resonance_alert
+        "compute",  # coherence_report (with query)
+        "set", "get", "list",  # boundary_contract
+        "initiate", "respond", "status",  # governance_action (with query)
+    },
+)
 async def handle_cirs_protocol(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
     CIRS Protocol - Unified entry point for multi-agent coordination.
 
-    Use 'protocol' to select which operation:
-    - void_alert, state_announce, coherence_report, boundary_contract,
-      governance_action, resonance_alert, stability_restored
+    Use 'protocol' to select which operation, and 'action' within it:
+    - void_alert, state_announce, resonance_alert: emit, query
+    - coherence_report: compute, query
+    - boundary_contract: set, get, list
+    - governance_action: initiate, respond, query, status
+    - stability_restored: no action
     """
     protocol = arguments.get("protocol")
 
