@@ -60,6 +60,99 @@ establishing that it is complete.
 
 ---
 
+## Council review — recorded 2026-09-12
+
+Seven independent reviewers, one per entry, dispatched from a Claude Code
+session. Each read its entry, the framing above, and the repository sources the
+entry cites, and each was instructed to attack the entry rather than ratify it,
+on the ground that this packet already carries one agreeing pass and a second
+agreeing pass adds nothing. Every reviewer was required to mark each load-bearing
+claim VERIFIED, REFUTED or UNVERIFIED against the tree, and forbidden to propose
+weakening, re-running or reinterpreting a pre-registered stop rule.
+
+**The live instruments were not reachable.** The session had no governance
+server, no PostgreSQL and no Redis, so nothing here was recorded through
+`request_review` and no dialectic session exists for it. `consult` had no model
+backend either. This is the same class of artifact as the Codex table above: an
+agent-authored analysis of repository sources, relayed here.
+
+**Recording a recommendation neither approves nor implements it.** As with the
+review above, none of the seven decisions is settled by this one, and agreement
+between two agent passes still supplies no operator authorization. Where the two
+passes disagree, that is information about the entries, not a tiebreak.
+
+| Entry | Where the council lands | Distance from this packet and from the review above |
+|---|---|---|
+| 1. D4 | Feature-axis family, with the candidate tuple pinned as a precondition and a per-slice fitted-candidate count reported | Differs from both. Holds that the defect is the comparison axis, not the word |
+| 2. D6 | Conditional pre-declaration: specify the supplementary analysis now, compute it only if the support condition clears | A new option. Declines the "mode inside the estimator" shape the packet describes |
+| 3. D5 | Decline to touch the registered file; add an exact derived verdict and a regression test instead | Differs on where it is written down, not on the fact |
+| 4. D3 | In, at file granularity. Stop serving the reference artifacts first | Agrees on scope, disputes the priority and the coverage claim |
+| 5. D2 | The substance is already written down twice; repair one dropped conjunct in the sibling instead | Differs on whether this is a decision at all |
+| 6. D1 | Repair the false greens first, then a database-free static check, then advisory on the deployed host | Differs on sequencing and refutes one proposed placement |
+| 7. D7 | Rule-scope the existing allowlist with a register-only default; do not build the baseline | Takes the rule-scoping half, declines the baseline half |
+
+### Corrections to the entries
+
+Findings that change what an entry states as fact. Each was checked against the
+tree by the reviewer that raised it.
+
+1. **D2's fork rests on a truncated quotation.** The section header governing the
+   quoted bullet states the gate as a conjunction of the owners *and* a review.
+   Restored, the two-referent collision the entry is built on does not arise: the
+   phrase names the review throughout and the owner conjunct is simply
+   unsatisfied. The entry's default-if-silent forecast also inverts the record —
+   the one time that gate was exercised, it refused.
+2. **D5's "nothing in the repo evaluates the four PASS conditions" is false for
+   condition 1**, which is machine-evaluated on the unrounded value and rendered
+   as a category. Conditions 2, 3 and 4 have no evaluator. That asymmetry, not
+   rendering precision, is what exposes condition 2 to a rounded read.
+3. **D6 prices its degeneracy argument on the wrong set.** The estimator permutes
+   every block, not only the bad ones, and the frozen artifact records no column
+   for that larger count — so the geometry the entry reasons from is not known.
+4. **D6's "provably cannot perturb the registered streams" holds only for a
+   separate function.** Bit-identity of the registered output is held by key
+   ordering and list length, not by the generator construction, so a mode added
+   inside the existing estimator is the likeliest way to move the registered
+   numbers by accident.
+5. **D4's pre-data warrant does not hold.** The pull-request gloss the
+   recommendation leans on was written in the same body that reports the results
+   and records the winner changing identity twice within an hour.
+6. **D1's blast-radius claim is false.** A documentation-health checker running in
+   CI hardcodes a reference to one of the affected documents, so the archival and
+   rename options touch live CI rather than nothing.
+7. **D7's first question is already answered in writing.** The ranking it hands to
+   the operator as unwritten is stated in `docs/REPO_SCOPE.md` and implemented in
+   `.github/workflows/repo-scope.yml`, which exempts the register sub-check and
+   keeps the other two running on every pull request.
+
+### Defects found underneath the decisions
+
+Four reviewers went looking for a judgement call and found instrumentation that
+reports healthy without having checked. Three are repaired in the same change
+that records this review; the fourth is filed, because it needs a durable sink
+rather than a fix.
+
+- `constraint_drift` returned PASS naming the source-side count after comparing
+  nothing, on the check two of these entries route onto the deployed host.
+- Two dashboard reference artifacts carrying a real fleet capture were served
+  unauthenticated, beside one file of the same data class that is gated.
+- No test pinned a number for the selective-null estimator and the read receipt
+  records no code version, so the December instrument was not a fixed object.
+- Shadow firings of the verification floor persist nowhere. The evidence its
+  enable decision is supposed to rest on is not being accumulated, which makes
+  that gate blocked on an instrument rather than on D2.
+
+### One deadline is nearer than this packet states
+
+`independent-operator-cohort-preregistration-v0.md` runs a 58-day window and
+embargoes publication from its lane between 2026-11-15 and the posting of the
+December read, and a phase-1 enrollment must merge before a window may start.
+Working back, the last start that clears the embargo is on or about 2026-09-18.
+The enrollments file records none. D4's entry computes roughly nine days from its
+2026-09-09 raise date; from 2026-09-12 it is about six.
+
+---
+
 ## Why this packet exists
 
 Three mechanisms in this repo look like they could absorb a load-bearing call.
