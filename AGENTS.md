@@ -301,8 +301,10 @@ Minimal glossary:
 
 Friendly workflow aliases: `start_session` -> `onboard`, `sync_state` ->
 `process_agent_update`, `check_working_state` -> `get_governance_metrics`,
-`search_shared_memory` -> `knowledge(action="search")`, `record_result` ->
-`outcome_event`, and `request_review` -> `dialectic(action="request")`.
+`search_shared_memory` -> `knowledge(action="search")`, `store_finding` ->
+`knowledge(action="store")`, `update_finding` -> `knowledge(action="update")`,
+`record_result` -> `outcome_event`, and `request_review` ->
+`dialectic(action="request")`.
 
 Shared-memory (KG) write discipline: search before writing. If a related entry
 exists, prefer a linked correction or `supersede` over a fresh note. Store when
