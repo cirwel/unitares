@@ -39,7 +39,12 @@ PORTS = [
         "host": "edge host (Raspberry Pi)",
         "source": "`anima-mcp` service config (external repo)",
         "verify": None,
-        "health": {"path": "/health", "expect": [200], "scope": "edge"},
+        # No roster probe. Anima runs on a separate host, so health_watchdog.sh
+        # checks it directly via ANIMA_HEALTH_URL rather than through this
+        # registry — see the anima block there. Declaring a `scope: "edge"`
+        # entry here would read as monitored while nothing emitted it, which
+        # masks the very gap this registry exists to close.
+        "health": None,
     },
     {
         "port": 8767,
@@ -71,9 +76,14 @@ PORTS = [
         "host": "governance host",
         "source": "`AGENT_ORCHESTRATOR_URL` default — `src/mcp_handlers/dialectic/orchestrator_dispatch.py`",
         "verify": "src/mcp_handlers/dialectic/orchestrator_dispatch.py",
-        # Bearer-gated: 401 is a HEALTHY answer here. Only a connection failure
-        # (curl reports 000) means down. Expecting 200 alone pages every cycle.
-        "health": {"path": "/health", "expect": [200, 401], "scope": "governance"},
+        # `/v1/health` is the declared route (http_router.ex). There is no
+        # bare `/health`, so probing that would only prove "a socket speaks
+        # HTTP" — and would flip to 404 the day HTTPAuth grows the liveness
+        # exemption that lease_plane and wave3a already have.
+        # 401 is a HEALTHY answer: `plug(HTTPAuth)` runs before `plug(:dispatch)`,
+        # so every path 401s unauthenticated. Only a connection failure (curl
+        # reports 000) means down.
+        "health": {"path": "/v1/health", "expect": [200, 401], "scope": "governance"},
     },
     {
         "port": 8790,
