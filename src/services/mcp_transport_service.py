@@ -53,6 +53,10 @@ class McpAuthConfig:
     oauth_provider: Any = None
     auth_settings: Any = None
     required_scopes: Sequence[str] = ("mcp:tools",)
+    #: True when the operator asked for an OAuth gate and building it failed.
+    #: Distinguishes "no gate was configured" from "a configured gate is
+    #: missing", which the provider being None cannot express on its own.
+    gate_unavailable: bool = False
 
 
 @dataclass(frozen=True)
@@ -105,8 +109,50 @@ async def authorize_mcp_request(
     scope: dict[str, Any],
     auth_config: McpAuthConfig,
 ) -> AuthDecision:
-    """Evaluate the static/OAuth bearer gate against one allowlist snapshot."""
+    """Evaluate the static/OAuth bearer gate against one allowlist snapshot.
+
+    Fails closed at the ROUTE when a configured gate could not be built. An
+    operator who set ``UNITARES_OAUTH_ISSUER_URL`` asked for a gate; if
+    construction raised at startup, serving ``/mcp`` unauthenticated answers a
+    different question than the one they asked, and on a public deployment it
+    exposes the whole tool catalog and the knowledge graph. Refusing the route
+    is the honest answer to "the gate you configured is missing."
+
+    Deliberately narrower than refusing to start. This process also serves
+    ``/health*``, ``/v1``, the EISV websocket, the dashboard and the UDS
+    resident listener, each with its own independent gate and none of them
+    dependent on OAuth. Killing all of them for a fault in one turns a route
+    misconfiguration into a fleet outage, and ``src/mcp_compat.py`` records
+    what that costs: launchd respawns forever while a sibling port keeps
+    reporting healthy.
+
+    503 rather than 401 because the state is the server's, not the caller's,
+    and because it is then observable over the wire — a diagnostic can read it
+    instead of inferring the gate from an environment variable, which is how
+    a check came to report an ungated route as healthy.
+
+    A bearer allowlist overrides it. The requirement is a gate, not OAuth, so
+    an operator whose OAuth broke can still reach the route with the second
+    credential rather than being locked out by their own hardening.
+    """
     bearer_allow = mcp_bearer_tokens()
+    if not bearer_allow and auth_config.gate_unavailable:
+        return AuthDecision(
+            allowed=False,
+            response=JSONResponse(
+                {
+                    "error": "auth_unavailable",
+                    "detail": (
+                        "an OAuth gate is configured for /mcp but could not be "
+                        "built at startup, so the route is closed rather than "
+                        "served unauthenticated; set UNITARES_MCP_BEARER_TOKENS "
+                        "for a credential that does not depend on OAuth, or fix "
+                        "the OAuth configuration and restart"
+                    ),
+                },
+                status_code=503,
+            ),
+        )
     if not bearer_allow and auth_config.oauth_provider is None:
         return AuthDecision(allowed=True)
 

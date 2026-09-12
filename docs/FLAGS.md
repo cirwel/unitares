@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**168 flags.**
+**169 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -140,6 +140,7 @@ index; that one is the curated decision record.
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_REQUIRED` | `False (via env_truthy)` | True when the operator demanded an auth gate on ``/mcp`` or no service | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_RESOURCE_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_SECRET` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Base URL of the local Ollama endpoint | src/mcp_handlers/support/inference_registry.py |

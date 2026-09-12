@@ -127,6 +127,7 @@ SERVER_BUILD_SHA = load_build_sha_from_repo(project_root)
 # ============================================================================
 
 from src.mcp_listen_config import (
+    auth_gate_refusal,
     build_transport_security_settings,
     default_listen_host,
 )
@@ -136,6 +137,8 @@ _oauth_issuer_url = os.environ.get("UNITARES_OAUTH_ISSUER_URL")
 _oauth_provider = None
 _auth_settings = None
 _OAUTH_REQUIRED_SCOPES = ["mcp:tools"]
+
+_oauth_setup_error: Exception | None = None
 
 if _oauth_issuer_url:
     try:
@@ -161,9 +164,58 @@ if _oauth_issuer_url:
         )
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
     except Exception as e:
-        print(f"[FastMCP] OAuth setup failed, continuing without auth: {e}", file=sys.stderr, flush=True)
+        # An operator who set the issuer URL asked for an auth gate. Serving
+        # /mcp unauthenticated anyway answers a different question than the one
+        # they asked, so the route now closes instead: authorize_mcp_request
+        # reads gate_unavailable and answers 503. The process stays up, because
+        # every other surface here has its own gate and none of them depend on
+        # OAuth. A bearer allowlist still overrides the closure.
+        #
+        # Only the exception TYPE is printed. AuthSettings is a pydantic model
+        # and a ValidationError echoes the offending input verbatim, so a
+        # resource/issuer URL carrying userinfo would otherwise land in a log
+        # that gets pasted into issues.
+        _oauth_setup_error = e
+        print(
+            "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
+            f"and is now CLOSED (503) rather than served open ({type(e).__name__})",
+            file=sys.stderr, flush=True,
+        )
+        print(
+            "[FastMCP] WARNING: set UNITARES_MCP_BEARER_TOKENS for a credential "
+            "that does not depend on OAuth and reopens /mcp, or fix the OAuth "
+            "configuration and restart. UNITARES_OAUTH_REQUIRED=1 additionally "
+            "refuses to start the process at all.",
+            file=sys.stderr, flush=True,
+        )
         _oauth_provider = None
         _auth_settings = None
+
+# Fail closed, for deployments that would rather be down than open. The
+# predicate lives in mcp_listen_config so it can be exercised directly; the
+# flag is read there, outside this module's issuer branch, so a misspelled
+# issuer variable cannot silently disarm it.
+#
+# The cost, stated rather than discovered: this raises during module import, so
+# the process exits before binding and launchd — KeepAlive with no
+# ThrottleInterval — respawns it every ten seconds indefinitely. That outage is
+# NOT self-announcing. src/mcp_compat.py records the precedent: a startup death
+# here reads as healthy on any surface whose status is inferred from a sibling
+# port, and the gateway's /health on :8768 is hardcoded to "ok".
+#
+# It is also wider than the MCP route. This process also serves /health*, the
+# /v1 REST surface, the EISV websocket, the dashboard and the UDS resident
+# listener, each with its own independent gate and none of them dependent on
+# OAuth. Refusing to start takes all of them down for a fault in one. That blast
+# radius is why this is opt-in rather than the default, and why a route-scoped
+# refusal (503 on /mcp alone) is the better long-term shape.
+_auth_refusal = auth_gate_refusal(
+    provider_present=_oauth_provider is not None,
+    issuer_set=bool(_oauth_issuer_url),
+    setup_error_name=type(_oauth_setup_error).__name__ if _oauth_setup_error else None,
+)
+if _auth_refusal:
+    raise RuntimeError(_auth_refusal)
 
 # Create the FastMCP server
 # Default bind: 127.0.0.1 (see default_listen_host). LAN/tunnel: set UNITARES_BIND_ALL_INTERFACES=1
@@ -313,6 +365,10 @@ async def main():
                 oauth_provider=_oauth_provider,
                 auth_settings=_auth_settings,
                 required_scopes=tuple(_OAUTH_REQUIRED_SCOPES),
+                # A configured gate that failed to build closes /mcp rather
+                # than serving it open. Scoped to the route: every other
+                # surface on this process keeps its own gate.
+                gate_unavailable=_oauth_setup_error is not None,
             ),
             host=args.host,
             port=args.port,
