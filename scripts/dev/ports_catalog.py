@@ -15,6 +15,14 @@ Ports that live outside this repo (anima on the Pi) or only in a tracked plist
 template are recorded descriptively; everything with an in-repo literal is
 verified.
 
+Interpreter constraint: ``scripts/ops/health_watchdog.sh`` shells out to this
+module via bare ``python3``, which under launchd's minimal PATH is the system
+interpreter (3.9.6 on macOS), NOT the 3.12+ this project requires. So this file
+must stay syntax-compatible with the oldest ``python3`` a deployment might
+resolve — see ``test_catalog_compiles_under_the_system_interpreter``. The first
+3.12-only construct added here collapses the watchdog's roster to its fallback
+branch on every run: loud, but six monitored services drop to one.
+
 Usage:
     python3 scripts/dev/ports_catalog.py            # write the doc
     python3 scripts/dev/ports_catalog.py --check     # exit 1 if doc stale OR a source lost its port

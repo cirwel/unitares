@@ -46,8 +46,13 @@ if [ -f "$REPO/scripts/dev/ports_catalog.py" ]; then
     # stops deletion of others' files, not creation of your own link.
     # `|| roster_file=/dev/null` keeps an unwritable or full disk on the loud
     # branch rather than aborting the whole run.
-    roster_file=$(mktemp "${TMPDIR:-/tmp}/unitares_roster.XXXXXX") || roster_file=/dev/null
-    trap 'rm -f "$roster_file"' EXIT
+    # The trap is armed ONLY on success: with roster_file=/dev/null it would
+    # try to unlink the device node on every degraded run — noisy into the
+    # error log here, and genuinely destructive anywhere the process can
+    # unlink in /dev.
+    roster_file=$(mktemp "${TMPDIR:-/tmp}/unitares_roster.XXXXXX") \
+        && trap 'rm -f "$roster_file"' EXIT \
+        || roster_file=/dev/null
     # stderr is kept, not discarded: when this fails, why it failed is the one
     # thing an operator needs at 3am, and this branch is meant to be the loud one.
     roster_err=$("$PYTHON" "$REPO/scripts/dev/ports_catalog.py" --health-probes 2>&1 >"$roster_file")
@@ -65,7 +70,12 @@ if [ -n "$roster" ]; then
             # script would exit 0 having written nothing.
             if [ "$role" = "governance" ]; then
                 governance_ok=1
-                GOVERNANCE_HEALTH_URL="$url"
+                # `:-` so an operator override still wins. Assigning
+                # unconditionally would honour GOVERNANCE_HEALTH_URL only when
+                # the registry is UNREADABLE — the inverse of what anyone would
+                # predict, and it would point a remote-host override silently
+                # back at localhost.
+                GOVERNANCE_HEALTH_URL="${GOVERNANCE_HEALTH_URL:-$url}"
             fi
         else
             failures=$((failures + 1))
@@ -83,7 +93,13 @@ else
     # script exists to catch.
     echo "[$(ts)] FAIL health-watchdog roster — ports_catalog.py produced no probes (repo: $REPO): ${roster_err:-no stderr}" >> "$LOG"
     failures=$((failures + 1))
-    if check "governance (fallback)" "${GOVERNANCE_HEALTH_URL:-http://localhost:8767/health}" 200; then
+    # The ONLY port literal left in this script, and only reachable when the
+    # registry cannot be read. It must also assign the variable: the pool read
+    # below consumes it, and leaving it unset here curls an empty URL and
+    # reports the pool "unknown" no matter what state it is actually in — a
+    # false alarm stacked on a real one, on the path that is already degraded.
+    GOVERNANCE_HEALTH_URL="${GOVERNANCE_HEALTH_URL:-http://localhost:8767/health}"
+    if check "governance (fallback)" "$GOVERNANCE_HEALTH_URL" 200; then
         governance_ok=1
     else
         failures=$((failures + 1))

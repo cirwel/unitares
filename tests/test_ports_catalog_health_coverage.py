@@ -183,6 +183,38 @@ def test_exactly_one_registry_entry_claims_the_governance_role():
     )
 
 
+def test_catalog_compiles_under_the_system_interpreter():
+    """The watchdog shells out via bare `python3`, which launchd resolves to /usr/bin.
+
+    pyproject requires >=3.12, but `scripts/ops/health_watchdog.sh` runs under
+    launchd's minimal PATH where `python3` is the system interpreter — 3.9.6 on
+    current macOS. This module therefore has a lower floor than the rest of the
+    repo, and nothing else enforces it. A 3.12-only construct added here (an
+    f-string containing a backslash, say) would not fail any other test; it
+    would collapse the watchdog's roster to the fallback branch on every run,
+    dropping six monitored services to one.
+
+    Skipped where no system interpreter exists, since the constraint only binds
+    on hosts that have one.
+    """
+    import py_compile
+
+    system_python = pathlib.Path("/usr/bin/python3")
+    if not system_python.exists():
+        pytest.skip("no /usr/bin/python3 on this host")
+
+    proc = subprocess.run(
+        [str(system_python), "-m", "py_compile", str(CATALOG)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, (
+        f"{CATALOG.name} does not compile under {system_python} — the "
+        "interpreter health_watchdog.sh actually gets under launchd:\n"
+        f"{proc.stderr}\nKeep this module compatible with the oldest python3 a "
+        "deployment might resolve, or pin the interpreter in the script."
+    )
+
+
 def test_watchdog_treats_an_empty_roster_as_failure():
     """An unavailable registry must page, not pass.
 
