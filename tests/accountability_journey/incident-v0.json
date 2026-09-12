@@ -2,8 +2,11 @@
   "schema": "unitares.accountability-journey.v0",
   "classification": {
     "evidence_class": "mechanism_validation",
+    "evaluation_stage": "retrieval_control",
     "headline_eligible": false,
-    "frozen_protocol_affected": false
+    "frozen_protocol_affected": false,
+    "information_equivalence_required": true,
+    "natural_capture_evaluated": false
   },
   "incident": {
     "incident_id": "reload-claim-contradiction-v0",

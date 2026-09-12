@@ -1,6 +1,7 @@
 # Accountability journey rehearsal — v0 result
 
 **Evidence class:** mechanism validation only.
+**Evaluation stage:** retrieval control (stage 2 of 2).
 **Headline comparison:** not evaluated.
 **Frozen preregistration:** unaffected.
 
@@ -17,11 +18,16 @@ Both arms carry the same oracle fact, edge, and attribution manifest. This preve
 
 None in the deterministic fixture.
 
+## Two-stage evaluation
+
+1. **Capture quality — not run.** Let UNITARES and the operator's ordinary Git/handoff workflow record an incident naturally, then score both against an external oracle. Missing facts are findings, not a reason to equalize the inputs after the fact.
+2. **Retrieval control — this rehearsal.** Give both paths equivalent facts and test reconstruction. This isolates retrieval from capture.
+
 ## Interpretation and limits
 
 The result establishes that the scenario, scorer, and both reconstruction paths preserve the declared incident facts. It does not establish that UNITARES improves outcomes, reduces reconstruction time, or outperforms a structured handoff in real work.
 
-The next step is a separate rehearsal against actual retained records, followed—without changing its rules—by the frozen multi-scenario evaluation when its harness is ready.
+The next step is stage 1 against actual retained UNITARES records and naturally produced Git/handoff artifacts. Only after capture coverage is measured should stage 2 compare retrieval effort. The frozen multi-scenario evaluation remains unchanged.
 
 Oracle manifest SHA-256: `78fd4c0c161373dfd548022b63ae66a7b6e4a4e2c6ef15de10b74022f91b331e`
 

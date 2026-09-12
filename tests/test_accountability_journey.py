@@ -17,11 +17,26 @@ def test_fixture_reconstructs_the_same_incident_in_both_arms() -> None:
 
     assert result["classification"] == {
         "evidence_class": "mechanism_validation",
+        "evaluation_stage": "retrieval_control",
         "frozen_protocol_affected": False,
         "headline_eligible": False,
+        "information_equivalence_required": True,
+        "natural_capture_evaluated": False,
     }
     assert result["semantic_equivalence"] is True
     assert result["failures"] == []
+    assert result["stage_summary"] == {
+        "capture_quality": {
+            "status": "not_run",
+            "question": "What does each system capture during natural use?",
+            "required_input": "external oracle plus naturally produced records",
+        },
+        "retrieval_control": {
+            "status": "passed",
+            "question": "Given equivalent facts, can each path reconstruct the incident?",
+            "information_equivalence": True,
+        },
+    }
     for arm in result["arms"].values():
         assert arm["metrics"]["reconstruction_accuracy"] == 1.0
         assert arm["metrics"]["attribution_precision"] == 1.0
@@ -89,6 +104,8 @@ def test_report_states_limits_and_failures() -> None:
     report = render_report(evaluate_journey(load_fixture(DEFAULT_FIXTURE)))
 
     assert "mechanism validation only" in report
+    assert "retrieval control (stage 2 of 2)" in report
+    assert "Capture quality — not run" in report
     assert "Headline comparison:** not evaluated" in report
     assert "None in the deterministic fixture." in report
     assert "does not establish that UNITARES improves outcomes" in report

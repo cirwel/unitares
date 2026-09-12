@@ -20,6 +20,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA = "unitares.accountability-journey.v0"
 RESULT_SCHEMA = "unitares.accountability-journey.result.v0"
+RETRIEVAL_STAGE = "retrieval_control"
 ARMS = ("unitares", "structured_handoff")
 DEFAULT_FIXTURE = (
     Path(__file__).resolve().parents[2]
@@ -170,10 +171,16 @@ def validate_fixture(fixture: Mapping[str, Any]) -> None:
         raise JourneyError("classification must be an object")
     if classification.get("evidence_class") != "mechanism_validation":
         raise JourneyError("evidence_class must be mechanism_validation")
+    if classification.get("evaluation_stage") != RETRIEVAL_STAGE:
+        raise JourneyError(f"evaluation_stage must be {RETRIEVAL_STAGE}")
     if classification.get("headline_eligible") is not False:
         raise JourneyError("headline_eligible must be false")
     if classification.get("frozen_protocol_affected") is not False:
         raise JourneyError("frozen_protocol_affected must be false")
+    if classification.get("information_equivalence_required") is not True:
+        raise JourneyError("retrieval control requires information equivalence")
+    if classification.get("natural_capture_evaluated") is not False:
+        raise JourneyError("retrieval control cannot claim natural capture evaluation")
 
     oracle = fixture.get("oracle")
     if not isinstance(oracle, dict):
@@ -371,6 +378,7 @@ def evaluate_journey(fixture: Mapping[str, Any]) -> dict[str, Any]:
         arm_results["unitares"]["manifest"]["exact_oracle_match"]
         and arm_results["structured_handoff"]["manifest"]["exact_oracle_match"]
     )
+    retrieval_status = "passed" if semantic_equivalence and not failures else "failed"
     return {
         "schema": RESULT_SCHEMA,
         "classification": deepcopy(fixture["classification"]),
@@ -380,8 +388,20 @@ def evaluate_journey(fixture: Mapping[str, Any]) -> dict[str, Any]:
         "arms": arm_results,
         "descriptive_deltas_unitares_minus_handoff": deltas,
         "failures": failures,
+        "stage_summary": {
+            "capture_quality": {
+                "status": "not_run",
+                "question": "What does each system capture during natural use?",
+                "required_input": "external oracle plus naturally produced records",
+            },
+            "retrieval_control": {
+                "status": retrieval_status,
+                "question": "Given equivalent facts, can each path reconstruct the incident?",
+                "information_equivalence": semantic_equivalence,
+            },
+        },
         "interpretation": {
-            "status": "mechanism_validation_only",
+            "status": "retrieval_control_mechanism_validation",
             "comparative_claim": "not_evaluated",
             "reason": (
                 "One deterministic, authored fixture can validate the evaluator "
@@ -416,6 +436,7 @@ def render_report(result: Mapping[str, Any]) -> str:
         "# Accountability journey rehearsal — v0 result",
         "",
         "**Evidence class:** mechanism validation only.",
+        "**Evaluation stage:** retrieval control (stage 2 of 2).",
         "**Headline comparison:** not evaluated.",
         "**Frozen preregistration:** unaffected.",
         "",
@@ -454,6 +475,15 @@ def render_report(result: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Two-stage evaluation",
+            "",
+            "1. **Capture quality — not run.** Let UNITARES and the operator's "
+            "ordinary Git/handoff workflow record an incident naturally, then score "
+            "both against an external oracle. Missing facts are findings, not a "
+            "reason to equalize the inputs after the fact.",
+            "2. **Retrieval control — this rehearsal.** Give both paths equivalent "
+            "facts and test reconstruction. This isolates retrieval from capture.",
+            "",
             "## Interpretation and limits",
             "",
             "The result establishes that the scenario, scorer, and both "
@@ -461,9 +491,10 @@ def render_report(result: Mapping[str, Any]) -> str:
             "not establish that UNITARES improves outcomes, reduces reconstruction "
             "time, or outperforms a structured handoff in real work.",
             "",
-            "The next step is a separate rehearsal against actual retained records, "
-            "followed—without changing its rules—by the frozen multi-scenario "
-            "evaluation when its harness is ready.",
+            "The next step is stage 1 against actual retained UNITARES records and "
+            "naturally produced Git/handoff artifacts. Only after capture coverage "
+            "is measured should stage 2 compare retrieval effort. The frozen "
+            "multi-scenario evaluation remains unchanged.",
             "",
             f"Oracle manifest SHA-256: `{result['oracle_manifest_digest']}`",
             "",
