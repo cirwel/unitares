@@ -238,53 +238,23 @@ WORKFLOWS: Dict[str, List[str]] = {
 }
 
 
+# Descriptions for DISPATCH-ONLY alias names: the pre-consolidation names
+# (list_agents, observe_agent, get_server_info, ...) that resolve through
+# src/mcp_handlers/tool_stability.py but are never on the wire, and which
+# describe_tool still answers for. Nothing else belongs here.
+#
+# An advertised name -- a registered tool or one of the eight workflow aliases
+# -- has exactly one description: src/tool_descriptions.py for a tool, the
+# ToolAlias.migration_note for a workflow alias. tools/list serves it,
+# list_tools serves its first line, and describe_tool opens with the same
+# line. Until 2026-09-12 this table also carried 28 advertised names and
+# outranked the wire in list_tools, so the rewrites of #2148, #2151 and #2158
+# reached MCP clients and never reached orientation (audit F2): `identity`
+# still read "Check current binding or set your display name" while the wire
+# warned that an argument-less call may mint and persist a new identity, and
+# the `dialectic` entry was a hand-maintained action list that had drifted
+# twice. test_override_table_carries_no_advertised_name pins the scope.
 TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
-    "start_session": "Start a UNITARES session; primary workflow name for onboarding",
-    "sync_state": (
-        "Check in after meaningful work; primary workflow name for state updates. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "check_working_state": (
-        "Read current EISV state without mutating history. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "search_shared_memory": "Search shared memory before writing duplicate discoveries",
-    "store_finding": (
-        "Store a structured finding in shared memory; intuitive alias for "
-        "knowledge(action='store')."
-    ),
-    "update_finding": (
-        "Update a stored finding's status or details; intuitive alias for "
-        "knowledge(action='update')."
-    ),
-    "record_result": (
-        "Record real task/tool/test outcome for calibration. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "request_review": (
-        "Request governed, on-record judgment with actual reviewer provenance; "
-        "use consult for advisory model evidence."
-    ),
-    "consult": (
-        "Ask for advisory model evidence without creating a governed review record."
-    ),
-    "onboard": "Register a fresh process identity. Prefer start_session(force_new=true); use parent_agent_id only for real handoffs.",
-    "identity": "🪞 Check current binding or set your display name. Not the normal start/resume path; use start_session first.",
-    "process_agent_update": (
-        "Raw implementation for sync_state(); updates agent governance state. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "get_governance_metrics": (
-        "📊 Get current state and metrics without updating. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "simulate_update": (
-        "🧪 Test decisions without persisting state. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "get_thresholds": "⚙️ View current threshold configuration",
-    "set_thresholds": "⚙️ Set runtime threshold overrides",
-    "observe": f"👁️ Unified governance observability. {EISV_INLINE_SUMMARY}",
     "observe_agent": (
         "👁️ View agent state and patterns (collaborative awareness). "
         f"{EISV_INLINE_SUMMARY}"
@@ -306,39 +276,21 @@ TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
     "update_agent_metadata": "✏️ Update tags and notes",
     "archive_agent": "📦 Archive for long-term storage",
     "delete_agent": "🗑️ Delete agent (protected for pioneers)",
-    "archive_old_test_agents": "🧹 Preview stale agent archival candidates",
-    "mark_response_complete": "✅ Mark agent as having completed response, waiting for input",
-    "self_recovery": "▶️ Self-recovery: use action='quick' for safe states, action='review' for full recovery with reflection",
     "get_system_history": (
         f"📜 Export time-series history (inline). {EISV_INLINE_SUMMARY}"
-    ),
-    "outcome_event": (
-        f"Record an outcome with its EISV snapshot. {EISV_INLINE_SUMMARY}"
     ),
     "export_to_file": "💾 Export history to JSON/CSV file",
     "reset_monitor": "🔄 Reset agent state",
     "get_server_info": "ℹ️ Server version, PID, uptime, health",
     # Knowledge Graph (Fast, indexed, transparent)
     "store_knowledge_graph": "💡 Store knowledge discovery in graph (fast, non-blocking)",
-    "search_knowledge_graph": "🔎 Search knowledge graph by tags, type, agent (indexed queries)",
     "get_knowledge_graph": "📚 Get all knowledge for an agent (fast index lookup)",
     "list_knowledge_graph": "📊 List knowledge graph statistics (full transparency)",
     "update_discovery_status_graph": "🔄 Update discovery status or content/metadata on an existing discovery",
-    "leave_note": "📝 Leave a quick note in the knowledge graph (minimal friction)",
-    "list_tools": "📚 Discover all available tools. Your guide to what's possible",
-    "describe_tool": "📖 Get full details for a specific tool. Deep dive into any tool",
     "cleanup_stale_locks": "🧹 Clean up stale lock files from crashed/killed processes",
-    # Keep in sync with the action map in consolidated.py's `handle_dialectic`.
-    # This override takes PRIORITY over the tool_descriptions.json entry
-    # (tool_introspection.py resolves overrides first), so a stale action list
-    # here silently wins over a corrected one there. `vote` was advertised for
-    # months after the action was removed; `quick` was live and unlisted.
-    "dialectic": "📋 Dialectic operations: get, list, quick, request, thesis, antithesis, synthesis, reassign",
-    "health_check": "🏥 Quick health check - system status and component health",
     "check_calibration": "📏 Check calibration of confidence estimates",
     "update_calibration_ground_truth": "📝 Record external truth signal for calibration (optional)",
     "get_telemetry_metrics": "📊 Get comprehensive telemetry metrics",
-    "get_workspace_health": "🏥 Get comprehensive workspace health status",
     "get_tool_usage_stats": "📈 Get tool usage statistics to identify which tools are actually used vs unused",
 }
 

@@ -862,12 +862,20 @@ def check_constraint_drift(db_url: str, repo_root: Path) -> CheckResult:
         return CheckResult(name, mode, Status.SKIP, "pg_constraint not queryable")
 
     live_tables = {tbl for tbl, _ in live}
+    # A table absent entirely is a different failure; schema_migrations and
+    # column_drift own that, and reporting it here would just double-count. But
+    # what was skipped has to be subtracted from what the verdict claims, or the
+    # PASS asserts every declared constraint is present having compared none of
+    # them — the same overclaim column_drift's "across {len(refs)} table(s)"
+    # wording carried before #2149, one level worse because it survives a
+    # database in which nothing exists at all.
+    comparable = {
+        key: src for key, src in declared.items() if key[0] in live_tables
+    }
     missing = [
         f"{tbl}.{cname}  (declared by {src})"
-        for (tbl, cname), src in sorted(declared.items())
-        # A table absent entirely is a different failure; schema_migrations and
-        # column_drift own that, and reporting it here would just double-count.
-        if tbl in live_tables and (tbl, cname) not in live
+        for (tbl, cname), src in sorted(comparable.items())
+        if (tbl, cname) not in live
     ]
 
     if missing:
@@ -885,9 +893,19 @@ def check_constraint_drift(db_url: str, repo_root: Path) -> CheckResult:
                 "constraint re-validates the whole table."
             ),
         )
+    if not comparable:
+        # Nothing was compared. SKIP rather than PASS: doctor_findings' own
+        # blindness guard thresholds on SKIP, so an honest non-answer is visible
+        # to it and a green is not.
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"none of the {len(declared)} declared constraint(s) could be compared "
+            "— no declaring table exists in this DB",
+        )
     return CheckResult(
         name, mode, Status.PASS,
-        f"all {len(declared)} migration-declared constraint(s) present in the DB",
+        f"{len(comparable)} of {len(declared)} migration-declared constraint(s) "
+        f"compared and present ({len(declared) - len(comparable)} skipped: table absent)",
     )
 
 
@@ -1642,17 +1660,26 @@ def check_tool_edge_index_fresh(repo_root: Path) -> CheckResult:
     string list of schema modules). A tool, action, or alias added without
     regenerating leaves the only readable map of dispatch silently wrong.
 
-    SKIPs on exit 2 — the generator needs the handler package importable
-    (requirements-core.txt). "Cannot look" is not "looked and found drift", and
-    this check must stay honest on a pre-install tree like the rest of the
-    doctor. A crash reports UNKNOWN rather than drift, per the contract above:
-    the import this generator needs can fail in ways it does not catch, so exit
-    1 from it is not automatically a verdict either.
+    SKIPs on exit 2 — the generator needs the handler package and the
+    production registrar importable (requirements-full.txt; a core-only install
+    lacks the registrar's `prometheus_client`, and until 2026-09-11 the
+    generator folded that into a false stale verdict — tool-surface audit
+    2026-09-12, F3). "Cannot look" is not "looked and found drift", and this
+    check must stay honest on a pre-install tree like the rest of the doctor.
+    A crash reports UNKNOWN rather than drift, per the contract above: the
+    import this generator needs can fail in ways it does not catch, so exit 1
+    from it is not automatically a verdict either.
     """
     return _check_generated_doc_fresh(
         "tool_edge_index_fresh", repo_root,
         "scripts/dev/tool_edge_index.py", "docs/dev/TOOL_EDGE_INDEX.md",
-        cannot_look_message="handler package not importable",
+        # Covers BOTH exit-2 causes. Naming only the dependency one would
+        # assert "not installed" about a machine whose real problem is an
+        # unimportable handler package; the detail line carries which it was.
+        cannot_look_message=(
+            "generator could not look — missing dependency "
+            "(requirements-full.txt) or unimportable handler package"
+        ),
     )
 
 

@@ -154,7 +154,14 @@ async def test_describe_request_review_uses_friendly_wire_schema_and_authority()
     assert properties == (
         ALIAS_SCHEMA_KEEP["request_review"] | _ALIAS_ALWAYS_KEEP
     )
-    assert "governed, on-record judgment" in tool["description"]
+    # The alias describes itself with the text tools/list serves for it (its
+    # migration note, via build_alias_tool_definition); that text is where the
+    # authority claim lives. Until 2026-09-12 a catalog override supplied a
+    # different sentence here, so describe_tool and the wire disagreed.
+    from src.interface_contract import build_alias_tool_definition
+
+    assert tool["description"] == build_alias_tool_definition("request_review").description
+    assert "governed, on-record" in tool["description"]
     assert tool["name"] == "request_review"
     assert tool["implementation_name"] == "dialectic"
 

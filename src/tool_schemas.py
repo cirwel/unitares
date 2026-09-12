@@ -189,8 +189,14 @@ def _validate_consolidated_tool_order(
             )
 
 
-def _first_line(s: str | None) -> str:
-    """Extract first non-empty line from a string."""
+def first_line(s: str | None) -> str:
+    """The first non-empty line of a description, stripped.
+
+    This is the description ``tools/list`` serves under the default short
+    verbosity, and since 2026-09-12 also the one ``list_tools`` and the compact
+    ``describe_tool`` view serve for an advertised name, so every discovery
+    surface derives its one-liner with the same rule.
+    """
     if not s:
         return ""
     for line in s.splitlines():
@@ -295,6 +301,7 @@ def advertised_input_schema(
 def get_tool_definitions(
     verbosity: str | None = None,
     field_descriptions: str | None = None,
+    property_titles: str | None = None,
 ) -> list[Tool]:
     """Build the list of MCP Tool objects from Pydantic schemas + descriptions.
 
@@ -303,6 +310,13 @@ def get_tool_definitions(
     compact form, and both leave the authored text reachable through
     ``describe_tool``, which reads the Pydantic models rather than this
     catalog.
+
+    ``property_titles`` governs generated ``title`` keywords and defaults to
+    ``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES`` (strip). The ``/mcp/`` registrar
+    passes ``"keep"``: it hands FastMCP this catalog schema with the titles
+    still present and lets ``src/tool_mode_listing.py`` apply the title policy
+    on every listing, which is what keeps the operator switch reversible at
+    list time on that transport too.
     """
     if verbosity is None:
         verbosity = os.getenv("UNITARES_TOOL_SCHEMA_VERBOSITY", "short").strip().lower()
@@ -388,10 +402,11 @@ def get_tool_definitions(
                 get_tool_input_schema(t),
                 field_descriptions=field_description_mode,
                 budget=brief_budget,
+                property_titles=property_titles,
             ),
         )
         if verbosity == "short":
-            t.description = _first_line(t.description)
+            t.description = first_line(t.description)
         # The machine-readable half of the same statement the description
         # makes in prose (src/tool_annotations.py). Both Tool() sites above
         # funnel through this loop, so stdio, REST and the FastMCP registrar

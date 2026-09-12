@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.6.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.7.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. The server advertises the same
@@ -15,11 +15,23 @@ machine-readable complete contract. A live client negotiates the same contract b
 calling `list_tools(lite=true)` and reading `interface_contract`; no repository
 tag lookup or private server import is required. Its `surface_sha256` changes
 whenever the ordered capability records change. CI compares that artifact with
-the live catalog. These hashes do not certify byte-identical MCP schemas:
-FastMCP regenerates schemas from typed wrappers, including defaults and schema
-structure. Use `scripts/diagnostics/tool_surface_cost.py --surface mcp` for the
-final local MCP definitions; `--surface catalog` explicitly measures this
-source layer. Neither command is a probe of a deployed peer.
+the live catalog. Each `input_schema_sha256` is taken over the catalog schema,
+and that schema is what every transport advertises byte for byte. FastMCP
+derives a schema of its own from each tool's typed wrapper, and that derivation
+drops bounds, concrete defaults and `$defs` (finding F12 of the 2026-09-12
+tool-surface audit: before 2026-09-11 a `/mcp/` client saw 106 defaults as
+`null` and no bound on `delegate_inference.timeout_s`), so the `/mcp/`
+registrar replaces it with the catalog schema after registration
+(`src/tool_registration.py`, `_advertise_catalog_schema`). Dispatch validation
+is unchanged: the wrapper's argument model still decides what the transport
+accepts, and the handler's Pydantic model enforces the advertised bounds.
+`tests/test_mcp_schema_parity.py` diffs the mounted listing against the
+catalog per tool and per property. The generated-title policy is the one step
+still applied per listing, so that it stays reversible.
+`scripts/diagnostics/tool_surface_cost.py --surface mcp` measures the final
+local MCP listing and `--surface catalog` the source layer; the two agree, and
+a gap between them is a finding rather than an expected difference. Neither
+command is a probe of a deployed peer.
 
 ## What v1 guarantees
 
@@ -62,7 +74,7 @@ reviewer services. Tool counts alone establish none of those conditions.
 
 ## One catalog and compatibility
 
-Interface release 1.6.0 advertises every registered-and-mounted public tool,
+Since interface release 1.6.0 the contract advertises every registered-and-mounted public tool,
 including primary workflow aliases, on every transport. A definition registered
 after server mounting is omitted rather than advertised without a dispatch path.
 No mode selection is required. Legacy
@@ -92,7 +104,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.6.0` is the negotiated interface release. Compatible additions
+- `version: 1.7.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -102,7 +114,12 @@ The two identifiers serve different jobs:
   abridged to their first sentence, with the full text served by
   `describe_tool`; 1.5.0: `search_shared_memory` drops 14 unused parameters
   belonging to other actions, while search's type, severity and provenance
-  options remain and appear in action-specific discovery).
+  options remain and appear in action-specific discovery; 1.6.0: one complete
+  catalog on every transport, as the section above describes; 1.7.0,
+  2026-09-12: `cirs_protocol`'s `action` description names which sub-action
+  each protocol routes, adding the `list` and `status` it had omitted.
+  Description-only: one digest moves and no parameter name, type, default or
+  requiredness changes).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
@@ -110,9 +127,9 @@ schema. In 1.5.0, clients pinning hashes should re-pin against the current
 catalog. `UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS=full` restores authored
 descriptions; `UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores generated
 titles. Neither switch restores parameters removed in later releases or
-guarantees an older digest. The default title policy now applies after MCP
-schema regeneration as well as to the catalog. Titles are annotations, so
-that part preserves validation; schema fingerprints still change.
+guarantees an older digest. The default title policy applies on each MCP
+listing as well as to the catalog. Titles are annotations, so that part
+preserves validation; schema fingerprints still change.
 
 The 14 fields removed from `search_shared_memory` are `closure_class`,
 `closure_evidence`, `confidence`, `dry_run`, `include_response_chain`,
