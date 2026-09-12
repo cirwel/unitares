@@ -62,7 +62,7 @@ reviewer services. Tool counts alone establish none of those conditions.
 
 ## One catalog and compatibility
 
-Interface release 1.6.0 advertises every registered-and-mounted public tool,
+Since interface release 1.6.0 the contract advertises every registered-and-mounted public tool,
 including primary workflow aliases, on every transport. A definition registered
 after server mounting is omitted rather than advertised without a dispatch path.
 No mode selection is required. Legacy
@@ -104,10 +104,9 @@ The two identifiers serve different jobs:
   belonging to other actions, while search's type, severity and provenance
   options remain and appear in action-specific discovery; 1.6.0: one complete
   catalog on every transport, as the section above describes; 1.7.0,
-  2026-09-11: `cirs_protocol` describes the `action` vocabulary each protocol
-  routes, adding the `list` and `status` the description omitted, and
-  `describe_tool(tool_name="cirs_protocol", action=...)` answers per action;
-  only that digest moves, and no parameter name, type, default or
+  2026-09-12: `cirs_protocol`'s `action` description names which sub-action
+  each protocol routes, adding the `list` and `status` it had omitted.
+  Description-only: one digest moves and no parameter name, type, default or
   requiredness changes).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,

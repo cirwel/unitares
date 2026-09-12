@@ -119,25 +119,19 @@ def test_cirs_protocol_declares_its_vocabulary():
     """Declared by hand, like self_recovery. ``cirs_protocol`` selects a
     ``protocol`` first and routes ``action`` one level down, so it is not an
     action_router and carried no vocabulary: the clamp treated it as
-    single-purpose and every call landed as one undifferentiated row
-    (tool-surface audit F4). The protocol selector is not part of the
-    discriminator — the resolver keys on ``action``/``op`` only, and the
-    selector must not reach the column any more than any other argument."""
+    single-purpose and dropped the sub-action, so a call would have recorded no
+    discriminator (tool-surface audit F4).
+
+    The protocol selector is deliberately NOT recorded: ``_ALLOWED_PAYLOAD_KEYS``
+    admits only action/canonical_tool/action_source. So this records the second
+    dispatch level and not the first, and ``action="query"`` still merges the
+    four protocols that route it. Recording the selector too would be a
+    deliberate allowlist widening, not a side effect of this test.
+    """
     payload = build_tool_usage_payload(
         "cirs_protocol", {"protocol": "void_alert", "action": "emit"}
     )
     assert payload == {"action": "emit", "action_source": "explicit"}
-
-    for protocol, action in (
-        ("coherence_report", "compute"),
-        ("boundary_contract", "list"),
-        ("governance_action", "status"),
-    ):
-        recorded = build_tool_usage_payload(
-            "cirs_protocol", {"protocol": protocol, "action": action}
-        )
-        assert recorded["action"] == action, (protocol, action)
-        assert protocol not in str(recorded)
 
     stray = build_tool_usage_payload(
         "cirs_protocol", {"protocol": "void_alert", "action": "broadcast"}
@@ -145,33 +139,54 @@ def test_cirs_protocol_declares_its_vocabulary():
     assert stray["action"] == "action_unlisted"
     assert "broadcast" not in str(stray)
 
-    # No protocol on the validated path defaults an action, so an action-less
-    # call (which the handler refuses) audits as no sub-action rather than as
-    # an invented default.
+    # No selectable protocol defaults an action, so an action-less call (which
+    # the handler refuses) audits as no sub-action rather than as an invented
+    # default. resonance_alert DOES default to "query", which is why the
+    # decorator declares no default_action only for the selectable set.
     assert build_tool_usage_payload("cirs_protocol", {"protocol": "void_alert"}) is None
+
+    # The merge this does not resolve, pinned so it is a known residual rather
+    # than a surprise in SQL.
+    assert build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "void_alert", "action": "query"}
+    ) == build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "coherence_report", "action": "query"}
+    )
 
 
 @pytest.mark.asyncio
-async def test_cirs_protocol_vocabulary_is_what_its_handlers_route():
-    """The set is hand-declared, so it is held to the handler bodies rather
-    than to the schema prose (which listed seven of the nine). Every protocol
-    handler that takes an action refuses an unroutable one with its own
-    ``valid_actions``; the union of those IS the vocabulary. A sub-action
-    added to a handler without being declared would audit as
-    ``action_unlisted`` from the day it ships, and this is what says so."""
+async def test_cirs_protocol_vocabulary_is_what_its_selectable_handlers_refuse():
+    """Holds the hand-declared set to the SELECTABLE handlers' own refusal
+    vocabularies, and to nothing wider.
+
+    Scoped to ``CirsProtocolParams.protocol``, not to ``_CIRS_DISPATCHERS``:
+    the dict routes two protocols validation rejects, so sourcing the
+    vocabulary from it would let an action only an unreachable handler routes
+    be forced into the declared set and advertised to callers.
+
+    What this does NOT verify, stated so the guard is not read as stronger
+    than it is: each handler holds its vocabulary twice, as the membership
+    tuple it dispatches on and as the ``valid_actions`` list in its refusal
+    payload. This reads the second. A branch added to the gate while the
+    refusal list is left alone routes, succeeds, audits as ``action_unlisted``,
+    and still passes here. Closing that needs one source per handler that the
+    gate, the refusal and this union all read.
+    """
     import json
 
-    from src.mcp_handlers.cirs.protocol import _CIRS_DISPATCHERS
+    from src.mcp_handlers.cirs.protocol import (
+        _CIRS_DISPATCHERS,
+        _VALIDATED_PROTOCOLS,
+    )
     from src.mcp_handlers.decorators import get_tool_definition
 
-    # The one protocol with no sub-action: it emits on every call and reads
-    # no ``action`` at all.
-    actionless = {"stability_restored"}
+    assert _VALIDATED_PROTOCOLS, "no selectable protocols resolved; test is inert"
     routed = set()
-    for protocol, handler in _CIRS_DISPATCHERS.items():
-        if protocol in actionless:
-            continue
-        result = await handler.__wrapped__({"action": "__unroutable__"})
+    for protocol in _VALIDATED_PROTOCOLS:
+        # Through the decorator, not ``__wrapped__``: the wrapper normalizes a
+        # bare TextContent into a list, which is the shape ``result[0]`` below
+        # assumes.
+        result = await _CIRS_DISPATCHERS[protocol]({"action": "__unroutable__"})
         body = json.loads(result[0].text)
         valid = (body.get("recovery") or {}).get("valid_actions")
         assert valid, f"{protocol} did not refuse an unroutable action with valid_actions"
@@ -185,8 +200,15 @@ async def test_cirs_protocol_vocabulary_is_what_its_handlers_route():
 # ---------------------------------------------------------------------------
 
 def test_every_action_router_declares_its_vocabulary():
-    """``action_router`` derives ``known_actions`` from its own routing map, so
-    this can only fail if the derivation is removed."""
+    """Every multi-action tool must carry a discriminator.
+
+    Two failure modes, not one. For the eight ``action_router`` tools the set is
+    derived from the routing map, so only removing the derivation breaks them.
+    ``self_recovery`` and ``cirs_protocol`` declare theirs BY HAND, so an
+    ordinary edit that drops the keyword is enough — which is the whole reason
+    those two are named here. The list is deliberately hand-written: a registry
+    scan would pass vacuously if a name vanished from the registry.
+    """
     from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
 
     routers = {
@@ -278,14 +300,29 @@ _FORBIDDEN = {
     "client_session_id": "sess-1",
     "target_agent_id": "another-agent",
     "name": "Some Display Name",
+    # A bounded server-side selector is still a caller-supplied argument: the
+    # column carries the sub-action, never the routing key that chose the
+    # handler. Covers every parametrized tool rather than cirs_protocol alone.
+    "protocol": "void_alert",
 }
 
 
 @pytest.mark.parametrize(
-    "tool_name", ["dialectic", "request_review", "knowledge", "onboard", "cirs_protocol"]
+    "tool_name,action",
+    [
+        ("dialectic", "request"),
+        ("request_review", "request"),
+        ("knowledge", "search"),
+        ("onboard", "request"),  # no vocabulary: payload stays empty
+        # An action IN the tool's own vocabulary, so the builder takes the
+        # pass-through branch rather than short-circuiting on the clamp. With a
+        # shared unlisted action every tool here exercised only the clamp, and
+        # a leak added under ``action in known`` would have passed.
+        ("cirs_protocol", "emit"),
+    ],
 )
-def test_no_non_allowlisted_argument_ever_reaches_the_payload(tool_name):
-    arguments = {"action": "request", **_FORBIDDEN}
+def test_no_non_allowlisted_argument_ever_reaches_the_payload(tool_name, action):
+    arguments = {"action": action, **_FORBIDDEN}
     payload = build_tool_usage_payload(tool_name, arguments) or {}
 
     assert set(payload) <= {"action", "canonical_tool", "action_source"}

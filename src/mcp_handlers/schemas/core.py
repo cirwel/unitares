@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Union, Literal, Dict, Any, List, ClassVar, Mapping, Tuple
+from typing import Optional, Union, Literal, Dict, Any, List
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -576,25 +576,24 @@ class OutcomeEventParams(AgentIdentityMixin):
 
 class CirsProtocolParams(AgentIdentityMixin):
     """Parameters for cirs_protocol"""
-    # Which of these flat parameters each action uses — the declaration
-    # SelfRecoveryParams carries, see schemas/router_actions.py. The tool is
-    # not an action_router: `protocol` selects the sub-handler and `action` is
-    # routed one level down, so the keys are the union across protocols and
-    # `protocol` itself belongs to every action. Only parameters on this
-    # schema are named; the sub-handlers read more than the wire declares.
-    # tests/test_router_action_fields.py holds the keys to the decorator's
-    # known_actions.
-    ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
-        "emit": ("protocol", "severity"),
-        "query": ("protocol", "target_agent_id", "limit"),
-        "compute": ("protocol", "target_agent_id"),
-        "set": ("protocol",),
-        "get": ("protocol", "target_agent_id"),
-        "list": ("protocol",),
-        "initiate": ("protocol", "target_agent_id"),
-        "respond": ("protocol",),
-        "status": ("protocol",),
-    }
+    # Deliberately NO ACTION_FIELDS. The declaration means "which of these flat
+    # parameters belongs to which action" (schemas/router_actions.py), and this
+    # tool cannot answer that with an action-keyed map: `protocol` selects the
+    # sub-handler and every parameter here is scoped by PROTOCOL, not by action
+    # (`severity` is void_alert's, `target_agent_id` is coherence_report's and
+    # boundary_contract's). An action-keyed union therefore describes no single
+    # call. Declaring one was tried and reverted in review: it flipped
+    # describe_tool into narrowing mode, where `narrow_schema_to_action` pins
+    # `action` and leaves `protocol` its full enum, so the per-action view
+    # asserted pairs the handlers refuse (protocol="void_alert", action="list"),
+    # named `target_agent_id` for the three query protocols that ignore it, and
+    # presented `set`/`respond`/`status` as parameterless. It also added an
+    # unknown-action refusal where the full schema used to be returned. Without
+    # it describe_tool serves the flat union and claims nothing about
+    # applicability, which is true. A per-(protocol, action) declaration would
+    # need a second selector in router_actions.py; until then the mapping lives
+    # in the `action` description below and in docs/guides/CIRS_PROTOCOL.md.
+    # tests/test_router_action_fields.py::_TWO_LEVEL_TOOLS records the exemption.
     protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(
         ...,
         description=(
@@ -613,8 +612,8 @@ class CirsProtocolParams(AgentIdentityMixin):
         ),
         json_schema_extra={
             "brief": (
-                "Per-protocol sub-action: emit, query, compute, set, get, list, "
-                "initiate, respond or status. Full mapping in describe_tool."
+                "Sub-action within the chosen protocol: emit, query, compute, "
+                "set, get, list, initiate, respond or status."
             )
         },
     )
