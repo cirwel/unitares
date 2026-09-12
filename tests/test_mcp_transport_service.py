@@ -215,3 +215,63 @@ async def test_streamable_asgi_translates_manager_error_and_resets_context(monke
     assert sent[0]["status"] == 500
     assert b"transport exploded" in sent[1]["body"]
     assert get_session_signals() is None
+
+
+# --- a configured gate that failed to build closes the route ---------------
+#
+# Serving /mcp unauthenticated because OAuth construction raised answers a
+# different question than the operator asked. The closure is deliberately
+# route-scoped: every other surface on this process has its own gate, so
+# refusing to start would turn one route's misconfiguration into a fleet
+# outage. 503 rather than 401 because the state is the server's, not the
+# caller's, and because a diagnostic can then read it off the wire instead of
+# inferring the gate from an environment variable.
+
+@pytest.mark.asyncio
+async def test_unavailable_gate_closes_the_route_instead_of_serving_it_open(monkeypatch):
+    from src.services import mcp_transport_service as svc
+
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(
+        _scope(), McpAuthConfig(gate_unavailable=True)
+    )
+    assert decision.allowed is False
+    assert decision.response is not None
+    assert decision.response.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_a_bearer_allowlist_reopens_a_route_whose_oauth_gate_failed(monkeypatch):
+    """The requirement is a gate, not OAuth — the second credential still works."""
+    from src.services import mcp_transport_service as svc
+
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: ["tok"])
+    decision = await svc.authorize_mcp_request(
+        _scope((b"authorization", b"Bearer tok")),
+        McpAuthConfig(gate_unavailable=True),
+    )
+    assert decision.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_a_wrong_token_against_a_failed_gate_is_401_not_503(monkeypatch):
+    """Once a bearer allowlist exists the caller's credential is the question."""
+    from src.services import mcp_transport_service as svc
+
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: ["tok"])
+    decision = await svc.authorize_mcp_request(
+        _scope((b"authorization", b"Bearer wrong")),
+        McpAuthConfig(gate_unavailable=True),
+    )
+    assert decision.allowed is False
+    assert decision.response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_no_gate_configured_still_serves_open(monkeypatch):
+    """The free/self-hosted default never sets an issuer and is untouched."""
+    from src.services import mcp_transport_service as svc
+
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(_scope(), McpAuthConfig())
+    assert decision.allowed is True
