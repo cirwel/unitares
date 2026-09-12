@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.6.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.7.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. The server advertises the same
@@ -74,7 +74,7 @@ reviewer services. Tool counts alone establish none of those conditions.
 
 ## One catalog and compatibility
 
-Interface release 1.6.0 advertises every registered-and-mounted public tool,
+Since interface release 1.6.0 the contract advertises every registered-and-mounted public tool,
 including primary workflow aliases, on every transport. A definition registered
 after server mounting is omitted rather than advertised without a dispatch path.
 No mode selection is required. Legacy
@@ -104,7 +104,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.6.0` is the negotiated interface release. Compatible additions
+- `version: 1.7.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -114,7 +114,12 @@ The two identifiers serve different jobs:
   abridged to their first sentence, with the full text served by
   `describe_tool`; 1.5.0: `search_shared_memory` drops 14 unused parameters
   belonging to other actions, while search's type, severity and provenance
-  options remain and appear in action-specific discovery).
+  options remain and appear in action-specific discovery; 1.6.0: one complete
+  catalog on every transport, as the section above describes; 1.7.0,
+  2026-09-12: `cirs_protocol`'s `action` description names which sub-action
+  each protocol routes, adding the `list` and `status` it had omitted.
+  Description-only: one digest moves and no parameter name, type, default or
+  requiredness changes).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

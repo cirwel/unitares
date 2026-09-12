@@ -233,7 +233,10 @@ def _session_id_from_ctx(ctx: Context | None) -> str | None:
 
 # Cache tool wrappers to avoid recreating functions on every call
 # Max size: 100 tools (future-proofing for dynamic tool registration)
-# Current tool count: ~51 tools, so plenty of headroom
+# The advertised surface is the registered tools (src.tool_meta.WIRE_ORDER)
+# plus the workflow aliases (tool_stability.AGENT_WORKFLOW_ALIASES): 50 names
+# (42 + 8) at be117c2, 2026-09-11, so there is headroom. Recount from those
+# two tuples, not from this comment.
 _MAX_TOOL_WRAPPER_CACHE_SIZE = 100
 _tool_wrappers_cache: Dict[str, callable] = {}
 
@@ -335,9 +338,10 @@ def get_tool_wrapper(tool_name: str):
                 # we fall back to the existing Python dispatch — silent
                 # skip is the worst possible outcome per §3.2.
                 #
-                # Hot-path discipline: the lookup is O(1) and cheap. For
-                # the ~100 tools NOT in the routing table the lookup returns
-                # None and the existing dispatch fires unchanged. Imports
+                # Hot-path discipline: the lookup is O(1) and cheap. For a
+                # tool NOT in the routing table -- every tool, until an
+                # explicit cutover adds a row -- the lookup returns None and
+                # the existing dispatch fires unchanged. Imports
                 # are at module top-level (FIND-A3 review fold) so the
                 # per-call cost is zero and ``patch()``-style mocks work.
                 beam_url = _wave3a_get_route(tool_name)
@@ -537,9 +541,9 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
     - Proper client autocomplete from typed signatures
     - Compact schema annotations keep discovery descriptions bounded
 
-    Just add the tool to:
-    1. tool_schemas.py (definition)
-    2. mcp_handlers/*.py (implementation with @mcp_tool)
+    Adding a tool: one ToolMeta record in src/tool_meta.py, its *Params
+    model, its description in src/tool_descriptions.py, and the @mcp_tool
+    handler under mcp_handlers/ (docs/dev/TOOL_REGISTRATION.md, step 1).
 
     The SSE server will automatically pick it up.
     """
