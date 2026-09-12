@@ -189,8 +189,14 @@ def _validate_consolidated_tool_order(
             )
 
 
-def _first_line(s: str | None) -> str:
-    """Extract first non-empty line from a string."""
+def first_line(s: str | None) -> str:
+    """The first non-empty line of a description, stripped.
+
+    This is the description ``tools/list`` serves under the default short
+    verbosity, and since 2026-09-12 also the one ``list_tools`` and the compact
+    ``describe_tool`` view serve for an advertised name, so every discovery
+    surface derives its one-liner with the same rule.
+    """
     if not s:
         return ""
     for line in s.splitlines():
@@ -391,7 +397,7 @@ def get_tool_definitions(
             ),
         )
         if verbosity == "short":
-            t.description = _first_line(t.description)
+            t.description = first_line(t.description)
         # The machine-readable half of the same statement the description
         # makes in prose (src/tool_annotations.py). Both Tool() sites above
         # funnel through this loop, so stdio, REST and the FastMCP registrar

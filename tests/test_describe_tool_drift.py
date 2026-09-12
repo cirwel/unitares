@@ -574,6 +574,147 @@ async def test_describe_and_list_report_the_declared_stability():
     assert all("stability" in t for t in lite_listed["tools"])
 
 
+# F2 of docs/operations/tool-surface-audit-2026-09-12.md: one description per
+# advertised name on every discovery surface. tools/list is the reference —
+# it is what a schema-driven MCP client reads — and list_tools, its lite hint
+# and describe_tool must open with the same first line.
+
+
+def _wire_first_lines() -> dict[str, str]:
+    """{name: first line of the description tools/list serves}.
+
+    Read the way handle_list_tools reads it (the deployment's public catalog
+    under the process TOOL_MODE), so both sides of every comparison below come
+    from the same call.
+    """
+    import src.tool_modes
+    from src.interface_contract import get_public_tool_definitions
+    from src.tool_schemas import first_line
+
+    wire = {
+        tool.name: first_line(tool.description)
+        for tool in get_public_tool_definitions(src.tool_modes.TOOL_MODE)
+    }
+    assert wire, "the public catalog is empty; nothing to compare"
+    assert all(wire.values()), "an advertised tool has no description"
+    return wire
+
+
+@pytest.mark.asyncio
+async def test_list_tools_describes_every_advertised_name_as_the_wire_does():
+    """list_tools serves the first line tools/list serves, for every name.
+
+    Until 2026-09-12 ``TOOL_DESCRIPTION_OVERRIDES`` outranked the wire inside
+    handle_list_tools, so the rewrites of #2148, #2151 and #2158 reached an MCP
+    client's tools/list and never reached orientation: 28 of 50 advertised
+    names described themselves differently on the two surfaces, including the
+    corrected ones. ``identity`` still read "Check current binding or set your
+    display name" while the wire warned that an argument-less call may mint
+    and persist a new identity; ``dialectic`` hand-listed its actions from a
+    table whose own comment recorded two prior drifts.
+    """
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    wire = _wire_first_lines()
+    listed = {
+        tool["name"]: tool["description"]
+        for tool in json.loads((await handle_list_tools({"lite": False}))[0].text)["tools"]
+    }
+    assert set(wire) <= set(listed), (
+        f"advertised names missing from list_tools: {sorted(set(wire) - set(listed))}"
+    )
+    drifted = {
+        name: {"list_tools": listed[name], "tools/list": wire[name]}
+        for name in wire
+        if listed[name] != wire[name]
+    }
+    assert not drifted, (
+        f"{len(drifted)} advertised name(s) describe themselves differently on "
+        f"list_tools and tools/list:\n{json.dumps(drifted, indent=2)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_tools_lite_hint_is_the_wire_first_line_truncated():
+    """The compact view's ``hint`` is the same line, cut at 100 characters."""
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    wire = _wire_first_lines()
+    hints = {
+        tool["name"]: tool["hint"]
+        for tool in json.loads((await handle_list_tools({"lite": True}))[0].text)["tools"]
+    }
+    assert set(wire) <= set(hints)
+    drifted = {
+        name: {"hint": hints[name], "tools/list": wire[name]}
+        for name, line in wire.items()
+        if hints[name] != line[:100] + ("..." if len(line) > 100 else "")
+    }
+    assert not drifted, (
+        f"lite hints that are not the wire's first line:\n{json.dumps(drifted, indent=2)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_describe_tool_opens_with_the_wire_first_line_for_every_advertised_name():
+    """describe_tool's compact description, and the first line of its full
+    one, are the line tools/list serves.
+
+    The eight workflow aliases went through the override table too: the alias
+    branch consulted it before the migration note, so describe_tool(sync_state)
+    and tools/list(sync_state) disagreed the same way list_tools did.
+    """
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+    from src.tool_schemas import first_line
+
+    drifted = {}
+    for name, line in _wire_first_lines().items():
+        lite = json.loads((await handle_describe_tool({"tool_name": name, "lite": True}))[0].text)
+        full = json.loads((await handle_describe_tool({"tool_name": name, "lite": False}))[0].text)
+        seen = {
+            "lite": lite.get("description"),
+            "full": first_line(full["tool"]["description"]),
+        }
+        if any(value != line for value in seen.values()):
+            drifted[name] = {**seen, "tools/list": line}
+    assert not drifted, (
+        f"describe_tool disagrees with tools/list:\n{json.dumps(drifted, indent=2)}"
+    )
+
+
+def test_override_table_carries_no_advertised_name():
+    """``TOOL_DESCRIPTION_OVERRIDES`` is for dispatch-only alias names only.
+
+    An advertised name's description has one home — src/tool_descriptions.py
+    for a registered tool, ``ToolAlias.migration_note`` for a workflow alias —
+    and every discovery surface reads it from the wire definition. An entry
+    here for such a name is dead on list_tools and a second, competing text on
+    describe_tool, which is exactly the drift the parity tests above closed.
+    The table keeps answering describe_tool for the pre-consolidation names
+    that resolve but never reach the wire (list_agents, get_server_info, ...).
+    """
+    from src.mcp_handlers.introspection.tool_catalog import TOOL_DESCRIPTION_OVERRIDES
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES, list_all_aliases
+
+    wire = _wire_first_lines()
+    advertised = sorted(set(TOOL_DESCRIPTION_OVERRIDES) & set(wire))
+    assert not advertised, (
+        f"TOOL_DESCRIPTION_OVERRIDES carries advertised names {advertised}; an "
+        "advertised name is described by src/tool_descriptions.py (tool) or its "
+        "ToolAlias.migration_note (workflow alias), and list_tools serves the "
+        "wire's first line without consulting this table."
+    )
+    dispatch_only = set(list_all_aliases()) - set(AGENT_WORKFLOW_ALIASES)
+    stray = sorted(set(TOOL_DESCRIPTION_OVERRIDES) - dispatch_only)
+    assert not stray, (
+        f"TOOL_DESCRIPTION_OVERRIDES carries names that are not dispatch-only "
+        f"aliases: {stray}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_describe_reports_a_legacy_alias_own_narrower_operation():
     import json
