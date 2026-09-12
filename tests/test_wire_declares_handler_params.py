@@ -7,7 +7,7 @@ in-process, where undeclared keys are merged back, and silently ignores it
 over the MCP wire. Two cases sat in that state until 2026-09-07:
 observe(action="telemetry") read window_hours / include_calibration, and
 describe_tool read include_schema / include_full_description. cirs_protocol's
-seven protocol handlers read twenty-four more until 2026-09-12;
+seven protocol handlers read thirty-three more until 2026-09-12;
 tests/test_cirs_protocol_wire_params.py holds that schema to the handlers'
 source, and the representative keys below keep the registered argument model
 covered from here.

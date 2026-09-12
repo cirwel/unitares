@@ -582,7 +582,9 @@ class CirsProtocolParams(AgentIdentityMixin):
     # routed one level down, so the keys are the union across protocols and
     # `protocol` itself belongs to every action. `query` on void_alert and
     # `query` on state_announce take different filters, so each field's
-    # description names the protocol that reads it.
+    # description names the protocol that reads it. stability_restored reads
+    # no `action` and emits on every call, so its parameters sit under `emit`,
+    # the action it performs.
     #
     # Every key a protocol handler reads is declared here, with the handler's
     # own default where it has one. Two reasons, both load-bearing. The MCP
@@ -603,6 +605,8 @@ class CirsProtocolParams(AgentIdentityMixin):
         "emit": (
             "protocol", "severity", "context_ref",  # void_alert
             "include_trajectory",  # state_announce
+            "oi", "phase", "tau_current", "beta_current", "flips", "duration_updates",  # resonance_alert
+            "tau_settled", "beta_settled",  # stability_restored (with oi); it reads no action
         ),
         "query": (
             "protocol", "target_agent_id", "limit",
@@ -610,6 +614,7 @@ class CirsProtocolParams(AgentIdentityMixin):
             "agent_ids", "regime", "max_risk", "min_coherence",  # state_announce
             "source_agent_id", "min_similarity",  # coherence_report
             "as_initiator", "as_target", "status_filter",  # governance_action
+            "max_age_minutes",  # resonance_alert
         ),
         "compute": ("protocol", "target_agent_id"),
         "set": (
@@ -622,11 +627,21 @@ class CirsProtocolParams(AgentIdentityMixin):
         "respond": ("protocol", "action_id", "accept", "response_data"),
         "status": ("protocol", "action_id"),
     }
-    protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(
+    # Held to _CIRS_DISPATCHERS by tests/test_cirs_protocol_wire_params.py.
+    # Until 2026-09-12 the Literal admitted five of the seven protocols the
+    # table routes, so resonance_alert and stability_restored were refused by
+    # validate_params on every transport while the tool's own recovery text
+    # advertised them.
+    protocol: Literal[
+        "void_alert", "state_announce", "coherence_report", "boundary_contract",
+        "governance_action", "resonance_alert", "stability_restored",
+    ] = Field(
         ...,
         description=(
             "Which CIRS protocol to use. coherence_report is the historical name "
-            "for provenance-tagged pairwise state similarity; v2 excludes legacy C(V)."
+            "for provenance-tagged pairwise state similarity; v2 excludes legacy C(V). "
+            "resonance_alert and stability_restored carry the oscillation signals "
+            "the governor's hook also emits on its own."
         ),
     )
     action: Optional[str] = Field(
@@ -795,6 +810,46 @@ class CirsProtocolParams(AgentIdentityMixin):
     status_filter: Optional[str] = Field(
         None,
         description="Only actions in this status: pending, accepted or rejected (governance_action query).",
+    )
+    # --- resonance_alert / stability_restored ---
+    # tau and beta are the governor's settings the emitting hook reads off the
+    # CIRS result (cirs/hooks.py maybe_emit_resonance_signal); the defaults are
+    # the hook's own fallbacks.
+    oi: float = Field(
+        0.0,
+        description="Oscillation index at emit time (resonance_alert emit, stability_restored). Default 0.",
+    )
+    phase: str = Field(
+        "unknown",
+        description="Oscillation phase label at emit time (resonance_alert emit). Default unknown.",
+    )
+    tau_current: float = Field(
+        0.4,
+        description="The governor's tau while oscillating (resonance_alert emit). Default 0.4.",
+    )
+    beta_current: float = Field(
+        0.6,
+        description="The governor's beta while oscillating (resonance_alert emit). Default 0.6.",
+    )
+    flips: int = Field(
+        0,
+        description="Sign flips counted in the oscillation (resonance_alert emit). Default 0.",
+    )
+    duration_updates: int = Field(
+        0,
+        description="Updates the oscillation has lasted (resonance_alert emit). Default 0.",
+    )
+    max_age_minutes: int = Field(
+        30,
+        description="Look-back window in minutes for resonance_alert query. Default 30.",
+    )
+    tau_settled: float = Field(
+        0.4,
+        description="The governor's tau after settling (stability_restored). Default 0.4.",
+    )
+    beta_settled: float = Field(
+        0.6,
+        description="The governor's beta after settling (stability_restored). Default 0.6.",
     )
 
 

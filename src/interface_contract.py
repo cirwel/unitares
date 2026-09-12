@@ -46,11 +46,12 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # vocabulary (the routed list and status were missing) and declares it for
 # tool_usage telemetry. Its input_schema_sha256 moves; no parameter name, type,
 # default or requiredness changes, and dispatch is unchanged.
-# 1.8.0 (2026-09-12): cirs_protocol declares the 24 parameters its protocol
-# handlers read that the MCP argument model dropped before dispatch, and limit
+# 1.8.0 (2026-09-12): cirs_protocol declares the 33 parameters its protocol
+# handlers read that the MCP argument model dropped before dispatch, limit
 # advertises the handlers' default of 50 in place of null (the null reached
-# int() and failed every query action through dispatch). Additive: only
-# cirs_protocol's input_schema_sha256 moves.
+# int() and failed every query action through dispatch), and protocol admits
+# resonance_alert and stability_restored, which dispatch already routed.
+# Additive: only cirs_protocol's input_schema_sha256 moves.
 INTERFACE_CONTRACT_VERSION = "1.8.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
