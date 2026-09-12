@@ -44,6 +44,7 @@ from mcp.types import TextContent
 from src.mcp_handlers.cirs.protocol import _CIRS_DISPATCHERS, handle_cirs_protocol
 from src.mcp_handlers.schemas.core import CirsProtocolParams
 from src.mcp_handlers.schemas.router_actions import COMMON_ROUTER_FIELDS, wire_field_names
+from tests.helpers import parse_result
 
 # stability_restored emits on every call and reads no ``action``; its
 # parameters are classified under ``emit``, the action it performs.
@@ -117,7 +118,10 @@ async def _vocabulary(protocol: str) -> tuple[str, ...]:
     if protocol in ACTIONLESS:
         return ACTIONLESS[protocol]
     result = await _CIRS_DISPATCHERS[protocol].__wrapped__({"action": "__unroutable__"})
-    body = json.loads(result[0].text)
+    # parse_result, not json.loads(result[0].text): some error_response call
+    # sites return a bare TextContent rather than a sequence, and a refusal is
+    # exactly what this asks for.
+    body = parse_result(result)
     valid = (body.get("recovery") or {}).get("valid_actions")
     assert valid, f"{protocol} did not refuse an unroutable action with valid_actions"
     return tuple(valid)
@@ -327,10 +331,10 @@ async def test_dispatch_validation_hands_query_handlers_their_own_defaults(proto
     outcome = await validate_params(
         "cirs_protocol", {"protocol": protocol, "action": "query"}, SimpleNamespace()
     )
-    assert isinstance(outcome, tuple), outcome  # a list is a validation-error envelope
+    assert isinstance(outcome, tuple), parse_result(outcome)  # a list is a refusal
     _, validated, _ = outcome
     assert validated["limit"] == 50
-    body = json.loads((await handle_cirs_protocol.__wrapped__(validated))[0].text)
+    body = parse_result(await handle_cirs_protocol.__wrapped__(validated))
     assert body["success"] is True, body
     assert body["filters_applied"]["limit"] == 50
 
@@ -340,8 +344,12 @@ async def test_dispatch_validation_carries_explicit_filters_to_the_handler():
     from src.mcp_handlers.middleware.params_step import validate_params
 
     async def through_dispatch_validation(arguments):
-        _, validated, _ = await validate_params("cirs_protocol", arguments, SimpleNamespace())
-        return json.loads((await handle_cirs_protocol.__wrapped__(validated))[0].text)
+        outcome = await validate_params("cirs_protocol", arguments, SimpleNamespace())
+        # Unpacking a refusal would fail as "not enough values to unpack" and
+        # hide the validation error that is the actual news.
+        assert isinstance(outcome, tuple), parse_result(outcome)
+        _, validated, _ = outcome
+        return parse_result(await handle_cirs_protocol.__wrapped__(validated))
 
     body = await through_dispatch_validation(
         {"protocol": "void_alert", "action": "query", "since_hours": 5, "filter_severity": "critical"}
@@ -394,7 +402,7 @@ async def test_emit_and_initiate_tolerate_the_none_the_middleware_materializes(m
 
     omitted = CirsProtocolParams(protocol="void_alert", action="emit").model_dump()
     assert omitted["severity"] is None
-    body = json.loads((await void_module.handle_void_alert.__wrapped__(omitted))[0].text)
+    body = parse_result(await void_module.handle_void_alert.__wrapped__(omitted))
     # V=0 sits under any void threshold: the handler's own refusal, reached past the None.
     assert body["success"] is False
     assert "threshold" in body["error"] and "NoneType" not in body["error"]
@@ -407,8 +415,8 @@ async def test_emit_and_initiate_tolerate_the_none_the_middleware_materializes(m
         protocol="governance_action", action="initiate", target_agent_id="peer"
     ).model_dump()
     assert omitted["action_type"] is None
-    body = json.loads(
-        (await governance_module.handle_governance_action.__wrapped__(omitted))[0].text
+    body = parse_result(
+        await governance_module.handle_governance_action.__wrapped__(omitted)
     )
     assert body["success"] is False
     assert "action_type" in body["error"] and "NoneType" not in body["error"]
