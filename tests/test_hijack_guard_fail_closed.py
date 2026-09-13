@@ -323,6 +323,65 @@ class TestMiddlewareResolverExceptionFailsClosed:
                 p.stop()
         return result, ctx
 
+    @pytest.mark.parametrize(
+        "resolver_outcome",
+        [
+            pytest.param({}, id="empty-result"),
+            pytest.param(
+                {"error": "identity_store_unavailable"},
+                id="error-without-resume-failed",
+            ),
+            pytest.param(
+                {"agent_uuid": "", "created": False, "persisted": False},
+                id="empty-agent-uuid",
+            ),
+            pytest.param(
+                RuntimeError("identity store unavailable"),
+                id="resolver-exception",
+            ),
+            pytest.param(
+                {"resume_failed": True, "error": "session_resolve_miss"},
+                id="known-resume-failure",
+            ),
+            pytest.param(
+                {"resume_failed": True, "error": "future_refusal"},
+                id="hard-resume-refusal",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_strict_write_pipeline_requires_a_truthy_binding(
+        self, monkeypatch, resolver_outcome
+    ):
+        """Every resolver failure shape stops the real dispatch pipeline."""
+        from src.mcp_handlers import dispatch_tool
+
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        handler = AsyncMock(return_value=[])
+        if isinstance(resolver_outcome, Exception):
+            resolve_mock = AsyncMock(side_effect=resolver_outcome)
+        else:
+            resolve_mock = AsyncMock(return_value=dict(resolver_outcome))
+
+        with patch(
+            "src.mcp_handlers.context.get_session_signals", return_value=None
+        ), patch(
+            "src.mcp_handlers.identity.handlers.derive_session_key",
+            new=AsyncMock(return_value="agent-strict-final-guard"),
+        ), patch(
+            "src.mcp_handlers.identity.handlers.resolve_session_identity",
+            resolve_mock,
+        ), patch.dict(
+            "src.mcp_handlers.TOOL_HANDLERS", {"knowledge": handler}
+        ):
+            result = await dispatch_tool(
+                "knowledge",
+                {"action": "note", "content": "strict final-guard probe"},
+            )
+
+        assert _refusal_payload(result).get("status") == "identity_required"
+        handler.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_strict_refuses_write_when_resolver_raises(self, monkeypatch):
         monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
@@ -412,8 +471,8 @@ class TestMiddlewareResolverExceptionFailsClosed:
         The X-Agent-Id recovery step is stubbed to return the bound identity so
         the result's first read of ``created`` happens after binding, in the
         ephemeral-marking step, which is where this fake raises. This pins the
-        ``bound_agent_id is None`` half of the refusal condition: without it,
-        every exception under strict mode would refuse, bound or not.
+        truthy-binding half of the refusal condition: without it, every
+        exception under strict mode would refuse, bound or not.
         """
         monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
         bound = "12121212-3434-4565-8787-909090909090"
