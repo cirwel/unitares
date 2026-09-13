@@ -1,0 +1,257 @@
+{
+  "schema": "unitares.accountability-journey.v0",
+  "classification": {
+    "evidence_class": "mechanism_validation",
+    "evaluation_stage": "retrieval_control",
+    "headline_eligible": false,
+    "frozen_protocol_affected": false,
+    "information_equivalence_required": true,
+    "natural_capture_evaluated": false
+  },
+  "incident": {
+    "incident_id": "reload-claim-contradiction-v0",
+    "summary": "A writer reports a successful service reload, deterministic evidence contradicts the claim, a reviewer challenges it, the writer corrects it, and a fresh successor reconstructs the chain."
+  },
+  "oracle": {
+    "facts": {
+      "writer_process_id": "process-writer-01",
+      "writer_principal_id": "principal-local-operator",
+      "original_claim": "The governance service reload completed successfully.",
+      "deterministic_evidence": "reload_smoke exited 1: stale process still owns port 8767.",
+      "reviewer_process_id": "process-reviewer-01",
+      "challenge": "The successful-reload claim conflicts with the smoke-test result.",
+      "correction": "The reload failed because a stale process retained port 8767.",
+      "outcome": "test_failed"
+    },
+    "edges": [
+      {
+        "source": "process-writer-01",
+        "relation": "authored",
+        "target": "claim-reload-success"
+      },
+      {
+        "source": "evidence-reload-smoke",
+        "relation": "contradicts",
+        "target": "claim-reload-success"
+      },
+      {
+        "source": "process-reviewer-01",
+        "relation": "challenged",
+        "target": "claim-reload-success"
+      },
+      {
+        "source": "claim-reload-correction",
+        "relation": "supersedes",
+        "target": "claim-reload-success"
+      },
+      {
+        "source": "outcome-reload-smoke",
+        "relation": "grades",
+        "target": "claim-reload-success"
+      }
+    ],
+    "attributions": [
+      {
+        "effect_id": "effect-service-reload",
+        "process_id": "process-writer-01",
+        "principal_id": "principal-local-operator"
+      }
+    ]
+  },
+  "questions": [
+    {
+      "question_id": "who_made_the_claim",
+      "fact_key": "writer_process_id"
+    },
+    {
+      "question_id": "under_which_principal",
+      "fact_key": "writer_principal_id"
+    },
+    {
+      "question_id": "what_was_claimed",
+      "fact_key": "original_claim"
+    },
+    {
+      "question_id": "what_evidence_contradicted_it",
+      "fact_key": "deterministic_evidence"
+    },
+    {
+      "question_id": "who_challenged_it",
+      "fact_key": "reviewer_process_id"
+    },
+    {
+      "question_id": "what_was_the_challenge",
+      "fact_key": "challenge"
+    },
+    {
+      "question_id": "what_correction_replaced_it",
+      "fact_key": "correction"
+    },
+    {
+      "question_id": "what_outcome_was_recorded",
+      "fact_key": "outcome"
+    }
+  ],
+  "arms": {
+    "unitares": {
+      "representation": "typed_accountability_records",
+      "records": [
+        {
+          "record_id": "identity-writer",
+          "kind": "identity",
+          "facts": {
+            "writer_process_id": "process-writer-01",
+            "writer_principal_id": "principal-local-operator"
+          },
+          "attributions": [
+            {
+              "effect_id": "effect-service-reload",
+              "process_id": "process-writer-01",
+              "principal_id": "principal-local-operator"
+            }
+          ]
+        },
+        {
+          "record_id": "finding-original",
+          "kind": "claim",
+          "facts": {
+            "original_claim": "The governance service reload completed successfully."
+          },
+          "edges": [
+            {
+              "source": "process-writer-01",
+              "relation": "authored",
+              "target": "claim-reload-success"
+            }
+          ]
+        },
+        {
+          "record_id": "outcome-evidence",
+          "kind": "evidence_and_outcome",
+          "facts": {
+            "deterministic_evidence": "reload_smoke exited 1: stale process still owns port 8767.",
+            "outcome": "test_failed"
+          },
+          "edges": [
+            {
+              "source": "evidence-reload-smoke",
+              "relation": "contradicts",
+              "target": "claim-reload-success"
+            },
+            {
+              "source": "outcome-reload-smoke",
+              "relation": "grades",
+              "target": "claim-reload-success"
+            }
+          ]
+        },
+        {
+          "record_id": "review-challenge",
+          "kind": "review",
+          "facts": {
+            "reviewer_process_id": "process-reviewer-01",
+            "challenge": "The successful-reload claim conflicts with the smoke-test result."
+          },
+          "edges": [
+            {
+              "source": "process-reviewer-01",
+              "relation": "challenged",
+              "target": "claim-reload-success"
+            }
+          ]
+        },
+        {
+          "record_id": "finding-correction",
+          "kind": "correction",
+          "facts": {
+            "correction": "The reload failed because a stale process retained port 8767."
+          },
+          "edges": [
+            {
+              "source": "claim-reload-correction",
+              "relation": "supersedes",
+              "target": "claim-reload-success"
+            }
+          ]
+        }
+      ]
+    },
+    "structured_handoff": {
+      "representation": "git_plus_structured_handoff",
+      "records": [
+        {
+          "record_id": "git-log-entry",
+          "kind": "git_log",
+          "facts": {
+            "writer_process_id": "process-writer-01",
+            "writer_principal_id": "principal-local-operator",
+            "original_claim": "The governance service reload completed successfully."
+          },
+          "edges": [
+            {
+              "source": "process-writer-01",
+              "relation": "authored",
+              "target": "claim-reload-success"
+            }
+          ],
+          "attributions": [
+            {
+              "effect_id": "effect-service-reload",
+              "process_id": "process-writer-01",
+              "principal_id": "principal-local-operator"
+            }
+          ]
+        },
+        {
+          "record_id": "test-output",
+          "kind": "test_log",
+          "facts": {
+            "deterministic_evidence": "reload_smoke exited 1: stale process still owns port 8767.",
+            "outcome": "test_failed"
+          },
+          "edges": [
+            {
+              "source": "evidence-reload-smoke",
+              "relation": "contradicts",
+              "target": "claim-reload-success"
+            },
+            {
+              "source": "outcome-reload-smoke",
+              "relation": "grades",
+              "target": "claim-reload-success"
+            }
+          ]
+        },
+        {
+          "record_id": "review-note",
+          "kind": "review_note",
+          "facts": {
+            "reviewer_process_id": "process-reviewer-01",
+            "challenge": "The successful-reload claim conflicts with the smoke-test result."
+          },
+          "edges": [
+            {
+              "source": "process-reviewer-01",
+              "relation": "challenged",
+              "target": "claim-reload-success"
+            }
+          ]
+        },
+        {
+          "record_id": "structured-handoff",
+          "kind": "handoff",
+          "facts": {
+            "correction": "The reload failed because a stale process retained port 8767."
+          },
+          "edges": [
+            {
+              "source": "claim-reload-correction",
+              "relation": "supersedes",
+              "target": "claim-reload-success"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

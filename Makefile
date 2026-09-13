@@ -1,5 +1,5 @@
 # Makefile for governance-mcp-v1
-.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs demo coordination-demo clean
+.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs demo coordination-demo accountability-journey clean
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -85,6 +85,9 @@ demo: ## Onboard an agent and run six governed check-ins against a live server (
 
 coordination-demo: ## Show two agents contending for and handing off one governed surface (default :8788)
 	@python3 scripts/demo/coordination_demo.py
+
+accountability-journey: ## Reproduce the deterministic incident-reconstruction rehearsal
+	@python3 -m scripts.eval.accountability_journey
 
 # ── Cleanup ──────────────────────────────────────────────
 
