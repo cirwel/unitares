@@ -107,8 +107,8 @@ PATTERNS = [
     Marker(REGISTRY, re.compile(r"\*\*(\d+) tools\*\*"), "**{count} tools**"),
     Marker(REGISTRY, re.compile(r"(\d+) tools\)"), "{count} tools)"),
     Marker(REGISTRY, re.compile(r"count: (\d+)\)"), "count: {count})"),
-    # "38+ tools" is rewritten to the exact count.
-    Marker(REGISTRY, re.compile(r"(\d+)\+ tools"), "{count} tools"),
+    # A lower-bound claim becomes the unambiguous canonical registry form.
+    Marker(REGISTRY, re.compile(r"(\d+)\+ tools"), "{count} registered tools"),
 ]
 
 
