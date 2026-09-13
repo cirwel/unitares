@@ -67,13 +67,15 @@ def test_landing_docs_link_the_proprioception_contract():
     readme = (ROOT / "README.md").read_text()
     start_here = (ROOT / "docs" / "guides" / "START_HERE.md").read_text()
     evaluation_index = (ROOT / "docs" / "EVALUATION_INDEX.md").read_text()
+    contract = (
+        ROOT / "docs" / "ontology" / "eisv-proprioception-contract.md"
+    ).read_text()
 
     for text in (readme, start_here, evaluation_index):
         assert "eisv-proprioception-contract.md" in text
-    assert "not an outcome oracle" in readme
-    assert "does not decide whether an output is correct or" in readme
-    assert "cannot detect deliberate concealment" in readme
-    assert "policy action, reason, and next step as the stable" in readme
+    assert "runtime [proprioception]" in readme
+    assert "not an outcome oracle" in contract
+    assert "external outcome evidence" in contract
     assert "task-negative" in evaluation_index
     assert "hand down bad verdicts" in evaluation_index
 

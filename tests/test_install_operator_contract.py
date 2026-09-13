@@ -48,22 +48,30 @@ def test_dev_install_provides_starlette_testclient_backend() -> None:
     assert "httpx2>=2.0.0,<3.0.0" in _read("requirements-full.txt")
 
 
-def test_tier_one_quickstart_is_release_pinned_and_coordination_complete() -> None:
+def test_tier_one_install_is_release_pinned_and_single_command() -> None:
     readme = _read("README.md")
     manual = _read("docs/manual/02-install.md")
-    compose = _read("docker-compose.yml")
 
     # Source bumps must not advertise an unavailable release. Public examples
     # advance only after tag, release page, and container verification.
     published = _read("PUBLISHED_VERSION").strip()
     pin = f"git clone --branch v{published} --depth 1"
 
-    assert "the supported install path" in readme
     assert pin in readme
     assert pin in manual
-    assert "make coordination-demo" in readme
+    install = readme.split("## Install\n", 1)[1].split("\n## ", 1)[0]
+    assert install.count("```bash") == 1
+    assert install.count(pin) == 1
+    assert "docker compose up -d --wait" in install
+    assert "make demo" not in readme
+    assert "make coordination-demo" not in readme
+
+
+def test_operator_manual_keeps_coordination_validation_detail() -> None:
+    manual = _read("docs/manual/02-install.md")
+    compose = _read("docker-compose.yml")
+
     assert "make coordination-demo" in manual
-    assert "one-command install/start" in readme
     assert "one-command install/start" in manual
     assert "depends_on:" in compose
     assert "redis:" in compose
@@ -86,10 +94,8 @@ def test_tier_one_quickstart_is_release_pinned_and_coordination_complete() -> No
     assert "UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS:" in compose
     assert "UNITARES_LEASE_TRUST_ALLOW_INSECURE_HTTP:" not in compose
     assert "UNITARES_LEASE_ATTESTATION_SIGNING_KEY:" in compose
-    assert "request-bound" in readme
     assert "refusing replay" in manual
     assert "UNITARES_CONTINUITY_TOKEN_SECRET:" in compose
-    assert "A's attestation is refused" in readme
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 
