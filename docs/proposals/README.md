@@ -21,9 +21,23 @@ thread can hold Closed and Parked rows beside Active ones.
 | **Closed** | A recorded decision, a refutation, a superseded draft, a negative result, or a dated record. Retained as provenance. |
 
 The 30-day line is a choice, not a measurement: it separates "someone is working
-this" from "nobody has touched this" and claims nothing else. Counts at tagging:
-Built 21 · Registered 7 · Active 21 · Parked 24 · Closed 14
+this" from "nobody has touched this" and claims nothing else. Current counts:
+Built 21 · Registered 7 · Active 23 · Parked 24 · Closed 14
 (top-level docs; the `resolved/` subfolder is not re-tagged).
+
+These counts are **live, not a snapshot**, and `scripts/dev/check_proposals_index.py`
+fails if they stop matching the rows below. They used to be a snapshot — "counts at
+tagging", 2026-09-03 — and within ten days they were wrong: the line still read
+`Active 21` after [#2156](https://github.com/CIRWEL/unitares/pull/2156) added a row,
+and the tagging count was itself one short. Nothing caught it, because nothing was
+checking. Add a row, change the number in the same commit.
+
+The guard checks this index against itself and the filesystem — coverage, dead links,
+count arithmetic, and whether each doc states a status. It does **not** decide whether
+a tag is *right*: the 30-day line above is a choice, and re-deriving tags in a script
+would make the script the tagging authority and stop this file being canonical for its
+own rule. A doc tagged **Active** that nobody has touched in a year passes the check;
+saying so is this index's job, and revising it is a human's.
 
 ## Active threads
 
