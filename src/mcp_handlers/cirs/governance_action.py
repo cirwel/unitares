@@ -53,7 +53,10 @@ async def _handle_governance_action_initiate(arguments: Dict[str, Any]) -> Seque
     if error:
         return [error]
 
-    action_type_str = arguments.get("action_type", "").lower()
+    # None-safe: the dispatch middleware hands over every declared field, so an
+    # omitted action_type arrives as None and must still reach the structured
+    # "missing action_type" refusal below rather than an AttributeError.
+    action_type_str = (arguments.get("action_type") or "").lower()
     valid_types = ["void_intervention", "coherence_boost", "delegation_request", "delegation_response", "coordination_sync"]
     if not action_type_str or action_type_str not in valid_types:
         return [error_response(
