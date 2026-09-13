@@ -47,7 +47,6 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
     source.write_text("2.21.0\n", encoding="utf-8")
     published.write_text("2.21.0\n", encoding="utf-8")
     readme.write_text(
-        "**Status:** v2.21.0.\n"
         "git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git\n",
         encoding="utf-8",
     )
@@ -60,7 +59,6 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
 
     assert manager.bump_version("minor") == "2.22.0"
     manager.main()
-    assert "**Status:** v2.22.0." in readme.read_text()
     assert "git clone --branch v2.21.0 " in readme.read_text()
     assert published.read_text() == "2.21.0\n"
     assert historical in compatibility.read_text()

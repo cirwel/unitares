@@ -95,7 +95,6 @@ ACTIVE_DOC_CHECKS = {
 }
 
 REQUIRED_STATUS_PREFIX = {
-    "README.md": "Status:",
     "docs/dev/CIRCUIT_BREAKER_DIALECTIC.md": "Status:",
     "docs/UNIFIED_ARCHITECTURE.md": "Status:",
     "docs/guides/TROUBLESHOOTING.md": "Status:",
@@ -115,40 +114,22 @@ MAX_LINES = {
 }
 
 
-# The product story is deliberately repeated on several public surfaces. Keep
-# the required concepts and the caveats that bound them executable so a later
-# wording pass cannot silently turn a multi-runtime, single-authority server
-# into a claim of cross-server federation or complete reconstruction.
+# The root README is the concise product surface. Detailed qualifications live
+# in the linked product, capability, and evidence documents rather than being
+# repeated beside every earned claim on the landing page.
 PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     "README.md": [
-        ("product category", ("federation kernel",)),
+        (
+            "product category",
+            ("self-hosted control plane", "accountability infrastructure"),
+        ),
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
         ("reconstruction", ("reconstruction",)),
         (
-            "single authority boundary",
-            ("one operator-controlled server and authority domain",),
-        ),
-        (
-            "no cross-server replication",
-            ("does not promise autonomous cross-server replication",),
-        ),
-        (
-            "check-in text retention limit",
-            ("does not retain the original report text",),
-        ),
-        # A requirement is satisfied by ANY of its accepted wordings. What must
-        # hold is that comparative benefit stays unclaimed; which baseline the
-        # sentence names is a positioning choice and not this guard's business.
-        # It previously accepted one phrasing, which quietly froze "Git plus a
-        # structured handoff" into the landing page as the thing to beat.
-        (
-            "unmeasured comparative benefit",
-            (
-                "still need comparative evaluation",
-                "still needs comparative evaluation",
-            ),
+            "operator ownership",
+            ("operator-owned accountability layer", "operator-owned record"),
         ),
     ],
     "docs/PRODUCT_DEFINITION.md": [

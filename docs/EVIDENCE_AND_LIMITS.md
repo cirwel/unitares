@@ -1,11 +1,9 @@
 # Evidence and limits, in full
 
-The [claim ledger lives on the README](../README.md#evidence-and-limits): every
-public claim, its evidence class, and what that class licenses stay on the
-landing page rather than behind a link. This page carries the supporting record
-the ledger is drawn from — where the deployment numbers come from and what they
-measure, the structural build record, and the two boundaries that need more room
-than a table row gives them.
+The root README states the product promise and links here for the measured
+record. This page carries the qualifications, provenance, deployment numbers,
+and evaluation boundaries in full so the landing page can remain a concise
+explanation of what UNITARES offers.
 
 ## Where the deployment numbers come from
 
@@ -40,7 +38,7 @@ a prototype or a system?
 | **67 database migrations** | slot-and-name drift is gated by the repo doctor |
 | **524 Python modules** | `src/`, `governance_core/`, and the reference residents |
 | **226 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
-| **7 companion repositories** | listed under [Ecosystem repositories](../README.md#ecosystem-repositories), including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland |
+| **7 companion repositories** | including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland; the main integrations are listed under [Ecosystem](../README.md#ecosystem) |
 
 Recounted 2026-09-09 against tracked files at `e017c45e`, each with the command
 that produced it. Test files: `git ls-files tests/` filtered to `test_*.py`;
