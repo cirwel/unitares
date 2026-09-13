@@ -275,3 +275,35 @@ async def test_no_gate_configured_still_serves_open(monkeypatch):
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
     decision = await svc.authorize_mcp_request(_scope(), McpAuthConfig())
     assert decision.allowed is True
+
+
+def test_cors_allows_every_method_the_streamable_transport_implements():
+    """CORS must not refuse a method the /mcp transport itself implements.
+
+    The Streamable HTTP session manager mounted at /mcp handles GET, POST and
+    DELETE, and says so in the `Allow` header it returns for anything else.
+    When the CORS list disagreed, the server contradicted itself: a browser
+    client was told DELETE was allowed by the transport and blocked from
+    preflighting it, so it could never terminate a session explicitly.
+    """
+    from starlette.applications import Starlette
+    from starlette.middleware.cors import CORSMiddleware
+
+    from src.services.mcp_transport_service import _configure_middleware
+
+    app = Starlette()
+    _configure_middleware(
+        app,
+        server_ready_fn=lambda: True,
+        server_version="test",
+    )
+
+    cors = [m for m in app.user_middleware if m.cls is CORSMiddleware]
+    assert len(cors) == 1, "expected exactly one CORS middleware"
+    allowed = set(cors[0].kwargs["allow_methods"])
+
+    # The transport's own advertised method set, per the MCP Streamable HTTP
+    # spec and the SDK's `Allow: GET, POST, DELETE` rejection header.
+    assert {"GET", "POST", "DELETE"} <= allowed, (
+        f"CORS refuses a method /mcp implements; allows {sorted(allowed)}"
+    )
