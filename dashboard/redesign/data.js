@@ -144,20 +144,23 @@
       const m = event.eisv || event || {};
       const lane = lanes[source] || (lanes[source] = {
         source, events: 0, values: { E: [], I: [], S: [], V: [] },
-        confidence: [], missingObservations: 0, missingInputs: new Set(),
+        confidence: [], missingObservations: 0, unknownProvenance: 0, missingInputs: new Set(),
         enforcementRequested: 0, enforcementApplied: 0, latest: null,
       });
       lane.events += 1;
       ["E", "I", "S", "V"].forEach((key) => {
-        if (typeof m[key] === "number") lane.values[key].push(m[key]);
+        if (typeof m[key] === "number" && Number.isFinite(m[key])) lane.values[key].push(m[key]);
       });
-      if (typeof telemetry.behavioral_confidence === "number") lane.confidence.push(telemetry.behavioral_confidence);
-      const missing = Array.isArray(telemetry.missing_inputs) ? telemetry.missing_inputs : [];
+      if (typeof telemetry.behavioral_confidence === "number" && Number.isFinite(telemetry.behavioral_confidence)) lane.confidence.push(telemetry.behavioral_confidence);
+      const hasMissingInputs = Array.isArray(telemetry.missing_inputs);
+      if (!hasMissingInputs) lane.unknownProvenance += 1;
+      const missing = hasMissingInputs ? telemetry.missing_inputs : [];
       if (missing.length) lane.missingObservations += 1;
       missing.forEach((name) => lane.missingInputs.add(name));
       if (telemetry.enforcement_requested === true) lane.enforcementRequested += 1;
       if (telemetry.enforcement_applied === true) lane.enforcementApplied += 1;
-      lane.latest = event.timestamp || event.t || lane.latest;
+      const timestamp = event.timestamp || event.t;
+      if (timestamp && Number.isFinite(Date.parse(timestamp)) && (!lane.latest || Date.parse(timestamp) > Date.parse(lane.latest))) lane.latest = timestamp;
     });
     const mean = (values) => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     return Object.values(lanes).map((lane) => ({
@@ -167,6 +170,7 @@
       S: mean(lane.values.S), V: mean(lane.values.V),
       confidence: mean(lane.confidence),
       missingObservations: lane.missingObservations,
+      unknownProvenance: lane.unknownProvenance,
       missingInputs: Array.from(lane.missingInputs).sort(),
       enforcementRequested: lane.enforcementRequested,
       enforcementApplied: lane.enforcementApplied,
@@ -537,12 +541,12 @@
         // either shape and a server without the parameter returns the full event.
         const r = await authFetch("/v1/eisv/recent?limit=120&fields=compact");
         const evs = (r && r.events) || [];
-        if (!evs.length) return null;
+        if (!r || !Array.isArray(r.events)) return null;
         // `raw` carries the unaveraged events so the section can keep
         // accumulating live pushes (same shape arrives over /ws/eisv) and
         // re-bucket the window itself, no refetch.
         return { series: bucketEisv(evs), raw: evs, sourceLanes: summarizeEisvSources(evs), coherenceEq: 0.5 };
-      }, () => { const e = S().eisv; return { series: e.series, raw: e.raw || [], sourceLanes: e.sourceLanes || [], coherenceEq: e.coherenceEq }; });
+      }, () => { const e = S().eisv || {}; return { series: e.series || [], raw: e.raw || [], sourceLanes: e.sourceLanes || [], coherenceEq: e.coherenceEq ?? 0.5 }; });
     },
 
     async eisvTelemetryHealth(days) {
@@ -630,16 +634,18 @@
       // EISV state-observation trajectory for one agent (no snapshot fallback —
       // empty if offline). Authored reports and automatic substrate rows remain
       // separate in observationSummary; neither is inferred from the other.
-      // opts: { limit, mode: "recent"|"all" }.
+      // opts: { limit, mode: "recent"|"all", includeTelemetry: true|"latest" }.
       opts = opts || {};
       return withFallback(async () => {
         const q = "?limit=" + (opts.limit || 200) +
           (opts.mode === "all" ? "&mode=all" : "") +
-          (opts.includeTelemetry ? "&include_telemetry=true" : "");
+          (opts.includeTelemetry === "latest" ? "&include_telemetry=latest" : opts.includeTelemetry ? "&include_telemetry=true" : "");
         const r = await authFetch("/v1/agents/" + encodeURIComponent(id) + "/history" + q);
         return r && Array.isArray(r.points)
           ? { points: r.points, total: r.total || r.points.length, mode: r.mode || "recent",
-              observationSummary: r.observation_summary || null }
+              observationSummary: r.observation_summary || null,
+              trajectoryContext: r.trajectory_context || null,
+              telemetryMode: r.telemetry_mode || "none" }
           : null;
       }, () => {
         // Offline: serve a bundled trajectory if the snapshot carries one for

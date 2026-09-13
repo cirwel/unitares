@@ -1074,6 +1074,8 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     regime_history=regime_history,
                     E_history=E_history,
                     I_history=I_history,
+                    S_history=S_history,
+                    V_history=V_history,
                     calibration_error=cal_error,
                     drift_norm=drift_n,
                     complexity_divergence=comp_div,
@@ -1086,6 +1088,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     unique_tools_ratio=tool_div,
                     computed=behavioral_eisv,
                     substrate_canaries=substrate_canaries,
+                    calibration_signal=ctx._calibration_signal,
                     coherence_source=LEGACY_COHERENCE_SOURCE,
                     coherence_role=ODE_CONTROL_FEEDBACK_ROLE,
                 )
@@ -2184,6 +2187,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                                     confidence=float(_conf),
                                     predicted_correct=(float(_conf) >= 0.5),
                                     actual_correct=1.0,
+                                    agent_id=agent_id,
                                 )
                             except Exception as _ce:
                                 logger.debug(f"Calibration from positive outcome skipped: {_ce}")
@@ -2250,6 +2254,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                                         confidence=float(_conf),
                                         predicted_correct=(float(_conf) >= 0.5),
                                         actual_correct=_bad_score,
+                                        agent_id=agent_id,
                                     )
                                 except Exception as _ce:
                                     logger.debug(f"Calibration from negative outcome skipped: {_ce}")
