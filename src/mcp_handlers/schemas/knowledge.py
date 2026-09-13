@@ -112,7 +112,11 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
     )
     agent_id_filter: Optional[str] = Field(
         default=None,
-        description="Filter by author agent UUID"
+        description=(
+            "Filter by author agent UUID. Preferred over the inherited "
+            "agent_id field for this purpose; agent_id is kept as a fallback "
+            "for existing callers."
+        )
     )
     status: Optional[str] = Field(
         default=None,
