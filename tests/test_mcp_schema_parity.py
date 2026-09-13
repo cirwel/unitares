@@ -23,6 +23,7 @@ Pure registry + data tests; no DB or network.
 
 from __future__ import annotations
 
+import copy
 import asyncio
 from typing import Any
 
@@ -299,24 +300,15 @@ def test_extra_argument_passthrough_survives_the_schema_replacement():
 # advertised ceiling is the likelier drift of the two, so the ceiling has to be
 # one of the values tried.
 #
-# Measured 2026-09-12 on the full surface: 507 properties across 50 tools,
-# 964 boundary values, none rejected by the transport, and six rejected by a
-# handler for the recorded catalog imprecision below.
-#
-# WHAT THIS DOES NOT CATCH, stated so the green result is not over-read. It
-# probes only the boundaries the advertised schema NAMES, so it is structurally
-# blind to a bound the advertised side omits or cannot express:
-#   - a handler bound with no advertised counterpart, e.g. an advertised
-#     `maximum` deleted while the handler keeps it;
-#   - a bound the schema emits in a form JSON Schema ignores. This is LIVE, not
-#     hypothetical: the check-in `complexity`/`confidence` bound is emitted as
-#     Pydantic `ge`/`le`, so 99.0 is advertised-legal and the handler refuses
-#     it, and this test passes because it only ever tries 1.0 there;
-#   - an optional nested field whose construct the helper does not model. This
-#     is also live: `ToolResultEvidence.observed_at` (format date-time) yields no
-#     candidates and is skipped without being recorded.
-# Closing these needs decisions this file should not make silently; see the
-# knowledge-graph record superseding 2026-09-12T18:41:44.
+# WHAT THIS STILL DOES NOT CATCH, stated so a green result is not over-read. It
+# probes only the boundaries the advertised schema NAMES, so a handler bound with
+# no advertised counterpart at all (an advertised `maximum` deleted while the
+# handler keeps it) is invisible to it. Catching that needs the opposite walk,
+# from the handler's bounds outward; it is a separate follow-up. Two related
+# classes this file used to miss are closed now: a bound emitted in a form JSON
+# Schema ignores is refused by test_no_advertised_schema_carries_a_pydantic_only_key,
+# and a construct the helper cannot model is recorded wherever it occurs rather
+# than skipped.
 
 _UNSYNTHESIZABLE = object()
 
@@ -327,31 +319,32 @@ _UNSYNTHESIZABLE = object()
 # cannot be chosen without deciding which violations are acceptable to miss,
 # which is a standard this file has no business setting quietly.
 
-# Advertised string branches the handler is stricter than. The canonical
-# process_agent_update and simulate_update models accept a number or a numeric
-# string such as "0.5" and refuse everything else, named levels and
-# {"value", "scale"} objects included; only the sync_state alias path normalizes
-# those upstream. But the advertised schema carries a bare `string` branch with
-# no enum, so it tells a caller any string is legal and the handler refuses "x".
-#
-# This is a real imprecision in the CATALOG, not something the schema swap
-# introduced: stdio and REST have advertised the same bare branch all along,
-# and docs/interface-contract.v1.json hashes it. Narrowing it is a contract
-# change that moves those input_schema_sha256 values and needs an interface
-# release, so it is a decision rather than a fix to fold into a test. Recorded
-# here so the exception is named and counted instead of silently passing.
-#
-# Two limits of this exemption, both measured. It does NOT guard the numeric
-# branch: that bound is emitted as Pydantic `ge`/`le`, which JSON Schema ignores,
-# so the numeric branch is already out of step and this test cannot see it. And
-# it covers every string, so narrowing the branch to the named-level enum would
-# still pass here even though these canonical handlers refuse named levels.
-_ADVERTISED_STRING_WIDER_THAN_HANDLER = frozenset({
-    ("process_agent_update", "complexity"),
-    ("process_agent_update", "confidence"),
-    ("simulate_update", "complexity"),
-    ("simulate_update", "confidence"),
-})
+# `format` policy: a declared format is treated as an assertion of intent, so the
+# value tried is a valid instance of it, and a format this table does not know
+# fails loudly instead of being skipped. JSON Schema 2020-12 makes `format` an
+# annotation by default, and Python's jsonschema accepts "x" as a date-time even
+# with its format checker when the optional parser is absent; but a client that
+# reads `date-time` and sends "x" has not built a call from the schema, so a
+# server refusing it is not an advertise-versus-accept mismatch. The handler also
+# accepts a bare date such as "2026-09-12" for this field: that is the server
+# accepting MORE than advertised, the permitted direction, so it is not surfaced.
+# Extend this table when a new format appears on the surface; until then an
+# unknown one fails, which is the point.
+_FORMAT_EXAMPLES = {
+    "date-time": "2026-01-01T00:00:00Z",
+}
+
+# `pattern` policy, the same shape as `format`: a regex this table knows gets
+# instances that match it, chosen to cover each alternative and both ends of the
+# range it describes, and an unknown regex fails loudly. A regex cannot be
+# sampled generically without either generating values that do not match it
+# (the test would then fail for the wrong reason) or silently skipping it.
+# test_every_pattern_example_matches_its_pattern keeps the examples honest.
+from src.mcp_handlers.schemas.core import UNIT_INTERVAL_STRING_PATTERN  # noqa: E402
+
+_PATTERN_EXAMPLES = {
+    UNIT_INTERVAL_STRING_PATTERN: ["0", "1", "1.0", "0.5", ".5"],
+}
 
 
 def _resolve_ref(schema: Any, defs: dict) -> Any:
@@ -366,7 +359,13 @@ def _resolve_ref(schema: Any, defs: dict) -> Any:
     return schema
 
 
-def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
+def _candidate_values(
+    schema: Any,
+    defs: dict,
+    depth: int = 0,
+    gaps: list | None = None,
+    path: str = "value",
+) -> list:
     """Every boundary value the advertised ``schema`` calls legal.
 
     Boundaries rather than arbitrary values, because a bound and an accepting
@@ -376,9 +375,18 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
     one — the failure this replaced was exactly that.
 
     An empty list means the helper does not model the construct (a ``pattern``,
-    a ``format``, an unresolvable ref). That is a gap in the helper, not a
-    failure of the invariant, and the test reports the two separately.
+    an unknown ``format``, an unresolvable ref). That is a gap in the helper,
+    not a failure of the invariant. When ``gaps`` is given, every such gap inside
+    a composite — an ``anyOf`` branch, a nested field, array items — is
+    appended to it with its ``path``. A previous version skipped those without
+    a word, which is how a nested date-time field went unchecked while the test
+    reported green.
     """
+
+    def _gap(where: str, why: str) -> None:
+        if gaps is not None:
+            gaps.append(f"{where}: {why}")
+
     schema = _resolve_ref(schema, defs)
     if not isinstance(schema, dict) or depth > 6:
         return []
@@ -392,10 +400,15 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
     for keyword in ("anyOf", "oneOf"):
         if keyword in schema:
             values: list = []
-            for branch in schema[keyword]:
+            for index, branch in enumerate(schema[keyword]):
                 if isinstance(branch, dict) and branch.get("type") == "null":
                     continue
-                values.extend(_candidate_values(branch, defs, depth + 1))
+                branch_path = f"{path}|{keyword}[{index}]"
+                branch_values = _candidate_values(branch, defs, depth + 1, gaps, branch_path)
+                if not branch_values:
+                    # One modelled branch must not hide an unmodelled sibling.
+                    _gap(branch_path, "branch has no candidates")
+                values.extend(branch_values)
             return values
 
     json_type = schema.get("type")
@@ -403,8 +416,12 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
         json_type = next((t for t in json_type if t != "null"), None)
 
     if json_type == "string":
-        if "pattern" in schema or schema.get("format"):
-            return []
+        if "pattern" in schema:
+            return list(_PATTERN_EXAMPLES.get(schema["pattern"], []))
+        declared_format = schema.get("format")
+        if declared_format:
+            example = _FORMAT_EXAMPLES.get(declared_format)
+            return [example] if example is not None else []
         shortest = max(1, int(schema.get("minLength") or 1))
         lengths = {shortest}
         longest = schema.get("maxLength")
@@ -430,13 +447,17 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
         # items must not be answered with one. BootstrapStateParams.ethical_drift
         # declares minItems and maxItems of 3, and an earlier draft handed it a
         # single-element list, i.e. a value its own schema calls illegal.
-        items = _candidate_values(schema.get("items") or {"type": "string"}, defs, depth + 1)
+        items_path = f"{path}[]"
+        items = _candidate_values(
+            schema.get("items") or {"type": "string"}, defs, depth + 1, gaps, items_path
+        )
         if not items:
+            _gap(items_path, "array items have no candidates")
             return []
         low = int(schema.get("minItems") or 0)
         high = schema.get("maxItems")
         high = high if isinstance(high, int) and high >= low else None
-        values: list = [[items[0]] * low]
+        values = [[items[0]] * low]
         if high is not None and high != low:
             values.append([items[0]] * high)
         # The shortest and longest arrays above test cardinality but carry only
@@ -452,10 +473,14 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
         return values
     if json_type == "object":
         properties = schema.get("properties") or {}
+        required = schema.get("required") or []
         base: dict[str, Any] = {}
-        for name in schema.get("required") or []:
-            nested = _candidate_values(properties.get(name) or {}, defs, depth + 1)
+        for name in required:
+            nested = _candidate_values(
+                properties.get(name) or {}, defs, depth + 1, gaps, f"{path}.{name}"
+            )
             if not nested:
+                _gap(f"{path}.{name}", "required nested field has no candidates")
                 return []
             base[name] = nested[0]
         # A nested field's bounds are as advertised as a top-level one's, and
@@ -463,7 +488,12 @@ def _candidate_values(schema: Any, defs: dict, depth: int = 0) -> list:
         # the same walk this test does at the top level.
         instances = [base]
         for name, definition in properties.items():
-            for value in _candidate_values(definition, defs, depth + 1):
+            nested_values = _candidate_values(
+                definition, defs, depth + 1, gaps, f"{path}.{name}"
+            )
+            if not nested_values and name not in required:
+                _gap(f"{path}.{name}", "nested field has no candidates")
+            for value in nested_values:
                 instances.append({**base, name: value})
         return instances
     if json_type == "null":
@@ -489,11 +519,16 @@ def test_every_advertised_value_survives_both_validation_boundaries():
       ``str``), so a rejection here means the advertised schema is structurally
       incompatible with the wrapper — the one way the schema swap could have
       broken a caller that generated bindings from the listing.
-    - the handler's own params model, which ``validate_params`` applies, is
-      where the advertised bounds and enums are actually enforced. A rejection
-      here means the mount advertises a value that dies one layer deeper: the
-      shape a hand-authored override in ``ALIAS_SCHEMA_PROPERTY_OVERRIDES``
-      could produce, since those are written by hand rather than derived.
+    - the handler path dispatch actually runs: the alias's normalizer, if it
+      has one, then the handler's own params model. That is where advertised
+      bounds and enums are enforced. A rejection here means the mount advertises
+      a value that dies one layer deeper, the shape a hand-authored entry in
+      ``ALIAS_SCHEMA_PROPERTY_OVERRIDES`` could produce.
+
+    The normalizer matters for ``sync_state``: its ``complexity`` accepts named
+    levels that the canonical model refuses, because the normalizer maps them to
+    numbers first. Judging ``sync_state`` against the canonical model alone would
+    report its real vocabulary as refused.
 
     An action-injecting alias strips ``action`` from its advertised schema
     while the router's model requires it, so the injected action is supplied
@@ -501,13 +536,11 @@ def test_every_advertised_value_survives_both_validation_boundaries():
     four action-injecting aliases fail on a missing field rather than on
     anything this test is about.
 
-    A TOP-LEVEL property the helper cannot synthesize is counted and named rather
-    than silently passed over. An optional NESTED field it cannot synthesize is
-    not yet counted; see the module comment above the helpers for that gap.
-    Measured 2026-09-12: 507 properties, 964 boundary values, none
-    unsynthesizable, none rejected outside the recorded exemption.
+    Any construct the helper cannot model is reported, at any depth: top-level,
+    inside a nested model, in an ``anyOf`` branch, or in array items.
     """
     from src import mcp_server
+    from src.mcp_handlers.support.param_normalization import ParamNormalizationError
     from src.mcp_handlers.tool_stability import resolve_tool_alias
     from src.tool_schemas import get_pydantic_schemas
 
@@ -516,8 +549,6 @@ def test_every_advertised_value_survives_both_validation_boundaries():
     unsynthesizable: list[str] = []
     transport_rejected: list[str] = []
     handler_rejected: list[str] = []
-    stale_exemptions: list[str] = []
-    exercised_exemptions: set[tuple[str, str]] = set()
 
     for name, tool in sorted(mcp_server.mcp._tool_manager._tools.items()):
         schema = tool.parameters or {}
@@ -525,6 +556,7 @@ def test_every_advertised_value_survives_both_validation_boundaries():
         properties = schema.get("properties") or {}
         canonical, alias = resolve_tool_alias(name)
         handler_model = handler_models.get(canonical)
+        normalizer = getattr(alias, "param_normalizer", None) if alias is not None else None
 
         # Required properties ride along on every instance, or a model would
         # reject for a missing field rather than for the property under test.
@@ -550,40 +582,35 @@ def test_every_advertised_value_survives_both_validation_boundaries():
             base[required] = _synthesize(properties.get(required) or {}, defs)
 
         for prop, definition in properties.items():
-            candidates = _candidate_values(definition, defs)
+            gaps: list[str] = []
+            candidates = _candidate_values(definition, defs, gaps=gaps, path=f"{name}.{prop}")
+            unsynthesizable.extend(gaps)
             if not candidates:
-                unsynthesizable.append(f"{name}.{prop}")
+                if not gaps:
+                    unsynthesizable.append(f"{name}.{prop}")
                 continue
             for value in candidates:
                 instance = {**base, prop: value}
                 shown = repr(value)
                 if len(shown) > 60:
-                    shown = f"{shown[:57]}... (len {len(value)})"
+                    shown = f"{shown[:57]}..."
                 try:
                     tool.fn_metadata.arg_model.model_validate(instance)
                 except ValidationError as exc:
                     transport_rejected.append(
                         f"{name}.{prop}={shown}: {exc.errors()[:1]}"
                     )
-                exempt = isinstance(value, str) and (
-                    (canonical, prop) in _ADVERTISED_STRING_WIDER_THAN_HANDLER
-                )
                 if handler_model is not None:
+                    dispatched = copy.deepcopy(instance)
                     try:
-                        handler_model.model_validate(instance)
-                    except ValidationError as exc:
-                        if not exempt:
-                            handler_rejected.append(
-                                f"{name}.{prop}={shown} -> {canonical}: {exc.errors()[:1]}"
-                            )
-                    else:
-                        # An exemption records that the handler REFUSES this.
-                        # If it now accepts, the entry describes nothing and has
-                        # to go, or it silently suppresses a real check forever.
-                        if exempt:
-                            stale_exemptions.append(f"{name}.{prop}={shown}")
-                if exempt:
-                    exercised_exemptions.add((canonical, prop))
+                        if normalizer is not None:
+                            normalizer(dispatched)
+                        handler_model.model_validate(dispatched)
+                    except (ValidationError, ParamNormalizationError) as exc:
+                        detail = exc.errors()[:1] if isinstance(exc, ValidationError) else str(exc)
+                        handler_rejected.append(
+                            f"{name}.{prop}={shown} -> {canonical}: {detail}"
+                        )
                 checked += 1
 
     assert not transport_rejected, (
@@ -598,38 +625,133 @@ def test_every_advertised_value_survives_both_validation_boundaries():
     )
     assert checked, "no advertised property was exercised; the check is vacuous"
 
-    # The exemption stays honest only while it still describes something real,
-    # which takes two checks rather than one. Checking the handler still
-    # REFUSES catches a widened handler; requiring every declared entry to be
-    # exercised catches a narrowed catalog one entry at a time. A single
-    # "something matched" assertion caught neither: three stale entries would
-    # have sat behind one live one.
-    assert not stale_exemptions, (
-        "the handler now ACCEPTS values _ADVERTISED_STRING_WIDER_THAN_HANDLER "
-        "exempts, so those entries suppress a check that would pass. Remove them "
-        f"({len(stale_exemptions)}):\n  " + "\n  ".join(stale_exemptions)
-    )
-    unexercised = _ADVERTISED_STRING_WIDER_THAN_HANDLER - exercised_exemptions
-    assert not unexercised, (
-        "these exemptions were never reached, so the catalog no longer advertises "
-        f"the branch they excuse. Delete them: {sorted(unexercised)}"
-    )
-
     # No allowance for constructs the helper cannot model. A tolerated fraction
     # would be a deciding standard chosen silently — how much of the surface is
     # acceptable to leave unchecked — and this repo requires such a standard to
-    # be stated as a choice rather than absorbed. So a `pattern` or `format` on a
-    # TOP-LEVEL property fails here. The same construct on an optional field
-    # inside a nested model does not reach this list today: the object walk
-    # skips a field with no candidates without recording it, which is how
-    # ToolResultEvidence.observed_at (format date-time) goes unchecked. Counting
-    # those would fail immediately on that field and needs a decision about
-    # whether `format` is an assertion or only an annotation.
+    # be stated as a choice rather than absorbed. So a `pattern`, an unknown
+    # `format`, or an unresolvable ref fails here wherever it sits.
     assert not unsynthesizable, (
         "advertised properties the helper cannot synthesize, so the invariant "
-        "went unchecked for them. Extend _candidate_values, or name the construct "
-        f"deliberately ({len(unsynthesizable)}):\n  " + "\n  ".join(unsynthesizable)
+        "went unchecked for them. Extend _candidate_values or _FORMAT_EXAMPLES, "
+        f"or name the construct deliberately ({len(unsynthesizable)}):\n  "
+        + "\n  ".join(unsynthesizable)
     )
+
+
+def test_every_pattern_example_matches_its_pattern():
+    """An example that failed its own regex would be an illegal value.
+
+    The invariant would then fail for the wrong reason, blaming the handler for
+    refusing something the schema never called legal.
+    """
+    import re
+
+    for pattern, examples in _PATTERN_EXAMPLES.items():
+        for example in examples:
+            assert re.fullmatch(pattern, example), f"{example!r} does not match {pattern!r}"
+
+
+def test_alias_schema_repeats_the_unit_interval_regex_exactly():
+    """src/alias_schema.py repeats the regex instead of importing it.
+
+    A drift would make sync_state advertise a different set of numeric strings
+    than the canonical tools, with nothing to notice.
+    """
+    from src.alias_schema import UNIT_INTERVAL_STRING_PATTERN as ALIAS_COPY
+
+    assert ALIAS_COPY == UNIT_INTERVAL_STRING_PATTERN
+
+
+def test_sync_state_named_levels_match_its_normalizer():
+    """The advertised enum is a hand-written copy of the normalizer's table.
+
+    src/alias_schema.py lists the named levels rather than importing them, to
+    stay free of runtime imports. A level added to the normalizer but not here
+    would be accepted and unadvertised, the safe direction; one added here but
+    not to the normalizer would be advertised and refused. Pin them equal so
+    neither can drift in silence.
+    """
+    from src.alias_schema import SYNC_STATE_COMPLEXITY_NAMED_LEVELS
+    from src.mcp_handlers.support.param_normalization import NAMED_LEVELS
+
+    assert sorted(SYNC_STATE_COMPLEXITY_NAMED_LEVELS) == sorted(NAMED_LEVELS)
+
+
+# ---------------------------------------------------------------------------
+# Constraint keys JSON Schema does not know
+# ---------------------------------------------------------------------------
+# Pydantic accepts constraint arguments under its own names. Most are translated
+# to JSON Schema keywords when a schema is emitted, but not in every position:
+# `Union[float, str, None] = Field(ge=0.0, le=1.0)` emitted `ge`/`le` verbatim
+# beside an inner anyOf, at twelve places on three check-in tools. A client
+# validator ignores an unknown key, so those bounds were invisible to every
+# client while the handler enforced them. The boundary walk above cannot see
+# this class at all, because it only probes keywords it recognises.
+_PYDANTIC_ONLY_KEYS = frozenset({
+    "ge", "gt", "le", "lt",
+    "multiple_of",
+    "min_length", "max_length",
+    "min_items", "max_items",
+    "decimal_places", "max_digits",
+    "allow_inf_nan",
+    "strict",
+})
+
+# Subschema maps whose keys are caller-chosen names, and keywords whose values
+# are data rather than schema. A parameter literally named `ge`, or a default
+# value containing a `le` key, is content and must not be flagged.
+_NAME_KEYED = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
+_DATA_KEYWORDS = frozenset({"default", "const", "enum", "examples", "example"})
+
+
+def _pydantic_only_keys(node: Any, path: str) -> list[str]:
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _DATA_KEYWORDS:
+                continue
+            if key in _NAME_KEYED and isinstance(value, dict):
+                for name, sub in value.items():
+                    found.extend(_pydantic_only_keys(sub, f"{path}.{key}.{name}"))
+                continue
+            if key in _PYDANTIC_ONLY_KEYS:
+                found.append(f"{path}.{key}={value!r}")
+            found.extend(_pydantic_only_keys(value, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            found.extend(_pydantic_only_keys(item, f"{path}[{index}]"))
+    return found
+
+
+def test_no_advertised_schema_carries_a_pydantic_only_key():
+    """Every constraint a client is told about must be one a client can read."""
+    mount = _fresh_mount()
+    assert mount, "no tools were listed; the check would be vacuous"
+    leaks = [hit for name, schema in sorted(mount.items()) for hit in _pydantic_only_keys(schema, name)]
+    assert not leaks, (
+        "advertised schemas carry Pydantic constraint keys that JSON Schema does "
+        "not define, so every client ignores those bounds while the handler "
+        "enforces them. Move the constraint onto the member it applies to, e.g. "
+        f"Optional[Annotated[float, Field(ge=0.0, le=1.0)]] ({len(leaks)}):\n  "
+        + "\n  ".join(leaks)
+    )
+
+
+def test_the_key_ban_finds_a_reintroduced_leak_and_ignores_content():
+    """The scanner must fire on the real shape and stay quiet on look-alikes."""
+    leaked = {"anyOf": [{"anyOf": [{"type": "number"}, {"type": "string"}], "ge": 0.0, "le": 1.0}, {"type": "null"}]}
+    assert _pydantic_only_keys(leaked, "tool.complexity") == [
+        "tool.complexity.anyOf[0].ge=0.0",
+        "tool.complexity.anyOf[0].le=1.0",
+    ]
+
+    look_alikes = {
+        "type": "object",
+        "properties": {"ge": {"type": "number", "minimum": 0}},
+        "default": {"le": 1},
+        "enum": [{"lt": 2}],
+    }
+    assert _pydantic_only_keys(look_alikes, "tool") == []
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +760,7 @@ def test_every_advertised_value_survives_both_validation_boundaries():
 # Every entry is a way the invariant above was once blind, found by mutation
 # rather than by reading, and each was fixed. Committing them is what keeps the
 # fixes fixed: a later tidy-up of _candidate_values that reintroduces a cap,
-# drops nested exploration, or softens the exemption check would still pass the
+# drops nested exploration, or stops recording a skip would still pass the
 # invariant itself, because the catalog is correct today. Only a test that
 # BREAKS the catalog and demands a failure can see that kind of decay.
 #
@@ -650,6 +772,7 @@ def test_every_advertised_value_survives_both_validation_boundaries():
 
 _HANDLER_GATE = "values the handler's own model refuses"
 _TRANSPORT_GATE = "values its own argument model refuses"
+_SYNTHESIS_GAP = "cannot synthesize"
 
 _REVIEW_ROUND_MUTATIONS = {
     "an advertised maximum above the handler's": (
@@ -692,15 +815,29 @@ _REVIEW_ROUND_MUTATIONS = {
         {"type": "string", "maxLength": 99999},
         _HANDLER_GATE,
     ),
-    "an exemption whose advertised branch no longer exists": (
-        "property", "simulate_update", "confidence",
-        {"anyOf": [{"type": "number", "minimum": 0, "maximum": 1}, {"type": "null"}]},
-        "exemptions were never reached",
+    "a named level the sync_state normalizer does not accept": (
+        "property", "sync_state", "complexity",
+        {"anyOf": [
+            {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            {"type": "string", "enum": ["medium", "not_a_named_level"]},
+            {"type": "null"},
+        ]},
+        _HANDLER_GATE,
     ),
     "a required field the helper cannot synthesize": (
         "property", "delegate_inference", "prompt",
         {"type": "string", "pattern": "^x+$"},
-        "cannot synthesize",
+        _SYNTHESIS_GAP,
+    ),
+    "an unknown format on an optional nested field": (
+        "nested", "sync_state", ("ToolResultEvidence", "observed_at"),
+        {"anyOf": [{"type": "string", "format": "uuid"}, {"type": "null"}]},
+        _SYNTHESIS_GAP,
+    ),
+    "an anyOf branch the helper cannot model beside one it can": (
+        "property", "delegate_inference", "timeout_s",
+        {"anyOf": [{"type": "integer", "minimum": 5, "maximum": 420}, {"type": "string", "pattern": "^\\d+$"}]},
+        _SYNTHESIS_GAP,
     ),
 }
 
@@ -710,11 +847,9 @@ _REVIEW_ROUND_MUTATIONS = {
 )
 def test_the_invariant_fails_when_the_catalog_is_broken(direction):
     """Break the advertised schema in one known way; the invariant must fail."""
-    import copy
+    import re
 
     from src import mcp_server
-
-    import re
 
     kind, tool_name, location, replacement, expected_gate = (
         _REVIEW_ROUND_MUTATIONS[direction]
@@ -736,30 +871,4 @@ def test_the_invariant_fails_when_the_catalog_is_broken(direction):
 
     # Restoration is part of the contract: a mutation that leaked would make
     # every later test in the session observe a broken catalog.
-    test_every_advertised_value_survives_both_validation_boundaries()
-
-
-def test_a_widened_handler_invalidates_the_exemption():
-    """The exemption records that the handler REFUSES a value; accepting it must fail.
-
-    Separate from the mutations above because it breaks the handler rather than
-    the catalog. It is the direction the first exemption guard could not see:
-    exempted values skipped handler validation, so nothing learned the handler
-    had changed.
-    """
-    from pydantic import ConfigDict, create_model
-
-    from src.tool_schemas import get_pydantic_schemas
-
-    schemas = get_pydantic_schemas()
-    permissive = create_model("WidenedHandler", __config__=ConfigDict(extra="allow"))
-    for canonical in sorted({tool for tool, _ in _ADVERTISED_STRING_WIDER_THAN_HANDLER}):
-        original = schemas[canonical]
-        schemas[canonical] = permissive
-        try:
-            with pytest.raises(AssertionError, match="handler now ACCEPTS"):
-                test_every_advertised_value_survives_both_validation_boundaries()
-        finally:
-            schemas[canonical] = original
-
     test_every_advertised_value_survives_both_validation_boundaries()
