@@ -75,21 +75,29 @@ branch does not deploy the master-only public Pages workflow.
 6. Push the tag and create the GitHub release with user impact, compatibility,
    migrations, evidence changes, known limits, and rollback notes.
 7. The `Publish Container` workflow publishes `linux/amd64` and `linux/arm64`
-   images to GHCR with an SBOM and build-provenance attestation. For a release
-   created before that workflow existed, dispatch it manually with the existing
-   release tag. Both paths publish only the version tag; neither changes
-   `latest`. The former `publish_latest` input is removed.
+   images to GHCR with an SBOM and build-provenance attestation. A manual
+   dispatch must select the same tag as both workflow ref and input:
+   `gh workflow run publish-container.yml --ref vX.Y.Z -f ref=vX.Y.Z`. This
+   keeps the attestation certificate bound to that tag and source commit. A
+   historical tag that predates the workflow cannot satisfy that binding;
+   leave it version-tag-only and cut a patch release if it must become
+   `latest`, rather than weakening promotion verification. Both publication
+   paths publish only the version tag; neither changes `latest`. The former
+   `publish_latest` input is removed.
 8. Dispatch the **Promote Release** workflow with the tag
    (`gh workflow run promote-release.yml -f tag=vX.Y.Z`). Its `verify` job
    checks that the tag is the newest server tag and ahead of
    `PUBLISHED_VERSION`, that the release page is published, that the index
    carries `linux/amd64` and `linux/arm64` with an SPDX SBOM for each, and that
-   build provenance verifies against `publish-container.yml` at that tag; it
-   records the evidence in the run summary. Approving the `release-promotion`
-   environment runs `promote`, which moves `latest` to the verified digest as
-   described below. `pin` then pushes `publish/vX.Y.Z` with `PUBLISHED_VERSION`
-   and `version_manager.py --update` applied; open its pull request from the
-   command in the run summary and merge it. Until that merges, public
+   build provenance verifies against `publish-container.yml` at that tag and
+   the tag's peeled source commit; it records the evidence in the run summary.
+   Approving the `release-promotion` environment runs `promote`, which re-reads
+   every mutable release pointer before moving `latest` to the verified digest
+   as described below. `pin` performs the same freshness check and re-verifies
+   the published release page plus source-bound provenance before pushing
+   `publish/vX.Y.Z` with `PUBLISHED_VERSION` and `version_manager.py --update`
+   applied; open its pull request from the command in the run summary and merge
+   it. Until that merges, public
    installation examples continue to name the previous verified release. Finish
    with clean closeout.
 
@@ -107,6 +115,13 @@ one, because GitHub would otherwise create it unprotected on first use and any
 caller able to dispatch a workflow could move `latest`. Docker documents this
 single-index operation as a [carbon copy](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/). Until promotion succeeds,
 `latest` continues to resolve to the previous image (or remains absent).
+
+The automated workflow requires an existing, readable `latest` digest so it
+can detect a competing write across the approval wait. For a repository whose
+first release has no `latest`, use the manual procedure below once under
+exclusive operator control, then run the workflow to verify and pin that same
+digest. The workflow intentionally does not treat a failed registry read as
+proof that the tag is absent.
 
 Record the release tag, source commit, multi-architecture **index digest**, both
 platforms, SBOM and provenance verification in the release evidence. Confirm
@@ -126,10 +141,18 @@ Verification is automated; promotion and publication remain explicit human
 acts, one environment approval and one pull request merge. Neither is an
 end-to-end claim that a deployment was upgraded.
 
+Do not run the manual fallback while a Promote Release run is pending or in
+progress. The workflow records the pre-approval `latest` digest and revalidates
+it immediately before the write, but GHCR tag updates do not provide a
+cross-actor compare-and-swap. Coordinate all manual `latest` changes with the
+workflow so that its freshness check remains the last reader before mutation.
+
 ## Correcting a published release
 
-A tag is immutable; a release body is not. When a published release is found to
-be wrong or incomplete, correct the prose and leave the tag alone.
+Treat a published tag as immutable; a release body is not. When a published
+release is found to be wrong or incomplete, correct the prose and leave the tag
+alone. Promotion also binds provenance to the tag's peeled source commit and
+refuses the run if that tag has moved since verification.
 
 1. Record the correction in `docs/releases/<version>-errata.md`: what was
    omitted, what was miscited, what was overstated, and what evidence has since
