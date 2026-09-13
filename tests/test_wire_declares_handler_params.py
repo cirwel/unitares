@@ -7,7 +7,8 @@ in-process, where undeclared keys are merged back, and silently ignores it
 over the MCP wire. Two cases sat in that state until 2026-09-07:
 observe(action="telemetry") read window_hours / include_calibration, and
 describe_tool read include_schema / include_full_description. cirs_protocol's
-selectable protocol handlers read twenty-four more until #2183;
+selectable protocol handlers read twenty-four more until #2183; list_tools
+read lite / include_advanced / tier the same way, missed by that sweep.
 tests/test_cirs_protocol_wire_params.py holds that schema to the handlers'
 source, and the representative keys below keep the registered argument model
 covered from here.
@@ -21,6 +22,7 @@ CASES = {
     "observe": {"window_hours": 48, "include_calibration": True},
     "describe_tool": {"include_schema": False, "include_full_description": False},
     "cirs_protocol": {"since_hours": 5.0, "action_id": "abc", "trust_default": "full"},
+    "list_tools": {"lite": False, "include_advanced": False, "tier": "essential"},
 }
 
 
@@ -44,6 +46,7 @@ def test_fastmcp_argument_model_keeps_the_parameters(tool_name):
         "observe": {"action": "telemetry"},
         "describe_tool": {"tool_name": "knowledge"},
         "cirs_protocol": {"protocol": "void_alert", "action": "query"},
+        "list_tools": {},
     }[tool_name]
     validated = tool.fn_metadata.arg_model.model_validate({**required_example, **CASES[tool_name]})
     dumped = validated.model_dump_one_level() if hasattr(validated, "model_dump_one_level") else validated.model_dump()
@@ -66,3 +69,16 @@ def test_describe_tool_switches_coerce_like_lite():
     p = DescribeToolParams(tool_name="knowledge", include_schema="false", include_full_description="0")
     assert p.include_schema is False and p.include_full_description is False
     assert DescribeToolParams(tool_name="knowledge").include_schema is True
+
+
+def test_list_tools_switches_default_and_coerce_like_the_handler():
+    from src.mcp_handlers.schemas.admin import ListToolsParams
+
+    defaults = ListToolsParams()
+    assert defaults.lite is True
+    assert defaults.include_advanced is True
+    assert defaults.tier == "all"
+
+    coerced = ListToolsParams(lite="false", include_advanced="0", tier="essential")
+    assert coerced.lite is False and coerced.include_advanced is False
+    assert coerced.tier == "essential"
