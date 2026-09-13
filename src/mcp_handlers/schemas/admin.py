@@ -1,6 +1,7 @@
 from typing import Any, ClassVar, Dict, Literal, Mapping, Optional, Tuple, Union
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
+from ..support.coerce import coerce_bool
 
 class ListToolsParams(AgentIdentityMixin):
     """
@@ -53,10 +54,11 @@ class ListToolsParams(AgentIdentityMixin):
             self.verbose = _to_bool(self.verbose)
         if self.progressive is not None:
             self.progressive = _to_bool(self.progressive)
-        if self.include_advanced is not None:
-            self.include_advanced = _to_bool(self.include_advanced)
-        if self.lite is not None:
-            self.lite = _to_bool(self.lite)
+        # These switches default true in the handler, so invalid and null
+        # values must preserve that default. Use the handler's coercer to keep
+        # schema-validated MCP calls identical to direct/REST dispatch.
+        self.include_advanced = coerce_bool(self.include_advanced, True)
+        self.lite = coerce_bool(self.lite, True)
 
         return self
 
