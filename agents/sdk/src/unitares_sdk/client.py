@@ -527,10 +527,12 @@ class GovernanceClient:
 
         ``sync_state`` is the promoted agent-facing alias of the raw
         ``process_agent_update`` handler (same dispatch, same response shape;
-        see ToolAlias in tool_stability.py). We call the alias deliberately:
-        #1292 dropped the raw twin from the lite MCP wire, so calling
-        ``process_agent_update`` by raw name now fails ``Unknown tool`` on the
-        :8767 ``/mcp/`` surface residents use. Do NOT revert to the raw name.
+        see ToolAlias in tool_stability.py). We call the alias deliberately.
+        #1292 dropped the raw twin from the lite MCP wire, and #2081 registered
+        every handler on ``/mcp/`` again, so a current server accepts both
+        names; a lite-mode server between those two changes answers the raw
+        name with ``Unknown tool`` on the :8767 ``/mcp/`` surface residents
+        use. The alias works on both, so do NOT revert to the raw name.
 
         ``confidence`` and ``epistemic_class`` both default to ``None`` and are
         omitted from the payload when unset. Both fields fabricate an epistemic
@@ -754,8 +756,9 @@ class GovernanceClient:
         """Get governance metrics via the advertised ``check_working_state`` alias.
 
         Same handler as raw ``get_governance_metrics`` (ToolAlias in
-        tool_stability.py); the raw twin was dropped from the lite MCP wire by
-        #1292, so call the alias to avoid ``Unknown tool`` on :8767 ``/mcp/``.
+        tool_stability.py). A current server accepts the raw name on ``/mcp/``
+        (#2081), but a lite-mode server between #1292 and #2081 answers it with
+        ``Unknown tool`` on :8767 ``/mcp/``; the alias works on both.
         """
         raw = await self.call_tool("check_working_state", kwargs)
         return MetricsResult.model_validate(raw)

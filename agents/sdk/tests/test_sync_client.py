@@ -168,8 +168,9 @@ class TestSyncIdentityCapture:
 
 class TestSyncToolMapping:
     def test_checkin_maps_to_sync_state(self):
-        # #1292 dropped the raw twin from the lite MCP wire; the alias resolves
-        # over both REST and MCP, so checkin() calls sync_state on all transports.
+        # The alias resolves over both REST and MCP, including on servers that
+        # refuse the raw name (see client.py checkin), so checkin() calls
+        # sync_state on all transports.
         client = SyncGovernanceClient(transport="rest")
         calls = []
 
