@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import copy
 import asyncio
-from typing import Any
+from typing import Any, Union
 
 import pytest
 from pydantic import ValidationError
@@ -731,8 +731,11 @@ def test_no_advertised_schema_carries_a_pydantic_only_key():
     assert not leaks, (
         "advertised schemas carry Pydantic constraint keys that JSON Schema does "
         "not define, so every client ignores those bounds while the handler "
-        "enforces them. Move the constraint onto the member it applies to, e.g. "
-        f"Optional[Annotated[float, Field(ge=0.0, le=1.0)]] ({len(leaks)}):\n  "
+        "enforces them. Override the advertised schema with WithJsonSchema and "
+        "leave the constraint where it is, as schemas/core.py does for the "
+        "check-in fields. Moving the constraint onto a Union member also fixes "
+        "the schema, but it changes the validation errors callers receive; see "
+        f"test_check_in_unit_fields_refuse_exactly_as_declared ({len(leaks)}):\n  "
         + "\n  ".join(leaks)
     )
 
@@ -752,6 +755,286 @@ def test_the_key_ban_finds_a_reintroduced_leak_and_ignores_content():
         "enum": [{"lt": 2}],
     }
     assert _pydantic_only_keys(look_alikes, "tool") == []
+
+
+# ---------------------------------------------------------------------------
+# The errors a caller receives
+# ---------------------------------------------------------------------------
+# Changing how a field is advertised must not change how it refuses. The first
+# fix for the leak above moved the check-in bound onto each Union member. That
+# emitted the right schema and accepted and refused exactly the same values,
+# but Pydantic reports a union failure once per member, so `complexity=2` came
+# back as two errors, at `complexity.constrained-float` and
+# `complexity.constrained-str`, instead of one at `complexity`. The response
+# formatter shows a caller every error. A second string branch in sync_state's
+# override did the same at the transport, repeating the string error for a list
+# or an object. Checks of accept-versus-refuse and of message text passed both
+# changes, so these tests compare whole error lists: location, type, message,
+# input and context.
+
+_UNIT_FIELD_INPUTS = (
+    0, 1, 0.5, 2, -1, 99.0, 1.5, True, float("nan"), float("inf"),
+    "0", "1", "0.5", ".5", "2", "-1", "1.5", "nan", " 0.5", "+0.5", "5e-1",
+    "x", "medium", "",
+    None, [], {}, [0.5], {"value": 5, "scale": 10},
+)
+
+
+def _declared_unit_fields_model(complexity_type: Any, confidence_type: Any, bound: bool):
+    """A model with only the two check-in unit fields and the real before-validator."""
+    from pydantic import BaseModel, Field, model_validator
+
+    from src.mcp_handlers.schemas import core
+
+    limits = {"ge": 0.0, "le": 1.0} if bound else {}
+
+    class DeclaredUnitFields(BaseModel):
+        complexity: complexity_type = Field(default=0.5, **limits)
+        confidence: confidence_type = Field(default=None, **limits)
+
+        @model_validator(mode="before")
+        @classmethod
+        def coerce_unit_strings(cls, data):
+            return core._coerce_unit_string_fields(
+                data, "complexity", "confidence", alias_hint=core._COMPLEXITY_ALIAS_HINT
+            )
+
+    return DeclaredUnitFields
+
+
+def _error_rows(exc: ValidationError) -> list[tuple]:
+    # repr, because the context of a before-validator error holds the raised
+    # exception object, and two exception objects never compare equal.
+    return [
+        (tuple(e["loc"]), e["type"], e["msg"], repr(e.get("input")), repr(e.get("ctx")))
+        for e in exc.errors(include_url=False)
+    ]
+
+
+def _outcome(validate, value_of) -> tuple:
+    try:
+        return ("accepted", repr(value_of(validate())))
+    except ValidationError as exc:
+        return ("refused", _error_rows(exc))
+
+
+def _unit_field_outcomes(model, field: str) -> dict[str, tuple]:
+    return {
+        repr(value): _outcome(
+            lambda value=value: model.model_validate({field: value}),
+            lambda validated: getattr(validated, field),
+        )
+        for value in _UNIT_FIELD_INPUTS
+    }
+
+
+def _differences(actual: dict, expected: dict) -> list[str]:
+    return [
+        f"{shown}:\n      declared {expected[shown]}\n      actual   {actual[shown]}"
+        for shown in expected
+        if actual[shown] != expected[shown]
+    ]
+
+
+# The declaration these fields have always validated with. Their advertised
+# JSON Schema is overridden; this is what must not move underneath it.
+_DECLARED_UNIT_FIELD = Union[float, str, None]
+
+
+@pytest.mark.parametrize("model_name", ["ProcessAgentUpdateParams", "SimulateUpdateParams"])
+@pytest.mark.parametrize("field", ["complexity", "confidence"])
+def test_check_in_unit_fields_refuse_exactly_as_declared(model_name, field):
+    """Same values accepted, the same coerced value kept, the same errors raised."""
+    from src.mcp_handlers.schemas import core
+
+    declared = _declared_unit_fields_model(_DECLARED_UNIT_FIELD, _DECLARED_UNIT_FIELD, bound=True)
+    differences = _differences(
+        _unit_field_outcomes(getattr(core, model_name), field),
+        _unit_field_outcomes(declared, field),
+    )
+    assert not differences, (
+        f"{model_name}.{field} no longer validates like its declaration, so callers "
+        f"see different errors ({len(differences)}):\n  " + "\n  ".join(differences)
+    )
+
+
+def test_the_error_comparison_catches_a_bound_moved_onto_the_union_members():
+    """Negative control: the shape the first fix used must fail the comparison.
+
+    It also pins why a weaker check passed it: every value is accepted or
+    refused exactly as before, so only the error lists can tell the two apart.
+    """
+    from typing import Annotated
+
+    from pydantic import Field
+
+    per_member = Union[
+        Annotated[float, Field(ge=0.0, le=1.0)],
+        Annotated[str, Field(pattern=UNIT_INTERVAL_STRING_PATTERN)],
+        None,
+    ]
+    moved = _unit_field_outcomes(
+        _declared_unit_fields_model(per_member, per_member, bound=False), "complexity"
+    )
+    declared = _unit_field_outcomes(
+        _declared_unit_fields_model(_DECLARED_UNIT_FIELD, _DECLARED_UNIT_FIELD, bound=True),
+        "complexity",
+    )
+
+    assert {shown: row[0] for shown, row in moved.items()} == {
+        shown: row[0] for shown, row in declared.items()
+    }
+    assert _differences(moved, declared)
+    assert [row[:2] for row in declared["2"][1]] == [(("complexity",), "less_than_equal")]
+    assert [row[:2] for row in moved["2"][1]] == [
+        (("complexity", "constrained-float"), "less_than_equal"),
+        (("complexity", "constrained-str"), "string_type"),
+    ]
+
+
+_OUT_OF_RANGE_CALLS = {
+    "process_agent_update complexity=2": (
+        "process_agent_update", {"complexity": 2},
+        {"field": "complexity", "message": "Input should be less than or equal to 1", "type": "less_than_equal"},
+    ),
+    "process_agent_update complexity='2'": (
+        "process_agent_update", {"complexity": "2"},
+        {"field": "complexity", "message": "Input should be less than or equal to 1", "type": "less_than_equal"},
+    ),
+    "simulate_update confidence=-1": (
+        "simulate_update", {"confidence": -1},
+        {"field": "confidence", "message": "Input should be greater than or equal to 0", "type": "greater_than_equal"},
+    ),
+    "sync_state confidence=1.5": (
+        "sync_state", {"response_text": "probe", "confidence": 1.5},
+        {"field": "confidence", "message": "Input should be less than or equal to 1", "type": "less_than_equal"},
+    ),
+}
+
+
+@pytest.mark.parametrize("call", sorted(_OUT_OF_RANGE_CALLS), ids=lambda label: label.replace(" ", "-"))
+def test_an_out_of_range_check_in_value_is_one_error_named_for_its_field(call):
+    """What the caller reads, through the dispatch steps that produce it.
+
+    An alias is resolved first, as dispatch does, so sync_state's normalizer
+    runs before the canonical model does.
+    """
+    import json
+
+    from src.mcp_handlers.middleware import DispatchContext, resolve_alias, validate_params
+
+    tool_name, arguments, expected = _OUT_OF_RANGE_CALLS[call]
+
+    async def dispatch():
+        ctx = DispatchContext()
+        resolved = await resolve_alias(tool_name, dict(arguments), ctx)
+        assert isinstance(resolved, tuple), f"refused before validation: {resolved}"
+        name, resolved_arguments, ctx = resolved
+        return await validate_params(name, resolved_arguments, ctx)
+
+    result = asyncio.run(dispatch())
+    assert isinstance(result, list), f"accepted a value outside 0-1: {result}"
+    payload = json.loads(result[0].text)
+    assert payload["errors"] == [expected]
+    assert payload["error"].count("\n") == 1, payload["error"]
+
+
+def _transport_outcomes(arg_model, base: dict, field: str) -> dict[str, tuple]:
+    """Outcomes for one field of a transport argument model, located as a bare value."""
+    rows = {}
+    for value in _UNIT_FIELD_INPUTS:
+        try:
+            validated = arg_model.model_validate({**base, field: value})
+            rows[repr(value)] = ("accepted", repr(getattr(validated, field)))
+        except ValidationError as exc:
+            rows[repr(value)] = ("refused", [
+                (loc[1:], *rest) for loc, *rest in _error_rows(exc) if loc[:1] == (field,)
+            ])
+    return rows
+
+
+def _declared_transport_outcomes() -> dict[str, tuple]:
+    from pydantic import TypeAdapter
+
+    adapter = TypeAdapter(_DECLARED_UNIT_FIELD)
+    return {
+        repr(value): _outcome(lambda value=value: adapter.validate_python(value), lambda v: v)
+        for value in _UNIT_FIELD_INPUTS
+    }
+
+
+def test_the_transport_builds_the_declared_union_for_every_check_in_unit_field():
+    """Every registered tool that dispatches to a check-in model, both fields.
+
+    The transport's argument model is built from the advertised schema, one
+    Python type per top-level anyOf branch, so an advertised refinement can add
+    a member to the union it validates with. It must stay the declared union.
+    """
+    from src import mcp_server
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+    from src.tool_schemas import get_pydantic_schemas
+
+    models = get_pydantic_schemas()
+    check_in_models = {models["process_agent_update"], models["simulate_update"]}
+    declared = _declared_transport_outcomes()
+    checked: list[str] = []
+    differences: list[str] = []
+    for name, tool in sorted(mcp_server.mcp._tool_manager._tools.items()):
+        canonical, _alias = resolve_tool_alias(name)
+        if models.get(canonical) not in check_in_models:
+            continue
+        schema = tool.parameters or {}
+        properties = schema.get("properties") or {}
+        defs = schema.get("$defs") or {}
+        base = {
+            required: _synthesize(properties.get(required) or {}, defs)
+            for required in schema.get("required") or []
+        }
+        for field in ("complexity", "confidence"):
+            if field not in properties:
+                continue
+            checked.append(f"{name}.{field}")
+            differences.extend(
+                f"{name}.{field}={line}"
+                for line in _differences(
+                    _transport_outcomes(tool.fn_metadata.arg_model, base, field), declared
+                )
+            )
+
+    assert {"process_agent_update.complexity", "simulate_update.confidence",
+            "sync_state.complexity", "sync_state.confidence"} <= set(checked), checked
+    assert not differences, (
+        "the transport validates a check-in unit field with a different union than "
+        f"the declared one, so its errors changed ({len(differences)}):\n  "
+        + "\n  ".join(differences)
+    )
+
+
+def test_the_transport_comparison_catches_a_second_string_branch():
+    """Negative control: the sync_state override's first shape must fail."""
+    from src.mcp_handlers.support.wrapper_generator import create_typed_wrapper
+
+    schema = copy.deepcopy(_catalog()["sync_state"])
+    schema["properties"]["complexity"] = {
+        "anyOf": [
+            {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            {"type": "string", "pattern": UNIT_INTERVAL_STRING_PATTERN},
+            {"type": "string", "enum": ["medium"]},
+            {"type": "null"},
+        ],
+        "default": 0.5,
+    }
+    wrapper = create_typed_wrapper("sync_state", schema, lambda tool_name: None)
+    arg_model = InternalTool.from_function(wrapper, structured_output=False).fn_metadata.arg_model
+    base = {required: "probe" for required in schema.get("required") or []}
+
+    outcomes = _transport_outcomes(arg_model, base, "complexity")
+    assert _differences(outcomes, _declared_transport_outcomes())
+    assert [row[:2] for row in outcomes["[]"][1]] == [
+        (("float",), "float_type"),
+        (("str",), "string_type"),
+        (("str",), "string_type"),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -819,7 +1102,10 @@ _REVIEW_ROUND_MUTATIONS = {
         "property", "sync_state", "complexity",
         {"anyOf": [
             {"type": "number", "minimum": 0.0, "maximum": 1.0},
-            {"type": "string", "enum": ["medium", "not_a_named_level"]},
+            {"type": "string", "anyOf": [
+                {"type": "string", "pattern": UNIT_INTERVAL_STRING_PATTERN},
+                {"type": "string", "enum": ["medium", "not_a_named_level"]},
+            ]},
             {"type": "null"},
         ]},
         _HANDLER_GATE,
