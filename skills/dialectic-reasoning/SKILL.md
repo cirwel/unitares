@@ -27,7 +27,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/reviewer.py: "d5e71f324195eb6c"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
   unitares/src/mcp_handlers/schemas/dialectic.py: "0e7bcaa2ebbd1e97"
-  unitares/src/mcp_handlers/tool_stability.py: "a8b0ef303f345dc3"
+  unitares/src/mcp_handlers/tool_stability.py: "1711841c459e2d2a"
   unitares/src/mcp_handlers/identity/operator.py: "cc2698ddc37a4091"
   unitares/src/mcp_handlers/lifecycle/query.py: "d2a87c234d9c4d76"
 ---

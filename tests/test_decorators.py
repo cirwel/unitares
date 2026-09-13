@@ -275,6 +275,15 @@ class TestListRegisteredTools:
         assert aaa_idx < zzz_idx
 
 
+def _shipped_package_roots() -> set[str]:
+    """Top-level packages named by pyproject's ``packages.find`` include list."""
+    import tomllib
+
+    pyproject = tomllib.loads((project_root / "pyproject.toml").read_text())
+    include = pyproject["tool"]["setuptools"]["packages"]["find"]["include"]
+    return {entry.split(".")[0] for entry in include}
+
+
 class TestToolProvenance:
     """``source_module`` separates this repo's tools from a plugin's.
 
@@ -333,6 +342,57 @@ class TestToolProvenance:
         # A tool this repo ships, registered by importing src.mcp_handlers.
         assert "list_tools" in _TOOL_DEFINITIONS
         assert "list_tools" not in foreign
+
+    def test_first_party_roots_are_exactly_the_packages_pyproject_ships(self):
+        """The predicate's roots and the build config must not drift apart.
+
+        ``_FIRST_PARTY_ROOTS`` mirrors ``[tool.setuptools.packages.find]``
+        because the built wheel does not carry pyproject.toml to read. It was
+        written (#2055) two weeks after #1745 added ``config`` to the wheel and
+        never named it. Equality rather than a subset: an extra root is the
+        same defect reversed, holding a package this repo does not ship to its
+        contracts.
+        """
+        from src.mcp_handlers.decorators import _FIRST_PARTY_ROOTS
+
+        shipped = _shipped_package_roots()
+        # A root is matched as an exact dotted prefix, so an include pattern
+        # whose top-level segment is a glob has no faithful mirror in the tuple.
+        assert all(root.isidentifier() for root in shipped), sorted(shipped)
+        assert set(_FIRST_PARTY_ROOTS) == shipped
+
+    @pytest.mark.parametrize("root", sorted(_shipped_package_roots()))
+    @pytest.mark.parametrize(
+        ("module_name", "first_party"),
+        [
+            ("{root}", True),
+            ("{root}.probe_handlers", True),
+            ("{root}_adjacent.handlers", False),
+        ],
+        ids=["package", "submodule", "prefix-sharing-sibling"],
+    )
+    def test_every_shipped_package_declares_first_party_tools(
+        self, root, module_name, first_party
+    ):
+        """A tool declared in a package pyproject ships is not a plugin tool.
+
+        Parametrized from the build config, not from the tuple, so a root
+        dropped from the tuple fails here as well as in the equality check.
+        The sibling case pins the dotted-prefix match: ``config_loader`` is
+        somebody else's package, and ``config`` is a generic enough name for
+        that to happen.
+        """
+        from src.mcp_handlers.decorators import list_plugin_registered_tools
+
+        self._declare_in_module(
+            module_name.format(root=root),
+            "@mcp_tool('test_provenance_root_probe')\n"
+            "async def handle_root_probe(arguments):\n"
+            "    return []\n",
+        )
+
+        foreign = list_plugin_registered_tools()
+        assert ("test_provenance_root_probe" not in foreign) is first_party
 
 
 class TestDecoratorExecution:
