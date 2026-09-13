@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-12"
+last_verified: "2026-09-13"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
@@ -20,7 +20,7 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "ad771f5e33e75c31"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "a4b238a17667a880"
   unitares/src/mcp_handlers/dialectic/session.py: "8065938fced23b6f"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
@@ -213,8 +213,23 @@ responses answer it directly from your seat:
   terminal"`.
 - **`next_call`** — a ready-to-use call template, present only when the move is
   actually yours. If `next_call` is null, you are waiting on someone else.
+- **`wait_assessment`** — `{elapsed_s, expected_by_s, assessment, note}`. The
+  same misreading recurs on the time axis: an open slot looked identical at 72
+  seconds and at 72 minutes until this field existed, and on 2026-09-13 that
+  produced two wrong "the reviewer is absent" calls inside one session, against
+  a reviewer that was mid-model-call and arrived at ~2m20s. `expected_by_s` is
+  derived from the reviewer's own configured ceiling
+  (`UNITARES_DIALECTIC_CODEX_TIMEOUT_S`, plus spawn or reconsider overhead).
 
-Read `whose_move` before concluding a session is hung. Use
+  `too_early` means the wait is unremarkable — **not** that the reviewer is
+  alive. A reviewer inside its budget may already be gone and merely not yet
+  late, so an absence read here is not evidence. Only `overdue` is evidence, and
+  it is evidence to look rather than to conclude. `assessment: null` means the
+  clock could not be read, or no orchestrated reviewer holds the slot; it is
+  never a sign of health.
+
+Read `whose_move` before concluding a session is hung, and `wait_assessment`
+before concluding it is late. Use
 `dialectic(action="get", session_id="...", check_timeout=true)` when you need the
 latest timeout/facilitation state; note that `check_timeout` is a write (it can
 auto-reassign or flip the phase) and is silently ignored for an unbound caller. An open reviewer slot in the antithesis phase

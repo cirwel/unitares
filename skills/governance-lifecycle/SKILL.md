@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-12"
+last_verified: "2026-09-13"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -42,7 +42,7 @@ source_digests:
   unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/mcp_handlers/updates/enrichments.py: "0aec78c062f4af99"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "ad771f5e33e75c31"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "a4b238a17667a880"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/tool_modes.py: "0f922d11fa4ac843"
@@ -69,7 +69,7 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Store a durable finding | `store_finding(summary=..., discovery_type=...)` | `knowledge(action="store")` |
 | Update a durable finding | `update_finding(discovery_id=..., ...)` | `knowledge(action="update")` |
 
-Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance.
+Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance, plus `wait_assessment` for whether a wait is yet unusual — `too_early` there means unremarkable, never that the reviewer is known alive.
 
 ## Starting a Session
 
