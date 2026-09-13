@@ -50,7 +50,7 @@ residents:
   the roster.
 
 The checked-in plist + templates under `scripts/ops/` ship an **empty** roster;
-the canonical fleet (`Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler`) appears
+the canonical fleet (`Lumen,Vigil,Sentinel,Watcher,Chronicler`) appears
 only as a comment example. A deployment sets these to its own roster, or leaves
 them empty for a residentless install.
 

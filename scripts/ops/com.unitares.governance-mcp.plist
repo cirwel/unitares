@@ -61,7 +61,7 @@
              default below) is the user-agnostic install with no named
              residents. If you run named residents, list them here and match
              the UNITARES_RESIDENTS set in each resident's plist.
-             Example (the maintainer's fleet): Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler -->
+             Example (the maintainer's fleet): Lumen,Vigil,Sentinel,Watcher,Chronicler -->
         <key>UNITARES_RESIDENTS</key>
         <string></string>
         <!-- ORDER MATTERS: /v1/residents presents residents in the order
