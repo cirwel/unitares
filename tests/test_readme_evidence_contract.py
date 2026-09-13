@@ -11,7 +11,7 @@ EVIDENCE = (ROOT / "docs" / "EVIDENCE_AND_LIMITS.md").read_text()
 
 
 def test_readme_leads_with_the_product_and_earned_capabilities() -> None:
-    assert "A self-hosted federation kernel for accountable AI agents" in README
+    assert "Accountability infrastructure for long-running AI agents" in README
     for capability in (
         "Identity and lineage",
         "Claims and evidence",

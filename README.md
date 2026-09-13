@@ -5,7 +5,7 @@
   <img src="docs/assets/unitares-lockup.svg" width="420" alt="UNITARES">
 </picture>
 
-### A self-hosted federation kernel for accountable AI agents.
+### Accountability infrastructure for long-running AI agents.
 
 Give every process an identity. Keep claims, evidence, reviews, and outcomes
 connected. Recover work across restarts, context loss, and handoffs.
@@ -17,9 +17,10 @@ connected. Recover work across restarts, context loss, and handoffs.
 
 </div>
 
-UNITARES is a federation kernel: many independent agent runtimes connect to one
-operator-controlled server over MCP or HTTP and share a durable accountability
-record. Each agent keeps its own models, tools, and runtime.
+UNITARES is self-hosted accountability infrastructure for operators running
+multiple AI agents. Its federation kernel connects independent runtimes to one
+operator-controlled server over MCP or HTTP, where they share a durable record
+while keeping their own models, tools, and runtimes.
 
 The goal is simple: agent work should remain attributable, reviewable, and
 recoverable even when the process that started it is gone.
