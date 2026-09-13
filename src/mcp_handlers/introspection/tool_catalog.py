@@ -379,9 +379,9 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "lite_view": "list_agents(summary_only=true)  # Minimal summary view"
     },
     "observe_agent": {
-        "basic_observation": "observe_agent(agent_id=\"my_agent\")  # Analyze agent patterns",
-        "with_history": "observe_agent(agent_id=\"my_agent\", include_history=true)  # Include historical patterns",
-        "pattern_analysis": "observe_agent(agent_id=\"my_agent\", analyze_patterns=true)  # Deep pattern analysis"
+        "basic_observation": "observe_agent(target_agent_id=\"my_agent\")  # Analyze agent patterns",
+        "with_history": "observe_agent(target_agent_id=\"my_agent\", include_history=true)  # Include historical patterns",
+        "pattern_analysis": "observe_agent(target_agent_id=\"my_agent\", analyze_patterns=true)  # Deep pattern analysis"
     }
 }
 

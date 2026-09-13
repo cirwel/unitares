@@ -26,6 +26,7 @@ It also records two status-quo decisions from the same council:
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -35,7 +36,13 @@ import pytest
 import src.mcp_handlers  # noqa: F401
 import src.mcp_handlers.consolidated  # noqa: F401
 
-from src.mcp_handlers.middleware import DispatchContext, inject_identity, resolve_identity
+from src.mcp_handlers.middleware import (
+    DispatchContext,
+    inject_identity,
+    resolve_alias,
+    resolve_identity,
+    validate_params,
+)
 from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +62,11 @@ def _call_kwargs(text: str) -> tuple[str, dict] | None:
     for kw in node.keywords:
         if kw.arg and isinstance(kw.value, ast.Constant):
             kwargs[kw.arg] = kw.value.value
+        elif kw.arg and isinstance(kw.value, ast.Name):
+            if kw.value.id in {"true", "false"}:
+                kwargs[kw.arg] = kw.value.id == "true"
+            elif kw.value.id == "null":
+                kwargs[kw.arg] = None
     return node.func.id, kwargs
 
 
@@ -96,6 +108,23 @@ async def _guard(name: str, arguments: dict):
         return await inject_identity(name, dict(arguments), ctx)
 
 
+async def _bound_alias_call(name: str, arguments: dict):
+    """Run the public alias through the bound call's real parameter steps."""
+    ctx = DispatchContext(bound_agent_id=BOUND)
+    server = MagicMock()
+    server.agent_metadata = {}
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=BOUND), patch(
+        "src.mcp_handlers.shared.get_mcp_server", return_value=server,
+    ):
+        result = await resolve_alias(name, dict(arguments), ctx)
+        if isinstance(result, list):
+            return result
+        result = await inject_identity(*result)
+        if isinstance(result, list):
+            return result
+        return await validate_params(*result)
+
+
 def test_the_example_and_note_scans_see_something():
     assert len(_router_examples()) > 10
     assert any("observe(" in call for call in _migration_note_calls())
@@ -119,10 +148,34 @@ async def test_observe_target_agent_id_passes_the_guard():
 
 
 @pytest.mark.asyncio
+async def test_describe_tool_observe_examples_pass_the_bound_alias_path():
+    """Live discovery examples must survive the same alias/guard path as calls."""
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    described = await handle_describe_tool({"tool_name": "observe_agent"})
+    common_patterns = json.loads(described[0].text)["common_patterns"]
+    assert len(common_patterns) == 3
+
+    for example in common_patterns.values():
+        parsed = _call_kwargs(example)
+        assert parsed is not None
+        name, kwargs = parsed
+        assert name == "observe_agent"
+        assert kwargs["target_agent_id"] == "my_agent"
+
+        result = await _bound_alias_call(name, kwargs)
+        assert not isinstance(result, list), example
+        canonical_name, validated, _ctx = result
+        assert canonical_name == "observe"
+        assert validated["action"] == "agent"
+        assert validated["target_agent_id"] == "my_agent"
+        assert validated["agent_id"] == BOUND
+
+
+@pytest.mark.asyncio
 async def test_the_refusal_recommends_a_call_that_passes():
     refusal = await _guard("knowledge", {"action": "search", "agent_id": OTHER})
     assert isinstance(refusal, list)
-    import json
 
     recovery = json.loads(refusal[0].text)["recovery"]
     name, kwargs = _call_kwargs(recovery["read_path"])
