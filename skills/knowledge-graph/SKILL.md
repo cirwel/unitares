@@ -22,7 +22,7 @@ source_digests:
   unitares/src/mcp_handlers/knowledge/handlers.py: "270af20d97716020"
   unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
   unitares/src/mcp_handlers/schemas/knowledge.py: "d3a3a6b031026ba7"
-  unitares/src/alias_schema.py: "d56741c5d6d62e02"
+  unitares/src/alias_schema.py: "b3cf7437056198f8"
   unitares/src/mcp_handlers/consolidated.py: "794842ca1f305e64"
   unitares/src/mcp_handlers/tool_stability.py: "1711841c459e2d2a"
   unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"

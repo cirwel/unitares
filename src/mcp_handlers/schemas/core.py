@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Optional, Union, Literal, Dict, Any, List
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing import Annotated, Optional, Union, Literal, Dict, Any, List
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
 from .mixins import AgentIdentityMixin
 
 
@@ -34,6 +34,47 @@ _COMPLEXITY_ALIAS_HINT = (
     " For 1-10 or other scales, call a check-in alias (checkin/log/update/"
     "sync_state) with complexity={'value': N, 'scale': M} or a named level "
     "like 'medium'."
+)
+
+
+# How a 0-1 check-in value is ADVERTISED. It changes nothing about validation.
+#
+# The fields are `Union[float, str, None] = Field(ge=0.0, le=1.0)`, and left to
+# itself Pydantic advertises two falsehoods for that. It emits the bound as
+# `ge`/`le` beside an inner anyOf, and those are not JSON Schema keywords, so
+# 99.0 and -5.0 were advertised as legal and then refused. The `str` member
+# emits a bare `string` branch, so "x" and "medium" were advertised as legal too.
+#
+# `WithJsonSchema` replaces only the emitted schema: the bound as
+# `minimum`/`maximum`, and a string branch whose regex matches only numeric
+# strings inside [0, 1]. The type and the `Field(ge=..., le=...)` bound stay
+# exactly as they were, and that is deliberate, because where the bound sits
+# decides the error a caller receives. Moving it onto each Union member emits
+# this same schema, but then 2 is refused with two errors, at
+# `complexity.constrained-float` and `complexity.constrained-str`, instead of
+# one at `complexity`. tests/test_mcp_schema_parity.py pins the error lists.
+#
+# The string branch stays, rather than being dropped, because the MCP transport
+# builds its argument model from the advertised schema. Without one it refuses
+# "x" and "medium" itself with a generic parse error, before the before-validator
+# below can name the accepted forms and point at the check-in aliases.
+#
+# A few numeric strings are accepted without being advertised (" 0.5", "+0.5",
+# "5e-1"), which is the safe direction. The regex is never evaluated: the
+# before-validator turns every string into a float first.
+#
+# sync_state's `complexity` also advertises the named levels its normalizer
+# accepts, through an alias schema override in src/alias_schema.py, which must
+# repeat this regex; tests/test_mcp_schema_parity.py pins the two equal.
+UNIT_INTERVAL_STRING_PATTERN = r"^(0(\.\d+)?|1(\.0+)?|\.\d+)$"
+_ADVERTISED_UNIT_INTERVAL = WithJsonSchema(
+    {
+        "anyOf": [
+            {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            {"type": "string", "pattern": UNIT_INTERVAL_STRING_PATTERN},
+            {"type": "null"},
+        ]
+    }
 )
 
 
@@ -208,13 +249,13 @@ class SimulateUpdateParams(AgentIdentityMixin):
         default="",
         description="Agent's response text (optional)."
     )
-    complexity: Union[float, str, None] = Field(
+    complexity: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
         description="Estimated task complexity (0-1)."
     )
-    confidence: Union[float, str, None] = Field(
+    confidence: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=None,
         ge=0.0,
         le=1.0,
@@ -320,7 +361,7 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         default=None,
         description="Agent's response text (optional, for analysis)"
     )
-    complexity: Union[float, str, None] = Field(
+    complexity: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
@@ -337,9 +378,9 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             )
         },
     )
-    confidence: Union[float, str, None] = Field(
+    confidence: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=None,
-        ge=0.0, 
+        ge=0.0,
         le=1.0,
         description="Confidence level for this update (0-1, optional)."
     )
