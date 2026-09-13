@@ -8,10 +8,10 @@ and `describe_tool(action=...)` serves it. A hand-written map that nothing
 checks is exactly the drift the tool-registry cleanup removed elsewhere, so
 these tests check it against the live routing table on every run.
 
-The advertised `action` enum is held to the same routing table here, for the
-same reason: it is hand-written as a `Literal` on the parameter model, and
-until 2026-09-13 only two routers had it checked, against hardcoded sets
-(`test_defaulted_consolidated_schemas_are_advertised` in
+The advertised `action` vocabulary is held to the same declared actions here.
+It is generated from a hand-written `Literal` on the parameter model, and until
+2026-09-13 only two routers had it compared with their actions, against
+hardcoded sets (`test_defaulted_consolidated_schemas_are_advertised` in
 tests/test_tool_schema_validation.py, whose job is the default action).
 """
 
@@ -20,7 +20,11 @@ import json
 import pytest
 
 from src.mcp_compat import get_tool_input_schema
-from src.mcp_handlers.decorators import get_tool_definition, get_tool_registry
+from src.mcp_handlers.decorators import (
+    get_tool_definition,
+    get_tool_registry,
+    list_plugin_registered_tools,
+)
 from src.mcp_handlers.schemas.router_actions import (
     COMMON_ROUTER_FIELDS,
     declared_action_fields,
@@ -44,11 +48,18 @@ _TWO_LEVEL_TOOLS = frozenset({"cirs_protocol"})
 
 
 def _routers():
-    """(tool name, routed actions, parameter model) for every action tool."""
+    """(tool name, routed actions, parameter model) for every first-party action tool.
+
+    Plugin and test-registered tools are left out. Whether one is in the
+    registry when this module is collected depends on what was imported first
+    (see `first_party_tool_surface` in tests/conftest.py), and whether a
+    plugin's tools are coherent is the plugin's suite to answer.
+    """
     models = get_pydantic_schemas()
+    external = set(list_plugin_registered_tools())
     out = []
     for name in sorted(get_tool_registry()):
-        if name in _TWO_LEVEL_TOOLS:
+        if name in _TWO_LEVEL_TOOLS or name in external:
             continue
         definition = get_tool_definition(name)
         actions = getattr(definition, "known_actions", None) if definition else None
@@ -67,6 +78,58 @@ def test_the_survey_found_the_routers():
     assert len(ROUTERS) >= 8
     for expected in ("knowledge", "dialectic", "observe", "agent"):
         assert expected in ROUTER_IDS
+
+
+def test_the_survey_misses_no_first_party_action_tool():
+    """A partial survey passes as quietly as an empty one.
+
+    `_routers` keeps a tool only when it has both `known_actions` and a
+    registered parameter model, so a tool whose model went missing would drop
+    out of every test below, and the floor above would not notice while eight
+    others remained.
+    """
+    external = set(list_plugin_registered_tools())
+    declared = {
+        name
+        for name in get_tool_registry()
+        if name not in external
+        and name not in _TWO_LEVEL_TOOLS
+        and getattr(get_tool_definition(name), "known_actions", None)
+    }
+    missing = sorted(declared - set(ROUTER_IDS))
+    assert not missing, (
+        f"{missing!r} declare known_actions but were not surveyed: each needs a "
+        "registered parameter model, or a justified place in _TWO_LEVEL_TOOLS"
+    )
+
+
+def _closed_vocabulary(node, defs):
+    """The values a JSON-schema node accepts when they form a closed set, else None.
+
+    Pydantic spells a closed vocabulary several ways: `enum` for a multi-value
+    `Literal`, `const` for a single value, `anyOf` with a `null` branch for an
+    optional one, and a `$ref` into `$defs` for an `Enum` class. Reading only a
+    top-level `enum` would reject each of the other spellings for no reason.
+    """
+    ref = node.get("$ref", "")
+    if ref.startswith("#/$defs/"):
+        node = defs.get(ref.rsplit("/", 1)[-1], {})
+    if "enum" in node:
+        return set(node["enum"])
+    if "const" in node:
+        return {node["const"]}
+    branches = node.get("anyOf") or node.get("oneOf")
+    if not branches:
+        return None
+    values = set()
+    for branch in branches:
+        if branch.get("type") == "null":
+            continue
+        branch_values = _closed_vocabulary(branch, defs)
+        if branch_values is None:
+            return None
+        values |= branch_values
+    return values
 
 
 @pytest.mark.parametrize("name,actions,model", ROUTERS, ids=ROUTER_IDS)
@@ -93,26 +156,37 @@ def test_declared_actions_are_exactly_the_routed_actions(name, actions, model):
 
 
 @pytest.mark.parametrize("name,actions,model", ROUTERS, ids=ROUTER_IDS)
-def test_advertised_action_enum_is_exactly_the_routed_actions(name, actions, model):
-    """The action list a client is shown must be the list that routes.
+def test_advertised_action_enum_is_exactly_the_routed_actions(
+    name, actions, model, first_party_tool_surface
+):
+    """The action list a client is shown must be the list the tool declares.
 
-    The advertised `action` enum is generated from the `Literal` on the
-    router's parameter model, while the routing table comes from the router's
-    own `actions={}` map. Nothing held the two together, and server-side
-    parameter validation checks the same `Literal` before the router runs. So
-    a routed action the enum omits is refused at validation — a route no call
-    through dispatch can reach — and an enum value that does not route passes
-    validation only to fail as an unknown action.
+    The advertised vocabulary is generated from the `Literal` on the tool's
+    parameter model, and server-side parameter validation checks that same
+    `Literal` before the handler runs. So an action the enum omits is refused
+    at validation, a route no call through dispatch can reach, and an enum
+    value the tool does not handle passes validation only to fail later.
+
+    What the enum is compared with depends on the tool. For an `action_router`,
+    `known_actions` is derived from its `actions={}` map, so this reaches the
+    routing table itself. For a tool that declares `known_actions` by hand and
+    dispatches on its own, currently `self_recovery`, it checks only that the
+    two declarations agree; neither is checked against the dispatch branches.
 
     The served description names these actions too, but prose may abbreviate
-    (tests/test_action_router_description_drift.py). The enum is the complete,
-    machine-readable statement, so it is held to the routing table exactly.
+    (tests/test_action_router_description_drift.py). `cirs_protocol` is not
+    surveyed: it advertises `action` as a free string, so there is no closed
+    vocabulary here to compare.
     """
     wire = {t.name: t for t in get_tool_definitions()}[name]
-    action = (get_tool_input_schema(wire).get("properties") or {}).get("action") or {}
-    advertised = action.get("enum")
-    assert advertised, f"{name}: the advertised schema carries no action enum"
-    assert set(advertised) == set(actions), (
+    schema = get_tool_input_schema(wire)
+    action = (schema.get("properties") or {}).get("action")
+    assert action is not None, f"{name}: the advertised schema has no action property"
+    advertised = _closed_vocabulary(action, schema.get("$defs") or {})
+    assert advertised is not None, (
+        f"{name}: the advertised action property is not a closed vocabulary: {action!r}"
+    )
+    assert advertised == set(actions), (
         f"{name}: the advertised action enum lists "
         f"{sorted(set(advertised) - set(actions))!r} that do not route and omits "
         f"{sorted(set(actions) - set(advertised))!r}"
