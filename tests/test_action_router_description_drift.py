@@ -122,11 +122,23 @@ async def test_served_description_names_every_routed_action(tool):
     undiscoverable by name: every router's advertised ``action`` enum lists all
     of its routed actions. What an enum cannot carry is an action's contract —
     what it does and what it requires — and that is the half this guard pins.
+
+    An action must appear as a whole word. Until 2026-09-13 this was a
+    substring test, and `knowledge`'s `note` passed only because the letters
+    occur inside `resolution_notes`: the guard was green while the served text
+    said nothing about the action. Underscores count as word characters here,
+    so a tool name such as `update_finding` does not name `update`.
     """
+    import re
+
     actions = await _routed_actions(tool)
     assert actions, f"{tool} reported no valid_actions"
     served = _served_description(tool)
-    missing = sorted(a for a in actions if a not in served)
+    missing = sorted(
+        a
+        for a in actions
+        if not re.search(rf"(?<![A-Za-z0-9_]){re.escape(a)}(?![A-Za-z0-9_])", served)
+    )
     assert not missing, (
         f"{tool} is advertised to clients with a description that omits routed "
         f"actions {missing}. The served text is authored in "
