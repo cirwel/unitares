@@ -142,6 +142,8 @@ async def resolve_dialectic_agent_id(
       which already returns the UUID.
     - With `agent_id`: canonicalize the reference to its UUID, verify
       registration, and optionally enforce ownership.
+    - With `require_bound_caller`: both paths require the resolver-stamped
+      caller to match the resolved UUID before returning success.
 
     `arguments["_agent_uuid"]` is deliberately NOT consulted here. Pydantic
     validation preserves unknown caller keys (`middleware/params_step.py`) and
@@ -151,12 +153,6 @@ async def resolve_dialectic_agent_id(
     provided = arguments.get("agent_id")
     if isinstance(provided, str):
         provided = provided.strip()
-
-    if not provided:
-        agent_id, error = require_registered_agent(arguments)
-        if error:
-            return None, [error]
-        return agent_id, None
 
     unresolvable_recovery = {
         "error_type": "agent_ref_unresolvable",
@@ -172,59 +168,64 @@ async def resolve_dialectic_agent_id(
         "related_tools": ["identity", "dialectic"],
     }
 
-    try:
-        resolved = _canonicalize_from_metadata(provided)
+    if not provided:
+        resolved, error = require_registered_agent(arguments)
+        if error:
+            return None, [error]
+    else:
+        try:
+            resolved = _canonicalize_from_metadata(provided)
 
-        if resolved is None:
-            # Cold metadata cache: a bare UUID can still be confirmed straight
-            # from Postgres. A handle cannot (no index-free lookup that does not
-            # re-introduce label matching), so it errors — see the follow-up note
-            # in the PR body.
-            if _looks_like_uuid(provided):
-                from ..identity.handlers import _agent_exists_in_postgres
+            if resolved is None:
+                # Cold metadata cache: a bare UUID can still be confirmed straight
+                # from Postgres. A handle cannot (no index-free lookup that does not
+                # re-introduce label matching), so it errors — see the follow-up note
+                # in the PR body.
+                if _looks_like_uuid(provided):
+                    from ..identity.handlers import _agent_exists_in_postgres
 
-                if await _agent_exists_in_postgres(provided):
-                    resolved = provided
+                    if await _agent_exists_in_postgres(provided):
+                        resolved = provided
 
-        if resolved is None:
+            if resolved is None:
+                return None, [error_response(
+                    f"Agent reference '{provided[:8]}...' could not be resolved to a "
+                    "registered agent",
+                    recovery=unresolvable_recovery,
+                )]
+        except AmbiguousAgentRef as ambiguous:
+            # Must precede the generic handler below — otherwise a collision is
+            # reported as a transient "could not verify" and invites a retry that
+            # will fail identically.
             return None, [error_response(
-                f"Agent reference '{provided[:8]}...' could not be resolved to a "
-                "registered agent",
-                recovery=unresolvable_recovery,
+                f"Agent reference '{provided[:8]}...' is ambiguous: it names "
+                f"{len(ambiguous.matches)} registered identities",
+                error_code="AMBIGUOUS_AGENT_REF",
+                error_category="auth_error",
+                recovery={
+                    "error_type": "agent_ref_ambiguous",
+                    "action": (
+                        "Pass your agent UUID (the `uuid` from start_session()/identity()) "
+                        "instead of the handle. Do NOT call start_session() — that mints a "
+                        "NEW identity and will not help."
+                    ),
+                    "note": (
+                        "public_agent_id is not unique across the fleet, so this "
+                        "handle cannot identify one agent. Resolving it by guess "
+                        "would attribute your message to someone else."
+                    ),
+                    "match_count": len(ambiguous.matches),
+                    "related_tools": ["identity", "dialectic"],
+                },
             )]
-    except AmbiguousAgentRef as ambiguous:
-        # Must precede the generic handler below — otherwise a collision is
-        # reported as a transient "could not verify" and invites a retry that
-        # will fail identically.
-        return None, [error_response(
-            f"Agent reference '{provided[:8]}...' is ambiguous: it names "
-            f"{len(ambiguous.matches)} registered identities",
-            error_code="AMBIGUOUS_AGENT_REF",
-            error_category="auth_error",
-            recovery={
-                "error_type": "agent_ref_ambiguous",
-                "action": (
-                    "Pass your agent UUID (the `uuid` from start_session()/identity()) "
-                    "instead of the handle. Do NOT call start_session() — that mints a "
-                    "NEW identity and will not help."
-                ),
-                "note": (
-                    "public_agent_id is not unique across the fleet, so this "
-                    "handle cannot identify one agent. Resolving it by guess "
-                    "would attribute your message to someone else."
-                ),
-                "match_count": len(ambiguous.matches),
-                "related_tools": ["identity", "dialectic"],
-            },
-        )]
-    except Exception:
-        return None, [error_response(
-            f"Could not verify agent '{provided[:8]}...' registration",
-            recovery={
-                "action": "Retry or call identity() to confirm your current binding.",
-                "related_tools": ["identity", "dialectic"],
-            },
-        )]
+        except Exception:
+            return None, [error_response(
+                f"Could not verify agent '{provided[:8]}...' registration",
+                recovery={
+                    "action": "Retry or call identity() to confirm your current binding.",
+                    "related_tools": ["identity", "dialectic"],
+                },
+            )]
 
     if require_bound_caller:
         # A call that can converge a session or release a pause needs the
@@ -244,7 +245,7 @@ async def resolve_dialectic_agent_id(
                 },
             )]
 
-    if enforce_session_ownership:
+    if provided and enforce_session_ownership:
         try:
             from ..context import get_context_agent_id
             from ..utils import verify_agent_ownership
