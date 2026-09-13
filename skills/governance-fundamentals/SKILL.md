@@ -50,7 +50,7 @@ source_digests:
   unitares/src/eisv_telemetry.py: "24f1a47911850263"
   unitares/src/services/runtime_queries.py: "2b3c4d432f501350"
   unitares/src/mcp_handlers/response_formatter.py: "1dce49d5fa405c49"
-  unitares/src/mcp_handlers/tool_stability.py: "25440b0686fa16d6"
+  unitares/src/mcp_handlers/tool_stability.py: "bbfa19a5291e0b2f"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
   unitares/src/mcp_handlers/observability/outcome_events.py: "d7152a8a83fc0182"
