@@ -133,14 +133,14 @@ they are not re-flagged.
 
 | Capability | Location | Live evidence | Status |
 |---|---|---|---|
-| `create_indexes` AGE index-DDL builder | `src/db/age_queries.py:567` | no static reference found; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT** — dead duplicate, sibling of `query_response_chain` |
+| ~~`create_indexes` AGE index-DDL builder~~ | was `src/db/age_queries.py` | no static reference found; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT — executed 2026-09-13.** Re-confirmed zero callers first; the nearby `_create_indexes` hits are the live `KnowledgeGraphAGE` method, a different symbol, and are untouched. **But this row's stated justification was too strong, and the correction outlives the cut:** the two are not equivalent. The live method creates three property-blob indexes (`idx_discovery_props`, `idx_agent_props`, `idx_tag_props`); the deleted builder declared thirteen field-level ones, including partial EISV indexes (`idx_eisv_e/s/v … WHERE type = 'self_observation'`) and `idx_discovery_timestamp`/`_status`/`_severity`. Those thirteen exist nowhere — the builder never ran, so nothing regressed by deleting it, and no index was dropped. What is gone is the *record* that someone once thought AGE wanted field-level indexes. If AGE search latency is ever investigated, that hypothesis is in git history at this commit, not in the live schema. |
 | `create_temporally_near_edge` | `src/db/age_queries.py:537` | TEMPORALLY_NEAR edge writer, no static reference found | **DECIDE** — same per-query call as the orphaned analytics in Theme 1 |
 | `calibration_db.py` async wrapper layer (`get_calibration_async` / `update_calibration_async`) | `calibration_db.py:12/21` | No static reference found for these two; live calibration writes go through `calibration.py` / `sequential_calibration.py` / `src/db/mixins/calibration.py`. **`calibration_health_check_async` was in this row and is NOT dead** — `services/runtime_queries.py:725` calls it from `get_health_check_data` (corrected 2026-08-13). | **DECIDE/CUT** for the remaining two — NB the *store* `core.calibration` is busy (see false-dead list); these *wrappers* are the dead path, not the store |
-| `_get_pg_db` private accessor | `calibration.py:110` | no static reference found | **CUT** |
+| ~~`_get_pg_db` private accessor~~ | was `calibration.py` | no static reference found | **CUT — executed 2026-09-13.** The dead seam was wider than the row: `self._pg_db` was assigned in `__init__` and read *only* inside this accessor, so the lazy-PostgreSQL-backend seam in `CalibrationChecker` went with it. Checked against the `_CalibrationCheckerProxy.__getattr__` forwarder too — nothing requests the name. Live calibration writes are unaffected; they go through `calibration.py` / `sequential_calibration.py` / `src/db/mixins/calibration.py` as the row below records. |
 | `check_idle_agents` / `get_recent_events_for_agent` | `event_detector.py:451/495` | no static reference found | **DECIDE** |
 | `list_restartable_tasks` | `background_tasks.py:1758` | no static reference found | **DECIDE** |
 | `reset_pin_match_scope` | `mcp_handlers/context.py:263` | no static reference found | **DECIDE** |
-| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:43` | no static reference found; same dead stuck-reviewer chain as `check_reviewer_stuck` (CUT below) | **CUT** — fold with `check_reviewer_stuck` |
+| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:51` | **Premise void as of 2026-09-13.** Its whole basis was "same dead chain as `check_reviewer_stuck` (CUT below)" — but `check_reviewer_stuck` was withdrawn 2026-08-13 as false-dead (it is called on a registered request path), and this row was never re-derived. It is also not unreferenced: it is one of twelve recovery builders in the `RECOVERY_BUILDERS` parametrisation of `tests/test_dialectic_recovery_pointers.py`, which guards every builder against pointing at retired tool names. Cutting it removes a row from that guard. | **KEEP** — re-status only from evidence about this function, not about its former sibling |
 | `reranker_available` | `reranker.py:190` | no static reference found (`rrf_fuse`/`apply_tag_boost` are live; this flag-check is not) | **DECIDE** |
 | `register_extra_schemas` / `register_extra_descriptions` plugin entry-point API | `tool_schemas.py:20`; `tool_descriptions.py:145` | Published `governance_mcp.plugins` hook; **0 consumers** (incl. the plugin repo) | **KEEP-DORMANT** — extension hook, removal is a deprecation decision |
 | `gateway_server.py` `main()` script entrypoint | `src/gateway_server.py:99` | Has `__main__`; launched out-of-band via the gateway plist *template* (`scripts/ops/com.unitares.gateway-mcp.plist.template`), not by any import — install state is deployment-specific | **DECIDE** — confirm the gateway plist is installed on the target deployment |
@@ -153,14 +153,30 @@ they are not re-flagged.
 > "0 callers" and both said Cut. Nothing was deleted, but the label was doing work it had
 > not earned. Treat a row here as a *candidate* and confirm the call sites yourself —
 > Rule 2 applies in this table more than anywhere else in the file.
+>
+> **A withdrawal does not propagate on its own (2026-09-13).** A re-derivation of the
+> open CUT rows found that half of them no longer held: two were clean and were executed,
+> three were not. `get_reviewer_stuck_recovery` was carried solely by "same dead chain as
+> `check_reviewer_stuck`" — a row withdrawn seven months earlier — so the 2026-08-13
+> correction had already voided it, and nobody noticed because the dependency was stated
+> in prose and never traversed. `ESCALATE` failed differently: its evidence was sound but
+> measured the wrong thing, counting how often the branch *fired* and concluding the code
+> was unreachable, when the string is a live default in five modules.
+>
+> Two habits follow. **A row whose premise is another row is void the moment that row is
+> withdrawn** — when you withdraw one, grep this file for its name before you stop.
+> And **say which question your evidence answers.** "0 callers" and "0 occurrences in
+> production" are different findings; only the first is about reachability, and only
+> reachability licenses a cut. A row that cannot name its question cannot carry `CUT`,
+> which remains the one irreversible verdict in this file.
 
 | Item | Location | Note |
 |---|---|---|
 | ~~backfill embeddings script~~ | Removed legacy migration script | Hardcoded to the legacy 384d `core.discovery_embeddings` table, which live search no longer reads — broken against the active bge-m3 model. **CUT** (script-cleanup sweep): removed; recoverable from git history if the legacy table is ever backfilled |
 | Legacy `core.discovery_embeddings` table (1887 rows, 384d) | DB | Superseded by `_bge_m3` (1056, clean). **Cut after** concept-extraction confirmed reading the active table |
-| `query_response_chain` builder | `src/db/age_queries.py:309` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **Cut** |
+| ~~`query_response_chain` builder~~ | was `src/db/age_queries.py` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **CUT — executed 2026-09-13.** Re-confirmed zero callers across `src/`, `tests/`, `scripts/`, `agents/` first; `age_queries.py` declares no `__all__` and uses no `getattr`/`importlib` dispatch, so the static count is the whole story for this module. Recoverable from git history. |
 | ~~`log_auto_attest` typed helper~~ | `audit_log.py` | **Withdrawn 2026-08-13 — it is called.** See *Verified-wired / false-dead*. |
-| Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | Retired by design ("0 of 47 sessions ever escalated"). **Cut the enum/dead branch** |
+| Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | **Withdrawn 2026-09-13 — the cut premise does not survive the call sites.** "0 of 47 sessions ever escalated" measured *outcomes*, not *reachability*: `"escalate"` is a live contract string, not a dead branch. It is the **default** recommendation in three places in `mcp_handlers/dialectic/handlers.py` (`.get("recommendation", "ESCALATE")`), a permitted value in `schemas/dialectic.py` `Literal[...]` and `mcp_handlers/types.py`, a disagreement signal in `dialectic/calibration.py`, and asserted in `tests/test_dialectic_session_pure.py`. Deleting the enum would change what the synthesis path falls back to — a **behavior change**, not cleanup. Re-open only as a deliberate default-value redesign with its own review. |
 | ~~`answer_question` handler~~ | Removed | **CUT** — it was `register=False` and unrouted; linked answers remain available through `knowledge(action="store", discovery_type="note", response_to={..., "response_type": "answer"})` |
 | ~~`check_reviewer_stuck`~~ | `mcp_handlers/dialectic/handlers.py` | **Withdrawn 2026-08-13 — it is called, on a registered request path.** See *Verified-wired / false-dead*. |
 | CIRS announce tools (void_alert / state_announce / coherence_report / …) | 7 `register=False` handlers | **Verify before cut** — the CIRS *monitor* path is live (26 `cirs_resonance` events/14d); only these agent-facing announce tools are dark |
