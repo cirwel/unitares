@@ -60,6 +60,21 @@ not inferred.
     "formula": "src.behavioral_sensor.compute_behavioral_sensor_eisv",
     "formula_version": "behavioral_sensor.v1",
     "inputs": {},
+    "components": {
+      "schema": "behavioral_sensor.components.v1",
+      "mode": "measurement_only",
+      "policy_applied": false,
+      "dimensions": {
+        "E": {"base_value": 0, "value": 0, "components": [], "adjustments": []}
+      }
+    },
+    "calibration_signal": {
+      "schema": "eisv.calibration-signal.v1",
+      "mode": "measurement_only",
+      "policy_applied": false,
+      "deployed": {"scope": "fleet", "freshness_status": "unknown"},
+      "agent_candidate": {"scope": "agent", "evidence_status": "no_data"}
+    },
     "missing_inputs": [],
     "computed_observation": {}
   },
@@ -73,6 +88,23 @@ live formula reads only that suffix. Outcome history is capped at twenty and
 reduced to the fields used by the formula: outcome type, bad/good flag, numeric
 score, and verification source. Free-form outcome detail, response text,
 credentials, prompts, and tool payloads are excluded.
+
+For behavioral observations, `derivation.components` records the exact weighted
+terms and ordered post-blend adjustments in the submitted behavioral sensor.
+Sources, defaults, and compatibility inputs such as `legacy_tanh_v` are named
+rather than collapsed into an unexplained score. E, I, and S are then clamped
+and smoothed by `BehavioralState`; its V is separately derived as an EMA of the
+raw E-I imbalance. The sensor's history-derived V is diagnostic (and may be an
+ODE-coupling input when configured), not the raw input to behavioral V. Policy
+never reads the component record itself.
+
+`derivation.calibration_signal` distinguishes the currently deployed,
+lifetime fleet aggregate from an additive agent-scoped candidate. New
+attributed outcome pairs carry UTC activity timestamps, and the candidate
+requires five samples in a bin plus activity within seven days. Legacy fleet
+bins have no timestamps, so their freshness is explicitly unknown. The
+candidate is shadow telemetry only and does not change I, policy, or
+enforcement.
 
 ### Submitted afferents
 
@@ -127,7 +159,11 @@ remains `ode_fallback` so the displayed ODE values are not mislabeled.
 - Full `process_agent_update(response_mode="full")` responses include the
   persisted envelope.
 - `GET /v1/agents/{agent_id}/history` returns a compact per-point `telemetry`
-  projection. Add `include_telemetry=true` to include each full envelope.
+  projection. Add `include_telemetry=true` to include every full envelope, or
+  `include_telemetry=latest` to attach only the newest returned envelope. Its
+  `trajectory_context` describes the requested pre-decimation scope, elapsed
+  wall-clock time, cadence gaps, source/maturity transitions, and descriptive
+  OLS slopes per elapsed hour.
 - `/v1/eisv/recent` and WebSocket `eisv_update` events carry only the compact
   summary so the broadcaster ring buffer stays bounded. Raw `sensor_data` is
   never duplicated onto either broadcast surface.

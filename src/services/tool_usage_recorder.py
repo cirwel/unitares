@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional, Tuple
 from uuid import UUID
 
 from src.logging_utils import get_logger
+from src.tool_call_sets import call_set
 
 logger = get_logger(__name__)
 
@@ -139,22 +140,24 @@ def classify_tool_result(result: Any) -> Tuple[bool, Optional[str]]:
 # auto-minted anonymous call and change the meaning of existing
 # agent_id=NULL rows. Found 2026-06-12: onboard rows carried agent_id=NULL,
 # making onboard→first-checkin conversion unmeasurable from audit.tool_usage.
-_IDENTITY_MINTING_TOOLS = frozenset({"onboard", "start_session"})
+# Matched on the call, so every alias of onboard (start_session, init, login,
+# register, start) is covered with it; the set once named start_session and
+# missed the other four.
+_IDENTITY_MINTING_TOOLS = call_set("tool_usage.identity_minting", tools={"onboard"})
 
 
 # Off-path activity that proves process liveness without going through the
 # ceremonial process_agent_update handler. The check-in path already refreshes
 # presence directly; keep this list to value-bearing tools that otherwise leave
-# onboard+work agents with an expiring agent:/ lease.
-_PRESENCE_REFRESH_TOOLS = frozenset({
-    "knowledge",
-    "search_knowledge_graph",
-    "store_knowledge_graph",
-    "leave_note",
-    "outcome_event",
-    "observe",
-    "observe_agent",
-})
+# onboard+work agents with an expiring agent:/ lease. Matched on the call, so
+# the workflow names agents are taught (store_finding, update_finding,
+# search_shared_memory -> knowledge; record_result -> outcome_event) refresh
+# exactly as their tools do. The set used to list two legacy names and none
+# of those four.
+_PRESENCE_REFRESH_TOOLS = call_set(
+    "tool_usage.presence_refresh",
+    tools={"knowledge", "search_knowledge_graph", "leave_note", "outcome_event", "observe"},
+)
 
 
 def _is_uuid_like(value: Optional[str]) -> bool:
@@ -177,7 +180,7 @@ def _schedule_presence_refresh(
     """Refresh agent:/ presence for successful off-path value activity."""
     if (
         not success
-        or tool_name not in _PRESENCE_REFRESH_TOOLS
+        or not _PRESENCE_REFRESH_TOOLS.matches(tool_name)
         or not _is_uuid_like(agent_id)
     ):
         return
@@ -200,7 +203,7 @@ def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any
     envelope, e.g. start_session), or ``agent_signature.uuid``. Returns the
     incoming ``agent_id`` unchanged in every other case; never raises.
     """
-    if agent_id or tool_name not in _IDENTITY_MINTING_TOOLS:
+    if agent_id or not _IDENTITY_MINTING_TOOLS.matches(tool_name):
         return agent_id
     payload = _payload_from_result(result)
     if not isinstance(payload, dict):

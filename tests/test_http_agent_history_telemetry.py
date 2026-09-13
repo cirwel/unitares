@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
+import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
@@ -188,3 +190,214 @@ def test_history_reports_a_missing_action_as_null_not_as_approve():
     point = response.json()["points"][0]
     assert point["action"] is None
     assert point["verdict"] is None
+
+
+@pytest.mark.parametrize("option,envelope_indexes", [
+    ("latest", [2]), ("true", [0, 1, 2]), ("false", []),
+])
+def test_history_envelope_modes_preserve_points(option, envelope_indexes):
+    rows = [_row() for _ in range(3)]
+    for index, row in enumerate(rows):
+        row["recorded_at"] += timedelta(hours=index)
+        row["total"] = 3
+    db = _DB(rows)
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
+         patch("src.db.get_db", return_value=db):
+        response = _client().get(
+            f"/v1/agents/agent-1/history?include_telemetry={option}"
+        )
+    payload = response.json()
+    assert len(payload["points"]) == 3
+    assert [i for i, point in enumerate(payload["points"])
+            if "telemetry_envelope" in point] == envelope_indexes
+    assert all("telemetry" in point for point in payload["points"])
+    assert payload["telemetry_included"] is bool(envelope_indexes)
+    # One query serves both trajectory statistics and every envelope mode.
+    assert db.conn.fetch.await_count == 1
+
+
+def test_latest_envelope_does_not_substitute_an_older_measurement():
+    rows = [_row(), _row()]
+    rows[-1]["state_json"] = {"E": 0.6}
+    rows[-1]["telemetry_available"] = False
+    rows[-1]["recorded_at"] += timedelta(hours=1)
+    db = _DB(rows)
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
+         patch("src.db.get_db", return_value=db):
+        payload = _client().get(
+            "/v1/agents/agent-1/history?include_telemetry=latest"
+        ).json()
+    assert not any("telemetry_envelope" in point for point in payload["points"])
+    assert payload["telemetry_mode"] == "latest"
+
+
+def test_missing_history_has_no_invented_duration_cadence_or_slopes():
+    db = _DB([])
+    with patch("src.http_routes.access._check_http_auth", return_value=True), \
+         patch("src.db.get_db", return_value=db):
+        payload = _client().get("/v1/agents/agent-1/history?mode=all").json()
+    context = payload["trajectory_context"]
+    assert context["status"] == "no_observations"
+    assert context["subject"] == {"kind": "agent", "agent_id": "agent-1"}
+    assert context["source"] == "core.agent_state"
+    assert context["policy_applied"] is False
+    assert context["observations"] == context["points_returned"] == 0
+    assert context["elapsed_seconds"] is None
+    assert context["first_observed_at"] is context["last_observed_at"] is None
+    assert context["cadence"]["gap_count"] == 0
+    assert context["cadence"]["median_seconds"] is None
+    assert context["slopes_per_hour"] == dict.fromkeys("EISV")
+
+
+async def _query_fixture_history(fixture_rows, mode="recent", limit=3):
+    """Run the endpoint's actual SQL over inline data, in a read-only transaction.
+
+    The existing test database supplies only the PostgreSQL engine. These CTEs
+    require no schema, migrations, temporary tables, or writes. Missing local
+    PostgreSQL skips only these SQL integration cases; CI provides it.
+    """
+    asyncpg = pytest.importorskip("asyncpg")
+    from tests.test_db_utils import TEST_DB_URL
+
+    try:
+        conn = await asyncpg.connect(TEST_DB_URL, timeout=2)
+    except (OSError, asyncpg.PostgresError):
+        pytest.skip("PostgreSQL test connection unavailable")
+    try:
+        db = _DB([])
+        with patch("src.http_routes.access._check_http_auth", return_value=True), \
+             patch("src.db.get_db", return_value=db):
+            response = _client().get(
+                f"/v1/agents/agent-1/history?mode={mode}&limit={limit}"
+            )
+        assert response.status_code == 200
+        sql, *arguments = db.conn.fetch.call_args.args
+        sql = sql.replace("core.identities", "fixture_identities").replace(
+            "core.agent_state", "fixture_states"
+        )
+        fixture_ctes = """
+            WITH fixture_identities AS (
+                SELECT 1::bigint AS identity_id, 'agent-1'::text AS agent_id
+            ), fixture_states AS (
+                SELECT * FROM jsonb_to_recordset($4::jsonb) AS fixture(
+                    state_id bigint, identity_id bigint, recorded_at timestamptz,
+                    integrity real, entropy real, volatility real, coherence real,
+                    risk_score real, state_json jsonb, epistemic_class text,
+                    synthetic boolean
+                )
+            ),
+        """
+        sql = fixture_ctes + sql.strip().removeprefix("WITH ")
+        async with conn.transaction(readonly=True):
+            rows = await conn.fetch(sql, *arguments, json.dumps(fixture_rows))
+        # The production pool decodes jsonb; raw asyncpg uses strings.
+        result = []
+        for row in rows:
+            decoded = dict(row)
+            decoded["state_json"] = json.loads(decoded["state_json"])
+            result.append(decoded)
+        db = _DB(result)
+        with patch("src.http_routes.access._check_http_auth", return_value=True), \
+             patch("src.db.get_db", return_value=db):
+            return _client().get(
+                f"/v1/agents/agent-1/history?mode={mode}&limit={limit}"
+            ).json()
+    finally:
+        await conn.close()
+
+
+def _fixture_rows(hours):
+    start = datetime(2026, 8, 9, 0, 0, tzinfo=timezone.utc)
+    rows = []
+    for index, hour in enumerate(hours):
+        envelope = _envelope()
+        envelope["measurement"]["primary"]["source"] = (
+            "ode_fallback" if index < 2 else "behavioral"
+        )
+        envelope["measurement"]["behavioral"]["observation_source"] = (
+            "physical" if index < 5 else "behavioral_sensor"
+        )
+        envelope["measurement"]["behavioral"]["warmup"] = {
+            "phase": "cold" if index < 4 else "baselined"
+        }
+        rows.append({
+            "state_id": index + 1, "identity_id": 1,
+            "recorded_at": (start + timedelta(hours=hour)).isoformat(),
+            "integrity": hour / 40, "entropy": 0.2, "volatility": -hour / 100,
+            "coherence": 0.5, "risk_score": 0.1,
+            "state_json": {"E": float(index == 3), "eisv_telemetry": envelope},
+            "epistemic_class": "agent_report", "synthetic": False,
+        })
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_recent_scope_excludes_prior_gaps_and_regime_transitions():
+    payload = await _query_fixture_history(_fixture_rows([0, 1, 2, 10, 11, 12, 13, 20]))
+    context = payload["trajectory_context"]
+    assert context["observations"] == context["points_returned"] == 3
+    assert context["total_observations"] == 8
+    assert context["elapsed_seconds"] == 8 * 3600
+    assert context["requested_window"]["basis"] == "latest_observations"
+    assert context["cadence"]["gap_count"] == 2
+    assert context["cadence"]["median_seconds"] == 4 * 3600
+    assert context["cadence"]["max_seconds"] == 7 * 3600
+    assert context["transitions"]["primary_source"] == 0
+    assert context["transitions"]["measurement_source"] == 0
+    assert context["transitions"]["maturity_phase"] == 0
+    assert context["slopes_per_hour"]["E"] == 0
+    assert context["slopes_per_hour"]["I"] == pytest.approx(0.025)
+    assert context["slopes_per_hour"]["V"] == pytest.approx(-0.01)
+
+
+@pytest.mark.asyncio
+async def test_all_scope_statistics_use_observations_before_decimation():
+    payload = await _query_fixture_history(
+        _fixture_rows([0, 1, 2, 10, 11, 12, 13, 20]), mode="all"
+    )
+    context = payload["trajectory_context"]
+    assert context["observations"] == 8
+    assert context["points_returned"] == 5
+    assert context["sampling"] == "event_index_decimation"
+    assert context["elapsed_seconds"] == 20 * 3600
+    assert context["cadence"]["gap_count"] == 7
+    assert context["cadence"]["median_seconds"] == 3600
+    assert context["cadence"]["p95_seconds"] == pytest.approx(7.7 * 3600)
+    assert context["cadence"]["max_seconds"] == 8 * 3600
+    # The first source transition occurs on a point omitted by decimation.
+    assert context["transitions"]["primary_source"] == 1
+    assert context["transitions"]["measurement_source"] == 2
+    assert context["transitions"]["maturity_phase"] == 1
+    assert context["slopes_per_hour"]["E"] == pytest.approx(11 / 2751)
+    assert context["slopes_per_hour"]["I"] == pytest.approx(0.025)
+    assert context["slopes_per_hour"]["S"] == pytest.approx(0)
+    assert context["slopes_per_hour"]["V"] == pytest.approx(-0.01)
+    assert context["slope_observations"] == dict.fromkeys("EISV", 8)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hours", [[0], [0, 0]])
+async def test_zero_time_span_never_produces_a_slope(hours):
+    payload = await _query_fixture_history(_fixture_rows(hours))
+    context = payload["trajectory_context"]
+    assert context["observations"] == len(hours)
+    assert context["cadence"]["gap_count"] == len(hours) - 1
+    assert context["slopes_per_hour"] == dict.fromkeys("EISV")
+    assert context["elapsed_seconds"] == (None if len(hours) == 1 else 0)
+
+
+@pytest.mark.asyncio
+async def test_statistics_preserve_missing_values_and_exclude_bootstrap_rows():
+    rows = _fixture_rows([0, 1, 2, 3])
+    del rows[0]["state_json"]["E"]
+    del rows[1]["state_json"]["eisv_telemetry"]
+    rows[2]["synthetic"] = True
+    payload = await _query_fixture_history(rows, mode="all")
+    context = payload["trajectory_context"]
+    assert context["observations"] == context["total_observations"] == 3
+    assert context["cadence"]["gap_count"] == 2
+    assert context["cadence"]["max_seconds"] == 2 * 3600
+    assert context["transitions"]["unknown_source_observations"] == 1
+    assert context["transitions"]["unknown_maturity_observations"] == 1
+    assert context["slope_observations"] == {"E": 2, "I": 3, "S": 3, "V": 3}
+    assert payload["points"][0]["E"] is None

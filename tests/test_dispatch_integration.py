@@ -759,17 +759,27 @@ class TestInjectIdentity:
         assert "mismatch" in text.lower()
 
     @pytest.mark.asyncio
-    async def test_dialectic_tools_allow_different_id(self):
-        """Dialectic tools allow different agent_id (for cross-agent review)."""
+    async def test_dialectic_phase_with_different_id_is_refused_under_any_name(self):
+        """The guard judges the call, so submit_thesis and dialectic(thesis) agree.
+
+        This step runs after resolve_alias, so production hands it
+        ``dialectic`` with ``action="thesis"``; the old exemption set named
+        ``submit_thesis`` and never matched. Calling the step with the alias
+        name made the exemption look live. Whether dialectic phases should be
+        exempt is an open decision; today neither name is.
+        """
         from src.mcp_handlers.middleware import inject_identity
-        ctx = _make_ctx(bound_agent_id="bound-uuid-1234")
-        with patch("src.mcp_handlers.context.get_context_agent_id", return_value="bound-uuid-1234"):
-            result = await inject_identity(
-                "submit_thesis",
-                {"agent_id": "other-uuid"},
-                ctx
-            )
-        assert not _is_short_circuit(result)
+        mock_server = MagicMock()
+        mock_server.agent_metadata = {}
+        for name, arguments in (
+            ("submit_thesis", {"agent_id": "other-uuid"}),
+            ("dialectic", {"action": "thesis", "agent_id": "other-uuid"}),
+        ):
+            ctx = _make_ctx(bound_agent_id="bound-uuid-1234")
+            with patch("src.mcp_handlers.context.get_context_agent_id", return_value="bound-uuid-1234"):
+                with patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_server):
+                    result = await inject_identity(name, arguments, ctx)
+            assert _is_short_circuit(result), name
 
     @pytest.mark.asyncio
     async def test_no_binding_provided_id_passthrough(self):

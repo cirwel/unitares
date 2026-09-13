@@ -31,6 +31,7 @@ describe("agents observability semantics", () => {
               E: 0.70, I: 0.74, S: 0.28, V: -0.04,
               coherence: 0.48, risk: 0, riskSource: "resolved",
               phiRiskCurrent: 0.88, verdict: "safe",
+              verdictSource: "behavioral_assessment",
               source: "persisted_state", recordedAt: last,
               rollingMetricsAvailable: false,
             },
@@ -85,6 +86,10 @@ describe("agents observability semantics", () => {
     expect(text).toContain("State rows");
     expect(text).toContain("observed");
     expect(text).toContain("Decision risk");
+    expect(text).toContain("Policy band");
+    expect(text).toContain("policy · safe");
+    const policy = dom.window.document.querySelector(".ag-row td:nth-child(3) .tag");
+    expect(policy.getAttribute("title")).toContain("behavioral_assessment");
     expect(text).not.toContain("Raw risk telemetry");
 
     dom.window.document.querySelector(".ag-row").dispatchEvent(

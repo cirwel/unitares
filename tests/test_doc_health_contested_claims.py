@@ -230,3 +230,39 @@ def test_allows_the_actuation_claim_the_ledger_supports(
         "actuates; that it protects is untested.",
     )
     assert warnings == []
+
+
+def test_flags_the_boundary_contract_keys_no_handler_reads(
+    tmp_path, monkeypatch, doc_health
+):
+    """The stale guide example, line by line as it was published: both keys in
+    the assignment form a reader copies into a call."""
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        'cirs_protocol(protocol="boundary_contract", action="set",\n'
+        '  trust_level="full|partial|observe|none",\n'
+        "  void_policy='notify|assist|isolate|coordinate')\n",
+    )
+    flagged = [w for w in warnings if "trust_default" in w]
+    assert len(flagged) == 2, warnings
+
+
+def test_allows_the_corrected_boundary_contract_prose(
+    tmp_path, monkeypatch, doc_health
+):
+    """The corrected guide names both stale keys in order to say they were
+    wrong. A bare-name pattern would fire on that sentence and redden the
+    strict doc workflow on the correction itself."""
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        'cirs_protocol(protocol="boundary_contract", action="set",\n'
+        '  trust_default="full|partial|observe|none",\n'
+        '  void_response_policy="notify|assist|isolate|coordinate")\n'
+        "Earlier revisions of this guide named `trust_level` and `void_policy`, "
+        "which the handler never read.\n",
+    )
+    assert warnings == []

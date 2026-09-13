@@ -33,7 +33,11 @@ def _session(reviewer, paused, dispute_type="verification"):
         paused_agent_id=paused,
         discovery_id="disc-1",
         created_at=datetime.now(timezone.utc),
-        resolution=SimpleNamespace(action="resume", conditions=[]),
+        resolution=SimpleNamespace(
+            action="resume",
+            conditions=[],
+            timestamp="2026-09-01T12:00:00+00:00",
+        ),
     )
 
 
@@ -54,7 +58,10 @@ async def test_peer_review_reaches_the_calibration_write():
          patch.object(cal_mod, "calibration_checker", checker):
         ok = await cal_mod.update_calibration_from_dialectic(_session("agent-b", "agent-a"))
     assert ok is True
-    checker.record_prediction.assert_called_once()
+    assert checker.record_prediction.call_args.kwargs["agent_id"] == "agent-a"
+    assert checker.record_prediction.call_args.kwargs["observed_at"] == (
+        "2026-09-01T12:00:00+00:00"
+    )
 
 
 @pytest.mark.asyncio

@@ -248,6 +248,8 @@ def build_behavioral_derivation(
     regime_history: Sequence[Any],
     E_history: Sequence[Any],
     I_history: Sequence[Any],
+    S_history: Sequence[Any] = (),
+    V_history: Sequence[Any] = (),
     calibration_error: Any = None,
     drift_norm: Any = None,
     complexity_divergence: Any = None,
@@ -260,6 +262,7 @@ def build_behavioral_derivation(
     unique_tools_ratio: Any = None,
     computed: Mapping[str, Any] | None = None,
     substrate_canaries: Mapping[str, Any] | None = None,
+    calibration_signal: Mapping[str, Any] | None = None,
     coherence_source: str | None = None,
     coherence_role: str | None = None,
 ) -> dict[str, Any]:
@@ -292,6 +295,28 @@ def build_behavioral_derivation(
     if outcome_history is None:
         missing_inputs.append("outcome_history")
 
+    from src.behavioral_sensor import compute_behavioral_sensor_components
+
+    components = compute_behavioral_sensor_components(
+        decision_history=list(decision_history),
+        coherence_history=list(coherence_history),
+        regime_history=list(regime_history),
+        E_history=list(E_history),
+        I_history=list(I_history),
+        S_history=list(S_history),
+        V_history=list(V_history),
+        calibration_error=_number(calibration_error),
+        drift_norm=_number(drift_norm),
+        complexity_divergence=_number(complexity_divergence),
+        continuity_E_input=_number(continuity_E_input),
+        continuity_I_input=_number(continuity_I_input),
+        continuity_S_input=_number(continuity_S_input),
+        outcome_history=list(outcome_history) if outcome_history is not None else None,
+        tool_error_rate=_number(tool_error_rate),
+        tool_call_velocity=_number(tool_call_velocity),
+        unique_tools_ratio=_number(unique_tools_ratio),
+    )
+
     return {
         "kind": "behavioral_sensor",
         "formula": "src.behavioral_sensor.compute_behavioral_sensor_eisv",
@@ -323,8 +348,11 @@ def build_behavioral_derivation(
         "unused_legacy_parameters": ["S_history", "V_history"],
         "missing_inputs": missing_inputs,
         "substrate_canaries": dict(substrate_canaries or {}),
+        "calibration_signal": _json_safe(calibration_signal or {}),
+        "components": _json_safe(components),
         "known_limitations": [
-            "coherence_history carries legacy ODE control feedback into the behavioral E/I blend"
+            "coherence_history carries legacy ODE control feedback into the behavioral E/I blend",
+            "history slopes are per check-in and are not normalized to elapsed wall-clock time",
         ],
         "computed_observation": _eisv_values(computed),
     }

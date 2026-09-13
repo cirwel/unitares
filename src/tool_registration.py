@@ -51,6 +51,7 @@ from src.alias_schema import (
     build_alias_input_schema,
 )
 from src.tool_annotations import tool_annotations
+from src.tool_call_sets import call_set
 
 from src.logging_utils import get_logger
 from src.metrics_registry import TOOL_CALLS_TOTAL, TOOL_CALL_DURATION
@@ -436,31 +437,28 @@ def get_tool_wrapper(tool_name: str):
 # Instead of manually decorating each tool, we auto-register from tool_schemas.py
 # This prevents tools from getting out of sync between schemas and SSE server.
 
-# Tools that need session injection from FastMCP Context
-# These tools get client_session_id injected from the SSE connection
-TOOLS_NEEDING_SESSION_INJECTION = {
-    "onboard",
-    "identity",
-    "process_agent_update",
-    "get_governance_metrics",
-    "store_knowledge_graph",
-    "search_knowledge_graph",
-    "leave_note",
-    "observe_agent",
-    "get_agent_metadata",
-    "update_agent_metadata",
-    "archive_agent",
-    "delete_agent",
-    "get_system_history",
-    "export_to_file",
-    "mark_response_complete",
-    "request_dialectic_review",
-    "update_discovery_status_graph",
-    "get_discovery_details",
-    "dialectic",
-    "get_knowledge_graph",
-    "compare_me_to_similar",
-}
+# Tools that get client_session_id injected from the FastMCP Context when a
+# client omits it. Matched on the call: the tool registrar asks about each
+# registered tool and the alias registrar about each workflow alias, and an
+# alias gets injection exactly when its tool does. The set named thirteen
+# pre-consolidation names until 2026-09 (store_knowledge_graph, observe_agent,
+# export_to_file, ...); both registrars only ever ask about registered tools
+# and aliases of them, so those entries were never read, and the routers that
+# absorbed them (knowledge, agent, observe, export) are not members. Which
+# routers should be is an open decision (tool-surface audit F5), not a repair.
+TOOLS_NEEDING_SESSION_INJECTION = call_set(
+    "registrar.session_injection",
+    tools={
+        "onboard",
+        "identity",
+        "process_agent_update",
+        "get_governance_metrics",
+        "search_knowledge_graph",
+        "leave_note",
+        "mark_response_complete",
+        "dialectic",
+    },
+)
 
 # FastMCP validates tool arguments before dispatch_tool sees them. For these
 # internal/provenance-heavy tools, UNITARES dispatch middleware is the source of
@@ -595,7 +593,7 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
 
         description = tool.description.split("\n")[0] if tool.description else f"Tool: {tool_name}"
         input_schema = get_tool_input_schema(tool, {}) or {}
-        inject_session = tool_name in TOOLS_NEEDING_SESSION_INJECTION
+        inject_session = TOOLS_NEEDING_SESSION_INJECTION.matches(tool_name)
 
         try:
             # Create typed wrapper with explicit parameter signature
@@ -700,7 +698,7 @@ def _register_common_aliases(mcp):
                 tool_name=alias_name,
                 input_schema=actual_schema,
                 get_handler=get_tool_wrapper,
-                inject_session=actual in TOOLS_NEEDING_SESSION_INJECTION,
+                inject_session=TOOLS_NEEDING_SESSION_INJECTION.matches(alias_name),
                 session_extractor=_session_id_from_ctx,
             )
             desc = alias_tool.description or f"Alias for {actual}"
