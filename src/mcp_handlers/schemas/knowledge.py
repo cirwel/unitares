@@ -385,6 +385,7 @@ class KnowledgeParams(AgentIdentityMixin):
                 "response_mode", "tags", "status", "scope", "epoch_scope",
                 "exclude_agent_labels", "min_similarity", "operator",
                 "discovery_type", "severity", "include_provenance",
+                "agent_id_filter",
         ),
         "get": (
                 "discovery_id", "include_details", "include_provenance",
@@ -512,6 +513,13 @@ class KnowledgeParams(AgentIdentityMixin):
     superseded_by: Optional[str] = Field(None, description="ID of the discovery that supersedes this one (for action=update with status=superseded)")
     supersedes_id: Optional[str] = Field(None, description="ID of the older discovery being replaced (for action=supersede; discovery_id is the newer one)")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get, search; omit when using discovery_id readback)")
+    agent_id_filter: Optional[str] = Field(
+        None,
+        description=(
+            "Filter search results by author agent UUID (action=search). "
+            "Takes precedence over agent_id; omit it to use the legacy agent_id filter."
+        ),
+    )
     limit: Optional[int] = Field(None, description="Max results (for action=search: min 1, values above 100 are capped, 0 or negative is rejected)")
     include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search or agent-scoped action=get)")
     include_provenance: Union[bool, str, None] = Field(None, description="Include provenance and lineage chain fields in search/details results")

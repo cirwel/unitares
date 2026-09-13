@@ -27,6 +27,7 @@ CASES = {
     "describe_tool": {"include_schema": False, "include_full_description": False},
     "cirs_protocol": {"since_hours": 5.0, "action_id": "abc", "trust_default": "full"},
     "list_tools": {"lite": False, "include_advanced": False, "tier": "essential"},
+    "knowledge": {"agent_id_filter": "author-agent"},
 }
 
 
@@ -77,6 +78,7 @@ def test_fastmcp_argument_model_keeps_the_parameters(tool_name):
         "describe_tool": {"tool_name": "knowledge"},
         "cirs_protocol": {"protocol": "void_alert", "action": "query"},
         "list_tools": {},
+        "knowledge": {"action": "search"},
     }[tool_name]
     validated = tool.fn_metadata.arg_model.model_validate({**required_example, **CASES[tool_name]})
     dumped = validated.model_dump_one_level() if hasattr(validated, "model_dump_one_level") else validated.model_dump()
