@@ -5,29 +5,31 @@
   <img src="docs/assets/unitares-lockup.svg" width="420" alt="UNITARES">
 </picture>
 
-### A federation kernel for accountable AI agents.
+### Runtime accountability for long-running AI agent work.
 
-Identity, claims and evidence, review, outcomes, and reconstruction across agent runtimes.
+One attributed record across restarts, context loss, handoffs, and overlapping processes.
 
 </div>
 
-UNITARES is a self-hosted MCP server that gives agents a shared, attributed
-record while they keep their own reasoning loops and tools. A new process can
-recover durable claims earlier processes stored, inspect the retained evidence
-and disagreement, and continue the work with its own identity.
+AI agent work often outlives a single process. Restarts, handoffs, and
+overlapping agents can scatter claims and evidence, reviews, and outcomes across
+runtimes even when ordinary logs capture what each process printed.
 
-Here, **federation kernel** means many independent agent runtimes and harnesses
-sharing one operator-controlled server and authority domain. It does not promise
-autonomous cross-server replication or a new agent runtime. The deployed building blocks are process identities, check-ins,
-attributed findings, structured reviews, outcome events, and history retrieval.
-Reconstruction reads those records. A running process can query them mid-task,
-across repositories and across agents, and where the graph backend is enabled
-it can follow a claim to the correction that superseded it. A repository
-history plus a handoff written in advance answers a narrower question, since it
-is static and holds only what its author knew to record. Whether reconstruction
-recovers more in practice still needs comparative evaluation.
+UNITARES is a self-hosted MCP and HTTP server that gives one operator an
+attributed record across those boundaries. Agents keep their existing models,
+tools, and execution loops. Each process receives its own identity; explicit
+lineage records where inherited work came from without pretending separate
+processes are the same agent. Later processes can recover selected durable
+findings, evidence, disagreement, and outcomes through MCP, HTTP, the public
+SDK, or the dashboard.
 
-**Status:** v2.22.0. Running continuously since November 2025.
+It is built for one operator running several long-lived agents on infrastructure
+they control. UNITARES is not an agent framework, sandbox, correctness oracle,
+or proof that an agent's reports are true. Its behavioral-state estimates are
+published heuristics under evaluation.
+
+**Status:** v2.22.0. The maintainer deployment has run continuously since
+November 2025.
 
 <div align="center">
 
@@ -40,39 +42,13 @@ recovers more in practice still needs comparative evaluation.
 
 </div>
 
----
-
-## What it does
-
-| What you get | The mechanism |
-|---|---|
-| **Identity** — who made the claim? | `start_session(force_new=true)` binds a fresh process; retain `client_session_id` for later calls. Real lineage links inherited work, not authority or sameness. Write enforcement depends on the configured identity gates. |
-| **Claims and evidence** — what was asserted, and what supports it? | `sync_state` submits a work report from which durable state is derived; it does not retain the original report text. `store_finding` and `update_finding` retain durable attributed claims and corrections. Supply evidence and provenance explicitly. |
-| **Review** — what was challenged, and on what terms? | `request_review` opens a structured review; `dialectic` records positions, disagreement, conditions, and resolution. A request alone is not a completed review. |
-| **Outcomes** — what actually happened? | `record_result` records typed outcomes; an explicit `prediction_id` links a result to the prediction it grades. A stored outcome does not independently verify the caller's report. |
-| **Reconstruction** — what should the next process recover? | `search_shared_memory`, knowledge reads, review history, `export`, and operator-gated outcome-evidence reads expose different retained records. Clients assemble them; there is no single reconstruction tool or guarantee that the original check-in text survives. |
-
-The core record is retained in your deployment and accessible through MCP,
-HTTP, and the self-hosted dashboard. Core storage needs no external model
-provider. Optional cloud consultation and configured integrations can send
-submitted content outside the deployment; their privacy and authorization
-settings apply.
-
-Clients can treat the policy action, reason, and next step as the stable
-contract; the enforcement record rides alongside it. Operators can additionally
-read four EISV coordinates — work progress, evidence alignment, behavioral
-drift, and their balance. Those are published heuristics, documented in the
-[computation reference](docs/EISV_COMPUTATION.md).
-
-## Scope
-
-UNITARES is a state instrument, not an outcome oracle. It
-does not decide whether an output is correct or ethical, and it
-cannot detect deliberate concealment without independent evidence.
-Whether pausing an agent prevents anything is untested;
-[Evidence and limits](#evidence-and-limits) is the measured record.
-
 ## Quickstart
+
+The latest verified public installation tag is `v2.21.0`:
+
+This release-tagged Docker Compose flow is the supported install path for a
+local, single-operator deployment. After cloning, the one-command install/start
+is `docker compose up -d --wait`.
 
 ```bash
 git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
@@ -81,7 +57,14 @@ docker compose up -d --wait   # PostgreSQL/AGE/pgvector, Redis, lease plane, ser
 ```
 
 MCP clients connect to `http://localhost:8767/mcp/`; the dashboard is at
-`http://localhost:8767/dashboard`. The loop, from any client:
+`http://localhost:8767/dashboard`. Run `make demo` to exercise a real onboard
+and six-check-in loop against that server.
+
+The verified installation tag can trail the source version shown in
+**Status**; newer releases are on the [releases page](https://github.com/cirwel/unitares/releases).
+
+<details>
+<summary>Run the first governed loop from a client</summary>
 
 ```python
 session = start_session(force_new=True)
@@ -110,26 +93,39 @@ record_result(
 state = check_working_state(client_session_id=sid)
 ```
 
-Two demos run this against the live server:
+`make coordination-demo` adds a two-agent handoff, exercises request-bound
+Ed25519 attestations, verifies that A's attestation is refused when it claims
+B's UUID, and rejects replay.
 
-- **`make demo`** onboards a process and sends six check-ins over the real API.
-- **`make coordination-demo`** shows the identity guarantees biting: two agents
-  onboard, governance exchanges their continuity credentials for single-use,
-  request-bound Ed25519 attestations, A's attestation is refused when it claims
-  B's UUID, a captured attestation is refused on replay, and a governed
-  `maintenance:/` surface moves through an identity-checked handoff before
-  release.
-
-This release-tagged Docker Compose flow is the supported install path for a
-local, single-operator deployment; after cloning, the one-command install/start
-is `docker compose up -d --wait`. The tag is the latest verified public release
-and may trail the source version in **Status** — newer releases are on the
-[releases page](https://github.com/cirwel/unitares/releases).
+</details>
 
 Evaluating rather than installing? Start with
 [Evidence and limits](#evidence-and-limits) and the
 [Reviewer Guide](docs/REVIEWER_GUIDE.md). Deploying? Use the
 [user manual](docs/manual/README.md).
+
+## What it keeps together
+
+| Question | Retained mechanism |
+|---|---|
+| **Who said it?** | Fresh process identity and explicit lineage for inherited work. |
+| **What supports it?** | Attributed findings, corrections, evidence, and provenance supplied by callers. |
+| **Who challenged it?** | Structured reviews that preserve positions, disagreement, conditions, and resolution. |
+| **What happened?** | Typed outcome events that can be linked to the prediction or check-in they grade. |
+| **What can a successor recover?** | Shared-memory, review, history, and authorized evidence records assembled by the client. |
+
+These are accountable records, not automatic truth. `sync_state` does not retain
+the original report text, stored outcomes remain caller reports unless backed
+by independent evidence, and reconstruction spans records with different
+retention and authorization boundaries. Whether reconstruction improves on a
+repository plus structured handoff still needs comparative evaluation. The
+[product definition](docs/PRODUCT_DEFINITION.md) and
+[capability guide](docs/CAPABILITIES_AND_DEPLOYMENT.md) give the precise
+contracts and tool names.
+
+The architecture docs call this boundary a **federation kernel**: independent
+runtimes share one operator-controlled server and authority domain. The term
+does not promise autonomous cross-server replication or a new agent runtime.
 
 ## Where it fits
 
@@ -140,7 +136,7 @@ them.
 |---|---|---|
 | **Evals** | Is this model good enough for a defined task? | Before or between deployments. |
 | **Guardrails / sandbox** | Is this action allowed and contained? | Per action. |
-| **UNITARES** | What has this running process been doing, what evidence supports its claims, and what state is it in now? | Continuously, mid-run. |
+| **UNITARES** | What has this running process reported, what evidence supports its claims, and what state is it in now? | At submitted checkpoints throughout a run. |
 
 It is for **one operator running several long-lived agents** — coding, research,
 operations, monitoring — on infrastructure they control. It is usually not worth
@@ -150,6 +146,26 @@ It governs the agent's loop from outside rather than owning it, so Claude Code,
 Codex, custom runtimes, and resident agents stay different userlands while
 sharing one accountable record. Plain-language definition:
 [What UNITARES is](docs/PRODUCT_DEFINITION.md).
+
+## Runtime state and policy
+
+The core record is retained in your deployment and accessible through MCP,
+HTTP, and the self-hosted dashboard. Core storage needs no external model
+provider. Optional cloud consultation and configured integrations can send
+submitted content outside the deployment; their privacy and authorization
+settings apply.
+
+Clients can treat the policy action, reason, and next step as the stable
+contract; the enforcement record rides alongside it. Operators can additionally
+read four EISV coordinates — work progress, evidence alignment, behavioral
+drift, and their balance. Those are published heuristics, documented in the
+[computation reference](docs/EISV_COMPUTATION.md).
+
+UNITARES is a state instrument, not an outcome oracle.
+It does not decide whether an output is correct or ethical,
+and it cannot detect deliberate concealment without independent evidence.
+Whether pausing an agent prevents anything is untested;
+[Evidence and limits](#evidence-and-limits) is the measured record.
 
 ## Tools
 
