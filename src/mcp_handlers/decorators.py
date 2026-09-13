@@ -419,7 +419,9 @@ def resolve_canonical_action_and_source(tool_name: str, arguments):
 
       "explicit"       — the caller passed ``action`` (or its ``op`` synonym)
       "alias_injected" — a friendly alias supplied it (request_review →
-                         dialectic(action="request"))
+                         dialectic(action="request")); as in dispatch, it
+                         wins over a caller's ``op`` and yields to a
+                         caller's ``action``
       "default"        — neither; the tool's ``default_action`` filled in
       None             — no action resolved at all
 
@@ -450,12 +452,20 @@ def resolve_canonical_action_and_source(tool_name: str, arguments):
             exc_info=True,
         )
 
-    action = None
-    if isinstance(arguments, dict):
-        action = arguments.get("action") or arguments.get("op")
-    explicit_action = str(action).lower() if action else None
-    action = explicit_action or implied_action
-    source = "explicit" if explicit_action else ("alias_injected" if action else None)
+    # Precedence is dispatch's own, step by step. params_step.resolve_alias
+    # injects the alias's action whenever the caller sent no `action` key, and
+    # the router then reads `action` before `op`. So an injected action beats
+    # a caller's `op`, and a present-but-empty `action` suppresses injection.
+    # Reading `action or op` first judged store_finding(op="search") as a
+    # knowledge search while dispatch ran the store.
+    has_action_key = isinstance(arguments, dict) and "action" in arguments
+    if implied_action and not has_action_key:
+        action = implied_action
+        source = "alias_injected"
+    else:
+        raw = (arguments.get("action") or arguments.get("op")) if isinstance(arguments, dict) else None
+        action = str(raw).lower() if raw else None
+        source = "explicit" if action else None
     td = _TOOL_DEFINITIONS.get(canonical)
     if action is None and td is not None:
         action = td.default_action

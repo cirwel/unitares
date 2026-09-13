@@ -324,6 +324,7 @@ async def _proxy_call_tool(name: str, arguments: dict[str, Any]) -> Sequence[Tex
 # ============================================================================
 
 from src.activity_tracker import get_activity_tracker, HeartbeatConfig
+from src.tool_call_sets import call_set
 
 HEARTBEAT_CONFIG = HeartbeatConfig(
     conversation_turn_threshold=5,
@@ -338,6 +339,15 @@ HEARTBEAT_CONFIG = HeartbeatConfig(
 )
 
 activity_tracker = get_activity_tracker(HEARTBEAT_CONFIG)
+
+# Calls that never trigger the stdio auto-heartbeat. Matched on the call, so
+# sync_state is lightweight because process_agent_update is, and request_review
+# because dialectic is; the list used to name the pre-consolidation names only.
+_HEARTBEAT_LIGHTWEIGHT_CALLS = call_set(
+    "stdio.heartbeat_lightweight",
+    tools={"process_agent_update", "leave_note", "search_knowledge_graph", "dialectic"},
+    actions={("knowledge", "details"), ("knowledge", "get"), ("knowledge", "list")},
+)
 
 
 # ============================================================================
@@ -479,15 +489,7 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
     if agent_id and HEARTBEAT_CONFIG.enabled:
         should_trigger, trigger_reason = activity_tracker.track_tool_call(agent_id, name)
 
-        lightweight_tools = {
-            "process_agent_update", "reply_to_question", "leave_note",
-            "get_discovery_details", "search_knowledge_graph",
-            "get_knowledge_graph", "list_knowledge_graph",
-            "request_dialectic_review", "request_exploration_session",
-            "submit_thesis", "submit_antithesis", "submit_synthesis",
-            "get_dialectic_session", "dialectic",
-        }
-        if should_trigger and name not in lightweight_tools:
+        if should_trigger and not _HEARTBEAT_LIGHTWEIGHT_CALLS.matches(name, arguments):
             try:
                 activity = activity_tracker.get_or_create(agent_id)
                 activity_summary = {
