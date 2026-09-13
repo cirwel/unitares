@@ -20,7 +20,7 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "a4b238a17667a880"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "e4c5564b37f0ea2c"
   unitares/src/mcp_handlers/dialectic/session.py: "8065938fced23b6f"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
@@ -214,19 +214,34 @@ responses answer it directly from your seat:
 - **`next_call`** — a ready-to-use call template, present only when the move is
   actually yours. If `next_call` is null, you are waiting on someone else.
 - **`wait_assessment`** — `{elapsed_s, expected_by_s, assessment, note}`. The
-  same misreading recurs on the time axis: an open slot looked identical at 72
-  seconds and at 72 minutes until this field existed, and on 2026-09-13 that
-  produced two wrong "the reviewer is absent" calls inside one session, against
-  a reviewer that was mid-model-call and arrived at ~2m20s. `expected_by_s` is
-  derived from the reviewer's own configured ceiling
-  (`UNITARES_DIALECTIC_CODEX_TIMEOUT_S`, plus spawn or reconsider overhead).
+  same misreading recurs on the time axis: a session awaiting an orchestrated
+  reviewer looked identical at 72 seconds and at 72 minutes until this field
+  existed, and on 2026-09-13 that produced two wrong "the reviewer is absent"
+  calls inside one session, against a reviewer that was mid-model-call and
+  arrived at ~2m20s. `expected_by_s` is derived from the reviewer's own
+  configured ceiling (`UNITARES_DIALECTIC_CODEX_TIMEOUT_S`, plus spawn or
+  reconsider overhead).
 
   `too_early` means the wait is unremarkable — **not** that the reviewer is
   alive. A reviewer inside its budget may already be gone and merely not yet
   late, so an absence read here is not evidence. Only `overdue` is evidence, and
-  it is evidence to look rather than to conclude. `assessment: null` means the
-  clock could not be read, or no orchestrated reviewer holds the slot; it is
-  never a sign of health.
+  it is evidence to look rather than to conclude.
+
+  A deadline is asserted only when somebody actually owes the move and the
+  server can say who and since when: an identified orchestrated reviewer holds
+  an outstanding obligation, and the transcript carries a usable clock.
+  Otherwise `assessment` is `null` and `note` says which condition was missing.
+  `null` therefore covers four different situations — nobody owes a reviewer
+  turn (terminal session, your own turn, or an open unclaimed slot), the
+  reviewer is a human or otherwise unmanaged and has no declared budget to
+  exceed, the transcript clock is missing or unreadable, or its entries are not
+  in causal order. None of them is a sign of health, and none of them is a sign
+  of trouble either. Read `note` rather than inferring from the `null`.
+
+  Do not read an OPEN slot as a late reviewer. No agent has taken the
+  obligation, so there is no budget to exceed and the field declines to invent
+  one; an unclaimed slot at 72 minutes is an unanswered invitation, not a
+  missing reviewer.
 
 Read `whose_move` before concluding a session is hung, and `wait_assessment`
 before concluding it is late. Use
