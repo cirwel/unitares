@@ -62,6 +62,8 @@ def _routers():
         if name in _TWO_LEVEL_TOOLS or name in external:
             continue
         definition = get_tool_definition(name)
+        if definition is not None and definition.hidden:
+            continue
         actions = getattr(definition, "known_actions", None) if definition else None
         model = models.get(name)
         if actions and model is not None:
@@ -86,16 +88,21 @@ def test_the_survey_misses_no_first_party_action_tool():
     `_routers` keeps a tool only when it has both `known_actions` and a
     registered parameter model, so a tool whose model went missing would drop
     out of every test below, and the floor above would not notice while eight
-    others remained.
+    others remained. Hidden tools are not advertised, so they need no model and
+    are left out on both sides.
     """
     external = set(list_plugin_registered_tools())
-    declared = {
-        name
-        for name in get_tool_registry()
-        if name not in external
-        and name not in _TWO_LEVEL_TOOLS
-        and getattr(get_tool_definition(name), "known_actions", None)
-    }
+    declared = set()
+    for name in get_tool_registry():
+        definition = get_tool_definition(name)
+        if (
+            name not in external
+            and name not in _TWO_LEVEL_TOOLS
+            and definition is not None
+            and not definition.hidden
+            and definition.known_actions
+        ):
+            declared.add(name)
     missing = sorted(declared - set(ROUTER_IDS))
     assert not missing, (
         f"{missing!r} declare known_actions but were not surveyed: each needs a "
@@ -103,33 +110,44 @@ def test_the_survey_misses_no_first_party_action_tool():
     )
 
 
+# Keys that annotate a schema node without narrowing what it accepts. `type` is
+# included because every action is a string, so a `type` beside a vocabulary
+# cannot remove a routed action.
+_ANNOTATION_KEYS = frozenset({"type", "title", "description", "default", "examples", "deprecated"})
+
+
 def _closed_vocabulary(node, defs):
     """The values a JSON-schema node accepts when they form a closed set, else None.
 
-    Pydantic spells a closed vocabulary several ways: `enum` for a multi-value
-    `Literal`, `const` for a single value, `anyOf` with a `null` branch for an
-    optional one, and a `$ref` into `$defs` for an `Enum` class. Reading only a
-    top-level `enum` would reject each of the other spellings for no reason.
+    Pydantic spells a closed vocabulary as exactly one constraint keyword plus
+    annotations: `enum` for a multi-value `Literal`, `const` for a single
+    value, `anyOf` with a `null` branch for an optional one, and a `$ref` into
+    `$defs` for an `Enum` class. Those four are read.
+
+    Anything else returns None, which fails the caller loudly. That includes a
+    constraint keyword beside another, such as `enum` with `const`, `$ref` with
+    its own `enum`, `allOf`, or `oneOf`. Reading those correctly means
+    intersecting constraints, and a reader that guessed could report a wider set
+    than the schema accepts, passing a schema that refuses a routed action.
     """
-    ref = node.get("$ref", "")
-    if ref.startswith("#/$defs/"):
-        node = defs.get(ref.rsplit("/", 1)[-1], {})
-    if "enum" in node:
+    constraints = set(node) - _ANNOTATION_KEYS
+    if constraints == {"$ref"} and node["$ref"].startswith("#/$defs/"):
+        return _closed_vocabulary(defs.get(node["$ref"].rsplit("/", 1)[-1], {}), defs)
+    if constraints == {"enum"}:
         return set(node["enum"])
-    if "const" in node:
+    if constraints == {"const"}:
         return {node["const"]}
-    branches = node.get("anyOf") or node.get("oneOf")
-    if not branches:
-        return None
-    values = set()
-    for branch in branches:
-        if branch.get("type") == "null":
-            continue
-        branch_values = _closed_vocabulary(branch, defs)
-        if branch_values is None:
-            return None
-        values |= branch_values
-    return values
+    if constraints == {"anyOf"}:
+        values = set()
+        for branch in node["anyOf"]:
+            if not set(branch) - _ANNOTATION_KEYS and branch.get("type") == "null":
+                continue
+            branch_values = _closed_vocabulary(branch, defs)
+            if branch_values is None:
+                return None
+            values |= branch_values
+        return values
+    return None
 
 
 @pytest.mark.parametrize("name,actions,model", ROUTERS, ids=ROUTER_IDS)
