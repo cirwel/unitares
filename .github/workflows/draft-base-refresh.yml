@@ -25,6 +25,12 @@ name: Draft Base Refresh
 # pull in the wrong history.
 #
 # GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
+# A bot push does not establish fresh CI: GITHUB_TOKEN-triggered pull_request
+# synchronize runs require maintainer approval, and ordinary push runs are
+# suppressed. Approve the resulting PR workflows and verify all required checks
+# on the refreshed head before declaring readiness. This workflow does not
+# approve runs or grant itself a broader token.
+# https://docs.github.com/en/actions/concepts/security/github_token
 
 on:
   schedule:
@@ -109,6 +115,7 @@ jobs:
             else
               git push origin "HEAD:$head"
               echo "refreshed: pushed merge of $base into $head"
+              echo "::notice::PR #$num: approve token-triggered PR workflows and verify required CI on the new head."
             fi
             refreshed=$((refreshed+1))
             echo "::endgroup::"
@@ -121,4 +128,5 @@ jobs:
             echo "- skipped:   $skipped"
             echo
             echo "Readiness and merge are untouched by this job by design."
+            echo "GITHUB_TOKEN synchronize workflows require maintainer approval; a refresh is not evidence that CI ran."
           } >> "$GITHUB_STEP_SUMMARY"
