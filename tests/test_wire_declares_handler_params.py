@@ -16,7 +16,11 @@ covered from here.
 
 from __future__ import annotations
 
+import inspect
+import json
+
 import pytest
+from mcp.types import TextContent
 
 CASES = {
     "observe": {"window_hours": 48, "include_calibration": True},
@@ -24,6 +28,32 @@ CASES = {
     "cirs_protocol": {"since_hours": 5.0, "action_id": "abc", "trust_default": "full"},
     "list_tools": {"lite": False, "include_advanced": False, "tier": "essential"},
 }
+
+
+LIST_TOOLS_BOOLEAN_CASES = [
+    pytest.param(True, True, id="bool-true"),
+    pytest.param(False, False, id="bool-false"),
+    pytest.param("true", True, id="string-true"),
+    pytest.param("false", False, id="string-false"),
+    pytest.param("1", True, id="string-1"),
+    pytest.param("0", False, id="string-0"),
+    pytest.param("yes", True, id="string-yes"),
+    pytest.param("no", False, id="string-no"),
+    pytest.param("on", True, id="string-on"),
+    pytest.param("off", False, id="string-off"),
+    pytest.param("  TrUe  ", True, id="whitespace-case-true"),
+    pytest.param("  oFf  ", False, id="whitespace-case-false"),
+    pytest.param(None, True, id="none-preserves-true-default"),
+    pytest.param("not-a-boolean", True, id="invalid-preserves-true-default"),
+]
+
+
+def _run_args(run_method, arguments):
+    """Positional args for internal Tool.run across MCP SDK 1.x/2.x."""
+    params = inspect.signature(run_method).parameters
+    if "context" in params and params["context"].default is inspect.Parameter.empty:
+        return (arguments, None)
+    return (arguments,)
 
 
 @pytest.mark.parametrize("tool_name", sorted(CASES))
@@ -71,7 +101,7 @@ def test_describe_tool_switches_coerce_like_lite():
     assert DescribeToolParams(tool_name="knowledge").include_schema is True
 
 
-def test_list_tools_switches_default_and_coerce_like_the_handler():
+def test_list_tools_switches_default_like_the_handler():
     from src.mcp_handlers.schemas.admin import ListToolsParams
 
     defaults = ListToolsParams()
@@ -79,6 +109,63 @@ def test_list_tools_switches_default_and_coerce_like_the_handler():
     assert defaults.include_advanced is True
     assert defaults.tier == "all"
 
-    coerced = ListToolsParams(lite="false", include_advanced="0", tier="essential")
-    assert coerced.lite is False and coerced.include_advanced is False
-    assert coerced.tier == "essential"
+
+@pytest.mark.parametrize("field_name", ["lite", "include_advanced"])
+@pytest.mark.parametrize(("raw", "expected"), LIST_TOOLS_BOOLEAN_CASES)
+def test_list_tools_true_default_switches_coerce_like_the_handler(
+    field_name, raw, expected
+):
+    from src.mcp_handlers.schemas.admin import ListToolsParams
+    from src.mcp_handlers.support.coerce import coerce_bool
+
+    params = ListToolsParams(**{field_name: raw})
+    assert getattr(params, field_name) is expected
+    assert getattr(params, field_name) is coerce_bool(raw, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        pytest.param("on", id="on"),
+        pytest.param("  TrUe  ", id="whitespace-case"),
+        pytest.param(None, id="none"),
+        pytest.param("not-a-boolean", id="invalid"),
+        pytest.param("off", id="off"),
+    ],
+)
+async def test_list_tools_mcp_dispatch_matches_direct_handler_coercion(
+    monkeypatch, raw
+):
+    """Exercise FastMCP's live argument model and the dispatch validator.
+
+    The direct handler uses ``coerce_bool(value, True)`` for both switches;
+    schema validation must hand it the same value instead of changing the
+    meaning before the handler runs.
+    """
+    import src.mcp_handlers as handlers
+    import src.tool_registration as registration
+    from src import mcp_server
+    from src.mcp_handlers.support.coerce import coerce_bool
+
+    delivered = {}
+
+    async def capture(arguments):
+        delivered.update(arguments)
+        return [TextContent(type="text", text=json.dumps({"success": True}))]
+
+    monkeypatch.setitem(handlers.TOOL_HANDLERS, "list_tools", capture)
+    monkeypatch.setattr(registration, "record_tool_usage", lambda **kwargs: None)
+
+    tool = mcp_server.mcp._tool_manager.get_tool("list_tools")
+    await tool.run(
+        *_run_args(
+            tool.run,
+            {"lite": raw, "include_advanced": raw},
+        ),
+        convert_result=False,
+    )
+
+    expected = coerce_bool(raw, True)
+    assert delivered["lite"] is expected
+    assert delivered["include_advanced"] is expected
