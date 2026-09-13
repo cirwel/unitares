@@ -586,6 +586,14 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         canonical_name, _alias_info = resolve_tool_alias(name)
     except Exception:
         canonical_name = name
+    # Judge the call by the name the caller INVOKED, as the REST gate does.
+    # This step runs before resolve_alias, so an alias's inject_action is not
+    # in `arguments` yet; the resolver supplies it only from the alias name.
+    # Handing it canonical_name drops the action and falls back to the
+    # router's default_action — search_shared_memory was judged as a knowledge
+    # write and request_review as a dialectic read.
+    from src.mcp_handlers.decorators import get_call_identity_requirement
+    call_identity_requirement = get_call_identity_requirement(name, arguments)
 
     # --- Sticky transport binding: early return if cached ---
     consult = await consult_sticky_binding(
@@ -850,8 +858,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
         )
     )
     if not _has_identity_proof and canonical_name not in _IDENTITY_LIFECYCLE_TOOLS:
-        from src.mcp_handlers.decorators import get_call_identity_requirement
-        if get_call_identity_requirement(canonical_name, arguments) == "pre_onboard":
+        if call_identity_requirement == "pre_onboard":
             logger.info(
                 "[DISPATCH] pre_onboard read %s with no proof — short-circuiting "
                 "identity resolution (no resolve, no mint, no sticky cache)",
@@ -927,8 +934,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             # pre_onboard_actions so their browsable READ actions serve
             # unbound while writes stay identity-gated — tool-level
             # classification can't express that split.
-            from src.mcp_handlers.decorators import get_call_identity_requirement
-            if get_call_identity_requirement(canonical_name, arguments) == "pre_onboard":
+            if call_identity_requirement == "pre_onboard":
                 logger.info(
                     "[DISPATCH] session_resolve_miss for %s "
                     "— leaving request unbound (no middleware auto-mint, "
