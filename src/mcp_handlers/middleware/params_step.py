@@ -57,14 +57,45 @@ _VALIDATION_CONTEXT_KEYS = frozenset({
 })
 
 
+# How many ``kwargs`` wrappers deep the strip looks. unwrap_kwargs removes one
+# level, and some handlers unwrap a JSON-string ``kwargs`` again themselves.
+_RESERVED_KEY_KWARGS_DEPTH = 4
+
+
+def remove_reserved_dispatch_keys(arguments: Any, _depth: int = 0) -> None:
+    """Drop caller-supplied middleware handoff keys, including inside ``kwargs``.
+
+    Only dispatch middleware may write these keys, after it has verified a
+    proof, and handlers read them as trusted. Every transport entry removes
+    caller-supplied copies before anything reads them. A ``kwargs`` wrapper, as
+    a dict or as a JSON-object string, is cleaned in place too.
+    """
+    if not isinstance(arguments, dict):
+        return
+    for key in _VALIDATION_CONTEXT_KEYS:
+        arguments.pop(key, None)
+    if _depth >= _RESERVED_KEY_KWARGS_DEPTH or "kwargs" not in arguments:
+        return
+    wrapped = arguments["kwargs"]
+    if isinstance(wrapped, dict):
+        remove_reserved_dispatch_keys(wrapped, _depth + 1)
+    elif isinstance(wrapped, str):
+        try:
+            parsed = json.loads(wrapped)
+        except (json.JSONDecodeError, TypeError):
+            return
+        if isinstance(parsed, dict):
+            remove_reserved_dispatch_keys(parsed, _depth + 1)
+            arguments["kwargs"] = json.dumps(parsed)
+
+
 async def strip_untrusted_dispatch_metadata(
     name: str,
     arguments: Dict[str, Any],
     ctx,
 ) -> Any:
     """Remove caller-forged middleware handoff fields before any proof step."""
-    for key in _VALIDATION_CONTEXT_KEYS:
-        arguments.pop(key, None)
+    remove_reserved_dispatch_keys(arguments)
     return name, arguments, ctx
 
 
