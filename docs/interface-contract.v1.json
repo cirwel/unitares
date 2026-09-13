@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "d0b0609c876405da264b65fa8403df8174a7345923a5cc53c1924e1bbf88a1b1",
+  "surface_sha256": "5992d49b82cdf71008f2fc35cf81658a1e4d5bafe0954e63ecf9423ab0a2125c",
   "capabilities": [
     {
       "name": "start_session",
@@ -432,7 +432,7 @@
       "name": "cirs_protocol",
       "implementation": "cirs_protocol",
       "kind": "canonical_tool",
-      "input_schema_sha256": "cd406d038fbf6f1bb2e1c0f03ac1f8b457f396375270f35791dcdf2780c8ff01",
+      "input_schema_sha256": "8ecdb8c1848d7bc906f38b5759f9cde5bb8911da3e6abb98b27ab6fa022525ec",
       "transport_names": {
         "mcp_streamable_http": "cirs_protocol",
         "rest_v1_tools": "cirs_protocol",

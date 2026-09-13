@@ -119,16 +119,25 @@ The two identifiers serve different jobs:
   2026-09-12: `cirs_protocol`'s `action` description names which sub-action
   each protocol routes, adding the `list` and `status` it had omitted.
   Description-only: one digest moves and no parameter name, type, default or
-  requiredness changes; 1.9.0, 2026-09-13: `complexity` and `confidence` on
-  `process_agent_update`, `simulate_update` and `sync_state` advertise what the
-  server actually accepts. Their 0-1 bound had been emitted as Pydantic
-  `ge`/`le`, which no client validator reads, so 99 was advertised as legal;
-  it is now `minimum`/`maximum`. Their string branch had allowed any string; it
-  is now a regex of numeric strings in [0, 1]. `sync_state`'s `complexity` also
-  lists the named levels its normalizer accepts. Only the advertised schema
-  changes: acceptance, refusal and every validation error, down to its
-  location, are unchanged on every transport; three digests move. 1.8.0 is
-  taken by a concurrent change).
+  requiredness changes; 1.8.0, 2026-09-13: `cirs_protocol` declares the 24
+  parameters its selectable protocol handlers read, which the MCP argument
+  model had dropped before dispatch, and `limit` advertises the handlers'
+  default of 50 in place of null, which the middleware had delivered to
+  `int()` and so failed every query action through dispatch. No advertised
+  parameter is removed or renamed; the one retyped, `limit`, stops admitting a
+  null that never worked; and again only that digest moves.
+  REST and in-process callers that sent these previously undeclared keys with
+  the wrong type or an explicit null now get a validation error, and string
+  booleans are parsed rather than read as truthy, as 1.2.0 did for
+  `observe`'s `include_calibration`; 1.9.0, 2026-09-13: `complexity` and
+  `confidence` on `process_agent_update`, `simulate_update` and `sync_state`
+  advertise what the server actually accepts. Their 0-1 bound had been emitted
+  as Pydantic `ge`/`le`, which no client validator reads, so 99 was advertised
+  as legal; it is now `minimum`/`maximum`. Their string branch had allowed any
+  string; it is now a regex of numeric strings in [0, 1]. `sync_state`'s
+  `complexity` also lists the named levels its normalizer accepts. Only the
+  advertised schema changes: acceptance, refusal and every validation error,
+  down to its location, are unchanged on every transport; three digests move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
