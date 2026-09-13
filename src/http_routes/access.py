@@ -312,6 +312,22 @@ _HTTP_PREBIND_SKIP_TOOLS = {
 }
 
 
+def _skips_http_prebind(tool_name: str) -> bool:
+    """Whether a REST call skips prebind, judged on the call it dispatches to.
+
+    REST sees the name the caller invoked. An alias of a skipped tool is the
+    same call, so `start_session` skips exactly as `onboard` does. Matching
+    the invoked name alone pre-bound `start_session(force_new=true)` to a
+    sticky-cached agent that `onboard(force_new=true)` never touches.
+    """
+    if tool_name in _HTTP_PREBIND_SKIP_TOOLS:
+        return True
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+    canonical, _alias = resolve_tool_alias(tool_name)
+    return canonical in _HTTP_PREBIND_SKIP_TOOLS
+
+
 async def _explicit_bind_corroboration(arguments: dict) -> str:
     """Classify what *else* a caller offered alongside a declared ``agent_id``.
 
@@ -705,7 +721,7 @@ async def _resolve_http_bound_agent(
     signals,
 ) -> str | None:
     """Resolve an existing identity before dispatching a direct HTTP tool."""
-    if not isinstance(arguments, dict) or tool_name in _HTTP_PREBIND_SKIP_TOOLS:
+    if not isinstance(arguments, dict) or _skips_http_prebind(tool_name):
         return None
 
     explicit_agent_id = await _bind_explicit_http_agent(arguments)

@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.7.0",
+  "version": "1.9.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "transports": [
@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "678cc61653a575b1649c5e92795091b03b1088b9782e7c05192008796dd63e88",
+  "surface_sha256": "5992d49b82cdf71008f2fc35cf81658a1e4d5bafe0954e63ecf9423ab0a2125c",
   "capabilities": [
     {
       "name": "start_session",
@@ -25,7 +25,7 @@
       "name": "sync_state",
       "implementation": "process_agent_update",
       "kind": "workflow_alias",
-      "input_schema_sha256": "bebd5ab8d8af3a940eadc968e680aacfd1cc1947426d23a5eb29c338220920a5",
+      "input_schema_sha256": "a3b0926d89b8c6e930243182af6256a0923574ca7b2cef01cddb60f591b55eb6",
       "transport_names": {
         "mcp_streamable_http": "sync_state",
         "rest_v1_tools": "sync_state",
@@ -124,7 +124,7 @@
       "name": "process_agent_update",
       "implementation": "process_agent_update",
       "kind": "canonical_tool",
-      "input_schema_sha256": "bebd5ab8d8af3a940eadc968e680aacfd1cc1947426d23a5eb29c338220920a5",
+      "input_schema_sha256": "b4c62a9170cd6ee04f8b970b7be3f2316590b7b544ea885dae863f5e0e88506a",
       "transport_names": {
         "mcp_streamable_http": "process_agent_update",
         "rest_v1_tools": "process_agent_update",
@@ -190,7 +190,7 @@
       "name": "simulate_update",
       "implementation": "simulate_update",
       "kind": "canonical_tool",
-      "input_schema_sha256": "62d892c808c99f1c69614d51d11c9574615072681e299b9c235cc8e0876e7cf7",
+      "input_schema_sha256": "b1d63282b94c5f324c6dd6c7c8dc19e974a57b03755cb074297b318257c64eac",
       "transport_names": {
         "mcp_streamable_http": "simulate_update",
         "rest_v1_tools": "simulate_update",
@@ -432,7 +432,7 @@
       "name": "cirs_protocol",
       "implementation": "cirs_protocol",
       "kind": "canonical_tool",
-      "input_schema_sha256": "cd406d038fbf6f1bb2e1c0f03ac1f8b457f396375270f35791dcdf2780c8ff01",
+      "input_schema_sha256": "8ecdb8c1848d7bc906f38b5759f9cde5bb8911da3e6abb98b27ab6fa022525ec",
       "transport_names": {
         "mcp_streamable_http": "cirs_protocol",
         "rest_v1_tools": "cirs_protocol",

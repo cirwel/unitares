@@ -24,7 +24,9 @@ async def handle_boundary_contract(arguments: Dict[str, Any]) -> Sequence[TextCo
 
     Three modes: set, get, list
     """
-    action = arguments.get("action", "").lower()
+    # None-safe: `action` is declared with no default, so the middleware hands
+    # an omitted action over as None, and it must reach the valid_actions refusal.
+    action = (arguments.get("action") or "").lower()
 
     if not action or action not in ("set", "get", "list"):
         return [error_response(

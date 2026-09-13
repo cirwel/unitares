@@ -21,9 +21,8 @@ async def update_calibration_from_dialectic(session: DialecticSession, resolutio
     """
     Automatically update calibration from dialectic convergence.
     
-    Uses peer agreement weighted at 0.7 to account for overconfidence.
-    The "elephant in the room": agents show 1.0 confidence but achieve ~0.7 accuracy.
-    This weight calibrates for that reality - peer verification is valuable but not perfect.
+    Uses a peer resolution as a mixed-proxy correctness signal. This is useful
+    calibration evidence, but not verified task correctness.
     
     Args:
         session: Dialectic session that converged
@@ -46,19 +45,19 @@ async def update_calibration_from_dialectic(session: DialecticSession, resolutio
 
     # A self-review is not peer agreement.
     #
-    # This function writes straight into the process-wide `calibration_checker`,
-    # whose bins are FLEET-GLOBAL (src/calibration.py carries no agent dimension
-    # at all) and feed `cal_I` at 50-60% of every agent's I via
-    # updates/context.py -> behavioral_sensor._compute_I. It is also the one
+    # This function writes into the process-wide `calibration_checker`. Its
+    # deployed bins remain FLEET-GLOBAL and feed `cal_I` at 50-60% of every
+    # agent's I via updates/context.py -> behavioral_sensor._compute_I. An
+    # attributed agent candidate is recorded beside that path for shadow
+    # telemetry only. This is also the one
     # writer on that path with no evidence-weight gate -- the `outcome_event`
     # route is guarded at 0.65, this one is not.
     #
     # `dialectic(action='request', reviewer_mode='self')` sets
     # reviewer_agent_id = the requesting agent (dialectic/handlers.py), so
     # without this check an agent could resolve a review of itself and move a
-    # term in every other agent's state vector. The 0.7 weight above is
-    # explicitly justified as *peer* agreement correcting for self-overconfidence;
-    # applied to a self-review it corrects self-report with self-report, which is
+    # term in every other agent's state vector. The signal is explicitly *peer*
+    # agreement; applied to a self-review it corrects self-report with self-report, which is
     # the Invariant-4 loop ("a signal derived from the loop cannot anchor the
     # loop", src/grounding/outcome_anchors.py).
     #
@@ -117,12 +116,7 @@ async def update_calibration_from_dialectic(session: DialecticSession, resolutio
         # If resolution action is "pause" or "escalate", peer disagreed
         actual_correct = (resolution.action == "resume")
         
-        # Weight peer agreement at 0.7 (accounts for overconfidence)
-        # This means: if peer says "correct", we're 70% confident it's actually correct
-        # If peer says "incorrect", we're 70% confident it's actually incorrect
-        peer_weight = 0.7
-        
-        # Update calibration with weighted peer agreement
+        # Update calibration with peer agreement.
         # Use record_prediction which accepts confidence, predicted_correct, actual_correct, complexity_discrepancy
         # predicted_correct: did the agent expect to be right?
         # If confidence >= 0.5, agent predicted it was correct
@@ -131,7 +125,14 @@ async def update_calibration_from_dialectic(session: DialecticSession, resolutio
             confidence=confidence,  # Original agent's confidence
             predicted_correct=predicted_correct,  # Agent's implicit prediction from confidence
             actual_correct=actual_correct,  # Ground truth (from dialectic peer signal)
-            complexity_discrepancy=complexity_discrepancy
+            complexity_discrepancy=complexity_discrepancy,
+            agent_id=session.paused_agent_id,
+            # Legacy resolution blobs may lack their own timestamp. Session
+            # creation is a conservative historical fallback; never stamp a
+            # replayed resolution as fresh merely because it was replayed now.
+            observed_at=(
+                getattr(resolution, "timestamp", None) or session.created_at
+            ),
         )
         
         logger.info(
@@ -292,4 +293,3 @@ async def backfill_calibration_from_historical_sessions() -> Dict[str, Any]:
             logger.warning(f"Error updating calibration for session {session_file.stem}: {e}")
     
     return results
-
