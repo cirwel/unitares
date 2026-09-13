@@ -300,17 +300,33 @@ def test_extra_argument_passthrough_survives_the_schema_replacement():
 # advertised ceiling is the likelier drift of the two, so the ceiling has to be
 # one of the values tried.
 #
+# The degenerate values a schema permits are boundaries too, and they are where
+# handlers most often refuse what a schema allows: null, the empty string, and a
+# dictionary carrying an entry nobody declared. A review found the generator
+# produced none of the three. An optional parameter was never sent null, a
+# string without a minLength was never sent "", and an object was never sent an
+# extra entry, so a nullable-advertised required parameter, a dropped minLength
+# and a forbidden extra entry all passed. Each now has a committed mutation.
+#
 # WHAT THIS STILL DOES NOT CATCH, stated so a green result is not over-read. It
 # probes only the boundaries the advertised schema NAMES, so a handler bound with
 # no advertised counterpart at all (an advertised `maximum` deleted while the
 # handler keeps it) is invisible to it. Catching that needs the opposite walk,
-# from the handler's bounds outward; it is a separate follow-up. Two related
-# classes this file used to miss are closed now: a bound emitted in a form JSON
-# Schema ignores is refused by test_no_advertised_schema_carries_a_pydantic_only_key,
-# and a construct the helper cannot model is recorded wherever it occurs rather
-# than skipped.
+# from the handler's bounds outward; it is a separate follow-up. It stops at the
+# handler's params model, so a value that model accepts and the handler body
+# then refuses is invisible too, and many parameters accept null or "" at the
+# model. It sends undeclared entries inside a parameter, never an undeclared
+# top-level argument. Two related classes this file used to miss are closed now:
+# a bound emitted in a form JSON Schema ignores is refused by
+# test_no_advertised_schema_carries_a_pydantic_only_key, and a construct the
+# helper cannot model is recorded wherever it occurs rather than skipped.
 
 _UNSYNTHESIZABLE = object()
+
+# The key sent to probe what an object schema says about undeclared entries, and
+# one value of each JSON type for an entry whose value nothing constrains.
+_UNDECLARED_KEY = "undeclared_probe_key"
+_ANY_JSON_VALUES = ("x", 1, 1.5, True, None, ["x"], {"x": "x"})
 
 # There is deliberately NO cap on values per property. A first draft capped at
 # eight, and the catalog immediately exceeded it: nine properties carry enums of
@@ -374,6 +390,13 @@ def _candidate_values(
     than the first. Returns a list so one lenient value cannot mask a strict
     one — the failure this replaced was exactly that.
 
+    The degenerate values are boundaries as well: null wherever an anyOf branch
+    or a type list admits it, the empty string wherever no minLength rules it
+    out, and an undeclared entry wherever ``additionalProperties`` permits one.
+    They come after the ordinary candidates, because ``_synthesize`` builds a
+    required field from the first candidate, and a legal but degenerate base
+    value would make every property of that tool fail for the wrong reason.
+
     An empty list means the helper does not model the construct (a ``pattern``,
     an unknown ``format``, an unresolvable ref). That is a gap in the helper,
     not a failure of the invariant. When ``gaps`` is given, every such gap inside
@@ -400,8 +423,10 @@ def _candidate_values(
     for keyword in ("anyOf", "oneOf"):
         if keyword in schema:
             values: list = []
+            admits_null = False
             for index, branch in enumerate(schema[keyword]):
                 if isinstance(branch, dict) and branch.get("type") == "null":
+                    admits_null = True
                     continue
                 branch_path = f"{path}|{keyword}[{index}]"
                 branch_values = _candidate_values(branch, defs, depth + 1, gaps, branch_path)
@@ -409,11 +434,27 @@ def _candidate_values(
                     # One modelled branch must not hide an unmodelled sibling.
                     _gap(branch_path, "branch has no candidates")
                 values.extend(branch_values)
+            if admits_null:
+                values.append(None)
             return values
 
     json_type = schema.get("type")
     if isinstance(json_type, list):
-        json_type = next((t for t in json_type if t != "null"), None)
+        # A type list is an anyOf over types sharing the other keywords, so every
+        # type is tried, as every branch is. Taking only the first one would
+        # skip the rest without a word.
+        values = []
+        for member in (member for member in json_type if member != "null"):
+            member_path = f"{path}|type={member}"
+            member_values = _candidate_values(
+                {**schema, "type": member}, defs, depth + 1, gaps, member_path
+            )
+            if not member_values:
+                _gap(member_path, "type has no candidates")
+            values.extend(member_values)
+        if "null" in json_type:
+            values.append(None)
+        return values
 
     if json_type == "string":
         if "pattern" in schema:
@@ -422,12 +463,17 @@ def _candidate_values(
         if declared_format:
             example = _FORMAT_EXAMPLES.get(declared_format)
             return [example] if example is not None else []
-        shortest = max(1, int(schema.get("minLength") or 1))
-        lengths = {shortest}
+        shortest = int(schema.get("minLength") or 0)
         longest = schema.get("maxLength")
-        if isinstance(longest, int) and longest >= shortest:
-            lengths.add(longest)
-        return ["x" * length for length in sorted(lengths)]
+        lengths = [max(shortest, 1)]
+        if isinstance(longest, int) and longest > lengths[0]:
+            lengths.append(longest)
+        if isinstance(longest, int) and longest < lengths[0]:
+            lengths = []
+        if shortest == 0:
+            # Legal whenever no minLength rules it out; last, for _synthesize.
+            lengths.append(0)
+        return ["x" * length for length in lengths]
     if json_type in ("integer", "number"):
         cast = int if json_type == "integer" else float
         bounds = set()
@@ -495,6 +541,25 @@ def _candidate_values(
                 _gap(f"{path}.{name}", "nested field has no candidates")
             for value in nested_values:
                 instances.append({**base, name: value})
+        # Undeclared entries. `additionalProperties` absent, `true` or `{}` lets
+        # any value sit under an undeclared key, and a schema there bounds the
+        # value; only `false` forbids the entry. A map such as Dict[str, Any] has
+        # no properties at all, so without this it was only ever sent `{}`.
+        extra = schema.get("additionalProperties", True)
+        if extra is not False:
+            extra_path = f"{path}.{_UNDECLARED_KEY}"
+            if "patternProperties" in schema or "propertyNames" in schema:
+                _gap(path, "patternProperties/propertyNames decide which undeclared keys are legal")
+            elif _UNDECLARED_KEY in properties:
+                _gap(extra_path, "the probe key is a declared property")
+            else:
+                if isinstance(extra, dict) and extra:
+                    extra_values = _candidate_values(extra, defs, depth + 1, gaps, extra_path)
+                    if not extra_values:
+                        _gap(extra_path, "undeclared entry values have no candidates")
+                else:
+                    extra_values = list(_ANY_JSON_VALUES)
+                instances.extend({**base, _UNDECLARED_KEY: value} for value in extra_values)
         return instances
     if json_type == "null":
         return [None]
@@ -1040,7 +1105,7 @@ def test_the_transport_comparison_catches_a_second_string_branch():
 # ---------------------------------------------------------------------------
 # The invariant's own sensitivity
 # ---------------------------------------------------------------------------
-# Every entry is a way the invariant above was once blind, found by mutation
+# Every entry is a way the invariant above was once blind, confirmed by mutation
 # rather than by reading, and each was fixed. Committing them is what keeps the
 # fixes fixed: a later tidy-up of _candidate_values that reintroduces a cap,
 # drops nested exploration, or stops recording a skip would still pass the
@@ -1125,6 +1190,34 @@ _REVIEW_ROUND_MUTATIONS = {
         {"anyOf": [{"type": "integer", "minimum": 5, "maximum": 420}, {"type": "string", "pattern": "^\\d+$"}]},
         _SYNTHESIS_GAP,
     ),
+    # Blind until a review named them: null, the empty string, undeclared
+    # entries, and a type list's second type. Each was measured passing the
+    # generator before it covered the case.
+    "null advertised on a parameter the tool requires": (
+        "property", "delegate_inference", "prompt",
+        {"anyOf": [{"type": "string", "minLength": 1, "maxLength": 100000}, {"type": "null"}]},
+        _TRANSPORT_GATE,
+    ),
+    "the empty string advertised where the handler needs a character": (
+        "property", "consult", "brief",
+        {"type": "string", "maxLength": 32000},
+        _HANDLER_GATE,
+    ),
+    "string-valued undeclared entries on a model that forbids them": (
+        "definition", "sync_state", ("ToolResultEvidence", "additionalProperties"),
+        {"type": "string"},
+        _HANDLER_GATE,
+    ),
+    "undeclared entries of any value on a model that forbids them": (
+        "definition", "sync_state", ("ToolResultEvidence", "additionalProperties"),
+        True,
+        _HANDLER_GATE,
+    ),
+    "a second type in a type list that the parameter refuses": (
+        "property", "delegate_inference", "timeout_s",
+        {"type": ["integer", "string"], "minimum": 5, "maximum": 420},
+        _TRANSPORT_GATE,
+    ),
 }
 
 
@@ -1143,9 +1236,13 @@ def test_the_invariant_fails_when_the_catalog_is_broken(direction):
     parameters = mcp_server.mcp._tool_manager.get_tool(tool_name).parameters
     if kind == "property":
         container, key = parameters["properties"], location
-    else:
+    elif kind == "nested":
         model_name, key = location
         container = parameters["$defs"][model_name]["properties"]
+    else:
+        # A keyword of the nested model itself, such as additionalProperties.
+        model_name, key = location
+        container = parameters["$defs"][model_name]
     original = copy.deepcopy(container[key])
 
     container[key] = replacement
