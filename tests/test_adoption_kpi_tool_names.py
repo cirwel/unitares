@@ -1,18 +1,21 @@
-"""Every tool-name filter must cover the LIVE tool name.
+"""Every tool filter must count the tool a call DISPATCHED to.
 
-`search_knowledge_graph` is a dead alias — `adoption_kpi.py`'s own note records
-0 rows in 30d and names `search_shared_memory` as the live one. That correction
-was applied to the KG-retrieval and return-rate queries and MISSED in the
-`cohort_engaged` predicate, which went on counting only the dead name. An agent
-whose only value action was a shared-memory search read as not engaged, so the
-metric silently UNDERSTATED engagement.
+`audit.tool_usage.tool_name` records the name the caller invoked. A workflow
+name reaches a different tool: `sync_state` is a `process_agent_update` call,
+`record_result` an `outcome_event` call, `search_shared_memory` /
+`store_finding` / `update_finding` are `knowledge` calls. The recorder writes
+`payload.canonical_tool` on every aliased row (#1424), so the dispatched tool
+is `coalesce(payload->>'canonical_tool', tool_name)`.
 
-WHY THIS FILE EXISTS. The #1856 sweep judged `adoption_kpi.py` clean and shipped
-a test that asserted only "no verdict token appears in the body". That test
-cannot see a wrong tool name, so it passed over this defect while reading as
-coverage — the same shape as the instruments the sweep was repairing. An
-independent reviewer found it. These tests check what the queries SELECT, not
-what the module refrains from saying.
+WHY THIS FILE EXISTS. Twice a name-keyed filter here undercounted without an
+error. First, `cohort_engaged` named `search_knowledge_graph` but not
+`search_shared_memory`, which an independent reviewer caught after the #1856
+sweep had judged the file clean. Second, the check-in, conversion and
+outcome-pipe filters named `process_agent_update` and `outcome_event` only.
+Over the 14d before 2026-09-13 they missed 1,696 of 8,050 check-ins, and the
+outcome pipe read ZERO rows because all 370 outcome calls arrived as
+`record_result`. These tests check what the queries SELECT, not what the module
+refrains from saying.
 """
 
 from __future__ import annotations
@@ -34,52 +37,101 @@ def _load():
     spec.loader.exec_module(mod)
     return mod
 
-LIVE_SEARCH_TOOL = "search_shared_memory"
-DEAD_SEARCH_TOOL = "search_knowledge_graph"
 
-# `tool_name IN (...)` / `tool_name = '...'` filters, comments stripped first.
-_NO_COMMENTS = "\n".join(
-    ln for ln in SOURCE.splitlines() if not ln.lstrip().startswith(("--", "#"))
+DISPATCHED = re.compile(
+    r"coalesce\((?:\w+\.)?payload->>'canonical_tool',\s*(?:\w+\.)?tool_name\)"
+    r"\s*(?:IN\s*\(([^)]*)\)|=\s*'([^']+)')",
+    re.S | re.I,
 )
-TOOL_FILTERS = re.findall(r"tool_name\s+IN\s*\(([^)]*)\)", _NO_COMMENTS, re.S)
+NAME_ONLY = re.compile(
+    r"(?<![\w>])(?:\w+\.)?tool_name\s*(?:IN\s*\(([^)]*)\)|=\s*'([^']+)')",
+    re.S,
+)
+
+# Queries keyed on the invoked name on purpose, and the continuity columns
+# that keep a changed figure's old name-only count beside it.
+INVOKED_NAME_QUERIES = {"surface_return_rate"}
+CONTINUITY_MARKER = "invoked_name"
 
 
-def _names(clause: str) -> set[str]:
-    return set(re.findall(r"'([^']+)'", clause))
+def _names(match: re.Match) -> set[str]:
+    listed, single = match.group(1), match.group(2)
+    return set(re.findall(r"'([^']+)'", listed)) if listed else {single}
 
 
-def test_there_are_tool_name_filters_to_check():
+def _queries() -> dict[str, str]:
+    return _load()._snapshot_queries()
+
+
+def _alias_names() -> set[str]:
+    from src.mcp_handlers.tool_stability import _TOOL_ALIASES
+
+    return set(_TOOL_ALIASES)
+
+
+def test_dispatched_filters_exist():
     """Guards the guard: a regex that matches nothing would pass vacuously."""
-    assert len(TOOL_FILTERS) >= 3
+    found = sum(len(DISPATCHED.findall(sql)) for sql in _queries().values())
+    assert found >= 5
 
 
-@pytest.mark.parametrize("clause", TOOL_FILTERS)
-def test_no_filter_names_the_dead_alias_without_the_live_one(clause):
-    """The defect, stated as the rule that would have caught it.
-
-    Naming the dead alias is fine — it keeps the metric comparable across the
-    rename. Naming it WITHOUT the live one is the undercount.
-    """
-    names = _names(clause)
-    if DEAD_SEARCH_TOOL in names:
-        assert LIVE_SEARCH_TOOL in names, (
-            f"filter names the dead alias but not the live tool: {sorted(names)}")
-
-
-def test_the_engagement_predicate_counts_the_live_search_tool():
-    """The specific query that was missed."""
-    engaged = [c for c in TOOL_FILTERS if "process_agent_update" in c and "outcome_event" in c]
-    assert engaged, "cohort_engaged predicate not found"
-    for clause in engaged:
-        assert LIVE_SEARCH_TOOL in _names(clause)
+def test_name_only_filters_are_the_listed_exceptions():
+    """Outside the invoked-name query, a bare tool_name filter must be a continuity column."""
+    offenders = []
+    for key, sql in _queries().items():
+        if key in INVOKED_NAME_QUERIES:
+            continue
+        for line in sql.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("--") or "canonical_tool" in stripped:
+                continue
+            if NAME_ONLY.search(stripped):
+                window = sql[sql.index(line):sql.index(line) + 400]
+                if CONTINUITY_MARKER not in window:
+                    offenders.append(f"{key}: {stripped}")
+    assert not offenders, "\n".join(offenders)
 
 
-def test_a_search_capable_filter_is_not_left_search_blind():
-    """Any filter that mentions searching at all must include the live name."""
-    for clause in TOOL_FILTERS:
-        names = _names(clause)
-        if any("search" in n or n == "knowledge" for n in names):
-            assert LIVE_SEARCH_TOOL in names, sorted(names)
+def test_a_dispatched_filter_names_no_alias():
+    """An alias never comes out of coalesce(canonical_tool, tool_name), so naming one is dead."""
+    aliases = _alias_names()
+    dead = []
+    for key, sql in _queries().items():
+        for match in DISPATCHED.finditer(sql):
+            dead += [f"{key}: {name}" for name in sorted(_names(match) & aliases)]
+    assert not dead, dead
+
+
+@pytest.mark.parametrize(
+    "query, tool",
+    [
+        ("checkin_concentration", "process_agent_update"),
+        ("onboard_conversion", "process_agent_update"),
+        ("onboard_conversion", "knowledge"),
+        ("onboard_conversion", "outcome_event"),
+        ("outcome_pipe_health", "outcome_event"),
+        ("agent_kg_retrieval", "knowledge"),
+        ("review_nudge_conversion", "dialectic"),
+    ],
+)
+def test_each_figure_counts_its_dispatched_tool(query, tool):
+    sql = _queries()[query]
+    assert any(tool in _names(m) for m in DISPATCHED.finditer(sql)), (query, tool)
+
+
+def test_the_workflow_names_reach_the_tools_these_filters_name():
+    """If an alias is retargeted, the dispatched filters above stop covering it."""
+    from src.mcp_handlers.tool_stability import _TOOL_ALIASES
+
+    expected = {
+        "sync_state": "process_agent_update",
+        "record_result": "outcome_event",
+        "search_shared_memory": "knowledge",
+        "store_finding": "knowledge",
+        "update_finding": "knowledge",
+        "request_review": "dialectic",
+    }
+    assert {name: _TOOL_ALIASES[name].new_name for name in expected} == expected
 
 
 # --- the scheduled cohort must come from the roster, not a literal ---------
