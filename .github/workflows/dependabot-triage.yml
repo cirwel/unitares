@@ -48,18 +48,9 @@ jobs:
           # token, under which private targets stay UNREACHABLE and the
           # coverage gate below keeps the run red — that red is honest.
           GH_TOKEN: ${{ secrets.DEPENDABOT_TRIAGE_TOKEN || secrets.GITHUB_TOKEN }}
-          HAS_FLEET_TOKEN: ${{ secrets.DEPENDABOT_TRIAGE_TOKEN }}
         run: |
           set +e
-          # The private-repo allowlist applies ONLY on the default token.
-          # With a fleet token provided, the private repo must be readable —
-          # an under-scoped or expired token must red the run, not ride the
-          # allowlist to green.
-          ALLOW=""
-          if [ -z "$HAS_FLEET_TOKEN" ]; then
-            ALLOW="--allow-unreachable CIRWEL/unitares-pi-plugin"
-          fi
-          python3 scripts/dev/dependabot_triage.py $ALLOW > triage.md
+          python3 scripts/dev/dependabot_triage.py > triage.md
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           cat triage.md >> "$GITHUB_STEP_SUMMARY"
           cat triage.md

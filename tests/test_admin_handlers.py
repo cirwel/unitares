@@ -591,24 +591,6 @@ class TestDescribeTool:
 
 class TestHealthCheck:
 
-    @pytest.fixture(autouse=True)
-    def mock_pi_connectivity(self):
-        """Mock Pi connectivity to prevent real network calls (times out in CI).
-
-        No-op when ``unitares_pi_plugin`` isn't installed — in that case
-        governance's runtime_queries skips the pi_connectivity check and
-        no network call happens anyway.
-        """
-        try:
-            import unitares_pi_plugin.handlers  # noqa: F401
-        except ImportError:
-            yield
-            return
-        with patch("unitares_pi_plugin.handlers.call_pi_tool",
-                   new_callable=AsyncMock,
-                   return_value={"error": "mocked - Pi unreachable"}):
-            yield
-
     @pytest.mark.asyncio
     async def test_health_check_calibration_error(self, mock_mcp_server, patch_context_agent_id):
         """Test that calibration errors are caught and reported."""
@@ -650,7 +632,6 @@ class TestHealthCheck:
     @pytest.mark.asyncio
     async def test_health_check_overall_status_logic(self, mock_mcp_server, patch_context_agent_id):
         """Test the three-tier status logic: healthy, moderate, critical."""
-        pytest.importorskip("unitares_pi_plugin")
         mock_audit = MagicMock()
         mock_audit.log_file = MagicMock()
         mock_audit.log_file.exists.return_value = True
@@ -669,9 +650,6 @@ class TestHealthCheck:
              patch("src.db.get_db", return_value=mock_db), \
              patch("src.embeddings.embeddings_available", return_value=True), \
              patch("src.knowledge_graph.backend_supports_semantic_search", return_value=True), \
-             patch("unitares_pi_plugin.handlers.call_pi_tool",
-                   new_callable=AsyncMock,
-                   return_value={"status": "healthy"}), \
              patch("src.calibration_db.calibration_health_check_async",
                    new_callable=AsyncMock,
                    return_value={"status": "healthy", "backend": "postgres"}), \
@@ -701,7 +679,6 @@ class TestHealthCheck:
         patch_context_agent_id,
     ):
         """Default health output should state when continuity is degraded-local."""
-        pytest.importorskip("unitares_pi_plugin")
         mock_audit = MagicMock()
         mock_audit.log_file = MagicMock()
         mock_audit.log_file.exists.return_value = True
@@ -720,9 +697,6 @@ class TestHealthCheck:
              patch("src.db.get_db", return_value=mock_db), \
              patch("src.embeddings.embeddings_available", return_value=True), \
              patch("src.knowledge_graph.backend_supports_semantic_search", return_value=True), \
-             patch("unitares_pi_plugin.handlers.call_pi_tool",
-                   new_callable=AsyncMock,
-                   return_value={"status": "healthy"}), \
              patch("src.calibration_db.calibration_health_check_async",
                    new_callable=AsyncMock,
                    return_value={"status": "healthy", "backend": "postgres"}), \
@@ -753,7 +727,6 @@ class TestHealthCheck:
         patch_context_agent_id,
     ):
         """Health output should explicitly report Redis-backed continuity when available."""
-        pytest.importorskip("unitares_pi_plugin")
         mock_audit = MagicMock()
         mock_audit.log_file = MagicMock()
         mock_audit.log_file.exists.return_value = True
@@ -785,9 +758,6 @@ class TestHealthCheck:
              patch("src.db.get_db", return_value=mock_db), \
              patch("src.embeddings.embeddings_available", return_value=True), \
              patch("src.knowledge_graph.backend_supports_semantic_search", return_value=True), \
-             patch("unitares_pi_plugin.handlers.call_pi_tool",
-                   new_callable=AsyncMock,
-                   return_value={"status": "healthy"}), \
              patch("src.calibration_db.calibration_health_check_async",
                    new_callable=AsyncMock,
                    return_value={"status": "healthy", "backend": "postgres"}), \
@@ -977,7 +947,6 @@ class TestIssue165HealthCapabilitySplit:
         """embedder_available=true + semantic_backend_available=false should
         be visible in the health response so callers don't infer that
         semantic KG search works when the active backend can't deliver."""
-        pytest.importorskip("unitares_pi_plugin")
         mock_audit = MagicMock()
         mock_audit.log_file = MagicMock()
         mock_audit.log_file.exists.return_value = True
@@ -997,9 +966,6 @@ class TestIssue165HealthCapabilitySplit:
              patch("src.embeddings.embeddings_available", return_value=True), \
              patch("src.knowledge_graph.backend_supports_semantic_search", return_value=False), \
              patch("src.knowledge_graph.selected_backend_name", return_value="postgres"), \
-             patch("unitares_pi_plugin.handlers.call_pi_tool",
-                   new_callable=AsyncMock,
-                   return_value={"status": "healthy"}), \
              patch("src.calibration_db.calibration_health_check_async",
                    new_callable=AsyncMock,
                    return_value={"status": "healthy", "backend": "postgres"}), \
@@ -1021,7 +987,6 @@ class TestIssue165HealthCapabilitySplit:
     async def test_both_up_reports_reachable(
         self, mock_mcp_server, patch_context_agent_id,
     ):
-        pytest.importorskip("unitares_pi_plugin")
         mock_audit = MagicMock()
         mock_audit.log_file = MagicMock()
         mock_audit.log_file.exists.return_value = True
@@ -1041,9 +1006,6 @@ class TestIssue165HealthCapabilitySplit:
              patch("src.embeddings.embeddings_available", return_value=True), \
              patch("src.knowledge_graph.backend_supports_semantic_search", return_value=True), \
              patch("src.knowledge_graph.selected_backend_name", return_value="age"), \
-             patch("unitares_pi_plugin.handlers.call_pi_tool",
-                   new_callable=AsyncMock,
-                   return_value={"status": "healthy"}), \
              patch("src.calibration_db.calibration_health_check_async",
                    new_callable=AsyncMock,
                    return_value={"status": "healthy", "backend": "postgres"}), \
@@ -2440,24 +2402,6 @@ class TestGetServerInfoPsutil:
 # ============================================================================
 
 class TestHealthCheckEdgeCases:
-
-    @pytest.fixture(autouse=True)
-    def mock_pi_connectivity(self):
-        """Mock Pi connectivity to prevent real network calls (times out in CI).
-
-        No-op when ``unitares_pi_plugin`` isn't installed — in that case
-        governance's runtime_queries skips the pi_connectivity check and
-        no network call happens anyway.
-        """
-        try:
-            import unitares_pi_plugin.handlers  # noqa: F401
-        except ImportError:
-            yield
-            return
-        with patch("unitares_pi_plugin.handlers.call_pi_tool",
-                   new_callable=AsyncMock,
-                   return_value={"error": "mocked - Pi unreachable"}):
-            yield
 
     @pytest.mark.asyncio
     async def test_health_check_telemetry_error(self, mock_mcp_server, patch_context_agent_id):

@@ -6,7 +6,7 @@ description: >
   pattern (window.X = { load }), the live-or-snapshot data seam, theme-aware
   charts via design tokens, and the app.html wiring (nav / pane / lazyLoad /
   RELOAD / retheme). A repo-specific reference — not general dashboard advice.
-last_verified: "2026-09-12"
+last_verified: "2026-09-13"
 freshness_days: 30
 source_files:
   - unitares/dashboard/redesign/app.html
@@ -33,7 +33,7 @@ source_digests:
   unitares/dashboard/redesign/app.html: "ac37237f646e7bde"
   unitares/dashboard/redesign/data.js: "ee5ad0763d8ca6ec"
   unitares/dashboard/redesign/ws.js: "27bf5088dc4db8a3"
-  unitares/dashboard/redesign/snapshot.js: "bfa64360fdcd4a90"
+  unitares/dashboard/redesign/snapshot.js: "f34b80e065a51b75"
   unitares/dashboard/redesign/tokens.css: "ffad3d92c1033924"
   unitares/dashboard/redesign/sections/eisv.js: "9c05bfc8a7e8a7d5"
   unitares/dashboard/redesign/sections/metrics.js: "9412b1a03348fbea"

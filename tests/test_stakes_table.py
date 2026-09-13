@@ -37,9 +37,8 @@ from src.mcp_handlers.decorators import (
 def _is_core_tool(td) -> bool:
     """Whether this repo declared ``td`` — the surface the table enumerates.
 
-    External-plugin tools (e.g. ``unitares_pi_plugin``'s ``pi`` router and
-    ``pi_restart_service``) register into the same ``_TOOL_DEFINITIONS`` when
-    that package is importable, but they are NOT enumerated in the core stakes
+    External-plugin tools register into the same ``_TOOL_DEFINITIONS`` when
+    their package is importable, but they are NOT enumerated in the core stakes
     table: they intentionally fall to the fail-closed "high" default until an
     operator classifies them when the gate is built. Provenance is read from
     the declaring module the decorator recorded (``ToolDefinition.source_module``),
@@ -217,8 +216,8 @@ def test_every_core_tool_is_known_to_the_table():
     deliberate classification, so the fail-closed default only ever catches a
     genuinely unclassified name — never a core surface.
 
-    External-plugin tools (e.g. the ``unitares_pi_plugin`` device tools, whose
-    declaring module is not under ``src.``) are intentionally excluded: they
+    External-plugin tools (whose declaring module is not under ``src.``) are
+    intentionally excluded: they
     fall to the fail-closed ``high`` default until an operator classifies them
     when the gate is built. Filtering by declaring module keeps this test
     deterministic regardless of which plugins another test in the same process
