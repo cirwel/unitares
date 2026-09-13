@@ -5,6 +5,56 @@ record. This page carries the qualifications, provenance, deployment numbers,
 and evaluation boundaries in full so the landing page can remain a concise
 explanation of what UNITARES offers.
 
+## Claim ledger
+
+Every claim below carries an evidence class. A class says what a result
+supports; it is not a positive or negative judgement about the project. A
+registered operational `FAIL` can close a scheduled line of work without
+scientifically refuting the underlying capability, and a claim earns `REFUTED`
+only when target, counterfactual, independent unit, power, decision rule, and
+read protocol all support it — see the
+[inference-status contract](ontology/falsification-inference-containment-2026-08-22.md).
+
+| Evidence class | What it licenses |
+|---|---|
+| **Operational observation** | A named mechanism ran in the stated deployment. Not benefit, correctness, or generality. |
+| **Exercised path** | A code path ran and left countable, replayable records. Execution, not benefit. |
+| **Non-detection** | The test did not separate the candidate from its comparison. Without power, that is not absence. |
+| **Structural limit** | A boundary that follows from the design itself. More data does not move it. |
+| **Untested** | No suitable measurement has been made. |
+
+Three further classes — **Benchmark pass / fail**, **Unidentified /
+inconclusive**, and **Mismatch / path bound** — are available for result types
+this table does not currently hold.
+
+### Current claim status
+
+| Question | Status | What the record supports |
+|---|---|---|
+| Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts below are rows, events, and configured residents. |
+| Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution. |
+| Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](ontology/eisv-proprioception-contract.md). |
+| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the cluster geometry needed to reconstruct read-specific power, so the corrected [power audit](operations/falsifiability-power-audit-2026-08-23.md) sets no standing AUC ceiling. |
+| Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
+| Review binds on the reviewed agent | **Exercised path** | A paused agent cannot resolve its own session over a standing reviewer objection: the submission is recorded, the session is not resolved, and it waits for facilitation (`src/dialectic_protocol.py`). 33 non-canary sessions carry such a submission after a reviewer's rejection. Since the 2026-07-02 reviewer-label split, 81 non-canary verdicts are recorded and 77 carry the reviewer's conditions; 42 dissent, one of which is a parse failure recorded as disagreement rather than a reviewer's judgement. |
+| Benefit from review and coordination | **Untested** | These records cover dialectic-mediated review only: review run through subagent councils or external models leaves no row unless filed through `reviewer_provenance`, a field no caller has yet populated, so that gap is in recording rather than occurrence. Benefit is separate and unmeasured — every change went through the reviewed path, leaving zero untreated cases to compare against. |
+| Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](SCOPE_AND_THREAT_MODEL.md). |
+
+The outcome read carries a protocol qualification. After the frozen cutoff,
+recurring automation exposed live discrimination output: the ablation watchdog
+completed 42 of 51 executions and the dogfood guard completed 43 of 52. Those
+jobs are paused. The fixed
+[2026-12-01 gate](proposals/eisv-outcome-grounding-stop-rule-v0.md) remains
+an operational decision rule, but it is not the only post-registration read and
+cannot be described as clean single-read blinding; its report must disclose the
+interim access and read-specific power.
+
+The validation the system does claim — reliability, faithfulness under
+intervention, and calibration — is scoped and partly built; the
+[roadmap](../ROADMAP.md) tracks it. The DOI identifies a
+[public preprint](https://doi.org/10.5281/zenodo.19647159), not peer-reviewed
+validation.
+
 ## Where the deployment numbers come from
 
 At the [2026-08-11 frozen snapshot](PRODUCTION_SNAPSHOT.md), the maintainer
