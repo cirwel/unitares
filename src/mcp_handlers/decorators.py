@@ -68,6 +68,12 @@ class ToolDefinition:
     # never inject unbounded cardinality (or free text) into
     # ``audit.tool_usage.payload``. Not a gate — nothing refuses on it.
     known_actions: Optional[frozenset] = None
+    # Whether the handler reads ``op`` as a synonym for ``action``. True only
+    # for ``action_router`` tools, whose generated router reads
+    # ``action or op``. A tool that declares ``known_actions`` by hand
+    # (self_recovery, cirs_protocol) routes on ``action`` alone, so the call
+    # resolver must not let ``op`` name an action there.
+    reads_op_as_action: bool = False
     # Import path of the module that DECLARED this tool, e.g.
     # ``src.mcp_handlers.consolidated`` or ``unitares_pi_plugin.handlers``.
     # Populated automatically: ``func.__module__`` for ``@mcp_tool``, and the
@@ -118,6 +124,7 @@ def mcp_tool(
     requires_verdict: str = "baseline",
     known_actions: Optional[set] = None,
     source_module: Optional[str] = None,
+    reads_op_as_action: bool = False,
 ):
     """
     Decorator for MCP tool handlers with auto-registration and timeout protection.
@@ -151,6 +158,8 @@ def mcp_tool(
         source_module: Overrides the recorded declaring module. Only
             ``action_router`` passes it, because the handler it decorates is
             defined in this file rather than in the caller's module.
+        reads_op_as_action: Whether the handler reads ``op`` as a synonym for
+            ``action``. Only ``action_router`` passes True.
     """
     def decorator(func: Callable) -> Callable:
         tool_name = name or func.__name__.replace('handle_', '')
@@ -312,6 +321,7 @@ def mcp_tool(
                 requires_verdict=requires_verdict,
                 known_actions=_known_actions,
                 source_module=source_module or getattr(func, "__module__", "") or "",
+                reads_op_as_action=reads_op_as_action,
             )
 
         return wrapper
@@ -417,7 +427,8 @@ def resolve_canonical_action_and_source(tool_name: str, arguments):
     Superset of ``_resolve_canonical_and_action``: same precedence, one extra
     return value. ``source`` is one of:
 
-      "explicit"       — the caller passed ``action`` (or its ``op`` synonym)
+      "explicit"       — the caller passed ``action`` (or, on an
+                         action_router, its ``op`` synonym)
       "alias_injected" — a friendly alias supplied it (request_review →
                          dialectic(action="request")); as in dispatch, it
                          wins over a caller's ``op`` and yields to a
@@ -458,15 +469,20 @@ def resolve_canonical_action_and_source(tool_name: str, arguments):
     # a caller's `op`, and a present-but-empty `action` suppresses injection.
     # Reading `action or op` first judged store_finding(op="search") as a
     # knowledge search while dispatch ran the store.
+    # `op` names an action only where the handler reads it: an action_router.
+    td = _TOOL_DEFINITIONS.get(canonical)
     has_action_key = isinstance(arguments, dict) and "action" in arguments
     if implied_action and not has_action_key:
         action = implied_action
         source = "alias_injected"
     else:
-        raw = (arguments.get("action") or arguments.get("op")) if isinstance(arguments, dict) else None
+        raw = None
+        if isinstance(arguments, dict):
+            raw = arguments.get("action")
+            if not raw and td is not None and td.reads_op_as_action:
+                raw = arguments.get("op")
         action = str(raw).lower() if raw else None
         source = "explicit" if action else None
-    td = _TOOL_DEFINITIONS.get(canonical)
     if action is None and td is not None:
         action = td.default_action
         source = "default" if action else None
@@ -638,6 +654,7 @@ def action_router(
         # DERIVED from the routing map, never hand-listed. A newly wired
         # action is auditable the moment it can route.
         known_actions=frozenset(actions.keys()),
+        reads_op_as_action=True,
         source_module=_declared_in,
     )
     async def router(arguments: Dict[str, Any]) -> Sequence[TextContent]:
