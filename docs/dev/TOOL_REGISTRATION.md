@@ -38,12 +38,12 @@ async def handle_my_new_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]
 ```
 
 **Step 3 (optional): Add to session injection list** if it needs `client_session_id` (legacy/external client compatibility — identity is primarily UUID-based via `agent_uuid`):
-In `src/tool_registration.py`, add to `TOOLS_NEEDING_SESSION_INJECTION`:
+In `src/tool_registration.py`, add the tool to the `TOOLS_NEEDING_SESSION_INJECTION` call set:
 ```python
-TOOLS_NEEDING_SESSION_INJECTION = {
-    "my_new_tool",  # Add here if tool needs session identity (legacy path)
-    ...
-}
+TOOLS_NEEDING_SESSION_INJECTION = call_set(
+    "registrar.session_injection",
+    tools={..., "my_new_tool"},  # a registered tool name, never an alias
+)
 ```
 
 **Step 4: Verify discovery.** No mode-set edit is needed. Every registered tool
@@ -301,6 +301,26 @@ Identity is primarily UUID-based (`agent_uuid` from `onboard()`). Session inject
 - Tool stores data associated with an agent (prefer UUID lookup when available)
 - Tool needs to know "who is calling" and cannot receive `agent_uuid` directly
 
+## Tool-Name Sets
+
+Behavior keyed on which tool a call reaches is declared with `call_set(...)`
+from `src/tool_call_sets.py`, not as a bare set of strings. During dispatch a
+call is named three ways: the invoked name (possibly an alias), the registered
+tool it resolves to, and the router action. A bare set holds one of those
+without saying which, and silently stops matching when a call arrives under
+another; the sets this replaced had drifted to pre-consolidation names that no
+call reached. A `CallSet` is declared in resolved terms only (registered tool
+names, and `(tool, action)` pairs for one router action) and answers
+`.matches(tool_name, arguments)` through the resolver the identity and stakes
+gates share, so an alias is a member exactly when its call is, before or after
+`resolve_alias`. It deliberately has no `in`.
+
+- `tests/test_tool_call_sets.py` fails on an alias, an unregistered tool, or an
+  unrouted action in any declared set.
+- `tests/test_no_bare_tool_name_sets.py` fails on a literal table of two or more
+  tool names in `src/` that is neither a `call_set(...)` nor listed in its
+  `EXCEPTIONS` with the name the table is keyed on and why.
+
 ---
 
 ## What a Parameter Description Costs
@@ -550,7 +570,8 @@ python3 scripts/diagnostics/hint_target_advertisement.py --mode lite
 | Add new standalone tool | `*Params` model + `tool_descriptions.py` + `ToolMeta` record in `tool_meta.py` + handler in `mcp_handlers/<subpackage>/` |
 | Add to consolidated tool | `consolidated.py` (add to `action_router` actions dict; check `pre_onboard_actions`) + `register=False` on handler |
 | Add dispatch middleware step | `middleware/` package (add step module or function + wire into `PRE_DISPATCH_STEPS`, `POST_VALIDATION_STEPS`, or `POST_EXECUTION_STEPS`) |
-| Tool needs session | + `TOOLS_NEEDING_SESSION_INJECTION` in `tool_registration.py` |
+| Tool needs session | + `TOOLS_NEEDING_SESSION_INJECTION` call set in `tool_registration.py` |
+| Key behavior on which tool a call reaches | `call_set(...)` from `tool_call_sets.py`, matched with `.matches(name, arguments)` |
 | Rename/deprecate tool | `tool_stability.py` (add alias) |
 | Categorize / tier / classify for list_tools and tool modes | `tool_meta.py` (the tool's record) |
 | Check what a profile costs, or what a hint promises | nothing to edit — run `scripts/diagnostics/tool_surface_cost.py` and `scripts/diagnostics/hint_target_advertisement.py` |

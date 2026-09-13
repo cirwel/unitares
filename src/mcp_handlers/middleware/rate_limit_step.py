@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 from src.logging_utils import get_logger
 from src.rate_limiter import get_rate_limiter
+from src.tool_call_sets import call_set
 from ..utils import error_response
 from ..error_helpers import rate_limit_error
 
@@ -14,19 +15,23 @@ logger = get_logger(__name__)
 # Persistent state for expensive-read-only loop detection
 _tool_call_history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=200))
 
-# Pure read tools exempt from the general limiter. These are standalone
-# registered tools (not aliases), so the names survive resolve_alias on
-# both the MCP and REST pipelines. Mixed read/write tools (knowledge,
+# Pure read tools exempt from the general limiter, matched on the call so an
+# alias is exempt exactly when its tool is. Mixed read/write tools (knowledge,
 # agent, observe, ...) are exempted per-call below via their declared
-# pre_onboard_actions instead of by name. (A never-consulted
-# rate_limit_exempt decorator flag was removed 2026-06-12 — this set and
-# the pre_onboard_actions classification are the only exemption sources.)
-_READ_ONLY_TOOLS = {
-    'health_check', 'get_server_info', 'list_tools', 'get_thresholds',
-    'search_knowledge_graph', 'get_governance_metrics', 'skills',
-    'detect_stuck_agents', 'list_inference_hosts',
-    'describe_inference_host',
-}
+# pre_onboard_actions instead of by name; admin(action='server_info') is
+# exempted that way, which is why get_server_info, an alias of it, is not
+# listed. (A never-consulted rate_limit_exempt decorator flag was removed
+# 2026-06-12 — this set and the pre_onboard_actions classification are the
+# only exemption sources.)
+_READ_ONLY_TOOLS = call_set(
+    "rate_limit.read_only",
+    tools={
+        "health_check", "list_tools", "get_thresholds",
+        "search_knowledge_graph", "get_governance_metrics", "skills",
+        "detect_stuck_agents", "list_inference_hosts",
+        "describe_inference_host",
+    },
+)
 
 # Expensive-read loop detection keys: (canonical name, resolved action).
 # 'agent'/'list' is what the legacy list_agents alias dispatches as.
@@ -138,7 +143,7 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
         _tool_call_history[loop_key].append(now)
 
     # General rate limiting (skip for read-only tools and pre-onboard reads)
-    if name in _READ_ONLY_TOOLS or _is_pre_onboard_read_call(name, arguments):
+    if _READ_ONLY_TOOLS.matches(name, arguments) or _is_pre_onboard_read_call(name, arguments):
         return name, arguments, ctx
 
     bucket = _rate_bucket_key(arguments, ctx)
