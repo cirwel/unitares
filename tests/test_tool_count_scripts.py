@@ -389,9 +389,53 @@ def test_doc_guard_update_writes_each_quantity(monkeypatch, tmp_path, capsys):
 
     assert code == 0
     assert doc.read_text() == (
-        "**42 tools**, 42 registered tools, 42 tools, 50 advertised tools\n"
+        "**42 tools**, 42 registered tools, 42 registered tools, 50 advertised tools\n"
     )
     assert "Updated 1 files" in capsys.readouterr().out
+
+
+_SUPPORTED_MARKER_UPDATE_CASES = (
+    ("49 advertised tools", "50 advertised tools"),
+    ("41 registered tools", "42 registered tools"),
+    ("**41 tools**", "**42 tools**"),
+    ("41 tools)", "42 tools)"),
+    ("count: 41)", "count: 42)"),
+    ("41+ tools", "42 registered tools"),
+)
+
+
+def test_doc_guard_update_cases_cover_every_supported_marker():
+    covered = {
+        marker.pattern.pattern
+        for source, _expected in _SUPPORTED_MARKER_UPDATE_CASES
+        for marker in update_docs_tool_count.PATTERNS
+        if marker.pattern.fullmatch(source)
+    }
+
+    assert covered == {marker.pattern.pattern for marker in update_docs_tool_count.PATTERNS}
+
+
+@pytest.mark.parametrize(("source", "expected"), _SUPPORTED_MARKER_UPDATE_CASES)
+def test_doc_guard_updates_markers_to_recognized_idempotent_forms(tmp_path, source, expected):
+    doc = tmp_path / "claim.md"
+    doc.write_text(source)
+    counts = {
+        update_docs_tool_count.REGISTRY: _REGISTRY_COUNT,
+        update_docs_tool_count.ADVERTISED: _ADVERTISED_COUNT,
+    }
+    source_marker = [
+        marker for marker in update_docs_tool_count.PATTERNS if marker.pattern.fullmatch(source)
+    ]
+    assert len(source_marker) == 1
+
+    assert update_docs_tool_count.update_file(doc, counts) is True
+    assert doc.read_text() == expected
+    assert [
+        (claim.quantity, claim.found) for claim in update_docs_tool_count.scan_file(doc)
+    ] == [(source_marker[0].quantity, counts[source_marker[0].quantity])]
+
+    assert update_docs_tool_count.update_file(doc, counts) is False
+    assert doc.read_text() == expected
 
 
 def test_doc_guard_refuses_zero_advertised_count_update(monkeypatch, tmp_path, capsys):
