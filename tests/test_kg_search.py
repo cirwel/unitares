@@ -860,6 +860,44 @@ class TestSearchKnowledgeGraph:
         assert data["success"] is True
 
     @pytest.mark.asyncio
+    async def test_search_with_agent_id_filter_param_reaches_backend_query(self, patch_common):
+        """The documented `agent_id_filter` param (schema: "Filter by author
+        agent UUID") must actually reach the backend filter, not just be
+        accepted and silently dropped (it used to have no effect at all)."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        mock_graph.query = AsyncMock(return_value=[
+            make_discovery(id="d-mine", agent_id="specific-agent"),
+        ])
+
+        result = await handle_search_knowledge_graph({
+            "agent_id_filter": "specific-agent",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert mock_graph.query.call_args.kwargs["agent_id"] == "specific-agent"
+
+    def test_parse_search_request_prefers_agent_id_filter_over_agent_id(self):
+        """agent_id_filter is the documented filter param; agent_id remains a
+        fallback for callers that predate it, but must not win when both are
+        supplied."""
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({
+            "agent_id_filter": "filter-agent",
+            "agent_id": "caller-agent",
+        })
+        assert request.agent_id == "filter-agent"
+
+    def test_parse_search_request_agent_id_fallback_when_no_filter(self):
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({"agent_id": "caller-agent"})
+        assert request.agent_id == "caller-agent"
+
+    @pytest.mark.asyncio
     async def test_exclude_agent_labels_drops_matching_rows(self, patch_common):
         """exclude_agent_labels filters post-query so the main Discoveries feed
         can hide janitorial residents (e.g. Vigil) without losing them from

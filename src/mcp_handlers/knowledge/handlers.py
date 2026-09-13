@@ -1750,7 +1750,10 @@ def _parse_knowledge_search_request(
         include_provenance=arguments.get("include_provenance", False),
         synthesize=arguments.get("synthesize", False),
         query_text=arguments.get("query") or arguments.get("text"),
-        agent_id=arguments.get("agent_id"),
+        # agent_id_filter is the documented filter param (schema: "Filter by
+        # author agent UUID"); agent_id is kept as a fallback since it has
+        # always been the field this filter actually ran on in practice.
+        agent_id=arguments.get("agent_id_filter") or arguments.get("agent_id"),
         search_mode_requested=search_mode,
         operator_forced=operator_forced,
         exclude_labels=exclude_labels,
@@ -2716,7 +2719,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
             # retrieval without splitting those measures the wrong population.
             "filter_tags": _audit_safe_tags(state.request.arguments.get("tags")),
             "writer_agent_ids": writers,
-            "filter_agent_id": state.request.arguments.get("agent_id"),
+            "filter_agent_id": state.request.agent_id,
         },
     )
     return response
