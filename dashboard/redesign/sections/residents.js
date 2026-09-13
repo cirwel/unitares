@@ -66,6 +66,12 @@
     ? `<div style="margin-top:var(--space-4);display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
          <span>E ${e.E.toFixed(2)}</span><span>I ${e.I.toFixed(2)}</span><span>S ${e.S.toFixed(2)}</span><span>V ${e.V.toFixed(2)}</span></div>` : "";
 
+  const policyColor = (verdict) => {
+    if (["pause", "reject", "high-risk"].includes(verdict)) return "var(--danger)";
+    if (["guide", "caution"].includes(verdict)) return "var(--warn)";
+    return "var(--muted)";
+  };
+
   // Recent KG writes — the one thing a quiet resident leaves behind. Vigil's
   // groundskeeper deltas and Chronicler's daily rollups ARE their visible
   // output, so a card that drops them reads as an idle resident.
@@ -82,7 +88,7 @@
   // carries, so no card is reduced to a name and a timestamp.
   const coreStats = (r) => statRow([
     stat("coherence", num(r.coherence)),
-    stat("verdict", r.verdict || "—", r.verdict ? "var(--ok)" : "var(--muted)"),
+    stat("policy", r.verdict || "—", policyColor(r.verdict)),
     stat("check-ins", count(r.updates)),
     stat("risk", num(r.risk), "var(--muted)"),
   ]);
@@ -139,7 +145,7 @@
     const e = (r.eisv && r.eisv.E != null) ? r.eisv : (v.eisv || {});
     const stats = [
       stat("coherence", num(coh)),
-      stat("verdict", verdict || "—", verdict ? "var(--ok)" : "var(--muted)"),
+      stat("policy", verdict || "—", policyColor(verdict)),
       stat("check-ins", count(r.updates)),
       stat("risk", num(r.risk), "var(--muted)"),
     ];
