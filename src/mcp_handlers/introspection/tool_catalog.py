@@ -118,6 +118,93 @@ TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# One presentation record per src/tool_meta.py category: how list_tools
+# labels a category. Which tools sit in a category is the roster's business
+# (tool_meta.TOOL_CATEGORIES, read through TOOL_RELATIONSHIPS); nothing here
+# may name a tool.
+#
+# Until 2026-09-12 the full list_tools view carried a hand-written
+# `categories` dict beside the derived `categories_summary`. It predated the
+# router consolidation and was never regenerated: of the 47 names it listed,
+# 30 were dispatch-only twins an MCP client cannot call (`list_agents`,
+# `store_knowledge_graph`, `get_server_info`, `submit_thesis`, ...) and it
+# omitted 33 of the 50 advertised names, every router and workflow alias among
+# them (F1 of docs/operations/tool-surface-audit-2026-09-12.md). The labels
+# are what was worth keeping; they live here so the names cannot come back.
+#
+# `priority` orders the categories for a reader (identity first); it is not a
+# tier and nothing in the runtime branches on it. `for_new_agents` marks the
+# two categories the getting-started block points a fresh caller at.
+CATEGORY_PRESENTATION: Dict[str, Dict[str, Any]] = {
+    "identity": {
+        "icon": "🚀", "name": "Identity & Onboarding", "priority": 1, "for_new_agents": True,
+        "description": "Get started - create your identity and set up your session",
+    },
+    "core": {
+        "icon": "💬", "name": "Core Governance", "priority": 2, "for_new_agents": True,
+        "description": "Main tools for sharing work and getting feedback",
+    },
+    "lifecycle": {
+        "icon": "👥", "name": "Agent Lifecycle", "priority": 3, "for_new_agents": False,
+        "description": "Manage agents, view metadata, and handle agent states",
+    },
+    "knowledge": {
+        "icon": "💡", "name": "Knowledge Graph", "priority": 4, "for_new_agents": False,
+        "description": "Store and search discoveries, insights, and notes",
+    },
+    "observability": {
+        "icon": "👁️", "name": "Observability", "priority": 5, "for_new_agents": False,
+        "description": "Monitor agents, compare patterns, and detect anomalies",
+    },
+    "inference": {
+        "icon": "🧠", "name": "Inference", "priority": 6, "for_new_agents": False,
+        "description": "Ask an advisory model, and list the hosts that serve one",
+    },
+    "export": {
+        "icon": "📊", "name": "Export & History", "priority": 7, "for_new_agents": False,
+        "description": "Export governance history and system data",
+    },
+    "config": {
+        "icon": "⚙️", "name": "Configuration", "priority": 8, "for_new_agents": False,
+        "description": "Configure thresholds and system settings",
+    },
+    "admin": {
+        "icon": "🔧", "name": "Admin & Diagnostics", "priority": 9, "for_new_agents": False,
+        "description": "System administration, health checks, and diagnostics",
+    },
+    "workspace": {
+        "icon": "📁", "name": "Workspace", "priority": 10, "for_new_agents": False,
+        "description": "Workspace health and file validation",
+    },
+    "dialectic": {
+        "icon": "💭", "name": "Dialectic", "priority": 11, "for_new_agents": False,
+        "description": "Structured peer review and recovery protocol",
+    },
+}
+
+
+def category_presentation(category: str) -> Dict[str, Any]:
+    """The presentation record for ``category``, or a generic one for a
+    category the table does not know (a plugin's, or a typo the roster test
+    will catch): unknown categories get a neutral label, never a crash."""
+    record = CATEGORY_PRESENTATION.get(category)
+    if record is not None:
+        return record
+    label = category.title() if isinstance(category, str) and category else "Other"
+    return {
+        "icon": "🔹", "name": label, "priority": len(CATEGORY_PRESENTATION) + 1,
+        "for_new_agents": False, "description": f"{label} tools",
+    }
+
+
+# Served by list_tools(lite=false) under `workflows`. Every entry is an
+# advertised name or a call shape against an advertised router: a step a
+# schema-driven client can take from tools/list alone. Six entries named a
+# dispatch-only twin (`list_agents`, `observe_agent`, `aggregate_metrics`,
+# `detect_anomalies`, `get_system_history`, `export_to_file`) until
+# 2026-09-12; the hint scanner seeds WORKFLOWS by name, and
+# tests/test_list_tools_names_the_wire.py holds the served payload to the
+# mount.
 WORKFLOWS: Dict[str, List[str]] = {
     "model_help": [
         "consult",
@@ -127,14 +214,14 @@ WORKFLOWS: Dict[str, List[str]] = {
         "onboard",  # 🚀 Portal tool - call FIRST
         "process_agent_update",  # Start working
         "identity",  # (Optional) Check/name yourself later
-        "list_agents"  # See who else is here
+        "agent(action='list')",  # See who else is here
     ],
     "monitoring": [
-        "list_agents",
+        "agent(action='list')",
         "get_governance_metrics",
-        "observe_agent",
-        "aggregate_metrics",
-        "detect_anomalies"
+        "observe(action='agent')",
+        "observe(action='aggregate')",
+        "observe(action='anomalies')",
     ],
     "governance_cycle": [
         "process_agent_update",
@@ -145,59 +232,29 @@ WORKFLOWS: Dict[str, List[str]] = {
         "self_recovery"  # Resume if state is safe
     ],
     "export_analysis": [
-        "get_system_history",
-        "export_to_file"
-    ]
+        "export(action='history')",
+        "export(action='file')",
+    ],
 }
 
 
+# Descriptions for DISPATCH-ONLY alias names: the pre-consolidation names
+# (list_agents, observe_agent, get_server_info, ...) that resolve through
+# src/mcp_handlers/tool_stability.py but are never on the wire, and which
+# describe_tool still answers for. Nothing else belongs here.
+#
+# An advertised name -- a registered tool or one of the eight workflow aliases
+# -- has exactly one description: src/tool_descriptions.py for a tool, the
+# ToolAlias.migration_note for a workflow alias. tools/list serves it,
+# list_tools serves its first line, and describe_tool opens with the same
+# line. Until 2026-09-12 this table also carried 28 advertised names and
+# outranked the wire in list_tools, so the rewrites of #2148, #2151 and #2158
+# reached MCP clients and never reached orientation (audit F2): `identity`
+# still read "Check current binding or set your display name" while the wire
+# warned that an argument-less call may mint and persist a new identity, and
+# the `dialectic` entry was a hand-maintained action list that had drifted
+# twice. test_override_table_carries_no_advertised_name pins the scope.
 TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
-    "start_session": "Start a UNITARES session; primary workflow name for onboarding",
-    "sync_state": (
-        "Check in after meaningful work; primary workflow name for state updates. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "check_working_state": (
-        "Read current EISV state without mutating history. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "search_shared_memory": "Search shared memory before writing duplicate discoveries",
-    "store_finding": (
-        "Store a structured finding in shared memory; intuitive alias for "
-        "knowledge(action='store')."
-    ),
-    "update_finding": (
-        "Update a stored finding's status or details; intuitive alias for "
-        "knowledge(action='update')."
-    ),
-    "record_result": (
-        "Record real task/tool/test outcome for calibration. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "request_review": (
-        "Request governed, on-record judgment with actual reviewer provenance; "
-        "use consult for advisory model evidence."
-    ),
-    "consult": (
-        "Ask for advisory model evidence without creating a governed review record."
-    ),
-    "onboard": "Register a fresh process identity. Prefer start_session(force_new=true); use parent_agent_id only for real handoffs.",
-    "identity": "🪞 Check current binding or set your display name. Not the normal start/resume path; use start_session first.",
-    "process_agent_update": (
-        "Raw implementation for sync_state(); updates agent governance state. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "get_governance_metrics": (
-        "📊 Get current state and metrics without updating. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "simulate_update": (
-        "🧪 Test decisions without persisting state. "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "get_thresholds": "⚙️ View current threshold configuration",
-    "set_thresholds": "⚙️ Set runtime threshold overrides",
-    "observe": f"👁️ Unified governance observability. {EISV_INLINE_SUMMARY}",
     "observe_agent": (
         "👁️ View agent state and patterns (collaborative awareness). "
         f"{EISV_INLINE_SUMMARY}"
@@ -219,39 +276,21 @@ TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
     "update_agent_metadata": "✏️ Update tags and notes",
     "archive_agent": "📦 Archive for long-term storage",
     "delete_agent": "🗑️ Delete agent (protected for pioneers)",
-    "archive_old_test_agents": "🧹 Preview stale agent archival candidates",
-    "mark_response_complete": "✅ Mark agent as having completed response, waiting for input",
-    "self_recovery": "▶️ Self-recovery: use action='quick' for safe states, action='review' for full recovery with reflection",
     "get_system_history": (
         f"📜 Export time-series history (inline). {EISV_INLINE_SUMMARY}"
-    ),
-    "outcome_event": (
-        f"Record an outcome with its EISV snapshot. {EISV_INLINE_SUMMARY}"
     ),
     "export_to_file": "💾 Export history to JSON/CSV file",
     "reset_monitor": "🔄 Reset agent state",
     "get_server_info": "ℹ️ Server version, PID, uptime, health",
     # Knowledge Graph (Fast, indexed, transparent)
     "store_knowledge_graph": "💡 Store knowledge discovery in graph (fast, non-blocking)",
-    "search_knowledge_graph": "🔎 Search knowledge graph by tags, type, agent (indexed queries)",
     "get_knowledge_graph": "📚 Get all knowledge for an agent (fast index lookup)",
     "list_knowledge_graph": "📊 List knowledge graph statistics (full transparency)",
     "update_discovery_status_graph": "🔄 Update discovery status or content/metadata on an existing discovery",
-    "leave_note": "📝 Leave a quick note in the knowledge graph (minimal friction)",
-    "list_tools": "📚 Discover all available tools. Your guide to what's possible",
-    "describe_tool": "📖 Get full details for a specific tool. Deep dive into any tool",
     "cleanup_stale_locks": "🧹 Clean up stale lock files from crashed/killed processes",
-    # Keep in sync with the action map in consolidated.py's `handle_dialectic`.
-    # This override takes PRIORITY over the tool_descriptions.json entry
-    # (tool_introspection.py resolves overrides first), so a stale action list
-    # here silently wins over a corrected one there. `vote` was advertised for
-    # months after the action was removed; `quick` was live and unlisted.
-    "dialectic": "📋 Dialectic operations: get, list, quick, request, thesis, antithesis, synthesis, reassign",
-    "health_check": "🏥 Quick health check - system status and component health",
     "check_calibration": "📏 Check calibration of confidence estimates",
     "update_calibration_ground_truth": "📝 Record external truth signal for calibration (optional)",
     "get_telemetry_metrics": "📊 Get comprehensive telemetry metrics",
-    "get_workspace_health": "🏥 Get comprehensive workspace health status",
     "get_tool_usage_stats": "📈 Get tool usage statistics to identify which tools are actually used vs unused",
 }
 
