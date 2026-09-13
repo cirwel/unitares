@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 # Only the newest revision of a branch is actionable. Cancel superseded runs so
-# an active PR does not consume sixteen database-backed runners for stale commits.
+# an active PR does not consume twelve database-backed runners for stale commits.
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -418,14 +418,14 @@ jobs:
         echo "one or more test shards failed or were cancelled" >&2
         exit 1
 
-    - name: Require every shard leg of this attempt to pass
+    - name: Require every shard leg of this run to pass
       # `needs.test_shard.result` is one value collapsed over twelve legs.
       # GitHub lets a single failed leg be re-run alone, and that re-run can
       # report the job as success while another leg's failure from the
       # earlier attempt still stands (github.com/orgs/community/discussions/26822).
       # elixir-tests.yml avoids the trap by not using a matrix; the shard
       # job is a matrix by design, so instead ask the Actions API for the
-      # latest attempt of every job in this run and require all twelve shard legs
+      # latest execution of every job in this run and require all twelve shard legs
       # present and successful. A missing leg is a failure, not a pass.
       # Partial re-runs: `filter=latest` returns each job's latest execution.
       # A leg re-run alone contributes its new conclusion; legs not re-run
@@ -439,17 +439,27 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        gh api --paginate \
-          "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?filter=latest&per_page=100" \
-          --jq '.jobs[] | select(.name | startswith("test shard (")) | "\(.conclusion)\t\(.name)"' \
-          > shard-legs.tsv
-        cat shard-legs.tsv
-        legs=$(wc -l < shard-legs.tsv | tr -d ' ')
-        bad=$(grep -vc '^success' shard-legs.tsv || true)
-        if [ "$legs" != "$EXPECTED_SHARD_LEGS" ] || [ "$bad" != "0" ]; then
-          echo "expected $EXPECTED_SHARD_LEGS successful shard legs in this attempt, saw $legs with $bad not successful" >&2
-          exit 1
-        fi
+        max_attempts=12
+        attempt=1
+        while true; do
+          gh api --paginate \
+            "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("test shard (")) | "\(.conclusion)\t\(.name)"' \
+            > shard-legs.tsv
+          cat shard-legs.tsv
+          legs=$(wc -l < shard-legs.tsv | tr -d ' ')
+          bad=$(grep -vc '^success' shard-legs.tsv || true)
+          if [ "$legs" = "$EXPECTED_SHARD_LEGS" ] && [ "$bad" = "0" ]; then
+            break
+          fi
+          if [ "$attempt" -ge "$max_attempts" ]; then
+            echo "expected $EXPECTED_SHARD_LEGS successful shard legs after $attempt API reads, saw $legs with $bad not successful" >&2
+            exit 1
+          fi
+          echo "Actions job list is not complete yet ($legs/$EXPECTED_SHARD_LEGS, $bad not successful); retrying" >&2
+          attempt=$((attempt + 1))
+          sleep 5
+        done
 
     - name: Checkout code
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
