@@ -604,7 +604,18 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     transport_key = consult.transport_key
     ctx._transport_key = transport_key
 
-    if consult.binding is not None:
+    # A cached binding with no agent_uuid attributes nothing. Taking the early
+    # return below with it would bind None and run the handler unbound, which
+    # under STRICT_IDENTITY_REQUIRED is the same fail-open the resolver-exception
+    # branch further down closes. Treat it as a cache miss so normal, strict-aware
+    # resolution decides; a successful resolution re-populates the cache entry.
+    if consult.binding is not None and not consult.binding.agent_uuid:
+        logger.warning(
+            "[STICKY] ignoring a cached transport binding with no agent_uuid "
+            "(source=%s); resolving normally",
+            consult.binding.source,
+        )
+    elif consult.binding is not None:
         cached = consult.binding
         logger.debug(
             "[STICKY] Cache hit for transport binding (source=%s)",
@@ -1124,6 +1135,71 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         logger.warning(f"[DISPATCH] Session TTL update failed: {e}")
     except Exception as e:
         logger.debug(f"Could not resolve session identity: {e}")
+        # A resolver that RAISES must not open the strict write gate that a
+        # resolver MISS closes. Before this branch existed, the typed refusal
+        # above ran only on a returned session_resolve_miss: an exception
+        # skipped it, the call continued with bound_agent_id=None, and the
+        # handler ran unbound — knowledge(note) then wrote under a derived
+        # anonymous writer id with STRICT_IDENTITY_REQUIRED on. Refuse instead,
+        # but only when nothing was bound before the exception (a bound call is
+        # attributed) and only for calls that are not allowed to run unbound.
+        # Non-strict deployments keep continuing unbound, unchanged.
+        if bound_agent_id is None and call_identity_requirement != "pre_onboard":
+            from src.mcp_handlers.identity_bootstrap import (
+                is_strict_identity_required,
+                strict_identity_refusal_payload,
+            )
+            if is_strict_identity_required():
+                logger.warning(
+                    "[DISPATCH] identity resolution raised %s for tool=%s under "
+                    "STRICT_IDENTITY_REQUIRED — refusing rather than running "
+                    "the handler unbound.",
+                    type(e).__name__,
+                    name,
+                )
+                from src.mcp_handlers.response_base import success_response
+                return success_response(strict_identity_refusal_payload(
+                    name,
+                    hint=(
+                        "The server could not resolve an identity for this call "
+                        "because identity resolution failed internally, and "
+                        "strict identity mode refuses rather than running the "
+                        "tool unattributed. The tool handler did not run."
+                    ),
+                    next_step=(
+                        "Retry the call. If it keeps failing, report it to the "
+                        "operator: this is a server-side failure, not a missing "
+                        "onboard."
+                    ),
+                    # The defaults steer a caller toward onboarding, which is the
+                    # right advice for a missing identity and the wrong one here.
+                    safe_options=(
+                        {
+                            "action": "retry",
+                            "call": "the same call, unchanged",
+                            "when": "Identity resolution failed on the server and may recover.",
+                        },
+                        {
+                            "action": "stay_read_only",
+                            "call": "get_governance_metrics() or list_tools()",
+                            "when": "Calls that need no identity keep working while resolution fails.",
+                        },
+                    ),
+                    do_not=(
+                        "Do not onboard a fresh identity only to get past this: the "
+                        "failure is on the server, and if you already have an "
+                        "identity a new one would split your work from it.",
+                    ),
+                    surface_context={
+                        "transport_surface": "mcp_dispatch",
+                        "lifecycle_automation": "not_confirmed",
+                        "identity_resolution": "failed",
+                        "note": (
+                            "Identity resolution raised on the server; the call "
+                            "was refused before binding and before the handler ran."
+                        ),
+                    },
+                ))
 
     # Set context for this request
     from ..context import set_session_context, update_context_agent_id
