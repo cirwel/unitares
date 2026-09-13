@@ -79,17 +79,32 @@ branch does not deploy the master-only public Pages workflow.
    created before that workflow existed, dispatch it manually with the existing
    release tag. Both paths publish only the version tag; neither changes
    `latest`. The former `publish_latest` input is removed.
-8. Verify the release page, both container architectures, digest, SBOM, and
-   attestation. After verification, promote the inspected manifest digest as
-   described below; then set `PUBLISHED_VERSION` to the verified version, run
-   `python scripts/ops/version_manager.py --update`, and deliver the public-pin
-   update in a follow-up PR. Until that merges, public installation examples
-   continue to name the previous verified release. Finish with clean closeout.
+8. Dispatch the **Promote Release** workflow with the tag
+   (`gh workflow run promote-release.yml -f tag=vX.Y.Z`). Its `verify` job
+   checks that the tag is the newest server tag and ahead of
+   `PUBLISHED_VERSION`, that the release page is published, that the index
+   carries `linux/amd64` and `linux/arm64` with an SPDX SBOM for each, and that
+   build provenance verifies against `publish-container.yml` at that tag; it
+   records the evidence in the run summary. Approving the `release-promotion`
+   environment runs `promote`, which moves `latest` to the verified digest as
+   described below. `pin` then pushes `publish/vX.Y.Z` with `PUBLISHED_VERSION`
+   and `version_manager.py --update` applied; open its pull request from the
+   command in the run summary and merge it. Until that merges, public
+   installation examples continue to name the previous verified release. Finish
+   with clean closeout.
 
 ## Promoting a verified container
 
 Publication creates the versioned artifact. Promotion moves `latest` to an
-already verified artifact without rebuilding it. Docker documents this
+already verified artifact without rebuilding it. The Promote Release workflow
+performs the steps below behind the `release-promotion` environment; they are
+written out so the operation can be audited, or run by hand if the workflow is
+unavailable.
+
+One-time setup: create the `release-promotion` environment with at least one
+required reviewer. The workflow refuses to run against an environment without
+one, because GitHub would otherwise create it unprotected on first use and any
+caller able to dispatch a workflow could move `latest`. Docker documents this
 single-index operation as a [carbon copy](https://docs.docker.com/reference/cli/docker/buildx/imagetools/create/). Until promotion succeeds,
 `latest` continues to resolve to the previous image (or remains absent).
 
@@ -107,8 +122,9 @@ Require the resulting `latest` digest to equal the recorded index digest before
 advancing installation pins. Do not rebuild to promote: that would create a new,
 unverified artifact. The publish workflow intentionally has no promotion switch;
 rerunning publication or backfilling a release cannot implicitly move `latest`.
-The verification and promotion remain explicit release operations, not an
-automated end-to-end verification claim.
+Verification is automated; promotion and publication remain explicit human
+acts, one environment approval and one pull request merge. Neither is an
+end-to-end claim that a deployment was upgraded.
 
 ## Correcting a published release
 
@@ -212,7 +228,12 @@ interactive release is over. Core's `SDK release sync` workflow runs Mondays at
 public compatibility claims; it opens one deduplicated `ci-finding` issue and
 closes it after convergence. Ten minutes later, `unitares-resident` runs its own
 `SDK drift` workflow and reports when its dependency range excludes the latest
-PyPI release. Neither check publishes or updates dependencies automatically.
+PyPI release. At 09:27 UTC, core's `Server release sync` workflow compares
+`VERSION`, the server tags and their ancestry on master, the release pages,
+`PUBLISHED_VERSION`, and the GHCR `latest` digest, and keeps one `ci-finding`
+issue open while they disagree: a tag awaiting promotion, a maintenance tag not
+yet forward-merged, or `latest` serving something other than the published
+version. None of these checks publishes or updates dependencies automatically.
 They preserve the human release and compatibility decisions while preventing a
 quietly untagged version or stale consumer pin from becoming invisible.
 
