@@ -131,7 +131,7 @@ describe("residents section reads live state", () => {
       },
       // Genuine zeroes are the mirror case of #1753: they must render as
       // numbers, never as "—" (an `|| fallback` would fabricate absence).
-      steward: { ...baseRow, coherence: 0, updates: 0, risk: 0 },
+      chronicler: { ...baseRow, coherence: 0, updates: 0, risk: 0 },
     });
     await dom.window.Residents.load();
     const doc = dom.window.document;
@@ -150,11 +150,11 @@ describe("residents section reads live state", () => {
     expect(statValue(lumen, "risk")).toBe("—");
     expect(lumen.textContent).not.toContain("NaN");
 
-    const steward = [...doc.querySelectorAll(".panel")]
-      .find((el) => el.querySelector("h2")?.textContent === "Steward");
-    expect(statValue(steward, "coherence")).toBe("0.00");
-    expect(statValue(steward, "check-ins")).toBe("0");
-    expect(statValue(steward, "risk")).toBe("0.00");
+    const chronicler = [...doc.querySelectorAll(".panel")]
+      .find((el) => el.querySelector("h2")?.textContent === "Chronicler");
+    expect(statValue(chronicler, "coherence")).toBe("0.00");
+    expect(statValue(chronicler, "check-ins")).toBe("0");
+    expect(statValue(chronicler, "risk")).toBe("0.00");
   });
 
   it("a missing residents row reads unknown (muted pip), never green", async () => {
@@ -183,18 +183,18 @@ describe("residents section reads live state", () => {
 
   it("renders policy output as neutral context and never paints a pause green", async () => {
     const dom = makeDom({
-      steward: { ...baseRow, verdict: "pause" },
+      chronicler: { ...baseRow, verdict: "pause" },
       lumen: { ...baseRow, verdict: "proceed" },
     });
     await dom.window.Residents.load();
     const panels = [...dom.window.document.querySelectorAll(".panel")];
-    const steward = panels.find((el) => el.querySelector("h2")?.textContent === "Steward");
+    const chronicler = panels.find((el) => el.querySelector("h2")?.textContent === "Chronicler");
     const lumen = panels.find((el) => el.querySelector("h2")?.textContent === "Lumen");
-    const stewardLabel = [...steward.querySelectorAll("div")]
+    const chroniclerLabel = [...chronicler.querySelectorAll("div")]
       .find((el) => el.textContent === "policy");
     const lumenLabel = [...lumen.querySelectorAll("div")]
       .find((el) => el.textContent === "policy");
-    expect(stewardLabel.previousElementSibling.getAttribute("style")).toContain("var(--danger)");
+    expect(chroniclerLabel.previousElementSibling.getAttribute("style")).toContain("var(--danger)");
     expect(lumenLabel.previousElementSibling.getAttribute("style")).toContain("var(--muted)");
   });
 });

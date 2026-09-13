@@ -31,9 +31,9 @@ source_files:
   - unitares/src/dashboard_auth.py
 source_digests:
   unitares/dashboard/redesign/app.html: "ac37237f646e7bde"
-  unitares/dashboard/redesign/data.js: "b1e11547e0d75b4e"
+  unitares/dashboard/redesign/data.js: "167553b85bf41e3a"
   unitares/dashboard/redesign/ws.js: "27bf5088dc4db8a3"
-  unitares/dashboard/redesign/snapshot.js: "bfa64360fdcd4a90"
+  unitares/dashboard/redesign/snapshot.js: "930e26df91abc78f"
   unitares/dashboard/redesign/tokens.css: "ffad3d92c1033924"
   unitares/dashboard/redesign/sections/eisv.js: "91e5cf78ab13eeef"
   unitares/dashboard/redesign/sections/metrics.js: "9412b1a03348fbea"
