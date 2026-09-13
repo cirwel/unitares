@@ -111,10 +111,23 @@ def _canonicalize_from_metadata(provided: str) -> Optional[str]:
     return None
 
 
+def caller_is_bound_as(agent_uuid: Optional[str]) -> bool:
+    """Whether identity resolution bound this request to ``agent_uuid``.
+
+    Reads the resolver-stamped context slot, not the generic one a transport can
+    seed (``context.get_context_resolved_agent_id``).
+    """
+    from ..context import get_context_resolved_agent_id
+
+    bound = get_context_resolved_agent_id()
+    return bool(bound) and bound == agent_uuid
+
+
 async def resolve_dialectic_agent_id(
     arguments: Dict[str, Any],
     *,
     enforce_session_ownership: bool = False,
+    require_bound_caller: bool = False,
 ) -> Tuple[Optional[str], Optional[Sequence[Any]]]:
     """
     Resolve caller identity for dialectic submit tools.
@@ -212,6 +225,24 @@ async def resolve_dialectic_agent_id(
                 "related_tools": ["identity", "dialectic"],
             },
         )]
+
+    if require_bound_caller:
+        # A call that can converge a session or release a pause needs the
+        # caller bound by identity resolution and submitting as that identity,
+        # whichever transport and pipeline delivered it.
+        if not caller_is_bound_as(resolved):
+            return None, [error_response(
+                "This dialectic action requires a bound identity submitting as itself.",
+                error_code="AUTH_REQUIRED",
+                error_category="auth_error",
+                recovery={
+                    "action": (
+                        "Bind the participant identity (start_session or identity), "
+                        "then submit without agent_id."
+                    ),
+                    "related_tools": ["start_session", "identity", "dialectic"],
+                },
+            )]
 
     if enforce_session_ownership:
         try:

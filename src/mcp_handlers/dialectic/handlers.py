@@ -54,10 +54,13 @@ async def _resolve_dialectic_agent_id(
     arguments: Dict[str, Any],
     *,
     enforce_session_ownership: bool = False,
+    require_bound_caller: bool = False,
 ) -> tuple:
     """Backward-compatible wrapper around shared dialectic auth policy."""
     return await resolve_dialectic_agent_id(
-        arguments, enforce_session_ownership=enforce_session_ownership
+        arguments,
+        enforce_session_ownership=enforce_session_ownership,
+        require_bound_caller=require_bound_caller,
     )
 from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
@@ -2929,9 +2932,12 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 recovery=missing_session_id_recovery(),
             )]
 
-        # Use same identity pipeline as onboard/identity (consistent UUID)
-        # Supports third-party synthesizer when agent_id is explicitly provided
-        agent_id, agent_error = await _resolve_dialectic_agent_id(arguments)
+        # Use same identity pipeline as onboard/identity (consistent UUID). A
+        # synthesis can converge the session and release a pause, so the caller
+        # must be bound by identity resolution and submitting as itself.
+        agent_id, agent_error = await _resolve_dialectic_agent_id(
+            arguments, require_bound_caller=True,
+        )
         if agent_error:
             return agent_error
 
@@ -2955,14 +2961,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         recovery=session_not_found_recovery(),
                     )]
     
-            # Participant-set eligibility gate. The sibling handlers
-            # (submit_thesis / submit_antithesis) pass enforce_session_ownership=True
-            # to _resolve_dialectic_agent_id; submit_synthesis intentionally relaxes
-            # that check to support the "third-party synthesizer" pattern. Without
-            # a compensating allow-list, any registered agent could drive a
-            # synthesis to convergence and trigger resolution execution — a real
-            # privilege escalation surface. The allow-list is: the paused agent
-            # and the assigned reviewer.
+            # Participant-set eligibility gate. The caller is already bound and
+            # submitting as itself (require_bound_caller above); this restricts
+            # which bound identities may synthesize at all: the paused agent and
+            # the assigned reviewer. Without it, any registered agent could drive
+            # a synthesis to convergence and trigger resolution execution.
             eligible = set()
             if getattr(session, "paused_agent_id", None):
                 eligible.add(session.paused_agent_id)
