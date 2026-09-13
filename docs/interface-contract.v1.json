@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "transports": [
@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "678cc61653a575b1649c5e92795091b03b1088b9782e7c05192008796dd63e88",
+  "surface_sha256": "7ec5c1929cac6126a2da4b25f335be5d121234fb608dfa7e61753efac5c54b1d",
   "capabilities": [
     {
       "name": "start_session",
@@ -432,7 +432,7 @@
       "name": "cirs_protocol",
       "implementation": "cirs_protocol",
       "kind": "canonical_tool",
-      "input_schema_sha256": "cd406d038fbf6f1bb2e1c0f03ac1f8b457f396375270f35791dcdf2780c8ff01",
+      "input_schema_sha256": "8ecdb8c1848d7bc906f38b5759f9cde5bb8911da3e6abb98b27ab6fa022525ec",
       "transport_names": {
         "mcp_streamable_http": "cirs_protocol",
         "rest_v1_tools": "cirs_protocol",

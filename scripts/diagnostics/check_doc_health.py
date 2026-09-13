@@ -917,6 +917,19 @@ _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
         "governance_action takes initiate/respond/query/status "
         "(see the CIRS per-protocol actions row in CANONICAL_SOURCES.md)",
     ),
+    # docs/guides/CIRS_PROTOCOL.md taught boundary_contract set with these two
+    # keys, which no handler reads, so a call written from it stored the
+    # defaults (trust partial, policy notify) whatever it asked for. Scoped to
+    # the assignment form for the same reason as the entry above: the corrected
+    # guide names both keys in backticks to say they were wrong, and a bare-name
+    # pattern would fire on that sentence.
+    (
+        re.compile(r"\b(?:trust_level|void_policy)\s*=\s*[\"']?\w"),
+        "corrected: boundary_contract set takes trust_default and "
+        "void_response_policy; trust_level and void_policy are read by no "
+        "handler, so the call stores partial/notify "
+        "(see the CIRS boundary_contract parameters row in CANONICAL_SOURCES.md)",
+    ),
     (
         re.compile(r"working circuit breaker", re.IGNORECASE),
         "overclaim: the cited event records a verdict whose delivery was "
