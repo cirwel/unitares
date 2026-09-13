@@ -961,6 +961,17 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     strength. For current-caller response blocks, mirror the same
     ``agent_signature`` source used by ``success_response`` so top-level
     ``agent.identity_assurance`` cannot disagree with the final envelope.
+
+    ``identity_context`` is deliberately NOT mirrored here. It is the largest
+    block in the envelope (~970 bytes, ~16% of a measured 6.1KB store response)
+    and it describes the caller rather than this KG row, so copying it made
+    every write serialize the same ontology twice — once under ``agent`` and
+    again under ``agent_signature``. One attribution envelope is attribution;
+    the second is repetition. The canonical copy stays on ``agent_signature``,
+    the cross-tool contract ``success_response`` attaches and
+    ``tool_usage_recorder`` reads. What the consistency requirement above
+    actually needs is ``uuid`` and ``identity_assurance`` agreeing between the
+    two blocks, and both still do.
     """
     raw_display = arguments.get("_agent_display")
     if isinstance(raw_display, dict):
@@ -985,11 +996,14 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
         "structured_agent_id",
         "display_name",
         "label_source",
-        "identity_context",
         "identity_assurance",
     ):
         if key in signature:
             agent_display[key] = signature[key]
+
+    # Drop any context inherited from a caller-supplied ``_agent_display`` so
+    # the block is identity_context-free regardless of how it was seeded.
+    agent_display.pop("identity_context", None)
 
     return agent_display
 

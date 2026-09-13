@@ -1446,6 +1446,78 @@ class TestResolveAgentDisplayAdditional:
 
 
 # ============================================================================
+# _agent_display_for_response helper
+# ============================================================================
+
+class TestAgentDisplayForResponse:
+    """The ``agent`` block mirrors the signature's proof, not its ontology.
+
+    ``identity_context`` is the largest block in a write envelope and describes
+    the caller rather than the KG row, so serializing it under both ``agent``
+    and ``agent_signature`` repeated ~970 bytes in every store response. The
+    canonical copy belongs to ``agent_signature``.
+    """
+
+    def _signature(self):
+        return {
+            "uuid": "uuid-abc",
+            "agent_id": "Claude_Test",
+            "structured_agent_id": "Claude_Test",
+            "display_name": "claude_test",
+            "label_source": "claimed",
+            "identity_context": {"schema": "s22.identity_response.v1"},
+            "identity_assurance": {"tier": "strong", "caller_proven": True},
+        }
+
+    def test_mirrors_proof_without_duplicating_context(self, patch_common):
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value=self._signature()
+        ):
+            result = kg._agent_display_for_response("Claude_Test", {})
+
+        # The consistency contract: uuid and proof strength agree with the
+        # final envelope, so top-level `agent` cannot contradict it.
+        assert result["uuid"] == "uuid-abc"
+        assert result["identity_assurance"]["tier"] == "strong"
+        assert result["identity_assurance"]["caller_proven"] is True
+        # The ontology block is not repeated here.
+        assert "identity_context" not in result
+
+    def test_seeded_context_is_stripped(self, patch_common):
+        """A caller-supplied _agent_display cannot smuggle the block back in."""
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        seeded = {"_agent_display": {"identity_context": {"schema": "stale"}}}
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value=self._signature()
+        ):
+            result = kg._agent_display_for_response("Claude_Test", seeded)
+
+        assert "identity_context" not in result
+
+    def test_unproven_signature_leaves_display_untouched(self, patch_common):
+        """No uuid means no proof to mirror; the metadata-only block stands."""
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value={"uuid": None}
+        ):
+            result = kg._agent_display_for_response("Claude_Test", {})
+
+        assert "identity_context" not in result
+        assert "identity_assurance" not in result
+
+
+def kg_auth_module():
+    """The agent_auth module object `_agent_display_for_response` imports."""
+    from src.mcp_handlers.support import agent_auth
+
+    return agent_auth
+
+
+# ============================================================================
 # handle_store_knowledge_graph - additional coverage
 # ============================================================================
 
