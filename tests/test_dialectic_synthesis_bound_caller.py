@@ -27,6 +27,7 @@ def _server():
     meta.public_agent_id = None
     meta.structured_id = None
     meta.label = None
+    meta.status = "active"
     server.agent_metadata = {PAUSED: meta, REVIEWER: meta}
     return server
 
@@ -122,3 +123,69 @@ async def test_thesis_and_antithesis_require_the_same_bound_caller(action):
     assert payload["success"] is False
     assert payload.get("error_code") == "AUTH_REQUIRED"
     load.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", [{}, {"agent_id": None}, {"agent_id": ""}])
+async def test_omitted_agent_id_still_requires_a_resolver_stamped_caller(arguments):
+    from src.mcp_handlers.context import reset_session_context, set_session_context
+    from src.mcp_handlers.dialectic.auth import (
+        caller_is_bound_as,
+        resolve_dialectic_agent_id,
+    )
+
+    token = set_session_context(agent_id=REVIEWER)
+    try:
+        with patch("src.mcp_handlers.shared.get_mcp_server", return_value=_server()):
+            # Registration can find this identity, but the generic transport
+            # context is not proof that identity resolution bound the caller.
+            assert caller_is_bound_as(REVIEWER) is False
+            agent_id, error = await resolve_dialectic_agent_id(
+                dict(arguments), require_bound_caller=True,
+            )
+    finally:
+        reset_session_context(token)
+
+    assert agent_id is None
+    assert json.loads(error[0].text)["error_code"] == "AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["thesis", "antithesis", "synthesis"])
+@pytest.mark.parametrize("bound", [False, True])
+async def test_omitted_agent_id_checks_binding_before_loading_a_session(action, bound):
+    from src.mcp_handlers.context import (
+        reset_session_context,
+        set_session_context,
+        update_context_agent_id,
+    )
+    from src.mcp_handlers.dialectic import handlers
+
+    handler = getattr(handlers, f"handle_submit_{action}")
+    caller = PAUSED if action == "thesis" else REVIEWER
+    load = AsyncMock(return_value=None)
+    token = set_session_context(agent_id=caller)
+    try:
+        if bound:
+            update_context_agent_id(caller)
+        with patch("src.mcp_handlers.shared.get_mcp_server", return_value=_server()), \
+             patch(f"{DIALECTIC}.load_session", load):
+            result = await handler({
+                "session_id": "sess-bound",
+                "agrees": True,
+                "root_cause": "rc",
+                "proposed_conditions": ["c"],
+                "reasoning": "r",
+                "concerns": ["x"],
+            })
+    finally:
+        reset_session_context(token)
+
+    payload = json.loads(result[0].text)
+    if bound:
+        assert payload.get("error_code") != "AUTH_REQUIRED"
+        load.assert_awaited_once_with("sess-bound")
+    else:
+        assert payload["success"] is False
+        assert payload.get("error_code") == "AUTH_REQUIRED"
+        load.assert_not_awaited()
