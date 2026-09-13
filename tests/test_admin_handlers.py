@@ -3149,3 +3149,73 @@ class TestContinuityHealthAdditional:
             data = parse_result(result)
             assert data["success"] is True
             assert any("provenance" in r.lower() for r in data["recommendations"])
+
+
+class TestServerInfoReportsWhatTheServerActuallyUses:
+    """server_info must report the marker the server writes and say which
+    tool population its count is.
+
+    Both fields used to answer a different question than the reader's.
+    `pid_file` was recomputed locally with a path walk that landed on `src/`
+    instead of the repo root AND ignored UNITARES_SERVER_PID_FILE, so
+    `pid_file_exists` was permanently False and could not distinguish "no
+    server running" from "looking in the wrong place". `tool_count` is the
+    dispatch-table size, while the audit surface counts advertised wire
+    names -- a different, larger number -- with nothing saying so.
+    """
+
+    def _payload(self, monkeypatch):
+        monkeypatch.setattr(
+            "sys.argv", ["python", "src/mcp_server.py", "--port", "8767"]
+        )
+        from src.mcp_handlers.admin.handlers import build_server_info_payload
+
+        return build_server_info_payload()
+
+    def test_pid_file_is_the_one_process_management_writes(self, monkeypatch):
+        """Cross-module agreement, not a literal path. The reporter and the
+        owner must name the same file or the field means nothing."""
+        from src.process_management import SERVER_PID_FILE
+
+        assert self._payload(monkeypatch)["pid_file"] == str(SERVER_PID_FILE)
+
+    def test_stdio_marker_sits_beside_the_http_one(self, monkeypatch):
+        monkeypatch.setattr("sys.argv", ["python", "src/mcp_server_std.py"])
+        from src.mcp_handlers.admin.handlers import build_server_info_payload
+        from src.process_management import SERVER_PID_FILE
+
+        payload = build_server_info_payload()
+        assert payload["transport"] == "STDIO"
+        # Same directory as the HTTP marker, including under an override.
+        assert (
+            Path(payload["pid_file"]).parent == Path(SERVER_PID_FILE).parent
+        )
+
+    def test_legacy_tool_count_is_the_dispatch_count(self, monkeypatch):
+        payload = self._payload(monkeypatch)
+        assert payload["tool_count"] == payload["tool_counts"]["dispatch_handlers"]
+
+    def test_advertised_is_never_smaller_than_dispatch(self, monkeypatch):
+        counts = self._payload(monkeypatch)["tool_counts"]
+        assert counts["advertised_wire_names"] >= counts["dispatch_handlers"]
+        assert (
+            counts["advertised_wire_names"]
+            == counts["dispatch_handlers"] + counts["workflow_aliases"]
+        )
+
+    def test_counts_see_a_tool_registered_after_import(self, monkeypatch):
+        """The property tool_meta.WIRE_ORDER fails.
+
+        An entry-point plugin registers its handler at boot, after WIRE_ORDER
+        is already built from static TOOL_META. Counting from WIRE_ORDER would
+        miss it; counting from TOOL_HANDLERS sees it. This is the difference
+        between a checkout's numbers and a deployment's.
+        """
+        import src.mcp_handlers as handlers_pkg
+
+        before = self._payload(monkeypatch)["tool_counts"]
+        monkeypatch.setitem(handlers_pkg.TOOL_HANDLERS, "pretend_plugin_tool", lambda *_: None)
+        after = self._payload(monkeypatch)["tool_counts"]
+
+        assert after["dispatch_handlers"] == before["dispatch_handlers"] + 1
+        assert after["advertised_wire_names"] == before["advertised_wire_names"] + 1

@@ -20,6 +20,12 @@
   ],
   "server_version": "0.42.0",
   "tool_count": 100,
+  "tool_counts": {
+    "advertised_wire_names": 108,
+    "dispatch_handlers": 100,
+    "note": "tool_count is dispatch_handlers, kept for older clients. advertised_wire_names is what tools/list emits.",
+    "workflow_aliases": 8
+  },
   "total_server_processes": 1,
   "transport": "HTTP",
   "version": "0.42.0"

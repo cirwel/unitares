@@ -115,13 +115,52 @@ def build_server_info_payload() -> Dict[str, Any]:
     current_uptime_minutes = int(current_uptime / 60)
     current_uptime_hours = int(current_uptime_minutes / 60)
 
-    # Get tool count (tool mode filtering removed - all tools always available)
+    # Three different populations get called "the tool count", so name which
+    # one this is. `tool_count` stays the dispatch-table size for older
+    # clients; the qualified block beside it says what that number is and
+    # what the other two are.
+    #
+    # Derived from TOOL_HANDLERS rather than tool_meta.WIRE_ORDER on purpose.
+    # WIRE_ORDER is a module-level tuple built from static TOOL_META
+    # (src/tool_meta.py:294), so it cannot see a tool an entry-point plugin
+    # registered at boot (src/services/mcp_server_bootstrap.py:161 ->
+    # src/plugin_loader.py, whose register() runs @mcp_tool decorators into
+    # TOOL_HANDLERS). A deployment with a plugin loaded advertises more names
+    # than WIRE_ORDER lists, so counting from WIRE_ORDER would under-report
+    # exactly the deployments that differ from the checkout.
     from src.mcp_handlers import TOOL_HANDLERS
-    tool_count = len(TOOL_HANDLERS)
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
 
-    # PID file differs by transport.
-    project_root = Path(__file__).resolve().parent.parent.parent
-    pid_file = (project_root / "data" / ".mcp_server.pid") if is_http else (project_root / "data" / ".mcp_server_std.pid")
+    _dispatch = set(TOOL_HANDLERS)
+    _aliases = set(AGENT_WORKFLOW_ALIASES)
+    tool_count = len(_dispatch)
+    tool_counts = {
+        "dispatch_handlers": len(_dispatch),
+        "workflow_aliases": len(_aliases - _dispatch),
+        "advertised_wire_names": len(_dispatch | _aliases),
+        "note": (
+            "tool_count is dispatch_handlers, kept for older clients. "
+            "advertised_wire_names is what tools/list emits."
+        ),
+    }
+
+    # The PID marker belongs to src/process_management.py; ask it rather than
+    # recomputing the path here. Both halves of the old computation were
+    # wrong, and in a way that made `pid_file_exists` permanently False:
+    # `Path(__file__).resolve().parent.parent.parent` from this module lands
+    # on `src/`, not the repo root, so the HTTP branch reported
+    # `<repo>/src/data/.mcp_server.pid` while process_management writes
+    # `<repo>/data/.mcp_server.pid`; and the local computation ignored the
+    # UNITARES_SERVER_PID_FILE override that process_management honours, so an
+    # operator who relocated the marker was misreported twice over.
+    #
+    # The stdio filename has never been written by anything -- `.mcp_server_std.pid`
+    # occurs in this repo only on the line this replaces -- so that branch
+    # reports where a stdio marker WOULD live, beside the HTTP one, and its
+    # `pid_file_exists` is expected to stay False until something writes it.
+    from src.process_management import SERVER_PID_FILE
+
+    pid_file = SERVER_PID_FILE if is_http else SERVER_PID_FILE.with_name(".mcp_server_std.pid")
 
     return {
         "transport": transport,
@@ -129,6 +168,7 @@ def build_server_info_payload() -> Dict[str, Any]:
         "version": server_version,  # Alias for consistency
         "build_date": server_build_date,
         "tool_count": tool_count,
+        "tool_counts": tool_counts,
         "current_pid": current_pid,
         "current_uptime_seconds": int(current_uptime),
         "current_uptime_formatted": f"{current_uptime_hours}h {current_uptime_minutes % 60}m",
