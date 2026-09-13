@@ -123,8 +123,13 @@ The two identifiers serve different jobs:
   parameters its selectable protocol handlers read, which the MCP argument
   model had dropped before dispatch, and `limit` advertises the handlers'
   default of 50 in place of null, which the middleware had delivered to
-  `int()` and so failed every query action through dispatch. Additive: again
-  only that digest moves).
+  `int()` and so failed every query action through dispatch. No advertised
+  parameter is removed or renamed; the one retyped, `limit`, stops admitting a
+  null that never worked; and again only that digest moves.
+  REST and in-process callers that sent these previously undeclared keys with
+  the wrong type or an explicit null now get a validation error, and string
+  booleans are parsed rather than read as truthy, as 1.2.0 did for
+  `observe`'s `include_calibration`).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
