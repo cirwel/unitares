@@ -5,322 +5,107 @@
   <img src="docs/assets/unitares-lockup.svg" width="420" alt="UNITARES">
 </picture>
 
-### Runtime accountability for long-running AI agent work.
+### Accountability infrastructure for long-running AI agents.
 
-One attributed record across restarts, context loss, handoffs, and overlapping processes.
-
-</div>
-
-AI agent work often outlives a single process. Restarts, handoffs, and
-overlapping agents can scatter claims and evidence, reviews, and outcomes across
-runtimes even when ordinary logs capture what each process printed.
-
-UNITARES is a self-hosted MCP and HTTP server that gives one operator an
-attributed record across those boundaries. Agents keep their existing models,
-tools, and execution loops. Each process receives its own identity; explicit
-lineage records where inherited work came from without pretending separate
-processes are the same agent. Later processes can recover selected durable
-findings, evidence, disagreement, and outcomes through the server's MCP and
-HTTP interfaces, directly or through the public SDK, and inspect them in the
-dashboard.
-
-It is built for one operator running several long-lived agents on infrastructure
-they control. UNITARES is not an agent framework, sandbox, correctness oracle,
-or proof that an agent's reports are true. Its behavioral-state estimates are
-published heuristics under evaluation.
-
-**Status:** v2.22.0. The maintainer deployment has run continuously since
-November 2025.
-
-<div align="center">
+Give every process an identity. Keep claims, evidence, reviews, and outcomes
+connected. Recover work across restarts, context loss, and handoffs.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-5C544A?style=flat-square&labelColor=1A1612)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-5C544A?style=flat-square&labelColor=1A1612)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19647159-7A1F1F?style=flat-square&labelColor=1A1612)](https://doi.org/10.5281/zenodo.19647159)
 
-[Quickstart](#quickstart) · [Evidence and limits](#evidence-and-limits) · [Docs](docs/README.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md)
-
 </div>
 
-## Quickstart
+UNITARES is self-hosted accountability infrastructure for operators running
+multiple AI agents. Its federation kernel connects independent runtimes to one
+operator-controlled server over MCP or HTTP, where they share a durable record
+while keeping their own models, tools, and runtimes.
 
-The latest verified public installation tag is `v2.21.0`. You need Git and
-Docker with Compose v2; running the local demos also needs Python 3.12+ and
-`make`.
+The goal is simple: agent work should remain attributable, reviewable, and
+recoverable even when the process that started it is gone.
 
-This release-tagged Docker Compose flow is the supported install path for a
-local, single-operator deployment. After cloning, the one-command install/start
-is `docker compose up -d --wait`.
+## What UNITARES gives you
+
+- **Identity and lineage** — know which process acted and where inherited work
+  came from.
+- **Claims and evidence** — retain important findings, corrections, and their
+  provenance outside any one context window.
+- **Governed review** — preserve disagreement, conditions, and resolution as
+  part of the work record.
+- **Outcome grounding** — connect predictions and check-ins to what later
+  happened.
+- **Runtime policy** — return an action, reason, and next step at meaningful
+  checkpoints in an agent's loop.
+- **Reconstruction** — give a successor the records needed to understand and
+  continue earlier work.
+
+Together, these form an operator-owned accountability layer across coding
+agents, research agents, residents, and custom runtimes.
+
+## Install
+
+With Git, curl, and Docker Compose installed, one command starts the latest
+verified release of the local operator stack:
 
 ```bash
-git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
-cd unitares
-docker compose up -d --wait   # PostgreSQL/AGE/pgvector, Redis, lease plane, server on loopback
+v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
 ```
 
-MCP clients connect to `http://localhost:8767/mcp/`; the dashboard is at
-`http://localhost:8767/dashboard`. Run `make demo` to exercise a real onboard
-and six-check-in loop against that server. It prints the new process identity,
-each policy response, and the final dashboard URL. The demo writes controlled
-identity and state rows to the deployment's named Docker volumes; it is an
-install check, not a read-only simulation.
+Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
+`http://localhost:8767/dashboard`.
 
-`docker compose up -d --wait` exits nonzero if the images cannot build, a host
-port is occupied, or a service does not become healthy. Inspect the result with
-`docker compose ps` and `docker compose logs <service>`. If ports 5432, 6379,
-8767, or 8788 are already in use, set the corresponding host-port overrides
-documented in `.env.example` before starting the stack.
+This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
+coordination plane.
 
-The verified installation tag can trail the source version shown in
-**Status**; newer releases are on the [releases page](https://github.com/cirwel/unitares/releases).
+## How it works
 
-<details>
-<summary>Run the first governed loop from a client</summary>
+An agent joins the operator's UNITARES deployment and receives a process
+identity. During work it can publish selected findings and evidence, request
+structured review, report meaningful state transitions, and record outcomes.
+UNITARES keeps those records available to the operator and to later authorized
+processes.
 
-Illustrative pseudocode (the exact call syntax depends on your MCP client):
+The server runs alongside evals, sandboxes, and guardrails. It provides the
+continuity and accountability layer that connects their outputs over time.
+Core storage is self-hosted and runs on its own; the operator chooses which
+inference providers and integrations to connect.
 
-```python
-session = start_session(force_new=True)
-sid = session["client_session_id"]
+Its EISV state model is runtime [proprioception](docs/ontology/eisv-proprioception-contract.md):
+a way to make changes in an agent process visible so operators can diagnose and
+act on them with evidence.
 
-result = sync_state(
-    response_text=output,
-    complexity=0.6,
-    confidence=0.8,
-    client_session_id=sid,
-)
-refused = (
-    result.get("success") is False              # error-shaped refusal, e.g. paused
-    or result.get("tool_class") == "required"   # identity refusal: success-shaped
-)
-if refused:
-    return_to_operator(result.get("recovery") or result.get("next_step"))
-elif result.get("state_summary", {}).get("action") == "pause":
-    return_to_operator(result.get("next_action"))   # your boundary to honor
+## Where it is going
 
-record_result(
-    outcome_type="test_passed" if tests_passed else "test_failed",
-    prediction_id=result.get("prediction_id"),      # grades this check-in's claim
-    client_session_id=sid,
-)
-state = check_working_state(client_session_id=sid)
-```
+UNITARES is working toward an operator experience where a fleet can be brought
+under accountable operation in one step: identities are configured, handoffs
+are enforceable, important evidence survives, reviews bind to the work they
+govern, and outcomes improve the next decision.
 
-Separately, `make coordination-demo` runs against the already-started governance
-and lease-plane services. It adds a two-agent handoff, exercises request-bound
-Ed25519 attestations, verifies that A's attestation is refused when it claims
-B's UUID, and rejects replay. It is not a second step required by `make demo`.
+The larger aim is infrastructure for agent systems that can accumulate useful
+experience without losing authorship, challenge, or operational control as they
+grow.
 
-</details>
+## Start here
 
-Evaluating rather than installing? Start with
-[Evidence and limits](#evidence-and-limits) and the
-[Reviewer Guide](docs/REVIEWER_GUIDE.md). Deploying? Use the
-[user manual](docs/manual/README.md).
-
-## What it keeps together
-
-| Question | Retained mechanism |
+| Goal | Guide |
 |---|---|
-| **Who said it?** | Fresh process identity and explicit lineage for inherited work; write enforcement depends on the deployment's configured identity gates. |
-| **What supports it?** | Attributed findings, corrections, evidence, and provenance supplied by callers. |
-| **Who challenged it?** | Structured reviews that preserve positions, disagreement, conditions, and resolution. |
-| **What happened?** | Typed outcome events that can be linked to the prediction or check-in they grade. |
-| **What can a successor recover?** | Shared-memory, review, history, and authorized evidence records assembled by the client. |
+| Operate a deployment | [Operator manual](docs/manual/README.md) |
+| Connect an agent or application | [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
+| Understand the product and architecture | [Product definition](docs/PRODUCT_DEFINITION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) |
+| Evaluate the claims | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
+| Contribute | [Contributing](CONTRIBUTING.md) · [Development guide](AGENTS.md) |
 
-These are accountable records, not automatic truth. `sync_state` does not retain
-the original report text, stored outcomes remain caller reports unless backed
-by independent evidence, and reconstruction spans records with different
-retention and authorization boundaries. Whether reconstruction improves on a
-repository plus structured handoff still needs comparative evaluation. The
-[product definition](docs/PRODUCT_DEFINITION.md) and
-[capability guide](docs/CAPABILITIES_AND_DEPLOYMENT.md) give the precise
-contracts and tool names.
+The [documentation index](docs/README.md) covers deployment profiles,
+operations, security, compatibility, research, and the full tool surface.
 
-The architecture docs call this boundary a **federation kernel**: independent
-runtimes share one operator-controlled server and authority domain. The term
-does not promise autonomous cross-server replication or a new agent runtime.
+## Ecosystem
 
-## Where it fits
-
-UNITARES runs **alongside** evals, guardrails, and sandboxes. It replaces none of
-them.
-
-| Layer | Question | Timing |
-|---|---|---|
-| **Evals** | Is this model good enough for a defined task? | Before or between deployments. |
-| **Guardrails / sandbox** | Is this action allowed and contained? | Per action. |
-| **UNITARES** | What has this running process reported, what evidence supports its claims, and what state is it in now? | At submitted checkpoints throughout a run. |
-
-It is for **one operator running several long-lived agents** — coding, research,
-operations, monitoring — on infrastructure they control. It is usually not worth
-the overhead for short-lived chat turns.
-
-It governs the agent's loop from outside rather than owning it, so Claude Code,
-Codex, custom runtimes, and resident agents stay different userlands while
-sharing one accountable record. Plain-language definition:
-[What UNITARES is](docs/PRODUCT_DEFINITION.md).
-
-## Runtime state and policy
-
-The core record is retained in your deployment and accessible through MCP,
-HTTP, and the self-hosted dashboard. Core storage needs no external model
-provider. Optional cloud consultation and configured integrations can send
-submitted content outside the deployment; their privacy and authorization
-settings apply.
-
-Clients can treat the policy action, reason, and next step as the stable
-contract; the enforcement record rides alongside it. Operators can additionally
-read four EISV coordinates — work progress, evidence alignment, behavioral
-drift, and their balance. Those are published heuristics, documented in the
-[computation reference](docs/EISV_COMPUTATION.md).
-
-UNITARES is a state instrument, not an outcome oracle.
-It does not decide whether an output is correct or ethical,
-and it cannot detect deliberate concealment without independent evidence.
-Whether pausing an agent prevents anything is untested;
-[Evidence and limits](#evidence-and-limits) is the measured record.
-
-## Tools
-
-Start with the five-part workflow above. Behavioral state estimation, policy
-and recovery remain deployed capabilities; inference, diagnostics, calibration,
-configuration, exports, and administration support more specialized workflows.
-The [capability and deployment guide](docs/CAPABILITIES_AND_DEPLOYMENT.md) maps
-the core workflow to real tools and explains which services each profile needs.
-
-One complete catalog advertises every registered-and-mounted public tool,
-including primary workflow aliases. **Core and advanced are reading paths, not visibility or permission
-modes.** No tool mode is needed; legacy `GOVERNANCE_TOOL_MODE` settings are
-ignored. `list_tools(category=...)` browses the catalog, and
-`describe_tool(tool_name=..., action=...)` returns full parameter details.
-Primary workflow names are preferred; raw names remain available for
-compatibility. Each action retains its authorization requirements.
-
-The public [unitares-sdk](agents/sdk/README.md) supports client
-integration. Ordinary fresh processes onboard fresh; dedicated resident
-substrate identities follow their adapter's explicit contract. A display name,
-UUID alone, or old continuity token does not establish cross-process identity.
-
-## Deployment profiles
-
-- **Local operator:** the release-tagged Compose quickstart provisions PostgreSQL
-  with AGE/pgvector, Redis, the lease plane, and the server.
-- **Private Glama installation:** the separate storage-backed bundle provides
-  those backing services behind stdio. Persist `/data`; see the
-  [Glama guide](docs/deployment/glama.md) for build, validation, and upgrade limits.
-- **Client of an existing deployment:** connect over MCP/HTTP using that
-  operator's access policy; installing a client does not provision the server.
-
-A bare Python process with missing storage dependencies can expose discovery
-without usable durable operations. It is not a supported lightweight core
-installation. Neither bundle includes an inference provider, automated reviewer
-fleet, or resident fleet by default. Catalog visibility does not establish
-service readiness or successful execution.
-
-## Evidence and limits
-
-At the [2026-08-11 frozen snapshot](docs/PRODUCTION_SNAPSHOT.md): 4,573,890
-audit/telemetry events, 71,141 stored EISV state rows, 6 long-running resident
-agents, 15 recorded self-recovery events, and
-[32,181 labeled EISV windows](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories)
-published as a dataset. Those numbers and the rest of the build record are in
-[Evidence and limits, in full](docs/EVIDENCE_AND_LIMITS.md).
-
-They come from one operator, since 2025-11-20: a single deployment, and
-co-development dogfood, since most agents governed by the system are also
-building it. Read the
-[deployment data caveat](docs/operations/DEPLOYMENT_DATA_CAVEAT.md) before citing
-any fleet number.
-
-Every claim below carries an evidence class. A class says what a result
-supports; it is not a positive or negative judgement about the project. A
-registered operational `FAIL` can close a scheduled line of work without
-scientifically refuting the underlying capability, and a claim earns `REFUTED`
-only when target, counterfactual, independent unit, power, decision rule, and
-read protocol all support it — see the
-[inference-status contract](docs/ontology/falsification-inference-containment-2026-08-22.md).
-
-| Evidence class | What it licenses |
-|---|---|
-| **Operational observation** | A named mechanism ran in the stated deployment. Not benefit, correctness, or generality. |
-| **Exercised path** | A code path ran and left countable, replayable records. Execution, not benefit. |
-| **Non-detection** | The test did not separate the candidate from its comparison. Without power, that is not absence. |
-| **Structural limit** | A boundary that follows from the design itself. More data does not move it. |
-| **Untested** | No suitable measurement has been made. |
-
-Three further classes — **Benchmark pass / fail**, **Unidentified /
-inconclusive**, and **Mismatch / path bound** — are available for result types
-this table does not currently hold.
-
-### Current claim status
-
-| Question | Status | What the record supports |
-|---|---|---|
-| Sustained operation | **Operational observation** | The maintainer deployment has run continuously under real load. The counts above are rows, events, and configured residents. |
-| Identity and audit trail | **Exercised path** | Process-bound writes, evidence records, policy responses, and replayable audit history are deployed. This establishes mechanism execution. |
-| Pause actuation and delivery | **Event reconciled; protection untested** | A governed pause landed on 2026-08-09. At the 2026-08-06 audit, a cadence window had downgraded 195 of 218 recorded pauses (89.4%) before delivery; the current rate has not been re-measured. See [ledger rows 24, 27, and 28](docs/ontology/eisv-proprioception-contract.md). |
-| Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the cluster geometry needed to reconstruct read-specific power, so the corrected [power audit](docs/operations/falsifiability-power-audit-2026-08-23.md) sets no standing AUC ceiling. |
-| Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
-| Review binds on the reviewed agent | **Exercised path** | A paused agent cannot resolve its own session over a standing reviewer objection: the submission is recorded, the session is not resolved, and it waits for facilitation (`src/dialectic_protocol.py`). 33 non-canary sessions carry such a submission after a reviewer's rejection. Since the 2026-07-02 reviewer-label split, 81 non-canary verdicts are recorded and 77 carry the reviewer's conditions; 42 dissent, one of which is a parse failure recorded as disagreement rather than a reviewer's judgement. |
-| Benefit from review and coordination | **Untested** | These records cover dialectic-mediated review only: review run through subagent councils or external models leaves no row unless filed through `reviewer_provenance`, a field no caller has yet populated, so that gap is in recording rather than occurrence. Benefit is separate and unmeasured — every change went through the reviewed path, leaving zero untreated cases to compare against. |
-| Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md). |
-
-The outcome read carries a protocol qualification. After the frozen cutoff,
-recurring automation exposed live discrimination output: the ablation watchdog
-completed 42 of 51 executions and the dogfood guard completed 43 of 52. Those
-jobs are paused. The fixed
-[2026-12-01 gate](docs/proposals/eisv-outcome-grounding-stop-rule-v0.md) remains
-an operational decision rule, but it is not the only post-registration read and
-cannot be described as clean single-read blinding; its report must disclose the
-interim access and read-specific power.
-
-The validation the system does claim — reliability, faithfulness under
-intervention, and calibration — is scoped and partly built; the
-[roadmap](ROADMAP.md) tracks it. The DOI identifies a
-[public preprint](https://doi.org/10.5281/zenodo.19647159), not peer-reviewed
-validation.
-
-## Documentation
-
-**Python 3.12+ · PostgreSQL + AGE + pgvector · Redis · optional Elixir/OTP
-coordination.** Redis holds session and identity state and the Docker quickstart
-brings it up; the server starts without it in a degraded local-only mode, which
-is not the supported path.
-
-| Reader | Start here |
-|---|---|
-| Evaluator or grant reviewer | [Reviewer Guide](docs/REVIEWER_GUIDE.md) → [computation](docs/EISV_COMPUTATION.md) → [scope and threat model](docs/SCOPE_AND_THREAT_MODEL.md) |
-| Integrator | [Manual](docs/manual/README.md) → [MCP clients](docs/integration/MCP_CLIENTS.md) |
-| Operator | [Docker quickstart](#quickstart) → [operator runbook](docs/operations/OPERATOR_RUNBOOK.md); [bare-metal playbook](docs/install/PLAYBOOK.md) |
-| Contributor | [AGENTS.md](AGENTS.md) → [architecture](docs/UNIFIED_ARCHITECTURE.md) → [canonical sources](docs/dev/CANONICAL_SOURCES.md) |
-| Research reader | [Evaluation index](docs/EVALUATION_INDEX.md) → [ontology](docs/ontology/README.md) → [proposals](docs/proposals/README.md) |
-
-Complete map: [`docs/README.md`](docs/README.md). Analogies and philosophical
-readings are isolated under [`docs/essays/`](docs/essays/README.md) — not
-specifications, not evidence. Project operation: [roadmap](ROADMAP.md),
-[compatibility](COMPATIBILITY.md), [governance](GOVERNANCE.md),
-[contributing](CONTRIBUTING.md), [security](SECURITY.md), [support](SUPPORT.md),
-[releases](docs/operations/RELEASE_PROCESS.md).
-
-## Ecosystem repositories
-
-Adjacent integrations, testbeds, and research projects; the quickstart needs none
-of them.
-
-| Project | Role |
-|---|---|
-| [unitares-resident](https://github.com/cirwel/unitares-resident) | First-party agent userland built on the public SDK contract. Early skeleton, not yet a usable general-purpose agent. |
-| [anima-mcp](https://github.com/cirwel/anima-mcp) | Raspberry Pi longitudinal testbed. |
-| [unitares-governance-plugin](https://github.com/cirwel/unitares-governance-plugin) | Codex and Claude Code lifecycle/hook packaging. |
-| [unitares-host-adapter](https://github.com/cirwel/unitares-host-adapter) | Thin bindings for additional clients and model hosts. |
-| [fermata](https://github.com/cirwel/fermata) | Governed-effect runtime research seed. |
-| [eisv-lumen](https://github.com/cirwel/eisv-lumen) | Dataset generation and labeling pipeline. |
-| [unitares-paper-v6](https://github.com/cirwel/unitares-paper-v6) | Companion preprint and research formulation. |
-
-The lowercase residents under [`agents/`](agents/README.md) are reference clients
-and operational examples, not a framework to subclass.
+UNITARES works with the
+[governance plugin](https://github.com/cirwel/unitares-governance-plugin) for
+Codex and Claude Code, the public [Python SDK](agents/sdk/README.md), and the
+[resident agent runtime](https://github.com/cirwel/unitares-resident). These are
+separate userlands connected by the same operator-owned record.
 
 ## Citation and license
 

@@ -130,7 +130,9 @@ async def handle_coherence_report(arguments: Dict[str, Any]) -> Sequence[TextCon
     1. COMPUTE mode (action='compute'): Compute similarity to another agent
     2. QUERY mode (action='query'): Get recent coherence reports
     """
-    action = arguments.get("action", "").lower()
+    # None-safe: `action` is declared with no default, so the middleware hands
+    # an omitted action over as None, and it must reach the valid_actions refusal.
+    action = (arguments.get("action") or "").lower()
 
     if not action or action not in ("compute", "query"):
         return [error_response(

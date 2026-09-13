@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 import json
 
 from src.audit_log import audit_logger
-from src.calibration import calibration_checker, resolve_calibration_status
+from src.calibration import resolve_calibration_status
 from src.telemetry_cache import get_telemetry_cache
 
 
@@ -16,8 +16,13 @@ class TelemetryCollector:
     """Collects and surfaces governance telemetry with caching"""
     
     def __init__(self):
+        from src.calibration import get_calibration_checker
+
         self.audit_logger = audit_logger
-        self.calibration_checker = calibration_checker
+        # Resolve lazily at construction time. Capturing the proxy at module
+        # import can retain a temporary test/plugin patch after its context
+        # exits, and obscures which process-local collector is being read.
+        self.calibration_checker = get_calibration_checker()
         self.cache = get_telemetry_cache()
     
     def get_skip_rate_metrics(self, agent_id: Optional[str] = None,
@@ -158,14 +163,18 @@ class TelemetryCollector:
             "calibration_status": resolve_calibration_status(is_calibrated, metrics),
         }
     
-    def detect_suspicious_patterns(self, agent_id: Optional[str] = None) -> Dict:
+    def detect_suspicious_patterns(
+        self,
+        agent_id: Optional[str] = None,
+        window_hours: int = 24,
+    ) -> Dict:
         """
         Detect suspicious patterns:
         - Low skip rate but low average confidence (suggests agreeableness)
         - High skip rate but high average confidence (suggests over-conservatism)
         """
-        skip_metrics = self.get_skip_rate_metrics(agent_id)
-        conf_dist = self.get_confidence_distribution(agent_id)
+        skip_metrics = self.get_skip_rate_metrics(agent_id, window_hours)
+        conf_dist = self.get_confidence_distribution(agent_id, window_hours)
         
         if "error" in skip_metrics or "error" in conf_dist:
             return {"error": "Insufficient data"}
@@ -208,7 +217,8 @@ class TelemetryCollector:
         return {
             "suspicious_patterns": patterns,
             "skip_metrics": skip_metrics,
-            "confidence_distribution": conf_dist
+            "confidence_distribution": conf_dist,
+            "window_hours": window_hours,
         }
     
     def get_comprehensive_metrics(self, agent_id: Optional[str] = None) -> Dict:

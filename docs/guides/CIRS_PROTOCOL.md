@@ -41,11 +41,13 @@ cirs_protocol(protocol="void_alert", action="emit", severity="warning|critical")
 - `warning`: Agent approaching void threshold
 - `critical`: Agent deep in void state
 
+Omit `severity` to have it detected from the void threshold; the call is refused when |V| is below it. `context_ref` attaches a free-form reference (a task, file or ticket).
+
 **Query:**
 ```
 cirs_protocol(protocol="void_alert", action="query")
 ```
-Returns recent void alerts from all agents.
+Returns recent void alerts from all agents. Filters: `filter_agent_id`, `filter_severity` (`warning` or `critical`), `since_hours` (default 1.0) and `limit` (default 50).
 
 ### 2. State Announce
 
@@ -55,13 +57,13 @@ Broadcasts full EISV state plus trajectory metadata to peers.
 ```
 cirs_protocol(protocol="state_announce", action="emit")
 ```
-Includes: E, I, S, V values, coherence, risk trend, regime, verdict, and trajectory signature (maturity, convergence, decision bias, focus stability).
+Includes: E, I, S, V values, coherence, risk trend, regime, verdict, and trajectory signature (maturity, convergence, decision bias, focus stability). Pass `include_trajectory=false` to leave the signature out.
 
 **Query:**
 ```
 cirs_protocol(protocol="state_announce", action="query")
 ```
-Returns recent state announcements from all agents.
+Returns recent state announcements from all agents. Filters: `agent_ids`, `regime` (`divergence`, `transition`, `convergence` or `stable`), `max_risk` and `limit` (default 50). `min_coherence` is retired and refused with `UNSUPPORTED_COHERENCE_FILTER`.
 
 ### 3. Coherence Report
 
@@ -77,19 +79,22 @@ Calculates similarity against one named agent using weighted EISV comparison: 25
 ```
 cirs_protocol(protocol="coherence_report", action="query")
 ```
-Returns recent coherence reports.
+Returns recent coherence reports. Filters: `source_agent_id`, `target_agent_id`, `min_similarity` and `limit` (default 50).
 
 ### 4. Boundary Contract
 
 Defines trust policies and void response rules between agents.
 
-**Set:**
+**Set** your own contract:
 ```
 cirs_protocol(protocol="boundary_contract", action="set",
-  target_agent_id="...",
-  trust_level="full|partial|observe|none",
-  void_policy="notify|assist|isolate|coordinate")
+  trust_default="full|partial|observe|none",
+  trust_overrides={"<agent_id>": "full|partial|observe|none"},
+  void_response_policy="notify|assist|isolate|coordinate",
+  max_delegation_complexity=0.5,
+  accept_coherence_threshold=0.4)
 ```
+Every parameter is optional; the values shown for the last two are the defaults, and `trust_default` / `void_response_policy` default to `partial` / `notify`. The contract is yours, so `set` takes no `target_agent_id`: trust toward one named agent goes in `trust_overrides`. Earlier revisions of this guide named `trust_level` and `void_policy`, which the handler never read, so a call written that way stored `partial` and `notify` whatever it asked for.
 
 Trust levels:
 | Level | Meaning |
@@ -121,17 +126,20 @@ Broadcasts governance coordination requests (recovery conditions, pauses, state 
 ```
 cirs_protocol(protocol="governance_action", action="initiate", action_type="void_intervention", target_agent_id="...")
 ```
+`action_type` is one of `void_intervention`, `coherence_boost`, `delegation_request`, `delegation_response` or `coordination_sync`; `payload` carries free-form data. A target whose boundary contract gives you trust `none` refuses the initiation.
 
 **Respond** to an action addressed to you, and read one back:
 ```
 cirs_protocol(protocol="governance_action", action="respond", action_id="...", accept=True)
 cirs_protocol(protocol="governance_action", action="status", action_id="...")
 ```
+`accept` defaults to false, so a respond without it rejects; `response_data` carries free-form data back.
 
 **Query:**
 ```
 cirs_protocol(protocol="governance_action", action="query")
 ```
+Returns actions you initiated and actions targeting you. Narrow with `as_initiator=false`, `as_target=false` or `status_filter` (`pending`, `accepted` or `rejected`).
 
 This protocol has no `emit` action.
 

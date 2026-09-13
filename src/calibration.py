@@ -6,11 +6,13 @@ Bins predictions by confidence and measures real accuracy to detect miscalibrati
 from typing import Any, Dict, List, Tuple, Optional
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import sys
 import time
 import os
+import math
 
 
 @dataclass
@@ -49,6 +51,10 @@ _OVERCONFIDENCE_GATE = 0.2
 # confidence vs 0.933 at high) is noise, not evidence that confident verdicts are
 # untrustworthy — the alarming "inverted curve" warning should not fire on it.
 _CURVE_INVERSION_MARGIN = 0.05
+
+# Distinguish an omitted live-write timestamp from an explicit unknown time on
+# historical/backfill evidence.
+_OBSERVED_AT_NOW = object()
 
 
 CALIBRATION_STATUSES = frozenset({"calibrated", "miscalibrated", "unassessed"})
@@ -197,6 +203,12 @@ class CalibrationChecker:
             'actual_correct': 0,
             'confidence_sum': 0.0,
         }))
+
+        # Additive, attributed observations for measurement-only candidates.
+        # Legacy fleet bins have no recoverable agent dimension and are never
+        # copied into these maps. Nothing in the live I/policy path reads them.
+        self.bins_by_agent = {}
+        self.tactical_bins_by_agent = {}
         
         # Ensure complexity_bins is initialized (may already be set in __init__)
         if not hasattr(self, 'complexity_bins'):
@@ -219,7 +231,10 @@ class CalibrationChecker:
         confidence: float,
         predicted_correct: bool,
         actual_correct: Optional[float],
-        complexity_discrepancy: Optional[float] = None
+        complexity_discrepancy: Optional[float] = None,
+        *,
+        agent_id: Optional[str] = None,
+        observed_at: Any = _OBSERVED_AT_NOW,
     ):
         """
         Record a prediction for calibration checking.
@@ -232,6 +247,12 @@ class CalibrationChecker:
             predicted_correct: Whether we predicted correct (based on confidence threshold)
             actual_correct: Whether prediction was actually correct (ground truth)
             complexity_discrepancy: Optional complexity-EISV discrepancy (0-1) for calibration weighting
+            agent_id: Known subject of this prediction. When supplied, a paired
+                      correctness signal also updates measurement-only scoped bins.
+                      Missing identity never borrows another agent's evidence.
+            observed_at: Timestamp for the attributed evidence. Omission means
+                         now; historical backfills must supply their original
+                         time (explicit None remains unknown).
         """
         # Find which bin this confidence falls into
         bin_key = None
@@ -258,6 +279,10 @@ class CalibrationChecker:
         # not only a strict boolean. This enables dynamic (non-manual) calibration.
         if actual_correct is not None:
             stats['actual_correct'] += float(actual_correct)
+            self._record_agent_bin(
+                'bins_by_agent', agent_id, bin_key, confidence,
+                predicted_correct, float(actual_correct), observed_at,
+            )
             # Auto-save after recording a prediction with any correctness signal
             self.save_state()
         
@@ -268,7 +293,9 @@ class CalibrationChecker:
     def record_tactical_decision(self, confidence: float, decision: str,
                                   immediate_outcome: bool,
                                   signal_source: Optional[str] = None,
-                                  include_in_aggregate: bool = True):
+                                  include_in_aggregate: bool = True,
+                                  *, agent_id: Optional[str] = None,
+                                  observed_at: Any = _OBSERVED_AT_NOW):
         """
         Record a decision for TACTICAL calibration (per-decision, no retroactive).
 
@@ -293,6 +320,9 @@ class CalibrationChecker:
                            quality signal into the same bins as pass/fail
                            outcomes is the same category error, in miniature,
                            as the removed tool-success feeder).
+            agent_id: Known subject, for additive scoped tactical bins. Rows
+                      excluded from the aggregate are excluded from these too.
+            observed_at: Timestamp for attributed evidence. Omission means now.
 
         Example:
             - Decision "proceed" is tactically correct if agent could proceed without immediate issues
@@ -333,6 +363,10 @@ class CalibrationChecker:
             # Tactical correctness is fixed at decision time - no retroactive updates!
             if immediate_outcome:
                 stats['actual_correct'] += 1
+            self._record_agent_bin(
+                'tactical_bins_by_agent', agent_id, bin_key, confidence,
+                predicted_correct, float(bool(immediate_outcome)), observed_at,
+            )
 
         # Per-channel routing (additive — aggregate above is unchanged).
         if signal_source:
@@ -354,6 +388,168 @@ class CalibrationChecker:
 
         # Save state
         self.save_state()
+
+    def _record_agent_bin(
+        self, attribute: str, agent_id: Optional[str], bin_key: str,
+        confidence: float, predicted_correct: bool, actual_correct: float,
+        observed_at: Any,
+    ) -> None:
+        """Collect one attributed pair without changing any fleet statistic."""
+        if not isinstance(agent_id, str) or not agent_id.strip():
+            return
+        if not hasattr(self, attribute):
+            setattr(self, attribute, {})
+        agent_bins = getattr(self, attribute).setdefault(agent_id, {})
+        stats = agent_bins.setdefault(bin_key, {
+            'count': 0, 'predicted_correct': 0, 'actual_correct': 0.0,
+            'confidence_sum': 0.0, 'last_observed_at': None,
+        })
+        stats['count'] += 1
+        stats['predicted_correct'] += int(bool(predicted_correct))
+        stats['actual_correct'] += actual_correct
+        stats['confidence_sum'] += confidence
+        normalized = self._normalize_observed_at(observed_at)
+        if normalized is not None:
+            current = self._normalize_observed_at(
+                stats.get('last_observed_at'), default_now=False,
+            )
+            if current is None or normalized > current:
+                stats['last_observed_at'] = normalized
+
+    @staticmethod
+    def _normalize_observed_at(
+        observed_at: Any,
+        *,
+        default_now: bool = True,
+    ) -> Optional[str]:
+        """Return a UTC timestamp, refusing ambiguous historical evidence."""
+        now = datetime.now(timezone.utc)
+        if observed_at is _OBSERVED_AT_NOW and default_now:
+            value = now
+        elif observed_at is None or observed_at is _OBSERVED_AT_NOW:
+            return None
+        elif isinstance(observed_at, str) and not observed_at:
+            return None
+        elif isinstance(observed_at, datetime):
+            value = observed_at
+        elif isinstance(observed_at, str):
+            try:
+                value = datetime.fromisoformat(observed_at.replace('Z', '+00:00'))
+            except ValueError:
+                return None
+        else:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            return None
+        return value.astimezone(timezone.utc).isoformat()
+
+    def compute_agent_calibration_candidate(
+        self, agent_id: str, *, now: Optional[datetime] = None,
+        min_samples_per_bin: int = 5, max_staleness_days: float = 7.0,
+    ) -> Dict[str, Any]:
+        """Measurement-only strategic candidate; never an input to live I.
+
+        Preserve the current strategic estimator: an unweighted mean of the
+        absolute confidence/outcome gaps in bins with at least five samples.
+        This channel can contain peer/proxy signals; scoping it does not turn
+        it into verified correctness. Unattributed historical data is absent.
+
+        The seven-day rule is a recent-ACTIVITY criterion per bin, matching the
+        duration already used by the confidence corrector. Counts remain
+        lifetime counts: one recent pair does not make all past evidence recent.
+        Missing, malformed, naive or future timestamps cannot certify freshness.
+        No status or statistic here authorizes policy or changes live estimates.
+        """
+        if min_samples_per_bin < 1:
+            raise ValueError('min_samples_per_bin must be positive')
+        if not math.isfinite(max_staleness_days) or max_staleness_days < 0:
+            raise ValueError('max_staleness_days must be finite and nonnegative')
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError('now must carry a timezone')
+        now = now.astimezone(timezone.utc)
+        identity = agent_id if isinstance(agent_id, str) and agent_id.strip() else None
+        result = {
+            'schema': 'agent_calibration_candidate.v1',
+            'mode': 'measurement_only',
+            'policy_applied': False,
+            'scope': 'agent',
+            'agent_id': identity,
+            'estimator': 'mean_absolute_strategic_bin_error',
+            'evidence_channel': 'strategic_mixed_proxy',
+            'evidence_status': 'no_data' if identity else 'missing_identity',
+            'calibration_error': None,
+            'sample_count': 0,
+            'eligible_sample_count': 0,
+            'eligible_bin_count': 0,
+            'newest_observation_at': None,
+            'age_days': None,
+            'freshness_status': 'unknown',
+            'freshness_rule': 'per_bin_recent_activity',
+            'max_staleness_days': max_staleness_days,
+            'min_samples_per_bin': min_samples_per_bin,
+            'sample_window': 'lifetime',
+            'freshness_note': 'Recent activity does not imply all supporting samples are recent.',
+            'excluded_bins': {},
+        }
+        if identity is None:
+            return result
+        bins = getattr(self, 'bins_by_agent', {}).get(identity, {})
+        if not bins:
+            return result
+
+        gaps = []
+        newest = None
+        for key, stats in bins.items():
+            try:
+                count = int(stats['count'])
+                if count <= 0:
+                    raise ValueError('nonpositive count')
+                expected = float(stats['confidence_sum']) / count
+                actual = float(stats['actual_correct']) / count
+                if not all(math.isfinite(v) and 0 <= v <= 1 for v in (expected, actual)):
+                    raise ValueError('invalid bin probabilities')
+            except (KeyError, TypeError, ValueError, OverflowError):
+                result['excluded_bins'][key] = 'invalid_statistics'
+                continue
+            result['sample_count'] += count
+            try:
+                timestamp = stats.get('last_observed_at')
+                observed = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                if observed.tzinfo is None or observed.utcoffset() is None:
+                    raise ValueError('timestamp has no timezone')
+                observed = observed.astimezone(timezone.utc)
+                age = (now - observed).total_seconds() / 86400.0
+                if age < 0:
+                    raise ValueError('future timestamp')
+            except (AttributeError, TypeError, ValueError, OverflowError):
+                result['excluded_bins'][key] = 'invalid_timestamp'
+                continue
+            newest = max(newest, observed) if newest is not None else observed
+            if count < min_samples_per_bin:
+                result['excluded_bins'][key] = 'insufficient_samples'
+            elif age > max_staleness_days:
+                result['excluded_bins'][key] = 'stale'
+            else:
+                gaps.append(abs(expected - actual))
+                result['eligible_sample_count'] += count
+
+        if newest is not None:
+            result['newest_observation_at'] = newest.isoformat()
+            result['age_days'] = (now - newest).total_seconds() / 86400.0
+            result['freshness_status'] = (
+                'recent' if result['age_days'] <= max_staleness_days else 'stale'
+            )
+        if gaps:
+            result['evidence_status'] = 'available'
+            result['calibration_error'] = sum(gaps) / len(gaps)
+            result['eligible_bin_count'] = len(gaps)
+        else:
+            reasons = set(result['excluded_bins'].values())
+            result['evidence_status'] = (
+                next(iter(reasons)) if len(reasons) == 1 else 'unavailable'
+            )
+        return result
     
     def record_complexity_discrepancy(self, discrepancy: float, reported_complexity: Optional[float] = None,
                                      derived_complexity: Optional[float] = None):
@@ -872,7 +1068,7 @@ class CalibrationChecker:
         result["honesty_note"] = (
             "Calibration ground truth comes from objective outcomes (test pass/fail, command exit codes, "
             "lint results, file operations) as the primary signal. Dialectic peer agreement is a secondary "
-            "signal (0.7 peer_weight). Human feedback is optional, not required."
+            "mixed-proxy signal and is not verified task correctness. Human feedback is optional, not required."
         )
 
         return is_calibrated, result
@@ -1081,6 +1277,14 @@ class CalibrationChecker:
                 channel: {k: dict(v) for k, v in bins.items()}
                 for channel, bins in self.tactical_bin_stats_by_channel.items()
             } if hasattr(self, 'tactical_bin_stats_by_channel') else {},
+            'bins_by_agent': {
+                agent_id: {k: dict(v) for k, v in bins.items()}
+                for agent_id, bins in getattr(self, 'bins_by_agent', {}).items()
+            },
+            'tactical_bins_by_agent': {
+                agent_id: {k: dict(v) for k, v in bins.items()}
+                for agent_id, bins in getattr(self, 'tactical_bins_by_agent', {}).items()
+            },
         }
 
     def save_state(self):
@@ -1182,6 +1386,12 @@ class CalibrationChecker:
             for bin_key, stats in channel_bins.items():
                 self.tactical_bin_stats_by_channel[channel][bin_key] = stats
 
+        for attribute in ('bins_by_agent', 'tactical_bins_by_agent'):
+            setattr(self, attribute, {
+                agent_id: {key: dict(stats) for key, stats in bins.items()}
+                for agent_id, bins in state_data.get(attribute, {}).items()
+            })
+
     def load_state(self):
         """Load calibration state from JSON file (sync, used at __init__ time).
 
@@ -1213,9 +1423,8 @@ class CalibrationChecker:
         that REPORTS the source must use this rather than reading
         ``_backend`` -- that attribute is a config value read once from
         UNITARES_CALIBRATION_BACKEND and never mutated, so it says which backend
-        was requested, never which one answered. Note the two silent fallbacks
-        below: a falsy result and an empty ``bins`` both land on the JSON path
-        without printing anything at all.
+        was requested, never which one answered. Empty state falls back to JSON;
+        a scoped-only or tactical-only blob is valid canonical state too.
         """
         if self._backend == "postgres":
             try:
@@ -1224,7 +1433,10 @@ class CalibrationChecker:
                 result = await db.get_calibration()
                 if result and isinstance(result, dict):
                     state_data = {k: v for k, v in result.items() if not k.startswith('_')}
-                    if state_data.get('bins'):
+                    if any(state_data.get(key) for key in (
+                        'bins', 'complexity_bins', 'tactical_bins',
+                        'tactical_bins_by_channel', 'bins_by_agent', 'tactical_bins_by_agent',
+                    )):
                         self._apply_state_data(state_data)
                         return True
             except Exception as e:

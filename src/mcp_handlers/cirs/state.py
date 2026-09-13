@@ -97,7 +97,9 @@ async def handle_state_announce(arguments: Dict[str, Any]) -> Sequence[TextConte
     1. EMIT mode (action='emit'): Broadcast your current state
     2. QUERY mode (action='query'): Get recent state announcements from peers
     """
-    action = arguments.get("action", "").lower()
+    # None-safe: `action` is declared with no default, so the middleware hands
+    # an omitted action over as None, and it must reach the valid_actions refusal.
+    action = (arguments.get("action") or "").lower()
 
     if not action or action not in ("emit", "query"):
         return [error_response(
