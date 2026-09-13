@@ -11,7 +11,7 @@ EVIDENCE = (ROOT / "docs" / "EVIDENCE_AND_LIMITS.md").read_text()
 
 
 def test_readme_leads_with_the_product_and_earned_capabilities() -> None:
-    assert "Accountability infrastructure for long-running AI agents" in README
+    assert "A self-hosted federation kernel for accountable AI agents" in README
     for capability in (
         "Identity and lineage",
         "Claims and evidence",
@@ -24,7 +24,7 @@ def test_readme_leads_with_the_product_and_earned_capabilities() -> None:
 
 
 def test_readme_links_to_evidence_instead_of_repeating_the_ledger() -> None:
-    assert "[measured record](docs/EVIDENCE_AND_LIMITS.md)" in README
+    assert "[Evidence and limits](docs/EVIDENCE_AND_LIMITS.md)" in README
     assert "[Reviewer Guide](docs/REVIEWER_GUIDE.md)" in README
     assert "## Evidence and limits" not in README
     assert "### Current claim status" not in README
@@ -42,7 +42,6 @@ def test_detailed_qualifications_remain_on_the_evidence_surface() -> None:
 
 
 def test_readme_stays_a_landing_page() -> None:
-    assert len(README.splitlines()) <= 160
     assert "make demo" not in README
     assert "make coordination-demo" not in README
     assert "dialectic-mediated review" not in README

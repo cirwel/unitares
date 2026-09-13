@@ -84,11 +84,8 @@ VERSION_REFERENCES = [
 
 # Installation pins move only after RELEASE_PROCESS step 8 verifies the public
 # artifacts and the operator updates PUBLISHED_VERSION in a follow-up PR.
+# The root README reads PUBLISHED_VERSION at install time and carries no pin.
 PUBLISHED_VERSION_REFERENCES = [
-    ("README.md", [
-        (r'git clone --branch v([\d.]+) --depth 1',
-         r'git clone --branch v{version} --depth 1'),
-    ]),
     ("docs/manual/02-install.md", [
         (r'git clone --branch v([\d.]+) --depth 1',
          r'git clone --branch v{version} --depth 1'),

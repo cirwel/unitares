@@ -5,7 +5,7 @@
   <img src="docs/assets/unitares-lockup.svg" width="420" alt="UNITARES">
 </picture>
 
-### Accountability infrastructure for long-running AI agents.
+### A self-hosted federation kernel for accountable AI agents.
 
 Give every process an identity. Keep claims, evidence, reviews, and outcomes
 connected. Recover work across restarts, context loss, and handoffs.
@@ -17,10 +17,9 @@ connected. Recover work across restarts, context loss, and handoffs.
 
 </div>
 
-UNITARES is a self-hosted control plane for operators running multiple AI
-agents. It connects to existing agent loops over MCP or HTTP, so agents keep
-their own models, tools, and runtimes while sharing a durable accountability
-record.
+UNITARES is a federation kernel: many independent agent runtimes connect to one
+operator-controlled server over MCP or HTTP and share a durable accountability
+record. Each agent keeps its own models, tools, and runtime.
 
 The goal is simple: agent work should remain attributable, reviewable, and
 recoverable even when the process that started it is gone.
@@ -45,19 +44,18 @@ agents, research agents, residents, and custom runtimes.
 
 ## Install
 
-With Git and Docker Compose installed, one command starts the supported local
-operator stack:
+With Git, curl, and Docker Compose installed, one command starts the latest
+verified release of the local operator stack:
 
 ```bash
-git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
+v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
 ```
 
 Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
 `http://localhost:8767/dashboard`.
 
 This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
-coordination plane. The product direction is a seamless operator install that
-also configures clients, credentials, upgrades, and ongoing operation.
+coordination plane.
 
 ## How it works
 
@@ -69,8 +67,8 @@ processes.
 
 The server runs alongside evals, sandboxes, and guardrails. It provides the
 continuity and accountability layer that connects their outputs over time.
-Core storage is self-hosted and does not require a model API; optional inference
-and integrations are configured by the operator.
+Core storage is self-hosted and runs on its own; the operator chooses which
+inference providers and integrations to connect.
 
 Its EISV state model is runtime [proprioception](docs/ontology/eisv-proprioception-contract.md):
 a way to make changes in an agent process visible so operators can diagnose and
@@ -87,16 +85,6 @@ The larger aim is infrastructure for agent systems that can accumulate useful
 experience without losing authorship, challenge, or operational control as they
 grow.
 
-## In operation
-
-UNITARES has run continuously in its maintainer deployment since November 2025.
-The frozen 2026-08-11 snapshot contains 4.5 million audit and telemetry events,
-71,000 stored state rows, and 32,181 published labeled trajectory windows.
-
-Explore the [measured record](docs/EVIDENCE_AND_LIMITS.md), reproduce the
-[evaluation paths](docs/REVIEWER_GUIDE.md), or use the
-[public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories).
-
 ## Start here
 
 | Goal | Guide |
@@ -104,7 +92,7 @@ Explore the [measured record](docs/EVIDENCE_AND_LIMITS.md), reproduce the
 | Operate a deployment | [Operator manual](docs/manual/README.md) |
 | Connect an agent or application | [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
 | Understand the product and architecture | [Product definition](docs/PRODUCT_DEFINITION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) |
-| Evaluate the claims | [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Evaluation index](docs/EVALUATION_INDEX.md) |
+| Evaluate the claims | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
 | Contribute | [Contributing](CONTRIBUTING.md) · [Development guide](AGENTS.md) |
 
 The [documentation index](docs/README.md) covers deployment profiles,

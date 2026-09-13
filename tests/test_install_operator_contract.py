@@ -54,14 +54,20 @@ def test_tier_one_install_is_release_pinned_and_single_command() -> None:
 
     # Source bumps must not advertise an unavailable release. Public examples
     # advance only after tag, release page, and container verification.
+    # The README resolves that verified version at install time, so a release
+    # never has to edit it; the manual keeps the explicit, bot-maintained pin.
     published = _read("PUBLISHED_VERSION").strip()
     pin = f"git clone --branch v{published} --depth 1"
+    lookup = (
+        'v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION)'
+        ' && git clone --branch "v$v" --depth 1'
+    )
 
-    assert pin in readme
     assert pin in manual
     install = readme.split("## Install\n", 1)[1].split("\n## ", 1)[0]
     assert install.count("```bash") == 1
-    assert install.count(pin) == 1
+    assert install.count(lookup) == 1
+    assert re.search(r"--branch v\d", readme) is None
     assert "docker compose up -d --wait" in install
     assert "make demo" not in readme
     assert "make coordination-demo" not in readme

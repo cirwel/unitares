@@ -111,18 +111,34 @@ MAX_LINES = {
     "docs/guides/START_HERE.md": 80,
     "docs/operations/database_architecture.md": 80,
     "docs/operations/DEFINITIVE_PORTS.md": 60,
+    "README.md": 160,
 }
 
+# The root README is static; releases and the maintainer deployment are not.
+# It links to the surfaces that carry those facts (release notes, the install
+# manual, the production snapshot) instead of restating values a release or a
+# day of traffic would make wrong. Badge image URLs are exempt.
+README_VOLATILE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("release version", r"\bv?\d+\.\d+\.\d+\b"),
+    (
+        "count of changing things",
+        r"\b\d[\d,.]*\+?(?:\s*(?:k|million|thousand))?(?:\s+[\w/-]+){0,3}?\s+"
+        r"(?:tools|tests|agents|identities|events|rows|windows|check-ins|sessions|discoveries)\b",
+    ),
+    ("running-since claim", r"\b(?:running|run|operated|operating)\b[^.\n]{0,40}\bsince\b"),
+)
+
+
+# One product category for every public surface, so a wording pass on one of
+# them cannot quietly rename the product. Changing the category is an edit here.
+PRODUCT_CATEGORY: tuple[str, tuple[str, ...]] = ("product category", ("federation kernel",))
 
 # The root README is the concise product surface. Detailed qualifications live
 # in the linked product, capability, and evidence documents rather than being
 # repeated beside every earned claim on the landing page.
 PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     "README.md": [
-        (
-            "product category",
-            ("self-hosted control plane", "accountability infrastructure"),
-        ),
+        PRODUCT_CATEGORY,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -133,7 +149,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ),
     ],
     "docs/PRODUCT_DEFINITION.md": [
-        ("product category", ("federation kernel",)),
+        PRODUCT_CATEGORY,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -153,7 +169,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ("unmeasured comparative benefit", ("remain unmeasured",)),
     ],
     "docs/CAPABILITIES_AND_DEPLOYMENT.md": [
-        ("product category", ("federation kernel",)),
+        PRODUCT_CATEGORY,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -176,7 +192,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ("unmeasured comparative benefit", ("remain evaluation questions",)),
     ],
     "src/tool_modes.py": [
-        ("product category", ("federation kernel",)),
+        PRODUCT_CATEGORY,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -203,7 +219,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ),
     ],
     "pyproject.toml": [
-        ("product category", ("federation kernel",)),
+        PRODUCT_CATEGORY,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -216,6 +232,30 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ("external-processing boundary", ("optional inference and integrations",)),
     ],
 }
+
+
+def readme_volatility_failures(root: Path) -> list[str]:
+    """Return README paragraphs that state a release version, live count, or uptime."""
+    failures: list[str] = []
+    path = root / "README.md"
+    if not path.exists():
+        return failures
+    lines = path.read_text(encoding="utf-8").splitlines()
+    # Scan whole paragraphs so a number wrapped onto the next line still matches.
+    start = 0
+    for end in range(len(lines) + 1):
+        if end < len(lines) and lines[end].strip():
+            continue
+        paragraph = " ".join(lines[start:end])
+        prose = " ".join(re.sub(r"https?://\S+", "", paragraph).split())
+        for label, pattern in README_VOLATILE_PATTERNS:
+            match = re.search(pattern, prose, flags=re.IGNORECASE)
+            if match:
+                failures.append(
+                    f"README.md:{start + 1}: {label} {match.group(0)!r}; link the surface that owns it"
+                )
+        start = end + 1
+    return failures
 
 
 def public_positioning_failures(root: Path) -> list[str]:
@@ -271,6 +311,7 @@ def main() -> int:
 
     failures.extend(freshness_failures(REPO_ROOT, date.today()))
     failures.extend(public_positioning_failures(REPO_ROOT))
+    failures.extend(readme_volatility_failures(REPO_ROOT))
 
     if failures:
         print("Doc drift check failed:")
