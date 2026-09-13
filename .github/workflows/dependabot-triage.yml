@@ -4,18 +4,16 @@ name: dependabot-triage
 # merges. The merge/triage policy lives in scripts/dev/dependabot_triage.py
 # where it can be diffed and tested.
 #
-# Coverage posture (2026-08-21): the default GITHUB_TOKEN cannot read the
-# private fleet target, and no fleet PAT exists by operator policy (no
-# operator-held tokens when local keychain auth can carry the job — the
+# Coverage posture: every target repository is public, so the default
+# GITHUB_TOKEN reads all of them and ANY unreachable repo fails the run. The
 # authoritative fleet-wide run is launchd com.cirwel.dependabot-triage,
-# Mon 08:00 America/Denver). Until 2026-08-21 that made every scheduled run
-# here red BY DESIGN, which trained everyone to ignore this workflow. The
-# gate now distinguishes the two honest states: unreachability confined to
-# the declared allowlist below is partial-by-policy (green, with an explicit
-# caveat in the report), while ANY other unreachable repo still fails the
-# run. Providing a valid fleet-scoped DEPENDABOT_TRIAGE_TOKEN with access to
-# every target turns the run fully green (an expired or under-scoped token
-# still reds).
+# Mon 08:00 America/Denver. From 2026-08-21 to 2026-09-13 one target was
+# private (unitares-pi-plugin, since retired and archived) and no fleet PAT
+# exists by operator policy, so this job passed --allow-unreachable for that
+# repo: partial-by-policy, green with a caveat, instead of red by design. With
+# that target gone the allowlist went too. A DEPENDABOT_TRIAGE_TOKEN secret,
+# if configured, is used instead of the default token (an expired or
+# under-scoped token still reds).
 
 on:
   schedule:
