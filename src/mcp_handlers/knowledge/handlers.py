@@ -979,6 +979,13 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     else:
         agent_display = _resolve_agent_display(agent_id)
 
+    # Drop inherited context at the construction site, not after enrichment.
+    # Both paths below return ``agent_display`` early — a signature that raises,
+    # and one with no uuid — so a pop placed after the enrichment loop would
+    # leave a caller-seeded ``_agent_display`` emitting identity_context in
+    # precisely the unproven and degraded cases (review on #2192 at d0496b9).
+    agent_display.pop("identity_context", None)
+
     try:
         from ..support import agent_auth as _auth
 
@@ -1000,10 +1007,6 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     ):
         if key in signature:
             agent_display[key] = signature[key]
-
-    # Drop any context inherited from a caller-supplied ``_agent_display`` so
-    # the block is identity_context-free regardless of how it was seeded.
-    agent_display.pop("identity_context", None)
 
     return agent_display
 

@@ -1509,6 +1509,41 @@ class TestAgentDisplayForResponse:
         assert "identity_context" not in result
         assert "identity_assurance" not in result
 
+    def test_seeded_context_stripped_when_signature_unproven(self, patch_common):
+        """The degraded path strips seeded context too.
+
+        Regression for the #2192 review at d0496b9: the pop sat after the
+        enrichment loop, but a signature with no uuid returns early, so a
+        seeded block survived in exactly the unproven case.
+        """
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        seeded = {"_agent_display": {"identity_context": {"schema": "stale"}}}
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value={"uuid": None}
+        ):
+            result = kg._agent_display_for_response("Claude_Test", seeded)
+
+        assert "identity_context" not in result
+
+    def test_seeded_context_stripped_when_signature_raises(self, patch_common):
+        """The exception path strips seeded context too.
+
+        Same review: `compute_agent_signature` raising returns agent_display
+        before any enrichment, so the block has to be gone before the try.
+        """
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        seeded = {"_agent_display": {"identity_context": {"schema": "stale"}}}
+        with patch.object(
+            kg_auth_module(),
+            "compute_agent_signature",
+            side_effect=RuntimeError("signature backend down"),
+        ):
+            result = kg._agent_display_for_response("Claude_Test", seeded)
+
+        assert "identity_context" not in result
+
 
 def kg_auth_module():
     """The agent_auth module object `_agent_display_for_response` imports."""
