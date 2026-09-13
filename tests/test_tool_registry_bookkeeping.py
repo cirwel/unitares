@@ -21,8 +21,13 @@ The rule these tests hold:
   (a legacy name's own read/write class is narrower than its router's);
 * ``_TOOL_STABILITY`` is keyed by the registered tools, all of them, and an
   alias reports its canonical tool's tier;
-* TOOL_RELATIONSHIPS covers the roster, and every name it mentions resolves
-  to something callable (or is a documented plugin-provided tool);
+* TOOL_RELATIONSHIPS covers the roster, and every name it mentions is on the
+  advertised roster or is a call shape against an advertised router (or is a
+  documented plugin-provided tool). "Resolves to something callable" was the
+  bar until 2026-09-12, and it let twelve records name a dispatch-only twin
+  such as ``list_agents``: callable on REST and stdio through the alias
+  table, ``Unknown tool`` on the /mcp/ mount, which registers the roster and
+  nothing else (F1 of docs/operations/tool-surface-audit-2026-09-12.md);
 * ``full`` mode is the roster.
 """
 
@@ -142,17 +147,60 @@ def test_stability_of_an_alias_is_its_canonical_tools(registered):
         assert ts.get_tool_stability(alias) == ts.get_tool_stability(info.new_name), alias
 
 
-def test_catalog_relationships_cover_the_roster_and_name_only_callable_tools(roster, callable_names):
-    allowed = callable_names | PLUGIN_PROVIDED_TOOLS
+def test_catalog_relationships_cover_the_roster_and_name_only_wire_names(roster):
+    """Every name a relationship record mentions is one a schema-driven client can call.
+
+    A bare entry must be on the advertised roster (a plugin-provided tool is
+    allowed: it is advertised wherever it is installed). A call shape must
+    name an advertised router and, when it states an action, one the router
+    declares. The roster-plus-legacy-aliases set was the bar until
+    2026-09-12; it admitted twelve records naming a dispatch-only twin.
+    """
+    from tests.helpers.wire_names import dead_ends, declared_actions, parse_call_shape
+
+    allowed = roster | PLUGIN_PROVIDED_TOOLS
     assert sorted(roster - set(tc.TOOL_RELATIONSHIPS)) == []
     assert sorted(set(tc.TOOL_RELATIONSHIPS) - allowed) == []
-    dangling = {
-        f"{name}.{field}": sorted(set(entry.get(field) or []) - allowed)
+    entries = [
+        (f"{name}.{field}", target)
         for name, entry in tc.TOOL_RELATIONSHIPS.items()
         for field in ("depends_on", "related_to", "replaces")
-        if set(entry.get(field) or []) - allowed
-    }
-    assert dangling == {}
+        for target in (entry.get(field) or [])
+    ]
+    entries += [
+        (f"{name}.superseded_by", entry["superseded_by"])
+        for name, entry in tc.TOOL_RELATIONSHIPS.items()
+        if entry.get("superseded_by")
+    ]
+    entries += [
+        (f"{name}.recovery_hierarchy.{key}", call)
+        for name, entry in tc.TOOL_RELATIONSHIPS.items()
+        for key, call in (entry.get("recovery_hierarchy") or {}).items()
+    ]
+    assert any(parse_call_shape(value) for _, value in entries), (
+        "the table carries call shapes; a walk that sees none is not reading it"
+    )
+    assert dead_ends(entries, allowed, declared_actions()) == []
+
+
+def test_every_category_has_a_presentation_record():
+    """list_tools labels a category from tool_catalog.CATEGORY_PRESENTATION.
+
+    Every category the record table can assign needs a label, and the table
+    must name no tool of its own: which tools a category holds is the
+    roster's business, and the hand-written block this replaced is exactly
+    how 30 dispatch-only names got into list_tools.
+    """
+    from src.tool_meta import CATEGORIES
+
+    assert set(tc.CATEGORY_PRESENTATION) == set(CATEGORIES)
+    for category, record in tc.CATEGORY_PRESENTATION.items():
+        assert {"icon", "name", "description", "priority", "for_new_agents"} <= set(record), category
+        assert "tools" not in record, category
+    priorities = [record["priority"] for record in tc.CATEGORY_PRESENTATION.values()]
+    assert len(set(priorities)) == len(priorities), "priorities must order the categories"
+    unknown = tc.category_presentation("no_such_category")
+    assert {"icon", "name", "description", "priority", "for_new_agents"} <= set(unknown)
 
 
 def test_deprecation_registry_names_only_callable_tools(callable_names):

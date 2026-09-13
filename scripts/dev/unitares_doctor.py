@@ -1660,17 +1660,26 @@ def check_tool_edge_index_fresh(repo_root: Path) -> CheckResult:
     string list of schema modules). A tool, action, or alias added without
     regenerating leaves the only readable map of dispatch silently wrong.
 
-    SKIPs on exit 2 — the generator needs the handler package importable
-    (requirements-core.txt). "Cannot look" is not "looked and found drift", and
-    this check must stay honest on a pre-install tree like the rest of the
-    doctor. A crash reports UNKNOWN rather than drift, per the contract above:
-    the import this generator needs can fail in ways it does not catch, so exit
-    1 from it is not automatically a verdict either.
+    SKIPs on exit 2 — the generator needs the handler package and the
+    production registrar importable (requirements-full.txt; a core-only install
+    lacks the registrar's `prometheus_client`, and until 2026-09-11 the
+    generator folded that into a false stale verdict — tool-surface audit
+    2026-09-12, F3). "Cannot look" is not "looked and found drift", and this
+    check must stay honest on a pre-install tree like the rest of the doctor.
+    A crash reports UNKNOWN rather than drift, per the contract above: the
+    import this generator needs can fail in ways it does not catch, so exit 1
+    from it is not automatically a verdict either.
     """
     return _check_generated_doc_fresh(
         "tool_edge_index_fresh", repo_root,
         "scripts/dev/tool_edge_index.py", "docs/dev/TOOL_EDGE_INDEX.md",
-        cannot_look_message="handler package not importable",
+        # Covers BOTH exit-2 causes. Naming only the dependency one would
+        # assert "not installed" about a machine whose real problem is an
+        # unimportable handler package; the detail line carries which it was.
+        cannot_look_message=(
+            "generator could not look — missing dependency "
+            "(requirements-full.txt) or unimportable handler package"
+        ),
     )
 
 

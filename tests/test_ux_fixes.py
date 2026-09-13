@@ -647,14 +647,20 @@ if __name__ == "__main__":
 
 def test_intuitive_alias_findings_have_catalog_metadata():
     """store_finding/update_finding are intuitive aliases for knowledge; without
-    catalog entries list_tools renders hint 'Tool: <name>' and category null
-    (dogfood 2026-08-16)."""
-    from src.mcp_handlers.introspection.tool_catalog import (
-        TOOL_DESCRIPTION_OVERRIDES,
-        TOOL_RELATIONSHIPS,
-    )
+    catalog metadata list_tools rendered hint 'Tool: <name>' and category null
+    (dogfood 2026-08-16). The hint now comes from the alias's wire description
+    (its migration note), not a catalog override, so assert on what list_tools
+    serves."""
+    from src.mcp_handlers.introspection.tool_catalog import TOOL_RELATIONSHIPS
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
 
+    listed = {
+        tool["name"]: tool
+        for tool in json.loads(asyncio.run(handle_list_tools({"lite": True}))[0].text)["tools"]
+    }
     for name in ("store_finding", "update_finding"):
-        assert name in TOOL_DESCRIPTION_OVERRIDES, name
-        assert "knowledge" in TOOL_DESCRIPTION_OVERRIDES[name]
+        assert name in listed, name
+        assert not listed[name]["hint"].startswith("Tool: "), listed[name]["hint"]
+        assert "knowledge" in listed[name]["hint"], listed[name]["hint"]
+        assert listed[name]["category"] == "knowledge", name
         assert TOOL_RELATIONSHIPS[name]["category"] == "knowledge", name

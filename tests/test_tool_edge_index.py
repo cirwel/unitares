@@ -22,6 +22,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import textwrap
 import types
 
 import pytest
@@ -103,8 +104,10 @@ def test_handler_modules_all_import(collected):
     """A module the generator cannot import is a hole in the index.
 
     The generator reports these rather than failing, so the doc stays honest
-    when a dependency is missing. In this repo, on the test environment's
-    dependency floor, there should be none.
+    when the tree is broken. A third-party module that is not installed is
+    the one exception: that is "cannot look" and exits 2 (the *Cannot look*
+    tests at the end of this file). In this repo, on the test environment's
+    dependency floor, there should be neither.
     """
     _tools, _aliases, failures, _unbound = collected
     assert not failures, f"handler modules failed to import: {failures}"
@@ -556,3 +559,311 @@ def test_committed_index_locates_code_by_file_and_symbol_only(audit_snapshot):
         for tool in dispatch["tools"]
         for edge in tool["actions"]
     )
+
+
+# ---------------------------------------------------------------------------
+# Cannot look: a dependency that is not installed is exit 2, never a verdict.
+# The exposure half builds the wire catalog through the production registrar,
+# which imports the Prometheus metrics registry — a requirements-full.txt
+# dependency. With only requirements-core.txt installed the generator used to
+# fold the ModuleNotFoundError into the findings (EXPOSURE_COLLECTION_FAILURE
+# plus one ORIENTATION_NAME_NOT_ON_WIRE per tool: 2 errors, 46 warnings) and
+# then compare, so --check called a current index stale and the doctor's
+# tool_edge_index_fresh reported FAIL where it should SKIP (tool-surface audit
+# 2026-09-12, F3). Simulated in a subprocess by blocking the import:
+# ``sys.modules[name] = None`` is how CPython spells "not installed", and it
+# raises the same ModuleNotFoundError (``.name`` set) a bare venv does.
+# ---------------------------------------------------------------------------
+
+GENERATOR = REPO / "scripts" / "dev" / "tool_edge_index.py"
+BLOCK_ENV = "TEST_EDGE_INDEX_BLOCK_MODULE"
+BREAK_ENV = "TEST_EDGE_INDEX_BREAK_FACADE"
+
+
+def _generator_shim(root: pathlib.Path) -> pathlib.Path:
+    """Install ``root/scripts/dev/tool_edge_index.py``: a shim that runs the
+    real generator under one of two simulated failures.
+
+    ``BLOCK_ENV`` makes a named module unimportable, standing in for a package
+    that is not installed. ``BREAK_ENV`` makes ``src.mcp_handlers`` itself
+    raise ``ImportError: cannot import name``, standing in for a broken
+    re-export in the facade — a defect in the tree rather than a missing
+    dependency, and the one exit-2 cause that installing cannot fix.
+
+    Same relative path the doctor invokes, so ``check_tool_edge_index_fresh``
+    can be pointed at ``root`` and exercised end to end against the real
+    generator and the real committed index.
+    """
+    script = root / "scripts" / "dev" / "tool_edge_index.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import importlib.abc
+            import os
+            import runpy
+            import sys
+
+            blocked = os.environ.get({BLOCK_ENV!r})
+            if blocked:
+                sys.modules[blocked] = None
+
+            if os.environ.get({BREAK_ENV!r}):
+                class _BrokenFacade(importlib.abc.MetaPathFinder):
+                    def find_spec(self, fullname, path=None, target=None):
+                        if fullname == "src.mcp_handlers":
+                            raise ImportError(
+                                "cannot import name 'probe' from "
+                                "'src.mcp_handlers.core'",
+                                name=fullname,
+                            )
+                        return None
+
+                sys.meta_path.insert(0, _BrokenFacade())
+
+            sys.argv = [{str(GENERATOR)!r}, *sys.argv[1:]]
+            runpy.run_path({str(GENERATOR)!r}, run_name="__main__")
+            """
+        ),
+        encoding="utf-8",
+    )
+    return script
+
+
+def _run_shim(
+    script: pathlib.Path,
+    *args: str,
+    blocked: str | None = None,
+    break_facade: bool = False,
+):
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in (BLOCK_ENV, BREAK_ENV)
+    }
+    if blocked:
+        env[BLOCK_ENV] = blocked
+    if break_facade:
+        env[BREAK_ENV] = "1"
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO),
+        timeout=120,
+        env=env,
+    )
+
+
+def test_repo_packages_covers_every_top_level_package_in_the_tree():
+    """``_REPO_PACKAGES`` is what separates a tree defect from an absent
+    dependency, so it must not fall behind the tree.
+
+    A new top-level package missing from the set reads as a third-party
+    module: a real defect inside it would exit 2, the doctor would SKIP, and
+    the defect would go quiet. Silence is the worse direction, which is why
+    this asserts coverage rather than equality — a package that loses its
+    ``__init__.py`` leaves a harmless extra entry, and failing the suite for
+    that would buy no safety.
+    """
+    on_disk = {
+        path.name
+        for path in REPO.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    }
+    assert on_disk, "no top-level package found; this guard is inert"
+    missing = on_disk - tei._REPO_PACKAGES
+    assert not missing, (
+        f"top-level package(s) {sorted(missing)} are not in _REPO_PACKAGES, so "
+        "a missing module inside them would be misread as an uninstalled "
+        "dependency and exit 2 instead of being reported as a tree defect"
+    )
+
+
+def test_missing_dependency_is_drawn_by_package_not_by_exception_type():
+    """Only a ModuleNotFoundError for a module outside the repo's packages is
+    "not installed". A missing ``src`` module and a bad name are defects in
+    the tree — the generator looked and found them — and stay findings."""
+    absent = ModuleNotFoundError("No module named 'prometheus_client'", name="prometheus_client")
+    assert tei.missing_dependency(absent) == "prometheus_client"
+    assert tei.missing_dependency(ModuleNotFoundError("x", name="pkg.sub")) == "pkg.sub"
+    assert tei.missing_dependency(ModuleNotFoundError("x", name="src.gone")) is None
+    assert tei.missing_dependency(ModuleNotFoundError("x", name="governance_core.gone")) is None
+    assert tei.missing_dependency(ModuleNotFoundError("x")) is None
+    assert tei.missing_dependency(ImportError("cannot import name 'x' from 'src.y'", name="src.y")) is None
+    assert tei.missing_dependency(TypeError("not an import failure")) is None
+
+    err = tei.MissingDependency("prometheus_client", absent)
+    assert isinstance(err, ImportError)
+    assert err.module == "prometheus_client"
+    assert "prometheus_client" in str(err) and "ModuleNotFoundError" in str(err)
+
+
+# The generator declares which codes read the wire catalog; this test module
+# consumes that declaration rather than keeping a second copy that could drift
+# from the set actually withheld.
+WIRE_DERIVED_CODES = frozenset(tei.WIRE_DERIVED_FINDING_CODES)
+
+
+def test_wire_catalog_raises_for_an_absent_dependency_and_records_a_tree_defect(
+    collected, monkeypatch
+):
+    """In-process, both sides of the line ``missing_dependency`` draws.
+
+    Absent dependency: the registrar is re-imported with ``prometheus_client``
+    blocked, exactly the core-only import chain, and the collector must raise
+    rather than hand back an empty catalog. Tree defect: the registrar module
+    itself is blocked, and that IS recorded as a collection failure — with the
+    wire-derived findings withheld, since nothing was looked at.
+
+    Only the exposure side is asserted. The in-process dispatch registry is
+    whatever earlier tests left in it (see ``test_committed_index_is_fresh``),
+    so dispatch-side findings such as ``ALIAS_TARGET_MISSING`` can appear under
+    full-suite ordering and say nothing about this change.
+    """
+    monkeypatch.delitem(sys.modules, "src.tool_registration", raising=False)
+    monkeypatch.delitem(sys.modules, "src.metrics_registry", raising=False)
+    monkeypatch.setitem(sys.modules, "prometheus_client", None)
+    with pytest.raises(tei.MissingDependency) as raised:
+        tei._collect_wire_catalog()
+    assert raised.value.module == "prometheus_client"
+    assert isinstance(raised.value.__cause__, ModuleNotFoundError)
+
+    monkeypatch.setitem(sys.modules, "src.tool_registration", None)
+    catalog, failures = tei._collect_wire_catalog()
+    assert catalog == {}
+    assert len(failures) == 1 and "src.tool_registration" in failures[0]
+
+    tools, aliases, import_failures, unbound = collected
+    dispatch = tei.build_dispatch_snapshot(tools, aliases, import_failures, unbound)
+    exposure = tei.build_exposure_snapshot(tools, aliases)
+    assert exposure["collection_failures"] == failures
+    assert exposure["tools"] == []
+    # The empty catalog DOES make every orientation name look off the wire;
+    # that is what must not become findings.
+    assert exposure["orientation"]["full_orientation_only"], "nothing to withhold"
+    found = tei.lint_snapshots(dispatch, exposure)
+    codes = {finding.code for finding in found}
+    assert "EXPOSURE_COLLECTION_FAILURE" in codes
+    assert not codes & WIRE_DERIVED_CODES, sorted(codes & WIRE_DERIVED_CODES)
+
+    # The withholding must be machine-readable: a consumer has to be able to
+    # read WHICH checks did not run, rather than infer it from their absence.
+    collection = [f for f in found if f.code == "EXPOSURE_COLLECTION_FAILURE"]
+    assert len(collection) == 1, "exactly one primary failure, not one per check"
+    withheld = collection[0].evidence["withheld_checks"]
+    assert set(withheld) == WIRE_DERIVED_CODES
+    assert collection[0].evidence["failure"] == failures[0]
+
+
+def test_declared_wire_derived_codes_match_what_is_actually_withheld():
+    """The declaration must not drift from the code.
+
+    ``WIRE_DERIVED_FINDING_CODES`` is published as evidence, so a code that
+    lint_snapshots emits after the early return but is not in the tuple would
+    be advertised as withheld while still firing — and one that no longer
+    exists would be advertised as withheld forever. Both are read off the
+    source of the function that does the withholding.
+    """
+    import inspect
+
+    source = inspect.getsource(tei.lint_snapshots)
+    _before, separator, after = source.partition('if exposure["collection_failures"]:')
+    assert separator, "the early return moved; this guard is reading the wrong code"
+    emitted_after = set(re.findall(r'"([A-Z][A-Z_]{4,})"', after))
+
+    declared = set(tei.WIRE_DERIVED_FINDING_CODES)
+    assert declared <= emitted_after, (
+        f"declared as withheld but not emitted after the early return: "
+        f"{sorted(declared - emitted_after)}"
+    )
+    assert emitted_after <= declared, (
+        f"emitted after the early return but not declared as withheld: "
+        f"{sorted(emitted_after - declared)}"
+    )
+
+
+@pytest.mark.parametrize("mode", ["--check", "--lint", "--json"])
+def test_every_mode_declines_with_exit_2_when_the_registrar_dependency_is_absent(
+    tmp_path, mode
+):
+    """The audit's reproduction, per mode: exit 2 and no verdict — never the
+    exit 1 that means "looked and found drift" (or, under --lint, "found
+    errors"). Nothing derived from the empty catalog is printed, --json emits
+    no partial snapshot, and the last stderr line is one the doctor will not
+    mistake for a crash."""
+    import unitares_doctor
+
+    result = _run_shim(_generator_shim(tmp_path), mode, blocked="prometheus_client")
+    assert result.returncode == 2, (
+        f"expected 2 (cannot look), got {result.returncode}\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    combined = result.stdout + result.stderr
+    assert tei.STALE_VERDICT not in combined
+    assert "EXPOSURE_COLLECTION_FAILURE" not in combined
+    assert "ORIENTATION_NAME_NOT_ON_WIRE" not in combined
+    assert result.stdout.strip() == "", "a partial snapshot or verdict was emitted"
+    last = [line for line in result.stderr.splitlines() if line.strip()][-1]
+    assert last.startswith("cannot look:"), last
+    assert "prometheus_client" in last and "requirements-full.txt" in last
+    assert unitares_doctor._generator_crashed(result.stderr) is False
+
+
+def test_an_unimportable_handler_package_is_not_reported_as_a_missing_dependency(
+    tmp_path,
+):
+    """Exit 2 has two causes and they need opposite advice.
+
+    A broken re-export in ``src/mcp_handlers/__init__.py`` leaves no registry
+    to read, so it exits 2 like an absent dependency does — but installing
+    cannot fix a code defect, and telling the reader to install sends them at
+    the wrong thing. The message must name the tree as the problem and must
+    not prescribe a package install.
+    """
+    result = _run_shim(_generator_shim(tmp_path), "--check", break_facade=True)
+    assert result.returncode == 2, (
+        f"expected 2, got {result.returncode}\nstderr: {result.stderr}"
+    )
+    last = [line for line in result.stderr.splitlines() if line.strip()][-1]
+    assert last.startswith("cannot look:"), last
+    assert "src.mcp_handlers did not import" in last
+    assert "defect in the tree" in last
+    assert tei.INSTALL_REMEDY not in last, (
+        "a broken re-export was reported as something an install would fix"
+    )
+    assert tei.STALE_VERDICT not in result.stderr + result.stdout
+
+
+def test_doctor_skips_when_the_generator_cannot_look_and_passes_when_it_can(
+    tmp_path, monkeypatch
+):
+    """End to end through the doctor's own check, against the real generator
+    and the real committed index. Blocked: SKIP, with the missing module named
+    in the detail. Unblocked through the same shim: PASS. Never FAIL — that is
+    the false verdict the audit reproduced on a core-only machine."""
+    import unitares_doctor
+
+    _generator_shim(tmp_path)
+
+    monkeypatch.setenv(BLOCK_ENV, "prometheus_client")
+    blocked = unitares_doctor.check_tool_edge_index_fresh(tmp_path)
+    assert blocked.status == unitares_doctor.Status.SKIP, (blocked.message, blocked.detail)
+    assert "requirements-full.txt" in blocked.message
+    assert "stale" not in blocked.message
+    assert tei.STALE_VERDICT not in (blocked.detail or "")
+    # The SKIP message covers both exit-2 causes, so which one occurred has to
+    # come from the detail, or the doctor would assert "not installed" about a
+    # machine whose real problem is a broken handler package.
+    assert "prometheus_client" in (blocked.detail or "")
+
+    monkeypatch.delenv(BLOCK_ENV)
+    monkeypatch.setenv(BREAK_ENV, "1")
+    broken = unitares_doctor.check_tool_edge_index_fresh(tmp_path)
+    assert broken.status == unitares_doctor.Status.SKIP, (broken.message, broken.detail)
+    assert "stale" not in broken.message
+    assert "defect in the tree" in (broken.detail or "")
+
+    monkeypatch.delenv(BREAK_ENV)
+    control = unitares_doctor.check_tool_edge_index_fresh(tmp_path)
+    assert control.status == unitares_doctor.Status.PASS, (control.message, control.detail)
