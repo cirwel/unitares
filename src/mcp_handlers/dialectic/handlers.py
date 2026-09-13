@@ -2369,7 +2369,7 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
 
         # Use same identity pipeline as onboard/identity (consistent UUID)
         agent_id, agent_error = await _resolve_dialectic_agent_id(
-            arguments, enforce_session_ownership=True
+            arguments, enforce_session_ownership=True, require_bound_caller=True,
         )
         if agent_error:
             return agent_error
@@ -2701,7 +2701,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
 
         # Use same identity pipeline as onboard/identity (consistent UUID)
         agent_id, agent_error = await _resolve_dialectic_agent_id(
-            arguments, enforce_session_ownership=True
+            arguments, enforce_session_ownership=True, require_bound_caller=True,
         )
         if agent_error:
             return agent_error

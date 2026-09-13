@@ -92,3 +92,33 @@ def test_caller_is_bound_as_reads_the_resolver_stamped_slot():
     with patch("src.mcp_handlers.context.get_context_resolved_agent_id", return_value=REVIEWER):
         assert caller_is_bound_as(REVIEWER) is True
         assert caller_is_bound_as(PAUSED) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["thesis", "antithesis"])
+async def test_thesis_and_antithesis_require_the_same_bound_caller(action):
+    """The session-ownership check only runs when a binding exists."""
+    from src.mcp_handlers.dialectic import handlers
+
+    handler = {
+        "thesis": handlers.handle_submit_thesis,
+        "antithesis": handlers.handle_submit_antithesis,
+    }[action]
+    load = AsyncMock(return_value=_session())
+    named = PAUSED if action == "thesis" else REVIEWER
+    with patch(f"{AUTH}.mcp_server", _server()), \
+         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None), \
+         patch("src.mcp_handlers.context.get_context_resolved_agent_id", return_value=None), \
+         patch(f"{DIALECTIC}.load_session", load):
+        result = await handler({
+            "session_id": "sess-bound",
+            "agent_id": named,
+            "root_cause": "rc",
+            "proposed_conditions": ["c"],
+            "reasoning": "r",
+            "concerns": ["x"],
+        })
+    payload = json.loads(result[0].text)
+    assert payload["success"] is False
+    assert payload.get("error_code") == "AUTH_REQUIRED"
+    load.assert_not_awaited()
