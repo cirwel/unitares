@@ -35,7 +35,7 @@ source_files:
 source_digests:
   unitares/src/mcp_handlers/core.py: "451b8f3d9dd2ce80"
   unitares/src/mcp_handlers/identity/handlers.py: "c5bd71f4ab659d05"
-  unitares/src/mcp_handlers/admin/handlers.py: "fd483fd4a0c5d6b6"
+  unitares/src/mcp_handlers/admin/handlers.py: "d7ac696ae443332e"
   unitares/src/mcp_handlers/tool_stability.py: "25440b0686fa16d6"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
   unitares/src/mcp_handlers/updates/phases.py: "bd790e0aabbb9c23"
