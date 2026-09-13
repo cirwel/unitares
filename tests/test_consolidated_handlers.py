@@ -190,6 +190,20 @@ class TestActionRouterDispatch:
         assert data["used"] == "default"
 
     @pytest.mark.asyncio
+    async def test_mixed_case_default_action_uses_canonical_route(self):
+        handler_default = _make_mock_handler({"used": "default"})
+        router = action_router(
+            "test_default_mixed_case",
+            actions={"check": handler_default},
+            default_action="CHECK",
+        )
+
+        result = await router({})
+        data = _parse_response(result)
+        assert data["used"] == "default"
+        assert _TOOL_DEFINITIONS["test_default_mixed_case"].default_action == "check"
+
+    @pytest.mark.asyncio
     async def test_action_is_case_insensitive(self):
         handler = _make_mock_handler({"matched": True})
         router = action_router(
@@ -331,6 +345,32 @@ class TestActionRouterRegistration:
         )
         td = _TOOL_DEFINITIONS["test_reg_timeout"]
         assert td.timeout == 99.0
+
+    def test_router_rejects_a_mixed_case_action_map_key(self):
+        handler = _make_mock_handler()
+
+        with pytest.raises(ValueError, match="action keys must be lowercase") as error:
+            action_router(
+                "test_reg_mixed_case_action",
+                actions={"Mixed": handler},
+            )
+
+        assert "Mixed" in str(error.value)
+        assert "test_reg_mixed_case_action" not in _TOOL_DEFINITIONS
+
+    def test_router_rejects_action_map_keys_that_collide_when_lowercased(self):
+        first = _make_mock_handler()
+        second = _make_mock_handler()
+
+        with pytest.raises(ValueError, match="collide when lowercased") as error:
+            action_router(
+                "test_reg_case_collision",
+                actions={"Mixed": first, "mixed": second},
+            )
+
+        assert "'Mixed'" in str(error.value)
+        assert "'mixed'" in str(error.value)
+        assert "test_reg_case_collision" not in _TOOL_DEFINITIONS
 
 
 class TestActionRouterErrorHandling:

@@ -563,7 +563,9 @@ def action_router(
 
     Args:
         name: Tool name for MCP registration
-        actions: Mapping of action name → async handler function
+        actions: Mapping of lowercase action name → async handler function.
+            The generated router lowercases ``action``/``op`` before lookup,
+            so routing-table keys must use their canonical lowercase spelling.
         timeout: Timeout in seconds
         description: Tool description
         default_action: If set, use this action when 'action' param is missing
@@ -587,6 +589,29 @@ def action_router(
     if _caller_frame is not None and _caller_frame.f_back is not None:
         _declared_in = _caller_frame.f_back.f_globals.get("__name__", "") or ""
 
+    # Calls are normalized to lowercase before lookup, and mcp_tool stores
+    # known_actions lowercase. Keep the routing table in that same canonical
+    # form. Reject rather than rewrite it: folding case variants into a new
+    # dict could silently discard one of two distinct handlers.
+    folded_actions = {}
+    for action in actions:
+        folded = action.lower()
+        if folded in folded_actions:
+            raise ValueError(
+                f"action_router {name!r}: action keys {folded_actions[folded]!r} "
+                f"and {action!r} collide when lowercased to {folded!r}"
+            )
+        folded_actions[folded] = action
+    noncanonical = sorted(
+        action for action in actions if action != action.lower()
+    )
+    if noncanonical:
+        raise ValueError(
+            f"action_router {name!r}: action keys must be lowercase because "
+            f"dispatch normalizes caller actions; got {noncanonical!r}"
+        )
+
+    canonical_default_action = default_action.lower() if default_action else None
     valid_actions = sorted(actions.keys())
     _param_maps = param_maps or {}
     _examples = examples or [f"{name}(action='{valid_actions[0]}')"]
@@ -603,13 +628,9 @@ def action_router(
     _full_description = f"{_prose} — actions: {', '.join(actions.keys())}."
 
     if pre_onboard_actions:
-        # Compare lowercase-to-lowercase: action keys are lowercase by
-        # convention everywhere today, but a mixed-case key would
-        # otherwise make this guard fire a confusing false positive on a
-        # CORRECT exemption (review fold, PR #611).
-        unknown = set(a.lower() for a in pre_onboard_actions) - set(
-            a.lower() for a in valid_actions
-        )
+        # Exemption values are normalized the same way as caller action
+        # tokens; routing-table keys above are already canonical lowercase.
+        unknown = set(a.lower() for a in pre_onboard_actions) - set(valid_actions)
         if unknown:
             raise ValueError(
                 f"action_router {name!r}: pre_onboard_actions contains "
@@ -623,7 +644,7 @@ def action_router(
         timeout=timeout,
         description=_full_description,
         pre_onboard_actions=pre_onboard_actions,
-        default_action=default_action,
+        default_action=canonical_default_action,
         # Same drift-proofing as _full_description: the telemetry clamp is
         # DERIVED from the routing map, never hand-listed. A newly wired
         # action is auditable the moment it can route.
@@ -632,7 +653,10 @@ def action_router(
     )
     async def router(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Support both 'action' and 'op' (op is alias for consistency with other tools)
-        action = (arguments.get("action") or arguments.get("op") or "").lower() or default_action
+        action = (
+            (arguments.get("action") or arguments.get("op") or "").lower()
+            or canonical_default_action
+        )
 
         if not action:
             return [error_response(
