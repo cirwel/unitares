@@ -1567,6 +1567,7 @@ class TestGetTelemetryMetrics:
         mock_telemetry.get_skip_rate_metrics.return_value = {"skip_rate": 0.1}
         mock_telemetry.get_confidence_distribution.return_value = {"mean": 0.7}
         mock_telemetry.detect_suspicious_patterns.return_value = []
+        mock_telemetry.audit_logger.log_file.exists.return_value = True
 
         with patch("src.telemetry.TelemetryCollector", return_value=mock_telemetry), \
              patch("src.perf_monitor.snapshot", return_value={"avg_ms": 5}):
@@ -1578,6 +1579,16 @@ class TestGetTelemetryMetrics:
             assert data["agent_id"] == "all_agents"
             assert data["window_hours"] == 24
             assert "calibration" in data  # should have note about excluded
+            context = data["measurement_context"]
+            assert context["schema"] == "telemetry.measurement-context.v1"
+            assert context["components"]["skip_rate_metrics"]["subject"] == {
+                "kind": "fleet"
+            }
+            assert context["components"]["calibration"]["included"] is False
+            assert context["components"]["calibration"]["window"] == {
+                "kind": "cumulative",
+                "requested_lookback_applied": False,
+            }
 
     @pytest.mark.asyncio
     async def test_telemetry_with_calibration(self, patch_context_agent_id):
@@ -1586,6 +1597,7 @@ class TestGetTelemetryMetrics:
         mock_telemetry.get_confidence_distribution.return_value = {}
         mock_telemetry.detect_suspicious_patterns.return_value = []
         mock_telemetry.get_calibration_metrics.return_value = {"calibrated": True}
+        mock_telemetry.audit_logger.log_file.exists.return_value = True
 
         with patch("src.telemetry.TelemetryCollector", return_value=mock_telemetry), \
              patch("src.perf_monitor.snapshot", return_value={}):
@@ -1600,6 +1612,90 @@ class TestGetTelemetryMetrics:
             assert data["agent_id"] == "agent-1"
             assert data["window_hours"] == 48
             assert data["calibration"]["calibrated"] is True
+            mock_telemetry.detect_suspicious_patterns.assert_called_once_with(
+                "agent-1", 48
+            )
+            context = data["measurement_context"]["components"]
+            assert context["confidence_distribution"]["subject"] == {
+                "kind": "agent",
+                "agent_id": "agent-1",
+            }
+            assert context["confidence_distribution"]["window"]["requested_hours"] == 48
+            assert context["confidence_distribution"]["coverage"] == {
+                "status": "observed",
+                "matching_observations": None,
+                "maximum_rows_scanned": 1000,
+                "status_note": "partial_tail_scan",
+            }
+            assert context["calibration"]["coverage"] == {
+                "status": "observed",
+                "matching_observations": None,
+                "strategic_matching_observations": None,
+                "tactical_matching_observations": None,
+                "counting_note": (
+                    "Channel counts are not summed because strategic and tactical "
+                    "calibration may share outcome pairs."
+                ),
+            }
+
+    @pytest.mark.asyncio
+    async def test_telemetry_reports_tactical_only_calibration_coverage(
+        self, patch_context_agent_id
+    ):
+        mock_telemetry = MagicMock()
+        mock_telemetry.get_skip_rate_metrics.return_value = {}
+        mock_telemetry.get_confidence_distribution.return_value = {}
+        mock_telemetry.detect_suspicious_patterns.return_value = []
+        mock_telemetry.get_calibration_metrics.return_value = {
+            "bins": {},
+            "tactical_calibration": {
+                "bins": {"0.6": {"count": 7}},
+            },
+        }
+        mock_telemetry.audit_logger.log_file.exists.return_value = True
+
+        with patch("src.telemetry.TelemetryCollector", return_value=mock_telemetry), \
+             patch("src.perf_monitor.snapshot", return_value={}):
+            from src.mcp_handlers.admin.handlers import handle_get_telemetry_metrics
+            data = parse_result(await handle_get_telemetry_metrics({
+                "include_calibration": True,
+            }))
+
+        coverage = data["measurement_context"]["components"]["calibration"]["coverage"]
+        assert coverage["matching_observations"] is None
+        assert coverage["strategic_matching_observations"] == 0
+        assert coverage["tactical_matching_observations"] == 7
+
+    @pytest.mark.asyncio
+    async def test_telemetry_does_not_turn_unavailable_source_into_zero_coverage(
+        self, patch_context_agent_id
+    ):
+        mock_telemetry = MagicMock()
+        mock_telemetry.get_skip_rate_metrics.return_value = {
+            "total_skips": 0,
+            "total_updates": 0,
+            "skip_rate": 0.0,
+        }
+        mock_telemetry.get_confidence_distribution.return_value = {
+            "error": "No audit log data"
+        }
+        mock_telemetry.detect_suspicious_patterns.return_value = {
+            "error": "Insufficient data"
+        }
+        mock_telemetry.audit_logger.log_file.exists.return_value = False
+
+        with patch("src.telemetry.TelemetryCollector", return_value=mock_telemetry), \
+             patch("src.perf_monitor.snapshot", return_value={}):
+            from src.mcp_handlers.admin.handlers import handle_get_telemetry_metrics
+            data = parse_result(await handle_get_telemetry_metrics({}))
+
+        components = data["measurement_context"]["components"]
+        assert components["skip_rate_metrics"]["coverage"] == {
+            "status": "source_unavailable",
+            "matching_observations": None,
+            "reason": "audit_log_not_present",
+        }
+        assert components["confidence_distribution"]["coverage"]["matching_observations"] is None
 
     @pytest.mark.asyncio
     async def test_telemetry_error(self, patch_context_agent_id):
