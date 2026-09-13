@@ -14,6 +14,8 @@ from numbers import Real
 import re
 from datetime import datetime, timedelta, timezone
 
+from .wait_assessment import assess_wait, suggests_facilitation
+
 # Import type definitions
 
 from src.dialectic_protocol import (
@@ -611,6 +613,36 @@ def _saved_brief_thesis_call(session_id: str, session_type: Optional[str]) -> st
     )
 
 
+def _last_activity_age_s(session_data: Dict[str, Any]) -> Optional[float]:
+    """Seconds since the last transcript entry, or None if unreadable.
+
+    None is returned rather than a default: "nothing has happened for 9 minutes"
+    and "the clock could not be read" are different findings, and only one of
+    them says anything about the reviewer.
+    """
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+    newest = None
+    for message in transcript:
+        stamp = (
+            message.get("timestamp")
+            if isinstance(message, dict)
+            else getattr(message, "timestamp", None)
+        )
+        if not stamp:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if newest is None or parsed > newest:
+            newest = parsed
+    if newest is None:
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - newest).total_seconds())
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     # Two dict shapes reach this function. `load_session_as_dict`
@@ -812,6 +844,17 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     # CALLER's synthesis was read as "stalled" by two experienced operators,
     # 2026-07-28). whose_move answers from the caller's seat; next_call is a
     # ready-to-use template when the move is theirs.
+    # How long this has been waiting, and whether that is yet odd. whose_move
+    # answers WHO; without this it never answered WHEN, and the open-slot text
+    # read identically at 72 seconds and 72 minutes (see wait_assessment).
+    _awaiting_kind = "reconsideration" if phase == "synthesis" else "verdict"
+    wait = assess_wait(
+        elapsed_s=_last_activity_age_s(session_data),
+        awaiting=_awaiting_kind,
+        orchestrated=bool(reviewer_agent_id) or phase == "antithesis",
+    )
+    _may_escalate = suggests_facilitation(wait.get("assessment"))
+
     whose_move = "nobody — session is terminal"
     next_call: Optional[str] = None
     if phase == "thesis":
@@ -823,7 +866,12 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     elif phase == "antithesis":
         if reviewer_agent_id is None:
             if current_agent_role == "paused_agent":
-                whose_move = "a reviewer's — the slot is open; wait or ask for facilitation"
+                whose_move = (
+                    "a reviewer's — the slot is open; wait or ask for facilitation"
+                    if _may_escalate
+                    else "a reviewer's — the slot is open and still inside the "
+                         "reviewer's budget; wait, do not escalate yet"
+                )
             else:
                 whose_move = "a reviewer's — the slot is OPEN, you may claim it"
                 next_call = (
@@ -964,6 +1012,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         "current_agent_can_submit": current_agent_can_submit,
         "reviewer_verdict_pending": reviewer_verdict_pending,
         "recommended_action": recommended_action,
+        "wait_assessment": wait,
     }
 
 
