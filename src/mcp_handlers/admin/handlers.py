@@ -115,13 +115,67 @@ def build_server_info_payload() -> Dict[str, Any]:
     current_uptime_minutes = int(current_uptime / 60)
     current_uptime_hours = int(current_uptime_minutes / 60)
 
-    # Get tool count (tool mode filtering removed - all tools always available)
-    from src.mcp_handlers import TOOL_HANDLERS
-    tool_count = len(TOOL_HANDLERS)
+    # Three different populations get called "the tool count", so name which
+    # one this is. `tool_count` stays the registry size for older clients;
+    # the qualified block beside it says what that number is and what the
+    # other two are.
+    #
+    # Source and vocabulary are the same ones #2197 canonized for the docs
+    # tool-count guard (scripts/diagnostics/count_tools.py /
+    # update_docs_tool_count.py): `registry` is the registered-dispatch-tool
+    # count, `advertised` is the registry plus the primary workflow aliases,
+    # and the breakdown key is `workflow_aliases`. Reported here from the
+    # SAME source functions rather than a parallel computation, so this
+    # surface and the docs guard cannot independently drift onto different
+    # numbers for the same claim.
+    #
+    # get_tool_registry() reads the decorator registry directly rather than
+    # the mcp_handlers.TOOL_HANDLERS snapshot: a plugin's @mcp_tool decorator
+    # writes straight into that registry the moment its handler module is
+    # imported, so this is always current for a plugin loaded at boot with no
+    # separate resync step -- unlike TOOL_HANDLERS, which needs
+    # refresh_tool_handlers_from_registry() called after plugin loading to
+    # see the same tools.
+    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
+    from src.tool_modes import advertised_tool_names_full
 
-    # PID file differs by transport.
-    project_root = Path(__file__).resolve().parent.parent.parent
-    pid_file = (project_root / "data" / ".mcp_server.pid") if is_http else (project_root / "data" / ".mcp_server_std.pid")
+    _registry = set(get_tool_registry())
+    _aliases = set(AGENT_WORKFLOW_ALIASES)
+    tool_count = len(_registry)
+    tool_counts = {
+        "registry": len(_registry),
+        "workflow_aliases": len(_aliases - _registry),
+        "advertised": len(advertised_tool_names_full()),
+        "note": (
+            "tool_count is `registry`, kept for older clients. "
+            "advertised is what tools/list emits."
+        ),
+    }
+
+    # The PID marker belongs to each transport's OWN writer; ask that module
+    # rather than recomputing the path here. Both transports were previously
+    # wrong, in different ways that both left `pid_file_exists` unable to
+    # distinguish "no server running" from "this field looks in the wrong
+    # place":
+    #
+    #   - HTTP: `Path(__file__).resolve().parent.parent.parent` from THIS
+    #     module lands on `src/`, not the repo root, so it reported
+    #     `<repo>/src/data/.mcp_server.pid` while process_management writes
+    #     `<repo>/data/.mcp_server.pid`. It also ignored the
+    #     UNITARES_SERVER_PID_FILE override that process_management honours.
+    #   - STDIO: reported an invented `.mcp_server_std.pid`, a filename this
+    #     repo writes nowhere. stdio's main() (src/mcp_server_std.py) calls
+    #     agent_process_mgmt.init_server_process(), which writes
+    #     agent_process_mgmt.PID_FILE -- a DIFFERENT module than the HTTP
+    #     transport's writer. (Both constants happen to resolve to the same
+    #     path today; they are still asked separately; only one of the two
+    #     honours UNITARES_SERVER_PID_FILE, so collapsing the selection would
+    #     rebuild this exact defect the moment either one moves.)
+    from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
+    from src.process_management import SERVER_PID_FILE
+
+    pid_file = SERVER_PID_FILE if is_http else STDIO_PID_FILE
 
     return {
         "transport": transport,
@@ -129,6 +183,7 @@ def build_server_info_payload() -> Dict[str, Any]:
         "version": server_version,  # Alias for consistency
         "build_date": server_build_date,
         "tool_count": tool_count,
+        "tool_counts": tool_counts,
         "current_pid": current_pid,
         "current_uptime_seconds": int(current_uptime),
         "current_uptime_formatted": f"{current_uptime_hours}h {current_uptime_minutes % 60}m",

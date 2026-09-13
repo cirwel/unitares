@@ -81,8 +81,12 @@ class TestGetServerInfo:
     @pytest.mark.asyncio
     async def test_server_info_without_psutil(self, mock_mcp_server, patch_context_agent_id):
         mock_mcp_server.PSUTIL_AVAILABLE = False
+        # tool_count is sourced from get_tool_registry() (the decorator
+        # registry), not the mcp_handlers.TOOL_HANDLERS snapshot -- see
+        # TestServerInfoReportsWhatTheServerActuallyUses for why.
         with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
-             patch("src.mcp_handlers.TOOL_HANDLERS", {"a": None, "b": None, "c": None}):
+             patch("src.mcp_handlers.decorators.get_tool_registry",
+                   return_value={"a": None, "b": None, "c": None}):
             from src.mcp_handlers.admin.handlers import handle_get_server_info
             result = await handle_get_server_info({})
 
@@ -3245,3 +3249,99 @@ class TestContinuityHealthAdditional:
             data = parse_result(result)
             assert data["success"] is True
             assert any("provenance" in r.lower() for r in data["recommendations"])
+
+
+class TestServerInfoReportsWhatTheServerActuallyUses:
+    """server_info must report the marker each transport writes and name
+    which tool population its count is, using the same source and
+    vocabulary #2197 canonized for the docs tool-count guard
+    (registry / workflow_aliases / advertised).
+
+    Both fields used to answer a different question than the reader's.
+    `pid_file` was recomputed locally instead of asked of each transport's
+    own writer, and both transports were wrong in different ways:
+    HTTP's path walk landed on `src/` instead of the repo root and ignored
+    UNITARES_SERVER_PID_FILE, and stdio reported an invented filename that
+    nothing writes -- agent_process_mgmt.PID_FILE is stdio's real writer,
+    not process_management.SERVER_PID_FILE. `tool_count` is the registry
+    size, while the docs audit surface counts advertised wire names -- a
+    different, larger number -- with nothing saying so.
+    """
+
+    def _payload(self, monkeypatch, argv):
+        monkeypatch.setattr("sys.argv", argv)
+        from src.mcp_handlers.admin.handlers import build_server_info_payload
+
+        return build_server_info_payload()
+
+    def test_http_pid_file_is_the_one_process_management_writes(self, monkeypatch):
+        from src.process_management import SERVER_PID_FILE
+
+        payload = self._payload(monkeypatch, ["python", "src/mcp_server.py", "--port", "8767"])
+        assert payload["pid_file"] == str(SERVER_PID_FILE)
+
+    def test_stdio_pid_file_is_the_one_stdio_actually_writes(self, monkeypatch):
+        """stdio's main() calls agent_process_mgmt.init_server_process(),
+        which writes agent_process_mgmt.PID_FILE -- a different module than
+        the HTTP transport's writer. Exact cross-module equality, not just a
+        shared parent directory."""
+        from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
+
+        payload = self._payload(monkeypatch, ["python", "src/mcp_server_std.py"])
+        assert payload["transport"] == "STDIO"
+        assert payload["pid_file"] == str(STDIO_PID_FILE)
+
+    def test_neither_transport_reports_a_name_nothing_writes(self, monkeypatch):
+        """The defect class, stated directly: every reported marker must be
+        some writer's constant, never a name synthesised in the reporter."""
+        from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
+        from src.process_management import SERVER_PID_FILE
+
+        written = {str(SERVER_PID_FILE), str(STDIO_PID_FILE)}
+        for argv in (["python", "src/mcp_server.py"], ["python", "src/mcp_server_std.py"]):
+            assert self._payload(monkeypatch, argv)["pid_file"] in written, argv
+
+    def test_legacy_tool_count_is_the_registry_count(self, monkeypatch):
+        payload = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+        assert payload["tool_count"] == payload["tool_counts"]["registry"]
+
+    def test_tool_counts_matches_the_docs_guard_vocabulary_and_source(self, monkeypatch):
+        """Same quantity names (registry / workflow_aliases / advertised) and
+        the same source function (tool_modes.advertised_tool_names_full) that
+        #2197's update_docs_tool_count.py / count_tools.py canonized for the
+        docs tool-count guard, so this surface and that one cannot
+        independently drift onto different numbers for the same claim."""
+        from src.tool_modes import advertised_tool_names_full
+
+        counts = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+
+        assert set(counts) >= {"registry", "workflow_aliases", "advertised"}
+        assert counts["advertised"] == len(advertised_tool_names_full())
+        assert counts["registry"] + counts["workflow_aliases"] == counts["advertised"]
+
+    def test_advertised_is_never_smaller_than_registry(self, monkeypatch):
+        counts = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+        assert counts["advertised"] >= counts["registry"]
+
+    def test_counts_see_a_tool_registered_after_import(self, monkeypatch):
+        """The property tool_meta.WIRE_ORDER (a static tuple built at import
+        from module-level TOOL_META) would fail: it cannot see a tool an
+        entry-point plugin registers at boot, after WIRE_ORDER is already
+        built. get_tool_registry() reads the decorator registry directly, so
+        a handler decorated after import is visible immediately -- no
+        separate resync step, unlike mcp_handlers.TOOL_HANDLERS.
+        """
+        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, ToolDefinition
+
+        before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+        monkeypatch.setitem(
+            _TOOL_DEFINITIONS,
+            "pretend_plugin_tool",
+            ToolDefinition(
+                name="pretend_plugin_tool", handler=lambda *_: None, timeout=30.0,
+            ),
+        )
+        after = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+
+        assert after["registry"] == before["registry"] + 1
+        assert after["advertised"] == before["advertised"] + 1

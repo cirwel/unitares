@@ -20,6 +20,12 @@
   ],
   "server_version": "0.42.0",
   "tool_count": 100,
+  "tool_counts": {
+    "advertised": 108,
+    "note": "tool_count is `registry`, kept for older clients. advertised is what tools/list emits.",
+    "registry": 100,
+    "workflow_aliases": 8
+  },
   "total_server_processes": 1,
   "transport": "HTTP",
   "version": "0.42.0"
