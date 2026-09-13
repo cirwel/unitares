@@ -52,6 +52,7 @@ from src.alias_schema import (
 )
 from src.tool_annotations import tool_annotations
 from src.tool_call_sets import call_set
+from src.mcp_handlers.middleware.params_step import remove_reserved_dispatch_keys
 
 from src.logging_utils import get_logger
 from src.metrics_registry import TOOL_CALLS_TOTAL, TOOL_CALL_DURATION
@@ -279,6 +280,11 @@ def get_tool_wrapper(tool_name: str):
             # identity is resolved only from the middleware-owned handoff at
             # the exit point; a raw request agent_id may be a target, legacy
             # reference, or rejected impersonation attempt.
+            # Caller copies of reserved dispatch keys go before anything reads
+            # kwargs: the Wave-3a BEAM branch below returns without
+            # dispatch_tool (whose pipeline strips them), and _record reads
+            # the middleware handoff for audit attribution.
+            remove_reserved_dispatch_keys(kwargs)
             usage_payload = build_tool_usage_payload(tool_name, kwargs)
             session_id = kwargs.get("client_session_id")
 

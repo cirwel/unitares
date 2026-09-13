@@ -4,7 +4,8 @@ Only dispatch middleware writes ``_middleware_identity_result``,
 ``_middleware_identity_session_key`` and the other reserved keys, after it has
 verified a proof, and handlers read them as trusted. The MCP pipeline and the
 REST dispatch fallback remove caller copies in their first step; these tests
-hold the REST route, the direct handlers and the BEAM proxy to the same rule,
+hold the REST route, the direct handlers, the BEAM proxy and the MCP tool
+wrapper's BEAM branch (which returns before dispatch) to the same rule,
 including for keys wrapped inside ``kwargs``.
 """
 
@@ -176,3 +177,41 @@ async def test_rest_onboard_with_a_forged_handoff_does_not_resume_the_named_agen
 
     rendered = json.dumps(result, default=str)
     assert VICTIM not in rendered, rendered[:2000]
+
+
+# --- MCP tool wrapper: the Wave-3a BEAM branch returns before dispatch_tool --
+
+
+@pytest.mark.asyncio
+async def test_mcp_wrapper_beam_branch_never_forwards_or_attributes_forged_keys(monkeypatch):
+    import src.tool_registration as tool_registration
+
+    forwarded = {}
+    recorded = []
+
+    class _Result:
+        ok = True
+        response = {"ok": True}
+        fallback_reason = None
+
+    async def spy_proxy(*, tool_name, beam_url, kwargs):
+        forwarded.update(kwargs)
+        return _Result()
+
+    async def must_not_dispatch(name, arguments):
+        raise AssertionError("BEAM success must not reach Python dispatch")
+
+    monkeypatch.setattr(tool_registration, "_wave3a_get_route", lambda name: "http://beam.invalid")
+    monkeypatch.setattr(tool_registration, "_wave3a_proxy_to_beam", spy_proxy)
+    monkeypatch.setattr(tool_registration, "dispatch_tool", must_not_dispatch)
+    monkeypatch.setattr(tool_registration, "record_tool_usage", lambda **kw: recorded.append(kw))
+
+    tool_registration._tool_wrappers_cache.pop("_forged_handoff_beam_tool", None)
+    try:
+        wrapper = tool_registration.get_tool_wrapper("_forged_handoff_beam_tool")
+        await wrapper(lite=True, **_forged())
+    finally:
+        tool_registration._tool_wrappers_cache.pop("_forged_handoff_beam_tool", None)
+
+    assert forwarded == {"lite": True}
+    assert recorded and all(row.get("agent_id") != VICTIM for row in recorded)
