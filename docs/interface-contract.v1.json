@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "24bdd260d69d3eb2b567306618457c17d3d769f799d23d8168362b5893f145d4",
+  "surface_sha256": "d0b0609c876405da264b65fa8403df8174a7345923a5cc53c1924e1bbf88a1b1",
   "capabilities": [
     {
       "name": "start_session",
@@ -25,7 +25,7 @@
       "name": "sync_state",
       "implementation": "process_agent_update",
       "kind": "workflow_alias",
-      "input_schema_sha256": "4e7d05a49d7129dcd9f8ccd81fb93629399fb07bce43e0f21d8b04b7827f1a1b",
+      "input_schema_sha256": "a3b0926d89b8c6e930243182af6256a0923574ca7b2cef01cddb60f591b55eb6",
       "transport_names": {
         "mcp_streamable_http": "sync_state",
         "rest_v1_tools": "sync_state",

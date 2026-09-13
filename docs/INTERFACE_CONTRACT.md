@@ -125,9 +125,10 @@ The two identifiers serve different jobs:
   `ge`/`le`, which no client validator reads, so 99 was advertised as legal;
   it is now `minimum`/`maximum`. Their string branch had allowed any string; it
   is now a regex of numeric strings in [0, 1]. `sync_state`'s `complexity` also
-  lists the named levels its normalizer accepts. Acceptance, refusal and error
-  messages are unchanged for every input on every transport; three digests
-  move. 1.8.0 is taken by a concurrent change).
+  lists the named levels its normalizer accepts. Only the advertised schema
+  changes: acceptance, refusal and every validation error, down to its
+  location, are unchanged on every transport; three digests move. 1.8.0 is
+  taken by a concurrent change).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

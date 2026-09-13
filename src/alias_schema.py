@@ -127,6 +127,13 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
     # This override replaces the whole anyOf, so it repeats the two canonical
     # branches rather than adding to them.
     #
+    # The named levels nest inside the one string branch rather than forming a
+    # second one. The MCP transport builds its argument model from this schema,
+    # one Python type per top-level branch, so a second string branch gave that
+    # model a second `str` member, and a list or object was then refused with
+    # the same string error twice. Nested, the top-level branches stay number,
+    # string and null: the union the transport built before, error for error.
+    #
     # Deliberately narrow, so the advertised schema stays a subset of what is
     # accepted. `complexity` only: nothing normalizes `confidence`, so it keeps
     # the canonical schema. And the named-level enum only: the normalizer also
@@ -137,8 +144,13 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         "complexity": {
             "anyOf": [
                 {"type": "number", "minimum": 0.0, "maximum": 1.0},
-                {"type": "string", "pattern": UNIT_INTERVAL_STRING_PATTERN},
-                {"type": "string", "enum": list(SYNC_STATE_COMPLEXITY_NAMED_LEVELS)},
+                {
+                    "type": "string",
+                    "anyOf": [
+                        {"type": "string", "pattern": UNIT_INTERVAL_STRING_PATTERN},
+                        {"type": "string", "enum": list(SYNC_STATE_COMPLEXITY_NAMED_LEVELS)},
+                    ],
+                },
                 {"type": "null"},
             ],
         },
