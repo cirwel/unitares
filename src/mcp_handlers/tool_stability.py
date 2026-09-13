@@ -315,9 +315,6 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Feb 2026 Tool Consolidation - removed tools map to consolidated versions
     # ==========================================================================
 
-    # Pi tool aliases moved to unitares-pi-plugin; registered via
-    # register_extra_aliases() at plugin load.
-
     # Observe tools → observe(action='...')
     "observe_agent": ToolAlias(old_name="observe_agent", new_name="observe", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
