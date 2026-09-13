@@ -14,7 +14,7 @@ from numbers import Real
 import re
 from datetime import datetime, timedelta, timezone
 
-from .wait_assessment import assess_wait, suggests_facilitation
+from .wait_assessment import assess_wait
 
 # Import type definitions
 
@@ -629,18 +629,44 @@ def _last_activity_age_s(session_data: Dict[str, Any]) -> Optional[float]:
             else getattr(message, "timestamp", None)
         )
         if not stamp:
-            continue
+            return None
         try:
             parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
-        except ValueError:
-            continue
+        except (ValueError, TypeError, OverflowError):
+            return None
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
-        if newest is None or parsed > newest:
-            newest = parsed
+        if newest is not None and parsed < newest:
+            return None  # The transcript's causal order has no reliable clock.
+        newest = parsed
     if newest is None:
         return None
-    return max(0.0, (datetime.now(timezone.utc) - newest).total_seconds())
+    elapsed = (datetime.now(timezone.utc) - newest).total_seconds()
+    return elapsed if elapsed >= 0 else None
+
+
+def _has_orchestrated_reviewer_budget(session_data: Dict[str, Any], reviewer_id: str) -> bool:
+    """Use recorded provenance, never assignment alone, to identify the runner.
+
+    Some read shapes omit provenance. They remain unclassified rather than
+    assigning the orchestrated runner's deadline to a human or unknown agent.
+    """
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+    for message in reversed(transcript):
+        agent_id = message.get("agent_id") if isinstance(message, dict) else getattr(message, "agent_id", None)
+        if agent_id != reviewer_id:
+            continue
+        metrics = message.get("observed_metrics") if isinstance(message, dict) else getattr(message, "observed_metrics", None)
+        if not isinstance(metrics, dict):
+            continue
+        backend = metrics.get("reviewer_backend")
+        if isinstance(backend, dict) and "reviewer_kind" in backend:
+            return backend.get("reviewer_kind") == "orchestrated"
+    # The runner registers this fingerprint at onboard (_reviewer_model_type),
+    # including on older messages whose backend stamp predates reviewer_kind.
+    meta = getattr(mcp_server, "agent_metadata", {}).get(reviewer_id)
+    model_type = _meta_value(meta, "model_type")
+    return isinstance(model_type, str) and model_type.startswith("dialectic_reviewer:")
 
 
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -847,13 +873,24 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     # How long this has been waiting, and whether that is yet odd. whose_move
     # answers WHO; without this it never answered WHEN, and the open-slot text
     # read identically at 72 seconds and 72 minutes (see wait_assessment).
-    _awaiting_kind = "reconsideration" if phase == "synthesis" else "verdict"
-    wait = assess_wait(
-        elapsed_s=_last_activity_age_s(session_data),
-        awaiting=_awaiting_kind,
-        orchestrated=bool(reviewer_agent_id) or phase == "antithesis",
+    reviewer_owed = (
+        phase in {"antithesis", "synthesis"}
+        and str(session_data.get("status") or "").lower() not in {
+            "resolved", "failed", "escalated", "timeout", "abandoned",
+        }
+        and required_role == "reviewer"
+        and independent_reviewer_can_revise
+        and current_agent_role != "reviewer"
     )
-    _may_escalate = suggests_facilitation(wait.get("assessment"))
+    awaiting_kind = (
+        ("reconsideration" if reviewer_reconsideration_owed else "verdict")
+        if reviewer_owed else None
+    )
+    wait = assess_wait(
+        elapsed_s=_last_activity_age_s(session_data) if reviewer_owed else None,
+        awaiting=awaiting_kind,
+        orchestrated=bool(reviewer_owed and _has_orchestrated_reviewer_budget(session_data, reviewer_agent_id)),
+    )
 
     whose_move = "nobody — session is terminal"
     next_call: Optional[str] = None
@@ -867,10 +904,8 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         if reviewer_agent_id is None:
             if current_agent_role == "paused_agent":
                 whose_move = (
-                    "a reviewer's — the slot is open; wait or ask for facilitation"
-                    if _may_escalate
-                    else "a reviewer's — the slot is open and still inside the "
-                         "reviewer's budget; wait, do not escalate yet"
+                    "a reviewer's — the slot is open; no identified reviewer "
+                    "obligation or wait budget is established"
                 )
             else:
                 whose_move = "a reviewer's — the slot is OPEN, you may claim it"

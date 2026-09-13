@@ -30,15 +30,16 @@ so that decision is made against a list rather than a memory.
 
 Classification per OPEN DRAFT pull request:
 
-  UNBLOCKED   CI green on the head commit, no merge conflict, no unresolved
-              review threads, and untouched for longer than --quiet-hours.
-              Nothing is wrong with it and nobody is working on it. THE ALARM
-              CLASS: it is waiting only on a readiness decision.
+  UNBLOCKED   All expected required CI is present and green on the head commit,
+              mergeability is confirmed, no changes requested or unresolved
+              threads, and untouched for longer than --quiet-hours. A candidate
+              for a readiness decision; inactivity does not prove work is done.
   CONFLICTED  merge conflict against the base branch. Needs a base merge from
               whoever owns it.
   CI-RED      at least one failing check on the head commit.
-  REVIEW-OPEN unresolved review threads. Waiting on the author, not on you.
-  CI-PENDING  checks still running, or none reported yet.
+  REVIEW-OPEN changes requested or unresolved review threads.
+  CI-PENDING  checks running/missing, or required check policy unreadable.
+  UNKNOWN     mergeability or review state could not be established.
   IN-FLIGHT   touched within --quiet-hours; the owner may still be working.
               Not reported.
 
@@ -59,6 +60,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 CLASS_ORDER = {
     "UNBLOCKED": 0,
@@ -66,6 +68,7 @@ CLASS_ORDER = {
     "CI-RED": 2,
     "REVIEW-OPEN": 3,
     "CI-PENDING": 4,
+    "UNKNOWN": 5,
 }
 
 ALARM_CLASSES = ("UNBLOCKED", "CONFLICTED", "CI-RED")
@@ -92,10 +95,114 @@ def open_drafts(repo: str) -> list[dict]:
         "--state", "open",
         "--limit", "200",
         "--json",
-        "number,title,isDraft,createdAt,updatedAt,headRefName,author,"
+        "number,title,isDraft,createdAt,updatedAt,headRefName,headRefOid,baseRefName,author,"
         "mergeable,statusCheckRollup,reviewDecision,reviewRequests",
     )
     return [pr for pr in json.loads(out) if pr.get("isDraft")]
+
+
+def required_checks(repo: str, branch: str) -> list[dict] | None:
+    """Read expected contexts and apps from protection and effective rulesets.
+
+    The rollup only contains checks that exist. It cannot establish whether a
+    required workflow never started (for example, awaiting bot-run approval).
+    An unreadable policy remains unknown; an unprotected base declares no gate.
+    """
+    owner, _, name = repo.partition("/")
+    query = """
+      query($owner:String!, $name:String!, $ref:String!) {
+        repository(owner:$owner, name:$name) {
+          ref(qualifiedName:$ref) {
+            branchProtectionRule {
+              requiredStatusChecks { context app { databaseId } }
+            }
+          }
+        }
+      }
+    """
+    try:
+        protection = json.loads(run(
+            "gh", "api", "graphql", "-f", f"query={query}",
+            "-F", f"owner={owner}", "-F", f"name={name}",
+            "-F", f"ref=refs/heads/{branch}",
+        ))
+        if not isinstance(protection, dict) or protection.get("errors"):
+            return None
+        rule = protection["data"]["repository"]["ref"]["branchProtectionRule"]
+        checks = [
+            {"context": check["context"], "app_id": check["app"]["databaseId"] if check["app"] else None}
+            for check in rule["requiredStatusChecks"] or []
+        ] if rule else []
+        pages = json.loads(run(
+            "gh", "api", "--paginate", "--slurp",
+            f"repos/{repo}/rules/branches/{quote(branch, safe='')}",
+        ))
+        for rules in pages:
+            for rule in rules:
+                if rule["type"] in {"workflows", "code_scanning", "required_deployments"}:
+                    # These gates cannot be established from named check
+                    # contexts. Do not silently certify the subset we can read.
+                    return None
+                if rule["type"] == "required_status_checks":
+                    checks.extend(
+                        {"context": check["context"], "app_id": check.get("integration_id")}
+                        for check in rule["parameters"]["required_status_checks"]
+                    )
+        if any(
+            not isinstance(check["context"], str) or not check["context"]
+            or (check["app_id"] is not None and (type(check["app_id"]) is not int or check["app_id"] <= 0))
+            for check in checks
+        ):
+            return None
+        return checks
+    except (subprocess.CalledProcessError, KeyError, TypeError, ValueError):
+        return None
+
+
+def head_check_rollup(repo: str, oid: str) -> list[dict] | None:
+    """Read checks with their producing app at the exact sampled PR head.
+
+    ``gh pr list`` omits app identity. A same-name check from another app must
+    not satisfy an app-constrained requirement. Unknown/truncated reads cannot
+    establish complete coverage.
+    """
+    owner, _, name = repo.partition("/")
+    query = """
+      query($owner:String!, $name:String!, $oid:GitObjectID!) {
+        repository(owner:$owner, name:$name) {
+          object(oid:$oid) { ... on Commit {
+            statusCheckRollup { contexts(first:100) {
+              pageInfo { hasNextPage }
+              nodes {
+                ... on CheckRun { name status conclusion checkSuite { app { databaseId } } }
+                ... on StatusContext { context state }
+              }
+            } }
+          } }
+        }
+      }
+    """
+    try:
+        payload = json.loads(run(
+            "gh", "api", "graphql", "-f", f"query={query}",
+            "-F", f"owner={owner}", "-F", f"name={name}", "-F", f"oid={oid}",
+        ))
+        if not isinstance(payload, dict) or payload.get("errors"):
+            return None
+        rollup = payload["data"]["repository"]["object"]["statusCheckRollup"]
+        if rollup is None:
+            return []
+        connection = rollup["contexts"]
+        if connection["pageInfo"]["hasNextPage"]:
+            return None
+        checks = connection["nodes"]
+        for check in checks:
+            if "name" in check:
+                app = check["checkSuite"]["app"]
+                check["app_id"] = app["databaseId"] if app else None
+        return checks
+    except (subprocess.CalledProcessError, KeyError, TypeError, ValueError):
+        return None
 
 
 def unresolved_threads(repo: str, number: int) -> int | None:
@@ -109,7 +216,10 @@ def unresolved_threads(repo: str, number: int) -> int | None:
       query($owner:String!, $name:String!, $number:Int!) {
         repository(owner:$owner, name:$name) {
           pullRequest(number:$number) {
-            reviewThreads(first:100) { nodes { isResolved } }
+            reviewThreads(first:100) {
+              nodes { isResolved }
+              pageInfo { hasNextPage }
+            }
           }
         }
       }
@@ -126,7 +236,13 @@ def unresolved_threads(repo: str, number: int) -> int | None:
     except subprocess.CalledProcessError:
         return None
     try:
-        nodes = json.loads(out)["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+        payload = json.loads(out)
+        if not isinstance(payload, dict) or payload.get("errors"):
+            return None
+        connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+        if connection["pageInfo"]["hasNextPage"]:
+            return None  # A truncated clean prefix is not a clean review.
+        nodes = connection["nodes"]
     except (KeyError, TypeError, json.JSONDecodeError):
         return None
     return sum(1 for n in nodes if not n.get("isResolved"))
@@ -143,7 +259,17 @@ def check_state(pr: dict) -> str:
     if not rollup:
         return "pending"
     failed = False
-    pending = False
+    required = pr.get("requiredStatusChecks")
+    # No declared gate is insufficient evidence for this audit's CI-green
+    # claim, including stacked PRs targeting an unprotected feature branch.
+    pending = not required or any(
+        not any(
+            (check.get("name") or check.get("context")) == rule["context"]
+            and (rule["app_id"] is None or check.get("app_id") == rule["app_id"])
+            for check in rollup
+        )
+        for rule in required
+    )
     for check in rollup:
         # Check runs use status/conclusion; legacy commit statuses use state.
         if check.get("status") is not None:
@@ -153,11 +279,13 @@ def check_state(pr: dict) -> str:
             conclusion = (check.get("conclusion") or "").upper()
             if conclusion in ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"):
                 failed = True
+            elif conclusion not in ("SUCCESS", "SKIPPED", "NEUTRAL"):
+                pending = True
         else:
             state = (check.get("state") or "").upper()
             if state in ("FAILURE", "ERROR"):
                 failed = True
-            elif state == "PENDING":
+            elif state != "SUCCESS":
                 pending = True
     if failed:
         return "red"
@@ -185,6 +313,7 @@ def classify(pr: dict, threads: int | None, quiet_hours: float, now: datetime) -
 
     mergeable = (pr.get("mergeable") or "UNKNOWN").upper()
     checks = check_state(pr)
+    review = pr.get("reviewDecision")
 
     if mergeable == "CONFLICTING":
         finding["class"] = "CONFLICTED"
@@ -192,6 +321,9 @@ def classify(pr: dict, threads: int | None, quiet_hours: float, now: datetime) -
     elif checks == "red":
         finding["class"] = "CI-RED"
         finding["reason"] = "at least one failing check on the head commit"
+    elif review == "CHANGES_REQUESTED":
+        finding["class"] = "REVIEW-OPEN"
+        finding["reason"] = "changes requested in a review; waiting on the author"
     elif threads is None:
         finding["class"] = "CI-PENDING"
         finding["reason"] = "review threads could not be read; state indeterminate"
@@ -200,12 +332,21 @@ def classify(pr: dict, threads: int | None, quiet_hours: float, now: datetime) -
         finding["reason"] = f"{threads} unresolved review thread(s); waiting on the author"
     elif checks == "pending":
         finding["class"] = "CI-PENDING"
-        finding["reason"] = "checks still running or none reported on the head commit"
+        finding["reason"] = "checks running/missing, or expected required CI could not be established"
+    elif mergeable != "MERGEABLE":
+        finding["class"] = "UNKNOWN"
+        finding["reason"] = "mergeability has not been established"
+    elif "reviewDecision" not in pr or review not in (None, "", "APPROVED", "REVIEW_REQUIRED"):
+        finding["class"] = "UNKNOWN"
+        finding["reason"] = "review decision could not be established"
+    elif review == "REVIEW_REQUIRED":
+        finding["class"] = "REVIEW-OPEN"
+        finding["reason"] = "required review approval is outstanding"
     else:
         finding["class"] = "UNBLOCKED"
         finding["reason"] = (
             f"green, mergeable, no open threads, untouched {idle_h:.1f}h "
-            "— waiting only on a readiness decision"
+            "— candidate for a readiness decision; completion is not established"
         )
     return finding
 
@@ -235,10 +376,17 @@ def age_profile(findings: list[dict]) -> dict:
 def audit(repo: str, quiet_hours: float) -> list[dict]:
     now = datetime.now(timezone.utc)
     findings = []
+    policies = {}
     for pr in open_drafts(repo):
         idle_h = (now - _parse_ts(pr["updatedAt"])).total_seconds() / 3600
         # Only pay for the GraphQL round-trip on PRs that could be reported.
         threads = unresolved_threads(repo, pr["number"]) if idle_h >= quiet_hours else 0
+        if idle_h >= quiet_hours:
+            base = pr["baseRefName"]
+            if base not in policies:
+                policies[base] = required_checks(repo, base)
+            pr["requiredStatusChecks"] = policies[base]
+            pr["statusCheckRollup"] = head_check_rollup(repo, pr["headRefOid"])
         findings.append(classify(pr, threads, quiet_hours, now))
     return findings
 
@@ -289,7 +437,7 @@ def main() -> int:
             f"oldest {allp.get('oldest_age_hours', 0)}h"
         )
         print(
-            f"UNBLOCKED (waiting only on a readiness decision): {unb['count']}"
+            f"UNBLOCKED (readiness candidates, completion unproven): {unb['count']}"
             + (f"  median age {unb['median_age_hours']}h" if unb["count"] else "")
         )
 
