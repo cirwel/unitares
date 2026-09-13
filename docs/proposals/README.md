@@ -39,6 +39,14 @@ would make the script the tagging authority and stop this file being canonical f
 own rule. A doc tagged **Active** that nobody has touched in a year passes the check;
 saying so is this index's job, and revising it is a human's.
 
+**So be precise about what is live here and what is not.** The *counts* are live and
+enforced. The *tags* are a dated reading, last taken 2026-09-03, and nothing re-derives
+them — which means this index answers "what was judged alive on that date, and is every
+doc still accounted for," **not** "what is alive right now." A review
+(dialectic `490c7cf515b89a6e`, 2026-09-13) named the earlier wording a contradiction:
+it claimed the first while only checking the second. Re-tag deliberately when the
+picture changes; do not read an untouched **Active** row as current evidence.
+
 ## Active threads
 
 ### Plexus / surface lease plane

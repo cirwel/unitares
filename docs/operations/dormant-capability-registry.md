@@ -140,10 +140,39 @@ they are not re-flagged.
 | `check_idle_agents` / `get_recent_events_for_agent` | `event_detector.py:451/495` | no static reference found | **DECIDE** |
 | `list_restartable_tasks` | `background_tasks.py:1758` | no static reference found | **DECIDE** |
 | `reset_pin_match_scope` | `mcp_handlers/context.py:263` | no static reference found | **DECIDE** |
-| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:51` | **Premise void as of 2026-09-13.** Its whole basis was "same dead chain as `check_reviewer_stuck` (CUT below)" — but `check_reviewer_stuck` was withdrawn 2026-08-13 as false-dead (it is called on a registered request path), and this row was never re-derived. It is also not unreferenced: it is one of twelve recovery builders in the `RECOVERY_BUILDERS` parametrisation of `tests/test_dialectic_recovery_pointers.py`, which guards every builder against pointing at retired tool names. Cutting it removes a row from that guard. | **KEEP** — re-status only from evidence about this function, not about its former sibling |
+| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:51` | **Premise void as of 2026-09-13.** Its whole basis was "same dead chain as `check_reviewer_stuck` (CUT below)" — but `check_reviewer_stuck` was withdrawn 2026-08-13 as false-dead (it is called on a registered request path), and this row was never re-derived. Its only other reference is a **test**: it is one of twelve recovery builders in the `RECOVERY_BUILDERS` parametrisation of `tests/test_dialectic_recovery_pointers.py`. **That is not production reachability, and this row previously implied it was** — the same evidence-mislabelling this file's header warns about, committed in the act of warning about it (caught by review `490c7cf515b89a6e`, 2026-09-13). A test-only reference means deleting the function costs a row of guard coverage; it says nothing about whether any caller wants the capability. | **DECIDE** — no production caller is known and none has been ruled out; the prior CUT is void because its premise was another withdrawn row, not because this function was shown to be live. Re-status only on evidence about its intended capability. |
 | `reranker_available` | `reranker.py:190` | no static reference found (`rrf_fuse`/`apply_tag_boost` are live; this flag-check is not) | **DECIDE** |
 | `register_extra_schemas` / `register_extra_descriptions` plugin entry-point API | `tool_schemas.py:20`; `tool_descriptions.py:145` | Published `governance_mcp.plugins` hook; **0 consumers** (incl. the plugin repo) | **KEEP-DORMANT** — extension hook, removal is a deprecation decision |
 | `gateway_server.py` `main()` script entrypoint | `src/gateway_server.py:99` | Has `__main__`; launched out-of-band via the gateway plist *template* (`scripts/ops/com.unitares.gateway-mcp.plist.template`), not by any import — install state is deployment-specific | **DECIDE** — confirm the gateway plist is installed on the target deployment |
+
+## Cross-repository consumer audit (2026-09-13)
+
+A caller count taken inside this repo bounds nothing about consumers outside it, and
+this repo has a real one: `unitares-pi-plugin` imports `src.*` directly (it is why the
+five `AuditLogger.log_*` orchestration methods are KEEP-DORMANT rather than cut). A
+review (dialectic `490c7cf515b89a6e`) refused the three 2026-09-13 cuts on exactly that
+ground, so the audit below is the evidence that was missing, recorded rather than
+asserted.
+
+Audited at `unitares-pi-plugin@4a49267` (shallow clone, 19 Python files):
+
+| Symbol | Hits |
+|---|---|
+| `create_indexes` | 0 |
+| `query_response_chain` | 0 |
+| `_get_pg_db` | 0 |
+
+The plugin imports 19 `src.*` modules — `agent_state`, `agent_storage`, `audit_log`,
+`background_tasks`, `health_thresholds`, `lease_plane*`, `logging_utils`,
+`mcp_handlers.*`, `tool_descriptions`, `tool_schemas`. **Neither `src.db.age_queries`
+nor `src.calibration` appears in that set**, so the cut symbols are unreachable from it
+by import as well as by name.
+
+**Scope, stated so it is not over-read:** this covers the one first-party companion
+repository known to import `src.*`. It does not cover an unknown third-party consumer,
+and no absence of `__all__` would have — `__all__` governs `from x import *` only, and
+a public module-level name stays importable regardless. Re-run this audit against any
+new companion repo before citing it.
 
 ## Genuine cruft — CUT candidates (check the call sites before deleting)
 
@@ -174,7 +203,7 @@ they are not re-flagged.
 |---|---|---|
 | ~~backfill embeddings script~~ | Removed legacy migration script | Hardcoded to the legacy 384d `core.discovery_embeddings` table, which live search no longer reads — broken against the active bge-m3 model. **CUT** (script-cleanup sweep): removed; recoverable from git history if the legacy table is ever backfilled |
 | Legacy `core.discovery_embeddings` table (1887 rows, 384d) | DB | Superseded by `_bge_m3` (1056, clean). **Cut after** concept-extraction confirmed reading the active table |
-| ~~`query_response_chain` builder~~ | was `src/db/age_queries.py` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **CUT — executed 2026-09-13.** Re-confirmed zero callers across `src/`, `tests/`, `scripts/`, `agents/` first; `age_queries.py` declares no `__all__` and uses no `getattr`/`importlib` dispatch, so the static count is the whole story for this module. Recoverable from git history. |
+| ~~`query_response_chain` builder~~ | was `src/db/age_queries.py` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **CUT — executed 2026-09-13.** Re-confirmed zero callers across `src/`, `tests/`, `scripts/`, `agents/` first, and `age_queries.py` uses no `getattr`/`importlib` dispatch, so nothing in this repo reaches it dynamically. **The scope of that claim is in-repo only.** An earlier draft of this row argued from the absence of `__all__`; a review (dialectic `490c7cf515b89a6e`, 2026-09-13) refuted it — `__all__` governs `from x import *` and nothing else, so a public module-level name stays importable by any out-of-repo consumer regardless. What bounds the risk here is the separate cross-repo check recorded below, not that absence. Recoverable from git history. |
 | ~~`log_auto_attest` typed helper~~ | `audit_log.py` | **Withdrawn 2026-08-13 — it is called.** See *Verified-wired / false-dead*. |
 | Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | **Withdrawn 2026-09-13 — the cut premise does not survive the call sites.** "0 of 47 sessions ever escalated" measured *outcomes*, not *reachability*: `"escalate"` is a live contract string, not a dead branch. It is the **default** recommendation in three places in `mcp_handlers/dialectic/handlers.py` (`.get("recommendation", "ESCALATE")`), a permitted value in `schemas/dialectic.py` `Literal[...]` and `mcp_handlers/types.py`, a disagreement signal in `dialectic/calibration.py`, and asserted in `tests/test_dialectic_session_pure.py`. Deleting the enum would change what the synthesis path falls back to — a **behavior change**, not cleanup. Re-open only as a deliberate default-value redesign with its own review. |
 | ~~`answer_question` handler~~ | Removed | **CUT** — it was `register=False` and unrouted; linked answers remain available through `knowledge(action="store", discovery_type="note", response_to={..., "response_type": "answer"})` |
