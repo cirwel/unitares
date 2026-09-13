@@ -56,7 +56,25 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # unchanged. Bumped because a moved digest is what tells a hash-pinning client
 # to re-pin (see the re-pin note in docs/INTERFACE_CONTRACT.md), not because
 # the catalog gained or lost anything.
-INTERFACE_CONTRACT_VERSION = "1.7.0"
+# 1.8.0 (2026-09-13): cirs_protocol declares the 24 parameters its selectable
+# protocol handlers read, which the MCP argument model dropped before dispatch,
+# and limit advertises the handlers' default of 50 in place of null (the null
+# reached int() and failed every query action through dispatch). No advertised
+# parameter is removed or renamed, the one retyped (limit) stops admitting a null
+# that never worked, and only cirs_protocol's
+# input_schema_sha256 moves; REST and in-process callers that sent these keys
+# with the wrong type or an explicit null now get a validation error, as 1.2.0
+# did for observe's include_calibration.
+# 1.9.0 (2026-09-13): `complexity` and `confidence` on process_agent_update,
+# simulate_update and sync_state advertise their 0-1 bound as JSON Schema
+# `minimum`/`maximum` instead of Pydantic's `ge`/`le`, which no client validator
+# reads, and their string branch as a regex of numeric strings in [0, 1] instead
+# of any string; sync_state's `complexity` also advertises the named levels its
+# normalizer accepts, nested inside that string branch. Only the advertised
+# schema changes: the fields keep their runtime declaration, so every value is
+# accepted or refused as before, with the same validation errors down to each
+# error's location, on every transport; three digests move.
+INTERFACE_CONTRACT_VERSION = "1.9.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

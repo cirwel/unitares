@@ -169,3 +169,65 @@ class TestSingleFlightWriter:
             checker.save_state()
         assert checker._pg_writer_running is False
         assert checker._save_dirty is True  # will drain on next in-loop save
+
+
+class TestAgentCalibrationPersistence:
+    def test_json_roundtrip_preserves_scoped_bins_and_timestamps(self, tmp_path):
+        from src.calibration import CalibrationChecker
+
+        checker = CalibrationChecker(state_file=tmp_path / 'scoped.json')
+        checker._backend = 'json'
+        checker.record_prediction(0.6, True, 0.7, agent_id='agent-a')
+        checker.record_tactical_decision(0.9, 'proceed', False, agent_id='agent-b')
+        restored = CalibrationChecker(state_file=checker.state_file)
+        assert restored.bins_by_agent == checker.bins_by_agent
+        assert restored.tactical_bins_by_agent == checker.tactical_bins_by_agent
+        assert restored.bins_by_agent['agent-a']['0.5-0.7']['last_observed_at']
+        # Restored plain dictionaries remain writable through the live API.
+        restored._backend = 'json'
+        restored.record_prediction(0.6, True, 0.7, agent_id='agent-a')
+        assert restored.bins_by_agent['agent-a']['0.5-0.7']['count'] == 2
+
+    def test_old_blob_does_not_copy_fleet_evidence_to_agents(self, tmp_path):
+        from src.calibration import CalibrationChecker
+
+        checker = CalibrationChecker(state_file=tmp_path / 'legacy.json')
+        checker._backend = 'json'
+        checker.record_prediction(0.6, True, 0.0, agent_id='agent-a')
+        legacy = checker._snapshot_state()
+        legacy.pop('bins_by_agent')
+        legacy.pop('tactical_bins_by_agent')
+        checker._apply_state_data(legacy)
+        assert checker.bin_stats['0.5-0.7']['count'] == 1
+        assert checker.bins_by_agent == {}
+        assert checker.tactical_bins_by_agent == {}
+        candidate = checker.compute_agent_calibration_candidate('agent-a')
+        assert candidate['evidence_status'] == 'no_data'
+        assert candidate['calibration_error'] is None
+
+    @pytest.mark.asyncio
+    async def test_pg_writer_includes_scoped_data_in_same_snapshot(self, calibration_checker):
+        checker, mock_db = calibration_checker
+        with patch('src.db.get_db', return_value=mock_db):
+            checker.record_prediction(0.6, True, 0.7, agent_id='agent-a')
+            checker.record_tactical_decision(0.9, 'proceed', False, agent_id='agent-b')
+            for _ in range(5):
+                await asyncio.sleep(0)
+        payload = mock_db.update_calibration.call_args.args[0]
+        assert payload['bins_by_agent'] == checker.bins_by_agent
+        assert payload['tactical_bins_by_agent'] == checker.tactical_bins_by_agent
+        assert payload['bins'] and payload['tactical_bins']
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('attribute', ['bins_by_agent', 'tactical_bins_by_agent'])
+    async def test_pg_scoped_only_blob_is_loaded(self, calibration_checker, attribute):
+        checker, mock_db = calibration_checker
+        scoped = {'agent-a': {'0.5-0.7': {
+            'count': 5, 'predicted_correct': 5, 'actual_correct': 2,
+            'confidence_sum': 3.0, 'last_observed_at': '2026-09-13T12:00:00+00:00',
+        }}}
+        mock_db.get_calibration.return_value = {'bins': {}, attribute: scoped}
+        with patch('src.db.get_db', return_value=mock_db):
+            assert await checker.load_state_async() is True
+        assert getattr(checker, attribute) == scoped
+        assert not checker.bin_stats
