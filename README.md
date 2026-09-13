@@ -20,8 +20,9 @@ attributed record across those boundaries. Agents keep their existing models,
 tools, and execution loops. Each process receives its own identity; explicit
 lineage records where inherited work came from without pretending separate
 processes are the same agent. Later processes can recover selected durable
-findings, evidence, disagreement, and outcomes through MCP, HTTP, the public
-SDK, or the dashboard.
+findings, evidence, disagreement, and outcomes through the server's MCP and
+HTTP interfaces, directly or through the public SDK, and inspect them in the
+dashboard.
 
 It is built for one operator running several long-lived agents on infrastructure
 they control. UNITARES is not an agent framework, sandbox, correctness oracle,
@@ -44,7 +45,9 @@ November 2025.
 
 ## Quickstart
 
-The latest verified public installation tag is `v2.21.0`:
+The latest verified public installation tag is `v2.21.0`. You need Git and
+Docker with Compose v2; running the local demos also needs Python 3.12+ and
+`make`.
 
 This release-tagged Docker Compose flow is the supported install path for a
 local, single-operator deployment. After cloning, the one-command install/start
@@ -58,13 +61,24 @@ docker compose up -d --wait   # PostgreSQL/AGE/pgvector, Redis, lease plane, ser
 
 MCP clients connect to `http://localhost:8767/mcp/`; the dashboard is at
 `http://localhost:8767/dashboard`. Run `make demo` to exercise a real onboard
-and six-check-in loop against that server.
+and six-check-in loop against that server. It prints the new process identity,
+each policy response, and the final dashboard URL. The demo writes controlled
+identity and state rows to the deployment's named Docker volumes; it is an
+install check, not a read-only simulation.
+
+`docker compose up -d --wait` exits nonzero if the images cannot build, a host
+port is occupied, or a service does not become healthy. Inspect the result with
+`docker compose ps` and `docker compose logs <service>`. If ports 5432, 6379,
+8767, or 8788 are already in use, set the corresponding host-port overrides
+documented in `.env.example` before starting the stack.
 
 The verified installation tag can trail the source version shown in
 **Status**; newer releases are on the [releases page](https://github.com/cirwel/unitares/releases).
 
 <details>
 <summary>Run the first governed loop from a client</summary>
+
+Illustrative pseudocode (the exact call syntax depends on your MCP client):
 
 ```python
 session = start_session(force_new=True)
@@ -93,9 +107,10 @@ record_result(
 state = check_working_state(client_session_id=sid)
 ```
 
-`make coordination-demo` adds a two-agent handoff, exercises request-bound
+Separately, `make coordination-demo` runs against the already-started governance
+and lease-plane services. It adds a two-agent handoff, exercises request-bound
 Ed25519 attestations, verifies that A's attestation is refused when it claims
-B's UUID, and rejects replay.
+B's UUID, and rejects replay. It is not a second step required by `make demo`.
 
 </details>
 
@@ -108,7 +123,7 @@ Evaluating rather than installing? Start with
 
 | Question | Retained mechanism |
 |---|---|
-| **Who said it?** | Fresh process identity and explicit lineage for inherited work. |
+| **Who said it?** | Fresh process identity and explicit lineage for inherited work; write enforcement depends on the deployment's configured identity gates. |
 | **What supports it?** | Attributed findings, corrections, evidence, and provenance supplied by callers. |
 | **Who challenged it?** | Structured reviews that preserve positions, disagreement, conditions, and resolution. |
 | **What happened?** | Typed outcome events that can be linked to the prediction or check-in they grade. |
