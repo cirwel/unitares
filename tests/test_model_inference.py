@@ -325,11 +325,16 @@ class TestCallModelReachabilityGate:
 
     @pytest.mark.asyncio
     async def test_unreachable_host_refused_with_reachability_error(self):
-        """A built-but-unwired host fails as UNREACHABLE, not UNAVAILABLE.
+        """A built-but-unwired host fails as UNREACHABLE, not UNAVAILABLE,
+        specifically through call_model.
 
         The distinction is the point: 'unavailable' tells the caller to go
-        configure something, which cannot help when no code path routes to the
-        host at all.
+        configure something, which cannot help when no code path within
+        call_model routes to the host at all. This does NOT mean the host is
+        uncallable anywhere: codex:host-adapter has a real route through
+        delegate_inference (accepts_host_id_from=["delegate_inference"]) —
+        see TestInvocationRoutingDisclosure. Only call_model's route is
+        absent, which is exactly what this assertion proves and no more.
         """
         from src.mcp_handlers.support.model_inference import handle_call_model
 
