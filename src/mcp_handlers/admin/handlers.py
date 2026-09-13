@@ -413,6 +413,7 @@ async def handle_get_telemetry_metrics(arguments: Dict[str, Any]) -> Sequence[Te
     Note: Calibration data is system-wide and can be large. Use include_calibration=False to reduce response size.
     """
     import asyncio
+    from datetime import datetime, timedelta, timezone
     from src.telemetry import TelemetryCollector
     
     telemetry = TelemetryCollector()
@@ -429,23 +430,161 @@ async def handle_get_telemetry_metrics(arguments: Dict[str, Any]) -> Sequence[Te
         skip_metrics, conf_dist, suspicious = await asyncio.gather(
             loop.run_in_executor(None, telemetry.get_skip_rate_metrics, agent_id, window_hours),
             loop.run_in_executor(None, telemetry.get_confidence_distribution, agent_id, window_hours),
-            loop.run_in_executor(None, telemetry.detect_suspicious_patterns, agent_id)
+            loop.run_in_executor(
+                None,
+                telemetry.detect_suspicious_patterns,
+                agent_id,
+                window_hours,
+            )
         )
+
+        generated_at = datetime.now(timezone.utc)
+        requested_start = generated_at - timedelta(hours=window_hours)
+        try:
+            source_exists = telemetry.audit_logger.log_file.exists()
+            audit_source_available = (
+                source_exists if isinstance(source_exists, bool) else None
+            )
+        except Exception:
+            audit_source_available = None
+        subject = (
+            {"kind": "agent", "agent_id": agent_id}
+            if agent_id
+            else {"kind": "fleet"}
+        )
+        requested_window = {
+            "kind": "lookback",
+            "requested_hours": window_hours,
+            "start_at": requested_start.isoformat(),
+            "end_at": generated_at.isoformat(),
+        }
+
+        def coverage(
+            value: Any,
+            count_key: str | None = None,
+            count_keys: tuple[str, ...] = (),
+            source_available: bool | None = None,
+        ) -> Dict[str, Any]:
+            if not isinstance(value, dict):
+                return {"status": "unknown", "matching_observations": None}
+            if value.get("error"):
+                return {
+                    "status": "unavailable",
+                    "matching_observations": None,
+                    "reason": value.get("error"),
+                }
+            if source_available is False:
+                return {
+                    "status": "source_unavailable",
+                    "matching_observations": None,
+                    "reason": "audit_log_not_present",
+                }
+            if count_keys and all(isinstance(value.get(key), int) for key in count_keys):
+                count = sum(value[key] for key in count_keys)
+            else:
+                count = value.get(count_key) if count_key else None
+            return {
+                "status": "observed" if source_available is not None else "unknown",
+                "matching_observations": count if isinstance(count, int) else None,
+            }
         
         response = {
             "agent_id": agent_id or "all_agents",
             "window_hours": window_hours,
             "skip_rate_metrics": skip_metrics,
             "confidence_distribution": conf_dist,
-            "suspicious_patterns": suspicious
+            "suspicious_patterns": suspicious,
+            "measurement_context": {
+                "schema": "telemetry.measurement-context.v1",
+                "generated_at": generated_at.isoformat(),
+                "components": {
+                    "skip_rate_metrics": {
+                        "subject": subject,
+                        "source": "audit_log",
+                        "window": requested_window,
+                        "freshness": {"maximum_cache_age_seconds": 30},
+                        "coverage": coverage(
+                            skip_metrics,
+                            count_keys=("total_skips", "total_updates"),
+                            source_available=audit_source_available,
+                        ),
+                    },
+                    "confidence_distribution": {
+                        "subject": subject,
+                        "source": "audit_jsonl_tail",
+                        "window": requested_window,
+                        "freshness": {"maximum_cache_age_seconds": 60},
+                        "coverage": {
+                            **coverage(
+                                conf_dist,
+                                "count",
+                                source_available=audit_source_available,
+                            ),
+                            "maximum_rows_scanned": 1000,
+                            "status_note": (
+                                "partial_tail_scan" if not conf_dist.get("error")
+                                else "source_unavailable"
+                            ) if isinstance(conf_dist, dict) else "unknown",
+                        },
+                    },
+                    "suspicious_patterns": {
+                        "subject": subject,
+                        "source": "derived_skip_and_confidence",
+                        "window": requested_window,
+                        "freshness": {"derived_from_component_reads": True},
+                        "coverage": {
+                            "status": "unavailable" if (
+                                isinstance(suspicious, dict) and suspicious.get("error")
+                            ) else "derived",
+                            "matching_observations": None,
+                        },
+                    },
+                    "calibration": {
+                        "subject": {"kind": "fleet"},
+                        "source": "accumulated_calibration_state",
+                        "window": {
+                            "kind": "cumulative",
+                            "requested_lookback_applied": False,
+                        },
+                        "freshness": {
+                            "status": "unknown",
+                            "reason": "legacy_fleet_bins_have_no_timestamps",
+                        },
+                        "included": bool(include_calibration),
+                        "coverage": {
+                            "status": "pending" if include_calibration else "not_requested",
+                            "matching_observations": None,
+                        },
+                    },
+                    "knowledge_graph_perf": {
+                        "subject": {"kind": "current_process"},
+                        "source": "in_process_performance_buffer",
+                        "window": {"kind": "retained_samples"},
+                        "freshness": {"sample_timestamps_recorded": False},
+                        "coverage": {"status": "pending", "matching_observations": None},
+                    },
+                },
+            },
         }
 
         # Include lightweight knowledge-graph performance stats (in-process, low overhead).
         try:
             from src.perf_monitor import snapshot as perf_snapshot
             response["knowledge_graph_perf"] = perf_snapshot()
+            perf_counts = [
+                item.get("count") for item in response["knowledge_graph_perf"].values()
+                if isinstance(item, dict) and isinstance(item.get("count"), int)
+            ] if isinstance(response["knowledge_graph_perf"], dict) else []
+            response["measurement_context"]["components"]["knowledge_graph_perf"]["coverage"] = {
+                "status": "observed",
+                "matching_observations": sum(perf_counts) if perf_counts else None,
+            }
         except Exception:
             response["knowledge_graph_perf"] = {"note": "perf snapshot unavailable"}
+            response["measurement_context"]["components"]["knowledge_graph_perf"]["coverage"] = {
+                "status": "unavailable",
+                "matching_observations": None,
+            }
         
         # Only include calibration if explicitly requested (reduces context bloat)
         if include_calibration:
@@ -453,6 +592,37 @@ async def handle_get_telemetry_metrics(arguments: Dict[str, Any]) -> Sequence[Te
                 None, telemetry.get_calibration_metrics
             )
             response["calibration"] = calibration_metrics
+            calibration_bins = calibration_metrics.get("bins")
+            tactical_calibration = calibration_metrics.get("tactical_calibration")
+            tactical_bins = (
+                tactical_calibration.get("bins")
+                if isinstance(tactical_calibration, dict)
+                else None
+            )
+
+            def _channel_observation_count(bins: Any) -> Optional[int]:
+                if not isinstance(bins, dict):
+                    return None
+                return sum(
+                    item.get("count", 0)
+                    for item in bins.values()
+                    if isinstance(item, dict) and isinstance(item.get("count"), int)
+                )
+
+            response["measurement_context"]["components"]["calibration"]["coverage"] = {
+                "status": "observed",
+                "matching_observations": None,
+                "strategic_matching_observations": _channel_observation_count(
+                    calibration_bins
+                ),
+                "tactical_matching_observations": _channel_observation_count(
+                    tactical_bins
+                ),
+                "counting_note": (
+                    "Channel counts are not summed because strategic and tactical "
+                    "calibration may share outcome pairs."
+                ),
+            }
         else:
             # Provide summary instead of full calibration data
             response["calibration"] = {
