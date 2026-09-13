@@ -15,8 +15,9 @@ the wrong call twice inside one session: a reviewer polled at 72s and again at
 asymmetric — escalating early wastes a facilitation, while escalating late is
 the backlog this whole surface is trying to drain.
 
-So this module answers the second question, from the one clock that is always
-present: the age of the last thing that happened in the transcript.
+This module answers the second question only when an identified orchestrated
+reviewer owes work and the latest transcript clock can be read. Missing
+provenance, an unreadable clock, and a caller's own turn remain unclassified.
 
 WHAT THE BUDGETS ARE, AND WHAT THEY ARE NOT
 -------------------------------------------
@@ -44,6 +45,8 @@ This module reads. It never reassigns, fails, or escalates a session.
 from __future__ import annotations
 
 import os
+import math
+from numbers import Real
 from typing import Any, Optional
 
 # Mirror of agents.dialectic_reviewer.reviewer's model-call ceiling. Read from
@@ -75,7 +78,7 @@ def _verdict_timeout_s() -> float:
         value = float(raw)
     except (TypeError, ValueError):
         return DEFAULT_VERDICT_TIMEOUT_S
-    return value if value > 0 else DEFAULT_VERDICT_TIMEOUT_S
+    return value if math.isfinite(value) and value > 0 else DEFAULT_VERDICT_TIMEOUT_S
 
 
 def expected_budget_s(*, awaiting: str) -> float:
@@ -93,8 +96,8 @@ def expected_budget_s(*, awaiting: str) -> float:
 def assess_wait(
     *,
     elapsed_s: Optional[float],
-    awaiting: str,
-    orchestrated: bool = True,
+    awaiting: Optional[str],
+    orchestrated: bool = False,
 ) -> dict[str, Any]:
     """Classify a wait without claiming anything about liveness.
 
@@ -103,8 +106,40 @@ def assess_wait(
     defaulted, because a missing reading and a short one are different findings
     and only one of them is reassuring.
     """
-    budget = expected_budget_s(awaiting=awaiting)
+    if awaiting not in {"verdict", "reconsideration"}:
+        return {
+            "elapsed_s": None,
+            "expected_by_s": None,
+            "assessment": None,
+            "note": (
+                "No outstanding reviewer obligation is identified for this wait; "
+                "terminal sessions and the caller's own turn have no reviewer deadline."
+            ),
+        }
 
+    if (
+        not isinstance(elapsed_s, Real)
+        or isinstance(elapsed_s, bool)
+        or not math.isfinite(elapsed_s)
+        or elapsed_s < 0
+    ):
+        elapsed_s = None
+
+    if not orchestrated:
+        # A human or unmanaged reviewer has no declared budget to exceed, so
+        # there is nothing to be late against and inventing a deadline would
+        # manufacture urgency the protocol never promised.
+        return {
+            "elapsed_s": round(elapsed_s, 1) if elapsed_s is not None else None,
+            "expected_by_s": None,
+            "assessment": None,
+            "note": (
+                "An orchestrated reviewer budget could not be established for "
+                "this assignment, so this wait is unclassified."
+            ),
+        }
+
+    budget = expected_budget_s(awaiting=awaiting)
     if elapsed_s is None:
         return {
             "elapsed_s": None,
@@ -114,20 +149,6 @@ def assess_wait(
                 "Elapsed time could not be established from the transcript, so "
                 "this wait is unclassified. Do not read that as either healthy "
                 "or stuck."
-            ),
-        }
-
-    if not orchestrated:
-        # A human or unmanaged reviewer has no declared budget to exceed, so
-        # there is nothing to be late against and inventing a deadline would
-        # manufacture urgency the protocol never promised.
-        return {
-            "elapsed_s": round(elapsed_s, 1),
-            "expected_by_s": None,
-            "assessment": None,
-            "note": (
-                "No orchestrated reviewer is responsible for this slot, so there "
-                "is no declared budget to exceed."
             ),
         }
 
