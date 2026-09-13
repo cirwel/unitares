@@ -29,7 +29,7 @@ they control. UNITARES is not an agent framework, sandbox, correctness oracle,
 or proof that an agent's reports are true. Its behavioral-state estimates are
 published heuristics under evaluation.
 
-**Status:** v2.22.0. The maintainer deployment has run continuously since
+**Status:** v2.22.1. The maintainer deployment has run continuously since
 November 2025.
 
 <div align="center">
