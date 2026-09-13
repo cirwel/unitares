@@ -48,6 +48,29 @@ NAME_ONLY = re.compile(
     re.S,
 )
 
+LIVE_SEARCH_TOOL = "search_shared_memory"
+# A registered tool with no recent traffic (not an alias); kept in filters so
+# figures stay comparable across the rename to the workflow name.
+DEAD_SEARCH_TOOL = "search_knowledge_graph"
+
+# Every tool filter in the module as (names, dispatched), comments stripped
+# first. A dispatched filter covers every alias of a tool it names.
+_NO_COMMENTS = "\n".join(
+    ln for ln in SOURCE.splitlines() if not ln.lstrip().startswith(("--", "#"))
+)
+TOOL_FILTERS = [
+    (frozenset(re.findall(r"'([^']+)'", m.group(1) or f"'{m.group(2)}'")), True)
+    for m in DISPATCHED.finditer(_NO_COMMENTS)
+] + [
+    (frozenset(re.findall(r"'([^']+)'", m.group(1) or f"'{m.group(2)}'")), False)
+    for m in NAME_ONLY.finditer(_NO_COMMENTS)
+]
+
+
+def _covers_live_search(names: frozenset, dispatched: bool) -> bool:
+    return LIVE_SEARCH_TOOL in names or (dispatched and "knowledge" in names)
+
+
 # Queries keyed on the invoked name on purpose, and the continuity columns
 # that keep a changed figure's old name-only count beside it.
 INVOKED_NAME_QUERIES = {"surface_return_rate"}
@@ -67,6 +90,41 @@ def _alias_names() -> set[str]:
     from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 
     return set(_TOOL_ALIASES)
+
+
+def test_there_are_tool_name_filters_to_check():
+    """Guards the guard: a regex that matches nothing would pass vacuously."""
+    assert len(TOOL_FILTERS) >= 3
+
+
+@pytest.mark.parametrize("names, dispatched", TOOL_FILTERS)
+def test_no_filter_names_the_dead_search_tool_without_the_live_one(names, dispatched):
+    """The #1868 defect, stated as the rule that would have caught it.
+
+    Naming the old search tool is fine; it keeps the metric comparable across
+    the rename. Naming it without covering the live workflow name is the
+    undercount, and a dispatched filter covers it through `knowledge`.
+    """
+    if DEAD_SEARCH_TOOL in names:
+        assert _covers_live_search(names, dispatched), sorted(names)
+
+
+def test_the_engagement_predicate_counts_the_live_search_tool():
+    """The specific query #1868 found missing it."""
+    engaged = [
+        (names, dispatched) for names, dispatched in TOOL_FILTERS
+        if "process_agent_update" in names and "outcome_event" in names
+    ]
+    assert engaged, "cohort_engaged predicate not found"
+    for names, dispatched in engaged:
+        assert _covers_live_search(names, dispatched), sorted(names)
+
+
+def test_a_search_capable_filter_is_not_left_search_blind():
+    """Any filter that mentions searching at all must cover the live name."""
+    for names, dispatched in TOOL_FILTERS:
+        if any("search" in n or n == "knowledge" for n in names):
+            assert _covers_live_search(names, dispatched), sorted(names)
 
 
 def test_dispatched_filters_exist():
