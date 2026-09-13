@@ -7,12 +7,19 @@ machine-readable statement of which flat parameter belongs to which action,
 and `describe_tool(action=...)` serves it. A hand-written map that nothing
 checks is exactly the drift the tool-registry cleanup removed elsewhere, so
 these tests check it against the live routing table on every run.
+
+The advertised `action` enum is held to the same routing table here, for the
+same reason: it is hand-written as a `Literal` on the parameter model, and
+until 2026-09-13 only two routers had it checked, against hardcoded sets
+(`test_defaulted_consolidated_schemas_are_advertised` in
+tests/test_tool_schema_validation.py, whose job is the default action).
 """
 
 import json
 
 import pytest
 
+from src.mcp_compat import get_tool_input_schema
 from src.mcp_handlers.decorators import get_tool_definition, get_tool_registry
 from src.mcp_handlers.schemas.router_actions import (
     COMMON_ROUTER_FIELDS,
@@ -82,6 +89,33 @@ def test_declared_actions_are_exactly_the_routed_actions(name, actions, model):
     assert declared == set(actions), (
         f"{name}: ACTION_FIELDS declares {sorted(declared - set(actions))!r} "
         f"that do not route and omits {sorted(set(actions) - declared)!r}"
+    )
+
+
+@pytest.mark.parametrize("name,actions,model", ROUTERS, ids=ROUTER_IDS)
+def test_advertised_action_enum_is_exactly_the_routed_actions(name, actions, model):
+    """The action list a client is shown must be the list that routes.
+
+    The advertised `action` enum is generated from the `Literal` on the
+    router's parameter model, while the routing table comes from the router's
+    own `actions={}` map. Nothing held the two together, and server-side
+    parameter validation checks the same `Literal` before the router runs. So
+    a routed action the enum omits is refused at validation — a route no call
+    through dispatch can reach — and an enum value that does not route passes
+    validation only to fail as an unknown action.
+
+    The served description names these actions too, but prose may abbreviate
+    (tests/test_action_router_description_drift.py). The enum is the complete,
+    machine-readable statement, so it is held to the routing table exactly.
+    """
+    wire = {t.name: t for t in get_tool_definitions()}[name]
+    action = (get_tool_input_schema(wire).get("properties") or {}).get("action") or {}
+    advertised = action.get("enum")
+    assert advertised, f"{name}: the advertised schema carries no action enum"
+    assert set(advertised) == set(actions), (
+        f"{name}: the advertised action enum lists "
+        f"{sorted(set(advertised) - set(actions))!r} that do not route and omits "
+        f"{sorted(set(actions) - set(advertised))!r}"
     )
 
 
