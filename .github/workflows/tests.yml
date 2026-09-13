@@ -182,7 +182,11 @@ jobs:
         # the matrix. Until 2026-09-02 the pytest suite ran on 3.12 only;
         # the only 3.14 exercise CI had was docker-quickstart's demo, which
         # runs no tests. The floor leg is the coverage leg (COVERAGE_LEG);
-        # the production leg is pass/fail evidence. Every leg feeds the
+        # the production leg is pass/fail evidence. The production suite uses
+        # four broader shards below instead of duplicating all eight coverage
+        # shards: one run otherwise exposes 21 immediately eligible jobs to a
+        # 20-runner GitHub Free account before any other branch run competes
+        # for capacity. Every leg feeds the
         # required `test (3.12)` context below, so a 3.14 regression blocks
         # merge.
         python-version: ['3.12', '3.14']
@@ -226,6 +230,24 @@ jobs:
         # runners. Re-cut these boundaries from measurement, not from intuition,
         # whenever the spread drifts again.
         shard: [tests-a-c, tests-d-e, tests-f-i, tests-j-m, tests-n-r, tests-s-t, tests-u-z, agents-and-nested]
+        # Keep the measured eight-way split for the instrumented 3.12 coverage
+        # leg. The uninstrumented 3.14 production leg runs the same files in
+        # four broader groups, retaining full interpreter coverage with four
+        # fewer runner allocations and dependency/database setup cycles.
+        exclude:
+          - {python-version: '3.14', shard: tests-a-c}
+          - {python-version: '3.14', shard: tests-d-e}
+          - {python-version: '3.14', shard: tests-f-i}
+          - {python-version: '3.14', shard: tests-j-m}
+          - {python-version: '3.14', shard: tests-n-r}
+          - {python-version: '3.14', shard: tests-s-t}
+          - {python-version: '3.14', shard: tests-u-z}
+          - {python-version: '3.14', shard: agents-and-nested}
+        include:
+          - {python-version: '3.14', shard: tests-a-e}
+          - {python-version: '3.14', shard: tests-f-m}
+          - {python-version: '3.14', shard: tests-n-t}
+          - {python-version: '3.14', shard: tests-u-z-and-agents}
 
     # Without a database, 333 tests across 29 modules skip themselves — every
     # migration test among them. The suite went green while the riskiest surface
@@ -333,6 +355,18 @@ jobs:
           agents-and-nested)
             targets=(agents/ tests/*/ tests/smoke_test.py)
             ;;
+          tests-a-e)
+            targets=(tests/test_[a-e]*.py)
+            ;;
+          tests-f-m)
+            targets=(tests/test_[f-m]*.py)
+            ;;
+          tests-n-t)
+            targets=(tests/test_[n-t]*.py)
+            ;;
+          tests-u-z-and-agents)
+            targets=(tests/test_[u-z]*.py agents/ tests/*/ tests/smoke_test.py)
+            ;;
           *)
             echo "unknown test shard: ${{ matrix.shard }}" >&2
             exit 2
@@ -373,9 +407,9 @@ jobs:
       actions: read   # list this run's jobs (the per-leg check below)
     env:
       COVERAGE_LEG: '3.12'
-      # versions x shards in the test_shard matrix; tests/test_ci_test_gate.py
-      # recomputes it from the matrix so the two cannot drift.
-      EXPECTED_SHARD_LEGS: '16'
+      # Expanded matrix legs after exclude/include; tests/test_ci_test_gate.py
+      # recomputes this value from the matrix so the two cannot drift.
+      EXPECTED_SHARD_LEGS: '12'
 
     steps:
     - name: Require every test shard to pass
@@ -385,19 +419,19 @@ jobs:
         exit 1
 
     - name: Require every shard leg of this attempt to pass
-      # `needs.test_shard.result` is one value collapsed over sixteen legs.
+      # `needs.test_shard.result` is one value collapsed over twelve legs.
       # GitHub lets a single failed leg be re-run alone, and that re-run can
       # report the job as success while another leg's failure from the
       # earlier attempt still stands (github.com/orgs/community/discussions/26822).
       # elixir-tests.yml avoids the trap by not using a matrix; the shard
       # job is a matrix by design, so instead ask the Actions API for the
-      # latest attempt of every job in this run and require all shard legs
+      # latest attempt of every job in this run and require all twelve shard legs
       # present and successful. A missing leg is a failure, not a pass.
       # Partial re-runs: `filter=latest` returns each job's latest execution.
       # A leg re-run alone contributes its new conclusion; legs not re-run
       # keep their earlier one. The gate therefore aggregates the latest
       # execution of every leg across attempts: it passes only when all
-      # sixteen are present and each one's latest execution succeeded, and
+      # twelve are present and each one's latest execution succeeded, and
       # it fails on any leg that is absent or whose latest execution is not
       # a success. That is what closes the masking hazard: a leg whose most
       # recent execution failed cannot be hidden behind a re-run of another.
