@@ -115,18 +115,141 @@ def test_self_recovery_declares_its_vocabulary():
     assert build_tool_usage_payload("self_recovery", {"action": "review"})["action"] == "review"
 
 
+def test_cirs_protocol_declares_its_vocabulary():
+    """Declared by hand, like self_recovery. ``cirs_protocol`` selects a
+    ``protocol`` first and routes ``action`` one level down, so it is not an
+    action_router and carried no vocabulary: the clamp treated it as
+    single-purpose and dropped the sub-action, so a call would have recorded no
+    discriminator (tool-surface audit F4).
+
+    Both dispatch levels are recorded, because for a two-level tool the
+    sub-action alone is not the discriminator: four protocols route ``query``
+    and two route ``emit``.
+    """
+    payload = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "void_alert", "action": "emit"}
+    )
+    assert payload == {
+        "action": "emit",
+        "action_source": "explicit",
+        "protocol": "void_alert",
+    }
+
+    stray = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "void_alert", "action": "broadcast"}
+    )
+    assert stray["action"] == "action_unlisted"
+    assert "broadcast" not in str(stray)
+
+    # An action-less call still records the selector, because the selector is
+    # what chose the handler. No selectable protocol defaults an action, so the
+    # action stays absent rather than being invented; resonance_alert DOES
+    # default to "query", which is why the decorator declares no default_action
+    # only for the selectable set.
+    assert build_tool_usage_payload("cirs_protocol", {"protocol": "void_alert"}) == {
+        "protocol": "void_alert"
+    }
+
+    # The merge the selector exists to resolve: same action, different handler.
+    void_query = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "void_alert", "action": "query"}
+    )
+    coherence_query = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "coherence_report", "action": "query"}
+    )
+    assert void_query != coherence_query
+    assert void_query["protocol"] == "void_alert"
+    assert coherence_query["protocol"] == "coherence_report"
+
+
+def test_the_protocol_selector_is_clamped_to_the_schema_literal():
+    """Same discipline as the action clamp, one level up: the vocabulary is read
+    from ``CirsProtocolParams.protocol`` rather than hand-listed, so the column
+    can never carry a token dispatch would reject, and a caller cannot make the
+    selector a cardinality bomb."""
+    unroutable = build_tool_usage_payload(
+        # Routed by _CIRS_DISPATCHERS but absent from the validated Literal.
+        "cirs_protocol", {"protocol": "resonance_alert", "action": "emit"}
+    )
+    assert unroutable["protocol"] == "protocol_unlisted"
+    assert "resonance" not in str(unroutable)
+
+    bomb = build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "Z" * 5000, "action": "emit"}
+    )
+    assert bomb["protocol"] == "protocol_unlisted"
+
+    # Case and surrounding whitespace normalize rather than clamping, matching
+    # the handler, which lowers and strips before dispatch.
+    assert build_tool_usage_payload(
+        "cirs_protocol", {"protocol": "  VOID_ALERT  ", "action": "emit"}
+    )["protocol"] == "void_alert"
+
+    # A single-purpose tool that happens to receive a `protocol` kwarg gains no
+    # key: the selector is recorded only for a tool declared to dispatch on one.
+    assert build_tool_usage_payload("onboard", {"protocol": "void_alert"}) is None
+
+
+@pytest.mark.asyncio
+async def test_cirs_protocol_vocabulary_is_what_its_selectable_handlers_refuse():
+    """Holds the hand-declared set to the SELECTABLE handlers' own refusal
+    vocabularies, and to nothing wider.
+
+    Scoped to ``CirsProtocolParams.protocol``, not to ``_CIRS_DISPATCHERS``:
+    the dict routes two protocols validation rejects, so sourcing the
+    vocabulary from it would let an action only an unreachable handler routes
+    be forced into the declared set and advertised to callers.
+
+    What this does NOT verify, stated so the guard is not read as stronger
+    than it is: each handler holds its vocabulary twice, as the membership
+    tuple it dispatches on and as the ``valid_actions`` list in its refusal
+    payload. This reads the second. A branch added to the gate while the
+    refusal list is left alone routes, succeeds, audits as ``action_unlisted``,
+    and still passes here. Closing that needs one source per handler that the
+    gate, the refusal and this union all read.
+    """
+    import json
+
+    from src.mcp_handlers.cirs.protocol import (
+        _CIRS_DISPATCHERS,
+        _VALIDATED_PROTOCOLS,
+    )
+    from src.mcp_handlers.decorators import get_tool_definition
+
+    assert _VALIDATED_PROTOCOLS, "no selectable protocols resolved; test is inert"
+    routed = set()
+    for protocol in _VALIDATED_PROTOCOLS:
+        # Through the decorator, not ``__wrapped__``: the wrapper normalizes a
+        # bare TextContent into a list, which is the shape ``result[0]`` below
+        # assumes.
+        result = await _CIRS_DISPATCHERS[protocol]({"action": "__unroutable__"})
+        body = json.loads(result[0].text)
+        valid = (body.get("recovery") or {}).get("valid_actions")
+        assert valid, f"{protocol} did not refuse an unroutable action with valid_actions"
+        routed.update(valid)
+
+    assert routed == set(get_tool_definition("cirs_protocol").known_actions)
+
+
 # ---------------------------------------------------------------------------
 # Drift guards — a new action must not become silently unauditable
 # ---------------------------------------------------------------------------
 
 def test_every_action_router_declares_its_vocabulary():
-    """``action_router`` derives ``known_actions`` from its own routing map, so
-    this can only fail if the derivation is removed."""
+    """Every multi-action tool must carry a discriminator.
+
+    Two failure modes, not one. For the eight ``action_router`` tools the set is
+    derived from the routing map, so only removing the derivation breaks them.
+    ``self_recovery`` and ``cirs_protocol`` declare theirs BY HAND, so an
+    ordinary edit that drops the keyword is enough — which is the whole reason
+    those two are named here. The list is deliberately hand-written: a registry
+    scan would pass vacuously if a name vanished from the registry.
+    """
     from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
 
     routers = {
         "knowledge", "agent", "calibration", "config", "export",
-        "observe", "admin", "dialectic", "self_recovery",
+        "observe", "admin", "dialectic", "self_recovery", "cirs_protocol",
     }
     for name in routers:
         td = _TOOL_DEFINITIONS.get(name)
@@ -166,22 +289,22 @@ def test_every_known_action_is_classified_by_the_stakes_table():
 
     External-plugin tools are exempt for the same reason ``test_stakes_table``
     exempts them: they are deliberately unenumerated and fail closed to "high"
-    until an operator classifies them. The exemption set is imported rather
-    than restated so the two tests cannot disagree about what "external" means.
-    Without this the assertion is order-dependent — ``pi`` only appears once
-    some other test in the process has imported ``unitares_pi_plugin``.
+    until an operator classifies them. Both tests decide "external" with the
+    same predicate over the declaring module the decorator recorded
+    (``ToolDefinition.source_module``), so they cannot disagree; reading
+    ``handler.__module__`` instead names ``decorators.py`` for every
+    action_router, a plugin's included, and needed a hand-kept allowlist.
+    Without the exemption the assertion is order-dependent — ``pi`` only
+    appears once some other test in the process has imported
+    ``unitares_pi_plugin``.
     """
     from src.mcp_handlers import stakes_table
-    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
-    from tests.test_stakes_table import _EXTERNAL_PLUGIN_TOOLS
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, _is_first_party_module
 
     unclassified = []
     for name, td in _TOOL_DEFINITIONS.items():
-        if name in _EXTERNAL_PLUGIN_TOOLS:
-            continue
-        module = getattr(td.handler, "__module__", "") or ""
-        if not module.startswith("src."):
-            continue  # external single-purpose tool — fail-closed-high by design
+        if not _is_first_party_module(td.source_module):
+            continue  # external tool — fail-closed-high by design
         for action in td.known_actions or ():
             if (
                 stakes_table.get_action_stakes(name, action) == "high"
@@ -216,12 +339,25 @@ _FORBIDDEN = {
 }
 
 
-@pytest.mark.parametrize("tool_name", ["dialectic", "request_review", "knowledge", "onboard"])
-def test_no_non_allowlisted_argument_ever_reaches_the_payload(tool_name):
-    arguments = {"action": "request", **_FORBIDDEN}
+@pytest.mark.parametrize(
+    "tool_name,action",
+    [
+        ("dialectic", "request"),
+        ("request_review", "request"),
+        ("knowledge", "search"),
+        ("onboard", "request"),  # no vocabulary: payload stays empty
+        # An action IN the tool's own vocabulary, so the builder takes the
+        # pass-through branch rather than short-circuiting on the clamp. With a
+        # shared unlisted action every tool here exercised only the clamp, and
+        # a leak added under ``action in known`` would have passed.
+        ("cirs_protocol", "emit"),
+    ],
+)
+def test_no_non_allowlisted_argument_ever_reaches_the_payload(tool_name, action):
+    arguments = {"action": action, **_FORBIDDEN}
     payload = build_tool_usage_payload(tool_name, arguments) or {}
 
-    assert set(payload) <= {"action", "canonical_tool", "action_source"}
+    assert set(payload) <= {"action", "canonical_tool", "action_source", "protocol"}
     flat = " ".join(payload.values())
     for value in _FORBIDDEN.values():
         assert str(value) not in flat

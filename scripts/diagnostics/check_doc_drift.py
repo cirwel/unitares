@@ -138,7 +138,18 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
             "check-in text retention limit",
             ("does not retain the original report text",),
         ),
-        ("unmeasured comparative benefit", ("still need comparative evaluation",)),
+        # A requirement is satisfied by ANY of its accepted wordings. What must
+        # hold is that comparative benefit stays unclaimed; which baseline the
+        # sentence names is a positioning choice and not this guard's business.
+        # It previously accepted one phrasing, which quietly froze "Git plus a
+        # structured handoff" into the landing page as the thing to beat.
+        (
+            "unmeasured comparative benefit",
+            (
+                "still need comparative evaluation",
+                "still needs comparative evaluation",
+            ),
+        ),
     ],
     "docs/PRODUCT_DEFINITION.md": [
         ("product category", ("federation kernel",)),

@@ -149,6 +149,95 @@ def _not_advertised_summary(tools_list, mode: str) -> dict:
     }
 
 
+LITE_HINT_BUDGET = 100
+
+
+def lite_hint(text: str, budget: int = LITE_HINT_BUDGET) -> str:
+    """The compact view's one-line ``hint``: ``text`` clipped to ``budget``.
+
+    Clipped at a word boundary rather than mid-word. Measured 2026-09-12,
+    after orientation began serving the wire's first line: 30 of 50 hints cut
+    inside a word ("...without running a cycle, writing anyth"), because the
+    authored first lines run 390 to 1098 characters and every one of the 50
+    exceeds this budget. The boundary costs a few characters and is never
+    worse to read.
+
+    A boundary is honoured only in the last 40% of the budget. A first line
+    whose opening is one unbroken token — a URL, a long identifier — would
+    otherwise collapse to a stub far shorter than the budget, and a clipped
+    token carries more than that.
+
+    This does NOT shorten the underlying text, which is the separate and
+    larger question: the authored first lines are written for a client reading
+    a full schema, and whether they should also be written to survive a
+    100-character cut is a content decision for the descriptions themselves.
+    """
+    if len(text) <= budget:
+        return text
+    clipped = text[:budget]
+    boundary = clipped.rfind(" ")
+    if boundary >= budget * 0.6:
+        clipped = clipped[:boundary]
+    return clipped.rstrip().rstrip(",;:") + "..."
+
+
+def _orientation_description(
+    tool_name: str,
+    wire_descriptions: Dict[str, str],
+    catalog_descriptions: Dict[str, str],
+) -> str:
+    """The one-line description list_tools serves for ``tool_name``.
+
+    An advertised name gets the first line of the description ``tools/list``
+    serves for it, so the two discovery surfaces cannot disagree about the
+    same tool. Until 2026-09-12 ``tool_catalog.TOOL_DESCRIPTION_OVERRIDES``
+    outranked the wire here, and the rewrites of #2148, #2151 and #2158
+    corrected what an MCP client read while orientation kept the old
+    one-liners for 28 of the 50 advertised names (F2 of
+    docs/operations/tool-surface-audit-2026-09-12.md). The override table now
+    carries dispatch-only alias names only, which this listing never shows,
+    so it is not consulted.
+
+    A registered name the deployment does not advertise (a plugin tool
+    registered after the server mounted its table) keeps the pre-existing
+    fallback chain minus the override: the alias note below, then the schema
+    catalog, then the decorator description, then a generic placeholder.
+
+    The alias link is load-bearing rather than defensive. A workflow alias is
+    in ``registered_tool_names`` unconditionally, but it reaches
+    ``wire_descriptions`` only through ``build_alias_tool_definition``, which
+    ``get_public_tool_definitions`` skips with ``except KeyError`` when the
+    alias's implementation tool is missing from the schema catalog — the
+    partial-catalog case that module documents as deliberately supported for
+    embedded consumers. An alias is in neither the schema catalog nor the
+    decorator registry, so without this link all eight would render as
+    ``Tool: sync_state`` there, where the pre-2026-09-12 override table showed
+    a curated line. ``migration_note`` is the same authority the wire itself
+    would have used, so the degraded surface now says what the healthy one says.
+
+    Note on a failure mode this does NOT cover, so nobody re-derives it: if
+    ``get_public_tool_definitions`` were to RAISE, this helper is never reached.
+    ``get_interface_contract_summary`` calls the same function unguarded a few
+    lines earlier in the handler, so the whole call fails first. The reachable
+    degradation is a partial return, not an unavailable catalog.
+    """
+    from src.tool_schemas import first_line
+    from ..decorators import get_tool_description
+    from ..tool_stability import resolve_tool_alias
+
+    description = wire_descriptions.get(tool_name)
+    if not description:
+        _, alias_info = resolve_tool_alias(tool_name)
+        if alias_info is not None:
+            description = alias_info.migration_note
+    description = (
+        description
+        or catalog_descriptions.get(tool_name)
+        or get_tool_description(tool_name)
+    )
+    return first_line(description) or f"Tool: {tool_name}"
+
+
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -159,7 +248,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         include_advanced (bool): If false, exclude Tier 3 (advanced) tools (default: true)
         tier (str): Filter by tier: "essential", "common", "advanced", or "all" (default: "all")
         category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
-        lite (bool): If true, return minimal response (names + descriptions only, ~500B vs ~4KB)
+        lite (bool): If true, return the compact listing: truncated hints and a category summary in place of full descriptions, the relationship map and the tool map (default: true)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
     """
     
@@ -191,14 +280,18 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     from src.tool_modes import TOOL_MODE, TOOL_TIERS
     interface_contract = get_interface_contract_summary(TOOL_MODE)
 
-    # Orientation and all transports share the same complete catalog.
+    # Orientation and all transports share the same complete catalog, and the
+    # definitions tools/list serves are also where each advertised name's
+    # description comes from (_orientation_description).
     try:
-        advertised_names = {
-            tool.name for tool in get_public_tool_definitions(TOOL_MODE)
-        } or None
+        public_definitions = list(get_public_tool_definitions(TOOL_MODE))
     except Exception:
-        advertised_names = None
+        public_definitions = []
+    advertised_names = {tool.name for tool in public_definitions} or None
     # An unavailable/empty schema catalog fails open to registration.
+    wire_descriptions = {
+        tool.name: tool.description or "" for tool in public_definitions
+    }
 
     # Deprecated tools - hidden from list_tools by default.
     # Two independent sources, and both are needed:
@@ -241,36 +334,21 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     tool_relationships = tool_catalog.TOOL_RELATIONSHIPS
     workflows = tool_catalog.WORKFLOWS
-    tool_descriptions = tool_catalog.TOOL_DESCRIPTION_OVERRIDES
-    
+
     # Build tools list from registered tools with metadata from decorators
-    from ..decorators import get_tool_timeout, get_tool_description
-    # Import tool schemas to get proper descriptions
+    from ..decorators import get_tool_timeout
+    # The schema catalog is the description fallback for a registered name
+    # the deployment does not advertise; an advertised name reads the wire
+    # definition itself (wire_descriptions).
     from src.tool_schemas import get_tool_definitions
-    schema_tools = {t.name: t.description for t in get_tool_definitions()}
-    
+    schema_tools = {t.name: t.description or "" for t in get_tool_definitions()}
+
     tools_list = []
     for tool_name in registered_tool_names:
-        # Priority: 1. tool_descriptions dict, 2. schema description, 3. decorator description, 4. fallback
-        # Check each source explicitly to avoid empty string issues
-        description = None
-        if tool_name in tool_descriptions and tool_descriptions[tool_name]:
-            description = tool_descriptions[tool_name]
-        elif tool_name in schema_tools and schema_tools[tool_name]:
-            description = schema_tools[tool_name]
-        else:
-            desc_from_decorator = get_tool_description(tool_name)
-            if desc_from_decorator:
-                description = desc_from_decorator
-        
-        # Fallback to generic description if none found
-        if not description:
-            description = f"Tool: {tool_name}"
-        
-        # Extract first line of description for brevity (full description available in tool schemas)
-        if description and '\n' in description:
-            description = description.split('\n')[0]
-        
+        description = _orientation_description(
+            tool_name, wire_descriptions, schema_tools
+        )
+
         # Determine tool tier
         tool_tier = "common"  # Default
         if tool_name in TOOL_TIERS["essential"]:
@@ -331,25 +409,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             if not category_name or not isinstance(category_name, str):
                 category_name = "unknown"
             tool_info["category"] = category_name
-            # Add category metadata for better UX
-            category_meta_dict = {
-                "identity": {"icon": "🚀", "name": "Identity & Onboarding"},
-                "core": {"icon": "💬", "name": "Core Governance"},
-                "lifecycle": {"icon": "👥", "name": "Agent Lifecycle"},
-                "knowledge": {"icon": "💡", "name": "Knowledge Graph"},
-                "observability": {"icon": "👁️", "name": "Observability"},
-                "export": {"icon": "📊", "name": "Export & History"},
-                "config": {"icon": "⚙️", "name": "Configuration"},
-                "admin": {"icon": "🔧", "name": "Admin & Diagnostics"},
-                "workspace": {"icon": "📁", "name": "Workspace"},
-                "dialectic": {"icon": "💭", "name": "Dialectic"}
-            }
-            if category_name in category_meta_dict:
-                category_meta = category_meta_dict[category_name]
-            else:
-                # Fallback for unknown categories - category_name is guaranteed to be a string here
-                fallback_name = category_name.title() if isinstance(category_name, str) else "Other"
-                category_meta = {"icon": "🔹", "name": fallback_name}
+            # Category label from the one presentation table (tool_catalog);
+            # an unknown category gets a neutral label, never a crash.
+            category_meta = tool_catalog.category_presentation(category_name)
             tool_info["category_icon"] = category_meta["icon"]
             tool_info["category_name"] = category_meta["name"]
         tools_list.append(tool_info)
@@ -381,13 +443,14 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         tools_list = order_tools_by_usage(tools_list, usage_data)
     
     # Count tools by tier
-    # LITE MODE: Return only ESSENTIAL tools (~1KB vs ~20KB)
+    # LITE MODE: every advertised tool that survived the filters above,
+    # compacted -- truncated hints, no relationship map or tool map.
     if lite_mode:
         # Import from single source of truth
         lite_tools = [
             {
                 "name": t["name"],
-                "hint": t["description"][:100] + ("..." if len(t["description"]) > 100 else ""),
+                "hint": lite_hint(t["description"]),
                 "tier": t.get("tier", "common"),  # essential/common/advanced
                 "op": t.get("op", "read"),  # read/write/admin
                 "stability": t.get("stability"),  # stable/beta/experimental
@@ -418,7 +481,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "onboard", "identity", "process_agent_update",
                 "get_governance_metrics", "list_tools", "describe_tool",
                 "agent", "knowledge", "dialectic", "health_check",
-                "store_knowledge_graph", "search_knowledge_graph", "leave_note",
+                "search_knowledge_graph", "leave_note",
             ]
             lite_tools.sort(key=lambda x: order.index(x["name"]) if x["name"] in order else 99)
         
@@ -503,9 +566,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
                 "consult": "(brief:str, purpose?:str, effort?:str, privacy?:str, allow_degraded?:bool, response_mode?:'compact'|'full')",
                 "request_review": "(issue_description:str, reasoning?:str, use_brief_as_thesis?:bool — the brief is the thesis by default; false keeps the two-call flow)",
-                "store_knowledge_graph": "(summary:str, tags?:list, severity?:str, details?:str)",
+                # Keyed by a name on the wire or a call shape against one;
+                # the legacy twin store_knowledge_graph sat here until
+                # 2026-09-12 and is not a name an MCP client can call.
+                "knowledge(action='store')": "(summary:str, tags?:list, severity?:str, details?:str)",
                 "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
-                "knowledge_search": "(action='search', query?:str, tags?:list, limit?:int, include_details?:bool)",
+                "knowledge(action='search')": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
                 "leave_note": "(summary:str, tags?:list)"
             },
             "more": "list_tools(lite=false) for all tools with full category details",
@@ -584,6 +650,44 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except Exception:
             pass  # Graceful degradation - skip grouping if stats unavailable
     
+    # `categories` is derived from the tools this response lists, so it can
+    # only name what `tools` already names: every entry is on this
+    # deployment's wire by construction, and a filter (tier, category)
+    # narrows it the same way. Ordered by the presentation priority.
+    #
+    # Until 2026-09-12 this was a hand-written dict beside the derived
+    # `categories_summary` of the compact view. It predated the router
+    # consolidation: 30 of its 47 names were dispatch-only twins (`list_agents`,
+    # `store_knowledge_graph`, `get_server_info`, ...) that return Unknown tool
+    # on the /mcp/ mount, and it omitted every router and workflow alias (F1
+    # of docs/operations/tool-surface-audit-2026-09-12.md).
+    listed_names = [t["name"] for t in tools_list]
+    categories_block: Dict[str, Dict[str, Any]] = {}
+    for t in tools_list:
+        cat = t.get("category") or "other"
+        if cat not in categories_block:
+            presentation = tool_catalog.category_presentation(cat)
+            categories_block[cat] = {
+                "name": f"{presentation['icon']} {presentation['name']}",
+                "description": presentation["description"],
+                "tools": [],
+                "priority": presentation["priority"],
+                "for_new_agents": presentation["for_new_agents"],
+            }
+        categories_block[cat]["tools"].append(t["name"])
+    categories_block = dict(
+        sorted(categories_block.items(), key=lambda item: item[1]["priority"])
+    )
+    # `relationships` carries records for the names listed above only. The
+    # catalog also holds records for plugin-provided tools; a deployment
+    # without the plugin would otherwise describe relationships of a tool it
+    # cannot dispatch.
+    tool_relationships = {
+        name: tool_relationships[name]
+        for name in listed_names
+        if name in tool_relationships
+    }
+
     tools_info = {
         "success": True,
         "server_version": mcp_server.SERVER_VERSION,
@@ -603,89 +707,10 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "category_filter": category_filter,
             "progressive": progressive,
         },
-        "categories": {
-            "identity": {
-                "name": "🚀 Identity & Onboarding",
-                "description": "Get started - create your identity and set up your session",
-                "tools": ["onboard", "identity"],
-                "priority": 1,
-                "for_new_agents": True
-            },
-            "core": {
-                "name": "💬 Core Governance",
-                "description": "Main tools for sharing work and getting feedback",
-                "tools": ["process_agent_update", "get_governance_metrics", "simulate_update"],
-                "priority": 2,
-                "for_new_agents": True
-            },
-            "lifecycle": {
-                "name": "👥 Agent Lifecycle",
-                "description": "Manage agents, view metadata, and handle agent states",
-                "tools": ["list_agents", "get_agent_metadata", "update_agent_metadata", "archive_agent", "delete_agent", "archive_old_test_agents", "mark_response_complete", "self_recovery"],
-                "priority": 3,
-                "for_new_agents": False
-            },
-            "knowledge": {
-                "name": "💡 Knowledge Graph",
-                "description": "Store and search discoveries, insights, and notes",
-                "tools": ["store_knowledge_graph", "search_knowledge_graph", "get_knowledge_graph", "list_knowledge_graph", "get_discovery_details", "leave_note", "update_discovery_status_graph"],
-                "priority": 4,
-                "for_new_agents": False
-            },
-            "observability": {
-                "name": "👁️ Observability",
-                "description": "Monitor agents, compare patterns, and detect anomalies",
-                "tools": ["observe_agent", "compare_agents", "compare_me_to_similar", "detect_anomalies", "aggregate_metrics"],
-                "priority": 5,
-                "for_new_agents": False
-            },
-            "export": {
-                "name": "📊 Export & History",
-                "description": "Export governance history and system data",
-                "tools": ["get_system_history", "export_to_file"],
-                "priority": 6,
-                "for_new_agents": False
-            },
-            "config": {
-                "name": "⚙️ Configuration",
-                "description": "Configure thresholds and system settings",
-                "tools": ["get_thresholds", "set_thresholds"],
-                "priority": 7,
-                "for_new_agents": False
-            },
-            "admin": {
-                "name": "🔧 Admin & Diagnostics",
-                "description": "System administration, health checks, and diagnostics",
-                "tools": ["reset_monitor", "get_server_info", "health_check", "check_calibration", "update_calibration_ground_truth", "get_telemetry_metrics", "get_tool_usage_stats", "list_tools", "describe_tool", "cleanup_stale_locks", "backfill_calibration_from_dialectic", "validate_file_path"],
-                "priority": 8,
-                "for_new_agents": False
-            },
-            "workspace": {
-                "name": "📁 Workspace",
-                "description": "Workspace health and file validation",
-                "tools": ["get_workspace_health"],
-                "priority": 9,
-                "for_new_agents": False
-            },
-            "dialectic": {
-                "name": "💭 Dialectic",
-                "description": "Structured peer review and recovery protocol",
-                "tools": ["request_dialectic_review", "submit_thesis", "submit_antithesis", "submit_synthesis", "dialectic"],
-                "priority": 10,
-                "for_new_agents": False
-            }
-        },
+        "categories": categories_block,
         "category_descriptions": {
-            "identity": "🚀 Start here! Create your identity and get ready-to-use templates",
-            "core": "💬 Your main tools - share work, get feedback, check your state",
-            "lifecycle": "👥 Manage agents and view agent metadata",
-            "knowledge": "💡 Store discoveries, search insights, leave notes",
-            "observability": "👁️ Monitor agents, compare patterns, detect issues",
-            "export": "📊 Export history and system data",
-            "config": "⚙️ Configure thresholds and settings",
-            "admin": "🔧 System administration and diagnostics",
-            "workspace": "📁 Workspace health and validation",
-            "dialectic": "💭 View archived dialectic sessions"
+            cat: f"{p['icon']} {p['description']}"
+            for cat, p in tool_catalog.CATEGORY_PRESENTATION.items()
         },
         "getting_started": {
             "path": tool_catalog.getting_started_path(),
@@ -705,19 +730,24 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "next_steps": [
                 {
                     "category": "lifecycle",
-                    "tools": ["list_agents"],
+                    "tools": ["agent(action='list')"],
                     "why": "See who else is here"
                 },
                 {
                     "category": "knowledge",
-                    "tools": ["store_knowledge_graph", "leave_note"],
+                    "tools": ["store_finding", "leave_note"],
                     "why": "Save discoveries and insights"
                 }
             ]
         },
         "workflows": workflows,
         "relationships": tool_relationships,
-        "note": "Use this tool to discover available capabilities. MCP protocol also provides tool definitions, but this provides categorized overview useful for onboarding. Use 'essential_only=true' or 'tier=essential' to reduce cognitive load by showing only core workflow tools (~10 tools).",
+        "note": (
+            "Use this tool to discover available capabilities. MCP protocol also provides tool "
+            "definitions, but this provides categorized overview useful for onboarding. Use "
+            "'essential_only=true' or 'tier=essential' to reduce cognitive load by showing only the "
+            f"{len(TOOL_TIERS['essential'])} core workflow tools."
+        ),
         "quick_start": {
             "new_agent": [
                 "1. Call start_session(force_new=true) - creates a fresh process identity",
@@ -734,50 +764,53 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             ]
         },
         "options": {
-            "lite_mode": "Use list_tools(lite=true) for minimal response (~2KB vs ~15KB) - better for local/smaller models",
+            "lite_mode": "Use list_tools(lite=true) for the compact listing (truncated hints and a category summary; no relationship map or tool map) - better for local/smaller models",
             "describe_tool": "Use describe_tool(tool_name, lite=true) for simplified schemas with fewer parameters"
         },
-        # Visual tool relationship map (v2.5.0+)
+        # Visual tool relationship map (v2.5.0+). Names on the wire only, or
+        # call shapes against a router on it: the ten dispatch-only twins it
+        # drew until 2026-09-12 (list_agents, observe_agent, export_to_file,
+        # delete_agent, ...) were Unknown tool on /mcp/.
         "tool_map": """
-┌─────────────────────────────────────────────────────────────────────┐
-│                        TOOL RELATIONSHIP MAP                        │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  🚀 START                                                           │
-│     │                                                               │
-│     ▼                                                               │
-│  ┌───────────────┐                                                  │
-│  │ start_session │────────────┐                                     │
-│  └───────┬───────┘            │                                     │
-│       │                       ▼                                     │
-│       │              ┌──────────────┐                               │
-│       │              │   identity   │ ◄── name yourself             │
-│       │              └──────────────┘                               │
-│       │                                                             │
-│       ▼                                                             │
-│  ┌────────────────────────┐       ┌─────────────────────────────┐  │
-│  │ sync_state             │◄─────►│ check_working_state         │  │
-│  │ (main check-in)        │       │ (view state)                │  │
-│  └───────────┬────────────┘       └─────────────────────────────┘  │
-│              │                                                      │
-│              ├───────────────────────────────────────┐              │
-│              │                                       │              │
-│              ▼                                       ▼              │
-│  ┌───────────────────────┐              ┌────────────────────────┐ │
-│  │ KNOWLEDGE GRAPH       │              │ OBSERVABILITY          │ │
-│  ├───────────────────────┤              ├────────────────────────┤ │
-│  │ search_shared_memory  │              │ list_agents            │ │
-│  │ knowledge             │              │ observe_agent          │ │
-│  │ leave_note            │              │ compare_agents         │ │
-│  │ get_discovery_details │              │ detect_anomalies       │ │
-│  └───────────────────────┘              └────────────────────────┘ │
-│                                                                     │
-│  ─────────────────────────────────────────────────────────────────  │
-│  ADMIN/CONFIG: health_check, get_thresholds, describe_tool         │
-│  EXPORT: get_system_history, export_to_file                        │
-│  LIFECYCLE: archive_agent, delete_agent, update_agent_metadata     │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                        TOOL RELATIONSHIP MAP                         │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  🚀 START                                                            │
+│     │                                                                │
+│     ▼                                                                │
+│  ┌───────────────┐                                                   │
+│  │ start_session │────────────┐                                      │
+│  └───────┬───────┘            │                                      │
+│          │                    ▼                                      │
+│          │           ┌──────────────┐                                │
+│          │           │   identity   │ ◄── name yourself              │
+│          │           └──────────────┘                                │
+│          │                                                           │
+│          ▼                                                           │
+│  ┌────────────────────────┐       ┌─────────────────────────────┐    │
+│  │ sync_state             │◄─────►│ check_working_state         │    │
+│  │ (main check-in)        │       │ (read the verdict)          │    │
+│  └───────────┬────────────┘       └─────────────────────────────┘    │
+│              │                                                       │
+│              ├───────────────────────────────────────┐               │
+│              │                                       │               │
+│              ▼                                       ▼               │
+│  ┌────────────────────────────┐   ┌────────────────────────────────┐ │
+│  │ KNOWLEDGE GRAPH            │   │ OBSERVABILITY                  │ │
+│  ├────────────────────────────┤   ├────────────────────────────────┤ │
+│  │ search_shared_memory       │   │ agent(action='list')           │ │
+│  │ store_finding              │   │ observe(action='agent')        │ │
+│  │ knowledge                  │   │ observe(action='compare')      │ │
+│  │ leave_note                 │   │ observe(action='anomalies')    │ │
+│  └────────────────────────────┘   └────────────────────────────────┘ │
+│                                                                      │
+│  ────────────────────────────────────────────────────────────────    │
+│  ADMIN/CONFIG: health_check, get_thresholds, describe_tool, admin    │
+│  EXPORT: export(action='history'), export(action='file')             │
+│  LIFECYCLE: agent (action=get | update | archive | delete)           │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
 """
     }
 
@@ -827,7 +860,11 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         stability = get_tool_stability(tool_name).value
 
         from src.tool_descriptions import TOOL_DESCRIPTIONS
-        from src.tool_schemas import advertised_input_schema, get_pydantic_schemas
+        from src.tool_schemas import (
+            advertised_input_schema,
+            first_line,
+            get_pydantic_schemas,
+        )
 
         schema_model = get_pydantic_schemas().get(tool_name)
         tool_schema = None
@@ -897,6 +934,11 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 tool_schema,
                 inject_action=bool(alias_info.inject_action),
             )
+            # A workflow alias describes itself with its migration note, which
+            # is the text tools/list serves for it (build_alias_tool_definition).
+            # The override table holds dispatch-only alias names only, so it
+            # answers here for names that are never on the wire (list_agents)
+            # and cannot put a second description on an advertised one.
             description = (
                 tool_catalog.TOOL_DESCRIPTION_OVERRIDES.get(requested_tool_name)
                 or alias_info.migration_note
@@ -956,7 +998,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     }
 
         if not include_full_description:
-            description = (description or "").splitlines()[0].strip() if description else ""
+            description = first_line(description)
 
         # Helper function to get common patterns (shared between both branches)
         def get_common_patterns(tool_name: str) -> dict:
@@ -1052,7 +1094,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
                 response_data = {
                     "tool": requested_tool_name,
-                    "description": (description or "").splitlines()[0].strip(),
+                    "description": first_line(description),
                     "tier": tool_tier,
                     "tier_note": tier_guidance.get(tool_tier, ""),
                     "operation": _describe_operation(requested_tool_name, tool_name, alias_info),  # read/write/admin
@@ -1113,7 +1155,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
                 response_data = {
                     "tool": requested_tool_name,
-                    "description": (description or "").splitlines()[0].strip(),
+                    "description": first_line(description),
                     "parameters": params_simple,
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
                 }

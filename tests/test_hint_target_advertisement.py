@@ -189,33 +189,169 @@ class TestUnregisteredNames:
         )
         assert planted.kind == "names_no_such_tool"
 
-    def test_every_bare_related_tools_entry_resolves(self):
+    def test_every_bare_structured_name_entry_resolves(self):
         """The invariant the four fixes established, checked at the source.
 
         Not via find_dead_end_hints: that suppresses a site whose emitter no
         caller can reach, which is right for an advertisement question and
         wrong here. A name nothing answers to is broken wherever it sits.
+        Covers every structured name field and every scanned file,
+        src/tool_meta.py included.
         """
-        import ast
-
         from src.mcp_handlers.decorators import get_tool_registry
         from src.mcp_handlers.tool_stability import list_all_aliases
 
         roster = set(get_tool_registry()) | set(list_all_aliases())
         dangling = []
-        for path in sorted(scanner.HANDLER_ROOT.rglob("*.py")):
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            relative = path.relative_to(scanner.PROJECT_ROOT).as_posix()
+        for relative, tree in scanner.scanned_sources().items():
             bindings = scanner._value_bindings(tree)
-            for value in scanner._hint_value_nodes(tree, {"related_tools"}):
-                for constant in scanner._string_constants(value, bindings):
+            for value in scanner._hint_value_nodes(tree, scanner.STRUCTURED_NAME_KEYS):
+                for constant in scanner._name_list_constants(value, bindings):
                     if constant.value in roster:
                         continue
                     if scanner.TOOL_NAME_SHAPE.match(constant.value):
                         dangling.append(f"{relative}:{constant.lineno} {constant.value!r}")
         assert not dangling, (
-            "related_tools names no registered tool or alias at: " + "; ".join(dangling)
+            "a structured name field names no registered tool or alias at: "
+            + "; ".join(dangling)
         )
+
+
+class TestStructuredNameFields:
+    """Bare names under `tools`, `related_to`, `depends_on` and the workflow lists.
+
+    Until 2026-09-12 the scan admitted bare names under `related_tools` only,
+    and list_tools(lite=false) was naming 30 dispatch-only twins in four
+    fields it never read (F1 of docs/operations/tool-surface-audit-2026-09-12.md)
+    while --fail-on-finding reported clean. These tests reproduce those four
+    shapes synthetically and require a finding for each.
+    """
+
+    def test_the_four_list_tools_shapes_are_findings(self, handler_tree):
+        handler_tree("introspection/tool_catalog.py", '''
+WORKFLOWS = {
+    "monitoring": ["list_agents", "get_governance_metrics"],
+    "export_analysis": ["get_system_history"],
+}
+''')
+        handler_tree("introspection/tool_introspection.py", '''
+@mcp_tool("list_tools")
+def handle_list_tools(arguments):
+    return {
+        "categories": {"lifecycle": {"tools": ["list_agents", "self_recovery"]}},
+        "getting_started": {"next_steps": [{"tools": ["store_knowledge_graph"]}]},
+        "relationships": {
+            "health_check": {"depends_on": ["observe_agent"], "related_to": ["get_server_info"]},
+        },
+    }
+''')
+        findings = {f.tool: f for f in scanner.find_dead_end_hints("standard")}
+        assert set(findings) == {
+            "list_agents", "get_system_history", "store_knowledge_graph",
+            "observe_agent", "get_server_info",
+        }
+        # Each names a pre-consolidation twin whose router is advertised, so
+        # the hint text is fixable in place.
+        assert {f.kind for f in findings.values()} == {"names_unadvertised_twin"}
+        assert findings["list_agents"].advertised_alias == "agent"
+        assert findings["get_system_history"].advertised_alias == "export"
+        assert findings["store_knowledge_graph"].advertised_alias == "knowledge"
+        assert findings["observe_agent"].advertised_alias == "observe"
+        assert findings["get_server_info"].advertised_alias == "admin"
+        # The names list_tools DOES list: an advertised router or workflow
+        # alias in a name field is what these fields should carry.
+        assert not ({"self_recovery", "get_governance_metrics"} & set(findings))
+        # WORKFLOWS is keyed by workflow label, not by tool; its keys are not names.
+        assert not ({"monitoring", "export_analysis"} & set(findings))
+
+    def test_the_fixed_shapes_are_clean(self, handler_tree):
+        """The rewrite this guard exists for: an advertised name or a call
+        shape against an advertised router, in every one of the four fields."""
+        handler_tree("introspection/tool_catalog.py", '''
+WORKFLOWS = {"monitoring": ["agent(action='list')", "observe(action='anomalies')"]}
+''')
+        handler_tree("introspection/tool_introspection.py", '''
+@mcp_tool("list_tools")
+def handle_list_tools(arguments):
+    return {
+        "categories": {"lifecycle": {"tools": ["agent", "self_recovery"]}},
+        "getting_started": {"next_steps": [{"tools": ["store_finding", "leave_note"]}]},
+        "relationships": {
+            "health_check": {"depends_on": [], "related_to": ["admin(action='server_info')"]},
+        },
+    }
+''')
+        assert scanner.find_dead_end_hints("standard") == []
+
+    def test_the_relationship_graph_source_is_scanned(self, handler_tree):
+        """src/tool_meta.py sits outside the handler tree and declares the
+        `related_to` / `depends_on` fields list_tools serves; the handler that
+        emits them only re-exports the table, so the file is scanned itself."""
+        handler_tree("catalog.py", "TOOL_RELATIONSHIPS = {}\n")  # an empty handler tree is 'unknown', not 'clean'
+        handler_tree("../tool_meta.py", '''
+TOOL_META = (
+    ToolMeta("health_check", category="admin", related_to=("get_server_info", "admin(action='telemetry')")),
+    ToolMeta("set_thresholds", category="config", depends_on=("get_thresholds",)),
+)
+''')
+        sites = scanner.collect_hint_sites({"get_server_info", "admin", "get_thresholds", "health_check"})
+        # The record's own name is a positional argument, not a hint.
+        assert set(sites) == {"get_server_info", "admin", "get_thresholds"}
+        assert all(
+            site.startswith("src/tool_meta.py:")
+            for triples in sites.values()
+            for site, _, _ in triples
+        )
+        assert {action for _, action, _ in sites["admin"]} == {"telemetry"}
+        findings = {f.tool: f for f in scanner.find_dead_end_hints("standard")}
+        assert set(findings) == {"get_server_info"}
+        assert findings["get_server_info"].advertised_alias == "admin"
+
+    def test_the_real_relationship_graph_is_in_the_inventory(self):
+        """Against the real tree: the inventory carries src/tool_meta.py sites."""
+        from src.mcp_handlers.decorators import get_tool_registry
+        from src.mcp_handlers.tool_stability import list_all_aliases
+
+        roster = set(get_tool_registry()) | set(list_all_aliases())
+        sites = {
+            site
+            for triples in scanner.collect_hint_sites(roster).values()
+            for site, _, _ in triples
+        }
+        assert any(site.startswith("src/tool_meta.py:") for site in sites), (
+            "src/tool_meta.py is not being scanned"
+        )
+
+    def test_a_synthetic_tree_is_not_contaminated_by_the_real_table(self, handler_tree):
+        """EXTRA_SCAN_FILES resolves against PROJECT_ROOT at scan time, so a
+        test tree with no tool_meta.py sees none of the real records."""
+        handler_tree("empty.py", "x = 1\n")
+        assert not scanner.collect_hint_sites({"health_check", "agent", "observe"})
+
+    def test_a_name_field_bound_to_an_expression_yields_no_incidental_strings(self, handler_tree):
+        """list_tools' not_advertised block: `sorted(t["name"] for t in ...)`
+        under a `tools` key. The broad string walk reads its subscript key
+        "name" as a tool; the structured walk stops at the expression."""
+        handler_tree("summary.py", '''
+def summary(tools_list):
+    names = sorted(t["name"] for t in tools_list if not t.get("advertised", True))
+    return {"tools": names, "related_tools": [n for n in names]}
+''')
+        # An empty roster admits every tool-shaped string, so any incidental
+        # constant the walk yielded would surface here.
+        assert not scanner.collect_hint_sites(set())
+
+    def test_a_structured_walk_still_follows_bindings_and_builders(self, handler_tree):
+        handler_tree("bound.py", '''
+def related():
+    return ["get_server_info"]
+
+def payload():
+    names = ("observe_agent",)
+    return {"related_to": names, "depends_on": related(), "tools": [*names, "list_agents"]}
+''')
+        sites = scanner.collect_hint_sites({"get_server_info", "observe_agent", "list_agents"})
+        assert set(sites) == {"get_server_info", "observe_agent", "list_agents"}
 
 
 class TestNoRegression:

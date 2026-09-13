@@ -60,10 +60,10 @@ gates.
 
 | File | Purpose | When to Edit |
 |------|---------|--------------|
-| Pydantic `*Params` model + `src/tool_descriptions.py` + `TOOL_ORDER` | Tool schema, description, listing order | Always - defines the tool |
+| Pydantic `*Params` model + `src/tool_descriptions.py` | Tool schema and description | Always - defines the tool |
 | `src/mcp_handlers/<subpackage>/*.py` | Handler implementations with `@mcp_tool` | Always - implements the logic |
 | `src/tool_registration.py` | Auto-registration pass + `TOOLS_NEEDING_SESSION_INJECTION` | Rarely - session injection, registration behavior |
-| `src/tool_meta.py` | Category, tier, operation and stability | Always - one metadata record per tool |
+| `src/tool_meta.py` | Category, tier, operation, stability and listing order — `TOOL_ORDER` in `src/tool_schemas.py` is `list(WIRE_ORDER)`, derived from the record order, never edited by hand | Always - one `ToolMeta` record per tool |
 
 ### Key Modules
 
@@ -87,24 +87,27 @@ gates.
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator
 
-**The both-places rule, now enforced:** a core tool needs a `*Params` schema
-(via `TOOL_ORDER`) AND `@mcp_tool` with `register=True` (default). Omitting
-either is a startup error as of 2026-08-29 —
-`_validate_consolidated_tool_order` in `src/tool_schemas.py` refuses to build
-the tool list when a registered, non-hidden, core-handler tool is missing from
-`TOOL_ORDER`.
+**The both-places rule, now enforced:** a core tool needs a `ToolMeta` record
+in `src/tool_meta.py` AND `@mcp_tool` with `register=True` (default). The
+record is what puts the tool on the wire list: `TOOL_ORDER` in
+`src/tool_schemas.py` is `list(WIRE_ORDER)`, the registered records in the
+order they appear, and is never edited by hand. Omitting either is a startup
+error as of 2026-08-29 — `_validate_consolidated_tool_order` in
+`src/tool_schemas.py` refuses to build the tool list when a registered,
+non-hidden, core-handler tool has no record and is therefore missing from the
+derived `TOOL_ORDER`.
 
 This used to be a silent softening: `get_tool_definitions` auto-discovered the
 tool and served an open `{"properties": {}, "additionalProperties": true}`
 schema. That is worse than it sounds, because `validate_params` resolves the
-real `*Params` model **by tool name** regardless of `TOOL_ORDER` — so the wire
+real `*Params` model **by tool name**, never via `TOOL_ORDER` — so the wire
 advertised "any parameters accepted" and the server then rejected the call
 against a schema the caller was never shown. Six tools sat in that state. The
 guard originally covered action routers only, which is exactly how
 single-purpose tools drifted out unnoticed.
 
 If a tool is only ever reached through a consolidated router, the fix is
-`register=False`, not a `TOOL_ORDER` entry. Plugin tools are exempt from the
+`register=False`, not a `ToolMeta` record. Plugin tools are exempt from the
 guard and keep the auto-discovery path; a plugin that wants a real advertised
 schema calls `register_extra_schemas`.
 
@@ -265,9 +268,10 @@ the module that **declared** the tool. It is filled in automatically:
 `decorators.list_plugin_registered_tools()` returns everything declared outside `src.` /
 `governance_core.`. Two consumers:
 
-- `tool_schemas._is_core_handler` — only a tool this repo ships must appear in
-  `TOOL_ORDER`; a plugin keeps the auto-discovery path and supplies its own
-  schemas via `tool_schemas.register_extra_schemas()`.
+- `tool_schemas._is_core_handler` — only a tool this repo ships must carry a
+  `ToolMeta` record (and so appear in the derived `TOOL_ORDER`); a plugin keeps
+  the auto-discovery path and supplies its own schemas via
+  `tool_schemas.register_extra_schemas()`.
 - `tests/conftest.py::first_party_tool_surface` — a fixture that lifts foreign
   registrations out for the duration of a test, so a surface-drift assertion
   compares the surface this repo ships. `tests/test_describe_tool_drift.py` and
@@ -348,17 +352,27 @@ parameter name, type, default or requiredness may move between `brief` and
 `full`.
 
 The complete descriptions remain on the Pydantic models and are served by
-`describe_tool(tool_name=..., action=...)`. The transport may regenerate
-schemas from those definitions; source-catalog equality is not a wire check.
+`describe_tool(tool_name=..., action=...)`. The `/mcp/` registrar advertises
+the catalog schema verbatim (`src/tool_registration.py`,
+`_advertise_catalog_schema`): FastMCP derives a schema from the typed wrapper's
+signature, that derivation loses bounds, concrete defaults and `$defs` (finding
+F12 of `docs/operations/tool-surface-audit-2026-09-12.md`), so the registrar
+replaces it after registration. Dispatch validation is unchanged — the
+wrapper's argument model still decides what the transport accepts, and the
+handler's Pydantic model enforces the advertised bounds. Source-catalog
+equality is therefore a wire check, pinned per tool and per property by
+`tests/test_mcp_schema_parity.py`.
 
 ### Generated titles and validation
 
 `src/schema_brief.py::apply_property_title_mode` removes generated `title`
-annotations by default. Catalog construction applies it upstream, and
-`src/tool_mode_listing.py` applies it again **after FastMCP regenerates its
-schemas**. The latter copies the advertised Tool objects; it does not mutate
-argument models or dispatch validation. A parameter named `title`, or a
-`title` inside caller defaults/examples, remains intact.
+annotations by default. Catalog construction applies it upstream; the `/mcp/`
+registrar hands FastMCP the catalog schema with the titles still present
+(`get_tool_definitions(property_titles="keep")`) and `src/tool_mode_listing.py`
+applies the policy **on every listing**, which is what keeps the switch below
+reversible on that transport. The latter copies the advertised Tool objects; it
+does not mutate argument models or dispatch validation. A parameter named
+`title`, or a `title` inside caller defaults/examples, remains intact.
 
 `UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores generated titles in the
 current listing. It does not restore a historical payload or fingerprint
@@ -366,18 +380,28 @@ across unrelated changes. The final-listing tests check keep/strip/keep
 behavior independently of catalog policy. Dropping titles preserves
 validation but changes schema fingerprints.
 
-With MCP 2.1.1, brief descriptions and the current search alias, measured
-2026-09-08 as compact UTF-8 JSON `ListToolsResult` objects:
+With MCP 2.1.1 and brief descriptions, measured 2026-09-12 as compact UTF-8
+JSON `ListToolsResult` objects. There is one row because there is one surface:
+since interface release 1.6.0 every legacy profile advertises the same
+complete catalog, so the per-profile table this replaces had been reporting
+sizes no deployment serves.
 
-| Profile | Titles kept | Titles stripped | Saved |
+| `/mcp/` tools/list | Titles kept | Titles stripped | Saved by stripping |
 |---|---:|---:|---:|
-| `minimal` | 16,679 B | 14,945 B | 1,734 B |
-| `standard` | 52,469 B | 46,829 B | 5,640 B |
-| `lite` | 84,734 B | 75,576 B | 9,158 B |
-| `full` | 120,437 B | 107,189 B | 13,248 B |
+| 50 tools, complete catalog | 152,074 B | 138,454 B | 13,620 B |
 
-The earlier #2115 numbers measured the catalog and missed titles regenerated
-by FastMCP. Do not use them as measured MCP savings. `--boilerplate` now
+Schema parity costs 5,395 B of that, and the trade is a judgement worth
+stating rather than absorbing. Advertising the catalog verbatim grew the
+stripped listing from 133,059 B, about 4%, and handed back roughly two fifths
+of what title-stripping saves. What the bytes buy is 106 concrete defaults, the
+bounds on seven parameters, and four nested model definitions that a `/mcp/`
+client previously could not see at all. A client that cannot learn a delegated
+inference times out at 420 seconds is worse off than one paying 5 KB once per
+session. The alternative was not a cheaper parity but a different contract.
+
+The earlier #2115 numbers measured the catalog rather than the MCP listing.
+That distinction no longer exists, because the registrar now advertises the
+catalog itself, so the two surfaces measure the same bytes. `--boilerplate`
 applies the same recursive title transform to the explicitly selected layer.
 The null-union experiment remains diagnostic only: removing the `null`
 alternative changes validation and is not applied to the server.
@@ -433,9 +457,19 @@ will complete successfully under every identity/state condition.
 inventory**. Its `HINT_KEYS` list is a heuristic seed, not proof that a value is
 serialized to a caller. It scans literals under keys such as `hint`, `next_call`,
 `safe_options[*].call`, `message`, and `related_tools`; follows local bindings
-and return builders; and handles nested lists/dicts/f-strings. Structured
-`related_tools` values can name tools without parentheses. Prose requires an
-adjacent `tool(` call shape, excluding the English plural `session(s)`.
+and return builders; and handles nested lists/dicts/f-strings. Structured name
+fields (`STRUCTURED_NAME_KEYS`: `related_tools`, `tools`, `related_to`,
+`depends_on`, and the workflow lists, including the `WORKFLOWS` constant in
+`introspection/tool_catalog.py`) can name tools without parentheses; a literal
+list, the values of a literal dict, or a name bound to one — never an arbitrary
+expression. Prose requires an adjacent `tool(` call shape, excluding the
+English plural `session(s)`. The scan covers the handler tree plus
+`src/tool_meta.py` (`EXTRA_SCAN_FILES`), where the `related_to` / `depends_on`
+fields that `list_tools` serves under `relationships` are declared. Until
+2026-09-12 bare names were admitted under `related_tools` only, and the full
+`list_tools` view carried 30 dispatch-only twins in fields the scan never read
+while `--fail-on-finding` reported clean; `tests/test_list_tools_names_the_wire.py`
+now holds the served payload to the mount directly.
 Comments and docstrings are not seed values. Dynamic string construction and
 arbitrary data flow remain outside the guarantee. JSON discloses these limits.
 
