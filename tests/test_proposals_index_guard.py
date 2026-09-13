@@ -21,6 +21,7 @@ authority.
 from __future__ import annotations
 
 import importlib.util
+import re
 import shutil
 import subprocess
 import sys
@@ -85,6 +86,18 @@ def test_allowlists_are_not_empty_catch_alls():
 # --- failure modes, against a copied fixture tree -----------------------------
 
 
+def _counts_line(readme: Path) -> tuple[str, dict[str, int]]:
+    """The live 'Current counts:' line and its parsed tag->count mapping.
+
+    Derived rather than hardcoded: adding a proposal legitimately changes these
+    numbers, and a test that pins them would fail on ordinary work rather than
+    on the drift it exists to catch.
+    """
+    text = readme.read_text()
+    line = next(l for l in text.splitlines() if " · Registered " in l)
+    return line, {m[0]: int(m[1]) for m in re.findall(r"(\w+) (\d+)", line)}
+
+
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
     """A minimal copy of the repo layout the guard walks."""
@@ -115,7 +128,10 @@ def test_fixture_tree_passes_unmodified(tree: Path):
 
 def test_detects_count_drift(tree: Path):
     readme = tree / "docs" / "proposals" / "README.md"
-    readme.write_text(readme.read_text().replace("Active 23 ·", "Active 99 ·"))
+    line, counts = _counts_line(readme)
+    readme.write_text(
+        readme.read_text().replace(line, line.replace(f"Active {counts['Active']}", "Active 99"))
+    )
     result = _run_tree(tree)
     assert result.returncode == 1
     assert "count drift" in result.stdout
@@ -200,7 +216,11 @@ def test_guard_does_not_adjudicate_tag_correctness(tree: Path):
     else:
         pytest.fail("no Parked row found to re-tag")
     text = "\n".join(lines) + "\n"
-    text = text.replace("Active 23 · Parked 24", "Active 24 · Parked 23")
+    line, counts = _counts_line(readme)
+    rebalanced = line.replace(
+        f"Active {counts['Active']}", f"Active {counts['Active'] + 1}"
+    ).replace(f"Parked {counts['Parked']}", f"Parked {counts['Parked'] - 1}")
+    text = text.replace(line, rebalanced)
     readme.write_text(text)
     result = _run_tree(tree)
     assert result.returncode == 0, result.stdout

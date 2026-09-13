@@ -22,7 +22,7 @@ thread can hold Closed and Parked rows beside Active ones.
 
 The 30-day line is a choice, not a measurement: it separates "someone is working
 this" from "nobody has touched this" and claims nothing else. Current counts:
-Built 21 · Registered 7 · Active 23 · Parked 24 · Closed 14
+Built 21 · Registered 7 · Active 24 · Parked 24 · Closed 14
 (top-level docs; the `resolved/` subfolder is not re-tagged).
 
 These counts are **live, not a snapshot**, and `scripts/dev/check_proposals_index.py`
@@ -105,6 +105,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 |---|---|
 | [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md) | **Parked (since 2026-06-14)** · v0.1 plan, parked — pending council; unbuilt, blocked on the behavioral-EISV arm emitting signal |
 | [`continuous-verdict-blending-v0.md`](continuous-verdict-blending-v0.md) | **Parked (since 2026-06-27)** · v0.2 council-corrected design note — do not implement v0 blend as written; primary fix is verdict-gate hysteresis/dead-band |
+| [`dialectic-terminal-state-fidelity-v0.md`](dialectic-terminal-state-fidelity-v0.md) | **Active** · Decision packet, raised 2026-09-13 — `DialecticPhase.FAILED` is the terminal state for adjudication, exhaustion, reviewer non-completion and error alike, so the kernel's answer to its own "who challenged it?" question is unrecoverable once written. Options: a distinct terminal state (recommended), a structured reason field, or accept. Nothing implemented; companion to issue #2202 |
 | [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md) | **Parked (since 2026-07-01)** · v1 design — making load-bearing taste/authority/irreversible calls cheap to answer (decision-packet output contract; review pass live, dialectic `ESCALATE`/`design_review` are latent unwired scaffolds). Reviewed to v1 2026-06-17; design-first, no code |
 | [`mirror-effectiveness-measurement-v0.md`](mirror-effectiveness-measurement-v0.md) | **Built (partial)** · Phases 0–1 landed (Phase 2 proposed) — deterministic, operator-funded-free measurement of whether a surfaced mirror signal changes agent behavior |
 | [`kg-agent-adoption-pilot-v0.md`](kg-agent-adoption-pilot-v0.md) | **Active** · DRAFT / HOLD — offline fixture independently reviewed; production-plugin probe found the pinned root outside top five for five of six frozen queries, the one audit row required read-only decoder recovery, delayed auto-checkin falsified durable canary isolation, and live parity, scored runs, orchestration promotion, and live actuators remain unauthorized |
