@@ -265,8 +265,12 @@ the module that **declared** the tool. It is filled in automatically:
   inside `mcp_handlers/decorators.py`, so `handler.__module__` names governance
   for every router, a plugin's included — do not use it for provenance.
 
-`decorators.list_plugin_registered_tools()` returns everything declared outside `src.` /
-`governance_core.`. Two consumers:
+`decorators.list_plugin_registered_tools()` returns everything declared outside
+the packages this repo ships: `src`, `governance_core` and `config`, the
+top-level packages of `[tool.setuptools.packages.find]` in `pyproject.toml`.
+`decorators._FIRST_PARTY_ROOTS` mirrors that include list (the built wheel does
+not carry `pyproject.toml` to read at runtime), and `tests/test_decorators.py`
+fails if they ever name different packages. Two consumers:
 
 - `tool_schemas._is_core_handler` — only a tool this repo ships must carry a
   `ToolMeta` record (and so appear in the derived `TOOL_ORDER`); a plugin keeps

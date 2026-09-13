@@ -86,7 +86,14 @@ _TOOL_DEFINITIONS: Dict[str, ToolDefinition] = {}
 # Packages that ship in this repo. A tool declared anywhere else was registered
 # by an externally-installed plugin (or by a test) and is not part of the
 # governance surface this repo's contracts describe.
-_FIRST_PARTY_ROOTS = ("src", "governance_core")
+#
+# What ships is declared once, by ``[tool.setuptools.packages.find].include`` in
+# pyproject.toml. This tuple mirrors it rather than reading it because the built
+# wheel does not carry pyproject.toml, and tests/test_decorators.py fails unless
+# the two name exactly the same top-level packages. ``config`` joined the wheel
+# in #1745 and was missing here until 2026-09-12, which would have classified a
+# tool declared under it as a plugin's and exempted it from the TOOL_ORDER guard.
+_FIRST_PARTY_ROOTS = ("src", "governance_core", "config")
 
 
 def _is_first_party_module(module: str) -> bool:
