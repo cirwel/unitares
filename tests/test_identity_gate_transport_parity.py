@@ -175,3 +175,95 @@ async def test_rest_prebind_skips_every_alias_of_a_skipped_tool(name, monkeypatc
     monkeypatch.setattr(access, "_resolve_http_session_binding", _must_not_run)
 
     assert await access._resolve_http_bound_agent(name, {"force_new": True}, None) is None
+
+
+# ---------------------------------------------------------------------------
+# The shared resolver names the action dispatch will route
+# ---------------------------------------------------------------------------
+
+
+def _router_aliases() -> list[str]:
+    """Aliases whose target is an action_router, the routers whose rule is known."""
+    from src.mcp_handlers.decorators import get_tool_definition
+
+    names = []
+    for alias, info in sorted(_TOOL_ALIASES.items()):
+        td = get_tool_definition(info.new_name)
+        if td is not None and td.known_actions and td.handler.__module__ == "src.mcp_handlers.decorators":
+            names.append(alias)
+    return names
+
+
+def _argument_shapes(alias: str) -> list[dict]:
+    from src.mcp_handlers.decorators import get_tool_definition
+
+    info = _TOOL_ALIASES[alias]
+    td = get_tool_definition(info.new_name)
+    other = sorted(a for a in td.known_actions if a != info.inject_action)[0]
+    return [
+        {},
+        {"action": other},
+        {"op": other},
+        {"action": other.upper()},
+        {"action": "", "op": other},
+        {"action": ""},
+    ]
+
+
+async def _dispatched_action(alias: str, arguments: dict):
+    """Run the real alias step, then apply the action_router's own read."""
+    from src.mcp_handlers.decorators import get_tool_definition
+    from src.mcp_handlers.middleware.params_step import resolve_alias
+
+    args = dict(arguments)
+    name, args, _ctx = await resolve_alias(alias, args, DispatchContext())
+    td = get_tool_definition(name)
+    return name, (args.get("action") or args.get("op") or "").lower() or td.default_action
+
+
+def test_router_alias_roster_is_not_empty():
+    assert {"store_finding", "search_shared_memory", "request_review"} <= set(_router_aliases())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("alias", _router_aliases())
+async def test_resolver_names_the_action_dispatch_routes(alias):
+    """The gates judge (tool, action) through this resolver; it must be the call that runs.
+
+    An alias injects its action only when the caller sent no `action` key,
+    and the router reads `action` before `op`, so store_finding(op="search")
+    runs the store. The resolver used to read `action or op` first and judged
+    that call as a knowledge search, a pre_onboard read.
+    """
+    from src.mcp_handlers.decorators import resolve_canonical_action_and_source
+
+    mismatches = []
+    for arguments in _argument_shapes(alias):
+        dispatched = await _dispatched_action(alias, arguments)
+        canonical, action, _source = resolve_canonical_action_and_source(alias, dict(arguments))
+        if (canonical, action) != dispatched:
+            mismatches.append(f"{arguments}: resolver {(canonical, action)}, dispatch {dispatched}")
+    assert not mismatches, f"{alias}:\n" + "\n".join(mismatches)
+
+
+@pytest.mark.asyncio
+async def test_a_write_alias_with_a_read_op_is_not_waved_through_unbound(monkeypatch):
+    """store_finding(op="search") dispatches as knowledge(action="store").
+
+    Judged as the search its `op` named, a proofless call short-circuited
+    identity resolution and, under strict identity, skipped the typed refusal
+    on the way to a write.
+    """
+    monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+    resolve_mock = AsyncMock(return_value={
+        "resume_failed": True,
+        "error": "session_resolve_miss",
+        "session_key": "fp-session",
+    })
+
+    result = await _run_middleware(
+        "store_finding", {"op": "search", "summary": "x"}, resolve_mock, "fp-session",
+    )
+
+    assert resolve_mock.await_count == 1
+    assert isinstance(result, list), "strict identity must refuse the unbound store"
