@@ -14,13 +14,6 @@
     "threshold": 1,
     "expected_cadence_s": null
   },
-  "steward": {
-    "source": "eisv_sync_rows",
-    "metric": "rows_written",
-    "window_seconds": 1800,
-    "threshold": 1,
-    "expected_cadence_s": 300
-  },
   "chronicler": {
     "source": "metrics_series",
     "metric": "rows_written",
