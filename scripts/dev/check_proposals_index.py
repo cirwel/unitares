@@ -68,22 +68,38 @@ INDEX_EXEMPT = {
     "beam-wave-3a-read-only-handlers.md",
 }
 
-# Bodies with no parseable status line as of 2026-09-13. Shrink this list by
-# adding a status line to the doc; never grow it.
-STATUS_LINE_DEBT = {
-    "accountable-testbed-preliminary-trace.md",
-    "cedar-delegation-authz-v0.md",
-    "eisv-individuality-v2-result.md",
-    "governed-effect-effect-binding-v0.md",
-    "governed-effect-plane-v0.md",
-    "governed-effect-s7-strong-tier-recert.md",
-    "independent-operator-cohort-enrollments.md",
-    "lease-plane-phase-a-latency-2026-05-20.md",
-    "wave-3-section-5-2-boundary-audit-summary.md",
-}
+# Bodies with no parseable status line. EMPTY as of 2026-09-13, and the check
+# below fails if an entry here no longer needs one, so it cannot quietly rot
+# back into a list of excuses.
+#
+# It held nine names for part of that day. Two — cedar-delegation-authz-v0 and
+# governed-effect-plane-v0 — were never debt at all: both state a status plainly,
+# in the `**Created:** … · **Status:** …` shape, which the first version of
+# STATUS_RE could not see because it anchored only to line start. A guard that
+# over-reports debt is no better than one that under-reports it; both fail to
+# discriminate, and this one was inventing work. The remaining seven were real
+# and were written by reading each document, never by copying its index tag —
+# the index is a map and the body is canonical, so backfilling from the tag would
+# have inverted that.
+STATUS_LINE_DEBT: set[str] = set()
 
+# A LABELLED status field, not the word "status" appearing in prose.
+#
+# The label may open the line (`**Status:** …`, `- Status: …`) or follow a
+# separator on a metadata line (`**Created:** 2026-08-21 · **Status:** …`), which
+# is a shape two docs here already use. An earlier version anchored only to line
+# start and so reported `cedar-delegation-authz-v0` and `governed-effect-plane-v0`
+# as stating no status when both state one plainly — a guard over-reporting debt,
+# which is no better than one under-reporting it.
+#
+# What it deliberately will NOT match is `status` inside a sentence, e.g.
+# "Inference status: UNTESTED AS DEPLOYED" in a verdict paragraph. A substring
+# that passes on a coincidence certifies nothing (the same objection PR #2184
+# raised against matching a routed action as a substring), and a doc whose only
+# "status" is prose has not declared one.
 STATUS_RE = re.compile(
-    r"^\s*[-*>]?\s*\**status\**\s*[:：]|^\s*\**(status|disposition)\**\s*$",
+    r"(?:^\s*[-*>]?\s*|[·|]\s*)\**status\**\s*[:：]"
+    r"|^\s*\**(?:status|disposition)\**\s*$",
     re.IGNORECASE,
 )
 LINK_RE = re.compile(r"\]\(([^)]+\.md)\)")

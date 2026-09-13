@@ -66,10 +66,18 @@ def test_repository_currently_passes():
     )
 
 
-def test_known_debt_is_reported_not_hidden():
-    """Existing status-line debt is surfaced on every run, not silently tolerated."""
-    result = _run()
+def test_known_debt_is_reported_not_hidden(tree: Path):
+    """Debt, when it exists, is surfaced on every run rather than silently tolerated."""
+    _add_doc(tree, "zz-owes-a-status.md", status=False)
+    _seed_debt(tree, {"zz-owes-a-status.md"})
+    result = _run_tree(tree)
     assert "known debt" in result.stdout, result.stdout
+    assert result.returncode == 0, "recorded debt is reported, not failed on"
+
+
+def test_repository_debt_list_and_reality_agree():
+    """Whatever the committed debt is, the guard accepts the tree as it stands."""
+    assert _run().returncode == 0
 
 
 def test_allowlists_are_not_empty_catch_alls():
@@ -77,7 +85,9 @@ def test_allowlists_are_not_empty_catch_alls():
     mod = _load_module()
     on_disk = {p.name for p in (REPO_ROOT / "docs" / "proposals").glob("*.md")}
     exempt = mod.INDEX_EXEMPT | mod.STATUS_LINE_DEBT
-    assert exempt, "allowlists unexpectedly empty"
+    # STATUS_LINE_DEBT is legitimately empty once paid off; INDEX_EXEMPT is not,
+    # because the two relocation stubs it names are still on disk.
+    assert mod.INDEX_EXEMPT, "INDEX_EXEMPT unexpectedly empty"
     assert len(exempt) < len(on_disk) / 2, (
         "allowlists cover more than half the folder; the guard has stopped guarding"
     )
@@ -111,6 +121,43 @@ def tree(tmp_path: Path) -> Path:
     (root / "docs" / "ontology" / "README.md").write_text("# ontology\n")
     shutil.copy2(SCRIPT, root / "scripts" / "dev" / SCRIPT.name)
     return root
+
+
+def _seed_debt(tree: Path, names: set[str]) -> None:
+    """Rewrite the tree's copy of the script so STATUS_LINE_DEBT holds `names`.
+
+    The debt list is legitimately empty in the committed tree, so a test that
+    reached into the real one broke the moment the debt was paid off — the same
+    brittleness as pinning a live count. Seeding it keeps these tests about the
+    guard's behaviour rather than about how much debt happens to exist.
+    """
+    script = tree / "scripts" / "dev" / SCRIPT.name
+    body = script.read_text()
+    literal = ("{" + ", ".join(repr(n) for n in sorted(names)) + "}") if names else "set()"
+    patched = re.sub(
+        r"STATUS_LINE_DEBT(?:: set\[str\])? = (?:set\(\)|\{.*?\})",
+        f"STATUS_LINE_DEBT = {literal}",
+        body,
+        count=1,
+        flags=re.S,
+    )
+    assert patched != body, "STATUS_LINE_DEBT assignment not found in the script copy"
+    script.write_text(patched)
+
+
+def _add_doc(tree: Path, name: str, *, status: bool, indexed: bool = True) -> None:
+    """Add a proposal to the fixture tree, with or without a status line."""
+    body = "# Doc\n\n**Status:** stated\n" if status else "# Doc\n\nno status here\n"
+    (tree / "docs" / "proposals" / name).write_text(body)
+    if indexed:
+        readme = tree / "docs" / "proposals" / "README.md"
+        # Adding a row obliges updating the count — that is the rule the guard
+        # enforces, so the helper obeys it rather than tripping it incidentally.
+        line, counts = _counts_line(readme)
+        text = readme.read_text().replace(
+            line, line.replace(f"Active {counts['Active']}", f"Active {counts['Active'] + 1}"), 1
+        )
+        readme.write_text(text + f"\n| [`{name}`]({name}) | **Active** · x |\n")
 
 
 def _run_tree(root: Path) -> subprocess.CompletedProcess[str]:
@@ -173,13 +220,7 @@ def test_detects_dead_index_link(tree: Path):
 
 def test_detects_stale_allowlist_entry(tree: Path):
     """An allowlist entry whose file is gone is itself drift."""
-    mod = _load_module()
-    victim = sorted(mod.STATUS_LINE_DEBT)[0]
-    (tree / "docs" / "proposals" / victim).unlink()
-    readme = tree / "docs" / "proposals" / "README.md"
-    # Drop its row too, so we isolate the stale-allowlist signal from a dead link.
-    kept = [ln for ln in readme.read_text().splitlines() if f"({victim})" not in ln]
-    readme.write_text("\n".join(kept) + "\n")
+    _seed_debt(tree, {"zz-never-existed.md"})
     result = _run_tree(tree)
     assert result.returncode == 1
     assert "stale STATUS_LINE_DEBT entry" in result.stdout
@@ -187,10 +228,8 @@ def test_detects_stale_allowlist_entry(tree: Path):
 
 def test_detects_debt_entry_that_was_fixed(tree: Path):
     """Fixing a doc must shrink the debt list, so the recorded count stays honest."""
-    mod = _load_module()
-    victim = sorted(mod.STATUS_LINE_DEBT)[0]
-    doc = tree / "docs" / "proposals" / victim
-    doc.write_text("**Status:** now stated\n\n" + doc.read_text())
+    _add_doc(tree, "zz-status-now-stated.md", status=True)
+    _seed_debt(tree, {"zz-status-now-stated.md"})
     result = _run_tree(tree)
     assert result.returncode == 1
     assert "out of date" in result.stdout
