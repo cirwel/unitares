@@ -333,7 +333,7 @@ handle_observe = action_router(
     # identity-gated.
     pre_onboard_actions={"agent", "compare", "similar", "anomalies", "aggregate"},
     examples=[
-        "observe(action='agent', agent_id='claude-opus-20251215')",
+        "observe(action='agent', target_agent_id='claude-opus-20251215')",
         "observe(action='compare', agent_ids=['agent1', 'agent2'])",
         "observe(action='similar')",
         "observe(action='anomalies')",

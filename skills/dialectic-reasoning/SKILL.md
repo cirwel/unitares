@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-12"
+last_verified: "2026-09-13"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
@@ -27,7 +27,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/reviewer.py: "d5e71f324195eb6c"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
   unitares/src/mcp_handlers/schemas/dialectic.py: "0e7bcaa2ebbd1e97"
-  unitares/src/mcp_handlers/tool_stability.py: "25440b0686fa16d6"
+  unitares/src/mcp_handlers/tool_stability.py: "bbfa19a5291e0b2f"
   unitares/src/mcp_handlers/identity/operator.py: "cc2698ddc37a4091"
   unitares/src/mcp_handlers/lifecycle/query.py: "d2a87c234d9c4d76"
 ---
