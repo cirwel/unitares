@@ -21,8 +21,8 @@ from typing import Any
 
 from agents.common.findings import post_finding
 from agents.watcher._util import (
+    findings_state_lock as _findings_state_lock,
     log,
-    repo_relative_path,
     watcher_state_dir,
 )
 from agents.watcher.calibration import (
@@ -53,6 +53,11 @@ MIN_FINGERPRINT_PREFIX = 4  # users can type the first N chars instead of all 16
 # calibration.py). The others document operator intent without claiming
 # the finding was wrong.
 DISMISSAL_REASONS = frozenset({"fp", "wont_fix", "out_of_scope", "dup", "unclear", "stale"})
+
+
+def findings_state_lock(wait_s: float = 2.0):
+    """Lock the currently configured findings state directory."""
+    return _findings_state_lock(STATE_DIR, wait_s=wait_s)
 
 
 # ---------------------------------------------------------------------------
@@ -98,13 +103,18 @@ class Finding:
         ``line_content_hash`` BEFORE invoking this and then assign the
         result back to ``fingerprint``.
 
-        The file path is normalized to its repo-relative form (relative to
-        the git worktree root containing it) so the same line in identical
-        code checked out across multiple git worktrees produces ONE
-        fingerprint, not N. The displayed ``file`` field is left absolute so
-        the user can navigate to the right copy.
+        Absolute file identity is retained in the fingerprint. Watcher state
+        is shared across worktrees, so collapsing identical repo-relative
+        paths would deduplicate away the second worktree's only actionable
+        finding. Legacy relative paths remain normalized but un-attributed.
         """
-        normalized_path = repo_relative_path(self.file)
+        path = Path(self.file)
+        try:
+            normalized_path = (
+                path.resolve().as_posix() if path.is_absolute() else path.as_posix()
+            )
+        except OSError:
+            normalized_path = path.as_posix()
         key = f"{self.pattern}|{normalized_path}|{self.line}|{self.line_content_hash}"
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
@@ -199,29 +209,81 @@ def sweep_stale_dedup(
 # ---------------------------------------------------------------------------
 
 
+def _absolute_provenance_key(
+    file_path: str,
+    pattern: str,
+    line: Any,
+    line_content_hash: str,
+) -> tuple[str, str, int, str] | None:
+    """Identity used only to bridge pre-absolute fingerprint rows."""
+    try:
+        normalized_line = int(line or 0)
+    except (TypeError, ValueError):
+        return None
+    path = Path(file_path)
+    if not path.is_absolute():
+        return None
+    try:
+        canonical_path = path.resolve().as_posix()
+    except OSError:
+        canonical_path = path.as_posix()
+    return pattern, canonical_path, normalized_line, line_content_hash
+
+
 def persist_findings(new_findings: list[Finding]) -> list[Finding]:
     """Append new (non-duplicate) findings to findings.jsonl. Return the ones
     that were actually new (dedup filter applied)."""
-    dedup = load_dedup()
-    dedup = sweep_stale_dedup(dedup)
-    fresh: list[Finding] = []
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    for f in new_findings:
-        if f.fingerprint in dedup:
-            continue  # already flagged this one
-        dedup[f.fingerprint] = now
-        fresh.append(f)
+    with findings_state_lock():
+        dedup = load_dedup()
+        original_dedup = dict(dedup)
+        dedup = sweep_stale_dedup(dedup)
+        legacy_fingerprints: dict[tuple[str, str, int, str], list[str]] = {}
+        for row in _iter_findings_raw():
+            old_fingerprint = row.get("fingerprint")
+            key = _absolute_provenance_key(
+                str(row.get("file") or ""),
+                str(row.get("pattern") or ""),
+                row.get("line"),
+                str(row.get("line_content_hash") or ""),
+            )
+            if key is not None and isinstance(old_fingerprint, str):
+                legacy_fingerprints.setdefault(key, []).append(old_fingerprint)
+        fresh: list[Finding] = []
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for f in new_findings:
+            if f.fingerprint in dedup:
+                continue  # already flagged this one
+            key = _absolute_provenance_key(
+                f.file,
+                f.pattern,
+                f.line,
+                f.line_content_hash,
+            )
+            prior_timestamps = [
+                dedup[old_fingerprint]
+                for old_fingerprint in legacy_fingerprints.get(key, [])
+                if old_fingerprint in dedup
+            ]
+            if prior_timestamps:
+                # Rollout bridge: retain the existing row and lifecycle while
+                # teaching dedup its new absolute-path fingerprint. Exact
+                # canonical provenance keeps separate repos/worktrees apart.
+                dedup[f.fingerprint] = max(prior_timestamps)
+                continue
+            dedup[f.fingerprint] = now
+            fresh.append(f)
 
-    if fresh or dedup != load_dedup():
-        # Persist even if `fresh` is empty, so the sweep's pruning actually
-        # lands on disk. Otherwise stale entries would rematerialize on the
-        # next scan.
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        if fresh:
-            for f in fresh:
-                persist_finding(f)
-        save_dedup(dedup)
+        if fresh or dedup != original_dedup:
+            # Persist even if `fresh` is empty, so the sweep's pruning actually
+            # lands on disk. Otherwise stale entries would rematerialize on the
+            # next scan.
+            STATE_DIR.mkdir(parents=True, exist_ok=True)
+            for finding in fresh:
+                _append_finding_row(finding)
+            save_dedup(dedup)
 
+    for finding in fresh:
+        _emit_persisted_finding(finding)
     return fresh
 
 
@@ -280,10 +342,20 @@ def persist_finding(finding: Finding) -> None:
     The caller is responsible for the dedup gate; this function does NOT
     check dedup itself.
     """
+    with findings_state_lock():
+        _append_finding_row(finding)
+    _emit_persisted_finding(finding)
+
+
+def _append_finding_row(finding: Finding) -> None:
+    """Append one local row; caller holds the findings state lock."""
     FINDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with FINDINGS_FILE.open("a") as f:
         f.write(json.dumps(asdict(finding)) + "\n")
 
+
+def _emit_persisted_finding(finding: Finding) -> None:
+    """Mirror a persisted high-severity finding after releasing the file lock."""
     if finding.severity in ("high", "critical"):
         post_finding(
             event_type="watcher_finding",
@@ -376,7 +448,13 @@ def _finding_target_exists(finding: dict[str, Any]) -> bool:
     path = finding.get("file", "")
     if not path:
         return False
-    return Path(path).exists()
+    candidate = Path(path)
+    # Legacy hook records may be relative to an edit worktree that is no
+    # longer knowable. Never reinterpret them against the cwd of whichever
+    # later session happens to surface the shared findings file.
+    if not candidate.is_absolute():
+        return True
+    return candidate.exists()
 
 
 def update_finding_status(
@@ -384,6 +462,9 @@ def update_finding_status(
     new_status: str,
     resolver_agent_id: str | None = None,
     reason: str | None = None,
+    *,
+    emit_resolution_event: bool = True,
+    updated_finding_sink: list[dict[str, Any]] | None = None,
 ) -> int:
     """Mark a finding as ``new_status`` by fingerprint prefix.
 
@@ -442,6 +523,7 @@ def update_finding_status(
     timestamp_field = _STATUS_TIMESTAMP_FIELD.get(new_status)
 
     updated: list[dict[str, Any]] = []
+    updated_target: dict[str, Any] | None = None
     for f in findings:
         if f.get("fingerprint") == target_fp:
             merged = {**f, "status": new_status}
@@ -452,8 +534,11 @@ def update_finding_status(
             if reason:
                 merged["resolution_reason"] = reason
             f = merged
+            updated_target = merged
         updated.append(f)
     _write_findings_atomic(updated)
+    if updated_finding_sink is not None and updated_target is not None:
+        updated_finding_sink.append(updated_target)
     log(f"update_finding_status: {target_fp[:8]} → {new_status}")
     print(
         f"ok: {target_fp[:16]} → {new_status} "
@@ -461,7 +546,7 @@ def update_finding_status(
     )
 
     # --- Post resolution event to governance ---
-    if new_status in ("confirmed", "dismissed"):
+    if emit_resolution_event and new_status in ("confirmed", "dismissed"):
         # Lazy import: _post_resolution_event needs get_watcher_identity
         # from agent.py's identity block. Top-level import would be circular.
         from agents.watcher.agent import _post_resolution_event
@@ -566,7 +651,9 @@ def _current_source_line(path: str, line: int) -> str | None:
     if not path or line < 1:
         return None
     p = Path(path)
-    if not p.exists():
+    # A relative legacy record has no durable worktree provenance. Reading it
+    # against the current hook cwd could age out another worktree's finding.
+    if not p.is_absolute() or not p.exists():
         return None
     try:
         with p.open("r", encoding="utf-8", errors="replace") as fh:
@@ -933,15 +1020,24 @@ def _partition_findings_by_scope(
 
     in_scope: list[dict[str, Any]] = []
     out_groups: dict[str, int] = {}
-    scope_str = str(scope_root)
+    resolved_scope = scope_root.resolve()
     for f in findings:
         file_path = f.get("file") or ""
-        if file_path and (file_path == scope_str or file_path.startswith(scope_str + "/")):
-            in_scope.append(f)
-            continue
-        out_groups[_label_for_other_worktree(file_path)] = (
-            out_groups.get(_label_for_other_worktree(file_path), 0) + 1
-        )
+        resolved_file: Path | None = None
+        if file_path:
+            candidate = Path(file_path)
+            if candidate.is_absolute():
+                resolved_file = candidate.resolve()
+                try:
+                    resolved_file.relative_to(resolved_scope)
+                except ValueError:
+                    pass
+                else:
+                    in_scope.append(f)
+                    continue
+        label_path = str(resolved_file) if resolved_file is not None else file_path
+        label = _label_for_other_worktree(label_path)
+        out_groups[label] = out_groups.get(label, 0) + 1
     return in_scope, out_groups
 
 
