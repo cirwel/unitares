@@ -19,9 +19,9 @@ source_files:
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
 source_digests:
-  unitares/src/mcp_handlers/knowledge/handlers.py: "270af20d97716020"
+  unitares/src/mcp_handlers/knowledge/handlers.py: "012312b8f2f4f25c"
   unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
-  unitares/src/mcp_handlers/schemas/knowledge.py: "d3a3a6b031026ba7"
+  unitares/src/mcp_handlers/schemas/knowledge.py: "66f607237f3a3daf"
   unitares/src/alias_schema.py: "b3cf7437056198f8"
   unitares/src/mcp_handlers/consolidated.py: "99210293967885fb"
   unitares/src/mcp_handlers/tool_stability.py: "25440b0686fa16d6"
@@ -59,7 +59,9 @@ router's inline-detail behaviour. Use either it or the unified router;
 duplicate entries fragment knowledge and make search less effective.
 
 You may omit `query` entirely when filtering by `tags`, `discovery_type`,
-`severity`, `status`, or `agent_id`. Search also supports `include_provenance`;
+`severity`, `status`, or `agent_id_filter` (author UUID). The explicit
+`agent_id_filter` takes precedence; `agent_id` remains a fallback for existing
+callers. Search also supports `include_provenance`;
 request `response_mode="full"` when you need the full result fields. The search
 alias omits controls for other actions, such as closure evidence and synthesis;
 use `update_finding` or the corresponding `knowledge` action for those tasks.

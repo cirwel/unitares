@@ -898,6 +898,48 @@ class TestSearchKnowledgeGraph:
         assert request.agent_id == "caller-agent"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["knowledge", "search_shared_memory"])
+    @pytest.mark.parametrize("search_mode", ["indexed_filters", "substring_scan"])
+    async def test_wire_author_filter_reaches_search_and_its_read_event(
+        self, patch_common, monkeypatch, tool_name, search_mode,
+    ):
+        """The real FastMCP model and dispatch must retain the author filter."""
+        from src import mcp_server
+        from src.mcp_handlers.knowledge import handlers
+
+        _, graph = patch_common
+        rows = [
+            make_discovery(id="wanted", agent_id="wanted-author", summary="keyword"),
+            make_discovery(id="other", agent_id="other-author", summary="keyword"),
+        ]
+
+        async def query(**kwargs):
+            author = kwargs.get("agent_id")
+            return [row for row in rows if not author or row.agent_id == author]
+
+        graph.query = AsyncMock(side_effect=query)
+        del graph.full_text_search
+        del graph.semantic_search
+        broadcast = AsyncMock()
+        monkeypatch.setattr(handlers, "_broadcast_knowledge_read", broadcast)
+        arguments = {"agent_id_filter": "wanted-author", "response_mode": "full"}
+        if tool_name == "knowledge":
+            arguments["action"] = "search"
+        if search_mode == "substring_scan":
+            arguments["query"] = "keyword"
+
+        tool = mcp_server.mcp._tool_manager.get_tool(tool_name)
+        result = await tool.run(arguments=arguments, context=None)
+
+        assert result["success"] is True
+        payload = result["raw_governance"] if tool_name == "search_shared_memory" else result
+        assert payload["search_mode_used"] == search_mode
+        assert [row["id"] for row in payload["discoveries"]] == ["wanted"]
+        if search_mode == "indexed_filters":
+            assert graph.query.call_args.kwargs["agent_id"] == "wanted-author"
+        assert broadcast.await_args.kwargs["payload"]["filter_agent_id"] == "wanted-author"
+
+    @pytest.mark.asyncio
     async def test_exclude_agent_labels_drops_matching_rows(self, patch_common):
         """exclude_agent_labels filters post-query so the main Discoveries feed
         can hide janitorial residents (e.g. Vigil) without losing them from
