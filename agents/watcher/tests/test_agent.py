@@ -1894,6 +1894,102 @@ def test_surface_pending_new_finding_after_chime_still_fires(
     assert "first___" not in captured
 
 
+def test_surface_pending_tracks_delivery_per_federated_audience(
+    watcher_module, capsys
+):
+    """One host's chime must not consume another host's notification."""
+    finding = _make_raw_entry("federate00000000", status="surfaced")
+    _seed_findings(watcher_module, [finding])
+
+    watcher_module.surface_pending(audience="claude:worktree-abc")
+    assert "federate" in capsys.readouterr().out
+
+    watcher_module.surface_pending(audience="claude:worktree-abc")
+    assert capsys.readouterr().out == ""
+
+    watcher_module.surface_pending(audience="codex:worktree-abc")
+    assert "federate" in capsys.readouterr().out
+
+    stored = watcher_module._iter_findings_raw()[0]
+    assert stored["status"] == "surfaced"
+    assert set(stored["surface_receipts"]) == {
+        "claude:worktree-abc",
+        "codex:worktree-abc",
+    }
+    assert all(value.endswith("Z") for value in stored["surface_receipts"].values())
+
+
+def test_surface_pending_federated_audience_only_receipts_shown_findings(
+    watcher_module, capsys
+):
+    findings = [
+        _make_raw_entry(f"hi_{i:013d}", severity="high") for i in range(10)
+    ] + [
+        _make_raw_entry("medium__00000000", severity="medium")
+    ]
+    _seed_findings(watcher_module, findings)
+
+    watcher_module.surface_pending(audience="codex:bounded")
+    out = capsys.readouterr().out
+    assert "[HIGH]" in out
+    assert "[MEDIUM]" not in out
+
+    stored = {
+        finding["fingerprint"]: finding
+        for finding in watcher_module._iter_findings_raw()
+    }
+    for i in range(10):
+        assert "codex:bounded" in stored[f"hi_{i:013d}"]["surface_receipts"]
+    assert stored["medium__00000000"]["status"] == "open"
+    assert "surface_receipts" not in stored["medium__00000000"]
+
+
+def test_surface_pending_federated_audience_is_worktree_scoped(
+    watcher_module, tmp_path, capsys
+):
+    scope_root = tmp_path / "current"
+    in_scope = scope_root / "src" / "inside.py"
+    out_scope = tmp_path / "other" / "outside.py"
+    for path in (in_scope, out_scope):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("print('fixture')\n")
+    _seed_findings(
+        watcher_module,
+        [
+            _make_raw_entry("inside__00000000", file=str(in_scope)),
+            _make_raw_entry("outside_00000000", file=str(out_scope)),
+        ],
+    )
+
+    watcher_module.surface_pending(
+        audience="codex:current",
+        scope_root=scope_root,
+    )
+    out = capsys.readouterr().out
+    assert "inside__" in out
+    assert "outside_" not in out
+    assert "other worktrees" not in out
+
+    stored = {
+        finding["fingerprint"]: finding
+        for finding in watcher_module._iter_findings_raw()
+    }
+    assert "codex:current" in stored["inside__00000000"]["surface_receipts"]
+    assert stored["outside_00000000"]["status"] == "open"
+    assert "surface_receipts" not in stored["outside_00000000"]
+
+
+@pytest.mark.parametrize(
+    "audience",
+    ["", "has a space", "slash/not-allowed", "x" * 161],
+)
+def test_surface_pending_rejects_unsafe_audience_keys(
+    watcher_module, audience
+):
+    with pytest.raises(ValueError, match="audience must be"):
+        watcher_module.surface_pending(audience=audience)
+
+
 # ---------------------------------------------------------------------------
 # Ogler round-3 self-review fixes — 2026-04-11
 #

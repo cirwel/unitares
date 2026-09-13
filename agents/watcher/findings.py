@@ -644,7 +644,7 @@ def _sweep_token_drift_quiet() -> int:
 
 
 # ---------------------------------------------------------------------------
-# Surfacing — how findings reach the main Claude session
+# Surfacing — how findings reach host sessions
 #
 # Two hooks call the functions below:
 #
@@ -654,13 +654,13 @@ def _sweep_token_drift_quiet() -> int:
 #     context)
 #
 #   UserPromptSubmit → --surface-pending (chime mode, in agent.py because
-#     it also triggers a governance check-in; it reuses _format_findings_block
-#     and _write_findings_atomic from here)
+#     it also triggers a governance check-in; federated callers pass a stable
+#     audience key so delivery by one host does not consume another host's
+#     notification)
 #
-# Both print a <unitares-watcher-findings> block that the Claude Code hook
-# system injects as additionalContext. The formatter is shared between the
-# two commands so the block shape stays consistent no matter which hook
-# emitted it.
+# Both print a <unitares-watcher-findings> block that a host hook injects as
+# additionalContext. The formatter is shared so the block shape stays
+# consistent no matter which host emitted it.
 # ---------------------------------------------------------------------------
 
 

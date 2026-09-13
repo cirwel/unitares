@@ -1975,11 +1975,52 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def surface_pending() -> int:
-    """Chime mode: print findings with status == 'open' and transition ONLY
-    THOSE ACTUALLY DISPLAYED to 'surfaced'. Called by the UserPromptSubmit
-    hook so each prompt the user sends gets a delta of "what Watcher caught
-    since your last prompt".
+_SURFACE_AUDIENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,159}$")
+
+
+def _normalize_surface_audience(audience: str | None) -> str | None:
+    """Validate an audit-safe, bounded federated delivery key."""
+    if audience is None:
+        return None
+    normalized = audience.strip()
+    if not _SURFACE_AUDIENCE_RE.fullmatch(normalized):
+        raise ValueError(
+            "audience must be 1-160 characters using letters, digits, '.', '_', "
+            "':', '@', '+', or '-'"
+        )
+    return normalized
+
+
+def _surface_receipts(finding: dict[str, Any]) -> dict[str, str]:
+    receipts = finding.get("surface_receipts")
+    if not isinstance(receipts, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in receipts.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def surface_pending(
+    *,
+    audience: str | None = None,
+    scope_root: Path | None = None,
+) -> int:
+    """Chime mode: print findings not yet delivered to this audience.
+
+    Legacy callers that omit ``audience`` retain the original global behavior:
+    only ``open`` findings are eligible and displayed findings transition to
+    ``surfaced``. Federated callers pass a stable ``host:worktree`` audience.
+    They receive every active finding (``open`` or ``surfaced``) once, tracked
+    in the finding's ``surface_receipts`` map. This prevents one host from
+    consuming another host's notification while avoiding per-session re-chime
+    spam inside the same worktree.
+
+    ``scope_root`` limits federated delivery to the current worktree. The
+    SessionStart read path remains responsible for summarizing out-of-scope
+    backlog; a prompt chime should contain only findings the current checkout
+    can act on.
 
     After this runs, the findings that were actually shown in the block are
     recorded as surfaced. Any findings dropped by the severity display cap
@@ -1999,19 +2040,39 @@ def surface_pending() -> int:
     repeated P003/P001/P016 dismissal sweeps). Both are quiet so they
     don't pollute the chime block stdout.
     """
+    audience = _normalize_surface_audience(audience)
     _sweep_stale_quiet()
     _sweep_token_drift_quiet()
     all_findings = _iter_findings_raw()
-    open_findings = [f for f in all_findings if f.get("status", "open") == "open"]
+    if audience is None:
+        pending_findings = [
+            f for f in all_findings if f.get("status", "open") == "open"
+        ]
+    else:
+        pending_findings = [
+            f
+            for f in all_findings
+            if f.get("status", "open") in ("open", "surfaced")
+            and audience not in _surface_receipts(f)
+        ]
+        pending_findings, _out_of_scope = _partition_findings_by_scope(
+            pending_findings,
+            scope_root,
+        )
 
-    block, shown = _format_findings_block(
-        open_findings,
-        header=(
+    if audience is None:
+        header = (
             "Watcher caught the following while you were working. These are\n"
             "new since your last prompt. Look them over before proceeding — or\n"
             "dismiss any false positives with --dismiss <fingerprint>."
-        ),
-    )
+        )
+    else:
+        header = (
+            "Watcher caught the following while you were working. These are\n"
+            "new for this worktree audience. Look them over before proceeding — or\n"
+            "dismiss any false positives with --dismiss <fingerprint>."
+        )
+    block, shown = _format_findings_block(pending_findings, header=header)
     # Always check in to governance, even when there's nothing new to surface.
     # Otherwise Watcher goes silent between finding bursts.
     _do_checkin()
@@ -2024,18 +2085,31 @@ def surface_pending() -> int:
     # Only transition findings that made it past the display cap. The ones
     # the user saw → surfaced. The ones crowded out → stay open.
     surfaced_fps = {f.get("fingerprint") for f in shown}
+    surfaced_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     updated: list[dict[str, Any]] = []
     changed = False
     for f in all_findings:
-        if f.get("fingerprint") in surfaced_fps and f.get("status", "open") == "open":
-            f = {**f, "status": "surfaced"}
+        if f.get("fingerprint") not in surfaced_fps:
+            updated.append(f)
+            continue
+
+        next_f = f
+        if f.get("status", "open") == "open":
+            next_f = {**next_f, "status": "surfaced"}
+        if audience is not None:
+            receipts = _surface_receipts(next_f)
+            if audience not in receipts:
+                receipts[audience] = surfaced_at
+                next_f = {**next_f, "surface_receipts": receipts}
+        if next_f != f:
             changed = True
-        updated.append(f)
+        updated.append(next_f)
     if changed:
         _write_findings_atomic(updated)
         log(
-            f"surface_pending: marked {len(surfaced_fps)} open → surfaced "
-            f"({len(open_findings) - len(surfaced_fps)} left pending for next chime)"
+            f"surface_pending: delivered {len(surfaced_fps)} finding(s)"
+            f"{f' to {audience}' if audience else ''} "
+            f"({len(pending_findings) - len(surfaced_fps)} left pending for next chime)"
         )
 
     return 0
@@ -3212,6 +3286,11 @@ def main(argv: list[str] | None = None) -> int:
         help="print open findings as a chime block and transition them to surfaced",
     )
     parser.add_argument(
+        "--audience",
+        type=_normalize_surface_audience,
+        help="stable host:worktree delivery key for federated --surface-pending receipts",
+    )
+    parser.add_argument(
         "--recompute-floor",
         action="store_true",
         help="recompute pattern_floor.json from findings.jsonl and persist atomically",
@@ -3288,7 +3367,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.surface_pending:
         return _run_with_watcher_findings_lease(
             "surface pending findings",
-            surface_pending,
+            lambda: surface_pending(
+                audience=args.audience,
+                scope_root=(
+                    _resolve_session_scope_root() if args.audience is not None else None
+                ),
+            ),
             holder_agent_id=args.agent_id,
         )
     if args.scan_commits:
