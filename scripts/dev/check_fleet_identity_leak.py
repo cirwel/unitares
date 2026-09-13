@@ -51,12 +51,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # script for this operator's fleet is supposed to name this operator's fleet.
 #
 # This list must track ``[tool.setuptools.packages.find].include`` in
-# pyproject.toml, which is ``src`` + ``governance_core``. governance_core was
-# missing from the first version of this guard — half the shipped artifact,
-# and the half most obliged to be agnostic, since it is the pure-Python core
-# every deployment imports. It passes, but it was not being checked.
-# agents/sdk/src ships separately as the unitares-sdk PyPI package; config/ is
-# imported by src at runtime.
+# pyproject.toml, which is ``src``, ``governance_core`` and ``config``;
+# tests/test_residentless_install.py fails on a shipped package missing here.
+# governance_core was missing from the first version of this guard — half the
+# shipped artifact, and the half most obliged to be agnostic, since it is the
+# pure-Python core every deployment imports. It passes, but it was not being
+# checked. agents/sdk/src ships separately as the unitares-sdk PyPI package.
 DEFAULT_PATHS = ("src", "governance_core", "config", "agents/sdk/src")
 
 # The operator fleet identities that must not appear in shipped source. This
