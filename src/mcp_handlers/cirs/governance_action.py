@@ -26,7 +26,9 @@ async def handle_governance_action(arguments: Dict[str, Any]) -> Sequence[TextCo
 
     Four modes: initiate, respond, query, status
     """
-    action = arguments.get("action", "").lower()
+    # None-safe: `action` is declared with no default, so the middleware hands
+    # an omitted action over as None, and it must reach the valid_actions refusal.
+    action = (arguments.get("action") or "").lower()
 
     if not action or action not in ("initiate", "respond", "query", "status"):
         return [error_response(
@@ -190,7 +192,17 @@ async def _handle_governance_action_query(arguments: Dict[str, Any]) -> Sequence
 
     as_initiator = arguments.get("as_initiator", True)
     as_target = arguments.get("as_target", True)
-    status_filter = arguments.get("status_filter")
+    # Statuses are stored lowercase and matched exactly, so normalize the filter
+    # and refuse an unknown one, as the other enum-like CIRS filters do. Until
+    # #2183 "PENDING" or a typo returned a successful empty result that read as
+    # "no such actions". An empty string means no filter, like filter_severity.
+    status_filter = (arguments.get("status_filter") or "").lower() or None
+    valid_statuses = ["pending", "accepted", "rejected"]
+    if status_filter is not None and status_filter not in valid_statuses:
+        return [error_response(
+            f"Invalid status_filter: {status_filter}",
+            recovery={"valid_values": valid_statuses}
+        )]
 
     actions = _get_governance_actions_for_agent(
         agent_id,
