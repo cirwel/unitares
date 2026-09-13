@@ -22,6 +22,23 @@ class ListToolsParams(AgentIdentityMixin):
         default=False,
         description="If true, order tools by usage frequency."
     )
+    # The handler has read all three of these since the tool existed; none
+    # was declared here, so over the MCP wire FastMCP's transport arg model
+    # (built from this schema) dropped them before dispatch and
+    # list_tools(lite=false) still returned the compact response. Same class
+    # as DescribeToolParams.include_schema/include_full_description above.
+    include_advanced: Union[bool, str, None] = Field(
+        default=True,
+        description="If false, exclude Tier 3 (advanced) tools."
+    )
+    tier: Optional[str] = Field(
+        default="all",
+        description="Filter by tier: 'essential', 'common', 'advanced', or 'all'."
+    )
+    lite: Union[bool, str, None] = Field(
+        default=True,
+        description="If true (default), return minimal response (names + descriptions only, ~500B vs ~4KB)."
+    )
 
     @model_validator(mode='after')
     def coerce_booleans(self):
@@ -36,7 +53,11 @@ class ListToolsParams(AgentIdentityMixin):
             self.verbose = _to_bool(self.verbose)
         if self.progressive is not None:
             self.progressive = _to_bool(self.progressive)
-        
+        if self.include_advanced is not None:
+            self.include_advanced = _to_bool(self.include_advanced)
+        if self.lite is not None:
+            self.lite = _to_bool(self.lite)
+
         return self
 
 class DescribeToolParams(AgentIdentityMixin):
