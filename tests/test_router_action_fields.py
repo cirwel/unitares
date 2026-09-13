@@ -62,8 +62,6 @@ def _routers():
         if name in _TWO_LEVEL_TOOLS or name in external:
             continue
         definition = get_tool_definition(name)
-        if definition is not None and definition.hidden:
-            continue
         actions = getattr(definition, "known_actions", None) if definition else None
         model = models.get(name)
         if actions and model is not None:
@@ -82,27 +80,27 @@ def test_the_survey_found_the_routers():
         assert expected in ROUTER_IDS
 
 
-def test_the_survey_misses_no_first_party_action_tool():
+def test_the_survey_misses_no_first_party_action_tool(first_party_tool_surface):
     """A partial survey passes as quietly as an empty one.
 
     `_routers` keeps a tool only when it has both `known_actions` and a
     registered parameter model, so a tool whose model went missing would drop
     out of every test below, and the floor above would not notice while eight
-    others remained. Hidden tools are not advertised, so they need no model and
-    are left out on both sides.
+    others remained.
+
+    The population is what is actually served: an advertised tool declaring
+    `known_actions` must be surveyed, and a tool that is not advertised needs
+    no model. `hidden` is not a substitute for that test, because a hidden tool
+    listed in TOOL_ORDER is still advertised.
     """
     external = set(list_plugin_registered_tools())
-    declared = set()
-    for name in get_tool_registry():
-        definition = get_tool_definition(name)
-        if (
-            name not in external
-            and name not in _TWO_LEVEL_TOOLS
-            and definition is not None
-            and not definition.hidden
-            and definition.known_actions
-        ):
-            declared.add(name)
+    declared = {
+        tool.name
+        for tool in get_tool_definitions()
+        if tool.name not in external
+        and tool.name not in _TWO_LEVEL_TOOLS
+        and getattr(get_tool_definition(tool.name), "known_actions", None)
+    }
     missing = sorted(declared - set(ROUTER_IDS))
     assert not missing, (
         f"{missing!r} declare known_actions but were not surveyed: each needs a "
@@ -110,44 +108,54 @@ def test_the_survey_misses_no_first_party_action_tool():
     )
 
 
-# Keys that annotate a schema node without narrowing what it accepts. `type` is
-# included because every action is a string, so a `type` beside a vocabulary
-# cannot remove a routed action.
-_ANNOTATION_KEYS = frozenset({"type", "title", "description", "default", "examples", "deprecated"})
+# Keys that annotate a schema node without narrowing what it accepts.
+_ANNOTATION_KEYS = frozenset({"title", "description", "default", "examples", "deprecated"})
 
 
 def _closed_vocabulary(node, defs):
-    """The values a JSON-schema node accepts when they form a closed set, else None.
+    """The exact values a JSON-schema node accepts when they form a closed set, else None.
 
-    Pydantic spells a closed vocabulary as exactly one constraint keyword plus
+    Pydantic spells a closed vocabulary as one constraint keyword plus
     annotations: `enum` for a multi-value `Literal`, `const` for a single
     value, `anyOf` with a `null` branch for an optional one, and a `$ref` into
-    `$defs` for an `Enum` class. Those four are read.
+    `$defs` for an `Enum` class. Those four are read, and `type` is read only
+    as `"string"`, which keeps exactly the string members. `null` is dropped: it
+    is the absence of an action, which a router resolves to its default.
 
-    Anything else returns None, which fails the caller loudly. That includes a
-    constraint keyword beside another, such as `enum` with `const`, `$ref` with
-    its own `enum`, `allOf`, or `oneOf`. Reading those correctly means
-    intersecting constraints, and a reader that guessed could report a wider set
-    than the schema accepts, passing a schema that refuses a routed action.
+    Every other shape returns None and fails the caller loudly: any other
+    `type`, a constraint keyword beside another such as `enum` with `const`,
+    `$ref` with its own constraints, `allOf`, or `oneOf`. Reading those means
+    intersecting constraints, and a reader that guessed could report a wider
+    set than the schema accepts, passing a schema that refuses a routed action.
     """
-    constraints = set(node) - _ANNOTATION_KEYS
-    if constraints == {"$ref"} and node["$ref"].startswith("#/$defs/"):
+    keys = set(node) - _ANNOTATION_KEYS
+    node_type = node.get("type")
+    if "type" in keys:
+        if node_type not in ("string", "null"):
+            return None
+        keys.discard("type")
+    if node_type == "null":
+        return set() if not keys else None
+    if keys == {"$ref"} and node_type is None and node["$ref"].startswith("#/$defs/"):
         return _closed_vocabulary(defs.get(node["$ref"].rsplit("/", 1)[-1], {}), defs)
-    if constraints == {"enum"}:
-        return set(node["enum"])
-    if constraints == {"const"}:
-        return {node["const"]}
-    if constraints == {"anyOf"}:
+    if keys == {"anyOf"} and node_type is None:
         values = set()
         for branch in node["anyOf"]:
-            if not set(branch) - _ANNOTATION_KEYS and branch.get("type") == "null":
-                continue
             branch_values = _closed_vocabulary(branch, defs)
             if branch_values is None:
                 return None
             values |= branch_values
         return values
-    return None
+    if keys == {"enum"}:
+        values = set(node["enum"])
+    elif keys == {"const"}:
+        values = {node["const"]}
+    else:
+        return None
+    if node_type == "string":
+        values = {value for value in values if isinstance(value, str)}
+    values.discard(None)
+    return values
 
 
 @pytest.mark.parametrize("name,actions,model", ROUTERS, ids=ROUTER_IDS)
@@ -196,8 +204,10 @@ def test_advertised_action_enum_is_exactly_the_routed_actions(
     surveyed: it advertises `action` as a free string, so there is no closed
     vocabulary here to compare.
     """
-    wire = {t.name: t for t in get_tool_definitions()}[name]
-    schema = get_tool_input_schema(wire)
+    catalog = {tool.name: tool for tool in get_tool_definitions()}
+    if name not in catalog:
+        pytest.skip(f"{name} is not advertised, so no client is shown a vocabulary")
+    schema = get_tool_input_schema(catalog[name])
     action = (schema.get("properties") or {}).get("action")
     assert action is not None, f"{name}: the advertised schema has no action property"
     advertised = _closed_vocabulary(action, schema.get("$defs") or {})
