@@ -56,7 +56,15 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # unchanged. Bumped because a moved digest is what tells a hash-pinning client
 # to re-pin (see the re-pin note in docs/INTERFACE_CONTRACT.md), not because
 # the catalog gained or lost anything.
-INTERFACE_CONTRACT_VERSION = "1.7.0"
+# 1.9.0 (2026-09-13): `complexity` and `confidence` on process_agent_update,
+# simulate_update and sync_state advertise their 0-1 bound as JSON Schema
+# `minimum`/`maximum` instead of Pydantic's `ge`/`le`, which no client validator
+# reads, and their string branch as a regex of numeric strings in [0, 1] instead
+# of any string; sync_state's `complexity` also advertises the named levels its
+# normalizer accepts. What the server accepts and refuses is unchanged for every
+# input, on every transport, with the same error messages; three digests move.
+# 1.8.0 is claimed by a concurrent change, so the two can land in either order.
+INTERFACE_CONTRACT_VERSION = "1.9.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
