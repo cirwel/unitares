@@ -63,6 +63,13 @@ UNREMARKABLE = "unremarkable"
 
 
 def _verdict_timeout_s() -> float:
+    """Seconds a reviewer model call may take before the wait is unusual.
+
+    Read from the same variable the reviewer itself reads
+    (``agents/dialectic_reviewer/reviewer.py``) so widening the reviewer's
+    allowance widens the budget it is judged against; two numbers that could
+    drift apart would make a compliant reviewer look late.
+    """
     raw = os.environ.get("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", str(DEFAULT_VERDICT_TIMEOUT_S))
     try:
         value = float(raw)
