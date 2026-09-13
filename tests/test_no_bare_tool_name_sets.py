@@ -59,6 +59,11 @@ EXCEPTIONS: dict[str, str] = {
         f"{GUARDED_REGISTRY}: keyed by the workflow alias whose schema it narrows; "
         "tests/test_alias_schema_narrowing.py"
     ),
+    "src/alias_schema.py::ALIAS_SCHEMA_PROPERTY_OVERRIDES": (
+        f"{GUARDED_REGISTRY}: keyed by the advertised alias whose schema it overrides, "
+        "so the canonical tool keeps its own; tests/test_mcp_schema_parity.py holds "
+        "every overridden value to what that alias's dispatch path accepts"
+    ),
     # --- keyed on the invoked name by design ------------------------------
     "src/mcp_handlers/middleware/envelope_step.py::_COMPACT_READ_ALIASES": (
         "the experience envelope is chosen by the friendly name the caller used; "
