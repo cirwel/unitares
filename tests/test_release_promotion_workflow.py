@@ -69,11 +69,41 @@ def test_workflow_inputs_never_reach_a_shell_unquoted():
             assert "${{" not in step.get("run", ""), step.get("name")
 
 
-def _run_gate(tmp_path: Path, fake_gh: str) -> subprocess.CompletedProcess[str]:
+def _run_gate(
+    tmp_path: Path,
+    environment_response: str,
+    *,
+    gh_exit_code: int = 0,
+) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     gh = bin_dir / "gh"
-    gh.write_text("#!/usr/bin/env bash\n" + fake_gh)
+    gh.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [ "$FAKE_GH_EXIT_CODE" -ne 0 ]; then
+  printf '%s\n' "$FAKE_GH_RESPONSE"
+  exit "$FAKE_GH_EXIT_CODE"
+fi
+jq_filter=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --jq)
+      jq_filter=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [ -z "$jq_filter" ]; then
+  echo "fake gh expected --jq" >&2
+  exit 2
+fi
+printf '%s\n' "$FAKE_GH_RESPONSE" | jq -r "$jq_filter"
+"""
+    )
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
     script = _step("verify", "Refuse an ungated promotion environment")["run"]
     env = {
@@ -81,6 +111,8 @@ def _run_gate(tmp_path: Path, fake_gh: str) -> subprocess.CompletedProcess[str]:
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "GITHUB_REPOSITORY": "cirwel/unitares",
         "PROMOTION_ENVIRONMENT": "release-promotion",
+        "FAKE_GH_RESPONSE": environment_response,
+        "FAKE_GH_EXIT_CODE": str(gh_exit_code),
     }
     # GitHub runs `run:` scripts with bash -e -o pipefail.
     return subprocess.run(
@@ -96,15 +128,34 @@ def test_missing_environment_fails_closed(tmp_path: Path):
     """gh prints the 404 body on stdout; that must not read as a reviewer count."""
     result = _run_gate(
         tmp_path,
-        'echo \'{"message":"Not Found","status":"404"}\'\nexit 1\n',
+        '{"message":"Not Found","status":"404"}',
+        gh_exit_code=1,
     )
     assert result.returncode != 0
     assert "must exist with a required reviewer" in result.stderr
 
 
 def test_environment_without_reviewers_fails_closed(tmp_path: Path):
-    assert _run_gate(tmp_path, "echo 0\n").returncode != 0
+    response = '{"protection_rules": []}'
+    assert _run_gate(tmp_path, response).returncode != 0
+
+
+def test_required_reviewer_rule_without_people_fails_closed(tmp_path: Path):
+    for reviewers in ("[]", "null"):
+        response = (
+            '{"protection_rules": [{"type":"required_reviewers",'
+            f'"reviewers":{reviewers}'
+            "]}]}"
+        )
+        assert _run_gate(tmp_path, response).returncode != 0
+
+    missing_reviewers = '{"protection_rules":[{"type":"required_reviewers"}]}'
+    assert _run_gate(tmp_path, missing_reviewers).returncode != 0
 
 
 def test_environment_with_a_reviewer_passes(tmp_path: Path):
-    assert _run_gate(tmp_path, "echo 1\n").returncode == 0
+    response = (
+        '{"protection_rules": [{"type":"required_reviewers",'
+        '"reviewers":[{"type":"User","reviewer":{"login":"operator"}}]}]}'
+    )
+    assert _run_gate(tmp_path, response).returncode == 0

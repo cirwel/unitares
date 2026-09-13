@@ -60,7 +60,7 @@ jobs:
         run: |
           # gh prints a 404 body to stdout, so a failed call must not be parsed.
           if ! reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/$PROMOTION_ENVIRONMENT" \
-            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' 2>/dev/null); then
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length' 2>/dev/null); then
             reviewers=0
           fi
           case "$reviewers" in ''|*[!0-9]*) reviewers=0 ;; esac
