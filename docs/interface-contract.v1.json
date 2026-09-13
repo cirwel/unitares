@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.7.0",
+  "version": "1.9.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "transports": [
@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "678cc61653a575b1649c5e92795091b03b1088b9782e7c05192008796dd63e88",
+  "surface_sha256": "24bdd260d69d3eb2b567306618457c17d3d769f799d23d8168362b5893f145d4",
   "capabilities": [
     {
       "name": "start_session",
@@ -25,7 +25,7 @@
       "name": "sync_state",
       "implementation": "process_agent_update",
       "kind": "workflow_alias",
-      "input_schema_sha256": "bebd5ab8d8af3a940eadc968e680aacfd1cc1947426d23a5eb29c338220920a5",
+      "input_schema_sha256": "4e7d05a49d7129dcd9f8ccd81fb93629399fb07bce43e0f21d8b04b7827f1a1b",
       "transport_names": {
         "mcp_streamable_http": "sync_state",
         "rest_v1_tools": "sync_state",
@@ -124,7 +124,7 @@
       "name": "process_agent_update",
       "implementation": "process_agent_update",
       "kind": "canonical_tool",
-      "input_schema_sha256": "bebd5ab8d8af3a940eadc968e680aacfd1cc1947426d23a5eb29c338220920a5",
+      "input_schema_sha256": "b4c62a9170cd6ee04f8b970b7be3f2316590b7b544ea885dae863f5e0e88506a",
       "transport_names": {
         "mcp_streamable_http": "process_agent_update",
         "rest_v1_tools": "process_agent_update",
@@ -190,7 +190,7 @@
       "name": "simulate_update",
       "implementation": "simulate_update",
       "kind": "canonical_tool",
-      "input_schema_sha256": "62d892c808c99f1c69614d51d11c9574615072681e299b9c235cc8e0876e7cf7",
+      "input_schema_sha256": "b1d63282b94c5f324c6dd6c7c8dc19e974a57b03755cb074297b318257c64eac",
       "transport_names": {
         "mcp_streamable_http": "simulate_update",
         "rest_v1_tools": "simulate_update",

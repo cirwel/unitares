@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Union, Literal, Dict, Any, List
+from typing import Annotated, Optional, Union, Literal, Dict, Any, List
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -37,14 +37,50 @@ _COMPLEXITY_ALIAS_HINT = (
 )
 
 
+# A 0-1 value, advertised so a client can read the whole contract.
+#
+# These fields were `Union[float, str, None] = Field(ge=0.0, le=1.0)`, which
+# advertised two falsehoods. Pydantic emitted the bound as `ge`/`le` beside an
+# inner anyOf, and those are not JSON Schema keywords, so 99.0 and -5.0 were
+# advertised as legal and then refused. The `str` member emitted a bare `string`
+# branch, so "x" and "medium" were advertised as legal too.
+#
+# The bound now sits on each member, so it is emitted as `minimum`/`maximum`,
+# and the string member carries a regex matching only numeric strings inside
+# [0, 1]. Keeping a string branch, rather than dropping it, is deliberate and
+# measured. The MCP transport builds its argument model from the advertised
+# schema. Without a string branch it refuses "x" and "medium" itself, with a
+# generic parse error, and the before-validator below never runs, so the caller
+# loses the message that names the accepted forms and points at the check-in
+# aliases. A string branch keeps those refusals in the handler, where they were.
+#
+# Measured on a replica using the real before-validator: this advertises no
+# value the model refuses, the transport accepts exactly what it accepted
+# before, and the model accepts and refuses exactly what it did before. A few
+# numeric strings are accepted without being advertised (" 0.5", "+0.5",
+# "5e-1"), which is the safe direction. The regex is never evaluated by the
+# model: the before-validator turns every string into a float first.
+#
+# sync_state's `complexity` also advertises the named levels its normalizer
+# accepts, through an alias schema override in src/alias_schema.py, which must
+# repeat this regex; tests/test_mcp_schema_parity.py pins the two equal.
+UNIT_INTERVAL_STRING_PATTERN = r"^(0(\.\d+)?|1(\.0+)?|\.\d+)$"
+_UnitInterval = Annotated[float, Field(ge=0.0, le=1.0)]
+_UnitIntervalString = Annotated[str, Field(pattern=UNIT_INTERVAL_STRING_PATTERN)]
+
+
 def _coerce_unit_string_fields(data: Any, *field_names: str, alias_hint: str = "") -> Any:
     """Coerce numeric strings to float BEFORE field validation.
 
-    ge/le on Union[float, str, None] raises a bare TypeError when the value
-    is a string, which the dispatch middleware's generic except treats as
-    "validation unavailable" — so '5' and 'abc' used to reach handlers
-    unvalidated. Coercing here lets the field's own ge/le enforce the 0-1
-    range; unparseable strings reject instead of silently degrading.
+    Originally needed because ge/le on Union[float, str, None] raised a bare
+    TypeError on a string, which the dispatch middleware's generic except
+    treated as "validation unavailable", so '5' and 'abc' reached handlers
+    unvalidated. The bound now sits on each Union member, but this still earns
+    its place: it turns an unparseable string into a message naming the
+    accepted forms instead of a generic float-parsing error, it lets the float
+    member's bound enforce the 0-1 range on numeric strings, and because it
+    runs first the string member's regex is only ever advertised, never used to
+    validate.
     Canonical check-in tools are strict; friendly aliases (checkin/log/
     update/sync_state) normalize richer vocabulary upstream."""
     if not isinstance(data, dict):
@@ -208,16 +244,12 @@ class SimulateUpdateParams(AgentIdentityMixin):
         default="",
         description="Agent's response text (optional)."
     )
-    complexity: Union[float, str, None] = Field(
+    complexity: Union[_UnitInterval, _UnitIntervalString, None] = Field(
         default=0.5,
-        ge=0.0,
-        le=1.0,
         description="Estimated task complexity (0-1)."
     )
-    confidence: Union[float, str, None] = Field(
+    confidence: Union[_UnitInterval, _UnitIntervalString, None] = Field(
         default=None,
-        ge=0.0,
-        le=1.0,
         description="Confidence level for this update (0-1)."
     )
     lite: Union[bool, str, None] = Field(
@@ -320,10 +352,8 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         default=None,
         description="Agent's response text (optional, for analysis)"
     )
-    complexity: Union[float, str, None] = Field(
+    complexity: Union[_UnitInterval, _UnitIntervalString, None] = Field(
         default=0.5,
-        ge=0.0,
-        le=1.0,
         description=(
             "Estimated task complexity, strictly 0-1. Check-in aliases "
             "(checkin/log/update/sync_state) also accept named levels "
@@ -337,10 +367,8 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             )
         },
     )
-    confidence: Union[float, str, None] = Field(
+    confidence: Union[_UnitInterval, _UnitIntervalString, None] = Field(
         default=None,
-        ge=0.0, 
-        le=1.0,
         description="Confidence level for this update (0-1, optional)."
     )
     epistemic_class: ProcessUpdateEpistemicClass = Field(

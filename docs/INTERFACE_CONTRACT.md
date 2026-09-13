@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.7.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.9.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. The server advertises the same
@@ -104,7 +104,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.7.0` is the negotiated interface release. Compatible additions
+- `version: 1.9.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -119,7 +119,15 @@ The two identifiers serve different jobs:
   2026-09-12: `cirs_protocol`'s `action` description names which sub-action
   each protocol routes, adding the `list` and `status` it had omitted.
   Description-only: one digest moves and no parameter name, type, default or
-  requiredness changes).
+  requiredness changes; 1.9.0, 2026-09-13: `complexity` and `confidence` on
+  `process_agent_update`, `simulate_update` and `sync_state` advertise what the
+  server actually accepts. Their 0-1 bound had been emitted as Pydantic
+  `ge`/`le`, which no client validator reads, so 99 was advertised as legal;
+  it is now `minimum`/`maximum`. Their string branch had allowed any string; it
+  is now a regex of numeric strings in [0, 1]. `sync_state`'s `complexity` also
+  lists the named levels its normalizer accepts. Acceptance, refusal and error
+  messages are unchanged for every input on every transport; three digests
+  move. 1.8.0 is taken by a concurrent change).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
