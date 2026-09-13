@@ -19,7 +19,7 @@ source_files:
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
 source_digests:
-  unitares/src/mcp_handlers/knowledge/handlers.py: "6aa7dc5f65ceba3b"
+  unitares/src/mcp_handlers/knowledge/handlers.py: "cbdabbeac866a47c"
   unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
   unitares/src/mcp_handlers/schemas/knowledge.py: "d3a3a6b031026ba7"
   unitares/src/alias_schema.py: "b3cf7437056198f8"
