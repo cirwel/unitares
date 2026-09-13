@@ -396,6 +396,18 @@ class TestDetectSuspiciousPatterns:
             assert "skip_rate" in p
             assert "avg_confidence" in p
 
+    def test_requested_window_reaches_both_component_reads(self):
+        from src.telemetry import TelemetryCollector
+        tc = TelemetryCollector()
+        tc.get_skip_rate_metrics = MagicMock(return_value={"skip_rate": 0.2})
+        tc.get_confidence_distribution = MagicMock(return_value={"mean": 0.8})
+
+        result = tc.detect_suspicious_patterns("agent-a", window_hours=168)
+
+        tc.get_skip_rate_metrics.assert_called_once_with("agent-a", 168)
+        tc.get_confidence_distribution.assert_called_once_with("agent-a", 168)
+        assert result["window_hours"] == 168
+
 
 # ============================================================================
 # get_comprehensive_metrics
