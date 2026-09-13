@@ -216,6 +216,100 @@ class TestInferenceHostRegistry:
 
 
 # =============================================================================
+# Tests: invocation routing disclosure
+# =============================================================================
+
+class TestInvocationRoutingDisclosure:
+    """The discovery reads must not point a caller at a tool that will reject
+    the host they just asked about.
+
+    `invocation.tool` is hardcoded "call_model" for every host and cannot be
+    made host-correct without breaking the older clients it was frozen for, so
+    the host-correct answer rides beside it as `recommended_tool`. These tests
+    pin both halves: the legacy scalar stays put, and the new field agrees with
+    the host's own `accepts_host_id_from` rather than being a second list to
+    maintain.
+    """
+
+    @pytest.mark.asyncio
+    async def test_describe_recommends_delegate_inference_for_host_adapters(self):
+        """The regression this exists for: following `invocation.tool` on a
+        Codex or Claude host lands on call_model, which fails closed."""
+        from src.mcp_handlers.support.model_inference import handle_describe_inference_host
+
+        for host_id in ("codex:host-adapter", "claude:host-adapter"):
+            result = await handle_describe_inference_host({"host_id": host_id})
+            parsed = _parse_text_content(result)
+
+            assert parsed["invocation"]["recommended_tool"] == "delegate_inference", host_id
+            # The legacy scalar is preserved verbatim, and labelled.
+            assert parsed["invocation"]["tool"] == "call_model", host_id
+            assert parsed["invocation"]["tool_authoritative"] is False, host_id
+
+    @pytest.mark.asyncio
+    async def test_describe_recommends_call_model_for_call_model_hosts(self):
+        from src.mcp_handlers.support.model_inference import handle_describe_inference_host
+
+        result = await handle_describe_inference_host({"host_id": "ollama:local"})
+        parsed = _parse_text_content(result)
+
+        assert parsed["invocation"]["recommended_tool"] == "call_model"
+
+    @pytest.mark.asyncio
+    async def test_recommended_tool_never_contradicts_accepts_host_id_from(self):
+        """The consistency rule, over every registered host: a recommendation
+        that is not in the host's own accepted set is the drift this field was
+        added to make impossible."""
+        from src.mcp_handlers.support.model_inference import (
+            handle_describe_inference_host,
+            handle_list_inference_hosts,
+        )
+
+        listed = _parse_text_content(await handle_list_inference_hosts({}))
+        assert listed["hosts"], "registry returned no hosts to check"
+
+        for entry in listed["hosts"]:
+            host_id = entry["host_id"]
+            parsed = _parse_text_content(
+                await handle_describe_inference_host({"host_id": host_id})
+            )
+            recommended = parsed["invocation"].get("recommended_tool")
+            accepted = parsed["host"]["accepts_host_id_from"]
+
+            assert recommended is not None, f"{host_id} recommends no tool"
+            assert recommended in accepted, (
+                f"{host_id} recommends {recommended}, which is not in {accepted}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_list_read_omits_recommended_tool(self):
+        """The list read names no single host, so there is no host-correct
+        answer to give — omitted rather than guessed."""
+        from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+
+        parsed = _parse_text_content(await handle_list_inference_hosts({}))
+
+        assert "recommended_tool" not in parsed["invocation"]
+        assert parsed["invocation"]["tool_authoritative"] is False
+        assert "accepts_host_id_from" in parsed["invocation"]["routing_precedence"]
+
+    def test_consult_is_never_recommended(self):
+        """consult reaches the host adapters but picks the host itself and
+        takes no host_id, so it can never answer "pass this host_id where?"."""
+        from src.mcp_handlers.support.model_inference import _recommended_tool
+
+        assert _recommended_tool({"accepts_host_id_from": ["consult"]}) is None
+
+    def test_no_host_and_malformed_accepts_yield_no_recommendation(self):
+        from src.mcp_handlers.support.model_inference import _recommended_tool
+
+        assert _recommended_tool(None) is None
+        assert _recommended_tool({}) is None
+        assert _recommended_tool({"accepts_host_id_from": "call_model"}) is None
+        assert _recommended_tool({"accepts_host_id_from": []}) is None
+
+
+# =============================================================================
 # Tests: call_model reachability gate
 # =============================================================================
 
