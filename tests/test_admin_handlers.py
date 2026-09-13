@@ -3179,17 +3179,34 @@ class TestServerInfoReportsWhatTheServerActuallyUses:
 
         assert self._payload(monkeypatch)["pid_file"] == str(SERVER_PID_FILE)
 
-    def test_stdio_marker_sits_beside_the_http_one(self, monkeypatch):
+    def test_stdio_pid_file_is_the_one_stdio_actually_writes(self, monkeypatch):
+        """Exact cross-module equality, matching the HTTP assertion.
+
+        The earlier version of this test compared only the PARENT directory
+        against the HTTP marker, which passed while the reported stdio name was
+        `.mcp_server_std.pid` -- a file nothing writes. stdio's main() calls
+        agent_process_mgmt.init_server_process(), so that module's PID_FILE is
+        the writer and the only thing worth asserting against.
+        """
         monkeypatch.setattr("sys.argv", ["python", "src/mcp_server_std.py"])
+        from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
         from src.mcp_handlers.admin.handlers import build_server_info_payload
-        from src.process_management import SERVER_PID_FILE
 
         payload = build_server_info_payload()
         assert payload["transport"] == "STDIO"
-        # Same directory as the HTTP marker, including under an override.
-        assert (
-            Path(payload["pid_file"]).parent == Path(SERVER_PID_FILE).parent
-        )
+        assert payload["pid_file"] == str(STDIO_PID_FILE)
+
+    def test_neither_transport_reports_a_name_nothing_writes(self, monkeypatch):
+        """The defect class, stated directly: every reported marker must be
+        some writer's constant, never a name synthesised in the reporter."""
+        from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
+        from src.mcp_handlers.admin.handlers import build_server_info_payload
+        from src.process_management import SERVER_PID_FILE
+
+        written = {str(SERVER_PID_FILE), str(STDIO_PID_FILE)}
+        for argv in (["python", "src/mcp_server.py"], ["python", "src/mcp_server_std.py"]):
+            monkeypatch.setattr("sys.argv", argv)
+            assert build_server_info_payload()["pid_file"] in written, argv
 
     def test_legacy_tool_count_is_the_dispatch_count(self, monkeypatch):
         payload = self._payload(monkeypatch)

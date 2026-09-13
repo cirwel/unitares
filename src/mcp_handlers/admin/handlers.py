@@ -154,13 +154,24 @@ def build_server_info_payload() -> Dict[str, Any]:
     # UNITARES_SERVER_PID_FILE override that process_management honours, so an
     # operator who relocated the marker was misreported twice over.
     #
-    # The stdio filename has never been written by anything -- `.mcp_server_std.pid`
-    # occurs in this repo only on the line this replaces -- so that branch
-    # reports where a stdio marker WOULD live, beside the HTTP one, and its
-    # `pid_file_exists` is expected to stay False until something writes it.
+    # The two transports have DIFFERENT writers, so ask each transport's own.
+    # `.mcp_server_std.pid` is written by nothing: stdio's main() calls
+    # agent_process_mgmt.init_server_process(), which writes
+    # agent_process_mgmt.PID_FILE. An earlier revision of this block reported
+    # that invented name for stdio on the strength of grepping the filename and
+    # finding no writer -- the right question was which file stdio writes, not
+    # whether that name is written, and the two have different answers.
+    #
+    # Both constants currently resolve to <repo>/data/.mcp_server.pid, so the
+    # two selections agree today. They are still selected separately: they are
+    # owned by different modules and only one of them honours
+    # UNITARES_SERVER_PID_FILE, so collapsing them here would re-create the same
+    # class of defect the moment either moves. Unifying the WRITERS is the real
+    # repair and is not this change.
+    from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
     from src.process_management import SERVER_PID_FILE
 
-    pid_file = SERVER_PID_FILE if is_http else SERVER_PID_FILE.with_name(".mcp_server_std.pid")
+    pid_file = SERVER_PID_FILE if is_http else STDIO_PID_FILE
 
     return {
         "transport": transport,
