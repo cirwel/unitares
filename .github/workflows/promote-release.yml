@@ -88,6 +88,10 @@ jobs:
             echo "$RELEASE_TAG is not the newest server tag ($newest); do not move latest backwards." >&2
             exit 1
           fi
+          if git ls-remote --exit-code --heads origin "publish/$RELEASE_TAG" > /dev/null; then
+            echo "publish/$RELEASE_TAG already exists; merge or delete its pull request before promoting again." >&2
+            exit 1
+          fi
           published=$(tr -d '[:space:]' < PUBLISHED_VERSION)
           if [ "$(printf '%s\n%s\n' "$published" "$VERSION" | sort -V | tail -1)" != "$VERSION" ] || [ "$published" = "$VERSION" ]; then
             echo "PUBLISHED_VERSION is already $published; $RELEASE_TAG is not ahead of it." >&2
@@ -214,6 +218,16 @@ jobs:
           DIGEST: ${{ needs.verify.outputs.digest }}
         run: |
           branch="publish/$RELEASE_TAG"
+          # A re-run after an unmerged earlier run must not die on a raw push
+          # rejection. latest is already promoted at this point; the pin is the
+          # only thing left, and it already exists.
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            {
+              echo "\`$branch\` already exists from an earlier run; latest now serves \`$DIGEST\`."
+              echo "Open or merge its pull request, or delete the branch and re-run to rebuild the pin."
+            } | tee -a "$GITHUB_STEP_SUMMARY" >&2
+            exit 1
+          fi
           git switch -c "$branch"
           printf '%s\n' "$VERSION" > PUBLISHED_VERSION
           python3 scripts/ops/version_manager.py --update

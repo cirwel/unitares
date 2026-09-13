@@ -55,6 +55,14 @@ def test_verification_binds_provenance_to_the_release_tag():
     assert ".SBOM" in image
 
 
+def test_an_existing_pin_branch_stops_the_run_before_approval():
+    """A re-dispatch must not re-run the approval only to fail at git push."""
+    verify = _step("verify", "Require the newest release, ahead of PUBLISHED_VERSION")["run"]
+    assert 'ls-remote --exit-code --heads origin "publish/$RELEASE_TAG"' in verify
+    pin = _step("pin", "Push a branch that advances PUBLISHED_VERSION")["run"]
+    assert pin.index("ls-remote --exit-code --heads") < pin.index("git push")
+
+
 def test_workflow_inputs_never_reach_a_shell_unquoted():
     for job in JOBS.values():
         for step in job["steps"]:

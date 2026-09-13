@@ -36,7 +36,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = "cirwel/unitares"
 SERVER_TAG = re.compile(r"v(\d+)\.(\d+)\.(\d+)")
-RELEASES_API = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=100"
+RELEASE_BY_TAG = f"https://api.github.com/repos/{REPOSITORY}/releases/tags/{{tag}}"
 GHCR_TOKEN = f"https://ghcr.io/token?scope=repository:{REPOSITORY}:pull&service=ghcr.io"
 GHCR_MANIFEST = f"https://ghcr.io/v2/{REPOSITORY}/manifests/{{ref}}"
 MANIFEST_TYPES = ", ".join(
@@ -87,8 +87,12 @@ def _ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context(cafile=certifi.where())
 
 
-def released_versions() -> set[str]:
-    """Versions with a published (non-draft) GitHub release page."""
+def released_versions(versions: set[str]) -> set[str]:
+    """The given versions that have a published (non-draft) GitHub release page.
+
+    Each tag is looked up directly rather than read from a paginated listing,
+    so an old PUBLISHED_VERSION cannot fall off the first page.
+    """
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "unitares-server-release-sync/1",
@@ -96,14 +100,20 @@ def released_versions() -> set[str]:
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(RELEASES_API, headers=headers)
-    with urllib.request.urlopen(request, timeout=30, context=_ssl_context()) as response:
-        payload = json.load(response)
-    return {
-        release["tag_name"][1:]
-        for release in payload
-        if not release.get("draft") and SERVER_TAG.fullmatch(release.get("tag_name", ""))
-    }
+    context = _ssl_context()
+    released: set[str] = set()
+    for version in sorted(versions):
+        request = urllib.request.Request(RELEASE_BY_TAG.format(tag=f"v{version}"), headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=30, context=context) as response:
+                payload = json.load(response)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            continue
+        if not payload.get("draft"):
+            released.add(version)
+    return released
 
 
 def image_digests(refs: list[str]) -> dict[str, str | None]:
@@ -120,7 +130,10 @@ def image_digests(refs: list[str]) -> dict[str, str | None]:
         )
         try:
             with urllib.request.urlopen(request, timeout=30, context=context) as response:
-                digests[ref] = response.headers["Docker-Content-Digest"]
+                digest = response.headers.get("Docker-Content-Digest")
+                if not digest:
+                    raise ValueError(f"GHCR returned no digest for {ref}")
+                digests[ref] = digest
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 raise
@@ -196,13 +209,6 @@ def assess(
                     ),
                 }
             )
-        if newest not in on_head:
-            issues.append(
-                {
-                    "code": "newest_tag_not_on_master",
-                    "detail": f"v{newest} is not an ancestor of master; forward-merge it before the next release",
-                }
-            )
         if _key(source) < _key(newest):
             issues.append(
                 {
@@ -210,6 +216,16 @@ def assess(
                     "detail": f"VERSION is {source}, older than the existing tag v{newest}",
                 }
             )
+
+    # Every tag, not only the newest: a maintenance tag left unmerged must stay
+    # visible after a newer mainline tag exists.
+    for version in sorted(tagged - on_head, key=_key):
+        issues.append(
+            {
+                "code": "tag_not_on_master",
+                "detail": f"v{version} is not an ancestor of master; forward-merge it",
+            }
+        )
 
     return {
         "status": "synced" if not issues else "drift",
@@ -230,7 +246,7 @@ def collect(root: Path = REPO_ROOT) -> dict[str, Any]:
     newest = sorted(tagged, key=_key)[-5:]
     refs = ["latest", *{f"v{version}" for version in [*newest, published]}]
     try:
-        released = released_versions()
+        released = released_versions({published, *newest})
         digests = image_digests(sorted(refs))
     except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
         return {
