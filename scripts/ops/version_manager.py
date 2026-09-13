@@ -74,10 +74,6 @@ VERSION_REFERENCES = [
     ("CITATION.cff", [
         (r'version: "([\d.]+)"', r'version: "{version}"'),
     ]),
-    ("README.md", [
-        (r'\*\*Status:\*\* v([\d.]+)\.',
-         r'**Status:** v{version}.'),
-    ]),
     ("COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',
          r'| UNITARES server | `v{version}`'),
