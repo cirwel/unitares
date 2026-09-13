@@ -1,0 +1,124 @@
+name: Draft Base Refresh
+
+# Drafts here do not merely wait — they ROT. PR #2184 was authored mergeable,
+# sat while its stacked base (#2176) merged, and is now `dirty`; #2187 the same.
+# Waiting converted finished work into conflict work, which is a cost the delay
+# itself created rather than deferred.
+#
+# This merges the base branch into any open draft that is BEHIND but still
+# CONFLICT-FREE, so a PR that was mergeable stays mergeable. It is deliberately
+# the narrowest useful action:
+#
+#   * Only DRAFT PRs, and only ones whose mergeable state is `behind`. A PR
+#     already `dirty` needs a human decision about which side wins; this never
+#     touches one.
+#   * Only branches in THIS repo (never a fork's head).
+#   * A merge commit, never a rebase or force-push, so nobody's checkout breaks
+#     and no commit anyone else authored is rewritten.
+#   * It never marks a PR ready and never merges it. Readiness belongs to the
+#     owning agent and merging to the maintainer (AGENTS.md / CLAUDE.md); a
+#     workflow doing either would be the "silent green button" the delivery
+#     contract forbids.
+#
+# Label a PR `no-base-refresh` to opt out — for a PR deliberately pinned to an
+# older base, or one stacked on another PR's branch where a base merge would
+# pull in the wrong history.
+#
+# GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
+
+on:
+  schedule:
+    - cron: "23 */4 * * *"   # every 4h; conflict-rot latency tolerance is hours
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List what would be refreshed without pushing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write        # push the merge commit to the PR branch
+  pull-requests: read
+
+concurrency:
+  # Scheduled and manual runs must not race each other into the same branch.
+  group: draft-base-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Merge base into behind-but-clean drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # mergeable/mergeStateStatus are computed lazily by GitHub; a fresh
+          # query can return UNKNOWN. Ask once, and treat UNKNOWN as "skip" —
+          # acting on an unknown merge state is how a clean branch gets a
+          # conflicted merge commit pushed into it.
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
+            --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels \
+            > prs.json
+
+          refreshed=0; skipped=0
+          while read -r pr; do
+            num=$(jq -r .number <<<"$pr")
+            head=$(jq -r .headRefName <<<"$pr")
+            base=$(jq -r .baseRefName <<<"$pr")
+            state=$(jq -r .mergeStateStatus <<<"$pr")
+            owner=$(jq -r '.headRepositoryOwner.login // ""' <<<"$pr")
+
+            echo "::group::PR #$num ($head <- $base, state=$state)"
+
+            if [ "$owner" != "${GITHUB_REPOSITORY%%/*}" ]; then
+              echo "skip: head is a fork ($owner)"; skipped=$((skipped+1)); echo "::endgroup::"; continue
+            fi
+            if [ "$state" != "BEHIND" ]; then
+              echo "skip: not BEHIND (a DIRTY pr needs a human; anything else needs nothing)"
+              skipped=$((skipped+1)); echo "::endgroup::"; continue
+            fi
+
+            git fetch origin "$head" "$base" --quiet
+            git checkout -q -B "refresh/$num" "origin/$head"
+
+            msg="Merge $base into $head"
+            msg="$msg"$'\n\n'"Keeps this draft mergeable while it waits for review."
+            msg="$msg"$'\n'"Opened by the Draft Base Refresh workflow; no readiness"
+            msg="$msg"$'\n'"or merge decision is implied."
+            if ! git merge --no-edit "origin/$base" -m "$msg"; then
+              # A branch GitHub called BEHIND can still conflict if it moved
+              # between the query and the fetch. Abandon rather than guess.
+              git merge --abort || true
+              echo "skip: merge conflicted after all — left for its owner"
+              skipped=$((skipped+1)); echo "::endgroup::"; continue
+            fi
+
+            if [ "${DRY_RUN:-false}" = "true" ]; then
+              echo "dry-run: would push $(git rev-parse --short HEAD) to $head"
+            else
+              git push origin "HEAD:$head"
+              echo "refreshed: pushed merge of $base into $head"
+            fi
+            refreshed=$((refreshed+1))
+            echo "::endgroup::"
+          done < <(jq -c '.[] | select(.isDraft)
+                          | select([.labels[].name] | index("no-base-refresh") | not)' prs.json)
+
+          {
+            echo "## Draft base refresh"
+            echo "- refreshed: $refreshed"
+            echo "- skipped:   $skipped"
+            echo
+            echo "Readiness and merge are untouched by this job by design."
+          } >> "$GITHUB_STEP_SUMMARY"
