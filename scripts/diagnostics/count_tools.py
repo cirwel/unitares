@@ -71,7 +71,14 @@ def _module_bucket(module_name: str) -> str:
 
 
 def get_tool_breakdown(*, include_hidden: bool = False, include_deprecated: bool = True) -> Dict[str, int]:
-    """Get tool count breakdown by module."""
+    """Get tool count breakdown by declaring module.
+
+    Buckets on ``ToolDefinition.source_module`` — the module that declared the
+    tool — not on ``handler.__module__``. Every ``action_router`` handler is
+    defined inside ``src/mcp_handlers/decorators.py``, so the latter filed the
+    eight consolidated routers under ``decorators`` instead of ``consolidated``
+    (and would file a plugin's router under governance too).
+    """
     get_tool_definition, list_registered_tools = _registry_accessors()
     breakdown = {}
     for tool_name in list_registered_tools(
@@ -81,7 +88,7 @@ def get_tool_breakdown(*, include_hidden: bool = False, include_deprecated: bool
         td = get_tool_definition(tool_name)
         if td is None:
             continue
-        module_name = _module_bucket(getattr(td.handler, "__module__", ""))
+        module_name = _module_bucket(getattr(td, "source_module", "") or "")
         breakdown[module_name] = breakdown.get(module_name, 0) + 1
 
     return breakdown

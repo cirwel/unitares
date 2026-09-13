@@ -42,9 +42,16 @@ The fail-closed default is the #425-faithful choice: a newly added tool/action
 that is genuinely low-stakes is over-classified as high until someone lists it
 here — a deliberate friction that forces classification rather than letting an
 unclassified high-stakes path slip through as low-stakes. `test_stakes_table.py`
-asserts every *registered* tool/action is explicitly present, so the fail-closed
-default only ever bites truly unregistered names. External-plugin tools (e.g.
-the `unitares_pi_plugin` device tools, handler module not under `src.`) are
+asserts every *first-party registered* tool/action is explicitly present, so the
+fail-closed default only ever bites names outside that surface: genuinely
+unregistered names, and the external-plugin tools described below — and, in the
+other direction, that every key here names a registered dispatch tool that
+dispatch actually resolves to. Keys are CANONICAL names
+only: `get_call_stakes_requirement` canonicalizes an alias before it looks the
+call up, so an entry keyed on an alias (`reset_monitor`, `submit_thesis`, ...)
+is never consulted and would only pad `export_table()`. External-plugin tools
+(e.g. the `unitares_pi_plugin` device tools, whose declaring module —
+`ToolDefinition.source_module` — is outside this repo's packages) are
 deliberately NOT enumerated: they fall to the fail-closed `high` default until
 an operator classifies them when the gate is built — the safe direction for
 tools this server does not own.
@@ -89,8 +96,10 @@ _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
     # dialectic — resolve / reassign a governance review
     ("dialectic", "synthesis"),
     ("dialectic", "reassign"),
-    # admin — destructive / state-resetting maintenance (mirrors the
-    # standalone reset_monitor / cleanup_stale_locks classification)
+    # admin — destructive / state-resetting maintenance. The legacy names
+    # reset_monitor / cleanup_stale_locks are aliases that inject these
+    # actions; they resolve here and carry no entry of their own (likewise
+    # reassign_reviewer / submit_synthesis -> the dialectic entries above).
     ("admin", "reset_monitor"),
     ("admin", "cleanup_locks"),
     # cirs_protocol — writes that other agents read. `emit` publishes a void or
@@ -107,12 +116,8 @@ _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
     # single-purpose admin / destructive / pause-state tools
     ("archive_old_test_agents", None),
     ("archive_orphan_agents", None),
-    ("cleanup_stale_locks", None),
     ("operator_resume_agent", None),
-    ("reset_monitor", None),
     ("set_thresholds", None),
-    ("reassign_reviewer", None),
-    ("submit_synthesis", None),
 })
 
 # Known-baseline keys. Listed explicitly (rather than relying on the
@@ -154,8 +159,11 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("observe", "audit_events"),
     ("observe", "outcome_evidence"),
     ("observe", "bridge"),
-    # admin — diagnostic reads (destructive actions are in _HIGH); mirrors the
-    # standalone get_server_info / get_workspace_health / ... classification
+    # admin — diagnostic reads (destructive actions are in _HIGH). The legacy
+    # names get_server_info / get_connection_status / get_tool_usage_stats /
+    # get_telemetry_metrics / debug_request_context / validate_file_path are
+    # aliases that inject these actions and carry no entry of their own;
+    # get_workspace_health is still a registered tool, so it keeps one below.
     ("admin", "server_info"),
     ("admin", "connections"),
     ("admin", "workspace_health"),
@@ -170,7 +178,9 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("cirs_protocol", "get"),
     ("cirs_protocol", "list"),
     ("cirs_protocol", "status"),
-    # dialectic — participation + reads (resolution is in _HIGH)
+    # dialectic — participation + reads (resolution is in _HIGH). The legacy
+    # names request_dialectic_review / submit_thesis / submit_antithesis are
+    # aliases that inject these actions and carry no entry of their own.
     ("dialectic", "get"),
     ("dialectic", "list"),
     ("dialectic", "quick"),
@@ -183,16 +193,11 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("consult", None),
     ("delegate_inference", None),
     ("dashboard", None),
-    ("debug_request_context", None),
     ("describe_inference_host", None),
     ("describe_tool", None),
     ("detect_stuck_agents", None),
-    ("get_connection_status", None),
     ("get_governance_metrics", None),
-    ("get_server_info", None),
-    ("get_telemetry_metrics", None),
     ("get_thresholds", None),
-    ("get_tool_usage_stats", None),
     ("get_trajectory_status", None),
     ("get_workspace_health", None),
     ("health_check", None),
@@ -207,14 +212,10 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("outcome_event", None),
     ("process_agent_update", None),  # produces the verdict — MUST be baseline
     ("record_progress_pulse", None),
-    ("request_dialectic_review", None),
     ("search_knowledge_graph", None),
     ("self_recovery", None),
     ("simulate_update", None),
     ("skills", None),
-    ("submit_antithesis", None),
-    ("submit_thesis", None),
-    ("validate_file_path", None),
     ("verify_trajectory_identity", None),
 })
 
