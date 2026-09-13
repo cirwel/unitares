@@ -2297,3 +2297,95 @@ def test_all_positive_generator_skips_when_table_unavailable(doctor, monkeypatch
 def test_all_positive_generator_is_registered_as_an_operator_check(doctor, tmp_path):
     names = {c.name: c.mode for c in doctor.build_checks(tmp_path, "postgresql://x/y")}
     assert names.get("anchor_all_positive_generator") == "operator"
+
+
+# ---------------------------------------------------------------------------
+# host_binary_currency — the Homebrew blind spot
+# ---------------------------------------------------------------------------
+#
+# Dependabot covers pip, docker, github-actions and npm. A Homebrew formula has
+# no manifest for it to read, so nothing reported cloudflared sitting six months
+# stale on 2026.3.0 while check_ipv6_sidecar hardcoded a "cloudflared 2026.3+"
+# assumption two lines away. These pin the check that closes that gap.
+
+
+def _brew_payload(*formulae):
+    return json.dumps({"formulae": list(formulae), "casks": []})
+
+
+def _fake_run(payload, returncode=0, stderr=""):
+    import subprocess as _sp
+
+    return _sp.CompletedProcess([], returncode, payload, stderr)
+
+
+def test_host_binary_currency_warns_on_a_tracked_stale_formula(doctor, monkeypatch):
+    """The regression this exists for, with the real observed versions."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(_brew_payload(
+            {"name": "cloudflared", "installed_versions": ["2026.3.0"],
+             "current_version": "2026.9.1"},
+        )),
+    )
+    result = doctor.check_host_binary_currency()
+    # WARN, never FAIL: currency is a thing to schedule, not a broken deploy.
+    assert result.status is doctor.Status.WARN
+    assert "2026.3.0" in result.detail and "2026.9.1" in result.detail
+
+
+def test_host_binary_currency_ignores_formulae_this_deployment_does_not_use(
+    doctor, monkeypatch
+):
+    """An outdated formula that is not ours is not this check's business."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(_brew_payload(
+            {"name": "jq", "installed_versions": ["1.6"], "current_version": "1.7"},
+        )),
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.PASS
+
+
+def test_host_binary_currency_matches_a_tapped_formula_name(doctor, monkeypatch):
+    """brew reports taps as org/tap/formula; the bare name must still match."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(_brew_payload(
+            {"name": "cloudflare/cloudflare/cloudflared",
+             "installed_versions": ["2026.3.0"], "current_version": "2026.9.1"},
+        )),
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
+def test_host_binary_currency_skips_without_homebrew(doctor, monkeypatch):
+    """A Linux or Docker host has no brew; that is not a finding."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_host_binary_currency()
+    assert result.status is doctor.Status.SKIP
+    assert "brew" in result.message
+
+
+def test_host_binary_currency_degrades_rather_than_raising_on_bad_brew_output(
+    doctor, monkeypatch
+):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run", lambda *a, **k: _fake_run("not json at all")
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
+def test_host_binary_currency_tracks_the_tunnel_that_went_stale(doctor):
+    """cloudflared must stay in the tracked set — it is the case that
+    motivated the check, and dropping it would silently reopen the gap."""
+    assert "cloudflared" in doctor.HOST_BINARIES
+
+
+def test_host_binary_currency_is_registered_as_an_operator_check(doctor, tmp_path):
+    names = {c.name: c.mode for c in doctor.build_checks(tmp_path, "postgresql://x/y")}
+    assert names.get("host_binary_currency") == "operator"

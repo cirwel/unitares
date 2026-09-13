@@ -50,6 +50,8 @@ or [User Manual](../manual/README.md).
 
 ## Validation and evidence records
 
+- [`agent-analysis-provenance.md`](agent-analysis-provenance.md) — mark every
+  load-bearing claim tree / system / inferred; the tree is not the deployment.
 - [`model-harness-risk-cohorts.md`](model-harness-risk-cohorts.md) — prospective,
   descriptive model/harness provenance and like-for-like cohort reporting.
 - [`ablation-negative-controls.md`](ablation-negative-controls.md) — synthetic

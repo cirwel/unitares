@@ -81,6 +81,18 @@ review above, none of the seven decisions is settled by this one, and agreement
 between two agent passes still supplies no operator authorization. Where the two
 passes disagree, that is information about the entries, not a tiebreak.
 
+**Provenance rule, added 2026-09-13 — applies to future councils, not to the
+record above.** A later four-reviewer council on a different question refuted the
+diagnosis it was sent to attack, and then all four reviewers repeated that
+diagnosis's own error: they read a deployment fact out of a config *template* in
+the tree and reported it as true of the running server, which a single live tool
+call contradicted. Reviewers dispatched from here on are required to mark each
+load-bearing claim **tree**, **system** or **inferred**, and to state plainly when
+the live instruments were unreachable rather than letting tree readings stand in
+for system ones. See `docs/operations/agent-analysis-provenance.md`. The seven
+verdicts recorded below were produced under the instructions described above and
+are left exactly as they were.
+
 | Entry | Where the council lands | Distance from this packet and from the review above |
 |---|---|---|
 | 1. D4 | Feature-axis family, with the candidate tuple pinned as a precondition and a per-slice fitted-candidate count reported | Differs from both. Holds that the defect is the comparison axis, not the word |
