@@ -381,17 +381,7 @@ def _configure_middleware(
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        # DELETE is part of the Streamable HTTP transport, not an extra: the
-        # SDK session manager mounted at /mcp implements it for explicit
-        # session termination and advertises "Allow: GET, POST, DELETE" on a
-        # rejected method. This list predates that mount and was never
-        # revisited, so a cross-origin client was told by one layer that
-        # DELETE is allowed and refused by another — the server contradicting
-        # itself about its own transport. Omitting it did not make the
-        # endpoint safer (same-origin and server-to-server callers were never
-        # gated by CORS); it only stopped browser clients from ending their
-        # sessions cleanly, leaving the server to expire them on its own.
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["*"],
         # Passkey sessions stay same-origin; credentialed CORS would make the
