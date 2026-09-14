@@ -294,9 +294,9 @@ def test_every_known_action_is_classified_by_the_stakes_table():
     (``ToolDefinition.source_module``), so they cannot disagree; reading
     ``handler.__module__`` instead names ``decorators.py`` for every
     action_router, a plugin's included, and needed a hand-kept allowlist.
-    Without the exemption the assertion is order-dependent — ``pi`` only
-    appears once some other test in the process has imported
-    ``unitares_pi_plugin``.
+    Without the exemption the assertion is order-dependent — a plugin's tool
+    only appears once some other test in the process has imported its
+    package.
     """
     from src.mcp_handlers import stakes_table
     from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, _is_first_party_module
@@ -377,7 +377,7 @@ def test_unknown_action_is_clamped_not_echoed():
 
 
 def test_external_plugin_router_falls_through_to_unlisted():
-    """A tool this server does not own (unitares_pi_plugin's ``pi``) has no
+    """A tool this server does not own (an external plugin's router) has no
     known vocabulary — record that a sub-action existed, not what it said."""
     payload = build_tool_usage_payload("a_tool_this_server_does_not_register", {"action": "zap"})
     assert payload["action"] == "action_unlisted"

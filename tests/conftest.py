@@ -342,11 +342,11 @@ def first_party_tool_surface():
     The decorator registry describes the process, not the repo. An
     externally-installed ``governance_mcp.plugins`` package registers into the
     same ``_TOOL_DEFINITIONS`` dict, and on a developer machine that has one
-    installed it gets there without anybody asking: ``tests/test_pi_orchestration.py``
-    imports ``unitares_pi_plugin.handlers`` at module scope, so pytest
-    COLLECTION fires that package's ``@mcp_tool`` decorators before the first
-    test runs, and several other tests call the plugin's ``register()`` to
-    exercise its router. ``TOOL_HANDLERS``, meanwhile, snapshots the registry
+    installed it can get there without anybody asking: until 2026-09-13
+    ``tests/test_pi_orchestration.py`` imported ``unitares_pi_plugin.handlers``
+    at module scope, so pytest COLLECTION fired that package's ``@mcp_tool``
+    decorators before the first test ran, and several other tests called the
+    plugin's ``register()`` to exercise its router. ``TOOL_HANDLERS``, meanwhile, snapshots the registry
     when ``src.mcp_handlers`` is imported. The tool surface a drift test then
     observes depends on which of those happened first — so
     ``test_every_advertised_tool_resolves_at_dispatch`` and

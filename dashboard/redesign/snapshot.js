@@ -13,10 +13,6 @@ window.SNAPSHOT = {
     { id:"mcp_20260406_e55caaf1", name:"Vigil",      status:"healthy", coherence:0.49, risk:0.00, verdict:"proceed", eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, silence:101,   silenceThreshold:3600 },
     { id:"mcp_20260428_69a1a4f7", name:"Lumen",      status:"careful", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, silence:56,    silenceThreshold:3600 },
     { id:"mcp_20260407_f92dcea8", name:"Sentinel",   status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, silence:273,   silenceThreshold:3600 },
-    // Steward: the honest middle — the server says ALIVE (its own vocabulary:
-    // healthy | silent | paused | archived | unknown; it never emits "dark"),
-    // but no EISV was recoverable. Exercises the alive-no-eisv branch offline.
-    { id:"mcp_20260417_9a6681ec", name:"Steward",    status:"healthy", coherence:null, risk:null, verdict:null,      eisv:null,                          silence:32,    silenceThreshold:3600 },
     { id:"mcp_20260419_chron001", name:"Chronicler", status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, silence:67156, silenceThreshold:172800 },
   ],
   // Bundled per-agent trajectory for the offline drill-down demo — Lumen's
@@ -104,7 +100,6 @@ window.SNAPSHOT = {
     { agent_id:"mcp_20260407_f92dcea8", label:"Sentinel", status:"active", tier:"verified", updates:15669, last:"2026-06-19T19:59:05Z", purpose:"Sentinel — analytical resident, WebSocket fleet monitor", tags:["persistent","autonomous"], event_driven:false, health:"healthy", redacted:true, lifecycleReason:"Self-recovery probe", metrics:{coherence:0.497,risk:0.265,verdict:"safe",E:0.764,I:0.768,S:0.095,V:-0.006} },
     { agent_id:"mcp_20260416_907e3195", label:"Watcher", status:"active", tier:"verified", updates:5182, last:"2026-06-19T19:55:54Z", purpose:"Watcher — diagnostic resident, event-driven on Edit/Write", tags:["persistent","autonomous"], event_driven:true, health:"healthy", redacted:true, metrics:{coherence:0.499,risk:0.248,verdict:"safe",E:0.765,I:0.766,S:0.077,V:-0.002} },
     { agent_id:"mcp_20260406_e55caaf1", label:"Vigil", status:"active", tier:"verified", updates:3171, last:"2026-06-19T19:56:56Z", purpose:"Vigil — janitorial resident, 30min cron", tags:["persistent","autonomous","cadence.30min"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.489,risk:0.221,verdict:"safe",E:0.792,I:0.808,S:0.059,V:-0.023} },
-    { agent_id:"mcp_20260417_9a6681ec", label:"Steward", status:"active", tier:"unknown", updates:15112, last:"2026-06-19T20:03:06Z", purpose:"Steward — custodial resident, Pi→Mac EISV sync", tags:["persistent","autonomous"], event_driven:false, health:"healthy", redacted:true, lifecycleReason:"Energy-integrity imbalance — recalibrate", metrics:{coherence:0.495,risk:0.279,verdict:"safe",E:0.838,I:0.845,S:0.090,V:-0.011} },
     { agent_id:"7a424397-3f2c-4a33-8b8a-fd706c3a5ac8", label:"dashboard-redesign", status:"active", tier:"unknown", updates:2, last:"2026-06-19T20:00:50Z", purpose:"implementation", tags:["ephemeral"], event_driven:false, health:"healthy", redacted:false, metrics:{coherence:0.489,risk:0.282,verdict:"safe",E:0.729,I:0.796,S:0.142,V:-0.022} },
     { agent_id:"Claude_Code_20260619_18d9a014", label:"claude-cirwel#49251cfd", status:"active", tier:"emerging", updates:26, last:"2026-06-19T19:56:00Z", purpose:null, tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.506,risk:0.283,verdict:"safe",E:0.778,I:0.770,S:0.083,V:0.012} },
     { agent_id:"Claude_20260619_18ff4568", label:"claude_code-claude_18ff4568", status:"active", tier:"emerging", updates:21, last:"2026-06-19T17:38:01Z", purpose:"review", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.504,risk:0.261,verdict:"safe",E:0.788,I:0.780,S:0.076,V:0.008} },
@@ -296,10 +291,10 @@ window.SNAPSHOT = {
   // Real resident-panel data from /v1/{watcher,sentinel,vigil}/summary + /health/deep 2026-06-19T20:41Z.
   // `coherence` rides along so the Agents pane applies DATA.residentLiveness
   // (the one predicate) rather than inferring liveness from `silence != null`.
-  // Steward = alive-no-eisv; Lumen = reporting. Add a `status:"silent"` entry
-  // here to exercise the `overdue` badge offline.
+  // Lumen = reporting. Add a `coherence: null` entry here to exercise the
+  // alive-no-eisv branch offline, or a `status:"silent"` one for the
+  // `overdue` badge.
   residentFreshness: {
-    Steward: { silence: 120, status: "healthy", coherence: null },
     Lumen: { silence: 95, status: "healthy", coherence: 0.50 },
   },
 
@@ -326,14 +321,12 @@ window.SNAPSHOT = {
     chronicler: { status:"healthy", silence:10029, silenceThreshold:172800, coherence:0.50, risk:0.0,
       verdict:"guide", updates:107, eisv:{E:0.82,I:0.71,S:0.21,V:0.11},
       recent:[{type:"observation",summary:"Chronicler daily: 14/14 scrapers ok, 14 moved",timestamp:"2026-06-18T10:35:59Z"}] },
-    steward: { status:"healthy", silence:82, silenceThreshold:1800, coherence:0.47, risk:0.04,
-      verdict:"approve", updates:26951, eisv:{E:0.40,I:0.68,S:0.20,V:-0.28}, recent:[] },
     lumen: { status:"healthy", silence:74, silenceThreshold:600, coherence:0.47, risk:0.05,
       verdict:"proceed", updates:144055, eisv:{E:0.63,I:0.66,S:0.29,V:-0.06},
       recent:[{type:"recovery_reflection",summary:"Self-recovery reflection: pause originated when the Mac slept",timestamp:"2026-06-18T21:26:45Z"}] },
-    health: { status:"healthy", version:"2.14.0", checks:{ healthy:12, warning:0, error:0 },
+    health: { status:"healthy", version:"2.14.0", checks:{ healthy:11, warning:0, error:0 },
       items:{ primary_db:{status:"healthy",latency_ms:3}, audit_db:{status:"healthy",latency_ms:4}, redis_cache:{status:"healthy",mode:"connected"},
-        lease_plane:{status:"healthy"}, knowledge_graph:{status:"healthy"}, pi_connectivity:{status:"healthy",latency_ms:229},
+        lease_plane:{status:"healthy"}, knowledge_graph:{status:"healthy"},
         identity_continuity:{status:"healthy",note:"Redis is present; session continuity uses Redis-backed bindings with PostgreSQL as the durable source of truth."},
         calibration:{status:"healthy",pending_updates:0}, calibration_db:{status:"healthy"},
         telemetry:{status:"healthy"}, agent_metadata:{status:"healthy",note:"Agent metadata stored in core.identities table (PostgreSQL)"}, data_directory:{status:"healthy"} },

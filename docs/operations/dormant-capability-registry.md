@@ -110,7 +110,7 @@ and the registry's primary protectees.**
 | Lineage credit-assignment aggregation | `identity/provenance_chain.py:83/170` | Read/scoring half orphaned; write half produces empty chains (0/1056) | **DECIDE** — depends on whether discovery→lineage attribution is still a goal |
 | S22 H5 cross-harness coverage assessor | `identity/s22_h5_comparison.py:110/190/277` | Diagnostic-script-only; input data live (30k provenance rows) but no MCP surface reads the gate | **DECIDE** — surface via `get_governance_metrics`, or keep as a script |
 | `backfill_calibration_from_historical_sessions` | `mcp_handlers/dialectic/calibration.py:193` | One-shot admin migration util; no scheduled caller (by design) | **KEEP-DORMANT** — document as manual-only |
-| Cross-device / orchestration audit API (`AuditLogger.log_orchestration_request` / `log_orchestration_complete` / `log_cross_device_call` / `log_device_health_check` / `log_eisv_sync`) | `src/audit_log.py` (the five `AuditLogger.log_*` methods named at left) | 0 in-repo callers — the consumer (Mac→Pi orchestration) was extracted to the external `unitares-pi-plugin` package in the Phase B1 Lumen decoupling (see the `unitares-pi-plugin` extraction notes in `src/mcp_handlers/__init__.py` and the guarded `unitares_pi_plugin` import in `src/services/runtime_queries.py`). This repo owns the writer surface; the caller lives cross-repo. Same external-API shape as `register_extra_schemas` (Theme 5) | **KEEP-DORMANT** — cross-repo audit API; removal is a deprecation decision coordinated with `unitares-pi-plugin` |
+| ~~Cross-device / orchestration audit API (`AuditLogger.log_orchestration_request` / `log_orchestration_complete` / `log_cross_device_call` / `log_device_health_check` / `log_eisv_sync`)~~ | Removed | **CUT 2026-09-13** — the writer's only caller was the external `unitares-pi-plugin` (Mac→Pi orchestration and the Steward sync loop), retired by operator decision together with the rest of the Mac→Pi coupling (#2189). Lumen's sensor-derived EISV reaches governance through its own check-ins (`body_eisv_projection`), which needs no server-side Pi address. |
 
 ## Theme 5 — Mechanical singletons (vulture cross-pass, 2026-06-16)
 
@@ -147,12 +147,13 @@ they are not re-flagged.
 
 ## Cross-repository consumer audit (2026-09-13)
 
-A caller count taken inside this repo bounds nothing about consumers outside it, and
-this repo has a real one: `unitares-pi-plugin` imports `src.*` directly (it is why the
-five `AuditLogger.log_*` orchestration methods are KEEP-DORMANT rather than cut). A
-review (dialectic `490c7cf515b89a6e`) refused the three 2026-09-13 cuts on exactly that
-ground, so the audit below is the evidence that was missing, recorded rather than
-asserted.
+A caller count taken inside this repo bounds nothing about consumers outside it.
+At the time of this audit, `unitares-pi-plugin` was a first-party consumer that
+imported `src.*` directly. Review `490c7cf515b89a6e` initially refused three
+2026-09-13 cuts on that ground, so the audit below records the missing evidence.
+The Pi plugin was subsequently retired by operator decision, and its five
+`AuditLogger.log_*` orchestration methods were cut as recorded above; the
+earlier KEEP-DORMANT disposition is no longer current.
 
 Audited at `unitares-pi-plugin@4a49267` (shallow clone, 19 Python files):
 

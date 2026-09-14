@@ -31,7 +31,7 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
 source_digests:
-  unitares/config/governance_config.py: "f7f688e938d7cf8e"
+  unitares/config/governance_config.py: "942446afdd5bf5c7"
   unitares/governance_core/coherence.py: "ef819003ee72b388"
   unitares/governance_core/parameters.py: "84bf47ca540bbc49"
   unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
@@ -48,9 +48,9 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/confidence.py: "00cc04e1f54278b4"
   unitares/src/eisv_telemetry.py: "24f1a47911850263"
-  unitares/src/services/runtime_queries.py: "2b3c4d432f501350"
+  unitares/src/services/runtime_queries.py: "70cfc8d1a7ee7975"
   unitares/src/mcp_handlers/response_formatter.py: "1dce49d5fa405c49"
-  unitares/src/mcp_handlers/tool_stability.py: "bbfa19a5291e0b2f"
+  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
   unitares/src/mcp_handlers/observability/outcome_events.py: "d7152a8a83fc0182"

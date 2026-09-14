@@ -3,7 +3,7 @@ Consolidated MCP Tool Handlers
 
 Reduces cognitive load for AI agents by consolidating related tools into a
 single ``action``-dispatched tool each: knowledge, agent, calibration, config,
-export, observe, admin, and dialectic (``pi`` lives in unitares-pi-plugin).
+export, observe, admin, and dialectic.
 
 The authoritative per-tool action list is the ``actions={}`` map passed to each
 ``action_router`` below — the router derives the tool description and the
@@ -93,9 +93,6 @@ from .dialectic.handlers import (
     handle_submit_synthesis,
     handle_reassign_reviewer,
 )
-# Pi orchestration (``pi`` action router + handlers) moved to the
-# ``unitares-pi-plugin`` package — registered via the
-# ``governance_mcp.plugins`` entry point at server startup.
 
 
 def _has_bound_observe_operator_identity() -> bool:
@@ -344,8 +341,6 @@ handle_observe = action_router(
         "observe(action='bridge', since='24h')",
     ],
 )
-
-# ``pi`` consolidated tool moved to unitares-pi-plugin (see register() there).
 
 # ============================================================
 # Consolidated Admin / Diagnostics Tool

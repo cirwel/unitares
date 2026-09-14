@@ -95,27 +95,7 @@ LITE_IDENTITY_FIELDS = {"continuity_token", "client_session_id", "agent_id"}
 # carried 87 entries: the roster, 35 legacy alias names that no surface ever
 # read (list_tools lists registered tools and workflow aliases only), and the
 # key "dialectic" twice, with the second entry silently winning.
-#
-# Plugin tools are registered by their plugin when installed. These records
-# do not register them; they only keep a loaded plugin tool out of the null
-# category in list_tools.
-PLUGIN_TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
-    "pi": {
-        "depends_on": [],
-        "related_to": ["admin", "observe"],
-        "category": "admin",
-    },
-    "pi_restart_service": {
-        "depends_on": ["pi"],
-        "related_to": ["admin"],
-        "category": "admin",
-    },
-}
-
-TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = {
-    **tool_relationships(),
-    **PLUGIN_TOOL_RELATIONSHIPS,
-}
+TOOL_RELATIONSHIPS: Dict[str, Dict[str, Any]] = tool_relationships()
 
 
 # One presentation record per src/tool_meta.py category: how list_tools
