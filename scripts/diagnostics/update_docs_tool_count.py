@@ -12,9 +12,10 @@ its own source:
   (``count_tools.resolve_tool_count``). Written ``NN registered tools``, or in
   the older shapes ``**NN tools**``, ``NN tools)``, ``count: NN)``,
   ``NN+ tools``, which have always meant this count.
-* **advertised** — what ``tools/list`` advertises: the registry plus the
-  primary workflow aliases (``count_tools.resolve_advertised_tool_count``).
-  Written ``NN advertised tools``.
+* **advertised** — the full-mode catalog, the registry plus the primary
+  workflow aliases (``count_tools.resolve_advertised_tool_count``).
+  Written ``NN advertised tools``. A mounted server in a narrower mode may
+  list fewer names.
 
 A number in any other shape is not a guarded claim. So that such a number
 cannot quietly replace a guarded one, every file names the quantities it must
