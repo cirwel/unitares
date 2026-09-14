@@ -98,7 +98,7 @@ def build_gateway_transport_security_settings() -> TransportSecuritySettings:
     **Hosts come from ``UNITARES_GATEWAY_ALLOWED_HOSTS`` first.**
     ``scripts/ops/start_unitares.sh`` exports ``UNITARES_MCP_ALLOWED_HOSTS``
     process-wide, so an operator admitting an external client to this six-tool
-    surface would otherwise admit the same host to the 76-tool one. The gateway
+    surface would otherwise admit the same host to the full catalog. The gateway
     exists to give weak clients a *narrower* surface; a shared allowlist inverts
     that. The shared var is still the fallback, so a deployment that wants one
     list keeps it by setting nothing.

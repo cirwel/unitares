@@ -8,6 +8,16 @@ numbers that baseline it:
 
   1. Check-in concentration — what share of process_agent_update calls come
      from the top-2 callers (residents). Baseline 2026-06-12: 76%.
+
+     Every tool filter here means the DISPATCHED tool,
+     COALESCE(payload->>'canonical_tool', tool_name), so workflow names
+     (sync_state, record_result, store_finding, ...) count as the tools they
+     reach. Changed 2026-09-13. The old name-only filters missed a fifth of
+     check-ins and every outcome call, so expect a step-change UP at that
+     date: it is the instrument being fixed, not usage rising. The name-only
+     counts stay beside each changed figure for continuity. The exception is
+     surface_return_rate, which uses invoked names on purpose, to tell an
+     agent's workflow call from the same tool's polling traffic.
   2. Agent KG retrieval — knowledge/search_shared_memory calls from
      NAMED agents, excluding operator credentials (the dashboard). The legacy
      search_knowledge_graph alias is retained only where historical continuity
@@ -139,17 +149,37 @@ def _scheduled_label_re() -> str:
 
 def _snapshot_queries() -> dict:
     return {
+        # DISPATCHED tool, not the name typed. `tool_name` records what the
+        # caller invoked, so a `sync_state` check-in (the workflow name the SDK
+        # and adapters use) is a `process_agent_update` call that a
+        # `tool_name = 'process_agent_update'` filter never sees: 1,696 of
+        # 8,050 check-ins over the 14d before 2026-09-13. The recorder writes
+        # payload.canonical_tool on every aliased row since #1424
+        # (2026-07-31, the same instant the MCP transports began recording at
+        # all), so COALESCE(payload->>'canonical_tool', tool_name) is the
+        # dispatched tool for every row in the instrumented era.
+        # `invoked_name_total` keeps the old name-only count for continuity.
+        # Concentration is the one figure here with a recorded baseline that
+        # moves: top-2 share read 75.3% name-only and 59.5% dispatched over
+        # the same 14d window, because the top-2 callers check in as
+        # process_agent_update and the sync_state callers are spread out. The
+        # 76% baseline above was taken name-only.
         "checkin_concentration": """
             WITH calls AS (
                 SELECT agent_id, count(*) n
                 FROM audit.tool_usage
                 WHERE ts > now() - make_interval(days => %(days)s)
-                  AND tool_name = 'process_agent_update' AND success
+                  AND coalesce(payload->>'canonical_tool', tool_name) = 'process_agent_update'
+                  AND success
                 GROUP BY 1
             )
             SELECT coalesce(sum(n), 0) AS total,
                    coalesce((SELECT sum(n) FROM (
-                       SELECT n FROM calls ORDER BY n DESC LIMIT 2) top2), 0) AS top2
+                       SELECT n FROM calls ORDER BY n DESC LIMIT 2) top2), 0) AS top2,
+                   (SELECT count(*) FROM audit.tool_usage
+                     WHERE ts > now() - make_interval(days => %(days)s)
+                       AND tool_name = 'process_agent_update' AND success
+                   ) AS invoked_name_total
             FROM calls
         """,
         "agent_kg_retrieval": """
@@ -165,8 +195,9 @@ def _snapshot_queries() -> dict:
             -- this date; it is the metric being fixed, not usage falling.
             -- `all_action_calls` keeps the old broad count for continuity.
             --
-            -- Tool list also corrected: `search_knowledge_graph` is dead (0
-            -- rows in 30d); the live alias is `search_shared_memory`.
+            -- Tool list also corrected: `search_knowledge_graph` (a registered
+            -- tool) had 0 rows in 30d; the workflow name `search_shared_memory`
+            -- dispatches to `knowledge`, which the dispatched-tool filter covers.
             SELECT count(*) FILTER (WHERE u.payload->>'action' IN ('search', 'details'))
                        AS named_searches,
                    count(DISTINCT u.agent_id) FILTER (WHERE u.payload->>'action' IN ('search', 'details'))
@@ -178,7 +209,7 @@ def _snapshot_queries() -> dict:
             FROM audit.tool_usage u
             LEFT JOIN core.agents a ON a.id::text = u.agent_id
             WHERE u.ts > now() - make_interval(days => %(days)s)
-              AND u.tool_name IN ('knowledge', 'search_shared_memory')
+              AND coalesce(u.payload->>'canonical_tool', u.tool_name) = 'knowledge'
               AND u.agent_id IS NOT NULL
               AND coalesce(a.label, '') NOT LIKE 'operator\\_%%'
               AND coalesce(a.label, '') NOT LIKE 'canary\\_%%'
@@ -206,6 +237,11 @@ def _snapshot_queries() -> dict:
         # dashboard reads, and the scheduled cohort (residents, KG jobs,
         # canaries, and the hermes harness loop, which calls record_result on a
         # cadence — so its return is set by the schedule, not by the caller).
+        # Keyed on the INVOKED name on purpose, unlike every other query here:
+        # the workflow names (check_working_state, store_finding) mark an
+        # agent's own call, while their dispatched tools
+        # (get_governance_metrics, knowledge) also carry polling and
+        # housekeeping traffic this metric excludes.
         "surface_return_rate": """
             WITH eligible_calls AS (
                 SELECT u.ts, u.agent_id,
@@ -289,27 +325,36 @@ def _snapshot_queries() -> dict:
             ),
             f AS (
                 SELECT a.id, a.is_adopter,
+                    -- Dispatched tool (see checkin_concentration): a
+                    -- sync_state check-in is this ceremony too.
                     EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text
-                            AND t.success AND t.tool_name = 'process_agent_update') AS ceremonial_checked_in,
+                            AND t.success
+                            AND coalesce(t.payload->>'canonical_tool', t.tool_name) = 'process_agent_update'
+                    ) AS ceremonial_checked_in,
+                    EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text
+                            AND t.success AND t.tool_name = 'process_agent_update'
+                    ) AS ceremonial_checked_in_invoked_name,
                     EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
                             AND oe.ts > now() - make_interval(days => %(days)s)
                             AND oe.verification_source = 'external_signal'
                             AND oe.detail->>'harness' = 'beam') AS beam_checked_in,
                     (
-                        -- `search_shared_memory` is the LIVE tool name.
-                        -- `search_knowledge_graph` is the dead alias (0 rows in
-                        -- 30d, as this file's own note at the KG-retrieval query
-                        -- above already records). That correction was applied to
-                        -- the retrieval and return-rate queries and MISSED here,
-                        -- so `cohort_engaged` counted a tool nobody calls and
-                        -- silently UNDERSTATED engagement: an agent whose only
-                        -- value action was a shared-memory search read as not
-                        -- engaged. Both names are kept so the metric stays
-                        -- comparable across the rename.
+                        -- Matched on the DISPATCHED tool (see
+                        -- checkin_concentration). `knowledge` covers the
+                        -- workflow names that reach it (search_shared_memory,
+                        -- store_finding, update_finding), `process_agent_update`
+                        -- covers sync_state, and `outcome_event` covers
+                        -- record_result. The name-only predicate listed
+                        -- search_shared_memory after a 2026-08 correction but
+                        -- still missed sync_state and the two write names, so
+                        -- an agent whose only value action was one of them read
+                        -- as not engaged. `search_knowledge_graph` is a
+                        -- registered tool with no recent traffic, kept so the
+                        -- metric stays comparable.
                         EXISTS (SELECT 1 FROM audit.tool_usage t WHERE t.agent_id = a.id::text AND t.success
-                                AND t.tool_name IN ('process_agent_update','knowledge',
-                                                    'search_shared_memory','search_knowledge_graph',
-                                                    'outcome_event'))
+                                AND coalesce(t.payload->>'canonical_tool', t.tool_name) IN (
+                                    'process_agent_update','knowledge',
+                                    'search_knowledge_graph','outcome_event'))
                         OR EXISTS (SELECT 1 FROM audit.outcome_events oe WHERE oe.agent_id = a.id::text
                                    AND oe.ts > now() - make_interval(days => %(days)s))
                     ) AS engaged_value,
@@ -333,19 +378,27 @@ def _snapshot_queries() -> dict:
             SELECT count(*) AS minted,
                    count(*) FILTER (WHERE ceremonial_checked_in OR beam_checked_in) AS converted,
                    count(*) FILTER (WHERE ceremonial_checked_in) AS ceremonial_converted,
+                   count(*) FILTER (WHERE ceremonial_checked_in_invoked_name)
+                       AS ceremonial_converted_invoked_name,
                    count(*) FILTER (WHERE beam_checked_in) AS beam_converted,
                    count(*) FILTER (WHERE is_adopter) AS cohort_minted,
                    count(*) FILTER (WHERE is_adopter AND engaged_value) AS cohort_engaged,
                    count(*) FILTER (WHERE NOT did_anything) AS did_nothing
             FROM f
         """,
+        # Dispatched tool (see checkin_concentration). Outcomes arrive as
+        # `record_result`, the workflow name: over the 14d before 2026-09-13
+        # every one of 370 outcome calls did, so the name-only filter read
+        # ZERO rows. That zero was the instrument, blind to the name callers
+        # use, not an idle pipe. `invoked_name_total` keeps the old count.
         "outcome_pipe_health": """
             SELECT count(*) AS total,
                    count(*) FILTER (WHERE success) AS ok,
-                   count(*) FILTER (WHERE error_type = 'identity_error') AS identity_errors
+                   count(*) FILTER (WHERE error_type = 'identity_error') AS identity_errors,
+                   count(*) FILTER (WHERE tool_name = 'outcome_event') AS invoked_name_total
             FROM audit.tool_usage
             WHERE ts > now() - make_interval(days => %(days)s)
-              AND tool_name = 'outcome_event'
+              AND coalesce(payload->>'canonical_tool', tool_name) = 'outcome_event'
         """,
         "proactive_kg_surface": """
             -- Legacy KG candidate telemetry. These events are emitted only
@@ -406,7 +459,7 @@ def _snapshot_queries() -> dict:
                      ),
                      %(nudge_until)s
                  )
-                 AND u.tool_name IN ('request_review', 'dialectic')
+                 AND coalesce(u.payload->>'canonical_tool', u.tool_name) = 'dialectic'
                  AND u.payload->>'action' = 'request'
                  AND u.success
                 GROUP BY n.agent_id, n.session_id
@@ -648,7 +701,8 @@ def main() -> int:
     cc, kg = snap["checkin_concentration"], snap["agent_kg_retrieval"]
     oc, op = snap["onboard_conversion"], snap["outcome_pipe_health"]
     print(f"Adoption KPI snapshot — last {args.days}d")
-    print(f"  check-ins: {cc['total']} total, top-2 callers {cc['top2_share_pct']}%")
+    print(f"  check-ins: {cc['total']} total, top-2 callers {cc['top2_share_pct']}% "
+          f"(dispatched; {cc['invoked_name_total']} invoked as process_agent_update)")
     print(f"  agent KG retrieval (named agents): {kg['named_searches']} search/details calls "
           f"by {kg['distinct_agents']} agents "
           f"({kg['scheduled_searches']} of them scheduled; "
@@ -664,6 +718,7 @@ def main() -> int:
     print(f"  onboard→checkin (process + BEAM external): {oc['converted']}/{oc['minted']} "
           f"({oc['conversion_pct']}%)")
     print(f"    ceremonial-only: {oc['ceremonial_converted']}/{oc['minted']} "
+          f"[{oc['ceremonial_converted_invoked_name']} by name process_agent_update] "
           f"({oc['ceremonial_conversion_pct']}%); "
           f"BEAM external: {oc['beam_converted']}/{oc['minted']} "
           f"({oc['beam_conversion_pct']}%)")
@@ -672,7 +727,8 @@ def main() -> int:
     print(f"  true bounce (onboarded, did nothing): {oc['did_nothing']}/{oc['minted']} "
           f"({oc['did_nothing_pct']}%)")
     print(f"  outcome_event pipe: {op['success_pct']}% success "
-          f"({op['identity_errors']} identity_errors of {op['total']})")
+          f"({op['identity_errors']} identity_errors of {op['total']}; "
+          f"{op['invoked_name_total']} invoked as outcome_event)")
     pk = snap["proactive_kg_surface"]
     print(f"  legacy KG candidate events: {pk['fired']} emitted by "
           f"{pk['agents']} agents; final delivery unknown")

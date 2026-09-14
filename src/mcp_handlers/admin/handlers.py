@@ -115,13 +115,96 @@ def build_server_info_payload() -> Dict[str, Any]:
     current_uptime_minutes = int(current_uptime / 60)
     current_uptime_hours = int(current_uptime_minutes / 60)
 
-    # Get tool count (tool mode filtering removed - all tools always available)
+    # Three different populations get called "the tool count", so name which
+    # one this is.
+    #
+    # `tool_count` is UNCHANGED from before this reporting fix: the dispatch
+    # snapshot (`mcp_handlers.TOOL_HANDLERS`), not the live decorator
+    # registry. The two can diverge -- a plugin's @mcp_tool decorator writes
+    # straight into the registry the moment its handler module is imported,
+    # but TOOL_HANDLERS only sees it after `refresh_tool_handlers_from_
+    # registry()` re-syncs -- and a decorator-only registration cannot
+    # dispatch yet either. Reading `get_tool_registry()` here instead
+    # (an earlier draft of this fix did exactly that) would have changed
+    # this existing field's value the moment such a registration landed,
+    # breaking the "no existing field changed value or type" compatibility
+    # claim for older clients that key off `tool_count` as a dispatch count.
+    # The qualified block beside it says what THIS number is and adds two
+    # others.
+    #
+    # `registry` and the docs tool-count guard (scripts/diagnostics/
+    # count_tools.py) both read get_tool_registry() directly, so those two
+    # cannot independently drift onto different numbers for the same claim.
+    # It is deliberately a different quantity than `tool_count` -- see above.
+    #
+    # `advertised` is NOT tool_modes.advertised_tool_names_full() (registry |
+    # aliases): that reads the decorator registry live and so can outrun what
+    # tools/list actually serves. FastMCP mounts the wire table exactly once,
+    # at auto_register_all_tools() during boot; a plugin's @mcp_tool decorator
+    # registering after that point grows the registry with no matching mount.
+    # interface_contract.mounted_tool_names() reads that mounted table
+    # directly (sys.modules introspection only -- no schema catalog, no
+    # caching), so narrowing against it here cannot claim more than dispatch
+    # will serve. Unmounted contexts (this module's own tests, a bare script
+    # import) get mounted_tool_names() == None and so the full
+    # registry-plus-aliases count, matching the docs guard exactly. Once a
+    # server IS mounted, `registry + workflow_aliases` need NOT equal
+    # `advertised`: a late, unmounted registry entry is counted in `registry`
+    # but excluded from `advertised`, on purpose.
+    #
+    # Deliberately NOT interface_contract.get_public_tool_definitions(): that
+    # pulls full Tool definitions via tool_schemas.get_tool_definitions() ->
+    # get_pydantic_schemas(), which lazily populates a module-level cache on
+    # first call. get_server_info is a Wave 3a §6 Q1 SHIPPED handler and must
+    # stay mutation-free in its transitive closure (test_wave3a_transitive_
+    # audit.py::test_shipped_handlers_clear pins this) -- this handler only
+    # needs a name-set narrowing, never the schemas themselves.
     from src.mcp_handlers import TOOL_HANDLERS
-    tool_count = len(TOOL_HANDLERS)
+    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
+    from src.interface_contract import mounted_tool_names
 
-    # PID file differs by transport.
-    project_root = Path(__file__).resolve().parent.parent.parent
-    pid_file = (project_root / "data" / ".mcp_server.pid") if is_http else (project_root / "data" / ".mcp_server_std.pid")
+    _registry = set(get_tool_registry())
+    _aliases = set(AGENT_WORKFLOW_ALIASES)
+    _full_surface = _registry | _aliases
+    _mounted = mounted_tool_names()
+    _advertised_surface = _full_surface if _mounted is None else (_full_surface & _mounted)
+    tool_count = len(TOOL_HANDLERS)
+    tool_counts = {
+        "registry": len(_registry),
+        "workflow_aliases": len(_aliases - _registry),
+        "advertised": len(_advertised_surface),
+        "note": (
+            "tool_count is the dispatch snapshot (TOOL_HANDLERS), kept "
+            "unchanged for older clients. registry is the live decorator "
+            "registry, which can run ahead of it until resynced. "
+            "advertised is what tools/list emits."
+        ),
+    }
+
+    # The PID marker belongs to each transport's OWN writer; ask that module
+    # rather than recomputing the path here. Both transports were previously
+    # wrong, in different ways that both left `pid_file_exists` unable to
+    # distinguish "no server running" from "this field looks in the wrong
+    # place":
+    #
+    #   - HTTP: `Path(__file__).resolve().parent.parent.parent` from THIS
+    #     module lands on `src/`, not the repo root, so it reported
+    #     `<repo>/src/data/.mcp_server.pid` while process_management writes
+    #     `<repo>/data/.mcp_server.pid`. It also ignored the
+    #     UNITARES_SERVER_PID_FILE override that process_management honours.
+    #   - STDIO: reported an invented `.mcp_server_std.pid`, a filename this
+    #     repo writes nowhere. stdio's main() (src/mcp_server_std.py) calls
+    #     agent_process_mgmt.init_server_process(), which writes
+    #     agent_process_mgmt.PID_FILE -- a DIFFERENT module than the HTTP
+    #     transport's writer. (Both constants happen to resolve to the same
+    #     path today; they are still asked separately; only one of the two
+    #     honours UNITARES_SERVER_PID_FILE, so collapsing the selection would
+    #     rebuild this exact defect the moment either one moves.)
+    from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
+    from src.process_management import SERVER_PID_FILE
+
+    pid_file = SERVER_PID_FILE if is_http else STDIO_PID_FILE
 
     return {
         "transport": transport,
@@ -129,6 +212,7 @@ def build_server_info_payload() -> Dict[str, Any]:
         "version": server_version,  # Alias for consistency
         "build_date": server_build_date,
         "tool_count": tool_count,
+        "tool_counts": tool_counts,
         "current_pid": current_pid,
         "current_uptime_seconds": int(current_uptime),
         "current_uptime_formatted": f"{current_uptime_hours}h {current_uptime_minutes % 60}m",

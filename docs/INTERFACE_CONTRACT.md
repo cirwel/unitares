@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.9.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.11.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. The server advertises the same
@@ -104,7 +104,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.9.0` is the negotiated interface release. Compatible additions
+- `version: 1.11.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -137,7 +137,14 @@ The two identifiers serve different jobs:
   string; it is now a regex of numeric strings in [0, 1]. `sync_state`'s
   `complexity` also lists the named levels its normalizer accepts. Only the
   advertised schema changes: acceptance, refusal and every validation error,
-  down to its location, are unchanged on every transport; three digests move).
+  down to its location, are unchanged on every transport; three digests move;
+  1.11.0, 2026-09-13: `knowledge` and `search_shared_memory` declare
+  `agent_id_filter`, the search handler's preferred author filter. It takes
+  precedence over the retained `agent_id` filter and is disclosed by
+  `describe_tool(tool_name="knowledge", action="search")`.
+  `search_knowledge_graph` also records its clarified filter description, so
+  three input digests and the surface digest move. This release follows 1.10.0's
+  `list_tools` wire correction).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

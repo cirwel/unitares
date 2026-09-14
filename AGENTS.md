@@ -34,9 +34,13 @@ Raw tool flow when slash commands are unavailable: `start_session(force_new=true
 
 If `session_resolution_source` falls back to a weak source, rerun `/governance-start` or diagnose explicitly; do not repair it with bare UUID resume.
 
-### Watcher visibility is manual
+### Watcher visibility
 
-There is no `PostToolUse` hook to surface findings. To see and close them:
+The governance plugin can surface Watcher findings when its explicit Watcher
+opt-in is configured. SessionStart is read-only; UserPromptSubmit records a
+stable host+worktree delivery receipt so one federated client cannot consume
+another client's notification. Without that plugin wiring, visibility remains
+manual. To see and close findings directly:
 
 ```bash
 python3 agents/watcher/agent.py --list-findings --only-open   # list open/surfaced findings

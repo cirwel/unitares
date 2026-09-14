@@ -37,7 +37,7 @@ import pytest
 
 import src.mcp_handlers  # noqa: F401  -- settles every @mcp_tool decorator
 from src.mcp_handlers import tool_stability as ts
-from src.mcp_handlers.decorators import get_tool_registry
+from src.mcp_handlers.decorators import get_tool_registry, list_plugin_registered_tools
 from src.mcp_handlers.introspection import tool_catalog as tc
 from src.tool_modes import (
     TOOL_CATEGORIES,
@@ -47,11 +47,6 @@ from src.tool_modes import (
     get_tools_for_mode,
 )
 
-# Tools the catalog may describe although this repository never registers
-# them: they live in the separately installed unitares-pi-plugin and register
-# only when it is loaded (see the note in src/tool_schemas.py).
-PLUGIN_PROVIDED_TOOLS = frozenset({"pi", "pi_restart_service"})
-
 
 @pytest.fixture(autouse=True)
 def first_party_aliases(monkeypatch):
@@ -59,9 +54,10 @@ def first_party_aliases(monkeypatch):
     # decorators. Isolate those alongside the first-party tool roster below;
     # otherwise a full run tests foreign alias dates/stability against a
     # deliberately first-party registry. Restore every alias after the test.
+    foreign = set(list_plugin_registered_tools())
     monkeypatch.setattr(ts, "_TOOL_ALIASES", {
         name: alias for name, alias in ts.list_all_aliases().items()
-        if alias.new_name not in PLUGIN_PROVIDED_TOOLS
+        if alias.new_name not in foreign
     })
 
 
@@ -150,15 +146,14 @@ def test_stability_of_an_alias_is_its_canonical_tools(registered):
 def test_catalog_relationships_cover_the_roster_and_name_only_wire_names(roster):
     """Every name a relationship record mentions is one a schema-driven client can call.
 
-    A bare entry must be on the advertised roster (a plugin-provided tool is
-    allowed: it is advertised wherever it is installed). A call shape must
+    A bare entry must be on the advertised roster. A call shape must
     name an advertised router and, when it states an action, one the router
     declares. The roster-plus-legacy-aliases set was the bar until
     2026-09-12; it admitted twelve records naming a dispatch-only twin.
     """
     from tests.helpers.wire_names import dead_ends, declared_actions, parse_call_shape
 
-    allowed = roster | PLUGIN_PROVIDED_TOOLS
+    allowed = roster
     assert sorted(roster - set(tc.TOOL_RELATIONSHIPS)) == []
     assert sorted(set(tc.TOOL_RELATIONSHIPS) - allowed) == []
     entries = [

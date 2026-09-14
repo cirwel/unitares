@@ -68,8 +68,14 @@ class ToolDefinition:
     # never inject unbounded cardinality (or free text) into
     # ``audit.tool_usage.payload``. Not a gate — nothing refuses on it.
     known_actions: Optional[frozenset] = None
+    # Whether the handler reads ``op`` as a synonym for ``action``. True only
+    # for ``action_router`` tools, whose generated router reads
+    # ``action or op``. A tool that declares ``known_actions`` by hand
+    # (self_recovery, cirs_protocol) routes on ``action`` alone, so the call
+    # resolver must not let ``op`` name an action there.
+    reads_op_as_action: bool = False
     # Import path of the module that DECLARED this tool, e.g.
-    # ``src.mcp_handlers.consolidated`` or ``unitares_pi_plugin.handlers``.
+    # ``src.mcp_handlers.consolidated`` or ``third_party_plugin.handlers``.
     # Populated automatically: ``func.__module__`` for ``@mcp_tool``, and the
     # CALLING module for ``action_router`` — a router's generated handler is
     # defined in this file, so ``handler.__module__`` names governance for
@@ -118,6 +124,7 @@ def mcp_tool(
     requires_verdict: str = "baseline",
     known_actions: Optional[set] = None,
     source_module: Optional[str] = None,
+    reads_op_as_action: bool = False,
 ):
     """
     Decorator for MCP tool handlers with auto-registration and timeout protection.
@@ -151,6 +158,8 @@ def mcp_tool(
         source_module: Overrides the recorded declaring module. Only
             ``action_router`` passes it, because the handler it decorates is
             defined in this file rather than in the caller's module.
+        reads_op_as_action: Whether the handler reads ``op`` as a synonym for
+            ``action``. Only ``action_router`` passes True.
     """
     def decorator(func: Callable) -> Callable:
         tool_name = name or func.__name__.replace('handle_', '')
@@ -312,6 +321,7 @@ def mcp_tool(
                 requires_verdict=requires_verdict,
                 known_actions=_known_actions,
                 source_module=source_module or getattr(func, "__module__", "") or "",
+                reads_op_as_action=reads_op_as_action,
             )
 
         return wrapper
@@ -417,7 +427,8 @@ def resolve_canonical_action_and_source(tool_name: str, arguments):
     Superset of ``_resolve_canonical_and_action``: same precedence, one extra
     return value. ``source`` is one of:
 
-      "explicit"       — the caller passed ``action`` (or its ``op`` synonym)
+      "explicit"       — the caller passed ``action`` (or, on an
+                         action_router, its ``op`` synonym)
       "alias_injected" — a friendly alias supplied it (request_review →
                          dialectic(action="request")); as in dispatch, it
                          wins over a caller's ``op`` and yields to a
@@ -458,15 +469,20 @@ def resolve_canonical_action_and_source(tool_name: str, arguments):
     # a caller's `op`, and a present-but-empty `action` suppresses injection.
     # Reading `action or op` first judged store_finding(op="search") as a
     # knowledge search while dispatch ran the store.
+    # `op` names an action only where the handler reads it: an action_router.
+    td = _TOOL_DEFINITIONS.get(canonical)
     has_action_key = isinstance(arguments, dict) and "action" in arguments
     if implied_action and not has_action_key:
         action = implied_action
         source = "alias_injected"
     else:
-        raw = (arguments.get("action") or arguments.get("op")) if isinstance(arguments, dict) else None
+        raw = None
+        if isinstance(arguments, dict):
+            raw = arguments.get("action")
+            if not raw and td is not None and td.reads_op_as_action:
+                raw = arguments.get("op")
         action = str(raw).lower() if raw else None
         source = "explicit" if action else None
-    td = _TOOL_DEFINITIONS.get(canonical)
     if action is None and td is not None:
         action = td.default_action
         source = "default" if action else None
@@ -573,7 +589,9 @@ def action_router(
 
     Args:
         name: Tool name for MCP registration
-        actions: Mapping of action name → async handler function
+        actions: Mapping of lowercase action name → async handler function.
+            The generated router lowercases ``action``/``op`` before lookup,
+            so routing-table keys must use their canonical lowercase spelling.
         timeout: Timeout in seconds
         description: Tool description
         default_action: If set, use this action when 'action' param is missing
@@ -597,6 +615,29 @@ def action_router(
     if _caller_frame is not None and _caller_frame.f_back is not None:
         _declared_in = _caller_frame.f_back.f_globals.get("__name__", "") or ""
 
+    # Calls are normalized to lowercase before lookup, and mcp_tool stores
+    # known_actions lowercase. Keep the routing table in that same canonical
+    # form. Reject rather than rewrite it: folding case variants into a new
+    # dict could silently discard one of two distinct handlers.
+    folded_actions = {}
+    for action in actions:
+        folded = action.lower()
+        if folded in folded_actions:
+            raise ValueError(
+                f"action_router {name!r}: action keys {folded_actions[folded]!r} "
+                f"and {action!r} collide when lowercased to {folded!r}"
+            )
+        folded_actions[folded] = action
+    noncanonical = sorted(
+        action for action in actions if action != action.lower()
+    )
+    if noncanonical:
+        raise ValueError(
+            f"action_router {name!r}: action keys must be lowercase because "
+            f"dispatch normalizes caller actions; got {noncanonical!r}"
+        )
+
+    canonical_default_action = default_action.lower() if default_action else None
     valid_actions = sorted(actions.keys())
     _param_maps = param_maps or {}
     _examples = examples or [f"{name}(action='{valid_actions[0]}')"]
@@ -613,13 +654,9 @@ def action_router(
     _full_description = f"{_prose} — actions: {', '.join(actions.keys())}."
 
     if pre_onboard_actions:
-        # Compare lowercase-to-lowercase: action keys are lowercase by
-        # convention everywhere today, but a mixed-case key would
-        # otherwise make this guard fire a confusing false positive on a
-        # CORRECT exemption (review fold, PR #611).
-        unknown = set(a.lower() for a in pre_onboard_actions) - set(
-            a.lower() for a in valid_actions
-        )
+        # Exemption values are normalized the same way as caller action
+        # tokens; routing-table keys above are already canonical lowercase.
+        unknown = set(a.lower() for a in pre_onboard_actions) - set(valid_actions)
         if unknown:
             raise ValueError(
                 f"action_router {name!r}: pre_onboard_actions contains "
@@ -633,16 +670,20 @@ def action_router(
         timeout=timeout,
         description=_full_description,
         pre_onboard_actions=pre_onboard_actions,
-        default_action=default_action,
+        default_action=canonical_default_action,
         # Same drift-proofing as _full_description: the telemetry clamp is
         # DERIVED from the routing map, never hand-listed. A newly wired
         # action is auditable the moment it can route.
         known_actions=frozenset(actions.keys()),
+        reads_op_as_action=True,
         source_module=_declared_in,
     )
     async def router(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         # Support both 'action' and 'op' (op is alias for consistency with other tools)
-        action = (arguments.get("action") or arguments.get("op") or "").lower() or default_action
+        action = (
+            (arguments.get("action") or arguments.get("op") or "").lower()
+            or canonical_default_action
+        )
 
         if not action:
             return [error_response(

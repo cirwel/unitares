@@ -961,12 +961,30 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     strength. For current-caller response blocks, mirror the same
     ``agent_signature`` source used by ``success_response`` so top-level
     ``agent.identity_assurance`` cannot disagree with the final envelope.
+
+    ``identity_context`` is deliberately NOT mirrored here. It is the largest
+    block in the envelope (~970 bytes, ~16% of a measured 6.1KB store response)
+    and it describes the caller rather than this KG row, so copying it made
+    every write serialize the same ontology twice — once under ``agent`` and
+    again under ``agent_signature``. One attribution envelope is attribution;
+    the second is repetition. The canonical copy stays on ``agent_signature``,
+    the cross-tool contract ``success_response`` attaches and
+    ``tool_usage_recorder`` reads. What the consistency requirement above
+    actually needs is ``uuid`` and ``identity_assurance`` agreeing between the
+    two blocks, and both still do.
     """
     raw_display = arguments.get("_agent_display")
     if isinstance(raw_display, dict):
         agent_display = dict(raw_display)
     else:
         agent_display = _resolve_agent_display(agent_id)
+
+    # Drop inherited context at the construction site, not after enrichment.
+    # Both paths below return ``agent_display`` early — a signature that raises,
+    # and one with no uuid — so a pop placed after the enrichment loop would
+    # leave a caller-seeded ``_agent_display`` emitting identity_context in
+    # precisely the unproven and degraded cases (review on #2192 at d0496b9).
+    agent_display.pop("identity_context", None)
 
     try:
         from ..support import agent_auth as _auth
@@ -985,7 +1003,6 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
         "structured_agent_id",
         "display_name",
         "label_source",
-        "identity_context",
         "identity_assurance",
     ):
         if key in signature:
@@ -1742,6 +1759,19 @@ def _parse_knowledge_search_request(
             f"tags {raw_tags!r} normalize to nothing; pass at least one tag containing a letter or digit."
         )
 
+    explicit_author_filter = arguments.get("agent_id_filter")
+    if isinstance(explicit_author_filter, str):
+        explicit_author_filter = explicit_author_filter.strip()
+        if not explicit_author_filter:
+            raise _SearchParameterError(
+                "agent_id_filter must be a non-blank author agent UUID"
+            )
+    author_filter = (
+        explicit_author_filter
+        if explicit_author_filter is not None
+        else arguments.get("agent_id")
+    )
+
     return _KnowledgeSearchRequest(
         arguments=arguments,
         limit=limit,
@@ -1750,7 +1780,9 @@ def _parse_knowledge_search_request(
         include_provenance=arguments.get("include_provenance", False),
         synthesize=arguments.get("synthesize", False),
         query_text=arguments.get("query") or arguments.get("text"),
-        agent_id=arguments.get("agent_id"),
+        # The explicit author filter is preferred; legacy agent_id is a
+        # fallback only when that filter was omitted.
+        agent_id=author_filter,
         search_mode_requested=search_mode,
         operator_forced=operator_forced,
         exclude_labels=exclude_labels,
@@ -2716,7 +2748,7 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
             # retrieval without splitting those measures the wrong population.
             "filter_tags": _audit_safe_tags(state.request.arguments.get("tags")),
             "writer_agent_ids": writers,
-            "filter_agent_id": state.request.arguments.get("agent_id"),
+            "filter_agent_id": state.request.agent_id,
         },
     )
     return response

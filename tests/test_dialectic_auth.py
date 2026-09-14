@@ -234,6 +234,13 @@ class TestForgeryResistance:
                  return_value=attacker,
              ), \
              patch(
+                 # the attacker is a genuinely bound caller acting as itself,
+                 # so the bound-caller requirement passes and the participant
+                 # gate is what this test pins
+                 "src.mcp_handlers.context.get_context_resolved_agent_id",
+                 return_value=attacker,
+             ), \
+             patch(
                  f"{DIALECTIC}.load_session",
                  new_callable=AsyncMock, return_value=session,
              ), \

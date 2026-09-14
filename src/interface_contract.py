@@ -74,7 +74,16 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # schema changes: the fields keep their runtime declaration, so every value is
 # accepted or refused as before, with the same validation errors down to each
 # error's location, on every transport; three digests move.
-INTERFACE_CONTRACT_VERSION = "1.9.0"
+# 1.10.0 (2026-09-13): list_tools declares lite, include_advanced and tier,
+# which the handler has read since the tool existed (same class as 1.2.0's
+# observe/describe_tool gap and 1.8.0's cirs_protocol gap). No advertised
+# parameter is removed or renamed; only list_tools' input_schema_sha256 moves.
+# 1.11.0 (2026-09-13): knowledge and search_shared_memory declare
+# agent_id_filter, which the search handler already honors. Search action
+# discovery exposes it too; search_knowledge_graph also records its clarified
+# filter description. This compatible addition follows the 1.10.0
+# list_tools wire correction.
+INTERFACE_CONTRACT_VERSION = "1.11.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

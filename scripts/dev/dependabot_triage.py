@@ -33,7 +33,6 @@ DEFAULT_REPOS = [
     "CIRWEL/anima-mcp",
     "CIRWEL/unitares-discord-bridge",
     "CIRWEL/unitares-governance-plugin",
-    "CIRWEL/unitares-pi-plugin",
     "CIRWEL/unitares-host-adapter",
     "CIRWEL/cirwel-site",
 ]
