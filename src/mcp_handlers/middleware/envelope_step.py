@@ -932,10 +932,22 @@ def build_experience_envelope(
         )
         if isinstance(predecessor, dict) and predecessor.get("uuid"):
             state_summary["predecessor_uuid"] = predecessor["uuid"]
-            next_action += (
-                " A predecessor was detected - declare its uuid as "
-                "parent_agent_id on your NEXT fresh start_session, not now."
+            fork_kind = payload.get("thread_context", {}).get("episode_fork_kind")
+            lineage_fork = payload.get("thread_context", {}).get(
+                "identity_lineage_fork"
             )
+            if fork_kind == "identity_lineage" and lineage_fork is True:
+                next_action += (
+                    " Declared lineage for this fork is already recorded; do not "
+                    "redeclare it on the current session."
+                )
+            else:
+                next_action += (
+                    " A prior node in this thread was detected, but thread "
+                    "co-location does not establish lineage. Do not use its uuid "
+                    "as parent_agent_id unless a future process is a deliberate "
+                    "continuation after this process exits."
+                )
 
     elif canonical_name == "process_agent_update":
         decision = payload.get("decision") if isinstance(payload.get("decision"), dict) else {}
