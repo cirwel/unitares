@@ -342,6 +342,14 @@ async def test_expired_binding_cleanup_allows_new_canonical_submission(
 
     connection = await asyncpg.connect(TEST_DB_URL)
     try:
+        retained = await connection.fetchval(
+            "SELECT audit.cleanup_outcome_prediction_bindings(0)"
+        )
+        assert retained == 0
+        await connection.execute(
+            "DELETE FROM audit.outcome_events WHERE outcome_id = $1::uuid",
+            uuid.UUID(first["outcome_id"]),
+        )
         await connection.execute(
             """
             UPDATE audit.outcome_prediction_bindings
@@ -350,14 +358,6 @@ async def test_expired_binding_cleanup_allows_new_canonical_submission(
             """,
             isolated_binding_agent,
             prediction_id,
-        )
-        retained = await connection.fetchval(
-            "SELECT audit.cleanup_outcome_prediction_bindings(100000)"
-        )
-        assert retained == 0
-        await connection.execute(
-            "DELETE FROM audit.outcome_events WHERE outcome_id = $1::uuid",
-            uuid.UUID(first["outcome_id"]),
         )
         removed = await connection.fetchval(
             "SELECT audit.cleanup_outcome_prediction_bindings(100000)"
@@ -373,3 +373,113 @@ async def test_expired_binding_cleanup_allows_new_canonical_submission(
         "bindings": 1,
         "outcomes": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_uses_full_partitioned_outcome_key(isolated_binding_agent):
+    prediction_id = str(uuid.uuid4())
+    backend = SeparateConnectionBackend()
+    first = await _record(backend, isolated_binding_agent, prediction_id)
+    assert first["status"] == "created"
+
+    connection = await asyncpg.connect(TEST_DB_URL)
+    try:
+        await connection.execute(
+            """
+            UPDATE audit.outcome_prediction_bindings
+            SET canonical_outcome_ts = canonical_outcome_ts - INTERVAL '1 day'
+            WHERE agent_id = $1 AND prediction_id = $2
+            """,
+            isolated_binding_agent,
+            prediction_id,
+        )
+        removed = await connection.fetchval(
+            "SELECT audit.cleanup_outcome_prediction_bindings(0)"
+        )
+    finally:
+        await connection.close()
+
+    assert removed == 1
+    assert dict(await _counts(isolated_binding_agent, prediction_id)) == {
+        "bindings": 0,
+        "outcomes": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_exact_score_is_canonical_across_response_row_replay_and_calibration(
+    isolated_binding_agent,
+):
+    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+
+    prediction_id = str(uuid.uuid4())
+    monitor = MagicMock()
+    monitor._open_predictions = {}
+    monitor._prediction_ttl_seconds = 3600.0
+    monitor._prev_confidence = None
+    monitor._behavioral_state = None
+    monitor.get_primary_eisv.return_value = (0.71, 0.78, 0.16, -0.02)
+    register_tactical_prediction(
+        monitor._open_predictions,
+        confidence=0.83,
+        decision_action="proceed",
+    )
+    monitor._open_predictions[prediction_id] = monitor._open_predictions.pop(
+        next(iter(monitor._open_predictions))
+    )
+    server = MagicMock()
+    server.monitors = {isolated_binding_agent: monitor}
+    checker = MagicMock()
+    sequential = MagicMock()
+    snapshot = {"primary_eisv": {"E": 0.71}, "eisv_labels": {}}
+    arguments = {
+        "agent_id": isolated_binding_agent,
+        "outcome_type": "test_passed",
+        "outcome_score": 0.123456789,
+        "prediction_id": prediction_id,
+        "verification_source": "external_signal",
+        "detail": {"kind": "test", "tool": "pytest", "exit_code": 0},
+    }
+
+    async def submit(backend):
+        with (
+            patch("src.db.get_db", return_value=backend),
+            patch("src.mcp_handlers.observability.outcome_events.mcp_server", server),
+            patch("src.calibration.calibration_checker", checker),
+            patch(
+                "src.sequential_calibration.sequential_calibration_tracker",
+                sequential,
+            ),
+            patch(
+                "src.services.runtime_queries._build_eisv_semantics",
+                return_value=snapshot,
+            ),
+            patch(
+                "src.mcp_handlers.context.get_context_client_session_id",
+                return_value=None,
+            ),
+        ):
+            return await _record_outcome_event_inline(arguments)
+
+    first = await submit(SeparateConnectionBackend())
+    replay = await submit(SeparateConnectionBackend())
+    connection = await asyncpg.connect(TEST_DB_URL)
+    try:
+        persisted_score = await connection.fetchval(
+            """
+            SELECT outcome_score
+            FROM audit.outcome_events
+            WHERE agent_id = $1 AND detail->>'prediction_id' = $2
+            """,
+            isolated_binding_agent,
+            prediction_id,
+        )
+    finally:
+        await connection.close()
+
+    assert first["idempotent_replay"] is False
+    assert replay["idempotent_replay"] is True
+    assert first["outcome_score"] == persisted_score
+    assert replay["outcome_score"] == persisted_score
+    assert checker.record_prediction.call_count == 1
+    assert checker.record_prediction.call_args.kwargs["actual_correct"] == persisted_score

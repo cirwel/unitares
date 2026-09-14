@@ -106,7 +106,8 @@ BEGIN
       AND NOT EXISTS (
           SELECT 1
           FROM audit.outcome_events outcome
-          WHERE outcome.outcome_id = binding.canonical_outcome_id
+          WHERE outcome.ts = binding.canonical_outcome_ts
+            AND outcome.outcome_id = binding.canonical_outcome_id
       );
     GET DIAGNOSTICS v_deleted = ROW_COUNT;
     RETURN v_deleted;
@@ -117,9 +118,10 @@ COMMENT ON FUNCTION audit.cleanup_outcome_prediction_bindings(INTEGER) IS
     'Deletes expired prediction claims only after their canonical outcomes have been retired.';
 
 -- Migration 055 owns the current partition-drop implementation. Replace it
--- here so deployed databases clean the unpartitioned ledger before dropping
--- any canonical outcome partition. db/postgres/partitions.sql carries the same
--- definition for fresh bootstrap and re-runnable test schema setup.
+-- here so deployed databases clean the unpartitioned ledger after dropping
+-- canonical outcome partitions in the same transaction.
+-- db/postgres/partitions.sql carries the same definition for fresh bootstrap
+-- and re-runnable test schema setup.
 CREATE OR REPLACE FUNCTION audit.drop_old_outcome_partitions(
     p_retention_days INTEGER DEFAULT 365
 )

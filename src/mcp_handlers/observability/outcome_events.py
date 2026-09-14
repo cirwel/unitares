@@ -537,24 +537,24 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
                 "error_category": "system_error",
             }
 
+        # Use database-canonical material for both the creating acknowledgement
+        # and replay. PostgreSQL REAL values can differ from their input Python
+        # float, so retaining the pre-write value here would let the first
+        # response and calibration disagree with the persisted row and retry.
         outcome_id = persistence["outcome_id"]
-        if persistence_status == "existing":
-            # Replay exactly what the first transaction derived. Current EISV,
-            # registry contents, and fallback confidence must not rewrite the
-            # canonical acknowledgement after a restart or lost response.
-            outcome_type = persistence["outcome_type"]
-            outcome_score = persistence["outcome_score"]
-            is_bad = persistence["is_bad"]
-            detail = persistence["detail"]
-            snapshot = persistence.get("eisv_snapshot")
-            _confidence = detail.get("reported_confidence")
-            decision_action = detail.get("decision_action")
-            prediction_source = detail.get("prediction_source")
-            prediction_binding = detail.get("prediction_binding")
-            evidence_weight = float(detail.get("evidence_weight") or 0.0)
-            calibration_excluded = bool(detail.get("calibration_excluded"))
-            hard_exogenous_signal = detail.get("hard_exogenous_signal")
-            eprocess_eligible = bool(detail.get("eprocess_eligible"))
+        outcome_type = persistence["outcome_type"]
+        outcome_score = persistence["outcome_score"]
+        is_bad = persistence["is_bad"]
+        detail = persistence["detail"]
+        snapshot = persistence.get("eisv_snapshot")
+        _confidence = detail.get("reported_confidence")
+        decision_action = detail.get("decision_action")
+        prediction_source = detail.get("prediction_source")
+        prediction_binding = detail.get("prediction_binding")
+        evidence_weight = float(detail.get("evidence_weight") or 0.0)
+        calibration_excluded = bool(detail.get("calibration_excluded"))
+        hard_exogenous_signal = detail.get("hard_exogenous_signal")
+        eprocess_eligible = bool(detail.get("eprocess_eligible"))
 
         # This is only a local cache marker. Failure here cannot revoke the
         # authoritative database binding, and it occurs strictly after commit.
