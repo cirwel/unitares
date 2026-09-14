@@ -40,7 +40,7 @@ source_digests:
   unitares/src/mcp_handlers/identity/handlers.py: "c5bd71f4ab659d05"
   unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
+  unitares/src/mcp_handlers/middleware/envelope_step.py: "d26ff62684afbe54"
   unitares/src/mcp_handlers/middleware/identity_step.py: "d6dacf96434c8fba"
   unitares/src/mcp_handlers/updates/phases.py: "bd790e0aabbb9c23"
   unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
