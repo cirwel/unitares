@@ -116,13 +116,26 @@ def build_server_info_payload() -> Dict[str, Any]:
     current_uptime_hours = int(current_uptime_minutes / 60)
 
     # Three different populations get called "the tool count", so name which
-    # one this is. `tool_count` stays the registry size for older clients;
-    # the qualified block beside it says what that number is and what the
-    # other two are.
+    # one this is.
+    #
+    # `tool_count` is UNCHANGED from before this reporting fix: the dispatch
+    # snapshot (`mcp_handlers.TOOL_HANDLERS`), not the live decorator
+    # registry. The two can diverge -- a plugin's @mcp_tool decorator writes
+    # straight into the registry the moment its handler module is imported,
+    # but TOOL_HANDLERS only sees it after `refresh_tool_handlers_from_
+    # registry()` re-syncs -- and a decorator-only registration cannot
+    # dispatch yet either. Reading `get_tool_registry()` here instead
+    # (an earlier draft of this fix did exactly that) would have changed
+    # this existing field's value the moment such a registration landed,
+    # breaking the "no existing field changed value or type" compatibility
+    # claim for older clients that key off `tool_count` as a dispatch count.
+    # The qualified block beside it says what THIS number is and adds two
+    # others.
     #
     # `registry` and the docs tool-count guard (scripts/diagnostics/
     # count_tools.py) both read get_tool_registry() directly, so those two
     # cannot independently drift onto different numbers for the same claim.
+    # It is deliberately a different quantity than `tool_count` -- see above.
     #
     # `advertised` is NOT tool_modes.advertised_tool_names_full() (registry |
     # aliases): that reads the decorator registry live and so can outrun what
@@ -134,7 +147,10 @@ def build_server_info_payload() -> Dict[str, Any]:
     # caching), so narrowing against it here cannot claim more than dispatch
     # will serve. Unmounted contexts (this module's own tests, a bare script
     # import) get mounted_tool_names() == None and so the full
-    # registry-plus-aliases count, matching the docs guard exactly.
+    # registry-plus-aliases count, matching the docs guard exactly. Once a
+    # server IS mounted, `registry + workflow_aliases` need NOT equal
+    # `advertised`: a late, unmounted registry entry is counted in `registry`
+    # but excluded from `advertised`, on purpose.
     #
     # Deliberately NOT interface_contract.get_public_tool_definitions(): that
     # pulls full Tool definitions via tool_schemas.get_tool_definitions() ->
@@ -143,14 +159,7 @@ def build_server_info_payload() -> Dict[str, Any]:
     # stay mutation-free in its transitive closure (test_wave3a_transitive_
     # audit.py::test_shipped_handlers_clear pins this) -- this handler only
     # needs a name-set narrowing, never the schemas themselves.
-    #
-    # get_tool_registry() reads the decorator registry directly rather than
-    # the mcp_handlers.TOOL_HANDLERS snapshot: a plugin's @mcp_tool decorator
-    # writes straight into that registry the moment its handler module is
-    # imported, so this is always current for a plugin loaded at boot with no
-    # separate resync step -- unlike TOOL_HANDLERS, which needs
-    # refresh_tool_handlers_from_registry() called after plugin loading to
-    # see the same tools.
+    from src.mcp_handlers import TOOL_HANDLERS
     from src.mcp_handlers.decorators import get_tool_registry
     from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
     from src.interface_contract import mounted_tool_names
@@ -160,13 +169,15 @@ def build_server_info_payload() -> Dict[str, Any]:
     _full_surface = _registry | _aliases
     _mounted = mounted_tool_names()
     _advertised_surface = _full_surface if _mounted is None else (_full_surface & _mounted)
-    tool_count = len(_registry)
+    tool_count = len(TOOL_HANDLERS)
     tool_counts = {
         "registry": len(_registry),
         "workflow_aliases": len(_aliases - _registry),
         "advertised": len(_advertised_surface),
         "note": (
-            "tool_count is `registry`, kept for older clients. "
+            "tool_count is the dispatch snapshot (TOOL_HANDLERS), kept "
+            "unchanged for older clients. registry is the live decorator "
+            "registry, which can run ahead of it until resynced. "
             "advertised is what tools/list emits."
         ),
     }

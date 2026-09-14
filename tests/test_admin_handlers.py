@@ -81,12 +81,11 @@ class TestGetServerInfo:
     @pytest.mark.asyncio
     async def test_server_info_without_psutil(self, mock_mcp_server, patch_context_agent_id):
         mock_mcp_server.PSUTIL_AVAILABLE = False
-        # tool_count is sourced from get_tool_registry() (the decorator
-        # registry), not the mcp_handlers.TOOL_HANDLERS snapshot -- see
+        # tool_count is sourced from mcp_handlers.TOOL_HANDLERS (the dispatch
+        # snapshot), not the live decorator registry -- see
         # TestServerInfoReportsWhatTheServerActuallyUses for why.
         with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
-             patch("src.mcp_handlers.decorators.get_tool_registry",
-                   return_value={"a": None, "b": None, "c": None}):
+             patch("src.mcp_handlers.TOOL_HANDLERS", {"a": None, "b": None, "c": None}):
             from src.mcp_handlers.admin.handlers import handle_get_server_info
             result = await handle_get_server_info({})
 
@@ -3263,9 +3262,10 @@ class TestServerInfoReportsWhatTheServerActuallyUses:
     HTTP's path walk landed on `src/` instead of the repo root and ignored
     UNITARES_SERVER_PID_FILE, and stdio reported an invented filename that
     nothing writes -- agent_process_mgmt.PID_FILE is stdio's real writer,
-    not process_management.SERVER_PID_FILE. `tool_count` is the registry
-    size, while the docs audit surface counts advertised wire names -- a
-    different, larger number -- with nothing saying so.
+    not process_management.SERVER_PID_FILE. `tool_count` is (and stays) the
+    TOOL_HANDLERS dispatch snapshot, while the docs audit surface counts
+    advertised wire names -- a different, larger number -- with nothing
+    saying so.
     """
 
     def _payload(self, monkeypatch, argv):
@@ -3301,15 +3301,49 @@ class TestServerInfoReportsWhatTheServerActuallyUses:
         for argv in (["python", "src/mcp_server.py"], ["python", "src/mcp_server_std.py"]):
             assert self._payload(monkeypatch, argv)["pid_file"] in written, argv
 
-    def test_legacy_tool_count_is_the_registry_count(self, monkeypatch):
+    def test_legacy_tool_count_is_the_dispatch_snapshot(self, monkeypatch):
+        """`tool_count` reads TOOL_HANDLERS, not the live decorator registry
+        -- an earlier draft of the tool_counts fix read get_tool_registry()
+        for both, which would have changed this existing field's value the
+        moment a decorator-only registration landed, breaking this PR's own
+        "no existing field changed value or type" compatibility claim."""
+        from src.mcp_handlers import TOOL_HANDLERS
+
         payload = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
-        assert payload["tool_count"] == payload["tool_counts"]["registry"]
+        assert payload["tool_count"] == len(TOOL_HANDLERS)
+
+    def test_legacy_tool_count_does_not_move_with_an_unsynced_registration(
+        self, monkeypatch
+    ):
+        """A decorator-only registration (patched straight into the registry,
+        the way an entry-point plugin's @mcp_tool decorator does at import)
+        is invisible to TOOL_HANDLERS until refresh_tool_handlers_from_
+        registry() resyncs it, and cannot dispatch either way. Legacy
+        `tool_count` must not move even though `tool_counts.registry` does."""
+        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, ToolDefinition
+
+        before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+        monkeypatch.setitem(
+            _TOOL_DEFINITIONS,
+            "pretend_unsynced_plugin_tool",
+            ToolDefinition(
+                name="pretend_unsynced_plugin_tool", handler=lambda *_: None, timeout=30.0,
+            ),
+        )
+        after = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+
+        assert after["tool_counts"]["registry"] == before["tool_counts"]["registry"] + 1
+        assert after["tool_count"] == before["tool_count"], (
+            "legacy tool_count moved with a registry-only registration that "
+            "cannot dispatch -- it must track TOOL_HANDLERS, not the registry"
+        )
 
     def test_tool_counts_matches_the_docs_guard_vocabulary_and_source(self, monkeypatch):
         """Same quantity names (registry / workflow_aliases / advertised) that
         #2197's update_docs_tool_count.py / count_tools.py canonized for the
         docs tool-count guard. `advertised` and the docs guard read different
-        source functions (see test_counts_when_unmounted below for why), but
+        source functions (see test_counts_see_a_tool_registered_after_import_when_unmounted
+        below for why), but
         in this test's unmounted context they resolve to the same number, so
         this still pins that the two claims cannot silently diverge here."""
         from src.tool_modes import advertised_tool_names_full
@@ -3369,7 +3403,7 @@ class TestServerInfoReportsWhatTheServerActuallyUses:
         original = sys.modules.get("src.mcp_server")
         sys.modules["src.mcp_server"] = fake_server
         try:
-            before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+            before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
             monkeypatch.setitem(
                 _TOOL_DEFINITIONS,
                 "pretend_late_plugin_tool",
@@ -3377,15 +3411,20 @@ class TestServerInfoReportsWhatTheServerActuallyUses:
                     name="pretend_late_plugin_tool", handler=lambda *_: None, timeout=30.0,
                 ),
             )
-            after = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+            after = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
         finally:
             if original is None:
                 sys.modules.pop("src.mcp_server", None)
             else:
                 sys.modules["src.mcp_server"] = original
 
-        assert after["registry"] == before["registry"] + 1
-        assert after["advertised"] == before["advertised"], (
+        assert after["tool_counts"]["registry"] == before["tool_counts"]["registry"] + 1
+        assert after["tool_counts"]["advertised"] == before["tool_counts"]["advertised"], (
             "advertised grew with a registry-only registration the mounted "
             "server will never dispatch"
+        )
+        assert after["tool_count"] == before["tool_count"], (
+            "legacy tool_count moved with a registry-only registration -- it "
+            "must track TOOL_HANDLERS (the dispatch snapshot), not the "
+            "live decorator registry"
         )

@@ -169,10 +169,9 @@ class TestGetServerInfo:
     async def test_server_info_without_psutil(self, mock_mcp_server):
         with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server):
             from src.mcp_handlers.admin.handlers import handle_get_server_info
-            # tool_count is sourced from get_tool_registry() (the decorator
-            # registry), not the mcp_handlers.TOOL_HANDLERS snapshot.
-            with patch("src.mcp_handlers.decorators.get_tool_registry",
-                       return_value={"tool1": None, "tool2": None}):
+            # tool_count is sourced from mcp_handlers.TOOL_HANDLERS (the
+            # dispatch snapshot), not the live decorator registry.
+            with patch("src.mcp_handlers.TOOL_HANDLERS", {"tool1": None, "tool2": None}):
                 result = await handle_get_server_info({})
 
                 data = json.loads(result[0].text)
