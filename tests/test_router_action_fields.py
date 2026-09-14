@@ -369,6 +369,13 @@ def test_describe_tool_narrows_the_schema_to_one_action():
     assert "still accepted" in view["note"]
 
 
+def test_knowledge_author_filter_is_disclosed_only_for_search():
+    search = _describe(tool_name="knowledge", action="search", lite=False)
+    store = _describe(tool_name="knowledge", action="store", lite=False)
+    assert "agent_id_filter" in search["tool"]["inputSchema"]["properties"]
+    assert "agent_id_filter" not in store["tool"]["inputSchema"]["properties"]
+
+
 def test_describe_tool_rejects_an_action_the_router_does_not_route():
     payload = _describe(tool_name="knowledge", action="vote", lite=False)
     assert payload.get("success") is False
@@ -389,4 +396,3 @@ def test_describe_tool_action_is_declared_on_its_own_wire_schema():
         schema.inputSchema if hasattr(schema, "inputSchema") else schema.input_schema,
     )["properties"]
     assert "action" in props
-

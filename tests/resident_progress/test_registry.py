@@ -64,12 +64,13 @@ def test_parse_manifest_skips_metadata_and_nondict():
     assert set(reg) == {"vigil"}
 
 
-def test_registry_has_five_residents():
+def test_registry_has_four_residents():
     # Sentinel is back on a substrate-agnostic source (agent_checkins) after
     # its BEAM migration — it checks in via process_agent_update like the rest.
-    # (PR #566 retired it as a stopgap; this re-keys it correctly.)
+    # (PR #566 retired it as a stopgap; this re-keys it correctly.) Steward
+    # left the reference fleet on 2026-09-13 with unitares-pi-plugin.
     assert set(RESIDENT_PROGRESS_REGISTRY) == {
-        "vigil", "watcher", "steward", "chronicler", "sentinel"
+        "vigil", "watcher", "chronicler", "sentinel"
     }
 
 
@@ -99,7 +100,6 @@ def test_registry_cadences_match_resident_natural_periods():
         for label, cfg in RESIDENT_PROGRESS_REGISTRY.items()
     }
     assert cadences["sentinel"] == 300      # BEAM fleet-cycle (~5min)
-    assert cadences["steward"] == 300       # 5-min EISV sync
     assert cadences["vigil"] == 1800        # 30-min launchd cron
     assert cadences["watcher"] is None      # event-driven
     assert cadences["chronicler"] == 86400  # daily

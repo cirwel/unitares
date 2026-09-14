@@ -53,7 +53,7 @@
              SDK recognizes this resident's substrate emissions. Empty = no
              named residents (user-agnostic install). -->
         <key>UNITARES_RESIDENTS</key>
-        <string>Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler</string>
+        <string>Lumen,Vigil,Sentinel,Watcher,Chronicler</string>
         <!-- Set to one token accepted by the governance server's
              UNITARES_MCP_BEARER_TOKENS allowlist when that gate is enabled. -->
         <key>UNITARES_MCP_BEARER_TOKEN</key>

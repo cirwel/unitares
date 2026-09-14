@@ -234,29 +234,15 @@ class TestResolveAlias:
         assert ctx_out.original_name == "nonexistent_tool_xyz"
 
     @pytest.mark.asyncio
-    async def test_inject_action_adds_action(self):
-        """inject_action adds action parameter when not present."""
-        pytest.importorskip("unitares_pi_plugin")
-        import unitares_pi_plugin as _plugin
-        _plugin.register()  # ensures pi_health alias is present
-        ctx = _make_ctx()
-        # pi_health has inject_action="health"
-        name, args, ctx_out = await resolve_alias("pi_health", {}, ctx)
-        assert name == "pi"
-        assert args.get("action") == "health"
-
-    @pytest.mark.asyncio
     async def test_inject_action_does_not_override(self):
         """inject_action does not override existing action parameter."""
-        pytest.importorskip("unitares_pi_plugin")
-        import unitares_pi_plugin as _plugin
-        _plugin.register()
         ctx = _make_ctx()
+        # observe_agent has inject_action="agent"
         name, args, ctx_out = await resolve_alias(
-            "pi_health", {"action": "custom_action"}, ctx
+            "observe_agent", {"action": "compare"}, ctx
         )
-        assert name == "pi"
-        assert args["action"] == "custom_action"
+        assert name == "observe"
+        assert args["action"] == "compare"
 
     @pytest.mark.asyncio
     async def test_multiple_aliases_for_same_target(self):
@@ -502,14 +488,6 @@ class TestResolveToolAlias:
     def test_start_maps_to_onboard(self):
         actual, alias_info = resolve_tool_alias("start")
         assert actual == "onboard"
-
-    def test_pi_health_inject_action(self):
-        pytest.importorskip("unitares_pi_plugin")
-        import unitares_pi_plugin as _plugin
-        _plugin.register()
-        actual, alias_info = resolve_tool_alias("pi_health")
-        assert actual == "pi"
-        assert alias_info.inject_action == "health"
 
     def test_list_agents_maps_to_agent(self):
         actual, alias_info = resolve_tool_alias("list_agents")
@@ -781,17 +759,27 @@ class TestInjectIdentity:
         assert "mismatch" in text.lower()
 
     @pytest.mark.asyncio
-    async def test_dialectic_tools_allow_different_id(self):
-        """Dialectic tools allow different agent_id (for cross-agent review)."""
+    async def test_dialectic_phase_with_different_id_is_refused_under_any_name(self):
+        """The guard judges the call, so submit_thesis and dialectic(thesis) agree.
+
+        This step runs after resolve_alias, so production hands it
+        ``dialectic`` with ``action="thesis"``; the old exemption set named
+        ``submit_thesis`` and never matched. Calling the step with the alias
+        name made the exemption look live. Whether dialectic phases should be
+        exempt is an open decision; today neither name is.
+        """
         from src.mcp_handlers.middleware import inject_identity
-        ctx = _make_ctx(bound_agent_id="bound-uuid-1234")
-        with patch("src.mcp_handlers.context.get_context_agent_id", return_value="bound-uuid-1234"):
-            result = await inject_identity(
-                "submit_thesis",
-                {"agent_id": "other-uuid"},
-                ctx
-            )
-        assert not _is_short_circuit(result)
+        mock_server = MagicMock()
+        mock_server.agent_metadata = {}
+        for name, arguments in (
+            ("submit_thesis", {"agent_id": "other-uuid"}),
+            ("dialectic", {"action": "thesis", "agent_id": "other-uuid"}),
+        ):
+            ctx = _make_ctx(bound_agent_id="bound-uuid-1234")
+            with patch("src.mcp_handlers.context.get_context_agent_id", return_value="bound-uuid-1234"):
+                with patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_server):
+                    result = await inject_identity(name, arguments, ctx)
+            assert _is_short_circuit(result), name
 
     @pytest.mark.asyncio
     async def test_no_binding_provided_id_passthrough(self):

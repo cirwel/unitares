@@ -49,9 +49,19 @@ Agents reach the dialectic through **one registered tool** plus its friendly ali
 
 The handlers `llm_assisted_dialectic`, `get_dialectic_session`, and
 `list_dialectic_sessions` are `register=False` — internal delegates, not
-directly callable. `dialectic(action='get'|'list')` is how you reach the last
-two; the LLM-assisted path runs internally via
-`dialectic(action='request', reviewer_mode='llm')`.
+registered tools. `dialectic(action='get'|'list')` is how you reach the last
+two; their old names survive only as legacy aliases, which REST
+`/v1/tools/call` and stdio resolve and `/mcp/` answers with `Unknown tool`.
+
+The LLM-assisted path has no declared caller parameter. The request handler
+reads `reviewer_mode` (`auto` | `self` | `llm`, default `auto`), but neither
+`dialectic` nor `request_review` declares it in its schema. Server-internal
+callers pass it straight to the handler: auto-recovery for a paused agent
+(`_auto_initiate_dialectic_recovery` in `src/agent_loop_detection.py`) sends
+`llm` when no peer reviewer is available. On `/mcp/` the transport drops the
+undeclared argument before dispatch, so a request there always runs the default
+`auto` reviewer selection; REST and stdio currently pass undeclared keys
+through to the handler, which is not a supported contract.
 
 ### One-call review (the normal path)
 

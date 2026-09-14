@@ -252,6 +252,13 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     Records tool_usage telemetry (JSONL + audit.tool_usage) at every exit point,
     including the strict-identity refusal.
     """
+    # Caller-supplied middleware handoff keys never reach the BEAM proxy, a
+    # direct handler, or the fallback: only dispatch middleware writes them.
+    # The MCP pipeline and the fallback strip in their own first step; the
+    # direct and proxied paths start here.
+    from src.mcp_handlers.middleware.params_step import remove_reserved_dispatch_keys
+
+    remove_reserved_dispatch_keys(arguments)
     agent_id = arguments.get("agent_id") if isinstance(arguments, dict) else None
     session_id = arguments.get("client_session_id") if isinstance(arguments, dict) else None
     t0 = time.monotonic()

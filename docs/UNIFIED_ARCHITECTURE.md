@@ -189,8 +189,7 @@ anyio isolation (Redis guards, sync blocking I/O, performance caches):
    `transport_binding_cache_warmup`.
 2. **`run_in_executor` with a sync client** — the `verify_agent_ownership` dispatch
    in `src/agent_loop_detection.py` pushes a synchronous DB-touching function to an
-   executor thread so the anyio task group stays unblocked. The same pattern is used
-   externally by `call_pi_tool` in the `unitares_pi_plugin` package.
+   executor thread so the anyio task group stays unblocked.
 3. **`asyncio.wait_for` with a tight timeout** — degrade to a fallback on deadlock
    instead of hanging the pipeline: `deep_health_probe_task` in
    `src/background_tasks.py`, and `_load_binding_from_redis` in
@@ -224,7 +223,6 @@ Several long-lived governance agents run alongside the server. They consume the 
 | **Sentinel** | continuous (WebSocket) | Fleet monitor — anomaly detection on the live event stream |
 | **Watcher** | event-driven | Code-watcher — wired into Claude Code's PostToolUse hook, local-LLM pattern match |
 | **Chronicler** | daily | Longitudinal codebase metrics → `metrics.series` |
-| **Steward** | in-process | EISV sync across substrates |
 
 See [`agents/README.md`](../agents/README.md) for the reference implementations. The residents are reference patterns, **not** load-bearing governance internals — the public contract lives in `agents/sdk/`.
 

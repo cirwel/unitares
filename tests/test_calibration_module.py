@@ -16,6 +16,7 @@ import math
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional
+from datetime import datetime, timedelta, timezone
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -86,6 +87,167 @@ class TestDataclasses:
         )
         assert b.bin_range == (0.0, 0.1)
         assert b.high_discrepancy_rate == 0.0
+
+
+class TestAgentCalibrationCandidate:
+    """Attributed candidate data cannot substitute fleet evidence or policy."""
+
+    now = datetime(2026, 9, 13, 12, tzinfo=timezone.utc)
+
+    def record(self, checker, agent_id, confidence, actual, count=5, age_days=0):
+        observed = self.now - timedelta(days=age_days)
+        for _ in range(count):
+            checker.record_prediction(
+                confidence,
+                confidence >= 0.5,
+                actual,
+                agent_id=agent_id,
+                observed_at=observed,
+            )
+
+    def test_agent_isolation_and_missing_agent_has_no_fleet_fallback(self, checker):
+        self.record(checker, 'agent-a', 0.6, 0.0)
+        a_before = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        self.record(checker, 'agent-b', 0.9, 1.0)
+        assert checker.compute_agent_calibration_candidate('agent-a', now=self.now) == a_before
+        assert a_before['calibration_error'] == pytest.approx(0.6)
+        assert checker.compute_agent_calibration_candidate('agent-b', now=self.now)['calibration_error'] == pytest.approx(0.1)
+        absent = checker.compute_agent_calibration_candidate('agent-c', now=self.now)
+        assert absent['calibration_error'] is None
+        assert absent['sample_count'] == 0
+        assert absent['evidence_status'] == 'no_data'
+        assert 'agent-c' not in checker.bins_by_agent  # read is non-mutating
+
+    def test_estimator_remains_mean_of_bins_not_mean_of_samples(self, checker):
+        self.record(checker, 'agent-a', 0.6, 0.0, count=5)
+        self.record(checker, 'agent-a', 0.9, 1.0, count=20)
+        candidate = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert candidate['calibration_error'] == pytest.approx(0.35)
+        assert candidate['sample_count'] == candidate['eligible_sample_count'] == 25
+        assert candidate['eligible_bin_count'] == 2
+        assert candidate['mode'] == 'measurement_only'
+        assert candidate['policy_applied'] is False
+        assert candidate['scope'] == 'agent'
+        assert candidate['estimator'] == 'mean_absolute_strategic_bin_error'
+        assert candidate['evidence_channel'] == 'strategic_mixed_proxy'
+        assert candidate['sample_window'] == 'lifetime'
+
+    def test_five_sample_floor_and_weighted_proxy_preserved(self, checker):
+        self.record(checker, 'agent-a', 0.6, 0.7, count=4)
+        candidate = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert candidate['calibration_error'] is None
+        assert candidate['evidence_status'] == 'insufficient_samples'
+        self.record(checker, 'agent-a', 0.6, 0.7, count=1)
+        candidate = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert candidate['calibration_error'] == pytest.approx(0.1)
+        assert candidate['evidence_status'] == 'available'
+
+    @pytest.mark.parametrize('age_days,available', [(7, True), (7.000001, False)])
+    def test_recent_activity_boundary(self, checker, age_days, available):
+        self.record(checker, 'agent-a', 0.6, 0.0, age_days=age_days)
+        candidate = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert (candidate['calibration_error'] is not None) is available
+        assert candidate['age_days'] == pytest.approx(age_days)
+        assert candidate['freshness_status'] == ('recent' if available else 'stale')
+        assert candidate['evidence_status'] == ('available' if available else 'stale')
+
+    @pytest.mark.parametrize('timestamp', [None, '', 'not-a-date', 42, '2026-09-13T12:00:00', '2026-09-14T12:00:00Z'])
+    def test_unknown_naive_and_future_timestamps_cannot_certify_evidence(self, checker, timestamp):
+        self.record(checker, 'agent-a', 0.6, 0.0)
+        checker.bins_by_agent['agent-a']['0.5-0.7']['last_observed_at'] = timestamp
+        candidate = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert candidate['calibration_error'] is None
+        assert candidate['evidence_status'] == 'invalid_timestamp'
+        assert candidate['freshness_status'] == 'unknown'
+        assert candidate['newest_observation_at'] is None
+        assert candidate['age_days'] is None
+
+    def test_historical_writer_time_is_preserved_in_utc(self, checker):
+        observed = datetime(2026, 9, 1, 5, tzinfo=timezone(timedelta(hours=-6)))
+        checker.record_prediction(
+            0.6, True, 1.0, agent_id='agent-a', observed_at=observed,
+        )
+        assert checker.bins_by_agent['agent-a']['0.5-0.7']['last_observed_at'] == (
+            '2026-09-01T11:00:00+00:00'
+        )
+
+    def test_old_or_unknown_backfill_does_not_age_a_recent_bin(self, checker):
+        recent = datetime.now(timezone.utc) - timedelta(hours=1)
+        checker.record_prediction(
+            0.6, True, 1.0, agent_id='agent-a', observed_at=recent,
+        )
+        checker.record_prediction(
+            0.6, True, 0.0, agent_id='agent-a',
+            observed_at=recent - timedelta(days=30),
+        )
+        checker.record_prediction(
+            0.6, True, 0.0, agent_id='agent-a', observed_at=None,
+        )
+        assert checker.bins_by_agent['agent-a']['0.5-0.7']['last_observed_at'] == (
+            recent.isoformat()
+        )
+
+    def test_fresh_agent_does_not_refresh_stale_peer_or_stale_bin(self, checker):
+        self.record(checker, 'agent-a', 0.6, 0.0, age_days=8)
+        self.record(checker, 'agent-b', 0.9, 1.0)
+        assert checker.compute_agent_calibration_candidate('agent-a', now=self.now)['evidence_status'] == 'stale'
+        self.record(checker, 'agent-a', 0.9, 1.0)
+        checker.bins_by_agent['agent-a']['0.5-0.7']['last_observed_at'] = (self.now - timedelta(days=8)).isoformat()
+        candidate = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert candidate['calibration_error'] == pytest.approx(0.1)
+        assert candidate['eligible_bin_count'] == 1
+        assert candidate['sample_count'] == 10
+        assert candidate['eligible_sample_count'] == 5
+        assert candidate['excluded_bins'] == {'0.5-0.7': 'stale'}
+
+    def test_newest_activity_is_not_a_claim_of_recent_support(self, checker):
+        self.record(checker, 'agent-a', 0.6, 0.0, age_days=9)
+        self.record(checker, 'agent-a', 0.9, 1.0, count=1)
+        checker.bins_by_agent['agent-a']['0.5-0.7']['last_observed_at'] = (self.now - timedelta(days=9)).isoformat()
+        candidate = checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert candidate['freshness_status'] == 'recent'
+        assert candidate['newest_observation_at'] == self.now.isoformat()
+        assert candidate['calibration_error'] is None
+        assert candidate['evidence_status'] == 'unavailable'
+        assert candidate['eligible_sample_count'] == 0
+
+    def test_unscoped_and_ungraded_records_do_not_invent_attribution(self, checker):
+        checker.record_prediction(0.6, True, 1.0)
+        checker.record_prediction(0.6, True, None, agent_id='agent-a')
+        checker.record_tactical_decision(0.6, 'proceed', True)
+        assert not checker.bins_by_agent
+        assert not checker.tactical_bins_by_agent
+        assert checker.compute_calibration_metrics()['0.5-0.7'].count == 2
+        assert checker.compute_tactical_metrics()['0.5-0.7'].count == 1
+        assert checker.compute_agent_calibration_candidate('')['evidence_status'] == 'missing_identity'
+
+    def test_tactical_exclusion_and_isolation(self, checker):
+        checker.record_tactical_decision(0.6, 'proceed', False, agent_id='agent-a')
+        checker.record_tactical_decision(0.6, 'proceed', True, agent_id='agent-b')
+        checker.record_tactical_decision(
+            0.6, 'proceed', True, signal_source='trajectory',
+            include_in_aggregate=False, agent_id='agent-a',
+        )
+        assert checker.tactical_bins_by_agent['agent-a']['0.5-0.7']['actual_correct'] == 0
+        assert checker.tactical_bins_by_agent['agent-a']['0.5-0.7']['count'] == 1
+        assert checker.tactical_bins_by_agent['agent-b']['0.5-0.7']['actual_correct'] == 1
+        assert checker.compute_tactical_metrics()['0.5-0.7'].count == 2
+        assert checker.tactical_bin_stats_by_channel['trajectory']['0.5-0.7']['count'] == 1
+        timestamp = checker.tactical_bins_by_agent['agent-a']['0.5-0.7']['last_observed_at']
+        assert datetime.fromisoformat(timestamp).utcoffset() == timedelta(0)
+
+    def test_scope_collection_and_reads_leave_fleet_calculation_unchanged(self, checker):
+        from copy import deepcopy
+
+        self.record(checker, 'agent-a', 0.6, 0.0)
+        before = deepcopy(checker._snapshot_state())
+        fleet_before = checker.compute_calibration_metrics()
+        checker.compute_agent_calibration_candidate('agent-a', now=self.now)
+        assert checker._snapshot_state() == before
+        assert checker.compute_calibration_metrics() == fleet_before
+        checker.reset()
+        assert not checker.bins_by_agent
+        assert not checker.tactical_bins_by_agent
 
 
 # ===========================================================================

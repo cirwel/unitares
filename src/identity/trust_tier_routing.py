@@ -3,7 +3,7 @@
 Under ontology v2 agents split into two
 populations with incompatible calibration assumptions:
 
-  - Substrate-earned agents (Lumen, Watcher, Sentinel, Vigil, Steward)
+  - Substrate-earned agents (embodied and resident agents)
     whose identity is anchored to a dedicated substrate and accumulates
     honest per-UUID trajectory data across restarts.
   - Session-like agents (Claude Code tabs, Codex sessions, ephemeral

@@ -79,7 +79,7 @@
              SDK recognizes this resident's substrate emissions. Empty = no
              named residents (user-agnostic install). -->
         <key>UNITARES_RESIDENTS</key>
-        <string>Lumen,Vigil,Sentinel,Watcher,Steward,Chronicler</string>
+        <string>Lumen,Vigil,Sentinel,Watcher,Chronicler</string>
         <key>HOME</key>
         <string>__HOME__</string>
         <key>LANG</key>

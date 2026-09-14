@@ -190,8 +190,9 @@ class SyncGovernanceClient:
             args["epistemic_class"] = epistemic_class
         args.update(kwargs)
         # sync_state: advertised alias of the raw process_agent_update handler.
-        # #1292 dropped the raw twin from the lite MCP wire; call the alias so
-        # residents don't hit "Unknown tool" on the :8767 /mcp/ surface.
+        # A current server accepts both names on /mcp/ (#2081); a lite-mode server
+        # between #1292 and #2081 answers the raw name "Unknown tool". The alias
+        # works on both (see client.py).
         raw = self.call_tool("sync_state", args)
         self._raise_for_tool_failure("sync_state", raw)
 
@@ -331,7 +332,7 @@ class SyncGovernanceClient:
 
     def get_metrics(self, **kwargs: Any) -> MetricsResult:
         # check_working_state: advertised alias of get_governance_metrics.
-        # #1292 dropped the raw twin from the lite MCP wire (see client.py).
+        # The alias works on servers before and after #2081 (see client.py).
         raw = self.call_tool("check_working_state", kwargs)
         return MetricsResult.model_validate(raw)
 

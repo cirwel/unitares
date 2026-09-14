@@ -139,5 +139,5 @@ agent, and while delivery is live (a governed pause landed 2026-08-09), the rate
 has not been re-measured since. The contract ledger records the protection claim
 as untested. The precise boundary is
 the [scope and threat model](SCOPE_AND_THREAT_MODEL.md); the evidence status
-is the README's [Evidence and limits](../README.md#evidence-and-limits)
-section and the [Reviewer Guide](REVIEWER_GUIDE.md).
+is the [claim ledger](EVIDENCE_AND_LIMITS.md#claim-ledger) and the
+[Reviewer Guide](REVIEWER_GUIDE.md).

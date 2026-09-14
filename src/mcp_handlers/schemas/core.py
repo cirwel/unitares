@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Optional, Union, Literal, Dict, Any, List
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing import Annotated, Optional, Union, Literal, Dict, Any, List
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, field_validator, model_validator
 from .mixins import AgentIdentityMixin
 
 
@@ -34,6 +34,47 @@ _COMPLEXITY_ALIAS_HINT = (
     " For 1-10 or other scales, call a check-in alias (checkin/log/update/"
     "sync_state) with complexity={'value': N, 'scale': M} or a named level "
     "like 'medium'."
+)
+
+
+# How a 0-1 check-in value is ADVERTISED. It changes nothing about validation.
+#
+# The fields are `Union[float, str, None] = Field(ge=0.0, le=1.0)`, and left to
+# itself Pydantic advertises two falsehoods for that. It emits the bound as
+# `ge`/`le` beside an inner anyOf, and those are not JSON Schema keywords, so
+# 99.0 and -5.0 were advertised as legal and then refused. The `str` member
+# emits a bare `string` branch, so "x" and "medium" were advertised as legal too.
+#
+# `WithJsonSchema` replaces only the emitted schema: the bound as
+# `minimum`/`maximum`, and a string branch whose regex matches only numeric
+# strings inside [0, 1]. The type and the `Field(ge=..., le=...)` bound stay
+# exactly as they were, and that is deliberate, because where the bound sits
+# decides the error a caller receives. Moving it onto each Union member emits
+# this same schema, but then 2 is refused with two errors, at
+# `complexity.constrained-float` and `complexity.constrained-str`, instead of
+# one at `complexity`. tests/test_mcp_schema_parity.py pins the error lists.
+#
+# The string branch stays, rather than being dropped, because the MCP transport
+# builds its argument model from the advertised schema. Without one it refuses
+# "x" and "medium" itself with a generic parse error, before the before-validator
+# below can name the accepted forms and point at the check-in aliases.
+#
+# A few numeric strings are accepted without being advertised (" 0.5", "+0.5",
+# "5e-1"), which is the safe direction. The regex is never evaluated: the
+# before-validator turns every string into a float first.
+#
+# sync_state's `complexity` also advertises the named levels its normalizer
+# accepts, through an alias schema override in src/alias_schema.py, which must
+# repeat this regex; tests/test_mcp_schema_parity.py pins the two equal.
+UNIT_INTERVAL_STRING_PATTERN = r"^(0(\.\d+)?|1(\.0+)?|\.\d+)$"
+_ADVERTISED_UNIT_INTERVAL = WithJsonSchema(
+    {
+        "anyOf": [
+            {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            {"type": "string", "pattern": UNIT_INTERVAL_STRING_PATTERN},
+            {"type": "null"},
+        ]
+    }
 )
 
 
@@ -208,13 +249,13 @@ class SimulateUpdateParams(AgentIdentityMixin):
         default="",
         description="Agent's response text (optional)."
     )
-    complexity: Union[float, str, None] = Field(
+    complexity: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
         description="Estimated task complexity (0-1)."
     )
-    confidence: Union[float, str, None] = Field(
+    confidence: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=None,
         ge=0.0,
         le=1.0,
@@ -320,7 +361,7 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         default=None,
         description="Agent's response text (optional, for analysis)"
     )
-    complexity: Union[float, str, None] = Field(
+    complexity: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
@@ -337,9 +378,9 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
             )
         },
     )
-    confidence: Union[float, str, None] = Field(
+    confidence: Annotated[Union[float, str, None], _ADVERTISED_UNIT_INTERVAL] = Field(
         default=None,
-        ge=0.0, 
+        ge=0.0,
         le=1.0,
         description="Confidence level for this update (0-1, optional)."
     )
@@ -594,6 +635,22 @@ class CirsProtocolParams(AgentIdentityMixin):
     # need a second selector in router_actions.py; until then the mapping lives
     # in the `action` description below and in docs/guides/CIRS_PROTOCOL.md.
     # tests/test_router_action_fields.py::_TWO_LEVEL_TOOLS records the exemption.
+    #
+    # Every key a selectable protocol's handler reads IS declared, grouped
+    # below by the protocol that reads it, with the handler's own default where
+    # it has one; each description names its (protocol, action). Two reasons,
+    # both load-bearing. The MCP wrapper builds FastMCP's argument model from
+    # these properties and drops any other key before dispatch: REST and
+    # in-process callers are merged back by the middleware, the /mcp/ transport
+    # is not, so until #2183 a /mcp/ caller's since_hours, action_id or
+    # trust_default never reached the handler. And the middleware hands the
+    # handler every declared field, None included, so a declared field's
+    # default is what the handler receives when the caller omits it: `limit`
+    # declared as Optional[int] = None reached `int(arguments.get("limit", 50))`
+    # as None, and every query action failed with a TypeError through dispatch
+    # on every transport. A field declared with no default must therefore be
+    # one its handler reads None-safely. tests/test_cirs_protocol_wire_params.py
+    # holds this field list and its defaults to the keys the handlers read.
     protocol: Literal["void_alert", "state_announce", "coherence_report", "boundary_contract", "governance_action"] = Field(
         ...,
         description=(
@@ -619,10 +676,155 @@ class CirsProtocolParams(AgentIdentityMixin):
     )
     target_agent_id: Optional[str] = Field(
         None,
-        description="Target agent (for the coherence_report pairwise-similarity protocol)",
+        description=(
+            "The other agent: coherence_report compute (and an optional query "
+            "filter), boundary_contract get, governance_action initiate."
+        ),
     )
-    severity: Optional[Literal["warning", "critical"]] = Field(None, description="Alert severity (for void_alert)")
-    limit: Optional[int] = Field(None, description="Max results for queries")
+    limit: int = Field(
+        50,
+        description="Max results for void_alert, state_announce and coherence_report query. Default 50.",
+    )
+    # --- void_alert ---
+    severity: Optional[Literal["warning", "critical"]] = Field(
+        None,
+        description="Alert severity for void_alert emit. Omit to auto-detect it from the void threshold.",
+    )
+    context_ref: Optional[str] = Field(
+        None,
+        description="Free-form reference attached to a void_alert emit (a task, file or ticket).",
+    )
+    filter_agent_id: Optional[str] = Field(
+        None,
+        description="Only alerts from this agent (void_alert query).",
+    )
+    filter_severity: Optional[str] = Field(
+        None,
+        description="Only alerts of this severity, warning or critical (void_alert query).",
+    )
+    since_hours: float = Field(
+        1.0,
+        description="Look-back window in hours for void_alert query. Default 1.0.",
+    )
+    # --- state_announce ---
+    include_trajectory: bool = Field(
+        True,
+        description="Attach the trajectory signature to a state_announce emit. Default true.",
+    )
+    agent_ids: Optional[List[str]] = Field(
+        None,
+        description="Only announcements from these agents (state_announce query).",
+    )
+    regime: Optional[str] = Field(
+        None,
+        description=(
+            "Only announcements in this regime: divergence, transition, "
+            "convergence or stable (state_announce query)."
+        ),
+    )
+    max_risk: Optional[float] = Field(
+        None,
+        description="Only announcements at or below this risk score (state_announce query).",
+    )
+    min_coherence: Optional[float] = Field(
+        None,
+        description=(
+            "Retired filter that state_announce query refuses with "
+            "UNSUPPORTED_COHERENCE_FILTER; filter by max_risk, regime or "
+            "agent_ids instead. Declared so the refusal reaches the caller on "
+            "every transport rather than the filter being silently ignored."
+        ),
+    )
+    # --- coherence_report ---
+    source_agent_id: Optional[str] = Field(
+        None,
+        description="Only reports computed by this agent (coherence_report query).",
+    )
+    min_similarity: Optional[float] = Field(
+        None,
+        description="Only reports at or above this similarity score (coherence_report query).",
+    )
+    # --- boundary_contract ---
+    trust_default: str = Field(
+        "partial",
+        description=(
+            "Default trust level for peers: full, partial, observe or none "
+            "(boundary_contract set). Default partial."
+        ),
+    )
+    trust_overrides: Dict[str, str] = Field(
+        {},
+        description=(
+            "Per-agent trust levels overriding trust_default, agent id to "
+            "level (boundary_contract set)."
+        ),
+    )
+    void_response_policy: str = Field(
+        "notify",
+        description=(
+            "How peers should respond to your void alerts: notify, assist, "
+            "isolate or coordinate (boundary_contract set). Default notify."
+        ),
+    )
+    max_delegation_complexity: float = Field(
+        0.5,
+        description=(
+            "Highest task complexity you accept by delegation, 0-1, clamped "
+            "(boundary_contract set). Default 0.5."
+        ),
+    )
+    accept_coherence_threshold: float = Field(
+        0.4,
+        description=(
+            "Lowest peer coherence you accept work from, 0-1, clamped "
+            "(boundary_contract set). Default 0.4."
+        ),
+    )
+    # --- governance_action ---
+    action_type: Optional[str] = Field(
+        None,
+        description=(
+            "Intervention to initiate: void_intervention, coherence_boost, "
+            "delegation_request, delegation_response or coordination_sync "
+            "(governance_action initiate)."
+        ),
+        # The enum is the description, and the full sentence overruns the
+        # advertised budget (src/schema_brief.py); the brief keeps every value.
+        json_schema_extra={
+            "brief": (
+                "governance_action initiate: void_intervention, coherence_boost, "
+                "delegation_request, delegation_response or coordination_sync."
+            )
+        },
+    )
+    payload: Dict[str, Any] = Field(
+        {},
+        description="Free-form data carried by the intervention (governance_action initiate).",
+    )
+    action_id: Optional[str] = Field(
+        None,
+        description="Id of the governance action to answer or look up (governance_action respond, status).",
+    )
+    accept: bool = Field(
+        False,
+        description="Accept (true) or reject (false) the governance action (governance_action respond). Default false.",
+    )
+    response_data: Dict[str, Any] = Field(
+        {},
+        description="Free-form data returned with the response (governance_action respond).",
+    )
+    as_initiator: bool = Field(
+        True,
+        description="Include actions you initiated (governance_action query). Default true.",
+    )
+    as_target: bool = Field(
+        True,
+        description="Include actions targeting you (governance_action query). Default true.",
+    )
+    status_filter: Optional[str] = Field(
+        None,
+        description="Only actions in this status: pending, accepted or rejected (governance_action query).",
+    )
 
 
 class ValidateFilePathParams(AgentIdentityMixin):

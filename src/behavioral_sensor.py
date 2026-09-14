@@ -18,6 +18,7 @@ LEGACY_COHERENCE_NEUTRAL_VALUE = 0.5
 LEGACY_COHERENCE_NEUTRAL_COMPONENT = 0.6
 
 DECISION_SELF_LOOP_ABLATION_SCHEMA = "decision_self_loop_ablation.v1"
+BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA = "behavioral_sensor.components.v1"
 # The neutral stand-in is the OBSERVED level, not the score table's midpoint.
 # Measured 2026-08-20 over 30d (n=33,379 non-synthetic): guide 52.7% -> 0.7,
 # approve 47.2% -> 1.0, and the 0.0-scored pause vocabulary is 0.12% of rows.
@@ -51,34 +52,139 @@ def compute_behavioral_sensor_eisv(
 
     Returns {"E", "I", "S", "V"} dict or None if insufficient history (< 3 entries).
     """
+    components = compute_behavioral_sensor_components(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+    )
+    if components is None:
+        return None
+    return {
+        dimension: components["dimensions"][dimension]["value"]
+        for dimension in ("E", "I", "S", "V")
+    }
+
+
+def compute_behavioral_sensor_components(
+    decision_history: list,
+    coherence_history: list,
+    regime_history: list,
+    E_history: list,
+    I_history: list,
+    S_history: list,
+    V_history: list,
+    calibration_error: float | None = None,
+    drift_norm: float | None = None,
+    complexity_divergence: float | None = None,
+    continuity_E_input: float | None = None,
+    continuity_I_input: float | None = None,
+    continuity_S_input: float | None = None,
+    outcome_history: list | None = None,
+    tool_error_rate: float | None = None,
+    tool_call_velocity: float | None = None,
+    unique_tools_ratio: float | None = None,
+) -> dict | None:
+    """Explain the exact deployed behavioral observation without changing it.
+
+    The returned values are the same values ``compute_behavioral_sensor_eisv``
+    publishes.  Components and ordered adjustments make mixed provenance,
+    defaults, and weights inspectable.  This record is measurement-only and is
+    never consumed by policy.
+    """
+    del S_history, V_history  # accepted for signature parity; formulas do not read them
     if len(decision_history) < 3 or len(coherence_history) < 3:
         return None
 
-    E = _compute_E(decision_history, coherence_history, complexity_divergence, outcome_history)
-    I = _compute_I(coherence_history, calibration_error, outcome_history)
-    S = _compute_S(drift_norm, regime_history, complexity_divergence)
-    V = _compute_V(E_history, I_history)
+    dimensions = {
+        "E": _compute_E_components(
+            decision_history,
+            coherence_history,
+            complexity_divergence,
+            outcome_history,
+        ),
+        "I": _compute_I_components(
+            coherence_history,
+            calibration_error,
+            outcome_history,
+        ),
+        "S": _compute_S_components(
+            drift_norm,
+            regime_history,
+            complexity_divergence,
+        ),
+        "V": _compute_V_components(E_history, I_history),
+    }
+    for dimension in ("E", "I", "S"):
+        dimensions[dimension]["measurement_role"] = "behavioral_sensor_input"
+        dimensions[dimension]["behavioral_state_consumed"] = True
+    # GovernanceMonitor passes only E/I/S into BehavioralState.update. This V
+    # remains part of the full submitted sensor (diagnostic/divergence and,
+    # when configured, ODE coupling) but does not produce behavioral-state V;
+    # that live value is an EMA of the raw E-I imbalance.
+    dimensions["V"]["measurement_role"] = "sensor_diagnostic"
+    dimensions["V"]["behavioral_state_consumed"] = False
 
-    # Blend continuity-derived signals (20% weight) when available.
-    # These are grounded in operational log analysis (token rates, divergence).
+    def blend(dimension: str, name: str, source: str, value: float, weight: float) -> None:
+        record = dimensions[dimension]
+        before = record["value"]
+        after = (1.0 - weight) * before + weight * value
+        record["adjustments"].append({
+            "name": name,
+            "source": source,
+            "input_value": value,
+            "input_weight": weight,
+            "retained_weight": 1.0 - weight,
+            "output_value": after,
+            "observed": True,
+        })
+        record["value"] = after
+
+    # Preserve the deployed adjustment order exactly.
     if continuity_E_input is not None:
-        E = 0.80 * E + 0.20 * continuity_E_input
+        blend("E", "continuity_E_input", "response_structure", continuity_E_input, 0.20)
     if continuity_I_input is not None:
-        I = 0.80 * I + 0.20 * continuity_I_input
+        blend("I", "continuity_I_input", "response_structure", continuity_I_input, 0.20)
     if continuity_S_input is not None:
-        S = 0.80 * S + 0.20 * continuity_S_input
-
-    # Blend tool usage signals (10-15% weight) when available.
-    # These are grounded in actual tool call outcomes, not self-reports.
+        blend("S", "continuity_S_input", "response_structure", continuity_S_input, 0.20)
     if tool_error_rate is not None:
-        E = 0.85 * E + 0.15 * (1.0 - tool_error_rate)
+        blend("E", "tool_success_rate", "tool_audit", 1.0 - tool_error_rate, 0.15)
     if tool_call_velocity is not None:
-        # Velocity > 5 calls/min adds mild entropy (capped at 0.10 contribution)
-        S = S + 0.10 * min(1.0, max(0.0, tool_call_velocity - 5.0) / 10.0)
+        before = dimensions["S"]["value"]
+        velocity_pressure = min(1.0, max(0.0, tool_call_velocity - 5.0) / 10.0)
+        after = before + 0.10 * velocity_pressure
+        dimensions["S"]["adjustments"].append({
+            "name": "tool_velocity_pressure",
+            "source": "tool_audit",
+            "input_value": velocity_pressure,
+            "input_weight": 0.10,
+            "retained_weight": 1.0,
+            "output_value": after,
+            "observed": True,
+        })
+        dimensions["S"]["value"] = after
     if unique_tools_ratio is not None:
-        I = 0.90 * I + 0.10 * unique_tools_ratio
+        blend("I", "unique_tools_ratio", "tool_audit", unique_tools_ratio, 0.10)
 
-    return {"E": E, "I": I, "S": S, "V": V}
+    return {
+        "schema": BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "dimensions": dimensions,
+    }
 
 
 def compute_legacy_coherence_dependency_shadow(
@@ -409,6 +515,45 @@ def _compute_E(
     Pure decision-based E saturates at 1.0 for healthy agents (all "proceed").
     Blending with coherence, calibration, and outcomes makes E reflect actual capacity.
     """
+    return _compute_E_components(
+        decision_history,
+        coherence_history,
+        complexity_divergence,
+        outcome_history,
+    )["value"]
+
+
+def _component(
+    name: str,
+    source: str,
+    value: float,
+    weight: float,
+    *,
+    observed: bool,
+    default_reason: str | None = None,
+    health_evidence: bool | None = None,
+) -> dict:
+    record = {
+        "name": name,
+        "source": source,
+        "value": value,
+        "weight": weight,
+        "weighted_contribution": weight * value,
+        "observed": observed,
+    }
+    if default_reason is not None:
+        record["default_reason"] = default_reason
+    if health_evidence is not None:
+        record["health_evidence"] = health_evidence
+    return record
+
+
+def _compute_E_components(
+    decision_history: list,
+    coherence_history: list | None = None,
+    complexity_divergence: float | None = None,
+    outcome_history: list | None = None,
+) -> dict:
     # Decision success — exponentially weighted
     window = decision_history[-10:]
     if not window:
@@ -443,12 +588,85 @@ def _compute_E(
         success_rate = good_count / len(outcome_history)
         outcome_e = 0.3 + success_rate * 0.6  # Map [0,1] -> [0.3, 0.9]
         # Weights: 35% decision, 25% coherence, 20% calibration, 20% outcomes
-        raw = 0.35 * decision_e + 0.25 * coh_e + 0.20 * cal_e + 0.20 * outcome_e
+        components = [
+            _component(
+                "decision_history", "governance_decisions", decision_e, 0.35,
+                observed=bool(window),
+                default_reason=None if window else "no_decision_history",
+                health_evidence=False,
+            ),
+            _component(
+                "legacy_coherence_level", "legacy_tanh_v", coh_e, 0.25,
+                observed=bool(coherence_history and len(coherence_history) >= 3),
+                default_reason=(
+                    None if coherence_history and len(coherence_history) >= 3
+                    else "insufficient_coherence_history"
+                ),
+                health_evidence=False,
+            ),
+            _component(
+                "complexity_calibration", "continuity_metrics", cal_e, 0.20,
+                observed=complexity_divergence is not None,
+                default_reason=(
+                    None if complexity_divergence is not None
+                    else "default_complexity_divergence_0.15"
+                ),
+            ),
+            _component(
+                "outcome_success", "recent_outcomes", outcome_e, 0.20,
+                observed=True,
+            ),
+        ]
     else:
         # Without outcomes: 40% decision, 30% coherence, 30% calibration (original)
-        raw = 0.40 * decision_e + 0.30 * coh_e + 0.30 * cal_e
+        components = [
+            _component(
+                "decision_history", "governance_decisions", decision_e, 0.40,
+                observed=bool(window),
+                default_reason=None if window else "no_decision_history",
+                health_evidence=False,
+            ),
+            _component(
+                "legacy_coherence_level", "legacy_tanh_v", coh_e, 0.30,
+                observed=bool(coherence_history and len(coherence_history) >= 3),
+                default_reason=(
+                    None if coherence_history and len(coherence_history) >= 3
+                    else "insufficient_coherence_history"
+                ),
+                health_evidence=False,
+            ),
+            _component(
+                "complexity_calibration", "continuity_metrics", cal_e, 0.30,
+                observed=complexity_divergence is not None,
+                default_reason=(
+                    None if complexity_divergence is not None
+                    else "default_complexity_divergence_0.15"
+                ),
+            ),
+        ]
 
-    return max(0.0, min(1.0, raw))
+    # Keep the deployed left-to-right arithmetic order bit-for-bit. ``sum``
+    # may use compensated summation on newer Python runtimes.
+    if len(components) == 4:
+        raw = (
+            components[0]["weighted_contribution"]
+            + components[1]["weighted_contribution"]
+            + components[2]["weighted_contribution"]
+            + components[3]["weighted_contribution"]
+        )
+    else:
+        raw = (
+            components[0]["weighted_contribution"]
+            + components[1]["weighted_contribution"]
+            + components[2]["weighted_contribution"]
+        )
+    value = max(0.0, min(1.0, raw))
+    return {
+        "value": value,
+        "base_value": value,
+        "components": components,
+        "adjustments": [],
+    }
 
 
 # --- I: Calibration accuracy + legacy control-feedback trend ---
@@ -458,6 +676,18 @@ def _compute_I(
     calibration_error: float | None,
     outcome_history: list | None = None,
 ) -> float:
+    return _compute_I_components(
+        coherence_history,
+        calibration_error,
+        outcome_history,
+    )["value"]
+
+
+def _compute_I_components(
+    coherence_history: list,
+    calibration_error: float | None,
+    outcome_history: list | None = None,
+) -> dict:
     cal_I = 1.0 - calibration_error if calibration_error is not None else 0.75
     cal_I = max(0.0, min(1.0, cal_I))
 
@@ -473,9 +703,73 @@ def _compute_I(
             score_var = sum((s - mean_s) ** 2 for s in scores) / len(scores)
             consistency_I = max(0.3, 1.0 - score_var * 4)  # Low variance = high consistency
             # Weights: 50% calibration, 30% coherence trend, 20% outcome consistency
-            return max(0.0, min(1.0, 0.50 * cal_I + 0.30 * coh_I + 0.20 * consistency_I))
+            components = [
+                _component(
+                    "calibration_accuracy", "fleet_calibration", cal_I, 0.50,
+                    observed=calibration_error is not None,
+                    default_reason=(
+                        None if calibration_error is not None
+                        else "default_calibration_accuracy_0.75"
+                    ),
+                ),
+                _component(
+                    "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.30,
+                    observed=len(coherence_history) >= 4,
+                    default_reason=(
+                        None if len(coherence_history) >= 4
+                        else "insufficient_coherence_history"
+                    ),
+                    health_evidence=False,
+                ),
+                _component(
+                    "outcome_score_consistency", "recent_outcomes", consistency_I, 0.20,
+                    observed=True,
+                    health_evidence=False,
+                ),
+            ]
+            raw = (
+                components[0]["weighted_contribution"]
+                + components[1]["weighted_contribution"]
+                + components[2]["weighted_contribution"]
+            )
+            value = max(0.0, min(1.0, raw))
+            return {
+                "value": value,
+                "base_value": value,
+                "components": components,
+                "adjustments": [],
+            }
 
-    return max(0.0, min(1.0, 0.6 * cal_I + 0.4 * coh_I))
+    components = [
+        _component(
+            "calibration_accuracy", "fleet_calibration", cal_I, 0.60,
+            observed=calibration_error is not None,
+            default_reason=(
+                None if calibration_error is not None
+                else "default_calibration_accuracy_0.75"
+            ),
+        ),
+        _component(
+            "legacy_coherence_trend", "legacy_tanh_v", coh_I, 0.40,
+            observed=len(coherence_history) >= 4,
+            default_reason=(
+                None if len(coherence_history) >= 4
+                else "insufficient_coherence_history"
+            ),
+            health_evidence=False,
+        ),
+    ]
+    raw = (
+        components[0]["weighted_contribution"]
+        + components[1]["weighted_contribution"]
+    )
+    value = max(0.0, min(1.0, raw))
+    return {
+        "value": value,
+        "base_value": value,
+        "components": components,
+        "adjustments": [],
+    }
 
 
 def _coherence_trend(coherence_history: list) -> float:
@@ -502,6 +796,18 @@ def _compute_S(
     regime_history: list,
     complexity_divergence: float | None,
 ) -> float:
+    return _compute_S_components(
+        drift_norm,
+        regime_history,
+        complexity_divergence,
+    )["value"]
+
+
+def _compute_S_components(
+    drift_norm: float | None,
+    regime_history: list,
+    complexity_divergence: float | None,
+) -> dict:
     # Drift component (40%)
     dn = drift_norm if drift_norm is not None else 0.2
     drift_s = min(1.0, dn * 1.5)
@@ -513,8 +819,41 @@ def _compute_S(
     cd = complexity_divergence if complexity_divergence is not None else 0.1
     cd_s = min(1.0, cd)
 
-    raw = 0.40 * drift_s + 0.35 * regime_s + 0.25 * cd_s
-    return max(0.05, min(1.0, raw))
+    components = [
+        _component(
+            "drift_norm", "governance_drift", drift_s, 0.40,
+            observed=drift_norm is not None,
+            default_reason=None if drift_norm is not None else "default_drift_norm_0.2",
+        ),
+        _component(
+            "regime_instability", "regime_history", regime_s, 0.35,
+            observed=len(regime_history) >= 2,
+            default_reason=(
+                None if len(regime_history) >= 2
+                else "insufficient_regime_history"
+            ),
+        ),
+        _component(
+            "complexity_divergence", "continuity_metrics", cd_s, 0.25,
+            observed=complexity_divergence is not None,
+            default_reason=(
+                None if complexity_divergence is not None
+                else "default_complexity_divergence_0.1"
+            ),
+        ),
+    ]
+    raw = (
+        components[0]["weighted_contribution"]
+        + components[1]["weighted_contribution"]
+        + components[2]["weighted_contribution"]
+    )
+    value = max(0.05, min(1.0, raw))
+    return {
+        "value": value,
+        "base_value": value,
+        "components": components,
+        "adjustments": [],
+    }
 
 
 def _regime_instability(regime_history: list) -> float:
@@ -533,12 +872,33 @@ def _regime_instability(regime_history: list) -> float:
 
 def _compute_V(E_history: list, I_history: list) -> float:
     """V from E-I slope difference. Does NOT read V_history."""
+    return _compute_V_components(E_history, I_history)["value"]
+
+
+def _compute_V_components(E_history: list, I_history: list) -> dict:
     window = 10
     e_win = E_history[-window:]
     i_win = I_history[-window:]
 
     if len(e_win) < 3 or len(i_win) < 3:
-        return 0.0
+        components = [
+            _component(
+                "E_minus_I_slope", "per_checkin_history", 0.0, 0.60,
+                observed=False,
+                default_reason="insufficient_E_I_history",
+            ),
+            _component(
+                "E_minus_I_level", "per_checkin_history", 0.0, 0.40,
+                observed=False,
+                default_reason="insufficient_E_I_history",
+            ),
+        ]
+        return {
+            "value": 0.0,
+            "base_value": 0.0,
+            "components": components,
+            "adjustments": [],
+        }
 
     e_slope = _simple_slope(e_win)
     i_slope = _simple_slope(i_win)
@@ -548,8 +908,32 @@ def _compute_V(E_history: list, I_history: list) -> float:
     level = e_win[-1] - i_win[-1]
 
     # 60% trend + 40% level
-    v = 0.6 * trend + 0.4 * level
-    return max(-1.0, min(1.0, v))
+    components = [
+        _component(
+            "E_minus_I_slope", "per_checkin_history", trend, 0.60,
+            observed=True,
+        ),
+        _component(
+            "E_minus_I_level", "per_checkin_history", level, 0.40,
+            observed=True,
+        ),
+    ]
+    raw = (
+        components[0]["weighted_contribution"]
+        + components[1]["weighted_contribution"]
+    )
+    value = max(-1.0, min(1.0, raw))
+    return {
+        "value": value,
+        "base_value": value,
+        "components": components,
+        "adjustments": [],
+        "details": {
+            "E_slope_per_checkin": e_slope,
+            "I_slope_per_checkin": i_slope,
+            "cadence_normalized": False,
+        },
+    }
 
 
 def _simple_slope(values: list) -> float:

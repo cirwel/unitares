@@ -185,6 +185,22 @@ Membership is part of the writer-locked identity/onboarding surface, so this is
 recorded rather than changed. Option: decide membership per canonical tool,
 routers included, and hold the set to registered names with a test.
 
+**Correction (2026-09-13).** The statement above that no identity-binding
+difference follows from membership is wrong. `derive_session_key` reads an
+argument `client_session_id` before the transport's `mcp_session_id`
+(`src/mcp_handlers/identity/session.py`). It scopes an injected `mcp:<sid>` by
+model (`mcp:<sid>:claude`) and stamps it `server_inferred`, and a present
+`client_session_id` skips the sticky-cache lookup. An injected call and a
+non-injected call on the same MCP session can therefore bind differently once
+the sticky entry expires, so widening membership changes identity resolution on
+every install. The earlier laundering concern in `src/tool_schemas.py` is stale
+on tier: `server_inferred` is reported as weak. Collapse behind one IP+UA comes
+from the transport, not from injection. The 13 unread names left the set
+(#2199). Membership stays at its eight tools by decision of the 2026-09-13
+council, pinned by `tests/test_identity_guard_teaching.py`. A change would
+first need injected and native derivation to yield the same key for the same
+transport.
+
 ### F6 — `stakes_table` classifies 13 names nothing dispatches (low)
 
 `src/mcp_handlers/stakes_table.py` carries tool-level entries for
