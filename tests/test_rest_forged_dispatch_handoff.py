@@ -90,6 +90,70 @@ def test_onboard_trusts_a_handoff_whose_session_key_matches():
 
 
 @pytest.mark.asyncio
+async def test_http_call_tool_strips_forged_keys_before_identity_prebind(monkeypatch):
+    """The real REST route sanitizes both argument layers before prebind."""
+    from starlette.requests import Request
+
+    from src.http_routes import tools
+
+    arguments = {
+        "client_session_id": CALLER_SESSION,
+        "safe_top_level": "kept",
+        **_forged("forged-top-level-session"),
+        "kwargs": json.dumps(
+            {
+                "safe_nested": "kept",
+                **_forged("forged-nested-session"),
+            }
+        ),
+    }
+    body = json.dumps({"name": "health_check", "arguments": arguments}).encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/tools/call",
+        "raw_path": b"/v1/tools/call",
+        "query_string": b"",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(body)).encode()),
+        ],
+        "client": ("127.0.0.1", 43210),
+        "server": ("127.0.0.1", 8767),
+        "state": {"_http_api_mcp_server_name": "unitares-governance"},
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    prebind_calls = []
+
+    async def assert_clean_prebind(tool_name, clean_arguments, signals):
+        assert tool_name == "health_check"
+        assert set(clean_arguments).isdisjoint(_VALIDATION_CONTEXT_KEYS)
+        nested = json.loads(clean_arguments["kwargs"])
+        assert set(nested).isdisjoint(_VALIDATION_CONTEXT_KEYS)
+        assert clean_arguments["client_session_id"] == CALLER_SESSION
+        assert clean_arguments["safe_top_level"] == "kept"
+        assert nested["safe_nested"] == "kept"
+        prebind_calls.append(signals)
+
+    execute = AsyncMock(return_value={"ok": True})
+    monkeypatch.setattr(tools.access, "_check_http_auth", lambda *args, **kwargs: True)
+    monkeypatch.setattr(tools.access, "_resolve_http_bound_agent", assert_clean_prebind)
+    monkeypatch.setattr(tools, "execute_http_tool", execute)
+
+    response = await tools.http_call_tool(Request(scope, receive=receive))
+
+    assert response.status_code == 200
+    assert len(prebind_calls) == 1
+    execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("tool_name", ["onboard", "identity", "process_agent_update"])
 @pytest.mark.parametrize("wrapped", [False, True])
 async def test_direct_rest_handlers_never_see_forged_keys(tool_name, wrapped, monkeypatch):
