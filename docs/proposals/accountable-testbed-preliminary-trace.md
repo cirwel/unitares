@@ -1,5 +1,7 @@
 # Preliminary Trace: Two-Governor Federation Controls
 
+**Status:** Dated evidence record, captured 2026-08-03; all ten registered checks passed. Supersedes the 2026-06-30 single-deployment trace as evidence for the proposal's federation claim, and states its remaining gap explicitly rather than closing it. Retained as provenance; not a proposal and not a plan.
+
 **Captured 2026-08-03 against an isolated, public research harness.** The
 machine-readable capture is
 [`accountable-testbed-federation-trace.json`](accountable-testbed-federation-trace.json),

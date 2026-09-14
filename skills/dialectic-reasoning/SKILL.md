@@ -4,11 +4,14 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-12"
+last_verified: "2026-09-14"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
+  # Added 2026-09-14: participant resolution and the same-bound-caller gate
+  # for thesis, antithesis, and synthesis live here.
+  - unitares/src/mcp_handlers/dialectic/auth.py
   - unitares/src/mcp_handlers/dialectic/session.py
   - unitares/src/mcp_handlers/dialectic/responses.py
   - unitares/src/mcp_handlers/dialectic/auto_resolve.py
@@ -20,8 +23,9 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "ad771f5e33e75c31"
-  unitares/src/mcp_handlers/dialectic/session.py: "8065938fced23b6f"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "cebb8c905db22006"
+  unitares/src/mcp_handlers/dialectic/auth.py: "e6bcc28d7e2a4260"
+  unitares/src/mcp_handlers/dialectic/session.py: "eb5ed22eb5684038"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
   unitares/src/mcp_handlers/dialectic/reviewer.py: "d5e71f324195eb6c"
@@ -44,6 +48,22 @@ A dialectic session is useful when:
 - A high-stakes decision needs structured verification before proceeding
 
 Dialectics are not punishment. They are a structured way to resolve disagreements using evidence and negotiation. In current UNITARES language, think of them as structured review more than "recovery court."
+
+## Bind Before You Submit
+
+`thesis`, `antithesis`, and `synthesis` are state-changing participant actions.
+Each requires the identity resolver to have bound the caller, and the UUID being
+submitted must equal that resolver-stamped caller. The normal flow is to bind
+with `start_session` or `identity`, then omit `agent_id`; the transport carries
+the bound UUID into the handler. Supplying an explicit `agent_id` is not
+delegation and cannot authorize acting as another participant.
+
+This is an equality gate, not an independent authentication protocol. Its
+proof strength is exactly the strength of the upstream binding source and the
+deployment's strict-identity policy. A server-inferred weak binding that the
+policy accepts remains weak; the dialectic check must not be described as
+proving strong identity or closing impersonation by itself. Inspect the
+identity-assurance fields when that distinction matters.
 
 ## Phase 1: Thesis
 
@@ -213,8 +233,43 @@ responses answer it directly from your seat:
   terminal"`.
 - **`next_call`** — a ready-to-use call template, present only when the move is
   actually yours. If `next_call` is null, you are waiting on someone else.
+- **`wait_assessment`** — `{elapsed_s, expected_by_s, assessment, note}`. The
+  same misreading recurs on the time axis: a session awaiting an orchestrated
+  reviewer looked identical at 72 seconds and at 72 minutes until this field
+  existed, and on 2026-09-13 that produced two wrong "the reviewer is absent"
+  calls inside one session, against a reviewer that was mid-model-call and
+  arrived at ~2m20s. `expected_by_s` is derived from the reviewer's own
+  configured ceiling (`UNITARES_DIALECTIC_CODEX_TIMEOUT_S`, plus spawn or
+  reconsider overhead).
 
-Read `whose_move` before concluding a session is hung. Use
+  `too_early` means the wait is unremarkable — **not** that the reviewer is
+  alive. A reviewer inside its budget may already be gone and merely not yet
+  late, so an absence read here is not evidence. Only `overdue` is evidence, and
+  it is evidence to look rather than to conclude.
+
+  A deadline is asserted only when somebody actually owes the move and the
+  server can say who and since when: an identified orchestrated reviewer holds
+  an outstanding obligation, and the transcript carries a usable clock.
+  Otherwise `assessment` is `null` and `note` says which condition was missing.
+  `null` therefore covers four different situations — nobody owes a reviewer
+  turn (terminal session, your own turn, or an open unclaimed slot), the
+  reviewer is a human or otherwise unmanaged and has no declared budget to
+  exceed, the transcript clock is missing or unreadable, or its entries are not
+  in causal order. None of them is a sign of health, and none of them is a sign
+  of trouble either. Read `note` rather than inferring from the `null`.
+
+  Do not read an OPEN slot as a late reviewer. No agent has taken the
+  obligation, so there is no budget to exceed and the field declines to invent
+  one; an unclaimed slot at 72 minutes is an unanswered invitation, not a
+  missing reviewer.
+
+  Do not reassign or ask for facilitation from a `too_early` or `null`
+  assessment. Wait and read `note`; only `overdue` supports investigating or
+  offering the operator a facilitation path, and even then it does not prove
+  that the reviewer is gone.
+
+Read `whose_move` before concluding a session is hung, and `wait_assessment`
+before concluding it is late. Use
 `dialectic(action="get", session_id="...", check_timeout=true)` when you need the
 latest timeout/facilitation state; note that `check_timeout` is a write (it can
 auto-reassign or flip the phase) and is silently ignored for an unbound caller. An open reviewer slot in the antithesis phase

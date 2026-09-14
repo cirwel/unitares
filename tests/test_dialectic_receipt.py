@@ -58,6 +58,18 @@ from src.mcp_handlers.dialectic.session import (  # noqa: E402
     seal_resolution_for_persistence,
 )
 
+
+@pytest.fixture(autouse=True)
+def _synthesis_caller_bound_as_named_agent():
+    """These tests exercise synthesis behavior, not caller binding.
+
+    A synthesis requires a caller bound as the identity it submits for
+    (``dialectic/auth.py`` ``caller_is_bound_as``); that requirement is tested in
+    ``tests/test_dialectic_synthesis_bound_caller.py``.
+    """
+    with patch("src.mcp_handlers.dialectic.auth.caller_is_bound_as", return_value=True):
+        yield
+
 KEY_ENV = "UNITARES_AIC_SIGNING_KEY"
 FLAG_ENV = "UNITARES_DIALECTIC_RESOLUTION_RECEIPTS"
 ISSUER_ENV = "UNITARES_LEASE_ATTESTATION_ISSUER"

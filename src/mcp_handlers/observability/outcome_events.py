@@ -495,6 +495,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
                 confidence=_confidence,
                 predicted_correct=(_confidence >= 0.5),
                 actual_correct=float(outcome_score),
+                agent_id=agent_id,
             )
             # Hard-exogenous outcomes (test_*, task_*) feed tactical calibration.
             # signal_source routes the row to per-channel breakdown in
@@ -506,6 +507,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
                     decision='proceed',
                     immediate_outcome=not is_bad,
                     signal_source=_HARD_EXOGENOUS_TYPE_TO_CHANNEL[outcome_type],
+                    agent_id=agent_id,
                 )
         except Exception as e_cal:
             logger.debug(f"Calibration from outcome_event skipped: {e_cal}")

@@ -350,12 +350,14 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.85,
             predicted_correct=True,
             actual_correct=1.0,  # test_passed → outcome_score=1.0
+            agent_id='agent-test',
         )
         mock_checker.record_tactical_decision.assert_called_once_with(
             confidence=0.85,
             decision='proceed',
             immediate_outcome=True,  # not is_bad
             signal_source='tests',  # routes to per-channel breakdown
+            agent_id='agent-test',
         )
         mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once_with(
             confidence=0.85,
@@ -549,12 +551,14 @@ class TestExplicitOutcomeEventCalibration:
             confidence=0.9,
             predicted_correct=True,
             actual_correct=0.0,  # test_failed → is_bad=True → outcome_score=0.0
+            agent_id='agent-tf',
         )
         mock_checker.record_tactical_decision.assert_called_once_with(
             confidence=0.9,
             decision='proceed',
             immediate_outcome=False,  # is_bad=True → not is_bad = False
             signal_source='tests',  # routes to per-channel breakdown
+            agent_id='agent-tf',
         )
         mock_seq_tracker.record_exogenous_tactical_outcome.assert_called_once_with(
             confidence=0.9,
@@ -668,6 +672,7 @@ class TestPredictionIdLookup:
             confidence=0.9,
             predicted_correct=True,
             actual_correct=1.0,
+            agent_id='agent-pid',
         )
 
         # Sequential tracker received prediction_id for audit

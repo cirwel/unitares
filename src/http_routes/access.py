@@ -700,7 +700,18 @@ async def _resolve_http_session_binding(
         resume=True,
         token_agent_uuid=token_agent_uuid,
     )
-    if not resolved or resolved.get("created"):
+    # A resolver refusal can still carry the UUID it refused (for example,
+    # ``_substrate_http_reject``).  That UUID is diagnostic context, not a
+    # usable binding.  Treat every refusal/error shape as terminal here just
+    # as the MCP identity middleware and explicit-bind corroboration do;
+    # otherwise REST would stamp the rejected identity into the resolver-owned
+    # context slot and let a dialectic write proceed as that caller.
+    if (
+        not resolved
+        or resolved.get("created")
+        or resolved.get("resume_failed")
+        or resolved.get("error")
+    ):
         return None
     agent_uuid = resolved.get("agent_uuid")
     if not agent_uuid:
