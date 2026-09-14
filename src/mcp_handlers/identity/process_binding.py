@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 # "Live" window used when rows have not been explicitly marked stale.
 # Bindings whose last_seen is older than this are not counted for collision
 # detection, so a resident that restarts 10 minutes later does not trip the
-# alarm even before the sweeper runs. Kept in sync with the steward cadence.
+# alarm even before the sweeper runs. This is a collision window, not a
+# resident-cadence setting.
 LIVE_WINDOW_SECONDS = 300  # 5 minutes
 
 ALLOWED_TRANSPORTS = frozenset({"stdio", "http", "websocket", "sse", "rest", "unknown"})

@@ -147,12 +147,13 @@ they are not re-flagged.
 
 ## Cross-repository consumer audit (2026-09-13)
 
-A caller count taken inside this repo bounds nothing about consumers outside it, and
-this repo has a real one: `unitares-pi-plugin` imports `src.*` directly (it is why the
-five `AuditLogger.log_*` orchestration methods are KEEP-DORMANT rather than cut). A
-review (dialectic `490c7cf515b89a6e`) refused the three 2026-09-13 cuts on exactly that
-ground, so the audit below is the evidence that was missing, recorded rather than
-asserted.
+A caller count taken inside this repo bounds nothing about consumers outside it.
+At the time of this audit, `unitares-pi-plugin` was a first-party consumer that
+imported `src.*` directly. Review `490c7cf515b89a6e` initially refused three
+2026-09-13 cuts on that ground, so the audit below records the missing evidence.
+The Pi plugin was subsequently retired by operator decision, and its five
+`AuditLogger.log_*` orchestration methods were cut as recorded above; the
+earlier KEEP-DORMANT disposition is no longer current.
 
 Audited at `unitares-pi-plugin@4a49267` (shallow clone, 19 Python files):
 

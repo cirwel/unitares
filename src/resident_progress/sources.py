@@ -89,7 +89,8 @@ class WatcherFindingSource(KnowledgeDiscoverySource):
 
 class EISVSyncSource:
     """Counts audit.events rows with event_type='eisv_sync' authored by
-    the given resident in the window. Steward is the sole writer.
+    the given resident in the window. Retired Steward was the historical
+    writer; the source stays generic for deployments that still name it.
     """
     name = "eisv_sync_rows"
 

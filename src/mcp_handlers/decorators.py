@@ -75,7 +75,7 @@ class ToolDefinition:
     # resolver must not let ``op`` name an action there.
     reads_op_as_action: bool = False
     # Import path of the module that DECLARED this tool, e.g.
-    # ``src.mcp_handlers.consolidated`` or ``unitares_pi_plugin.handlers``.
+    # ``src.mcp_handlers.consolidated`` or ``third_party_plugin.handlers``.
     # Populated automatically: ``func.__module__`` for ``@mcp_tool``, and the
     # CALLING module for ``action_router`` — a router's generated handler is
     # defined in this file, so ``handler.__module__`` names governance for
