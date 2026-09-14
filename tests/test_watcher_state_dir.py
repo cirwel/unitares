@@ -95,6 +95,27 @@ class TestMigration:
 
         assert (target / "findings.jsonl").read_text() == "NEW\n"
 
+    def test_atomic_publish_does_not_clobber_racing_writer(
+        self, monkeypatch, tmp_path
+    ):
+        legacy = tmp_path / "legacy"
+        legacy.mkdir()
+        (legacy / "findings.jsonl").write_text("OLD\n")
+        target = tmp_path / "home" / "watcher"
+        self._point_legacy(monkeypatch, legacy, target)
+        real_link = util.os.link
+
+        def publish_after_other_writer(src, dst):
+            Path(dst).write_text("NEW\n")
+            return real_link(src, dst)
+
+        monkeypatch.setattr(util.os, "link", publish_after_other_writer)
+
+        util.migrate_legacy_watcher_state()
+
+        assert (target / "findings.jsonl").read_text() == "NEW\n"
+        assert list(target.glob(".findings.jsonl.migration.*")) == []
+
     def test_noop_when_legacy_absent(self, monkeypatch, tmp_path):
         legacy = tmp_path / "does_not_exist"
         target = tmp_path / "home" / "watcher"

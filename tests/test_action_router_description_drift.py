@@ -33,7 +33,8 @@ description in ``list_tools``, and the ``dialectic`` entry advertised ``vote``
 corrected. That table may no longer carry an advertised name
 (``test_override_table_carries_no_advertised_name`` in
 tests/test_describe_tool_drift.py), which closes the override vector but NOT
-the class: the served text in ``src/tool_descriptions.py`` is hand-authored and
+the class: the served text, authored in ``src/tool_descriptions.json`` or the
+Python override dict in ``src/tool_descriptions.py``, is hand-written and
 nothing derives it from the action map, so an action added to a router without a
 description edit is invisible again. ``test_served_description_*`` below is the
 replacement guard, and it is deliberately on the served text rather than the
@@ -43,6 +44,7 @@ derived text the removed guard's neighbours check.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -63,6 +65,19 @@ CONSOLIDATED_TOOLS = [
 ]
 
 
+def _names_action(description: str, action: str) -> bool:
+    """Match an action name without accepting identifier substrings."""
+    return re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(action)}(?![A-Za-z0-9_])",
+        description,
+    ) is not None
+
+
+def test_action_name_matcher_rejects_identifier_substrings():
+    assert not _names_action("update appends resolution_notes", "note")
+    assert _names_action("note stores an open discovery", "note")
+
+
 async def _routed_actions(tool: str) -> list[str]:
     """Recover a router's real action list from its unknown-action recovery."""
     handler = TOOL_HANDLERS[tool]
@@ -78,7 +93,7 @@ async def test_description_names_every_routed_action(tool):
     assert actions, f"{tool} reported no valid_actions"
     desc = get_tool_description(tool)
     assert desc, f"{tool} has no registered description"
-    missing = [a for a in actions if a not in desc]
+    missing = [a for a in actions if not _names_action(desc, a)]
     assert not missing, (
         f"{tool} description omits routed actions {missing}; description={desc!r}"
     )
@@ -106,17 +121,6 @@ def _served_description(tool: str) -> str:
     raise AssertionError(f"{tool} is not advertised; the roster changed")
 
 
-# Routers whose served description does not yet name every routed action.
-# Measured 2026-09-12: admin omits connections, debug_context, telemetry,
-# tool_usage and workspace_health; knowledge omits supersede. Neither is a
-# regression from the F2 change — neither name had a catalog override, so
-# list_tools was already serving this same text for them. They are recorded
-# here rather than silently fixed because the wire descriptions are authored
-# prose (#2148/#2151/#2158) and rewriting them is a content decision, not a
-# parity fix. Shrink this set; never grow it.
-SERVED_ACTION_COVERAGE_GAPS = {"admin", "knowledge"}
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", CONSOLIDATED_TOOLS)
 async def test_served_description_names_every_routed_action(tool):
@@ -126,18 +130,24 @@ async def test_served_description_names_every_routed_action(tool):
     listed all eight actions, and when #2176 made list_tools serve the wire
     text instead, `reassign` stopped being named anywhere an agent looks. The
     repair was to the served text, so the guard belongs there too.
+
+    This ran with a ``SERVED_ACTION_COVERAGE_GAPS`` xfail set for admin and
+    knowledge until 2026-09-12, covering six omitted actions. None of them was
+    undiscoverable by name: every router's advertised ``action`` enum lists all
+    of its routed actions. What an enum cannot carry is an action's contract —
+    what it does and what it requires — and that is the half this guard pins.
     """
     actions = await _routed_actions(tool)
     assert actions, f"{tool} reported no valid_actions"
     served = _served_description(tool)
-    missing = sorted(a for a in actions if a not in served)
-    if tool in SERVED_ACTION_COVERAGE_GAPS:
-        pytest.xfail(f"{tool} has a known served-text coverage gap: {missing}")
+    missing = sorted(a for a in actions if not _names_action(served, a))
     assert not missing, (
         f"{tool} is advertised to clients with a description that omits routed "
-        f"actions {missing}. The served text lives in src/tool_descriptions.py "
-        f"(or _INFERENCE_DESCRIPTION_OVERRIDES there); the derived text that "
-        f"names every action is not what ships. Served text: {served!r}"
+        f"actions {missing}. The served text is authored in "
+        f"src/tool_descriptions.json, or in _INFERENCE_DESCRIPTION_OVERRIDES in "
+        f"src/tool_descriptions.py, which wins for any name it carries; only the "
+        f"first non-empty line ships. The derived text that names every action "
+        f"is not what ships. Served text: {served!r}"
     )
 
 
@@ -150,8 +160,6 @@ async def test_served_description_names_no_phantom_action(tool):
     to pass an action that does not route — that is the `dialectic(action='vote')`
     defect, and it is worse than an omission because the caller acts on it.
     """
-    import re
-
     actions = set(await _routed_actions(tool))
     served = _served_description(tool)
     claimed = set(re.findall(r"action=['\"](\w+)['\"]", served))
