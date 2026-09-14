@@ -45,6 +45,14 @@ defmodule Wave3aHandlers.Handlers.GetServerInfoTest do
     "version" => "0.42.0",
     "build_date" => "2026-06-01",
     "tool_count" => 100,
+    "tool_counts" => %{
+      "registry" => 100,
+      "workflow_aliases" => 8,
+      "advertised" => 108,
+      "note" =>
+        "tool_count is `registry`, kept for older clients. " <>
+          "advertised is what tools/list emits."
+    },
     "current_pid" => 12_345,
     "current_uptime_seconds" => 5_400,
     "current_uptime_formatted" => "1h 30m",
@@ -196,6 +204,7 @@ defmodule Wave3aHandlers.Handlers.GetServerInfoTest do
       refute Map.has_key?(body, "data")
       assert body["transport"] == "HTTP"
       assert body["tool_count"] == 100
+      assert body["tool_counts"]["advertised"] == 108
       assert body["health"] == "healthy"
       assert body["pid_file_exists"] == true
     end

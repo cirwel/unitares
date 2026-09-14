@@ -120,14 +120,20 @@ def build_server_info_payload() -> Dict[str, Any]:
     # the qualified block beside it says what that number is and what the
     # other two are.
     #
-    # Source and vocabulary are the same ones #2197 canonized for the docs
-    # tool-count guard (scripts/diagnostics/count_tools.py /
-    # update_docs_tool_count.py): `registry` is the registered-dispatch-tool
-    # count, `advertised` is the registry plus the primary workflow aliases,
-    # and the breakdown key is `workflow_aliases`. Reported here from the
-    # SAME source functions rather than a parallel computation, so this
-    # surface and the docs guard cannot independently drift onto different
-    # numbers for the same claim.
+    # `registry` and the docs tool-count guard (scripts/diagnostics/
+    # count_tools.py) both read get_tool_registry() directly, so those two
+    # cannot independently drift onto different numbers for the same claim.
+    #
+    # `advertised` is NOT tool_modes.advertised_tool_names_full() (registry |
+    # aliases): that reads the decorator registry live and so can outrun what
+    # tools/list actually serves. FastMCP mounts the wire table exactly once,
+    # at auto_register_all_tools() during boot; a plugin's @mcp_tool decorator
+    # registering after that point grows the registry with no matching mount
+    # -- get_public_tool_definitions() narrows to interface_contract's
+    # mounted_tool_names() whenever a server has actually mounted one, so
+    # `advertised` cannot claim more than dispatch will serve. Unmounted
+    # contexts (this module's own tests, a bare script import) still get the
+    # full registry-plus-aliases count, matching the docs guard exactly.
     #
     # get_tool_registry() reads the decorator registry directly rather than
     # the mcp_handlers.TOOL_HANDLERS snapshot: a plugin's @mcp_tool decorator
@@ -138,7 +144,7 @@ def build_server_info_payload() -> Dict[str, Any]:
     # see the same tools.
     from src.mcp_handlers.decorators import get_tool_registry
     from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
-    from src.tool_modes import advertised_tool_names_full
+    from src.interface_contract import get_public_tool_definitions
 
     _registry = set(get_tool_registry())
     _aliases = set(AGENT_WORKFLOW_ALIASES)
@@ -146,7 +152,7 @@ def build_server_info_payload() -> Dict[str, Any]:
     tool_counts = {
         "registry": len(_registry),
         "workflow_aliases": len(_aliases - _registry),
-        "advertised": len(advertised_tool_names_full()),
+        "advertised": len(get_public_tool_definitions(mode="full")),
         "note": (
             "tool_count is `registry`, kept for older clients. "
             "advertised is what tools/list emits."
