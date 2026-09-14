@@ -34,7 +34,7 @@ class ListToolsParams(AgentIdentityMixin):
     )
     tier: Optional[str] = Field(
         default="all",
-        description="Filter by tier: 'essential', 'common', 'advanced', or 'all'."
+        description="Filter by tier: 'essential', 'common', 'advanced', or 'all' (case-insensitive; blank means 'all')."
     )
     lite: Union[bool, str, None] = Field(
         default=True,

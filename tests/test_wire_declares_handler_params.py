@@ -169,3 +169,35 @@ async def test_list_tools_mcp_dispatch_matches_direct_handler_coercion(
     expected = coerce_bool(raw, True)
     assert delivered["lite"] is expected
     assert delivered["include_advanced"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, "all"),
+        ("", "all"),
+        ("  ALL  ", "all"),
+        ("  EsSeNtIaL  ", "essential"),
+        (" COMMON ", "common"),
+        ("advanced", "advanced"),
+    ],
+)
+async def test_list_tools_tier_is_normalized_consistently(raw, expected):
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    response = json.loads((await handle_list_tools({"lite": False, "tier": raw}))[0].text)
+    assert response["success"] is True
+    assert response["filter_applied"]["tier_filter"] == expected
+    assert response["tools"], "a valid tier must not silently empty the catalog"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["bogus", 0, False, []])
+async def test_list_tools_unknown_tier_returns_validation_error(raw):
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    response = json.loads((await handle_list_tools({"lite": False, "tier": raw}))[0].text)
+    assert response["success"] is False
+    assert response["error_category"] == "validation_error"
+    assert "tier" in response["error"].lower()
