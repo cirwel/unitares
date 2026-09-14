@@ -53,7 +53,7 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
-  unitares/src/mcp_handlers/observability/outcome_events.py: "d7152a8a83fc0182"
+  unitares/src/mcp_handlers/observability/outcome_events.py: "33aedcb2231bc732"
 ---
 
 # Governance Fundamentals
@@ -212,6 +212,7 @@ Interpret it only with the accompanying `coherence_source` and `coherence_role`:
 The system tracks whether your stated confidence matches evidence. Over time this builds a calibration curve.
 
 - Grounding comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic evidence.
+- Prediction-bound outcomes are database-idempotent per `(agent_id, prediction_id)`: an identical retry returns the first canonical outcome and does not train calibration twice, while conflicting reuse is rejected. The in-memory prediction registry is only a cache; durable binding authority lives in the database.
 - Overconfidence is tracked and can lower Integrity / raise uncertainty through the check-in pipeline
 - When an agent omits confidence, the deployed compatibility estimator still gives legacy `C(V_ODE)` 55% of its base weight. Responses expose this as `confidence_reliability.coherence_dependency=ode_control_feedback`; it is known causal debt, not independent confidence evidence. Do not reweight it without prospective outcome calibration because confidence history can feed later entropy penalties.
 - That derived estimate stays internal: omitted confidence does not mint an agent tactical prediction or become an agent-reported calibration observation. Earlier explicit predictions remain available for their eventual outcomes. Simulation restores prediction bookkeeping and does not write trajectory calibration observations.
