@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from copy import deepcopy
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,6 +34,15 @@ EISV_B = {
     "coherence": 0.09,
     "regime": "EXPLORATION",
 }
+
+
+def test_public_description_names_canonical_retry_and_conflict() -> None:
+    descriptions = json.loads(
+        (Path(__file__).resolve().parents[1] / "src/tool_descriptions.json").read_text()
+    )
+    description = descriptions["outcome_event"]
+    assert "identical retries return the canonical existing outcome" in description
+    assert "PREDICTION_REUSE_CONFLICT" in description
 
 
 class DurableBindingDB:

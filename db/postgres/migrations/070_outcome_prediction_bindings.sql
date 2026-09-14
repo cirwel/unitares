@@ -87,7 +87,90 @@ COMMENT ON COLUMN audit.outcome_prediction_bindings.canonical_eisv_snapshot IS
     'Full original response snapshot retained so identical retries survive process restart without provenance drift.';
 
 COMMENT ON COLUMN audit.outcome_prediction_bindings.canonical_detail IS
-    'Canonical persisted provenance retained beyond outcome partition retention for deterministic replay.';
+    'Canonical persisted provenance retained only for the bounded outcome idempotency window.';
+
+CREATE OR REPLACE FUNCTION audit.cleanup_outcome_prediction_bindings(
+    p_retention_days INTEGER DEFAULT 365
+)
+RETURNS BIGINT AS $$
+DECLARE
+    v_deleted BIGINT;
+BEGIN
+    IF p_retention_days < 0 THEN
+        RAISE EXCEPTION 'retention days must be non-negative';
+    END IF;
+
+    DELETE FROM audit.outcome_prediction_bindings binding
+    WHERE binding.canonical_outcome_ts
+              < now() - make_interval(hours => p_retention_days * 24)
+      AND NOT EXISTS (
+          SELECT 1
+          FROM audit.outcome_events outcome
+          WHERE outcome.outcome_id = binding.canonical_outcome_id
+      );
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+    RETURN v_deleted;
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION audit.cleanup_outcome_prediction_bindings(INTEGER) IS
+    'Deletes expired prediction claims only after their canonical outcomes have been retired.';
+
+-- Migration 055 owns the current partition-drop implementation. Replace it
+-- here so deployed databases clean the unpartitioned ledger before dropping
+-- any canonical outcome partition. db/postgres/partitions.sql carries the same
+-- definition for fresh bootstrap and re-runnable test schema setup.
+CREATE OR REPLACE FUNCTION audit.drop_old_outcome_partitions(
+    p_retention_days INTEGER DEFAULT 365
+)
+RETURNS TABLE(partition_name TEXT, action TEXT) AS $$
+DECLARE
+    v_cutoff TIMESTAMPTZ;
+    v_rec RECORD;
+BEGIN
+    IF p_retention_days < 0 THEN
+        RAISE EXCEPTION 'retention days must be non-negative';
+    END IF;
+
+    v_cutoff := now() - make_interval(hours => p_retention_days * 24);
+
+    FOR v_rec IN
+        SELECT c.relname AS partition_name,
+               pg_get_expr(c.relpartbound, c.oid) AS partition_bound
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_inherits i ON i.inhrelid = c.oid
+        JOIN pg_class parent ON parent.oid = i.inhparent
+        WHERE n.nspname = 'audit'
+          AND parent.relname = 'outcome_events'
+          AND c.relkind = 'r'
+    LOOP
+        IF v_rec.partition_bound ~ 'TO \(''([^'']+)''' THEN
+            DECLARE
+                v_end TIMESTAMPTZ;
+            BEGIN
+                v_end := ((regexp_match(
+                    v_rec.partition_bound,
+                    'TO \(''([^'']+)'''
+                ))[1])::TIMESTAMPTZ;
+                IF v_end < v_cutoff THEN
+                    EXECUTE format(
+                        'DROP TABLE IF EXISTS audit.%I',
+                        v_rec.partition_name
+                    );
+                    partition_name := v_rec.partition_name;
+                    action := 'dropped';
+                    RETURN NEXT;
+                END IF;
+            END;
+        END IF;
+    END LOOP;
+
+    -- Partition drops and claim cleanup commit together. The cleanup helper
+    -- refuses to remove a claim while its canonical outcome remains live.
+    PERFORM audit.cleanup_outcome_prediction_bindings(p_retention_days);
+END;
+$$ LANGUAGE plpgsql;
 
 INSERT INTO core.schema_migrations (version, name, applied_at)
 VALUES (70, 'outcome_prediction_bindings', NOW())

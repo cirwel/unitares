@@ -353,6 +353,10 @@ DECLARE
     v_cutoff TIMESTAMPTZ;
     v_rec RECORD;
 BEGIN
+    IF p_retention_days < 0 THEN
+        RAISE EXCEPTION 'retention days must be non-negative';
+    END IF;
+
     -- Absolute instant, identical in every session TimeZone (see
     -- drop_old_events_partitions).
     v_cutoff := now() - make_interval(hours => p_retention_days * 24);
@@ -382,6 +386,13 @@ BEGIN
             END;
         END IF;
     END LOOP;
+
+    -- Migration 070 adds the unpartitioned prediction-binding ledger. Retire
+    -- claims after their canonical outcome partitions, in the same transaction.
+    -- The guard keeps pre-070 bootstrap usable.
+    IF to_regprocedure('audit.cleanup_outcome_prediction_bindings(integer)') IS NOT NULL THEN
+        PERFORM audit.cleanup_outcome_prediction_bindings(p_retention_days);
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
