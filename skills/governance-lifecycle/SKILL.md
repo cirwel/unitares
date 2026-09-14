@@ -12,6 +12,9 @@ source_files:
   - unitares/src/mcp_handlers/admin/handlers.py
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/middleware/envelope_step.py
+  # Added 2026-09-14: strict identity refusal and its no-handler-execution
+  # guarantee live here; resolver failure can still perform bookkeeping.
+  - unitares/src/mcp_handlers/middleware/identity_step.py
   # Added 2026-08-09: this skill documents check-in and dialectic semantics but
   # was not verified against the code implementing either. That is why stale
   # `confidence` guidance survived several freshness cycles — the field it was
@@ -38,6 +41,7 @@ source_digests:
   unitares/src/mcp_handlers/admin/handlers.py: "fd483fd4a0c5d6b6"
   unitares/src/mcp_handlers/tool_stability.py: "25440b0686fa16d6"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "0327e6202ed5cbb4"
+  unitares/src/mcp_handlers/middleware/identity_step.py: "d6dacf96434c8fba"
   unitares/src/mcp_handlers/updates/phases.py: "bd790e0aabbb9c23"
   unitares/src/governance_monitor.py: "cecc4bde0de1c02b"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
@@ -155,8 +159,11 @@ identity, you get the typed refusal contract instead: `status`
 `safe_options`, `do_not`, and `rollout_flag`. There is no `next_action` —
 read `next_step` and `safe_options`. It carries `success: true`, because it is
 a structured refusal rather than a transport error, so branching on
-`success is False` will miss it; branch on `status` or `rollout_flag`. Nothing
-was written. Follow `next_step` rather than retrying the same call.
+`success is False` will miss it; branch on `status` or `rollout_flag`. The target
+tool handler did not run. Treat that as a no-handler-execution receipt, not a
+blanket no-write receipt: resolver-failure paths may already have performed
+identity-resolution bookkeeping. Follow `next_step` rather than retrying the
+same call.
 
 Cold-start action summaries carry a provisional headline. A `proceed` action
 before the behavioral baseline forms is permission to continue under the current
