@@ -46,10 +46,10 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
-  unitares/skills/governance-lifecycle/SKILL.md: "5145e04160fa1058"
+  unitares/skills/governance-lifecycle/SKILL.md: "7efb6c2972efedac"
   unitares/skills/governance-fundamentals/SKILL.md: "8ebf6d0a1f2d21a7"
   unitares/skills/knowledge-graph/SKILL.md: "0eb8e94e76d27211"
-  unitares/skills/dialectic-reasoning/SKILL.md: "7d3b443e80c4edaf"
+  unitares/skills/dialectic-reasoning/SKILL.md: "da1820fd3bf94941"
   unitares/skills/discord-bridge/SKILL.md: "3ca60ac744a6223e"
   unitares/skills/unitares-dashboard/SKILL.md: "88dbe899466984d6"
 ---
