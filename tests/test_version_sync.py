@@ -42,12 +42,12 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
 
     source = tmp_path / "VERSION"
     published = tmp_path / "PUBLISHED_VERSION"
-    readme = tmp_path / "README.md"
+    manual = tmp_path / "docs" / "manual" / "02-install.md"
+    manual.parent.mkdir(parents=True)
     compatibility = tmp_path / "COMPATIBILITY.md"
     source.write_text("2.21.0\n", encoding="utf-8")
     published.write_text("2.21.0\n", encoding="utf-8")
-    readme.write_text(
-        "**Status:** v2.21.0.\n"
+    manual.write_text(
         "git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git\n",
         encoding="utf-8",
     )
@@ -60,8 +60,7 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
 
     assert manager.bump_version("minor") == "2.22.0"
     manager.main()
-    assert "**Status:** v2.22.0." in readme.read_text()
-    assert "git clone --branch v2.21.0 " in readme.read_text()
+    assert "git clone --branch v2.21.0 " in manual.read_text()
     assert published.read_text() == "2.21.0\n"
     assert historical in compatibility.read_text()
     assert "| UNITARES server | `v2.22.0` |" in compatibility.read_text()
@@ -69,5 +68,5 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
     # RELEASE_PROCESS step 8 records verified publication independently.
     published.write_text("2.22.0\n", encoding="utf-8")
     manager.main()
-    assert "git clone --branch v2.22.0 " in readme.read_text()
+    assert "git clone --branch v2.22.0 " in manual.read_text()
     assert source.read_text() == "2.22.0\n"

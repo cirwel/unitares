@@ -190,6 +190,20 @@ class TestActionRouterDispatch:
         assert data["used"] == "default"
 
     @pytest.mark.asyncio
+    async def test_mixed_case_default_action_uses_canonical_route(self):
+        handler_default = _make_mock_handler({"used": "default"})
+        router = action_router(
+            "test_default_mixed_case",
+            actions={"check": handler_default},
+            default_action="CHECK",
+        )
+
+        result = await router({})
+        data = _parse_response(result)
+        assert data["used"] == "default"
+        assert _TOOL_DEFINITIONS["test_default_mixed_case"].default_action == "check"
+
+    @pytest.mark.asyncio
     async def test_action_is_case_insensitive(self):
         handler = _make_mock_handler({"matched": True})
         router = action_router(
@@ -332,6 +346,32 @@ class TestActionRouterRegistration:
         td = _TOOL_DEFINITIONS["test_reg_timeout"]
         assert td.timeout == 99.0
 
+    def test_router_rejects_a_mixed_case_action_map_key(self):
+        handler = _make_mock_handler()
+
+        with pytest.raises(ValueError, match="action keys must be lowercase") as error:
+            action_router(
+                "test_reg_mixed_case_action",
+                actions={"Mixed": handler},
+            )
+
+        assert "Mixed" in str(error.value)
+        assert "test_reg_mixed_case_action" not in _TOOL_DEFINITIONS
+
+    def test_router_rejects_action_map_keys_that_collide_when_lowercased(self):
+        first = _make_mock_handler()
+        second = _make_mock_handler()
+
+        with pytest.raises(ValueError, match="collide when lowercased") as error:
+            action_router(
+                "test_reg_case_collision",
+                actions={"Mixed": first, "mixed": second},
+            )
+
+        assert "'Mixed'" in str(error.value)
+        assert "'mixed'" in str(error.value)
+        assert "test_reg_case_collision" not in _TOOL_DEFINITIONS
+
 
 class TestActionRouterErrorHandling:
     """Handler exceptions are caught by the mcp_tool wrapper."""
@@ -380,16 +420,6 @@ class TestConsolidatedRegistration:
     def test_observe_registered(self):
         from src.mcp_handlers import consolidated  # noqa: F401
         assert "observe" in _TOOL_DEFINITIONS
-
-    def test_pi_registered(self):
-        """``pi`` is registered only when the ``unitares_pi_plugin`` is
-        installed AND its ``register()`` has run. Under pytest we don't
-        invoke the plugin loader, so skip when the plugin is absent.
-        """
-        pytest.importorskip("unitares_pi_plugin")
-        unitares_pi_plugin = pytest.importorskip("unitares_pi_plugin")
-        unitares_pi_plugin.register()
-        assert "pi" in _TOOL_DEFINITIONS
 
     def test_dialectic_registered(self):
         from src.mcp_handlers import consolidated  # noqa: F401
@@ -676,55 +706,6 @@ class TestAdminParamsSchema:
         from src.tool_schemas import get_pydantic_schemas
         from src.mcp_handlers.schemas.admin import AdminParams
         assert get_pydantic_schemas().get("admin") is AdminParams
-
-
-@pytest.fixture
-def _pi_handler():
-    """``pi`` action router lives in unitares-pi-plugin as of Phase B1.
-
-    Plugin's ``register()`` builds and registers the router; this fixture
-    returns it, or skips the whole TestPiHandler class when the plugin
-    isn't installed.
-    """
-    plugin = pytest.importorskip("unitares_pi_plugin")
-    plugin.register()
-    handler = _TOOL_DEFINITIONS["pi"].handler
-    yield handler
-
-
-class TestPiHandler:
-    """Tests for the pi consolidated handler (requires unitares-pi-plugin)."""
-
-    @pytest.mark.asyncio
-    async def test_missing_action_returns_error(self, _pi_handler):
-        result = await _pi_handler({})
-        data = _parse_response(result)
-        assert data["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_invalid_action_returns_error(self, _pi_handler):
-        result = await _pi_handler({"action": "self_destruct"})
-        data = _parse_response(result)
-        assert data["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_valid_action_delegates(self, _pi_handler):
-        mock_health = _make_mock_handler({"status": "healthy"})
-        with _patch_router_action(_pi_handler, "health", mock_health):
-            result = await _pi_handler({"action": "health"})
-            data = _parse_response(result)
-            assert data["status"] == "healthy"
-            mock_health.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_valid_actions_list_complete(self, _pi_handler):
-        result = await _pi_handler({"action": "bad"})
-        data = _parse_response(result)
-        valid = sorted(data["recovery"]["valid_actions"])
-        expected = sorted(["tools", "context", "health", "sync_eisv", "display",
-                           "say", "message", "qa", "query", "workflow",
-                           "git_pull", "power"])
-        assert valid == expected
 
 
 class TestDialecticHandler:

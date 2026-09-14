@@ -503,7 +503,7 @@ class GovernanceClient:
         # this fixup self.resident_name stayed None and the post-checkin
         # substrate emission silently skipped. Caught 2026-05-04 on the
         # canary multi-resident probe (only Steward had a substrate row
-        # because Steward is in-process and skipped this code path).
+        # because it then ran in-process and skipped this code path).
         # Resolution order: explicit name kwarg → raw response 'label' field
         # if the server includes it → leave None (caller may set explicitly).
         if name:

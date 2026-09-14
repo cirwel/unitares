@@ -20,6 +20,12 @@ behind an ``ImportError`` guard that says nothing about the flag.
 This matters beyond tests: the flag is documented (docs/FLAGS.md) and exists
 for stripped OSS builds, so publishing an undispatchable federation capability
 was a reachable production state, not a test artifact.
+
+That importer, the deep-health Pi probe, was removed with the rest of the
+Mac-to-Pi coupling on 2026-09-13, so no shipped module imports a plugin package
+by name any more. What remains here holds for any plugin: the predicate the
+loader and every future importer must share, and the invariant that the
+contract never names a capability dispatch would refuse.
 """
 
 from __future__ import annotations
@@ -57,106 +63,6 @@ class TestPredicate:
         monkeypatch.setenv("UNITARES_DISABLE_PLUGINS", "1")
         assert plugin_loader.load_plugins() == []
         assert plugins_disabled() is True
-
-
-class TestHealthProbeIsFenced:
-    """The specific path that produced the undispatchable capability.
-
-    Both tests below are written so they cannot pass vacuously. An earlier
-    draft swallowed every exception from the health payload and then accepted
-    an empty import log — so a failure in any unrelated check before the Pi
-    block would have produced a green test that never reached the guard.
-    """
-
-    @pytest.mark.asyncio
-    async def test_health_check_consults_the_flag_and_skips_the_import(
-        self, monkeypatch
-    ):
-        """The guard must be REACHED and must block, not merely appear to.
-
-        Reaching is proved by spying on the predicate: if the Pi block is never
-        entered, the spy records nothing and the test fails. Blocking is proved
-        by the import watcher. An ``ImportError`` guard alone cannot satisfy
-        this, because the plugin is importable on the machine where the defect
-        appeared.
-        """
-        import builtins
-
-        import src.mcp_handlers  # noqa: F401 — settle the import cycle first
-        from src.services import runtime_queries
-
-        monkeypatch.setenv("UNITARES_DISABLE_PLUGINS", "1")
-
-        consulted: list[bool] = []
-
-        def spy() -> bool:
-            result = bool(os.environ.get("UNITARES_DISABLE_PLUGINS"))
-            consulted.append(result)
-            return result
-
-        monkeypatch.setattr("src.plugin_loader.plugins_disabled", spy)
-
-        attempted: list[str] = []
-        real_import = builtins.__import__
-
-        def watching_import(name, *args, **kwargs):
-            if name.startswith("unitares_pi_plugin"):
-                attempted.append(name)
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", watching_import)
-        await runtime_queries.get_health_check_data({"lite": True})
-
-        assert consulted == [True], (
-            "the Pi block did not consult plugins_disabled(); the guard was "
-            f"not reached (calls recorded: {consulted})"
-        )
-        assert attempted == [], (
-            f"plugin import attempted with UNITARES_DISABLE_PLUGINS set: {attempted}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_the_pi_check_still_runs_when_plugins_are_enabled(
-        self, monkeypatch
-    ):
-        """The fence must not become a permanent skip.
-
-        Uses a stand-in plugin module rather than the real one, so this runs on
-        CI, where no ``governance_mcp.plugins`` package is installed — which is
-        the only environment that gates merges. Asserts the probe was actually
-        CALLED and its result reached the payload, not merely that an import
-        was attempted: an import that then failed would satisfy the weaker
-        check while the connectivity signal stayed silently dead.
-        """
-        import sys
-        import types
-
-        import src.mcp_handlers  # noqa: F401
-        from src.services import runtime_queries
-
-        monkeypatch.delenv("UNITARES_DISABLE_PLUGINS", raising=False)
-
-        called: list[tuple] = []
-
-        async def fake_call_pi_tool(tool, args, timeout=None):
-            called.append((tool, args))
-            return {"ok": True}
-
-        fake_pkg = types.ModuleType("unitares_pi_plugin")
-        fake_handlers = types.ModuleType("unitares_pi_plugin.handlers")
-        fake_handlers.PI_MCP_URLS = {"pi": "http://127.0.0.1:0/mcp/"}
-        fake_handlers.call_pi_tool = fake_call_pi_tool
-        fake_pkg.handlers = fake_handlers
-        monkeypatch.setitem(sys.modules, "unitares_pi_plugin", fake_pkg)
-        monkeypatch.setitem(sys.modules, "unitares_pi_plugin.handlers", fake_handlers)
-
-        result = await runtime_queries.get_health_check_data({"lite": True})
-
-        assert called, "the Pi connectivity probe never ran with plugins enabled"
-        checks = result.get("checks", result)
-        assert "pi_connectivity" in checks, (
-            f"the probe ran but its result never reached the payload: {sorted(checks)}"
-        )
 
 
 class TestContractCannotOutrunDispatch:

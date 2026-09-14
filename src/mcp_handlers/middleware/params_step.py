@@ -57,14 +57,50 @@ _VALIDATION_CONTEXT_KEYS = frozenset({
 })
 
 
+# How many ``kwargs`` wrappers deep the strip looks. unwrap_kwargs removes one
+# level, and some handlers unwrap a JSON-string ``kwargs`` again themselves.
+_RESERVED_KEY_KWARGS_DEPTH = 4
+
+# JSON wrappers are untrusted input.  Besides malformed JSON, Python's decoder
+# can reject oversized integer literals with ValueError and deeply nested input
+# with RecursionError.  Neither shape should escape a transport error boundary.
+_JSON_KWARGS_ERRORS = (ValueError, TypeError, RecursionError)
+
+
+def remove_reserved_dispatch_keys(arguments: Any, _depth: int = 0) -> None:
+    """Drop caller-supplied middleware handoff keys, including inside ``kwargs``.
+
+    Only dispatch middleware may write these keys, after it has verified a
+    proof, and handlers read them as trusted. Every transport entry removes
+    caller-supplied copies before anything reads them. A ``kwargs`` wrapper, as
+    a dict or as a JSON-object string, is cleaned in place too.
+    """
+    if not isinstance(arguments, dict):
+        return
+    for key in _VALIDATION_CONTEXT_KEYS:
+        arguments.pop(key, None)
+    if _depth >= _RESERVED_KEY_KWARGS_DEPTH or "kwargs" not in arguments:
+        return
+    wrapped = arguments["kwargs"]
+    if isinstance(wrapped, dict):
+        remove_reserved_dispatch_keys(wrapped, _depth + 1)
+    elif isinstance(wrapped, str):
+        try:
+            parsed = json.loads(wrapped)
+            if isinstance(parsed, dict):
+                remove_reserved_dispatch_keys(parsed, _depth + 1)
+                arguments["kwargs"] = json.dumps(parsed)
+        except _JSON_KWARGS_ERRORS:
+            return
+
+
 async def strip_untrusted_dispatch_metadata(
     name: str,
     arguments: Dict[str, Any],
     ctx,
 ) -> Any:
     """Remove caller-forged middleware handoff fields before any proof step."""
-    for key in _VALIDATION_CONTEXT_KEYS:
-        arguments.pop(key, None)
+    remove_reserved_dispatch_keys(arguments)
     return name, arguments, ctx
 
 
@@ -108,7 +144,7 @@ async def unwrap_kwargs(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     del arguments["kwargs"]
                     arguments.update(kwargs_parsed)
                     logger.info(f"[DISPATCH_KWARGS] Unwrapped from string: {list(kwargs_parsed.keys())}")
-            except (json.JSONDecodeError, TypeError) as e:
+            except _JSON_KWARGS_ERRORS as e:
                 logger.warning(f"Failed to parse kwargs string: {e}")
         elif isinstance(kwargs_val, dict):
             del arguments["kwargs"]
@@ -242,16 +278,16 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         recovery={
                             "action": "Remove agent_id parameter (session binding handles identity)",
                             "note": (
-                                "Each session is bound to one agent, and this guard only blocks "
-                                "ACTING AS another agent (writes/mutations) — it does NOT block "
-                                "READING another agent's work. To discover another agent's "
-                                f"knowledge, search is unrestricted: "
-                                f"knowledge(action='search', agent_id='{provided_id}') filters to "
-                                "that agent's entries without binding to it. Identity auto-binds "
-                                "on first tool call."
+                                "Each session is bound to one agent, and on this call agent_id "
+                                "names the caller, so another agent's id is refused. To read "
+                                "another agent's governance state, name it as the target: "
+                                f"observe(action='agent', target_agent_id='{provided_id}'). "
+                                "knowledge(action='search') without agent_id searches every "
+                                "agent's entries. Removing agent_id from an observe call turns "
+                                "it into a self-observe."
                             ),
-                            "read_path": f"knowledge(action='search', agent_id='{provided_id}')",
-                            "related_tools": ["identity", "knowledge"]
+                            "read_path": f"observe(action='agent', target_agent_id='{provided_id}')",
+                            "related_tools": ["identity", "observe", "knowledge"]
                         }
                     )]
         elif provided_id:

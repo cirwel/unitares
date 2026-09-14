@@ -234,29 +234,15 @@ class TestResolveAlias:
         assert ctx_out.original_name == "nonexistent_tool_xyz"
 
     @pytest.mark.asyncio
-    async def test_inject_action_adds_action(self):
-        """inject_action adds action parameter when not present."""
-        pytest.importorskip("unitares_pi_plugin")
-        import unitares_pi_plugin as _plugin
-        _plugin.register()  # ensures pi_health alias is present
-        ctx = _make_ctx()
-        # pi_health has inject_action="health"
-        name, args, ctx_out = await resolve_alias("pi_health", {}, ctx)
-        assert name == "pi"
-        assert args.get("action") == "health"
-
-    @pytest.mark.asyncio
     async def test_inject_action_does_not_override(self):
         """inject_action does not override existing action parameter."""
-        pytest.importorskip("unitares_pi_plugin")
-        import unitares_pi_plugin as _plugin
-        _plugin.register()
         ctx = _make_ctx()
+        # observe_agent has inject_action="agent"
         name, args, ctx_out = await resolve_alias(
-            "pi_health", {"action": "custom_action"}, ctx
+            "observe_agent", {"action": "compare"}, ctx
         )
-        assert name == "pi"
-        assert args["action"] == "custom_action"
+        assert name == "observe"
+        assert args["action"] == "compare"
 
     @pytest.mark.asyncio
     async def test_multiple_aliases_for_same_target(self):
@@ -502,14 +488,6 @@ class TestResolveToolAlias:
     def test_start_maps_to_onboard(self):
         actual, alias_info = resolve_tool_alias("start")
         assert actual == "onboard"
-
-    def test_pi_health_inject_action(self):
-        pytest.importorskip("unitares_pi_plugin")
-        import unitares_pi_plugin as _plugin
-        _plugin.register()
-        actual, alias_info = resolve_tool_alias("pi_health")
-        assert actual == "pi"
-        assert alias_info.inject_action == "health"
 
     def test_list_agents_maps_to_agent(self):
         actual, alias_info = resolve_tool_alias("list_agents")

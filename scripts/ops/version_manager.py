@@ -74,10 +74,6 @@ VERSION_REFERENCES = [
     ("CITATION.cff", [
         (r'version: "([\d.]+)"', r'version: "{version}"'),
     ]),
-    ("README.md", [
-        (r'\*\*Status:\*\* v([\d.]+)\.',
-         r'**Status:** v{version}.'),
-    ]),
     ("COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',
          r'| UNITARES server | `v{version}`'),
@@ -88,11 +84,8 @@ VERSION_REFERENCES = [
 
 # Installation pins move only after RELEASE_PROCESS step 8 verifies the public
 # artifacts and the operator updates PUBLISHED_VERSION in a follow-up PR.
+# The root README reads PUBLISHED_VERSION at install time and carries no pin.
 PUBLISHED_VERSION_REFERENCES = [
-    ("README.md", [
-        (r'git clone --branch v([\d.]+) --depth 1',
-         r'git clone --branch v{version} --depth 1'),
-    ]),
     ("docs/manual/02-install.md", [
         (r'git clone --branch v([\d.]+) --depth 1',
          r'git clone --branch v{version} --depth 1'),

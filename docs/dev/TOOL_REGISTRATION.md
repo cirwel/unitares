@@ -159,8 +159,6 @@ renders it). As of 2026-08-16:
 | `config` | 2 | `config(action='get')` |
 | `export` | 2 | `export(action='history')` |
 
-(The former `pi` consolidated tool moved to the `unitares-pi-plugin` package.)
-
 ### Creating a Consolidated Tool
 
 Use the action-router helper in `src/mcp_handlers/consolidated.py` — no manual if/elif needed:
@@ -252,8 +250,8 @@ whose `new_name` is itself `register=False` would hit `tool_not_found_error`.
 ## Plugin tools vs. this repo's tools
 
 `_TOOL_DEFINITIONS` describes **the running process, not the repo**. An
-entry-point plugin (`governance_mcp.plugins`, e.g. the out-of-repo
-`unitares-pi-plugin`) registers into the same dict through the same
+entry-point plugin (`governance_mcp.plugins`) registers into the same dict
+through the same
 `@mcp_tool` / `action_router` calls, so "registered" alone cannot answer "does
 this repo ship it".
 
@@ -280,12 +278,13 @@ fails if they ever name different packages. Two consumers:
   registrations out for the duration of a test, so a surface-drift assertion
   compares the surface this repo ships. `tests/test_describe_tool_drift.py` and
   `tests/test_lite_wire_surface.py` use it module-wide. Without it those tests
-  depended on collection/import order: `tests/test_pi_orchestration.py` imports
-  the pi plugin's handlers at module scope, so pytest **collection** fires that
-  package's decorators before any test runs, while `TOOL_HANDLERS` snapshots
-  the registry when `src.mcp_handlers` is imported. They failed on
-  `pi_restart_service` / `pi` in full local runs on machines with the plugin
-  installed and passed everywhere else, CI included.
+  depended on collection/import order: a test module that imports a plugin's
+  handlers at module scope makes pytest **collection** fire that package's
+  decorators before any test runs, while `TOOL_HANDLERS` snapshots the registry
+  when `src.mcp_handlers` is imported. Until 2026-09-13 the Pi plugin's tests
+  did exactly that, and the drift tests failed on `pi_restart_service` / `pi`
+  in full local runs on machines with the plugin installed while passing
+  everywhere else, CI included.
 
 If you add a test that asserts something about the whole tool surface, request
 that fixture.

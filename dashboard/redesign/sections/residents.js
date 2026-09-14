@@ -2,8 +2,8 @@
  * Residents section — per-resident detail panels.
  * Consolidates the old watcher.js / sentinel.js / vigil.js / system-health.js
  * panels into one section: Watcher findings funnel, Sentinel findings by
- * severity/class + recent stream, and a uniform card for each of the six
- * residents the Overview fleet strip lists, so a quiet one never reads as
+ * severity/class + recent stream, and a uniform card for each reference
+ * resident the Overview fleet strip lists, so a quiet one never reads as
  * absent. System Health closes the pane full-width.
  *
  * Every card is anchored on that resident's /v1/residents row — status pip,
@@ -46,7 +46,7 @@
 
   // ---- shared resident-row helpers -----------------------------------------
   // Every panel now carries its /v1/residents row (`.resident` on the three
-  // that have their own summary endpoint, the row itself for the other three),
+  // that have their own summary endpoint, the row itself for the other two),
   // so liveness, cadence and check-in count are read the same way everywhere.
   const isOverdue = (r) => !!(r && typeof r.silence === "number" && r.silence > (r.silenceThreshold || 3600));
   // The server already emits "silent" past threshold; recomputing here keeps a
@@ -66,6 +66,12 @@
     ? `<div style="margin-top:var(--space-4);display:flex;gap:var(--space-5);font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">
          <span>E ${e.E.toFixed(2)}</span><span>I ${e.I.toFixed(2)}</span><span>S ${e.S.toFixed(2)}</span><span>V ${e.V.toFixed(2)}</span></div>` : "";
 
+  const policyColor = (verdict) => {
+    if (["pause", "reject", "high-risk"].includes(verdict)) return "var(--danger)";
+    if (["guide", "caution"].includes(verdict)) return "var(--warn)";
+    return "var(--muted)";
+  };
+
   // Recent KG writes — the one thing a quiet resident leaves behind. Vigil's
   // groundskeeper deltas and Chronicler's daily rollups ARE their visible
   // output, so a card that drops them reads as an idle resident.
@@ -82,7 +88,7 @@
   // carries, so no card is reduced to a name and a timestamp.
   const coreStats = (r) => statRow([
     stat("coherence", num(r.coherence)),
-    stat("verdict", r.verdict || "—", r.verdict ? "var(--ok)" : "var(--muted)"),
+    stat("policy", r.verdict || "—", policyColor(r.verdict)),
     stat("check-ins", count(r.updates)),
     stat("risk", num(r.risk), "var(--muted)"),
   ]);
@@ -139,7 +145,7 @@
     const e = (r.eisv && r.eisv.E != null) ? r.eisv : (v.eisv || {});
     const stats = [
       stat("coherence", num(coh)),
-      stat("verdict", verdict || "—", verdict ? "var(--ok)" : "var(--muted)"),
+      stat("policy", verdict || "—", policyColor(verdict)),
       stat("check-ins", count(r.updates)),
       stat("risk", num(r.risk), "var(--muted)"),
     ];
@@ -151,9 +157,9 @@
   }
 
   // Check-in card for residents whose whole dashboard story is their
-  // /v1/residents row (Steward, Lumen): liveness vs their own cadence
-  // threshold, coherence/writes/risk, EISV line. Same overdue discipline as
-  // Chronicler — silence within threshold is steady-state, not an alarm.
+  // /v1/residents row (Chronicler, Lumen): liveness vs their own cadence
+  // threshold, coherence/writes/risk, EISV line. Silence within threshold is
+  // steady-state, not an alarm — Chronicler is daily.
   function residentCard(name, desc, r) {
     if (!r) return "";
     return `<div class="panel" style="${isOverdue(r) ? "border-left:2px solid var(--warn)" : ""}">
@@ -223,7 +229,6 @@
          <span class="eyebrow" style="margin:0">Always-on fleet</span><span class="spring"></span><span class="src-badge ${r.source}">${r.source}</span></div>
        <div class="split-2" style="gap:var(--space-4)">
          ${watcher(d.watcher)}${sentinel(d.sentinel)}${vigil(d.vigil)}
-         ${residentCard("Steward", "custodial · 5min in-process cycle · Pi→Mac EISV sync", d.steward)}
          ${residentCard("Chronicler", "longitudinal · daily", d.chronicler)}
          ${residentCard("Lumen", "embodied · Raspberry Pi", d.lumen)}
        </div>

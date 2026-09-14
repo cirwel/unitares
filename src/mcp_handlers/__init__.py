@@ -136,10 +136,6 @@ from .cirs import (
     auto_emit_state_announce,  # Hook for process_agent_update
     maybe_emit_resonance_signal,  # Hook for process_agent_update
 )
-# Pi orchestration moved out to the ``unitares-pi-plugin`` package — see
-# docs/specs/2026-04-17-lumen-decoupling-design.md (Phase B1). Install
-# with ``pip install unitares-pi-plugin`` to restore the pi_* tools.
-
 # Keep helper functions from identity_shared.py (used by dispatch_tool)
 from .identity.shared import (
     get_bound_agent_id,
