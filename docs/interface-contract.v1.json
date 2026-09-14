@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "9e28b5e10add5b503c3888df2b479d6beff63fb8a9a738dd2ce1a5672d651731",
+  "surface_sha256": "d088bd72fc5788dcc09d08a862044b81e721e5fe84ae5a86e544d33b45a2b7e6",
   "capabilities": [
     {
       "name": "start_session",
@@ -234,7 +234,7 @@
       "name": "list_tools",
       "implementation": "list_tools",
       "kind": "canonical_tool",
-      "input_schema_sha256": "a04da0cd628798054b920c99c22df8d26adc5b5593309c42323348d44a647ca3",
+      "input_schema_sha256": "f9a66dd91e42c1d04aa926ade6cc46f89f6ccdaaf6610eeed4cc1726b19a9399",
       "transport_names": {
         "mcp_streamable_http": "list_tools",
         "rest_v1_tools": "list_tools",

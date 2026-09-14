@@ -3359,14 +3359,19 @@ class TestServerInfoReportsWhatTheServerActuallyUses:
         assert counts["advertised"] >= counts["registry"]
 
     def test_counts_see_a_tool_registered_after_import_when_unmounted(self, monkeypatch):
-        """Unmounted (no `src.mcp_server` module imported -- generators, unit
-        tests, a bare script), `advertised` must still see a tool an
+        """Unmounted (generators, unit tests, a bare script), `advertised`
+        must still see a tool an
         entry-point plugin registers at boot: get_tool_registry() reads the
         decorator registry directly, so a handler decorated after import is
         visible immediately -- no separate resync step, unlike
         mcp_handlers.TOOL_HANDLERS.
         """
         from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, ToolDefinition
+
+        # Other tests in a combined run may have imported the server already.
+        # Force this test's intended unmounted context rather than relying on
+        # collection order to keep src.mcp_server absent from sys.modules.
+        monkeypatch.setattr("src.interface_contract.mounted_tool_names", lambda: None)
 
         before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
         monkeypatch.setitem(
