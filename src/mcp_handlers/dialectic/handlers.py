@@ -14,6 +14,8 @@ from numbers import Real
 import re
 from datetime import datetime, timedelta, timezone
 
+from .wait_assessment import assess_wait, suggests_facilitation
+
 # Import type definitions
 
 from src.dialectic_protocol import (
@@ -611,6 +613,62 @@ def _saved_brief_thesis_call(session_id: str, session_type: Optional[str]) -> st
     )
 
 
+def _last_activity_age_s(session_data: Dict[str, Any]) -> Optional[float]:
+    """Seconds since the last transcript entry, or None if unreadable.
+
+    None is returned rather than a default: "nothing has happened for 9 minutes"
+    and "the clock could not be read" are different findings, and only one of
+    them says anything about the reviewer.
+    """
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+    newest = None
+    for message in transcript:
+        stamp = (
+            message.get("timestamp")
+            if isinstance(message, dict)
+            else getattr(message, "timestamp", None)
+        )
+        if not stamp:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        if newest is not None and parsed < newest:
+            return None  # The transcript's causal order has no reliable clock.
+        newest = parsed
+    if newest is None:
+        return None
+    elapsed = (datetime.now(timezone.utc) - newest).total_seconds()
+    return elapsed if elapsed >= 0 else None
+
+
+def _has_orchestrated_reviewer_budget(session_data: Dict[str, Any], reviewer_id: str) -> bool:
+    """Use recorded provenance, never assignment alone, to identify the runner.
+
+    Some read shapes omit provenance. They remain unclassified rather than
+    assigning the orchestrated runner's deadline to a human or unknown agent.
+    """
+    transcript = session_data.get("transcript") or session_data.get("messages") or []
+    for message in reversed(transcript):
+        agent_id = message.get("agent_id") if isinstance(message, dict) else getattr(message, "agent_id", None)
+        if agent_id != reviewer_id:
+            continue
+        metrics = message.get("observed_metrics") if isinstance(message, dict) else getattr(message, "observed_metrics", None)
+        if not isinstance(metrics, dict):
+            continue
+        backend = metrics.get("reviewer_backend")
+        if isinstance(backend, dict) and "reviewer_kind" in backend:
+            return backend.get("reviewer_kind") == "orchestrated"
+    # The runner registers this fingerprint at onboard (_reviewer_model_type),
+    # including on older messages whose backend stamp predates reviewer_kind.
+    meta = getattr(mcp_server, "agent_metadata", {}).get(reviewer_id)
+    model_type = _meta_value(meta, "model_type")
+    return isinstance(model_type, str) and model_type.startswith("dialectic_reviewer:")
+
+
 def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Annotate a session payload with concrete next-action metadata."""
     # Two dict shapes reach this function. `load_session_as_dict`
@@ -812,6 +870,29 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     # CALLER's synthesis was read as "stalled" by two experienced operators,
     # 2026-07-28). whose_move answers from the caller's seat; next_call is a
     # ready-to-use template when the move is theirs.
+    # How long this has been waiting, and whether that is yet odd. whose_move
+    # answers WHO; without this it never answered WHEN, and the open-slot text
+    # read identically at 72 seconds and 72 minutes (see wait_assessment).
+    reviewer_owed = (
+        phase in {"antithesis", "synthesis"}
+        and str(session_data.get("status") or "").lower() not in {
+            "resolved", "failed", "escalated", "timeout", "abandoned",
+        }
+        and required_role == "reviewer"
+        and independent_reviewer_can_revise
+        and current_agent_role != "reviewer"
+    )
+    awaiting_kind = (
+        ("reconsideration" if reviewer_reconsideration_owed else "verdict")
+        if reviewer_owed else None
+    )
+    wait = assess_wait(
+        elapsed_s=_last_activity_age_s(session_data) if reviewer_owed else None,
+        awaiting=awaiting_kind,
+        orchestrated=bool(reviewer_owed and _has_orchestrated_reviewer_budget(session_data, reviewer_agent_id)),
+    )
+    facilitation_supported = suggests_facilitation(wait["assessment"])
+
     whose_move = "nobody — session is terminal"
     next_call: Optional[str] = None
     if phase == "thesis":
@@ -823,7 +904,10 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     elif phase == "antithesis":
         if reviewer_agent_id is None:
             if current_agent_role == "paused_agent":
-                whose_move = "a reviewer's — the slot is open; wait or ask for facilitation"
+                whose_move = (
+                    "a reviewer's — the slot is open; no identified reviewer "
+                    "obligation or wait budget is established"
+                )
             else:
                 whose_move = "a reviewer's — the slot is OPEN, you may claim it"
                 next_call = (
@@ -877,20 +961,38 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "proposed_conditions=[...])"
             )
         elif current_agent_role == "paused_agent":
-            whose_move = (
-                "NOT YOURS — the reviewer's rejection stands; wait for the reviewer "
-                "or ask an operator to reassign/facilitate"
-            )
+            if facilitation_supported:
+                whose_move = (
+                    "NOT YOURS — the reviewer's rejection stands; wait for the reviewer "
+                    "or ask an operator to reassign/facilitate"
+                )
+            else:
+                whose_move = (
+                    "NOT YOURS — the reviewer's reconsideration is pending; wait for "
+                    "the reviewer and read wait_assessment.note before intervening"
+                )
         elif current_agent_role == "operator":
-            whose_move = "YOURS — reassign/facilitate unless the reviewer will revise"
-            next_call = (
-                f"dialectic(action='reassign', session_id='{session_id}', "
-                "reason='Facilitate standing reviewer rejection')"
-            )
+            if facilitation_supported:
+                whose_move = "YOURS — reassign/facilitate unless the reviewer will revise"
+                next_call = (
+                    f"dialectic(action='reassign', session_id='{session_id}', "
+                    "reason='Facilitate standing reviewer rejection')"
+                )
+            else:
+                whose_move = (
+                    "the reviewer's — their reconsideration is pending; read "
+                    "wait_assessment.note before intervening"
+                )
         else:
-            whose_move = (
-                "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
-            )
+            if facilitation_supported:
+                whose_move = (
+                    "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
+                )
+            else:
+                whose_move = (
+                    "the reviewer's — their reconsideration is pending; read "
+                    "wait_assessment.note before intervening"
+                )
     elif phase == "synthesis" and reviewer_objection_stands:
         if current_agent_role == "operator":
             whose_move = "YOURS — assign an independent reviewer/facilitator"
@@ -964,6 +1066,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         "current_agent_can_submit": current_agent_can_submit,
         "reviewer_verdict_pending": reviewer_verdict_pending,
         "recommended_action": recommended_action,
+        "wait_assessment": wait,
     }
 
 
