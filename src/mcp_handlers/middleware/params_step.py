@@ -6,10 +6,43 @@ from difflib import get_close_matches
 from typing import Any, Dict
 
 from src.logging_utils import get_logger
+from src.tool_call_sets import call_set
 from ..utils import error_response
 from ..shared import lazy_mcp_server as mcp_server
 
 logger = get_logger(__name__)
+
+
+# inject_identity runs after resolve_alias, so `name` is the canonical tool and
+# an alias's action is already in the arguments. These sets are matched on
+# the call, which gives the same answer whichever name a caller used.
+#
+# Reads that must not be filtered to the bound agent: search_knowledge_graph,
+# every dialectic action, and the browse actions of knowledge. Writes on
+# knowledge (store / note / update / supersede) still need attribution.
+_BROWSABLE_CALLS = call_set(
+    "inject_identity.browsable",
+    tools={"search_knowledge_graph", "dialectic"},
+    actions={("knowledge", action) for action in ("search", "list", "stats", "details", "get")},
+)
+
+# Tools that act on OTHER agents (dashboard resume/archive/observe), so a
+# different agent_id is a target, not impersonation. Until 2026-09 this set
+# also named observe_agent and archive_agent, and a separate set named
+# submit_thesis / submit_antithesis / submit_synthesis /
+# request_dialectic_review and status. None of those names ever reached this
+# step after the router consolidation (they arrive as observe, agent,
+# dialectic and get_governance_metrics), so the exemptions they described did
+# not apply. archive_agent's survives through agent. Whether
+# observe(action='agent') and the dialectic phases should carry an exemption
+# is an open decision, not something this set was already doing.
+_OPERATOR_TARGET_CALLS = call_set(
+    "inject_identity.operator_targets",
+    tools={
+        "agent", "detect_stuck_agents", "archive_old_test_agents",
+        "operator_resume_agent", "dashboard",
+    },
+)
 
 
 # Reserved dispatch metadata must never be trusted merely because a caller used
@@ -24,14 +57,50 @@ _VALIDATION_CONTEXT_KEYS = frozenset({
 })
 
 
+# How many ``kwargs`` wrappers deep the strip looks. unwrap_kwargs removes one
+# level, and some handlers unwrap a JSON-string ``kwargs`` again themselves.
+_RESERVED_KEY_KWARGS_DEPTH = 4
+
+# JSON wrappers are untrusted input.  Besides malformed JSON, Python's decoder
+# can reject oversized integer literals with ValueError and deeply nested input
+# with RecursionError.  Neither shape should escape a transport error boundary.
+_JSON_KWARGS_ERRORS = (ValueError, TypeError, RecursionError)
+
+
+def remove_reserved_dispatch_keys(arguments: Any, _depth: int = 0) -> None:
+    """Drop caller-supplied middleware handoff keys, including inside ``kwargs``.
+
+    Only dispatch middleware may write these keys, after it has verified a
+    proof, and handlers read them as trusted. Every transport entry removes
+    caller-supplied copies before anything reads them. A ``kwargs`` wrapper, as
+    a dict or as a JSON-object string, is cleaned in place too.
+    """
+    if not isinstance(arguments, dict):
+        return
+    for key in _VALIDATION_CONTEXT_KEYS:
+        arguments.pop(key, None)
+    if _depth >= _RESERVED_KEY_KWARGS_DEPTH or "kwargs" not in arguments:
+        return
+    wrapped = arguments["kwargs"]
+    if isinstance(wrapped, dict):
+        remove_reserved_dispatch_keys(wrapped, _depth + 1)
+    elif isinstance(wrapped, str):
+        try:
+            parsed = json.loads(wrapped)
+            if isinstance(parsed, dict):
+                remove_reserved_dispatch_keys(parsed, _depth + 1)
+                arguments["kwargs"] = json.dumps(parsed)
+        except _JSON_KWARGS_ERRORS:
+            return
+
+
 async def strip_untrusted_dispatch_metadata(
     name: str,
     arguments: Dict[str, Any],
     ctx,
 ) -> Any:
     """Remove caller-forged middleware handoff fields before any proof step."""
-    for key in _VALIDATION_CONTEXT_KEYS:
-        arguments.pop(key, None)
+    remove_reserved_dispatch_keys(arguments)
     return name, arguments, ctx
 
 
@@ -75,7 +144,7 @@ async def unwrap_kwargs(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     del arguments["kwargs"]
                     arguments.update(kwargs_parsed)
                     logger.info(f"[DISPATCH_KWARGS] Unwrapped from string: {list(kwargs_parsed.keys())}")
-            except (json.JSONDecodeError, TypeError) as e:
+            except _JSON_KWARGS_ERRORS as e:
                 logger.warning(f"Failed to parse kwargs string: {e}")
         elif isinstance(kwargs_val, dict):
             del arguments["kwargs"]
@@ -176,54 +245,28 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
         if bound_id:
             if not provided_id:
-                # Browsable data tools should NOT auto-filter by agent
-                browsable_data_tools = {
-                    "search_knowledge_graph", "query_knowledge_graph", "list_knowledge_graph",
-                    "list_dialectic_sessions", "get_dialectic_session", "dialectic"
-                }
-                # For the consolidated 'knowledge' tool, only skip injection for read/browse
-                # actions (search/list/stats/details/get) so agents can learn from each
-                # other's discoveries. Write actions (store/note/update/supersede) still
-                # need attribution and get agent_id injected normally.
-                knowledge_browsable_actions = {"search", "list", "stats", "details", "get"}
-                action = arguments.get("action", "")
-                is_knowledge_browsable = (
-                    name == "knowledge" and action in knowledge_browsable_actions
-                )
+                # Browsable reads should NOT auto-filter by agent, so agents
+                # can learn from each other's discoveries.
+                is_browsable = _BROWSABLE_CALLS.matches(name, arguments)
                 logger.info(
-                    f"[DISPATCH] name={name}, action={action!r}, "
-                    f"in browsable_data_tools={name in browsable_data_tools}, "
-                    f"is_knowledge_browsable={is_knowledge_browsable}, "
+                    f"[DISPATCH] name={name}, action={arguments.get('action', '')!r}, "
+                    f"browsable={is_browsable}, "
                     f"bound_id={bound_id[:8] if bound_id else None}..."
                 )
                 # bind_session handles its own identity resolution — injecting
                 # the middleware-resolved agent_id overwrites its validation.
                 identity_internal_tools = {"bind_session"}
-                if name not in browsable_data_tools and not is_knowledge_browsable and name not in identity_internal_tools:
+                if not is_browsable and name not in identity_internal_tools:
                     arguments["agent_id"] = bound_id
                     logger.debug(f"Injected session-bound agent_id: {bound_id}")
             elif provided_id != bound_id:
                 # Prevent impersonation
-                identity_tools = {"status"}
-                dialectic_tools = {
-                    "submit_thesis", "submit_antithesis", "submit_synthesis",
-                    "request_dialectic_review"
-                }
-
                 accepted_aliases = _bound_identity_aliases(bound_id)
                 is_alias_match = str(provided_id) in accepted_aliases
                 if is_alias_match:
                     logger.debug(f"Identity alias match allowed: {provided_id} -> {bound_id}")
 
-                # Operator tools that act on OTHER agents (dashboard resume/archive/observe)
-                operator_tools = {
-                    "agent", "observe_agent", "detect_stuck_agents",
-                    "archive_agent", "archive_old_test_agents",
-                    "operator_resume_agent",
-                    "ping_agent",
-                    "dashboard",
-                }
-                if name not in identity_tools and name not in dialectic_tools and name not in operator_tools and not is_alias_match:
+                if not _OPERATOR_TARGET_CALLS.matches(name, arguments) and not is_alias_match:
                     return [error_response(
                         f"Session mismatch: you are bound as '{bound_id}' but requested '{provided_id}'",
                         details={
@@ -235,16 +278,16 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                         recovery={
                             "action": "Remove agent_id parameter (session binding handles identity)",
                             "note": (
-                                "Each session is bound to one agent, and this guard only blocks "
-                                "ACTING AS another agent (writes/mutations) — it does NOT block "
-                                "READING another agent's work. To discover another agent's "
-                                f"knowledge, search is unrestricted: "
-                                f"knowledge(action='search', agent_id='{provided_id}') filters to "
-                                "that agent's entries without binding to it. Identity auto-binds "
-                                "on first tool call."
+                                "Each session is bound to one agent, and on this call agent_id "
+                                "names the caller, so another agent's id is refused. To read "
+                                "another agent's governance state, name it as the target: "
+                                f"observe(action='agent', target_agent_id='{provided_id}'). "
+                                "knowledge(action='search') without agent_id searches every "
+                                "agent's entries. Removing agent_id from an observe call turns "
+                                "it into a self-observe."
                             ),
-                            "read_path": f"knowledge(action='search', agent_id='{provided_id}')",
-                            "related_tools": ["identity", "knowledge"]
+                            "read_path": f"observe(action='agent', target_agent_id='{provided_id}')",
+                            "related_tools": ["identity", "observe", "knowledge"]
                         }
                     )]
         elif provided_id:
@@ -254,10 +297,11 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             logger.warning(f"[IDENTITY] No session binding but agent_id provided: {provided_id}. V2 may have failed.")
             arguments["agent_id"] = provided_id
         else:
-            # No binding and no agent_id
-            identity_tools = {"status", "list_tools", "health_check", "get_server_info",
-                              "describe_tool", "debug_request_context", "onboard", "identity"}
-            if name not in identity_tools:
+            # No binding and no agent_id: expected for a call that may run
+            # unbound, so warn only about calls that require an identity.
+            from ..decorators import get_call_identity_requirement
+
+            if get_call_identity_requirement(name, arguments) != "pre_onboard":
                 logger.warning(f"[IDENTITY] No identity for tool {name}. V2 should have created one.")
     except Exception as e:
         logger.debug(f"Session identity check skipped: {e}")

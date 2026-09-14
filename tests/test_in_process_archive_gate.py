@@ -1,8 +1,9 @@
 """Tests for the in-process archive gate in process_update_authenticated_async.
 
-Steward (in-process, unitares-pi-plugin) bypasses handle_process_agent_update
-and calls process_update_authenticated_async directly. Before this gate, an
-archived Steward identity would still accept updates — silent resurrection via
+An in-process caller bypasses handle_process_agent_update and calls
+process_update_authenticated_async directly; the first was Steward, from the
+since-retired unitares-pi-plugin. Before this gate, an archived Steward identity
+would still accept updates — silent resurrection via
 a different code path than the one sticky-archive guards on the MCP tool path.
 
 Regression scope: ensure archived agents are refused at the
@@ -40,7 +41,7 @@ class TestInProcessArchiveGate:
     """process_update_authenticated_async must refuse archived agents.
 
     The MCP-tool path has its own gate earlier (phases.py sticky-archive).
-    This covers the in-process path used by Steward (unitares-pi-plugin).
+    This covers the in-process path, which bypasses that gate.
     """
 
     @pytest.mark.asyncio

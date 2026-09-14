@@ -244,7 +244,7 @@ async def process_update_authenticated_async(
     # Sticky-archive gate for in-process callers. The MCP-tool path
     # (handle_process_agent_update → phases.py) has its own auto-resume /
     # refusal logic before it reaches this function, but in-process callers
-    # like Steward (unitares-pi-plugin) reach us directly and would otherwise
+    # (a plugin-hosted resident, for example) reach us directly and would otherwise
     # silently resurrect archived identities. Refuse here so the gate is
     # uniform across all paths.
     meta = agent_metadata.get(agent_id)

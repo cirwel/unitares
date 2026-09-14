@@ -8,9 +8,12 @@ from findings.py).
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import os
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,6 +61,44 @@ def watcher_state_dir() -> Path:
     return _state_dir_cache
 
 
+class FindingsStateBusy(RuntimeError):
+    """The local findings transaction did not acquire its bounded lock."""
+
+
+@contextmanager
+def findings_state_lock(
+    state_dir: Path | None = None,
+    wait_s: float = 2.0,
+):
+    """Serialize checkout-independent Watcher state without network I/O."""
+    lock_path = (state_dir or watcher_state_dir()) / "findings-state.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a")
+    except OSError as exc:
+        raise FindingsStateBusy(f"cannot open {lock_path}: {exc}") from exc
+
+    deadline = time.monotonic() + wait_s
+    try:
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise FindingsStateBusy(
+                        f"local findings lock busy for >{wait_s:.1f}s"
+                    ) from None
+                time.sleep(0.02)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        handle.close()
+
+
 def migrate_legacy_watcher_state() -> None:
     """Copy legacy checkout-relative state into the shared dir if absent there.
 
@@ -77,31 +118,67 @@ def migrate_legacy_watcher_state() -> None:
     global _legacy_migration_done
     if _legacy_migration_done:
         return
-    _legacy_migration_done = True
-
     target = watcher_state_dir()
     legacy = _LEGACY_STATE_DIR
     try:
         if legacy.resolve() == target.resolve() or not legacy.is_dir():
+            _legacy_migration_done = True
             return
     except OSError:
+        _legacy_migration_done = True
+        return
+    if not any(
+        (legacy / name).is_file() and not (target / name).exists()
+        for name in _STATE_FILES
+    ):
+        # Normal steady state: avoid making every read hook contend on a lock
+        # after the one-time migration has already completed.
+        _legacy_migration_done = True
         return
     try:
-        target.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return
-
-    import shutil
-
-    for name in _STATE_FILES:
-        src = legacy / name
-        dst = target / name
-        if src.is_file() and not dst.exists():
+        with findings_state_lock(target):
+            if _legacy_migration_done:
+                return
+            _legacy_migration_done = True
             try:
-                shutil.copy2(src, dst)
-                log(f"migrated watcher state {name} from {legacy} to {target}")
-            except OSError as e:
-                log(f"watcher state migration failed for {name}: {e}", "warning")
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                return
+
+            import shutil
+
+            for name in _STATE_FILES:
+                src = legacy / name
+                dst = target / name
+                if not src.is_file() or dst.exists():
+                    continue
+                tmp = target / (
+                    f".{name}.migration.{os.getpid()}.{time.monotonic_ns()}"
+                )
+                try:
+                    shutil.copy2(src, tmp)
+                    # A hard-link publish is atomic and never replaces state
+                    # another process created after our existence check.
+                    os.link(tmp, dst)
+                    log(f"migrated watcher state {name} from {legacy} to {target}")
+                except FileExistsError:
+                    pass
+                except OSError as e:
+                    log(f"watcher state migration failed for {name}: {e}", "warning")
+                finally:
+                    try:
+                        tmp.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError as e:
+                        log(
+                            f"watcher state migration cleanup failed for {tmp}: {e}",
+                            "warning",
+                        )
+    except FindingsStateBusy as e:
+        # A concurrent writer/migrator owns the state. Skipping this one-time
+        # best-effort copy is safer than racing or delaying a host hook.
+        log(f"watcher state migration skipped: {e}", "warning")
 
 # Cap for ~/Library/Logs/unitares-watcher.log rotation. Watcher logs a few
 # lines per scan; 5000 lines ≈ 500 scans of operational history, which is

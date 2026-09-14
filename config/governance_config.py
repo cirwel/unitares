@@ -1045,8 +1045,8 @@ assert GovernanceConfig.RISK_APPROVE_THRESHOLD < GovernanceConfig.RISK_REVISE_TH
 # embodied creatures, cron-driven janitors, streaming observers, and ephemeral
 # parsers do not share a healthy operating point or a tempo. Phase 2 calibration
 # must produce class-conditional constants keyed on existing identity tags
-# (embodied / autonomous / persistent / ephemeral) and labels (Lumen / Vigil /
-# Sentinel / Watcher / Steward). The fleet-wide constant remains as the default
+# (embodied / autonomous / persistent / ephemeral) and the configured resident
+# roster. The fleet-wide constant remains as the default
 # for unclassified agents — a safe fallback, not the production target.
 # See paper §3.4 (Heterogeneity as a First-Class Constraint).
 

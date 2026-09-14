@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 
 from src.logging_utils import get_logger
+from src.mcp_handlers.middleware.params_step import remove_reserved_dispatch_keys
 from src.services.http_tool_service import execute_http_tool
 from src.services.http_request_parser import (
     HttpToolRequestError,
@@ -303,6 +304,9 @@ async def http_call_tool(request):
             body,
             mcp_server_name=request.state._http_api_mcp_server_name,
         )
+        # Before client enrichment, session injection and prebind read the
+        # arguments: only dispatch middleware may write these keys.
+        remove_reserved_dispatch_keys(parsed.arguments)
         deprecated = deprecated_http_tool_payload(parsed.tool_name)
         if deprecated:
             return JSONResponse(deprecated)

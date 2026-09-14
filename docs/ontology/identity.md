@@ -192,7 +192,9 @@ Identity in this system is not one thing. It is a bundle of partially-independen
 
 ## Worked examples
 
-The administrative label "resident" (Vigil/Sentinel/Watcher/Steward/Lumen) collapses five genuinely different continuity profiles and should not carry ontological weight. The taxonomy makes this visible:
+The administrative label "resident" collapses genuinely different continuity
+profiles and should not carry ontological weight. The table retains Steward as a
+historical case; its Mac-to-Pi sync loop was retired on 2026-09-13.
 
 | Agent | Process-instance | Substrate | Role | Memory | Behavioral |
 |---|---|---|---|---|---|
@@ -200,7 +202,7 @@ The administrative label "resident" (Vigil/Sentinel/Watcher/Steward/Lumen) colla
 | **Vigil** (cron every 30min) | per-invocation, minutes-long | plist + binary on disk | stable; role-level policy | KG + audit trail | accrues over many invocations under role |
 | **Sentinel** (launchd continuous) | long-running; weeks | plist + binary + live process | stable | KG + audit trail | accrues within process; restart is rare |
 | **Watcher** (event-driven hook) | per-trigger, seconds-to-minutes | hook binary | stable | audit via commits | weak — bound to LLM call, not trajectory |
-| **Steward** (in-process in gov-mcp) | bounded by gov-mcp lifetime | gov-mcp process + DB | role attached to gov-mcp identity | KG + DB | accrues with parent MCP |
+| **Steward** (retired; formerly in-process in gov-mcp) | bounded by gov-mcp lifetime | gov-mcp process + DB | role attached to gov-mcp identity | KG + DB | accrued with parent MCP |
 | **Lumen** (embodied on Pi) | per boot, weeks | **dedicated hardware + DB + config** | strong; voice + personality attached | extensive self-knowledge, KG, DB | accrues richly over embodied time; hardcoded UUID reflects substrate commitment |
 | **Task-spawned subagent** | per-spawn, short | none | inherits from parent | contributes to parent's KG surface | weak — too short for trajectory |
 
@@ -208,7 +210,7 @@ The administrative label "resident" (Vigil/Sentinel/Watcher/Steward/Lumen) colla
 
 - **Lumen is qualitatively distinct** from other agents lumped as "residents." Dedicated hardware + hardcoded UUID + embodied role is a *different shape*, not just a bigger Vigil. The hardcoded UUID is not a bug — it is the substrate making a commitment that lesser substrates cannot make (axiom #11, "let embodiment anchor expression").
 - **Vigil and Watcher are closer to subagents than to Lumen.** Their process-instances are ephemeral; their continuity is entirely at the role + memory + behavioral layers, accrued across many fresh process-instances.
-- **Sentinel and Steward are the long-lived-subject cases** — their process-instance continuity genuinely extends for weeks.
+- **Sentinel is a long-lived-subject case.** Steward was another while its sync loop ran; both illustrate process-instance continuity extending beyond a short invocation.
 - **Claude Code tabs and task-spawned subagents** are the purest process-instance-only cases — almost no substrate, almost no role investment, almost no behavioral accrual.
 
 "Resident" remains a useful deployment label (launchd-registered, fleet-managed). It is not an ontological category.

@@ -265,7 +265,18 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Parse filter parameters (handle string booleans from MCP transport)
     essential_only = coerce_bool(arguments.get("essential_only"), False)
     include_advanced = coerce_bool(arguments.get("include_advanced"), True)
-    tier_filter = arguments.get("tier", "all")
+    raw_tier = arguments.get("tier")
+    tier_filter = (
+        "all" if raw_tier is None else (str(raw_tier).strip().lower() or "all")
+    )
+    valid_tiers = ("all", "essential", "common", "advanced")
+    if tier_filter not in valid_tiers:
+        return [error_response(
+            "tier must be one of: all, essential, common, advanced",
+            error_code="INVALID_TIER",
+            error_category="validation_error",
+            recovery={"allowed_values": list(valid_tiers)},
+        )]
     category_filter = str(arguments.get("category") or "all").strip().lower() or "all"
     # LITE-FIRST: Default to minimal response for local/smaller models
     lite_mode = coerce_bool(arguments.get("lite"), True)

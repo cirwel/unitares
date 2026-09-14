@@ -36,7 +36,6 @@ Several long-lived agents run alongside the server. They consume the **same publ
 | **Sentinel** | continuous (WebSocket) | Fleet monitor — anomaly detection on the live event stream |
 | **Watcher** | event-driven | Code-watcher — local-LLM pattern match, wired into Claude Code's PostToolUse hook |
 | **Chronicler** | daily | Longitudinal codebase metrics → `metrics.series` |
-| **Steward** | in-process | EISV sync across substrates |
 
 The named set is configured via `UNITARES_RESIDENTS` ([`../operations/resident-roster.md`](../operations/resident-roster.md)), not hardcoded. Reference implementations: [`../../agents/README.md`](../../agents/README.md).
 

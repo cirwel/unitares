@@ -860,6 +860,108 @@ class TestSearchKnowledgeGraph:
         assert data["success"] is True
 
     @pytest.mark.asyncio
+    async def test_search_with_agent_id_filter_param_reaches_backend_query(self, patch_common):
+        """The documented `agent_id_filter` param (schema: "Filter by author
+        agent UUID") must actually reach the backend filter, not just be
+        accepted and silently dropped (it used to have no effect at all)."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        mock_graph.query = AsyncMock(return_value=[
+            make_discovery(id="d-mine", agent_id="specific-agent"),
+        ])
+
+        result = await handle_search_knowledge_graph({
+            "agent_id_filter": "specific-agent",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert mock_graph.query.call_args.kwargs["agent_id"] == "specific-agent"
+
+    def test_parse_search_request_prefers_agent_id_filter_over_agent_id(self):
+        """agent_id_filter is the documented filter param; agent_id remains a
+        fallback for callers that predate it, but must not win when both are
+        supplied."""
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({
+            "agent_id_filter": "filter-agent",
+            "agent_id": "caller-agent",
+        })
+        assert request.agent_id == "filter-agent"
+
+    def test_parse_search_request_agent_id_fallback_when_no_filter(self):
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({"agent_id": "caller-agent"})
+        assert request.agent_id == "caller-agent"
+
+    def test_parse_search_trims_explicit_author_filter(self):
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({
+            "agent_id_filter": "  filter-agent  ",
+            "agent_id": "caller-agent",
+        })
+        assert request.agent_id == "filter-agent"
+
+    @pytest.mark.parametrize("blank", ["", "  "])
+    def test_parse_search_rejects_blank_explicit_author_filter(self, blank):
+        from src.mcp_handlers.knowledge.handlers import (
+            _SearchParameterError,
+            _parse_knowledge_search_request,
+        )
+
+        with pytest.raises(_SearchParameterError, match="agent_id_filter"):
+            _parse_knowledge_search_request({
+                "agent_id_filter": blank,
+                "agent_id": "caller-agent",
+            })
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_name", ["knowledge", "search_shared_memory"])
+    @pytest.mark.parametrize("search_mode", ["indexed_filters", "substring_scan"])
+    async def test_wire_author_filter_reaches_search_and_its_read_event(
+        self, patch_common, monkeypatch, tool_name, search_mode,
+    ):
+        """The real FastMCP model and dispatch must retain the author filter."""
+        from src import mcp_server
+        from src.mcp_handlers.knowledge import handlers
+
+        _, graph = patch_common
+        rows = [
+            make_discovery(id="wanted", agent_id="wanted-author", summary="keyword"),
+            make_discovery(id="other", agent_id="other-author", summary="keyword"),
+        ]
+
+        async def query(**kwargs):
+            author = kwargs.get("agent_id")
+            return [row for row in rows if not author or row.agent_id == author]
+
+        graph.query = AsyncMock(side_effect=query)
+        del graph.full_text_search
+        del graph.semantic_search
+        broadcast = AsyncMock()
+        monkeypatch.setattr(handlers, "_broadcast_knowledge_read", broadcast)
+        arguments = {"agent_id_filter": "wanted-author", "response_mode": "full"}
+        if tool_name == "knowledge":
+            arguments["action"] = "search"
+        if search_mode == "substring_scan":
+            arguments["query"] = "keyword"
+
+        tool = mcp_server.mcp._tool_manager.get_tool(tool_name)
+        result = await tool.run(arguments=arguments, context=None)
+
+        assert result["success"] is True
+        payload = result["raw_governance"] if tool_name == "search_shared_memory" else result
+        assert payload["search_mode_used"] == search_mode
+        assert [row["id"] for row in payload["discoveries"]] == ["wanted"]
+        if search_mode == "indexed_filters":
+            assert graph.query.call_args.kwargs["agent_id"] == "wanted-author"
+        assert broadcast.await_args.kwargs["payload"]["filter_agent_id"] == "wanted-author"
+
+    @pytest.mark.asyncio
     async def test_exclude_agent_labels_drops_matching_rows(self, patch_common):
         """exclude_agent_labels filters post-query so the main Discoveries feed
         can hide janitorial residents (e.g. Vigil) without losing them from
@@ -1443,6 +1545,113 @@ class TestResolveAgentDisplayAdditional:
 
         assert result["agent_id"] == "any-agent"
         assert result["display_name"] == "any-agent"
+
+
+# ============================================================================
+# _agent_display_for_response helper
+# ============================================================================
+
+class TestAgentDisplayForResponse:
+    """The ``agent`` block mirrors the signature's proof, not its ontology.
+
+    ``identity_context`` is the largest block in a write envelope and describes
+    the caller rather than the KG row, so serializing it under both ``agent``
+    and ``agent_signature`` repeated ~970 bytes in every store response. The
+    canonical copy belongs to ``agent_signature``.
+    """
+
+    def _signature(self):
+        return {
+            "uuid": "uuid-abc",
+            "agent_id": "Claude_Test",
+            "structured_agent_id": "Claude_Test",
+            "display_name": "claude_test",
+            "label_source": "claimed",
+            "identity_context": {"schema": "s22.identity_response.v1"},
+            "identity_assurance": {"tier": "strong", "caller_proven": True},
+        }
+
+    def test_mirrors_proof_without_duplicating_context(self, patch_common):
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value=self._signature()
+        ):
+            result = kg._agent_display_for_response("Claude_Test", {})
+
+        # The consistency contract: uuid and proof strength agree with the
+        # final envelope, so top-level `agent` cannot contradict it.
+        assert result["uuid"] == "uuid-abc"
+        assert result["identity_assurance"]["tier"] == "strong"
+        assert result["identity_assurance"]["caller_proven"] is True
+        # The ontology block is not repeated here.
+        assert "identity_context" not in result
+
+    def test_seeded_context_is_stripped(self, patch_common):
+        """A caller-supplied _agent_display cannot smuggle the block back in."""
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        seeded = {"_agent_display": {"identity_context": {"schema": "stale"}}}
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value=self._signature()
+        ):
+            result = kg._agent_display_for_response("Claude_Test", seeded)
+
+        assert "identity_context" not in result
+
+    def test_unproven_signature_leaves_display_untouched(self, patch_common):
+        """No uuid means no proof to mirror; the metadata-only block stands."""
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value={"uuid": None}
+        ):
+            result = kg._agent_display_for_response("Claude_Test", {})
+
+        assert "identity_context" not in result
+        assert "identity_assurance" not in result
+
+    def test_seeded_context_stripped_when_signature_unproven(self, patch_common):
+        """The degraded path strips seeded context too.
+
+        Regression for the #2192 review at d0496b9: the pop sat after the
+        enrichment loop, but a signature with no uuid returns early, so a
+        seeded block survived in exactly the unproven case.
+        """
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        seeded = {"_agent_display": {"identity_context": {"schema": "stale"}}}
+        with patch.object(
+            kg_auth_module(), "compute_agent_signature", return_value={"uuid": None}
+        ):
+            result = kg._agent_display_for_response("Claude_Test", seeded)
+
+        assert "identity_context" not in result
+
+    def test_seeded_context_stripped_when_signature_raises(self, patch_common):
+        """The exception path strips seeded context too.
+
+        Same review: `compute_agent_signature` raising returns agent_display
+        before any enrichment, so the block has to be gone before the try.
+        """
+        from src.mcp_handlers.knowledge import handlers as kg
+
+        seeded = {"_agent_display": {"identity_context": {"schema": "stale"}}}
+        with patch.object(
+            kg_auth_module(),
+            "compute_agent_signature",
+            side_effect=RuntimeError("signature backend down"),
+        ):
+            result = kg._agent_display_for_response("Claude_Test", seeded)
+
+        assert "identity_context" not in result
+
+
+def kg_auth_module():
+    """The agent_auth module object `_agent_display_for_response` imports."""
+    from src.mcp_handlers.support import agent_auth
+
+    return agent_auth
 
 
 # ============================================================================

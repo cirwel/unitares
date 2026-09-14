@@ -1,5 +1,7 @@
 # Governed-Effect §7 — Strong-Tier Re-Certification (design v0.2, council-folded)
 
+**Status:** Design v0.2, council-folded. Its successor [`governed-effect-effect-binding-v0.md`](governed-effect-effect-binding-v0.md) records this design as shipped — #1074, live 2026-06-26 — and names the residual it deliberately left open: §7 proves the proposer's identity strength, never per-effect authorization. That attribution is the successor document's; this file does not assert its own deployment state.
+
 Extends the live §6 governance veto (#1073) with the contract §2/§7 gate:
 **an `execute` agent_spawn commits only if the proposer's identity tier
 re-verifies as `strong`** — without trusting a self-asserted tier.
