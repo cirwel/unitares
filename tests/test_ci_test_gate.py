@@ -68,6 +68,13 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert "targets=(tests/test_[s-t]*.py)" in shard_job
     assert "targets=(tests/test_[u-z]*.py)" in shard_job
     assert "targets=(agents/ tests/*/ tests/smoke_test.py)" in shard_job
+    assert "targets=(tests/test_[a-e]*.py)" in shard_job
+    assert "targets=(tests/test_[f-m]*.py)" in shard_job
+    assert "targets=(tests/test_[n-t]*.py)" in shard_job
+    assert (
+        "targets=(tests/test_[u-z]*.py agents/ tests/*/ tests/smoke_test.py)"
+        in shard_job
+    )
     assert '--health-cmd "pg_isready -U postgres"' in shard_job
     assert 'python -m pytest "${targets[@]}" -q -ra' in shard_job
     assert "--cov=src --cov=agents/sdk/src/unitares_sdk --cov=agents" in shard_job
@@ -167,8 +174,8 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
     shard_job = _shard_job(workflow_text)
     floor = _render(checker._read_requires_python())
 
-    # Two interpreters share one shard list, so every per-leg artifact carries
-    # the interpreter: upload-artifact refuses duplicate names.
+    # Both interpreter layouts emit per-leg artifacts, so every artifact
+    # carries the interpreter: upload-artifact refuses duplicate names.
     assert "name: test shard (${{ matrix.python-version }}, ${{ matrix.shard }})" in shard_job
     assert "COVERAGE_FILE: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}" in shard_job
     assert "name: coverage-data-${{ matrix.python-version }}-${{ matrix.shard }}" in shard_job
@@ -182,10 +189,40 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
     assert "if: ${{ always() && matrix.python-version == env.COVERAGE_LEG }}" in shard_job
     assert "pattern: coverage-data-${{ env.COVERAGE_LEG }}-*" in workflow_text
 
-    # The aggregator checks every leg of the latest attempt by API, and the
-    # leg count it expects is the matrix product, not a number that can drift.
+    # The aggregator checks every leg's latest execution across attempts. The
+    # floor uses all eight shards while production replaces those combinations with
+    # four broader include entries, so count the expanded matrix rather than a
+    # hand-maintained number.
     matrix = workflow["jobs"]["test_shard"]["strategy"]["matrix"]
-    expected_legs = len(matrix["python-version"]) * len(matrix["shard"])
+    expanded = [
+        {"python-version": version, "shard": shard}
+        for version in matrix["python-version"]
+        for shard in matrix["shard"]
+    ]
+    for excluded in matrix.get("exclude", []):
+        matches = [leg for leg in expanded if excluded.items() <= leg.items()]
+        assert len(matches) == 1, f"matrix exclusion must match one leg: {excluded}"
+        expanded.remove(matches[0])
+    for included in matrix.get("include", []):
+        assert included not in expanded, f"matrix include duplicates a leg: {included}"
+        expanded.append(included)
+    legs_by_version = {
+        version: {
+            leg["shard"]
+            for leg in expanded
+            if leg["python-version"] == version
+        }
+        for version in matrix["python-version"]
+    }
+    assert legs_by_version["3.12"] == set(matrix["shard"])
+    assert legs_by_version["3.14"] == {
+        "tests-a-e",
+        "tests-f-m",
+        "tests-n-t",
+        "tests-u-z-and-agents",
+    }
+    expected_legs = len(expanded)
+    assert expected_legs == 12
     test_job = workflow["jobs"]["test"]
     assert test_job["env"]["EXPECTED_SHARD_LEGS"] == str(expected_legs)
     assert test_job["permissions"]["actions"] == "read"
@@ -194,7 +231,12 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
         if "filter=latest" in str(step.get("run", "")) and 'startswith("test shard (")' in str(step.get("run", ""))
     ]
     assert len(api_steps) == 1
-    assert "$EXPECTED_SHARD_LEGS" in api_steps[0]["run"]
+    api_script = api_steps[0]["run"]
+    assert "$EXPECTED_SHARD_LEGS" in api_script
+    assert "max_attempts=12" in api_script
+    assert 'if [ "$attempt" -ge "$max_attempts" ]' in api_script
+    assert "attempt=$((attempt + 1))" in api_script
+    assert "sleep 5" in api_script
 
 
 def test_checker_accepts_an_annotated_marker(checker, tmp_path, monkeypatch):

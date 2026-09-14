@@ -1,7 +1,8 @@
-"""Watcher fingerprint normalization + structural-verifier refinements.
+"""Watcher fingerprint provenance + structural-verifier refinements.
 
-Cross-worktree dedup: the fingerprint must collapse identical code at
-the same line across N worktrees into ONE surfaced finding (not N).
+Cross-worktree lifecycle: identical code in separate worktrees must retain
+separate findings so one branch cannot consume another branch's delivery or
+resolution state.
 
 P001 / P003 refinements: structural verifier drops false positives where
 the model matched a substring but the actual construct is the BLESSED
@@ -81,14 +82,14 @@ def test_repo_relative_strips_worktree_prefix(two_worktrees):
     assert repo_relative_path(str(wt_file)) == "src/x.py"
 
 
-def test_fingerprint_dedups_across_worktrees(two_worktrees):
+def test_fingerprint_preserves_distinct_worktree_lifecycles(two_worktrees):
     main_file, wt_file = two_worktrees
     line = "asyncio.create_task(noop())"
     f_main = _make_finding(str(main_file), 1, line)
     f_wt = _make_finding(str(wt_file), 1, line)
-    assert f_main.fingerprint == f_wt.fingerprint, (
-        "identical code at the same line in two worktrees must produce "
-        f"one fingerprint (got main={f_main.fingerprint!r}, wt={f_wt.fingerprint!r})"
+    assert f_main.fingerprint != f_wt.fingerprint, (
+        "identical code in two worktrees needs separate lifecycle identity "
+        f"(got main={f_main.fingerprint!r}, wt={f_wt.fingerprint!r})"
     )
 
 

@@ -110,7 +110,7 @@ and the registry's primary protectees.**
 | Lineage credit-assignment aggregation | `identity/provenance_chain.py:83/170` | Read/scoring half orphaned; write half produces empty chains (0/1056) | **DECIDE** — depends on whether discovery→lineage attribution is still a goal |
 | S22 H5 cross-harness coverage assessor | `identity/s22_h5_comparison.py:110/190/277` | Diagnostic-script-only; input data live (30k provenance rows) but no MCP surface reads the gate | **DECIDE** — surface via `get_governance_metrics`, or keep as a script |
 | `backfill_calibration_from_historical_sessions` | `mcp_handlers/dialectic/calibration.py:193` | One-shot admin migration util; no scheduled caller (by design) | **KEEP-DORMANT** — document as manual-only |
-| Cross-device / orchestration audit API (`AuditLogger.log_orchestration_request` / `log_orchestration_complete` / `log_cross_device_call` / `log_device_health_check` / `log_eisv_sync`) | `src/audit_log.py` (the five `AuditLogger.log_*` methods named at left) | 0 in-repo callers — the consumer (Mac→Pi orchestration) was extracted to the external `unitares-pi-plugin` package in the Phase B1 Lumen decoupling (see the `unitares-pi-plugin` extraction notes in `src/mcp_handlers/__init__.py` and the guarded `unitares_pi_plugin` import in `src/services/runtime_queries.py`). This repo owns the writer surface; the caller lives cross-repo. Same external-API shape as `register_extra_schemas` (Theme 5) | **KEEP-DORMANT** — cross-repo audit API; removal is a deprecation decision coordinated with `unitares-pi-plugin` |
+| ~~Cross-device / orchestration audit API (`AuditLogger.log_orchestration_request` / `log_orchestration_complete` / `log_cross_device_call` / `log_device_health_check` / `log_eisv_sync`)~~ | Removed | **CUT 2026-09-13** — the writer's only caller was the external `unitares-pi-plugin` (Mac→Pi orchestration and the Steward sync loop), retired by operator decision together with the rest of the Mac→Pi coupling (#2189). Lumen's sensor-derived EISV reaches governance through its own check-ins (`body_eisv_projection`), which needs no server-side Pi address. |
 
 ## Theme 5 — Mechanical singletons (vulture cross-pass, 2026-06-16)
 
@@ -133,17 +133,47 @@ they are not re-flagged.
 
 | Capability | Location | Live evidence | Status |
 |---|---|---|---|
-| `create_indexes` AGE index-DDL builder | `src/db/age_queries.py:567` | no static reference found; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT** — dead duplicate, sibling of `query_response_chain` |
+| ~~`create_indexes` AGE index-DDL builder~~ | was `src/db/age_queries.py` | no static reference found; AGE indexing is done by inline `CREATE INDEX` DDL in `storage/knowledge_graph_age.py` | **CUT — executed 2026-09-13.** Re-confirmed zero callers first; the nearby `_create_indexes` hits are the live `KnowledgeGraphAGE` method, a different symbol, and are untouched. **But this row's stated justification was too strong, and the correction outlives the cut:** the two are not equivalent. The live method creates three property-blob indexes (`idx_discovery_props`, `idx_agent_props`, `idx_tag_props`); the deleted builder declared thirteen field-level ones, including partial EISV indexes (`idx_eisv_e/s/v … WHERE type = 'self_observation'`) and `idx_discovery_timestamp`/`_status`/`_severity`. Those thirteen exist nowhere — the builder never ran, so nothing regressed by deleting it, and no index was dropped. What is gone is the *record* that someone once thought AGE wanted field-level indexes. If AGE search latency is ever investigated, that hypothesis is in git history at this commit, not in the live schema. |
 | `create_temporally_near_edge` | `src/db/age_queries.py:537` | TEMPORALLY_NEAR edge writer, no static reference found | **DECIDE** — same per-query call as the orphaned analytics in Theme 1 |
 | `calibration_db.py` async wrapper layer (`get_calibration_async` / `update_calibration_async`) | `calibration_db.py:12/21` | No static reference found for these two; live calibration writes go through `calibration.py` / `sequential_calibration.py` / `src/db/mixins/calibration.py`. **`calibration_health_check_async` was in this row and is NOT dead** — `services/runtime_queries.py:725` calls it from `get_health_check_data` (corrected 2026-08-13). | **DECIDE/CUT** for the remaining two — NB the *store* `core.calibration` is busy (see false-dead list); these *wrappers* are the dead path, not the store |
-| `_get_pg_db` private accessor | `calibration.py:110` | no static reference found | **CUT** |
+| ~~`_get_pg_db` private accessor~~ | was `calibration.py` | no static reference found | **CUT — executed 2026-09-13.** The dead seam was wider than the row: `self._pg_db` was assigned in `__init__` and read *only* inside this accessor, so the lazy-PostgreSQL-backend seam in `CalibrationChecker` went with it. Checked against the `_CalibrationCheckerProxy.__getattr__` forwarder too — nothing requests the name. Live calibration writes are unaffected; they go through `calibration.py` / `sequential_calibration.py` / `src/db/mixins/calibration.py` as the row below records. |
 | `check_idle_agents` / `get_recent_events_for_agent` | `event_detector.py:451/495` | no static reference found | **DECIDE** |
 | `list_restartable_tasks` | `background_tasks.py:1758` | no static reference found | **DECIDE** |
 | `reset_pin_match_scope` | `mcp_handlers/context.py:263` | no static reference found | **DECIDE** |
-| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:43` | no static reference found; same dead stuck-reviewer chain as `check_reviewer_stuck` (CUT below) | **CUT** — fold with `check_reviewer_stuck` |
+| `get_reviewer_stuck_recovery` | `mcp_handlers/dialectic/responses.py:51` | **Premise void as of 2026-09-13.** Its whole basis was "same dead chain as `check_reviewer_stuck` (CUT below)" — but `check_reviewer_stuck` was withdrawn 2026-08-13 as false-dead (it is called on a registered request path), and this row was never re-derived. Its only other reference is a **test**: it is one of twelve recovery builders in the `RECOVERY_BUILDERS` parametrisation of `tests/test_dialectic_recovery_pointers.py`. **That is not production reachability, and this row previously implied it was** — the same evidence-mislabelling this file's header warns about, committed in the act of warning about it (caught by review `490c7cf515b89a6e`, 2026-09-13). A test-only reference means deleting the function costs a row of guard coverage; it says nothing about whether any caller wants the capability. | **DECIDE** — no production caller is known and none has been ruled out; the prior CUT is void because its premise was another withdrawn row, not because this function was shown to be live. Re-status only on evidence about its intended capability. |
 | `reranker_available` | `reranker.py:190` | no static reference found (`rrf_fuse`/`apply_tag_boost` are live; this flag-check is not) | **DECIDE** |
 | `register_extra_schemas` / `register_extra_descriptions` plugin entry-point API | `tool_schemas.py:20`; `tool_descriptions.py:145` | Published `governance_mcp.plugins` hook; **0 consumers** (incl. the plugin repo) | **KEEP-DORMANT** — extension hook, removal is a deprecation decision |
 | `gateway_server.py` `main()` script entrypoint | `src/gateway_server.py:99` | Has `__main__`; launched out-of-band via the gateway plist *template* (`scripts/ops/com.unitares.gateway-mcp.plist.template`), not by any import — install state is deployment-specific | **DECIDE** — confirm the gateway plist is installed on the target deployment |
+
+## Cross-repository consumer audit (2026-09-13)
+
+A caller count taken inside this repo bounds nothing about consumers outside it.
+At the time of this audit, `unitares-pi-plugin` was a first-party consumer that
+imported `src.*` directly. Review `490c7cf515b89a6e` initially refused three
+2026-09-13 cuts on that ground, so the audit below records the missing evidence.
+The Pi plugin was subsequently retired by operator decision, and its five
+`AuditLogger.log_*` orchestration methods were cut as recorded above; the
+earlier KEEP-DORMANT disposition is no longer current.
+
+Audited at `unitares-pi-plugin@4a49267` (shallow clone, 19 Python files):
+
+| Symbol | Hits |
+|---|---|
+| `create_indexes` | 0 |
+| `query_response_chain` | 0 |
+| `_get_pg_db` | 0 |
+
+The plugin imports 19 `src.*` modules — `agent_state`, `agent_storage`, `audit_log`,
+`background_tasks`, `health_thresholds`, `lease_plane*`, `logging_utils`,
+`mcp_handlers.*`, `tool_descriptions`, `tool_schemas`. **Neither `src.db.age_queries`
+nor `src.calibration` appears in that set**, so the cut symbols are unreachable from it
+by import as well as by name.
+
+**Scope, stated so it is not over-read:** this covers the one first-party companion
+repository known to import `src.*`. It does not cover an unknown third-party consumer,
+and no absence of `__all__` would have — `__all__` governs `from x import *` only, and
+a public module-level name stays importable regardless. Re-run this audit against any
+new companion repo before citing it.
 
 ## Genuine cruft — CUT candidates (check the call sites before deleting)
 
@@ -153,14 +183,30 @@ they are not re-flagged.
 > "0 callers" and both said Cut. Nothing was deleted, but the label was doing work it had
 > not earned. Treat a row here as a *candidate* and confirm the call sites yourself —
 > Rule 2 applies in this table more than anywhere else in the file.
+>
+> **A withdrawal does not propagate on its own (2026-09-13).** A re-derivation of the
+> open CUT rows found that half of them no longer held: two were clean and were executed,
+> three were not. `get_reviewer_stuck_recovery` was carried solely by "same dead chain as
+> `check_reviewer_stuck`" — a row withdrawn seven months earlier — so the 2026-08-13
+> correction had already voided it, and nobody noticed because the dependency was stated
+> in prose and never traversed. `ESCALATE` failed differently: its evidence was sound but
+> measured the wrong thing, counting how often the branch *fired* and concluding the code
+> was unreachable, when the string is a live default in five modules.
+>
+> Two habits follow. **A row whose premise is another row is void the moment that row is
+> withdrawn** — when you withdraw one, grep this file for its name before you stop.
+> And **say which question your evidence answers.** "0 callers" and "0 occurrences in
+> production" are different findings; only the first is about reachability, and only
+> reachability licenses a cut. A row that cannot name its question cannot carry `CUT`,
+> which remains the one irreversible verdict in this file.
 
 | Item | Location | Note |
 |---|---|---|
 | ~~backfill embeddings script~~ | Removed legacy migration script | Hardcoded to the legacy 384d `core.discovery_embeddings` table, which live search no longer reads — broken against the active bge-m3 model. **CUT** (script-cleanup sweep): removed; recoverable from git history if the legacy table is ever backfilled |
 | Legacy `core.discovery_embeddings` table (1887 rows, 384d) | DB | Superseded by `_bge_m3` (1056, clean). **Cut after** concept-extraction confirmed reading the active table |
-| `query_response_chain` builder | `src/db/age_queries.py:309` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **Cut** |
+| ~~`query_response_chain` builder~~ | was `src/db/age_queries.py` | Dead duplicate; `get_response_chain` uses its own inline Cypher. **CUT — executed 2026-09-13.** Re-confirmed zero callers across `src/`, `tests/`, `scripts/`, `agents/` first, and `age_queries.py` uses no `getattr`/`importlib` dispatch, so nothing in this repo reaches it dynamically. **The scope of that claim is in-repo only.** An earlier draft of this row argued from the absence of `__all__`; a review (dialectic `490c7cf515b89a6e`, 2026-09-13) refuted it — `__all__` governs `from x import *` and nothing else, so a public module-level name stays importable by any out-of-repo consumer regardless. What bounds the risk here is the separate cross-repo check recorded below, not that absence. Recoverable from git history. |
 | ~~`log_auto_attest` typed helper~~ | `audit_log.py` | **Withdrawn 2026-08-13 — it is called.** See *Verified-wired / false-dead*. |
-| Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | Retired by design ("0 of 47 sessions ever escalated"). **Cut the enum/dead branch** |
+| Quorum `ESCALATE` resolution branch | `dialectic_protocol.py:196`; handler `:1526` | **Withdrawn 2026-09-13 — the cut premise does not survive the call sites.** "0 of 47 sessions ever escalated" measured *outcomes*, not *reachability*: `"escalate"` is a live contract string, not a dead branch. It is the **default** recommendation in three places in `mcp_handlers/dialectic/handlers.py` (`.get("recommendation", "ESCALATE")`), a permitted value in `schemas/dialectic.py` `Literal[...]` and `mcp_handlers/types.py`, a disagreement signal in `dialectic/calibration.py`, and asserted in `tests/test_dialectic_session_pure.py`. Deleting the enum would change what the synthesis path falls back to — a **behavior change**, not cleanup. Re-open only as a deliberate default-value redesign with its own review. |
 | ~~`answer_question` handler~~ | Removed | **CUT** — it was `register=False` and unrouted; linked answers remain available through `knowledge(action="store", discovery_type="note", response_to={..., "response_type": "answer"})` |
 | ~~`check_reviewer_stuck`~~ | `mcp_handlers/dialectic/handlers.py` | **Withdrawn 2026-08-13 — it is called, on a registered request path.** See *Verified-wired / false-dead*. |
 | CIRS announce tools (void_alert / state_announce / coherence_report / …) | 7 `register=False` handlers | **Verify before cut** — the CIRS *monitor* path is live (26 `cirs_resonance` events/14d); only these agent-facing announce tools are dark. The zero predates any call (`audit.tool_usage` holds no `cirs_protocol` row, and failed calls are recorded too, #2172), so the defects below did not produce it — but a caller who tried would have met a broken surface, and verification has to run against the repaired one: until #2183 every `query` on void_alert, state_announce and coherence_report raised a `TypeError` through dispatch on every transport (`limit` reached `int()` as None), `/mcp/` dropped 24 of the parameters the handlers read before dispatch, and the guide's `boundary_contract set` example named keys the handler never read. `resonance_alert` and `stability_restored` remain refused by the `protocol` Literal, so they have no agent-facing path at all |

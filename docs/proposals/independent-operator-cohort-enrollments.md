@@ -1,5 +1,7 @@
 # Independent-operator cohort — enrollment records
 
+**Status:** Append-only ledger, **currently empty** — the template below is the required shape, and no phase-1 enrollment has been recorded. Entries are added by PR and never edited afterward; corrections are new dated entries. An empty ledger here means nobody has enrolled, not that the protocol is inactive; the protocol lives in its preregistration companion and does not change when an operator enrolls.
+
 Append-only companion to
 [`independent-operator-cohort-preregistration-v0.md`](independent-operator-cohort-preregistration-v0.md).
 Each enrollment is added by PR and never edited afterward; corrections are

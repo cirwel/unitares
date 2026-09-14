@@ -59,9 +59,9 @@ def _can_perform_dialectic_review(
 
     Reviewer auto-selection (gated behind UNITARES_AUTOSELECT_REVIEWER) must
     never assign an agent that cannot respond. The named resident fleet
-    (KNOWN_RESIDENT_LABELS: Lumen / Vigil / Sentinel / Watcher / Steward /
-    Chronicler) and anything carrying a NON_REASONING_TAGS tag are deterministic
-    processes — they have no dialectic-reasoning path. Assigning one as reviewer
+    (KNOWN_RESIDENT_LABELS from the configured roster) and anything carrying
+    a NON_REASONING_TAGS tag are deterministic processes — they have no
+    dialectic-reasoning path. Assigning one as reviewer
     leaves the session stuck at the ANTITHESIS phase until the stuck-reviewer
     reaper times it out: wasted facilitation churn and a dishonest "reviewer
     assigned" signal. The capability filter is independent of the autoselect

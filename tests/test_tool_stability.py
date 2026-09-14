@@ -131,14 +131,6 @@ class TestResolveToolAlias:
             "search_shared_memory",
         }
 
-    def test_pi_health_alias(self):
-        pytest.importorskip("unitares_pi_plugin")
-        import unitares_pi_plugin as _plugin
-        _plugin.register()
-        name, alias = resolve_tool_alias("pi_health")
-        assert name == "pi"
-        assert alias.inject_action == "health"
-
     def test_list_agents_alias(self):
         name, alias = resolve_tool_alias("list_agents")
         assert name == "agent"

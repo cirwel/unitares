@@ -507,7 +507,8 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
 
             msg_rows = await conn.fetch("""
                 SELECT message_type, agent_id, timestamp, reasoning,
-                       root_cause, proposed_conditions, concerns, agrees
+                       root_cause, proposed_conditions, concerns, agrees,
+                       observed_metrics
                 FROM core.dialectic_messages
                 WHERE session_id = $1 ORDER BY message_id
             """, session_id)
@@ -558,6 +559,13 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                 if msg["concerns"]:
                     val = msg["concerns"]
                     m["concerns"] = val if isinstance(val, (list, dict)) else json.loads(val)
+                observed_metrics = msg.get("observed_metrics")
+                if observed_metrics:
+                    m["observed_metrics"] = (
+                        observed_metrics
+                        if isinstance(observed_metrics, dict)
+                        else json.loads(observed_metrics)
+                    )
                 if msg["agrees"] is not None:
                     m["agrees"] = bool(msg["agrees"])
                 result["transcript"].append(m)

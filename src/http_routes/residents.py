@@ -627,7 +627,7 @@ async def http_resident_tag_audit(request):
         {
             "success": true,
             "required_tags": ["persistent", "autonomous"],
-            "checked": ["Vigil", "Sentinel", "Watcher", "Steward", "Chronicler", "Lumen"],
+            "checked": ["Vigil", "Sentinel", "Watcher", "Chronicler", "Lumen"],
             "missing": {
                 "Watcher": ["autonomous"],
                 ...

@@ -154,9 +154,6 @@ class Surface:
 
 
 DEFAULT_SURFACES: List[Surface] = [
-    # Editable install imported live by governance-mcp — merge IS deploy here.
-    Surface("unitares-pi-plugin", "~/projects/unitares-pi-plugin", "main",
-            "com.unitares.governance-mcp"),
     # Adapter bundle, also live from its checkout.
     Surface("unitares-governance-plugin", "~/projects/unitares-governance-plugin", "master",
             "com.unitares.governance-mcp"),

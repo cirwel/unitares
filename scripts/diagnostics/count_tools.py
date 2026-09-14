@@ -16,6 +16,11 @@ them differently. A sentinel published as a measurement is instrumentation
 failing toward "healthy" instead of toward "unknown", which is exactly what
 this module exists to prevent.
 
+The registry count differs from the full-mode catalog: that catalog adds the
+primary workflow aliases. `resolve_advertised_tool_count()` counts the full
+catalog separately, under the same available-or-not rule. A mounted server
+using a narrower tool mode can list fewer names.
+
 Usage:
     python3 scripts/diagnostics/count_tools.py              # Display count
     python3 scripts/diagnostics/count_tools.py --json       # JSON output
@@ -123,6 +128,39 @@ def resolve_tool_count(
         return ToolCount(available=False, reason=str(exc))
 
     return ToolCount(available=True, total=sum(breakdown.values()), breakdown=breakdown)
+
+
+def _advertised_roster():
+    # Same import tree as the registry count: src.tool_modes settles the
+    # decorators before reading them.
+    from src.mcp_handlers.decorators import get_tool_registry
+    from src.tool_modes import advertised_tool_names_full
+
+    return advertised_tool_names_full(), set(get_tool_registry())
+
+
+def resolve_advertised_tool_count() -> ToolCount:
+    """Count the full-mode roster, as available-or-not.
+
+    This is a different quantity from :func:`resolve_tool_count`: the
+    full-mode catalog is the registry *union* the primary workflow aliases
+    (``src.tool_modes.advertised_tool_names_full``). A mounted server may
+    advertise fewer names under a narrower mode. Documentation may publish
+    either number, so each is counted from its own source and neither stands
+    in for the other. The breakdown separates registered tools from the
+    workflow aliases that are not themselves registered, so it sums to the
+    total.
+    """
+    try:
+        advertised, registry = _advertised_roster()
+    except ModuleNotFoundError as exc:
+        return ToolCount(available=False, reason=str(exc))
+
+    breakdown = {
+        "registry": len(advertised & registry),
+        "workflow_aliases": len(advertised - registry),
+    }
+    return ToolCount(available=True, total=len(advertised), breakdown=breakdown)
 
 
 def main() -> int:

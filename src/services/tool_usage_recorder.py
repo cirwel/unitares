@@ -395,8 +395,8 @@ def build_tool_usage_payload(
             if known is not None:
                 payload["action"] = action if action in known else _ACTION_UNLISTED
             elif td is None:
-                # Unregistered name (external plugin router, e.g. `pi` from
-                # unitares_pi_plugin). We cannot know its vocabulary, so we
+                # Unregistered name (an external plugin's router). We cannot
+                # know its vocabulary, so we
                 # record that a sub-action existed WITHOUT recording the
                 # caller's string.
                 payload["action"] = _ACTION_UNLISTED

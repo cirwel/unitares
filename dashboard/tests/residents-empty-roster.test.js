@@ -140,9 +140,8 @@ describe("residentPanels() on a residentless install", () => {
     expect(d.watcher).toBeFalsy();
     expect(d.sentinel).toBeFalsy();
     expect(d.vigil).toBeFalsy();
-    // The three that were already correct, kept as a control.
+    // The two that were already correct, kept as a control.
     expect(d.chronicler).toBeNull();
-    expect(d.steward).toBeNull();
     expect(d.lumen).toBeNull();
   });
 
@@ -152,7 +151,7 @@ describe("residentPanels() on a residentless install", () => {
     await dom.window.Residents.load();
     const mount = dom.window.document.querySelector("#res-mount");
     expect(mount.querySelectorAll(".panel").length).toBe(0);
-    for (const name of ["Watcher", "Sentinel", "Vigil", "Steward", "Chronicler", "Lumen"]) {
+    for (const name of ["Watcher", "Sentinel", "Vigil", "Chronicler", "Lumen"]) {
       expect(mount.textContent).not.toContain(name);
     }
   });
@@ -168,6 +167,28 @@ describe("residentPanels() on a residentless install", () => {
     expect(d.watcher.resident).toBeTruthy();
     expect(d.sentinel).toBeFalsy();
     expect(d.vigil).toBeFalsy();
+  });
+
+  it("a roster still naming the retired Steward renders no Steward card", async () => {
+    // Steward was retired on 2026-09-13 with unitares-pi-plugin. An operator
+    // whose UNITARES_RESIDENTS still lists it gets a /v1/residents row back;
+    // the pane must not revive the card from that row.
+    const { dom, d } = await panelsOf({
+      residents: {
+        success: true,
+        configured: ["Steward", "Chronicler"],
+        residents: [rosterRow("Steward"), rosterRow("Chronicler")],
+        source: "env",
+      },
+    });
+    expect("steward" in d).toBe(false);
+    expect(d.chronicler).toBeTruthy(); // control: the rostered neighbour still maps
+    dom.window.eval(residentsSource);
+    await dom.window.Residents.load();
+    const mount = dom.window.document.querySelector("#res-mount");
+    const titles = [...mount.querySelectorAll(".panel h2")].map((h) => h.textContent);
+    expect(titles).toEqual(["Chronicler"]);
+    expect(mount.textContent).not.toContain("Steward");
   });
 
   it("a /v1/residents outage is not a de-rostering — panels still render", async () => {

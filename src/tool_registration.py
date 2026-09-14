@@ -52,6 +52,7 @@ from src.alias_schema import (
 )
 from src.tool_annotations import tool_annotations
 from src.tool_call_sets import call_set
+from src.mcp_handlers.middleware.params_step import remove_reserved_dispatch_keys
 
 from src.logging_utils import get_logger
 from src.metrics_registry import TOOL_CALLS_TOTAL, TOOL_CALL_DURATION
@@ -279,8 +280,13 @@ def get_tool_wrapper(tool_name: str):
             # identity is resolved only from the middleware-owned handoff at
             # the exit point; a raw request agent_id may be a target, legacy
             # reference, or rejected impersonation attempt.
-            usage_payload = build_tool_usage_payload(tool_name, kwargs)
-            session_id = kwargs.get("client_session_id")
+            # Caller copies of reserved dispatch keys go before anything reads
+            # kwargs: the Wave-3a BEAM branch below returns without
+            # dispatch_tool (whose pipeline strips them), and _record reads
+            # the middleware handoff for audit attribution.
+            usage_payload = {}
+            session_id = None
+            dispatch_metadata_sanitized = False
 
             def _record(success, error_type=None, result=None):
                 """Fire-and-forget audit row.
@@ -306,7 +312,14 @@ def get_tool_wrapper(tool_name: str):
                     # `request_review` audits as agent_id=NULL — countable but
                     # not attributed, which is exactly the question #1387 was
                     # opened to answer. Same for knowledge(action="search").
-                    agent_id = resolve_dispatch_bound_agent_id(kwargs)
+                    # If sanitation itself unexpectedly failed, the raw kwargs
+                    # are not safe for attribution.  Still emit an anonymous
+                    # error row rather than trusting a forged handoff.
+                    agent_id = (
+                        resolve_dispatch_bound_agent_id(kwargs)
+                        if dispatch_metadata_sanitized
+                        else None
+                    )
                     if result is not None:
                         agent_id = resolve_minted_agent_id(tool_name, agent_id, result)
                     record_tool_usage(
@@ -332,6 +345,15 @@ def get_tool_wrapper(tool_name: str):
                     )
 
             try:
+                # Keep untrusted JSON/resource-limit failures inside the
+                # wrapper's normal error envelope and audit path.  Expected
+                # malformed wrapper shapes are treated as opaque by the
+                # sanitizer and the dispatch pipeline.
+                remove_reserved_dispatch_keys(kwargs)
+                dispatch_metadata_sanitized = True
+                usage_payload = build_tool_usage_payload(tool_name, kwargs)
+                session_id = kwargs.get("client_session_id")
+
                 # Wave 3a per-tool routing table (RFC docs/proposals/
                 # beam-wave-3a-read-only-handlers.md v0.2 §3.1). If the
                 # tool has been cut over to BEAM, attempt the BEAM proxy
