@@ -89,7 +89,10 @@ the tree and reported it as true of the running server, which a single live tool
 call contradicted. Reviewers dispatched from here on are required to mark each
 load-bearing claim **tree**, **system** or **inferred**, and to state plainly when
 the live instruments were unreachable rather than letting tree readings stand in
-for system ones. See `docs/operations/agent-analysis-provenance.md`. The seven
+for system ones. See `docs/operations/agent-analysis-provenance.md`, which is
+itself a **tree**-only artifact codified from a session transcript: its worked
+examples are reported as that transcript recorded them, not independently
+re-verified live, and are marked UNVERIFIED there on that basis. The seven
 verdicts recorded below were produced under the instructions described above and
 are left exactly as they were.
 
