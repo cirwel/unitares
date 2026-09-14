@@ -44,6 +44,7 @@ derived text the removed guard's neighbours check.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -64,6 +65,19 @@ CONSOLIDATED_TOOLS = [
 ]
 
 
+def _names_action(description: str, action: str) -> bool:
+    """Match an action name without accepting identifier substrings."""
+    return re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(action)}(?![A-Za-z0-9_])",
+        description,
+    ) is not None
+
+
+def test_action_name_matcher_rejects_identifier_substrings():
+    assert not _names_action("update appends resolution_notes", "note")
+    assert _names_action("note stores an open discovery", "note")
+
+
 async def _routed_actions(tool: str) -> list[str]:
     """Recover a router's real action list from its unknown-action recovery."""
     handler = TOOL_HANDLERS[tool]
@@ -79,7 +93,7 @@ async def test_description_names_every_routed_action(tool):
     assert actions, f"{tool} reported no valid_actions"
     desc = get_tool_description(tool)
     assert desc, f"{tool} has no registered description"
-    missing = [a for a in actions if a not in desc]
+    missing = [a for a in actions if not _names_action(desc, a)]
     assert not missing, (
         f"{tool} description omits routed actions {missing}; description={desc!r}"
     )
@@ -126,7 +140,7 @@ async def test_served_description_names_every_routed_action(tool):
     actions = await _routed_actions(tool)
     assert actions, f"{tool} reported no valid_actions"
     served = _served_description(tool)
-    missing = sorted(a for a in actions if a not in served)
+    missing = sorted(a for a in actions if not _names_action(served, a))
     assert not missing, (
         f"{tool} is advertised to clients with a description that omits routed "
         f"actions {missing}. The served text is authored in "
@@ -146,8 +160,6 @@ async def test_served_description_names_no_phantom_action(tool):
     to pass an action that does not route — that is the `dialectic(action='vote')`
     defect, and it is worse than an omission because the caller acts on it.
     """
-    import re
-
     actions = set(await _routed_actions(tool))
     served = _served_description(tool)
     claimed = set(re.findall(r"action=['\"](\w+)['\"]", served))
