@@ -63,6 +63,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **skills:** five skills whose cited sources had changed after `last_verified` were re-verified claim by claim and corrected: `knowledge-graph` (`search_shared_memory` defaults to lean summaries; date filters are not honoured by search; `supersede` and response chains need the AGE backend; `cleanup` is the 7/30/90-day lifecycle pass and staleness scoring is `audit`; closing statuses take `closure_class` and `closure_evidence`; lifecycle tags documented), `dialectic-reasoning` (the provenance-stamped antithesis example lacked the required `reasoning`; `whose_move` literals; the outcomes table lists what live code produces; policy and enforcement blocks arrive on the check-in, not the metrics call), `governance-fundamentals` (`verdict` is a glossary wrapper of `metrics.verdict`, not the action; `nearest_edge` can be `oscillation`; the coherence margin edge is gated on provenance, not history), `unitares-dashboard` (`snapshot.js` is auth-gated and can be absent, so snapshot fallbacks must guard every level; the WebSocket connects cookie-first; `RELOAD` is the polling fallback only while the stream is closed; the verify section describes the vitest harness that exists), and `unitares-governance` (the default surface is the five-tool `minimal` mode). Source lists now name the files the claims resolve to; all seven skills carry `source_digests`; `discord-bridge` keeps its date because its sources live in another repository. The plugin mirror lags until the next bundle re-cut, which the next release entry must declare with its `plugin-bundle-recut` marker, and the plugin's copy of `_check_freshness.py` should be synced at the same re-cut. (#2097)
 - **skills:** the `governance-lifecycle` skill's MCP Tools Reference now says which of its names a tool mode advertises: the default `minimal` lists only the five-tool checkpoint loop, `lite` (29 tools) lists every name in the reference plus `list_tools` / `describe_tool`, and a mode filters only `tools/list`, so every registered tool still dispatches by name in every mode. The discovery line names the modes that carry the two introspection tools instead of implying they are always listed. Every other claim in the skill was re-verified against its cited sources; `last_verified` moves to 2026-09-07 and the source list gains `src/tool_modes.py` and `src/tool_mode_listing.py`. The plugin mirror lags until the next bundle re-cut, which the next release entry must declare with its `plugin-bundle-recut` marker. (#2095)
 
+## [2.22.1] - 2026-09-08
+
+This is a maintenance release candidate based on the immutable v2.22.0 tag.
+It backports the release corrections without importing subsequent master
+changes. The five-tool default, 29-tool `lite` surface, registered callable
+names, input schemas, lifecycle envelopes, SDK version, and skills bundle are
+unchanged from v2.22.0. No database migration is introduced.
+
+### Fixed
+
+- **container publication:** publish only the versioned image; keep `latest` unchanged until the verified multi-architecture index digest is explicitly promoted without rebuilding. Remove the publication-time promotion switch. (#2108)
+- **Compose upgrade:** pass `GOVERNANCE_TOOL_MODE` from Compose interpolation into the server environment, so setting `lite` in `.env`, rebuilding/recreating the service, and reconnecting the MCP client restores wider discovery. v2.22.0 needs the explicit override documented in its errata. Backports the fix merged after v2.22.0 was tagged. (#2092)
+- **release metadata:** keep published installation pins separate from the source version, bind plugin parity to the inspected v2.22.0 tag, and prevent source-version updates from rewriting historical bundle evidence. Restore the v2.22.0 changelog to its actual tagged contents and record the post-publication correction separately. (#2092)
+
+### Validation
+
+- **Docker MCP:** exercise minimal discovery and an unadvertised named call, then the 29-tool `.env` lite override on the real Compose stack. The candidate must pass these checks before tagging; the successful #2092 run is prior evidence, not a substitute for candidate validation. (#2092)
+- **maintenance CI:** run the Python, Docker, Elixir, documentation, scope, and release-seam workflows on `release/2.22`, with their existing checks intact.
+
 ## [2.22.0] - 2026-09-07
 
 Published contents are recorded below. See [post-publication errata](releases/2.22.0-errata.md) for the Compose upgrade correction.
