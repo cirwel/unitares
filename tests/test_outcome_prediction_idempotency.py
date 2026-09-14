@@ -41,7 +41,10 @@ def test_public_description_names_canonical_retry_and_conflict() -> None:
         (Path(__file__).resolve().parents[1] / "src/tool_descriptions.json").read_text()
     )
     description = descriptions["outcome_event"]
-    assert "identical retries return the canonical existing outcome" in description
+    assert (
+        "while the binding is retained, identical retries return the canonical "
+        "existing outcome" in description.lower()
+    )
     assert "PREDICTION_REUSE_CONFLICT" in description
 
 
@@ -247,6 +250,44 @@ async def test_identical_retry_returns_canonical_and_calibrates_only_once():
     checker.record_prediction.assert_called_once()
     checker.record_tactical_decision.assert_called_once()
     sequential.record_exogenous_tactical_outcome.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_created_response_and_calibration_use_canonical_store_score():
+    class RoundingBindingDB(DurableBindingDB):
+        async def record_bound_outcome_event(self, **kwargs):
+            result = await super().record_bound_outcome_event(**kwargs)
+            if result["status"] == "created":
+                canonical_score = 0.12345679104328156
+                self.bindings[(kwargs["agent_id"], kwargs["prediction_id"])][
+                    "outcome_score"
+                ] = canonical_score
+                self.rows[-1]["outcome_score"] = canonical_score
+                result["outcome_score"] = canonical_score
+            return result
+
+    db = RoundingBindingDB()
+    monitor, pid = make_monitor()
+    checker = MagicMock()
+
+    with patch("src.calibration.calibration_checker", checker):
+        first = await submit(
+            db,
+            {"agent-idempotent": monitor},
+            pid,
+            outcome_score=0.123456789,
+        )
+        replay = await submit(
+            db,
+            {"agent-idempotent": monitor},
+            pid,
+            outcome_score=0.123456789,
+        )
+
+    canonical_score = db.rows[0]["outcome_score"]
+    assert first["outcome_score"] == canonical_score
+    assert replay["outcome_score"] == canonical_score
+    assert checker.record_prediction.call_args.kwargs["actual_correct"] == canonical_score
 
 
 @pytest.mark.asyncio
