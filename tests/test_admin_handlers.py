@@ -81,6 +81,9 @@ class TestGetServerInfo:
     @pytest.mark.asyncio
     async def test_server_info_without_psutil(self, mock_mcp_server, patch_context_agent_id):
         mock_mcp_server.PSUTIL_AVAILABLE = False
+        # tool_count is sourced from mcp_handlers.TOOL_HANDLERS (the dispatch
+        # snapshot), not the live decorator registry -- see
+        # TestServerInfoReportsWhatTheServerActuallyUses for why.
         with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
              patch("src.mcp_handlers.TOOL_HANDLERS", {"a": None, "b": None, "c": None}):
             from src.mcp_handlers.admin.handlers import handle_get_server_info
@@ -3245,3 +3248,183 @@ class TestContinuityHealthAdditional:
             data = parse_result(result)
             assert data["success"] is True
             assert any("provenance" in r.lower() for r in data["recommendations"])
+
+
+class TestServerInfoReportsWhatTheServerActuallyUses:
+    """server_info must report the marker each transport writes and name
+    which tool population its count is, using the same source and
+    vocabulary #2197 canonized for the docs tool-count guard
+    (registry / workflow_aliases / advertised).
+
+    Both fields used to answer a different question than the reader's.
+    `pid_file` was recomputed locally instead of asked of each transport's
+    own writer, and both transports were wrong in different ways:
+    HTTP's path walk landed on `src/` instead of the repo root and ignored
+    UNITARES_SERVER_PID_FILE, and stdio reported an invented filename that
+    nothing writes -- agent_process_mgmt.PID_FILE is stdio's real writer,
+    not process_management.SERVER_PID_FILE. `tool_count` is (and stays) the
+    TOOL_HANDLERS dispatch snapshot, while the docs audit surface counts
+    advertised wire names -- a different, larger number -- with nothing
+    saying so.
+    """
+
+    def _payload(self, monkeypatch, argv):
+        monkeypatch.setattr("sys.argv", argv)
+        from src.mcp_handlers.admin.handlers import build_server_info_payload
+
+        return build_server_info_payload()
+
+    def test_http_pid_file_is_the_one_process_management_writes(self, monkeypatch):
+        from src.process_management import SERVER_PID_FILE
+
+        payload = self._payload(monkeypatch, ["python", "src/mcp_server.py", "--port", "8767"])
+        assert payload["pid_file"] == str(SERVER_PID_FILE)
+
+    def test_stdio_pid_file_is_the_one_stdio_actually_writes(self, monkeypatch):
+        """stdio's main() calls agent_process_mgmt.init_server_process(),
+        which writes agent_process_mgmt.PID_FILE -- a different module than
+        the HTTP transport's writer. Exact cross-module equality, not just a
+        shared parent directory."""
+        from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
+
+        payload = self._payload(monkeypatch, ["python", "src/mcp_server_std.py"])
+        assert payload["transport"] == "STDIO"
+        assert payload["pid_file"] == str(STDIO_PID_FILE)
+
+    def test_neither_transport_reports_a_name_nothing_writes(self, monkeypatch):
+        """The defect class, stated directly: every reported marker must be
+        some writer's constant, never a name synthesised in the reporter."""
+        from src.agent_process_mgmt import PID_FILE as STDIO_PID_FILE
+        from src.process_management import SERVER_PID_FILE
+
+        written = {str(SERVER_PID_FILE), str(STDIO_PID_FILE)}
+        for argv in (["python", "src/mcp_server.py"], ["python", "src/mcp_server_std.py"]):
+            assert self._payload(monkeypatch, argv)["pid_file"] in written, argv
+
+    def test_legacy_tool_count_is_the_dispatch_snapshot(self, monkeypatch):
+        """`tool_count` reads TOOL_HANDLERS, not the live decorator registry
+        -- an earlier draft of the tool_counts fix read get_tool_registry()
+        for both, which would have changed this existing field's value the
+        moment a decorator-only registration landed, breaking this PR's own
+        "no existing field changed value or type" compatibility claim."""
+        from src.mcp_handlers import TOOL_HANDLERS
+
+        payload = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+        assert payload["tool_count"] == len(TOOL_HANDLERS)
+
+    def test_legacy_tool_count_does_not_move_with_an_unsynced_registration(
+        self, monkeypatch
+    ):
+        """A decorator-only registration (patched straight into the registry,
+        the way an entry-point plugin's @mcp_tool decorator does at import)
+        is invisible to TOOL_HANDLERS until refresh_tool_handlers_from_
+        registry() resyncs it, and cannot dispatch either way. Legacy
+        `tool_count` must not move even though `tool_counts.registry` does."""
+        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, ToolDefinition
+
+        before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+        monkeypatch.setitem(
+            _TOOL_DEFINITIONS,
+            "pretend_unsynced_plugin_tool",
+            ToolDefinition(
+                name="pretend_unsynced_plugin_tool", handler=lambda *_: None, timeout=30.0,
+            ),
+        )
+        after = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+
+        assert after["tool_counts"]["registry"] == before["tool_counts"]["registry"] + 1
+        assert after["tool_count"] == before["tool_count"], (
+            "legacy tool_count moved with a registry-only registration that "
+            "cannot dispatch -- it must track TOOL_HANDLERS, not the registry"
+        )
+
+    def test_tool_counts_matches_the_docs_guard_vocabulary_and_source(self, monkeypatch):
+        """Same quantity names (registry / workflow_aliases / advertised) that
+        #2197's update_docs_tool_count.py / count_tools.py canonized for the
+        docs tool-count guard. `advertised` and the docs guard read different
+        source functions (see test_counts_see_a_tool_registered_after_import_when_unmounted
+        below for why), but
+        in this test's unmounted context they resolve to the same number, so
+        this still pins that the two claims cannot silently diverge here."""
+        from src.tool_modes import advertised_tool_names_full
+
+        counts = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+
+        assert set(counts) >= {"registry", "workflow_aliases", "advertised"}
+        assert counts["advertised"] == len(advertised_tool_names_full())
+        assert counts["registry"] + counts["workflow_aliases"] == counts["advertised"]
+
+    def test_advertised_is_never_smaller_than_registry(self, monkeypatch):
+        counts = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+        assert counts["advertised"] >= counts["registry"]
+
+    def test_counts_see_a_tool_registered_after_import_when_unmounted(self, monkeypatch):
+        """Unmounted (no `src.mcp_server` module imported -- generators, unit
+        tests, a bare script), `advertised` must still see a tool an
+        entry-point plugin registers at boot: get_tool_registry() reads the
+        decorator registry directly, so a handler decorated after import is
+        visible immediately -- no separate resync step, unlike
+        mcp_handlers.TOOL_HANDLERS.
+        """
+        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, ToolDefinition
+
+        before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+        monkeypatch.setitem(
+            _TOOL_DEFINITIONS,
+            "pretend_plugin_tool",
+            ToolDefinition(
+                name="pretend_plugin_tool", handler=lambda *_: None, timeout=30.0,
+            ),
+        )
+        after = self._payload(monkeypatch, ["python", "src/mcp_server.py"])["tool_counts"]
+
+        assert after["registry"] == before["registry"] + 1
+        assert after["advertised"] == before["advertised"] + 1
+
+    def test_advertised_does_not_outrun_a_mounted_server(self, monkeypatch):
+        """The bug a live server hits: a plugin's @mcp_tool decorator can
+        register into the decorator registry after FastMCP already mounted
+        its wire table (auto_register_all_tools runs once, at boot). Once
+        that has happened, `advertised` must report what tools/list will
+        actually serve -- the mounted set -- not the live (now-larger)
+        registry, or server_info would promise a capability dispatch
+        refuses. Same fake-mount pattern as
+        TestContractCannotOutrunDispatch (test_plugins_disabled_is_honoured_by_importers.py).
+        """
+        import sys
+        import types
+        from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, ToolDefinition, get_tool_registry
+
+        mounted = {name: object() for name in get_tool_registry()}
+        fake_server = types.ModuleType("src.mcp_server")
+        fake_server.mcp = types.SimpleNamespace(
+            _tool_manager=types.SimpleNamespace(_tools=mounted)
+        )
+        original = sys.modules.get("src.mcp_server")
+        sys.modules["src.mcp_server"] = fake_server
+        try:
+            before = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+            monkeypatch.setitem(
+                _TOOL_DEFINITIONS,
+                "pretend_late_plugin_tool",
+                ToolDefinition(
+                    name="pretend_late_plugin_tool", handler=lambda *_: None, timeout=30.0,
+                ),
+            )
+            after = self._payload(monkeypatch, ["python", "src/mcp_server.py"])
+        finally:
+            if original is None:
+                sys.modules.pop("src.mcp_server", None)
+            else:
+                sys.modules["src.mcp_server"] = original
+
+        assert after["tool_counts"]["registry"] == before["tool_counts"]["registry"] + 1
+        assert after["tool_counts"]["advertised"] == before["tool_counts"]["advertised"], (
+            "advertised grew with a registry-only registration the mounted "
+            "server will never dispatch"
+        )
+        assert after["tool_count"] == before["tool_count"], (
+            "legacy tool_count moved with a registry-only registration -- it "
+            "must track TOOL_HANDLERS (the dispatch snapshot), not the "
+            "live decorator registry"
+        )
