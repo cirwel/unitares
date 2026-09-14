@@ -1,0 +1,247 @@
+name: Promote Release
+
+# Step 8 of docs/operations/RELEASE_PROCESS.md as one approval. `verify` reads
+# the already-published artifact and records its evidence; `promote` waits for a
+# required reviewer on the release-promotion environment, then moves GHCR
+# latest to the verified digest without rebuilding; `pin` pushes a branch that
+# advances PUBLISHED_VERSION. Merging that branch's PR stays a human act, and
+# GITHUB_TOKEN cannot open pull requests in this repository by setting.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published server release tag to verify and promote (for example v2.23.0)
+        required: true
+        type: string
+
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PROMOTION_ENVIRONMENT: release-promotion
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+      packages: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - name: Validate the requested tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Expected a server release tag such as v2.23.0; got: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse an ungated promotion environment
+        # GitHub creates a missing environment on first use with no protection,
+        # which would turn the approval into a formality. Fail closed instead.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # gh prints a 404 body to stdout, so a failed call must not be parsed.
+          if ! reviewers=$(gh api "repos/$GITHUB_REPOSITORY/environments/$PROMOTION_ENVIRONMENT" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length' 2>/dev/null); then
+            reviewers=0
+          fi
+          case "$reviewers" in ''|*[!0-9]*) reviewers=0 ;; esac
+          if [ "$reviewers" -lt 1 ]; then
+            echo "Environment '$PROMOTION_ENVIRONMENT' must exist with a required reviewer before promotion." >&2
+            exit 1
+          fi
+
+      - name: Check out master with release tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require the newest release, ahead of PUBLISHED_VERSION
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null || {
+            echo "$RELEASE_TAG is not a tag in this repository." >&2; exit 1; }
+          newest=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ "$newest" != "$RELEASE_TAG" ]; then
+            echo "$RELEASE_TAG is not the newest server tag ($newest); do not move latest backwards." >&2
+            exit 1
+          fi
+          if git ls-remote --exit-code --heads origin "publish/$RELEASE_TAG" > /dev/null; then
+            echo "publish/$RELEASE_TAG already exists; merge or delete its pull request before promoting again." >&2
+            exit 1
+          fi
+          published=$(tr -d '[:space:]' < PUBLISHED_VERSION)
+          if [ "$(printf '%s\n%s\n' "$published" "$VERSION" | sort -V | tail -1)" != "$VERSION" ] || [ "$published" = "$VERSION" ]; then
+            echo "PUBLISHED_VERSION is already $published; $RELEASE_TAG is not ahead of it." >&2
+            exit 1
+          fi
+
+      - name: Require a published release page
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "$draft" != "false" ]; then
+            echo "$RELEASE_TAG has no published release page." >&2
+            exit 1
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Resolve the index digest, platforms, and SBOMs
+        id: image
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          image="$REGISTRY/$IMAGE_NAME:$RELEASE_TAG"
+          digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "No index digest for $image" >&2; exit 1; }
+          platforms=$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME@$digest" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[]? | select(.platform.os != "unknown") | "\(.platform.os)/\(.platform.architecture)"] | sort | join(",")')
+          if [ "$platforms" != "linux/amd64,linux/arm64" ]; then
+            echo "Expected linux/amd64 and linux/arm64; got: $platforms" >&2
+            exit 1
+          fi
+          sboms=$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME@$digest" --format '{{json .SBOM}}' \
+            | jq -r '[to_entries[] | select(.value.SPDX != null) | .key] | sort | join(",")')
+          if [ "$sboms" != "linux/amd64,linux/arm64" ]; then
+            echo "Expected an SPDX SBOM for both platforms; got: $sboms" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+
+      - name: Verify build provenance from the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          gh attestation verify "oci://$REGISTRY/$IMAGE_NAME@$DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --format json > attestation.json
+          jq -e 'length >= 1' attestation.json > /dev/null
+
+      - name: Record release evidence
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORMS: ${{ steps.image.outputs.platforms }}
+        run: |
+          {
+            echo "## Release evidence for $RELEASE_TAG"
+            echo
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "| Source commit | \`$(git rev-list -n 1 "$RELEASE_TAG")\` |"
+            echo "| Index digest | \`$DIGEST\` |"
+            echo "| Platforms | $PLATFORMS |"
+            echo "| SBOM | SPDX for both platforms |"
+            echo "| Provenance | verified: publish-container.yml at refs/tags/$RELEASE_TAG |"
+            echo "| Release page | published |"
+            echo
+            echo "Promotion waits for approval on the \`$PROMOTION_ENVIRONMENT\` environment."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release-promotion
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point latest at the verified digest without rebuilding
+        env:
+          DIGEST: ${{ needs.verify.outputs.digest }}
+        run: |
+          docker buildx imagetools create --prefer-index=false \
+            --tag "$REGISTRY/$IMAGE_NAME:latest" "$REGISTRY/$IMAGE_NAME@$DIGEST"
+          served=$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:latest" --format '{{json .Manifest}}' | jq -r .digest)
+          if [ "$served" != "$DIGEST" ]; then
+            echo "latest resolves to $served, not the verified $DIGEST" >&2
+            exit 1
+          fi
+          echo "latest now serves \`$DIGEST\`." >> "$GITHUB_STEP_SUMMARY"
+
+  pin:
+    needs: [verify, promote]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out master
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: master
+
+      - name: Push a branch that advances PUBLISHED_VERSION
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+          DIGEST: ${{ needs.verify.outputs.digest }}
+        run: |
+          branch="publish/$RELEASE_TAG"
+          # A re-run after an unmerged earlier run must not die on a raw push
+          # rejection. latest is already promoted at this point; the pin is the
+          # only thing left, and it already exists.
+          if git ls-remote --exit-code --heads origin "$branch" > /dev/null; then
+            {
+              echo "\`$branch\` already exists from an earlier run; latest now serves \`$DIGEST\`."
+              echo "Open or merge its pull request, or delete the branch and re-run to rebuild the pin."
+            } | tee -a "$GITHUB_STEP_SUMMARY" >&2
+            exit 1
+          fi
+          git switch -c "$branch"
+          printf '%s\n' "$VERSION" > PUBLISHED_VERSION
+          python3 scripts/ops/version_manager.py --update
+          git config user.name "github-actions[bot]"
+          git config user.email "41898+github-actions[bot]@users.noreply.github.com"
+          git add PUBLISHED_VERSION
+          git add -u
+          git commit -m "chore(release): publish $RELEASE_TAG" \
+            -m "Verified and promoted by the Promote Release workflow; GHCR latest serves $DIGEST."
+          git push origin "$branch"
+          {
+            echo "Pushed \`$branch\`. Open its pull request so required checks run:"
+            echo
+            echo '```bash'
+            echo "gh pr create --base master --head $branch --title \"chore(release): publish $RELEASE_TAG\" --body \"GHCR latest serves $DIGEST. Evidence: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
