@@ -27,3 +27,14 @@ docs/proposals/2026-06-24-wave-3-gate-framing.md
 # record. New entries must still be written clean — the allowlist exempts the
 # file, not the practice (2026-08-13).
 docs/ontology/plan.md
+
+# Wave 3 §5.2 boundary-cost audit summary — a frozen 2026-06-10 technical
+# record in the same class as the BEAM Wave RFCs above, and additionally a LIVE
+# CI artifact: `scripts/dev/check-wave3-ode-prereq.sh:47` requires the file to
+# exist before any `elixir/handler_dispatch/` commit, so it cannot be moved out
+# of the repo. Its council/live-verifier references are pre-existing and
+# load-bearing provenance (added 2026-09-08, commit c2a7928) — they say which
+# body performed the audit the gate depends on. Allowlisted 2026-09-13 so a
+# status-header refresh could land without a gutting rewrite of someone else's
+# record. Exempts the file, not the practice.
+docs/proposals/wave-3-section-5-2-boundary-audit-summary.md
