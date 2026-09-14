@@ -190,24 +190,6 @@ class TestPydanticSchemas:
         for name, model_cls in schemas.items():
             assert hasattr(model_cls, "model_validate"), f"Schema for {name} must be a Pydantic model"
 
-    def test_pi_params_validation(self):
-        """Verify complex discriminated unions or enums in PiParams work.
-
-        PiParams lives in unitares-pi-plugin as of Phase B1; skip when
-        plugin isn't installed.
-        """
-        plugin_schemas = pytest.importorskip("unitares_pi_plugin.schemas")
-        PiParams = plugin_schemas.PiParams
-        valid_health = PiParams(action="health")
-        assert valid_health.action == "health"
-
-        valid_sync = PiParams(action="sync_eisv", update_governance=True)
-        assert valid_sync.action == "sync_eisv"
-        assert valid_sync.update_governance is True
-
-        with pytest.raises(ValidationError):
-            PiParams(action="unknown_action_xyz")
-
     def test_legacy_validation_removal(self):
         """Confirm that missing/invalid types let Pydantic handle it naturally."""
         # Instead of manual code checking if limit is int, Pydantic type hints do it

@@ -27,8 +27,8 @@ class ResidentConfig:
     # Heartbeat cadence. Drives critical-silence detection
     # (alive iff last_update within 3x cadence). Per-resident because
     # residents have very different natural cadences: Sentinel is a
-    # 60s loop, Steward syncs every 5min, Vigil cycles every 30min,
-    # Chronicler runs daily. None is reserved for event-driven
+    # 60s loop, Vigil cycles every 30min, Chronicler runs daily.
+    # None is reserved for event-driven
     # residents (Watcher) where heartbeat-liveness is the wrong
     # abstraction — the probe skips the staleness gate for those.
     expected_cadence_s: int | None

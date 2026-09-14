@@ -9,6 +9,9 @@ freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
+  # Added 2026-09-14: participant resolution and the same-bound-caller gate
+  # for thesis, antithesis, and synthesis live here.
+  - unitares/src/mcp_handlers/dialectic/auth.py
   - unitares/src/mcp_handlers/dialectic/session.py
   - unitares/src/mcp_handlers/dialectic/responses.py
   - unitares/src/mcp_handlers/dialectic/auto_resolve.py
@@ -20,14 +23,15 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "5c703689f5ad8395"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "cebb8c905db22006"
+  unitares/src/mcp_handlers/dialectic/auth.py: "e6bcc28d7e2a4260"
   unitares/src/mcp_handlers/dialectic/session.py: "eb5ed22eb5684038"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
-  unitares/src/mcp_handlers/dialectic/reviewer.py: "d5e71f324195eb6c"
+  unitares/src/mcp_handlers/dialectic/reviewer.py: "183603f3918b1896"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
   unitares/src/mcp_handlers/schemas/dialectic.py: "0e7bcaa2ebbd1e97"
-  unitares/src/mcp_handlers/tool_stability.py: "25440b0686fa16d6"
+  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/identity/operator.py: "cc2698ddc37a4091"
   unitares/src/mcp_handlers/lifecycle/query.py: "d2a87c234d9c4d76"
 ---
@@ -44,6 +48,22 @@ A dialectic session is useful when:
 - A high-stakes decision needs structured verification before proceeding
 
 Dialectics are not punishment. They are a structured way to resolve disagreements using evidence and negotiation. In current UNITARES language, think of them as structured review more than "recovery court."
+
+## Bind Before You Submit
+
+`thesis`, `antithesis`, and `synthesis` are state-changing participant actions.
+Each requires the identity resolver to have bound the caller, and the UUID being
+submitted must equal that resolver-stamped caller. The normal flow is to bind
+with `start_session` or `identity`, then omit `agent_id`; the transport carries
+the bound UUID into the handler. Supplying an explicit `agent_id` is not
+delegation and cannot authorize acting as another participant.
+
+This is an equality gate, not an independent authentication protocol. Its
+proof strength is exactly the strength of the upstream binding source and the
+deployment's strict-identity policy. A server-inferred weak binding that the
+policy accepts remains weak; the dialectic check must not be described as
+proving strong identity or closing impersonation by itself. Inspect the
+identity-assurance fields when that distinction matters.
 
 ## Phase 1: Thesis
 

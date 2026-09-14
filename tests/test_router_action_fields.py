@@ -7,13 +7,24 @@ machine-readable statement of which flat parameter belongs to which action,
 and `describe_tool(action=...)` serves it. A hand-written map that nothing
 checks is exactly the drift the tool-registry cleanup removed elsewhere, so
 these tests check it against the live routing table on every run.
+
+The advertised `action` vocabulary is held to the same declared actions here.
+It is generated from a hand-written `Literal` on the parameter model, and until
+2026-09-13 only two routers had it compared with their actions, against
+hardcoded sets (`test_defaulted_consolidated_schemas_are_advertised` in
+tests/test_tool_schema_validation.py, whose job is the default action).
 """
 
 import json
 
 import pytest
 
-from src.mcp_handlers.decorators import get_tool_definition, get_tool_registry
+from src.mcp_compat import get_tool_input_schema
+from src.mcp_handlers.decorators import (
+    get_tool_definition,
+    get_tool_registry,
+    list_plugin_registered_tools,
+)
 from src.mcp_handlers.schemas.router_actions import (
     COMMON_ROUTER_FIELDS,
     declared_action_fields,
@@ -37,11 +48,18 @@ _TWO_LEVEL_TOOLS = frozenset({"cirs_protocol"})
 
 
 def _routers():
-    """(tool name, routed actions, parameter model) for every action tool."""
+    """(tool name, routed actions, parameter model) for every first-party action tool.
+
+    Plugin and test-registered tools are left out. Whether one is in the
+    registry when this module is collected depends on what was imported first
+    (see `first_party_tool_surface` in tests/conftest.py), and whether a
+    plugin's tools are coherent is the plugin's suite to answer.
+    """
     models = get_pydantic_schemas()
+    external = set(list_plugin_registered_tools())
     out = []
     for name in sorted(get_tool_registry()):
-        if name in _TWO_LEVEL_TOOLS:
+        if name in _TWO_LEVEL_TOOLS or name in external:
             continue
         definition = get_tool_definition(name)
         actions = getattr(definition, "known_actions", None) if definition else None
@@ -60,6 +78,84 @@ def test_the_survey_found_the_routers():
     assert len(ROUTERS) >= 8
     for expected in ("knowledge", "dialectic", "observe", "agent"):
         assert expected in ROUTER_IDS
+
+
+def test_the_survey_misses_no_first_party_action_tool(first_party_tool_surface):
+    """A partial survey passes as quietly as an empty one.
+
+    `_routers` keeps a tool only when it has both `known_actions` and a
+    registered parameter model, so a tool whose model went missing would drop
+    out of every test below, and the floor above would not notice while eight
+    others remained.
+
+    The population is what is actually served: an advertised tool declaring
+    `known_actions` must be surveyed, and a tool that is not advertised needs
+    no model. `hidden` is not a substitute for that test, because a hidden tool
+    listed in TOOL_ORDER is still advertised.
+    """
+    external = set(list_plugin_registered_tools())
+    declared = {
+        tool.name
+        for tool in get_tool_definitions()
+        if tool.name not in external
+        and tool.name not in _TWO_LEVEL_TOOLS
+        and getattr(get_tool_definition(tool.name), "known_actions", None)
+    }
+    missing = sorted(declared - set(ROUTER_IDS))
+    assert not missing, (
+        f"{missing!r} declare known_actions but were not surveyed: each needs a "
+        "registered parameter model, or a justified place in _TWO_LEVEL_TOOLS"
+    )
+
+
+# Keys that annotate a schema node without narrowing what it accepts.
+_ANNOTATION_KEYS = frozenset({"title", "description", "default", "examples", "deprecated"})
+
+
+def _closed_vocabulary(node, defs):
+    """The exact values a JSON-schema node accepts when they form a closed set, else None.
+
+    Pydantic spells a closed vocabulary as one constraint keyword plus
+    annotations: `enum` for a multi-value `Literal`, `const` for a single
+    value, `anyOf` with a `null` branch for an optional one, and a `$ref` into
+    `$defs` for an `Enum` class. Those four are read, and `type` is read only
+    as `"string"`, which keeps exactly the string members. `null` is dropped: it
+    is the absence of an action, which a router resolves to its default.
+
+    Every other shape returns None and fails the caller loudly: any other
+    `type`, a constraint keyword beside another such as `enum` with `const`,
+    `$ref` with its own constraints, `allOf`, or `oneOf`. Reading those means
+    intersecting constraints, and a reader that guessed could report a wider
+    set than the schema accepts, passing a schema that refuses a routed action.
+    """
+    keys = set(node) - _ANNOTATION_KEYS
+    node_type = node.get("type")
+    if "type" in keys:
+        if node_type not in ("string", "null"):
+            return None
+        keys.discard("type")
+    if node_type == "null":
+        return set() if not keys else None
+    if keys == {"$ref"} and node_type is None and node["$ref"].startswith("#/$defs/"):
+        return _closed_vocabulary(defs.get(node["$ref"].rsplit("/", 1)[-1], {}), defs)
+    if keys == {"anyOf"} and node_type is None:
+        values = set()
+        for branch in node["anyOf"]:
+            branch_values = _closed_vocabulary(branch, defs)
+            if branch_values is None:
+                return None
+            values |= branch_values
+        return values
+    if keys == {"enum"}:
+        values = set(node["enum"])
+    elif keys == {"const"}:
+        values = {node["const"]}
+    else:
+        return None
+    if node_type == "string":
+        values = {value for value in values if isinstance(value, str)}
+    values.discard(None)
+    return values
 
 
 @pytest.mark.parametrize("name,actions,model", ROUTERS, ids=ROUTER_IDS)
@@ -82,6 +178,46 @@ def test_declared_actions_are_exactly_the_routed_actions(name, actions, model):
     assert declared == set(actions), (
         f"{name}: ACTION_FIELDS declares {sorted(declared - set(actions))!r} "
         f"that do not route and omits {sorted(set(actions) - declared)!r}"
+    )
+
+
+@pytest.mark.parametrize("name,actions,model", ROUTERS, ids=ROUTER_IDS)
+def test_advertised_action_enum_is_exactly_the_routed_actions(
+    name, actions, model, first_party_tool_surface
+):
+    """The action list a client is shown must be the list the tool declares.
+
+    The advertised vocabulary is generated from the `Literal` on the tool's
+    parameter model, and server-side parameter validation checks that same
+    `Literal` before the handler runs. So an action the enum omits is refused
+    at validation, a route no call through dispatch can reach, and an enum
+    value the tool does not handle passes validation only to fail later.
+
+    What the enum is compared with depends on the tool. For an `action_router`,
+    `known_actions` is derived from its `actions={}` map, so this reaches the
+    routing table itself. For a tool that declares `known_actions` by hand and
+    dispatches on its own, currently `self_recovery`, it checks only that the
+    two declarations agree; neither is checked against the dispatch branches.
+
+    The served description names these actions too, but prose may abbreviate
+    (tests/test_action_router_description_drift.py). `cirs_protocol` is not
+    surveyed: it advertises `action` as a free string, so there is no closed
+    vocabulary here to compare.
+    """
+    catalog = {tool.name: tool for tool in get_tool_definitions()}
+    if name not in catalog:
+        pytest.skip(f"{name} is not advertised, so no client is shown a vocabulary")
+    schema = get_tool_input_schema(catalog[name])
+    action = (schema.get("properties") or {}).get("action")
+    assert action is not None, f"{name}: the advertised schema has no action property"
+    advertised = _closed_vocabulary(action, schema.get("$defs") or {})
+    assert advertised is not None, (
+        f"{name}: the advertised action property is not a closed vocabulary: {action!r}"
+    )
+    assert advertised == set(actions), (
+        f"{name}: the advertised action enum lists "
+        f"{sorted(set(advertised) - set(actions))!r} that do not route and omits "
+        f"{sorted(set(actions) - set(advertised))!r}"
     )
 
 
@@ -233,6 +369,13 @@ def test_describe_tool_narrows_the_schema_to_one_action():
     assert "still accepted" in view["note"]
 
 
+def test_knowledge_author_filter_is_disclosed_only_for_search():
+    search = _describe(tool_name="knowledge", action="search", lite=False)
+    store = _describe(tool_name="knowledge", action="store", lite=False)
+    assert "agent_id_filter" in search["tool"]["inputSchema"]["properties"]
+    assert "agent_id_filter" not in store["tool"]["inputSchema"]["properties"]
+
+
 def test_describe_tool_rejects_an_action_the_router_does_not_route():
     payload = _describe(tool_name="knowledge", action="vote", lite=False)
     assert payload.get("success") is False
@@ -253,4 +396,3 @@ def test_describe_tool_action_is_declared_on_its_own_wire_schema():
         schema.inputSchema if hasattr(schema, "inputSchema") else schema.input_schema,
     )["properties"]
     assert "action" in props
-

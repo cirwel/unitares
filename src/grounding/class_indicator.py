@@ -103,8 +103,8 @@ def classify_by_label_and_tags(
     agents at fit time vs at gating time.
 
     Resolution order:
-      1. Known resident label (Lumen / Vigil / Sentinel / Watcher / Steward /
-         Chronicler) — each is its own class because N=1 means class==agent.
+      1. Label in the configured resident roster — each is its own class
+         because N=1 means class==agent.
       2. Tag-derived: embodied → embodied; engaged_ephemeral → engaged_ephemeral;
          ephemeral → ephemeral; persistent + autonomous → resident_persistent.
       3. Default — session-bounded agents and anything unrecognized.

@@ -7,9 +7,9 @@ the caller's normal operation. The point of Phase A is to discover
 whether leases would have prevented real collisions, not to actually
 prevent them yet.
 
-This module is the recommended on-ramp for Python residents (Watcher,
-Steward, ship.sh, dispatch). Each resident imports `lease_advisory_scope`
-and wraps its unit-of-work without changing behavior on lease outcome.
+This module is the recommended on-ramp for Python resident and task clients.
+Each caller wraps its unit-of-work in `lease_advisory_scope` without changing
+behavior on lease outcome.
 
 Environment:
     LEASE_PLANE_BEARER_TOKEN — bearer token (sourced from

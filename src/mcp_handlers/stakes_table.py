@@ -50,8 +50,8 @@ dispatch actually resolves to. Keys are CANONICAL names
 only: `get_call_stakes_requirement` canonicalizes an alias before it looks the
 call up, so an entry keyed on an alias (`reset_monitor`, `submit_thesis`, ...)
 is never consulted and would only pad `export_table()`. External-plugin tools
-(e.g. the `unitares_pi_plugin` device tools, whose declaring module —
-`ToolDefinition.source_module` — is outside this repo's packages) are
+(tools whose declaring module — `ToolDefinition.source_module` — is outside
+this repo's packages) are
 deliberately NOT enumerated: they fall to the fail-closed `high` default until
 an operator classifies them when the gate is built — the safe direction for
 tools this server does not own.

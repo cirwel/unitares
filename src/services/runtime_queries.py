@@ -728,7 +728,6 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     server = server or mcp_server
     import asyncio
     import os
-    import time as _time
 
     from src.audit_log import audit_logger
     from src.calibration import calibration_checker
@@ -947,53 +946,6 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     except Exception as e:
         checks["data_directory"] = {"status": "error", "error": str(e)}
 
-    # Pi connectivity check is skipped entirely when the unitares-pi-plugin
-    # isn't installed; a missing plugin is the default in OSS builds and
-    # shouldn't surface as a "degraded" signal in the health payload.
-    #
-    # ⛔It is ALSO skipped when plugins are disabled, and the ImportError guard
-    # alone is not enough to do that. Importing the plugin module runs its
-    # ``@mcp_tool`` decorators, which register tools into the same registry the
-    # interface contract is built from — but well after
-    # ``mcp_server_bootstrap`` mounted the surface, so the tool is counted and
-    # never dispatchable. This probe runs on a timer five seconds after start,
-    # so a server launched with UNITARES_DISABLE_PLUGINS reported 50 advertised
-    # tools and a 51-capability federation contract, and calling the 51st
-    # returned "Unknown tool". Measured 2026-09-09.
-    from src.plugin_loader import plugins_disabled
-
-    try:
-        if plugins_disabled():
-            # Deliberately the same outcome as "not installed": no Pi check and
-            # no degraded signal, routed through the existing ImportError arm so
-            # the two skip reasons cannot drift apart.
-            raise ImportError("plugin loading disabled by UNITARES_DISABLE_PLUGINS")
-        from unitares_pi_plugin.handlers import PI_MCP_URLS, call_pi_tool  # type: ignore
-    except ImportError:
-        pass
-    else:
-        try:
-            pi_start = _time.time()
-            pi_result = await asyncio.wait_for(call_pi_tool("get_health", {}, timeout=3.0), timeout=4.0)
-            pi_latency = (_time.time() - pi_start) * 1000
-            if isinstance(pi_result, dict) and "error" not in pi_result:
-                checks["pi_connectivity"] = {
-                    "status": "healthy",
-                    "reachable": True,
-                    "latency_ms": round(pi_latency, 1),
-                    "urls_configured": PI_MCP_URLS,
-                }
-            else:
-                error_msg = str(pi_result.get("error", "unknown")) if isinstance(pi_result, dict) else str(pi_result)
-                checks["pi_connectivity"] = {
-                    "status": "warning",
-                    "reachable": False,
-                    "error": error_msg,
-                    "urls_configured": PI_MCP_URLS,
-                }
-        except (asyncio.TimeoutError, Exception) as e:
-            checks["pi_connectivity"] = {"status": "warning", "reachable": False, "error": str(e)}
-
     effective_checks = dict(checks)
     redis_check = effective_checks.get("redis_cache")
     if (
@@ -1042,8 +994,6 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
         )
     elif "knowledge_graph" in failing_checks:
         first_action = "Check knowledge graph backend and embeddings availability."
-    elif "pi_connectivity" in degraded_checks or "pi_connectivity" in failing_checks:
-        first_action = "Check Pi/anima connectivity only if Pi orchestration is required."
     elif failing_checks:
         first_action = f"Inspect the first failing component: {failing_checks[0]}."
     elif degraded_checks:
