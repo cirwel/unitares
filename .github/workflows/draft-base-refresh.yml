@@ -20,6 +20,16 @@ name: Draft Base Refresh
 #     workflow doing either would be the "silent green button" the delivery
 #     contract forbids.
 #
+#   * Only drafts idle longer than QUIET_HOURS. This workflow cannot see
+#     whether an agent is mid-session on a branch, so it treats recent activity
+#     as evidence that someone may be, and declines to push into it. The signal
+#     is the PR's `updatedAt`, the same one `stuck_draft_audit.py` uses for its
+#     IN-FLIGHT class, at the same 12h default — the audit calling a draft
+#     IN-FLIGHT and this job refreshing it would be two instruments disagreeing
+#     about whether anybody is working. `updatedAt` also moves on comments, not
+#     just pushes, so it over-skips rather than under-skips; that is the safe
+#     direction for a job that writes to someone else's branch.
+#
 # Label a PR `no-base-refresh` to opt out — for a PR deliberately pinned to an
 # older base, or one stacked on another PR's branch where a base merge would
 # pull in the wrong history.
@@ -41,6 +51,10 @@ on:
         description: "List what would be refreshed without pushing"
         type: boolean
         default: false
+      quiet_hours:
+        description: "Skip drafts touched within this many hours (0 disables)"
+        type: string
+        default: ""
 
 permissions:
   contents: write        # push the merge commit to the PR branch
@@ -64,6 +78,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ inputs.dry_run }}
+          # Kept equal to stuck_draft_audit.py's --quiet-hours default on purpose.
+          QUIET_HOURS: ${{ inputs.quiet_hours || '12' }}
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
@@ -74,21 +90,39 @@ jobs:
           # acting on an unknown merge state is how a clean branch gets a
           # conflicted merge commit pushed into it.
           gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
-            --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels \
+            --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt \
             > prs.json
 
-          refreshed=0; skipped=0
+          refreshed=0; skipped=0; held=0
+          now_s=$(date -u +%s)
           while read -r pr; do
             num=$(jq -r .number <<<"$pr")
             head=$(jq -r .headRefName <<<"$pr")
             base=$(jq -r .baseRefName <<<"$pr")
             state=$(jq -r .mergeStateStatus <<<"$pr")
             owner=$(jq -r '.headRepositoryOwner.login // ""' <<<"$pr")
+            updated=$(jq -r .updatedAt <<<"$pr")
 
             echo "::group::PR #$num ($head <- $base, state=$state)"
 
             if [ "$owner" != "${GITHUB_REPOSITORY%%/*}" ]; then
               echo "skip: head is a fork ($owner)"; skipped=$((skipped+1)); echo "::endgroup::"; continue
+            fi
+
+            # An unreadable timestamp is not evidence of idleness. Hold.
+            # The empty check is first and deliberate: `date -d ""` resolves to
+            # NOW rather than failing, so an absent updatedAt would otherwise be
+            # held as "touched 0h ago" — the right action reported as the wrong
+            # finding, which is the confusion this whole branch is about.
+            if [ -z "$updated" ] || [ "$updated" = "null" ] \
+               || ! updated_s=$(date -u -d "$updated" +%s 2>/dev/null) || [ -z "$updated_s" ]; then
+              echo "hold: updatedAt ($updated) could not be read, so idleness is unknown"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+            idle_h=$(( (now_s - updated_s) / 3600 ))
+            if [ "$QUIET_HOURS" != "0" ] && [ "$idle_h" -lt "$QUIET_HOURS" ]; then
+              echo "hold: touched ${idle_h}h ago (< ${QUIET_HOURS}h) — its owner may still be working"
+              held=$((held+1)); echo "::endgroup::"; continue
             fi
             if [ "$state" != "BEHIND" ]; then
               echo "skip: not BEHIND (a DIRTY pr needs a human; anything else needs nothing)"
@@ -126,6 +160,7 @@ jobs:
             echo "## Draft base refresh"
             echo "- refreshed: $refreshed"
             echo "- skipped:   $skipped"
+            echo "- held (active within ${QUIET_HOURS}h, or idleness unreadable): $held"
             echo
             echo "Readiness and merge are untouched by this job by design."
             echo "GITHUB_TOKEN synchronize workflows require maintainer approval; a refresh is not evidence that CI ran."
