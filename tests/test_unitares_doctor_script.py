@@ -2430,6 +2430,27 @@ def test_host_binary_currency_disables_brew_auto_update(doctor, monkeypatch):
     assert captured["env"].get("HOMEBREW_NO_AUTO_UPDATE") == "1"
 
 
+def test_host_binary_currency_strips_the_force_api_update_escape_hatch(doctor, monkeypatch):
+    """HOMEBREW_FORCE_API_AUTO_UPDATE forces a formula/cask API refresh in
+    Homebrew::API.fetch_api_files! regardless of HOMEBREW_NO_AUTO_UPDATE --
+    a caller or launch environment carrying it would still make this
+    supposedly read-only check fetch and rewrite API cache state. It must
+    be removed from the subprocess env entirely, not merely overridden."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setenv("HOMEBREW_FORCE_API_AUTO_UPDATE", "1")
+    captured = {}
+
+    def _capture_run(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _fake_run(_brew_payload())
+
+    monkeypatch.setattr(doctor.subprocess, "run", _capture_run)
+    doctor.check_host_binary_currency()
+
+    assert captured["env"] is not None
+    assert "HOMEBREW_FORCE_API_AUTO_UPDATE" not in captured["env"]
+
+
 def test_host_binary_currency_tracks_the_tunnel_that_went_stale(doctor):
     """cloudflared must stay in the tracked set — it is the case that
     motivated the check, and dropping it would silently reopen the gap."""

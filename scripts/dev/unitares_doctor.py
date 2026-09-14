@@ -1488,7 +1488,16 @@ def check_host_binary_currency() -> CheckResult:
     # check advertises as a read-only diagnostic. Force the override into the
     # subprocess env ourselves rather than trust the caller's environment
     # already has it set the way we need.
+    #
+    # HOMEBREW_FORCE_API_AUTO_UPDATE is a separate escape hatch:
+    # Homebrew::API.fetch_api_files! forces a formula/cask API refresh when
+    # that variable is set, REGARDLESS of HOMEBREW_NO_AUTO_UPDATE. A caller or
+    # launch environment carrying it would still make this check fetch and
+    # rewrite API cache state, so it must be stripped from the copied
+    # environment rather than merely overridden -- setting it to "0" or ""
+    # does not un-set it for Homebrew's own `ENV.fetch(...)`-style checks.
     env = {**os.environ, "HOMEBREW_NO_AUTO_UPDATE": "1"}
+    env.pop("HOMEBREW_FORCE_API_AUTO_UPDATE", None)
     try:
         proc = subprocess.run(
             [brew, "outdated", "--json=v2"],
