@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UNITARES Gateway MCP Server — simplified proxy to full governance.
 
-Exposes 6 simple tools on port 8768, proxies to the full 76-tool server on 8767.
+Exposes 6 simple tools on port 8768, proxies to the full governance server on 8767.
 Designed for weaker MCP clients (Perplexity, Discord bots, smaller models).
 
 Usage:
