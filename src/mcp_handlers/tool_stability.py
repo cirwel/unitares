@@ -325,7 +325,7 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # Observe tools → observe(action='...')
     "observe_agent": ToolAlias(old_name="observe_agent", new_name="observe", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note=f"Use observe(action='agent', agent_id='...'). {EISV_INLINE_SUMMARY}", inject_action="agent"),
+        migration_note=f"Use observe(action='agent', target_agent_id='...'). {EISV_INLINE_SUMMARY}", inject_action="agent"),
     "compare_agents": ToolAlias(old_name="compare_agents", new_name="observe", reason="consolidated",
         deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
         migration_note=f"Use observe(action='compare', agent_ids=[...]). {EISV_INLINE_SUMMARY}", inject_action="compare"),
