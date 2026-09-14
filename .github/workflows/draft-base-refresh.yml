@@ -100,6 +100,17 @@ jobs:
               echo "::error::QUIET_HOURS must be a nonnegative integer of hours (got '$QUIET_HOURS'); 0 disables the hold."
               exit 1 ;;
           esac
+          # All-digit is not the same as in-range: a value past the shell's
+          # integer width passes the pattern above and then makes `test -gt`
+          # report "integer expression expected", which reads as false and
+          # disables the hold — the same fail-open, one step later. The length
+          # test runs first and short-circuits, so the numeric compare below it
+          # can never see an out-of-range value. 8760h is one year; a quiet
+          # period longer than that is a typo, not an intent.
+          if [ "${#QUIET_HOURS}" -gt 5 ] || [ "$QUIET_HOURS" -gt 8760 ]; then
+            echo "::error::QUIET_HOURS must be at most 8760 (one year); got '$QUIET_HOURS'."
+            exit 1
+          fi
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
