@@ -2410,6 +2410,36 @@ def test_host_binary_currency_tolerates_a_missing_casks_key(doctor, monkeypatch)
     assert doctor.check_host_binary_currency().status is doctor.Status.PASS
 
 
+@pytest.mark.parametrize("installed_versions", [None, "2026.3.0", {"version": "2026.3.0"}])
+def test_host_binary_currency_warns_on_wrong_typed_installed_versions(
+    doctor, monkeypatch, installed_versions
+):
+    """A malformed tracked entry must not raise while formatting its version."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda *a, **k: _fake_run(_brew_payload({
+            "name": "cloudflared",
+            "installed_versions": installed_versions,
+            "current_version": "2026.9.1",
+        })),
+    )
+    result = doctor.check_host_binary_currency()
+    assert result.status is doctor.Status.WARN
+    assert "unexpected JSON shape" in result.message
+
+
+def test_host_binary_currency_warns_on_json_integer_over_decoder_limit(
+    doctor, monkeypatch
+):
+    """json.loads raises ValueError, not JSONDecodeError, on huge integers."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    stdout = '{"formulae": [9' + ('9' * 5000) + '], "casks": []}'
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _fake_run(stdout))
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
 def test_host_binary_currency_disables_brew_auto_update(doctor, monkeypatch):
     """brew classifies `outdated` as an auto-update command: without
     HOMEBREW_NO_AUTO_UPDATE=1 forced into the subprocess env, brew's own

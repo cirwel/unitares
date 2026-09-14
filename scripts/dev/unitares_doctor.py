@@ -1515,7 +1515,7 @@ def check_host_binary_currency() -> CheckResult:
                            detail=proc.stderr.strip()[:400])
     try:
         payload = json.loads(proc.stdout or "{}")
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError, RecursionError):
         return CheckResult(name, mode, Status.WARN,
                            "brew outdated returned unparseable JSON")
 
@@ -1539,12 +1539,24 @@ def check_host_binary_currency() -> CheckResult:
     tracked = set(HOST_BINARIES)
     stale: list[str] = []
     for entry in (*formulae, *casks):
-        entry_name = str(entry.get("name", ""))
+        entry_name = entry.get("name", "")
+        if not isinstance(entry_name, str):
+            return CheckResult(name, mode, Status.WARN,
+                               "brew outdated returned an unexpected JSON shape")
         # brew reports taps as "org/tap/formula"; match the bare formula too.
         if entry_name not in tracked and entry_name.rpartition("/")[2] not in tracked:
             continue
-        installed = ", ".join(str(v) for v in entry.get("installed_versions", [])) or "?"
-        stale.append(f"{entry_name} {installed} -> {entry.get('current_version', '?')}")
+        versions = entry.get("installed_versions", [])
+        current_version = entry.get("current_version", "?")
+        if (
+            not isinstance(versions, list)
+            or not all(isinstance(v, str) for v in versions)
+            or not isinstance(current_version, str)
+        ):
+            return CheckResult(name, mode, Status.WARN,
+                               "brew outdated returned an unexpected JSON shape")
+        installed = ", ".join(versions) or "?"
+        stale.append(f"{entry_name} {installed} -> {current_version}")
 
     if not stale:
         return CheckResult(name, mode, Status.PASS,
