@@ -1,0 +1,79 @@
+name: Server release sync
+
+# Source version, release tags, release pages, the verified PUBLISHED_VERSION,
+# GHCR latest, and maintenance-tag ancestry are advanced by separate human acts.
+# Any of them may lag on purpose; this keeps the lag visible as one issue. Runs
+# after the SDK (09:07) and Resident (09:17) checks so the findings stay distinct.
+on:
+  schedule:
+    - cron: "27 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with release tags and history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Compare source, tagged, released, published, and served versions
+        id: sync
+        run: |
+          python3 scripts/ci/server_release_sync.py --json | tee server-sync.json
+          echo "synced=$(jq -r '.synced' server-sync.json)" >> "$GITHUB_OUTPUT"
+          {
+            echo '## Server release sync'
+            echo '```json'
+            cat server-sync.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open or update the release-sync issue
+        if: steps.sync.outputs.synced != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create ci-finding --description "Opened by a CI audit/collector" \
+            --color D93F0B 2>/dev/null || true
+          marker='<!-- finding-fingerprint: server-release-sync -->'
+          body_file=$(mktemp)
+          {
+            echo "$marker"
+            echo 'The server release surfaces disagree. This is a reminder, not an automatic release or promotion.'
+            echo
+            echo '```json'
+            cat server-sync.json
+            echo '```'
+            echo
+            echo 'Resolve through docs/operations/RELEASE_PROCESS.md: forward-merge maintenance tags, and verify and promote a release with the Promote Release workflow.'
+            echo
+            echo '_Filed by `.github/workflows/server-release-sync.yml`._'
+          } > "$body_file"
+          existing=$(gh issue list --label ci-finding --state open \
+            --search 'server-release-sync in:body' \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file "$body_file"
+          else
+            gh issue create --title "Server release surfaces are out of sync" \
+              --label ci-finding --body-file "$body_file"
+          fi
+
+      - name: Close the resolved release-sync issue
+        if: steps.sync.outputs.synced == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --label ci-finding --state open \
+            --search 'server-release-sync in:body' \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" --reason completed \
+              --comment "The source version, release tags, release page, published version, and GHCR latest now agree."
+          fi

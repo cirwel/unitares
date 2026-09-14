@@ -269,18 +269,42 @@ async def test_builder_failure_returns_raw(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_onboard_envelope_surfaces_predecessor():
+def test_onboard_envelope_does_not_turn_sibling_predecessor_into_parent():
     payload = {
         "success": True,
         "uuid": "u-new",
         "lineage_state": "no_lineage_declared",
-        "thread_context": {"predecessor": {"uuid": "u-prior"}},
+        "thread_context": {
+            "predecessor": {"uuid": "u-prior"},
+            "episode_fork_kind": "sibling_locus",
+            "identity_lineage_fork": False,
+        },
     }
     env = build_experience_envelope("start_session", "onboard", payload)
     assert env["agent_uuid"] == "u-new"
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
-    assert "parent_agent_id" in env["next_action"]
+    assert "co-location does not establish lineage" in env["next_action"]
+    assert "Do not use its uuid as parent_agent_id" in env["next_action"]
     assert env["raw_governance"] is payload
+
+
+def test_onboard_envelope_does_not_redeclare_recorded_lineage():
+    payload = {
+        "success": True,
+        "uuid": "u-new",
+        "lineage_state": "declared",
+        "thread_context": {
+            "predecessor": {"uuid": "u-parent"},
+            "episode_fork_kind": "identity_lineage",
+            "identity_lineage_fork": True,
+        },
+    }
+
+    env = build_experience_envelope("start_session", "onboard", payload)
+
+    assert env["state_summary"]["predecessor_uuid"] == "u-parent"
+    assert "Declared lineage for this fork is already recorded" in env["next_action"]
+    assert "future process" not in env["next_action"]
 
 
 def test_onboard_envelope_surfaces_recorded_creation_origin():
