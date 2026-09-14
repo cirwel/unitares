@@ -61,6 +61,11 @@ _VALIDATION_CONTEXT_KEYS = frozenset({
 # level, and some handlers unwrap a JSON-string ``kwargs`` again themselves.
 _RESERVED_KEY_KWARGS_DEPTH = 4
 
+# JSON wrappers are untrusted input.  Besides malformed JSON, Python's decoder
+# can reject oversized integer literals with ValueError and deeply nested input
+# with RecursionError.  Neither shape should escape a transport error boundary.
+_JSON_KWARGS_ERRORS = (ValueError, TypeError, RecursionError)
+
 
 def remove_reserved_dispatch_keys(arguments: Any, _depth: int = 0) -> None:
     """Drop caller-supplied middleware handoff keys, including inside ``kwargs``.
@@ -82,11 +87,11 @@ def remove_reserved_dispatch_keys(arguments: Any, _depth: int = 0) -> None:
     elif isinstance(wrapped, str):
         try:
             parsed = json.loads(wrapped)
-        except (json.JSONDecodeError, TypeError):
+            if isinstance(parsed, dict):
+                remove_reserved_dispatch_keys(parsed, _depth + 1)
+                arguments["kwargs"] = json.dumps(parsed)
+        except _JSON_KWARGS_ERRORS:
             return
-        if isinstance(parsed, dict):
-            remove_reserved_dispatch_keys(parsed, _depth + 1)
-            arguments["kwargs"] = json.dumps(parsed)
 
 
 async def strip_untrusted_dispatch_metadata(
@@ -139,7 +144,7 @@ async def unwrap_kwargs(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     del arguments["kwargs"]
                     arguments.update(kwargs_parsed)
                     logger.info(f"[DISPATCH_KWARGS] Unwrapped from string: {list(kwargs_parsed.keys())}")
-            except (json.JSONDecodeError, TypeError) as e:
+            except _JSON_KWARGS_ERRORS as e:
                 logger.warning(f"Failed to parse kwargs string: {e}")
         elif isinstance(kwargs_val, dict):
             del arguments["kwargs"]

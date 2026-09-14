@@ -76,6 +76,19 @@ def test_helper_leaves_other_shapes_alone(value):
     assert json.dumps(value) == before
 
 
+@pytest.mark.parametrize(
+    "wrapped",
+    [
+        '{"integer": ' + ("9" * 5000) + "}",
+        ("[" * 2000) + "0" + ("]" * 2000),
+    ],
+)
+def test_helper_treats_json_decoder_limits_as_opaque(wrapped):
+    args = {"kwargs": wrapped}
+    remove_reserved_dispatch_keys(args)
+    assert args == {"kwargs": wrapped}
+
+
 # --- the handler trusts the keys, which is why every entry must strip --------
 
 
@@ -279,3 +292,60 @@ async def test_mcp_wrapper_beam_branch_never_forwards_or_attributes_forged_keys(
 
     assert forwarded == {"lite": True}
     assert recorded and all(row.get("agent_id") != VICTIM for row in recorded)
+
+
+@pytest.mark.asyncio
+async def test_mcp_wrapper_contains_pathological_json_kwargs_and_audits(monkeypatch):
+    """Decoder resource limits cannot escape the MCP wrapper before audit."""
+    import src.tool_registration as tool_registration
+
+    recorded = []
+    monkeypatch.setattr(tool_registration, "_wave3a_get_route", lambda name: None)
+    monkeypatch.setattr(tool_registration, "record_tool_usage", lambda **kw: recorded.append(kw))
+
+    tool_name = "_pathological_json_kwargs_tool"
+    tool_registration._tool_wrappers_cache.pop(tool_name, None)
+    try:
+        wrapper = tool_registration.get_tool_wrapper(tool_name)
+        result = await wrapper(kwargs='{"integer": ' + ("9" * 5000) + "}")
+    finally:
+        tool_registration._tool_wrappers_cache.pop(tool_name, None)
+
+    assert result["success"] is False
+    assert "not found" in result["error"]
+    assert len(recorded) == 1
+    assert recorded[0]["success"] is False
+    assert recorded[0]["error_type"] == "validation_error"
+
+
+@pytest.mark.asyncio
+async def test_mcp_wrapper_contains_unexpected_sanitizer_failure_anonymously(monkeypatch):
+    """A sanitizer defect remains inside the envelope without forged attribution."""
+    import src.tool_registration as tool_registration
+
+    recorded = []
+
+    def fail_sanitizer(arguments):
+        raise RuntimeError("sanitizer failed")
+
+    monkeypatch.setattr(tool_registration, "remove_reserved_dispatch_keys", fail_sanitizer)
+    monkeypatch.setattr(tool_registration, "record_tool_usage", lambda **kw: recorded.append(kw))
+
+    tool_name = "_failing_sanitizer_tool"
+    tool_registration._tool_wrappers_cache.pop(tool_name, None)
+    try:
+        wrapper = tool_registration.get_tool_wrapper(tool_name)
+        result = await wrapper(**_forged())
+    finally:
+        tool_registration._tool_wrappers_cache.pop(tool_name, None)
+
+    assert result == {
+        "success": False,
+        "error": "sanitizer failed",
+        "error_type": "RuntimeError",
+    }
+    assert len(recorded) == 1
+    assert recorded[0]["success"] is False
+    assert recorded[0]["error_type"] == "RuntimeError"
+    assert recorded[0]["agent_id"] is None
+    assert recorded[0]["session_id"] is None
