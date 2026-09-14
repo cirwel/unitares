@@ -30,6 +30,13 @@ name: Draft Base Refresh
 #     just pushes, so it over-skips rather than under-skips; that is the safe
 #     direction for a job that writes to someone else's branch.
 #
+#   * Only a head that is still the one the idleness verdict was taken on. The
+#     listing snapshots `headRefOid` beside `updatedAt`; if the branch moved
+#     between the query and the fetch, that verdict describes a commit that is
+#     no longer the head, and an owner push inside that window is precisely the
+#     case the quiet period exists to avoid. Re-checking the OID after the fetch
+#     closes it; the ordinary non-force push closes the later race after that.
+#
 # Label a PR `no-base-refresh` to opt out — for a PR deliberately pinned to an
 # older base, or one stacked on another PR's branch where a base merge would
 # pull in the wrong history.
@@ -82,6 +89,18 @@ jobs:
           QUIET_HOURS: ${{ inputs.quiet_hours || '12' }}
         run: |
           set -euo pipefail
+
+          # Validate once, before anything can be pushed. An unconstrained value
+          # fails OPEN: `[ "$idle_h" -lt abc ]` prints "integer expression
+          # expected" and returns non-zero, which as an `if` condition reads as
+          # "not inside the quiet period" and lets the mutation through. `set -e`
+          # does not catch it, because a condition is allowed to fail.
+          case "$QUIET_HOURS" in
+            ''|*[!0-9]*)
+              echo "::error::QUIET_HOURS must be a nonnegative integer of hours (got '$QUIET_HOURS'); 0 disables the hold."
+              exit 1 ;;
+          esac
+
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -90,7 +109,7 @@ jobs:
           # acting on an unknown merge state is how a clean branch gets a
           # conflicted merge commit pushed into it.
           gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 200 \
-            --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt \
+            --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt,headRefOid \
             > prs.json
 
           refreshed=0; skipped=0; held=0
@@ -102,6 +121,7 @@ jobs:
             state=$(jq -r .mergeStateStatus <<<"$pr")
             owner=$(jq -r '.headRepositoryOwner.login // ""' <<<"$pr")
             updated=$(jq -r .updatedAt <<<"$pr")
+            oid=$(jq -r '.headRefOid // ""' <<<"$pr")
 
             echo "::group::PR #$num ($head <- $base, state=$state)"
 
@@ -120,7 +140,7 @@ jobs:
               held=$((held+1)); echo "::endgroup::"; continue
             fi
             idle_h=$(( (now_s - updated_s) / 3600 ))
-            if [ "$QUIET_HOURS" != "0" ] && [ "$idle_h" -lt "$QUIET_HOURS" ]; then
+            if [ "$QUIET_HOURS" -gt 0 ] && [ "$idle_h" -lt "$QUIET_HOURS" ]; then
               echo "hold: touched ${idle_h}h ago (< ${QUIET_HOURS}h) — its owner may still be working"
               held=$((held+1)); echo "::endgroup::"; continue
             fi
@@ -129,8 +149,28 @@ jobs:
               skipped=$((skipped+1)); echo "::endgroup::"; continue
             fi
 
-            git fetch origin "$head" "$base" --quiet
-            git checkout -q -B "refresh/$num" "origin/$head"
+            if [ -z "$oid" ] || [ "$oid" = "null" ]; then
+              echo "hold: headRefOid missing, so the idleness verdict cannot be pinned to a commit"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+
+            # One unfetchable ref must not abort the sweep for every later PR.
+            if ! git fetch origin "$head" "$base" --quiet; then
+              echo "skip: could not fetch $head or $base"
+              skipped=$((skipped+1)); echo "::endgroup::"; continue
+            fi
+
+            # The idleness verdict above describes $oid. If the branch moved
+            # since the listing, that verdict is about a commit that is no
+            # longer the head — and an owner push inside that window is exactly
+            # what the quiet period is for. Re-read it on the next run.
+            fetched=$(git rev-parse --verify --quiet "origin/$head^{commit}" || echo "")
+            if [ "$fetched" != "$oid" ]; then
+              echo "hold: $head moved since the listing (${oid:0:7} -> ${fetched:0:7}); the idleness verdict is stale"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+
+            git checkout -q -B "refresh/$num" "$oid"
 
             msg="Merge $base into $head"
             msg="$msg"$'\n\n'"Keeps this draft mergeable while it waits for review."
