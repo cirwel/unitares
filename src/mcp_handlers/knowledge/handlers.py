@@ -1759,6 +1759,19 @@ def _parse_knowledge_search_request(
             f"tags {raw_tags!r} normalize to nothing; pass at least one tag containing a letter or digit."
         )
 
+    explicit_author_filter = arguments.get("agent_id_filter")
+    if isinstance(explicit_author_filter, str):
+        explicit_author_filter = explicit_author_filter.strip()
+        if not explicit_author_filter:
+            raise _SearchParameterError(
+                "agent_id_filter must be a non-blank author agent UUID"
+            )
+    author_filter = (
+        explicit_author_filter
+        if explicit_author_filter is not None
+        else arguments.get("agent_id")
+    )
+
     return _KnowledgeSearchRequest(
         arguments=arguments,
         limit=limit,
@@ -1767,10 +1780,9 @@ def _parse_knowledge_search_request(
         include_provenance=arguments.get("include_provenance", False),
         synthesize=arguments.get("synthesize", False),
         query_text=arguments.get("query") or arguments.get("text"),
-        # agent_id_filter is the documented filter param (schema: "Filter by
-        # author agent UUID"); agent_id is kept as a fallback since it has
-        # always been the field this filter actually ran on in practice.
-        agent_id=arguments.get("agent_id_filter") or arguments.get("agent_id"),
+        # The explicit author filter is preferred; legacy agent_id is a
+        # fallback only when that filter was omitted.
+        agent_id=author_filter,
         search_mode_requested=search_mode,
         operator_forced=operator_forced,
         exclude_labels=exclude_labels,

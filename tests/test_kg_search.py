@@ -897,6 +897,28 @@ class TestSearchKnowledgeGraph:
         request = _parse_knowledge_search_request({"agent_id": "caller-agent"})
         assert request.agent_id == "caller-agent"
 
+    def test_parse_search_trims_explicit_author_filter(self):
+        from src.mcp_handlers.knowledge.handlers import _parse_knowledge_search_request
+
+        request = _parse_knowledge_search_request({
+            "agent_id_filter": "  filter-agent  ",
+            "agent_id": "caller-agent",
+        })
+        assert request.agent_id == "filter-agent"
+
+    @pytest.mark.parametrize("blank", ["", "  "])
+    def test_parse_search_rejects_blank_explicit_author_filter(self, blank):
+        from src.mcp_handlers.knowledge.handlers import (
+            _SearchParameterError,
+            _parse_knowledge_search_request,
+        )
+
+        with pytest.raises(_SearchParameterError, match="agent_id_filter"):
+            _parse_knowledge_search_request({
+                "agent_id_filter": blank,
+                "agent_id": "caller-agent",
+            })
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("tool_name", ["knowledge", "search_shared_memory"])
     @pytest.mark.parametrize("search_mode", ["indexed_filters", "substring_scan"])
