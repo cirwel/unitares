@@ -23,6 +23,7 @@ from src.coherence_provenance import (
     LEGACY_COHERENCE_SOURCE,
     ODE_CONTROL_FEEDBACK_ROLE,
 )
+from src.behavioral_sensor import BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA
 
 
 def _derivation():
@@ -68,6 +69,12 @@ def test_behavioral_derivation_is_bounded_exact_and_privacy_reduced():
         "health_evidence": False,
     }
     assert "legacy ODE control feedback" in trace["known_limitations"][0]
+    assert trace["components"]["schema"] == BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA
+    assert trace["components"]["policy_applied"] is False
+    assert isinstance(trace["components"]["dimensions"]["E"]["value"], float)
+    assert isinstance(trace["components"]["dimensions"]["I"]["value"], float)
+    assert trace["calibration_signal"] == {}
+    assert "per check-in" in trace["known_limitations"][1]
     assert "drift_norm" in trace["missing_inputs"]
     assert trace["unused_legacy_parameters"] == ["S_history", "V_history"]
     assert "detail" not in trace["inputs"]["outcomes"][0]

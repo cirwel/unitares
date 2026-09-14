@@ -95,10 +95,66 @@ ALIAS_SCHEMA_KEEP = {
 }
 
 
+# Two values repeated from runtime modules rather than imported, because this
+# module stays free of runtime imports so the standalone tool-surface audit can
+# load it. tests/test_mcp_schema_parity.py pins each to its source so neither can
+# drift: the regex to schemas/core.UNIT_INTERVAL_STRING_PATTERN, the levels to
+# support/param_normalization.NAMED_LEVELS.
+UNIT_INTERVAL_STRING_PATTERN = r"^(0(\.\d+)?|1(\.0+)?|\.\d+)$"
+
+# The named levels sync_state's complexity normalizer maps into 0-1.
+SYNC_STATE_COMPLEXITY_NAMED_LEVELS = (
+    "complex",
+    "critical",
+    "high",
+    "low",
+    "medium",
+    "minimal",
+    "moderate",
+    "simple",
+    "trivial",
+    "very_high",
+)
+
 # Overrides carry the same authoring shape as a Pydantic Field: `description`
 # is the full text describe_tool serves, and an optional `brief` is the
 # authored short form the advertised wire serves instead (src/schema_brief.py).
 ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
+    # The canonical process_agent_update advertises complexity as a number in
+    # 0-1 or a numeric string in 0-1, because that is all the canonical model
+    # accepts. sync_state accepts more: its normalizer maps a named level to a
+    # number BEFORE validation, so the named levels are advertised here as well.
+    # This override replaces the whole anyOf, so it repeats the two canonical
+    # branches rather than adding to them.
+    #
+    # The named levels nest inside the one string branch rather than forming a
+    # second one. The MCP transport builds its argument model from this schema,
+    # one Python type per top-level branch, so a second string branch gave that
+    # model a second `str` member, and a list or object was then refused with
+    # the same string error twice. Nested, the top-level branches stay number,
+    # string and null: the union the transport built before, error for error.
+    #
+    # Deliberately narrow, so the advertised schema stays a subset of what is
+    # accepted. `complexity` only: nothing normalizes `confidence`, so it keeps
+    # the canonical schema. And the named-level enum only: the normalizer also
+    # accepts {"value": N, "scale": M}, but its `value <= scale` rule cannot be
+    # written in JSON Schema, so advertising that object would call refused
+    # values legal.
+    "sync_state": {
+        "complexity": {
+            "anyOf": [
+                {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                {
+                    "type": "string",
+                    "anyOf": [
+                        {"type": "string", "pattern": UNIT_INTERVAL_STRING_PATTERN},
+                        {"type": "string", "enum": list(SYNC_STATE_COMPLEXITY_NAMED_LEVELS)},
+                    ],
+                },
+                {"type": "null"},
+            ],
+        },
+    },
     "search_shared_memory": {
         "response_mode": {
             "default": "lean",

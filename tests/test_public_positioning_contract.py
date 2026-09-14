@@ -52,3 +52,41 @@ def test_requirement_accepts_any_declared_wording(
     )
 
     assert check_doc_drift.public_positioning_failures(tmp_path) == []
+
+
+def test_every_positioning_surface_shares_one_product_category() -> None:
+    for rel_path, requirements in check_doc_drift.PUBLIC_POSITIONING_CHECKS.items():
+        categories = [req for req in requirements if req[0] == "product category"]
+        if categories:
+            assert categories == [check_doc_drift.PRODUCT_CATEGORY], rel_path
+
+
+def test_current_readme_has_no_volatile_literals() -> None:
+    assert check_doc_drift.readme_volatility_failures(PROJECT_ROOT) == []
+
+
+def test_readme_volatile_literals_are_reported(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "**Status:** v2.22.0.\n"
+        "\n"
+        "The deployment has run continuously since November 2025.\n"
+        "\n"
+        "The snapshot holds 4,573,890\n"
+        "audit/telemetry events.\n",
+        encoding="utf-8",
+    )
+
+    labels = [
+        failure.split(": ", 1)[1].split(" '", 1)[0]
+        for failure in check_doc_drift.readme_volatility_failures(tmp_path)
+    ]
+    assert labels == ["release version", "running-since claim", "count of changing things"]
+
+
+def test_readme_badge_urls_are_not_volatile(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text(
+        "[![Python](https://img.shields.io/badge/python-3.12.1+-blue)](https://example.org/v1.2.3)\n",
+        encoding="utf-8",
+    )
+
+    assert check_doc_drift.readme_volatility_failures(tmp_path) == []

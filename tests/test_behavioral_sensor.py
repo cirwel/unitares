@@ -4,7 +4,9 @@ import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from src.behavioral_sensor import (
+    BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA,
     compute_behavioral_sensor_eisv,
+    compute_behavioral_sensor_components,
     compute_legacy_coherence_dependency_shadow,
     _compute_E,
     _compute_I,
@@ -90,6 +92,53 @@ class TestBehavioralSensor:
         r1 = compute_behavioral_sensor_eisv(**h1)
         r2 = compute_behavioral_sensor_eisv(**h2)
         assert r1["V"] == r2["V"]
+
+    def test_component_record_reproduces_deployed_values_exactly(self):
+        h = make_histories(n=10)
+        kwargs = {
+            **h,
+            "calibration_error": 0.12,
+            "drift_norm": 0.22,
+            "complexity_divergence": 0.18,
+            "continuity_E_input": 0.71,
+            "continuity_I_input": 0.83,
+            "continuity_S_input": 0.16,
+            "outcome_history": [
+                {"is_bad": False, "outcome_score": 0.9},
+                {"is_bad": True, "outcome_score": 0.2},
+                {"is_bad": False, "outcome_score": 0.8},
+            ],
+            "tool_error_rate": 0.1,
+            "tool_call_velocity": 8.0,
+            "unique_tools_ratio": 0.4,
+        }
+
+        deployed = compute_behavioral_sensor_eisv(**kwargs)
+        record = compute_behavioral_sensor_components(**kwargs)
+
+        assert record["schema"] == BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA
+        assert record["policy_applied"] is False
+        assert record["dimensions"]["E"]["behavioral_state_consumed"] is True
+        assert record["dimensions"]["V"]["measurement_role"] == "sensor_diagnostic"
+        assert record["dimensions"]["V"]["behavioral_state_consumed"] is False
+        assert {
+            key: record["dimensions"][key]["value"]
+            for key in ("E", "I", "S", "V")
+        } == deployed
+        assert record["dimensions"]["E"]["components"][0]["name"] == "decision_history"
+        assert record["dimensions"]["I"]["components"][0]["source"] == "fleet_calibration"
+        assert record["dimensions"]["V"]["details"]["cadence_normalized"] is False
+
+    def test_component_record_names_defaulted_inputs(self):
+        record = compute_behavioral_sensor_components(**make_histories(n=5))
+
+        integrity = record["dimensions"]["I"]
+        calibration = next(
+            item for item in integrity["components"]
+            if item["name"] == "calibration_accuracy"
+        )
+        assert calibration["observed"] is False
+        assert calibration["default_reason"] == "default_calibration_accuracy_0.75"
 
 
 class TestLegacyCoherenceDependencyShadow:

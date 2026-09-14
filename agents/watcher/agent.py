@@ -75,6 +75,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from agents.watcher._util import (
+    FindingsStateBusy,
     LOG_FILE,
     MAX_LOG_LINES,
     PROJECT_ROOT,
@@ -107,6 +108,7 @@ from agents.watcher.findings import (
     _write_findings_atomic,
     compact_findings,
     escalate,
+    findings_state_lock,
     load_dedup,
     match_fingerprint,
     persist_finding,
@@ -617,7 +619,13 @@ def _run_with_watcher_findings_lease(
     """
     mode = _watcher_findings_lease_mode()
     if mode == "off":
-        return mutation()
+        try:
+            with findings_state_lock():
+                return mutation()
+        except FindingsStateBusy as exc:
+            print(f"error: watcher findings mutation blocked: {exc}", file=sys.stderr)
+            log(f"watcher findings mutation blocked by local lock: {exc}", "warning")
+            return WATCHER_FINDINGS_LEASE_BLOCK_RC
 
     from unitares_sdk.lease_plane import (
         AcquireHeldByOther,
@@ -694,7 +702,13 @@ def _run_with_watcher_findings_lease(
         return WATCHER_FINDINGS_LEASE_BLOCK_RC
 
     try:
-        return mutation()
+        try:
+            with findings_state_lock():
+                return mutation()
+        except FindingsStateBusy as exc:
+            print(f"error: watcher findings mutation blocked: {exc}", file=sys.stderr)
+            log(f"watcher findings mutation blocked by local lock: {exc}", "warning")
+            return WATCHER_FINDINGS_LEASE_BLOCK_RC
     finally:
         if lease_id is not None:
             release_advisory(client, lease_id)
@@ -1946,15 +1960,39 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
             matches = [fp for fp in fp_state if fp.startswith(prefix)]
             if len(matches) != 1:
                 continue
-            full_fp = matches[0]
             reason = f"referenced in {sha[:8]}: {subject[:80]}"
-            rc = update_finding_status(
-                full_fp,
-                "confirmed",
-                resolver_agent_id="watcher_scan_commits",
-                reason=reason,
-            )
+            try:
+                with findings_state_lock():
+                    current = {
+                        f.get("fingerprint", ""): f
+                        for f in _iter_findings_raw()
+                        if f.get("fingerprint")
+                        and f.get("status", "open") in ("open", "surfaced")
+                    }
+                    current_matches = [
+                        fp for fp in current if fp.startswith(prefix)
+                    ]
+                    if current_matches != matches:
+                        continue
+                    full_fp = matches[0]
+                    resolved_finding = current[full_fp]
+                    rc = update_finding_status(
+                        full_fp,
+                        "confirmed",
+                        resolver_agent_id="watcher_scan_commits",
+                        reason=reason,
+                        emit_resolution_event=False,
+                    )
+            except FindingsStateBusy as exc:
+                log(f"scan_commits: findings lock busy: {exc}", "warning")
+                continue
             if rc == 0:
+                _post_resolution_event(
+                    resolved_finding,
+                    "confirmed",
+                    "watcher_scan_commits",
+                    reason=reason,
+                )
                 # Drop from active map so a later commit-in-the-same-scan
                 # mentioning the same fingerprint doesn't re-stamp it.
                 del fp_state[full_fp]
@@ -1975,11 +2013,57 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def surface_pending() -> int:
-    """Chime mode: print findings with status == 'open' and transition ONLY
-    THOSE ACTUALLY DISPLAYED to 'surfaced'. Called by the UserPromptSubmit
-    hook so each prompt the user sends gets a delta of "what Watcher caught
-    since your last prompt".
+_SURFACE_AUDIENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,159}$")
+
+
+def _normalize_surface_audience(audience: str | None) -> str | None:
+    """Validate an audit-safe, bounded federated delivery key."""
+    if audience is None:
+        return None
+    normalized = audience.strip()
+    if not _SURFACE_AUDIENCE_RE.fullmatch(normalized):
+        raise ValueError(
+            "audience must be 1-160 characters using letters, digits, '.', '_', "
+            "':', '@', '+', or '-'"
+        )
+    return normalized
+
+
+def _surface_receipts(finding: dict[str, Any]) -> dict[str, str]:
+    receipts = finding.get("surface_receipts")
+    if not isinstance(receipts, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in receipts.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
+
+
+def surface_pending(
+    *,
+    audience: str | None = None,
+    scope_root: Path | None = None,
+    check_in: bool = True,
+) -> int:
+    """Chime mode: print findings not yet delivered to this audience.
+
+    Legacy callers that omit ``audience`` retain the original global behavior:
+    only ``open`` findings are eligible and displayed findings transition to
+    ``surfaced``. Federated callers pass a stable ``host:worktree`` audience.
+    They receive every active finding (``open`` or ``surfaced``) once, tracked
+    in the finding's ``surface_receipts`` map. This prevents one host from
+    consuming another host's notification while avoiding per-session re-chime
+    spam inside the same worktree.
+
+    ``scope_root`` limits federated delivery to the current worktree. The
+    SessionStart read path remains responsible for summarizing out-of-scope
+    backlog; a prompt chime should contain only findings the current checkout
+    can act on.
+
+    The check_in flag preserves the legacy CLI heartbeat by default. Federated
+    host hooks disable it so context delivery and receipt persistence never
+    wait on governance network I/O inside the host's command timeout.
 
     After this runs, the findings that were actually shown in the block are
     recorded as surfaced. Any findings dropped by the severity display cap
@@ -1999,24 +2083,43 @@ def surface_pending() -> int:
     repeated P003/P001/P016 dismissal sweeps). Both are quiet so they
     don't pollute the chime block stdout.
     """
+    audience = _normalize_surface_audience(audience)
     _sweep_stale_quiet()
     _sweep_token_drift_quiet()
     all_findings = _iter_findings_raw()
-    open_findings = [f for f in all_findings if f.get("status", "open") == "open"]
+    if audience is None:
+        pending_findings = [
+            f for f in all_findings if f.get("status", "open") == "open"
+        ]
+    else:
+        pending_findings = [
+            f
+            for f in all_findings
+            if f.get("status", "open") in ("open", "surfaced")
+            and audience not in _surface_receipts(f)
+        ]
+        pending_findings, _out_of_scope = _partition_findings_by_scope(
+            pending_findings,
+            scope_root,
+        )
 
-    block, shown = _format_findings_block(
-        open_findings,
-        header=(
+    if audience is None:
+        header = (
             "Watcher caught the following while you were working. These are\n"
             "new since your last prompt. Look them over before proceeding — or\n"
             "dismiss any false positives with --dismiss <fingerprint>."
-        ),
-    )
-    # Always check in to governance, even when there's nothing new to surface.
-    # Otherwise Watcher goes silent between finding bursts.
-    _do_checkin()
+        )
+    else:
+        header = (
+            "Watcher caught the following while you were working. These are\n"
+            "new for this worktree audience. Look them over before proceeding — or\n"
+            "dismiss any false positives with --dismiss <fingerprint>."
+        )
+    block, shown = _format_findings_block(pending_findings, header=header)
 
     if block is None:
+        if check_in:
+            _do_checkin()
         return 0
 
     print(block)
@@ -2024,20 +2127,35 @@ def surface_pending() -> int:
     # Only transition findings that made it past the display cap. The ones
     # the user saw → surfaced. The ones crowded out → stay open.
     surfaced_fps = {f.get("fingerprint") for f in shown}
+    surfaced_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     updated: list[dict[str, Any]] = []
     changed = False
     for f in all_findings:
-        if f.get("fingerprint") in surfaced_fps and f.get("status", "open") == "open":
-            f = {**f, "status": "surfaced"}
+        if f.get("fingerprint") not in surfaced_fps:
+            updated.append(f)
+            continue
+
+        next_f = f
+        if f.get("status", "open") == "open":
+            next_f = {**next_f, "status": "surfaced"}
+        if audience is not None:
+            receipts = _surface_receipts(next_f)
+            if audience not in receipts:
+                receipts[audience] = surfaced_at
+                next_f = {**next_f, "surface_receipts": receipts}
+        if next_f != f:
             changed = True
-        updated.append(f)
+        updated.append(next_f)
     if changed:
         _write_findings_atomic(updated)
         log(
-            f"surface_pending: marked {len(surfaced_fps)} open → surfaced "
-            f"({len(open_findings) - len(surfaced_fps)} left pending for next chime)"
+            f"surface_pending: delivered {len(surfaced_fps)} finding(s)"
+            f"{f' to {audience}' if audience else ''} "
+            f"({len(pending_findings) - len(surfaced_fps)} left pending for next chime)"
         )
 
+    if check_in:
+        _do_checkin()
     return 0
 
 
@@ -3212,6 +3330,11 @@ def main(argv: list[str] | None = None) -> int:
         help="print open findings as a chime block and transition them to surfaced",
     )
     parser.add_argument(
+        "--audience",
+        type=_normalize_surface_audience,
+        help="stable host:worktree delivery key for federated --surface-pending receipts",
+    )
+    parser.add_argument(
         "--recompute-floor",
         action="store_true",
         help="recompute pattern_floor.json from findings.jsonl and persist atomically",
@@ -3231,6 +3354,48 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # Context hooks have a strict host-side timeout. Keep their read/deliver
+    # paths free of identity, check-in, and remote lease-plane calls so a slow
+    # governance server cannot suppress the context or its delivery receipt.
+    higher_precedence = (
+        args.self_test,
+        args.list_findings,
+        args.resolve,
+        args.dismiss,
+        args.sweep_stale,
+        args.compact,
+    )
+    if args.print_unresolved and not any(higher_precedence):
+        return print_unresolved()
+    if (
+        args.surface_pending
+        and args.audience is not None
+        and not args.print_unresolved
+        and not any(higher_precedence)
+    ):
+        scope_root = _resolve_session_scope_root()
+        if _watcher_findings_lease_mode() == "enforce":
+            # Enforced remote leases and a no-network host timeout cannot both
+            # be satisfied. Preserve the operator's no-receipt-mutation
+            # guarantee and deliver read-only context; a later non-hook
+            # lifecycle call can persist the receipt under the remote lease.
+            return print_unresolved(scope_root=scope_root)
+        try:
+            with findings_state_lock():
+                return surface_pending(
+                    audience=args.audience,
+                    scope_root=scope_root,
+                    check_in=False,
+                )
+        except FindingsStateBusy as exc:
+            # Never race a receipt rewrite. A read-only full-context fallback
+            # can repeat once, but it cannot lose another host's receipt.
+            log(
+                f"federated surface lock busy; using read-only fallback: {exc}",
+                "warning",
+            )
+            return print_unresolved(scope_root=scope_root)
+
     # --- Identity resolution (best-effort) ---
     client = None
     try:
@@ -3244,6 +3409,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.list_findings:
         return list_findings(only_open=args.only_open)
     if args.resolve:
+        updated_findings: list[dict[str, Any]] = []
         rc = _run_with_watcher_findings_lease(
             f"resolve {args.resolve}",
             lambda: update_finding_status(
@@ -3251,13 +3417,23 @@ def main(argv: list[str] | None = None) -> int:
                 "confirmed",
                 resolver_agent_id=args.agent_id,
                 reason=args.reason,
+                emit_resolution_event=False,
+                updated_finding_sink=updated_findings,
             ),
             holder_agent_id=args.agent_id,
         )
         if rc == 0:
+            if updated_findings:
+                _post_resolution_event(
+                    updated_findings[0],
+                    "confirmed",
+                    args.agent_id,
+                    reason=args.reason,
+                )
             _emit_resolution_outcome(client, "confirmed", args.resolve, args.reason)
         return rc
     if args.dismiss:
+        updated_findings = []
         rc = _run_with_watcher_findings_lease(
             f"dismiss {args.dismiss}",
             lambda: update_finding_status(
@@ -3265,10 +3441,19 @@ def main(argv: list[str] | None = None) -> int:
                 "dismissed",
                 resolver_agent_id=args.agent_id,
                 reason=args.reason,
+                emit_resolution_event=False,
+                updated_finding_sink=updated_findings,
             ),
             holder_agent_id=args.agent_id,
         )
         if rc == 0:
+            if updated_findings:
+                _post_resolution_event(
+                    updated_findings[0],
+                    "dismissed",
+                    args.agent_id,
+                    reason=args.reason,
+                )
             _emit_resolution_outcome(client, "dismissed", args.dismiss, args.reason)
         return rc
     if args.sweep_stale:
@@ -3286,11 +3471,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_unresolved:
         return print_unresolved()
     if args.surface_pending:
-        return _run_with_watcher_findings_lease(
+        rc = _run_with_watcher_findings_lease(
             "surface pending findings",
-            surface_pending,
+            lambda: surface_pending(
+                audience=args.audience,
+                scope_root=(
+                    _resolve_session_scope_root() if args.audience is not None else None
+                ),
+                check_in=False,
+            ),
             holder_agent_id=args.agent_id,
         )
+        if rc == 0:
+            _do_checkin()
+        return rc
     if args.scan_commits:
         return 0 if scan_commits(since=args.scan_since) >= 0 else 1
     if args.recompute_floor:

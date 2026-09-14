@@ -72,6 +72,9 @@ class UpdateContext:
     # ── Cached computations ────────────────────────────────────────
     _cal_error: Optional[float] = None
     _cal_error_ready: bool = False
+    # Observational provenance for the deployed fleet statistic and the
+    # agent-scoped candidate. Nothing in the live I/policy path reads this.
+    _calibration_signal: Dict[str, Any] = field(default_factory=dict)
 
     # ── Phase-5 evidence supply (Task 4) ──────────────────────────
     recent_tool_results: List[Any] = field(default_factory=list)
@@ -91,17 +94,61 @@ class UpdateContext:
 
 
 def get_mean_calibration_error(ctx: 'UpdateContext') -> Optional[float]:
-    """Return mean calibration error, computing once and caching on ctx."""
+    """Return the deployed fleet error and cache its observational provenance.
+
+    The returned value deliberately preserves the live policy input.  The
+    agent-scoped estimate is collected beside it as a measurement-only
+    candidate so consumers can evaluate coverage and freshness before any
+    separately reviewed authority change.
+    """
     if ctx._cal_error_ready:
         return ctx._cal_error
     try:
         from src.calibration import calibration_checker
         metrics = calibration_checker.compute_calibration_metrics()
+        eligible = [b for b in metrics.values() if b.count >= 5]
         if metrics:
-            errors = [b.calibration_error for b in metrics.values() if b.count >= 5]
+            errors = [b.calibration_error for b in eligible]
             if errors:
                 ctx._cal_error = sum(errors) / len(errors)
+        candidate = calibration_checker.compute_agent_calibration_candidate(
+            ctx.agent_id
+        )
+        ctx._calibration_signal = {
+            "schema": "eisv.calibration-signal.v1",
+            "mode": "measurement_only",
+            "policy_applied": False,
+            "deployed": {
+                "scope": "fleet",
+                "estimator": "mean_absolute_strategic_bin_error",
+                "evidence_channel": "strategic_mixed_proxy",
+                "calibration_error": ctx._cal_error,
+                "sample_count": sum(b.count for b in metrics.values()),
+                "eligible_sample_count": sum(b.count for b in eligible),
+                "eligible_bin_count": len(eligible),
+                "minimum_samples_per_bin": 5,
+                "sample_window": "lifetime",
+                "freshness_status": "unknown",
+                "freshness_reason": "legacy_fleet_bins_have_no_timestamps",
+            },
+            "agent_candidate": candidate,
+        }
     except Exception:
-        pass
+        ctx._calibration_signal = {
+            "schema": "eisv.calibration-signal.v1",
+            "mode": "measurement_only",
+            "policy_applied": False,
+            "deployed": {
+                "scope": "fleet",
+                "calibration_error": ctx._cal_error,
+                "freshness_status": "unknown",
+                "evidence_status": "unavailable",
+            },
+            "agent_candidate": {
+                "scope": "agent",
+                "agent_id": ctx.agent_id or None,
+                "evidence_status": "unavailable",
+            },
+        }
     ctx._cal_error_ready = True
     return ctx._cal_error
