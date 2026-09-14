@@ -36,6 +36,17 @@ def _mock_db(latest_confidence=None):
     db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
     db.get_latest_confidence_before = AsyncMock(return_value=latest_confidence)
     db.record_outcome_event = AsyncMock(return_value="outcome-id")
+    async def record_bound(**kwargs):
+        return {
+            "status": "created",
+            "outcome_id": "outcome-id",
+            "outcome_type": kwargs["outcome_type"],
+            "outcome_score": kwargs["outcome_score"],
+            "is_bad": kwargs["is_bad"],
+            "detail": kwargs["detail"],
+            "eisv_snapshot": kwargs["eisv_snapshot"],
+        }
+    db.record_bound_outcome_event = AsyncMock(side_effect=record_bound)
     return db
 
 
@@ -72,7 +83,12 @@ async def _run(args_extra, *, latest_confidence=None, monitor=None, env=None):
     finally:
         for p in reversed(patches):
             p.stop()
-    persisted = db.record_outcome_event.await_args.kwargs["detail"]
+    recorder = (
+        db.record_bound_outcome_event
+        if args.get("prediction_id")
+        else db.record_outcome_event
+    )
+    persisted = recorder.await_args.kwargs["detail"]
     return persisted, checker, seq, db
 
 

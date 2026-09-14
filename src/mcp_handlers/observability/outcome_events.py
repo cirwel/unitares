@@ -6,8 +6,11 @@ Enables validation of the EISV model by collecting real outcome data
 EISV state at outcome time.
 """
 
+import hashlib
+import json
 import os
 import time as _time
+from copy import deepcopy
 from typing import Dict, Any, Optional, Sequence
 from mcp.types import TextContent
 from ..utils import success_response, error_response
@@ -30,6 +33,41 @@ from src.outcome_corroboration import (
 logger = get_logger(__name__)
 
 _MIN_TACTICAL_EVIDENCE_WEIGHT = GRADE_WEIGHTS[TOOL_OBSERVED]
+
+
+def _prediction_request_digest(
+    arguments: Dict[str, Any],
+    *,
+    outcome_type: str,
+    outcome_score: float,
+    is_bad: bool,
+    detail: Dict[str, Any],
+    verification_source: str,
+) -> str:
+    """Digest caller-controlled outcome semantics for durable idempotency.
+
+    Session identifiers describe the submitting process, not the canonical
+    outcome, so a retry after restart must not conflict. Registry-derived
+    confidence/provenance and EISV are likewise excluded: the first committed
+    claim preserves those values and replays them verbatim.
+    """
+    canonical = {
+        "schema": 1,
+        "outcome_type": outcome_type,
+        "outcome_score": outcome_score,
+        "is_bad": is_bad,
+        "detail": detail,
+        "confidence": arguments.get("confidence"),
+        "decision_action": arguments.get("decision_action"),
+        "verification_source": verification_source,
+    }
+    encoded = json.dumps(
+        canonical,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 # Outcome types that are considered "bad" by default
 BAD_OUTCOME_TYPES = {"test_failed", "tool_rejected", "drawing_abandoned", "task_failed"}
@@ -202,6 +240,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         outcome_score = 0.0 if is_bad else 1.0
 
     detail = dict(arguments.get("detail") or {})
+    submitted_detail = deepcopy(detail)
     session_id = (
         arguments.get("session_id")
         or arguments.get("client_session_id")
@@ -291,9 +330,9 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
 
     # Resolve confidence before persisting detail so exports can reconstruct the lane.
     #
-    # Two-phase prediction resolution: peek first to compute binding label,
-    # then consume only if live. See spec §4 — without peek, ttl_expired and
-    # missing collapse into the same None return from consume_prediction.
+    # Prediction resolution is a non-consuming peek. The database claim is the
+    # binding authority; the local registry is marked consumed only after a
+    # created/existing durable acknowledgement.
     #
     # Resolution order:
     #   1. Explicit `prediction_id` — two-phase lookup against the agent's open
@@ -324,21 +363,15 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
                 if age > ttl_seconds:
                     prediction_binding = "ttl_expired_fallback"
                 else:
-                    prediction_record = consume_prediction(
-                        open_predictions, prediction_id, ttl_seconds=ttl_seconds
-                    )
-                    if prediction_record is not None:
-                        _confidence = float(prediction_record.get("confidence"))
-                        prediction_source = "registry"
-                        prediction_binding = "registry"
-                    else:
-                        # Race: another consumer beat us. Treat as missing.
-                        prediction_binding = "missing_prediction"
+                    prediction_record = record_peek
+                    _confidence = float(prediction_record.get("confidence"))
+                    prediction_source = "registry"
+                    prediction_binding = "registry"
         else:
             # No open_predictions available (old monitor or no monitor)
             try:
                 if _m is not None:
-                    prediction_record = _m.consume_prediction(prediction_id)
+                    prediction_record = _m.lookup_prediction(prediction_id)
                     if prediction_record is not None:
                         _confidence = float(prediction_record.get("confidence"))
                         prediction_source = "registry"
@@ -459,27 +492,102 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     detail["prediction_source"] = prediction_source
     detail["prediction_binding"] = prediction_binding
 
-    # Insert
-    outcome_id = await db.record_outcome_event(
-        agent_id=agent_id,
-        outcome_type=outcome_type,
-        is_bad=is_bad,
-        outcome_score=outcome_score,
-        session_id=session_id,
-        eisv_e=eisv_e,
-        eisv_i=eisv_i,
-        eisv_s=eisv_s,
-        eisv_v=eisv_v,
-        eisv_phi=eisv_phi,
-        eisv_verdict=eisv_verdict,
-        eisv_coherence=eisv_coherence,
-        eisv_regime=eisv_regime,
-        detail=detail,
-        verification_source=verification_source,
-    )
+    persistence_status = "created"
+    if prediction_id:
+        request_digest = _prediction_request_digest(
+            arguments,
+            outcome_type=outcome_type,
+            outcome_score=outcome_score,
+            is_bad=is_bad,
+            detail=submitted_detail,
+            verification_source=verification_source,
+        )
+        persistence = await db.record_bound_outcome_event(
+            agent_id=agent_id,
+            prediction_id=prediction_id,
+            request_digest=request_digest,
+            outcome_type=outcome_type,
+            is_bad=is_bad,
+            outcome_score=outcome_score,
+            session_id=session_id,
+            eisv_e=eisv_e,
+            eisv_i=eisv_i,
+            eisv_s=eisv_s,
+            eisv_v=eisv_v,
+            eisv_phi=eisv_phi,
+            eisv_verdict=eisv_verdict,
+            eisv_coherence=eisv_coherence,
+            eisv_regime=eisv_regime,
+            detail=detail,
+            eisv_snapshot=snapshot,
+            verification_source=verification_source,
+        )
+        persistence_status = persistence.get("status", "error")
+        if persistence_status == "conflict":
+            return {
+                "error": "prediction_id was already used for a different outcome",
+                "error_code": "PREDICTION_REUSE_CONFLICT",
+                "error_category": "state_error",
+                "canonical_outcome_id": persistence.get("outcome_id"),
+            }
+        if persistence_status not in {"created", "existing"}:
+            return {
+                "error": "Failed to record outcome event (database error)",
+                "error_code": "DB_ERROR",
+                "error_category": "system_error",
+            }
 
-    if not outcome_id:
-        return {"error": "Failed to record outcome event (database error)"}
+        outcome_id = persistence["outcome_id"]
+        if persistence_status == "existing":
+            # Replay exactly what the first transaction derived. Current EISV,
+            # registry contents, and fallback confidence must not rewrite the
+            # canonical acknowledgement after a restart or lost response.
+            outcome_type = persistence["outcome_type"]
+            outcome_score = persistence["outcome_score"]
+            is_bad = persistence["is_bad"]
+            detail = persistence["detail"]
+            snapshot = persistence.get("eisv_snapshot")
+            _confidence = detail.get("reported_confidence")
+            decision_action = detail.get("decision_action")
+            prediction_source = detail.get("prediction_source")
+            prediction_binding = detail.get("prediction_binding")
+            evidence_weight = float(detail.get("evidence_weight") or 0.0)
+            calibration_excluded = bool(detail.get("calibration_excluded"))
+            hard_exogenous_signal = detail.get("hard_exogenous_signal")
+            eprocess_eligible = bool(detail.get("eprocess_eligible"))
+
+        # This is only a local cache marker. Failure here cannot revoke the
+        # authoritative database binding, and it occurs strictly after commit.
+        if prediction_record is not None and open_predictions is not None:
+            consume_prediction(
+                open_predictions,
+                prediction_id,
+                ttl_seconds=ttl_seconds,
+            )
+    else:
+        outcome_id = await db.record_outcome_event(
+            agent_id=agent_id,
+            outcome_type=outcome_type,
+            is_bad=is_bad,
+            outcome_score=outcome_score,
+            session_id=session_id,
+            eisv_e=eisv_e,
+            eisv_i=eisv_i,
+            eisv_s=eisv_s,
+            eisv_v=eisv_v,
+            eisv_phi=eisv_phi,
+            eisv_verdict=eisv_verdict,
+            eisv_coherence=eisv_coherence,
+            eisv_regime=eisv_regime,
+            detail=detail,
+            verification_source=verification_source,
+        )
+        if not outcome_id:
+            return {
+                "error": "Failed to record outcome event (database error)",
+                "error_code": "DB_ERROR",
+                "error_category": "system_error",
+            }
 
     logger.info(
         "Recorded outcome: type=%s is_bad=%s score=%.2f agent=%s verdict=%s",
@@ -488,7 +596,12 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
 
     # Record calibration from outcome event (never for self-declared synthetic
     # fixtures — they persist above but do not train the calibration channels).
-    if _confidence is not None and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT and not calibration_excluded:
+    if (
+        persistence_status == "created"
+        and _confidence is not None
+        and evidence_weight >= _MIN_TACTICAL_EVIDENCE_WEIGHT
+        and not calibration_excluded
+    ):
         try:
             from src.calibration import calibration_checker
             calibration_checker.record_prediction(
@@ -557,7 +670,7 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         include_semantics = response_mode == "full"
     response_snapshot = snapshot if include_semantics else _lite_eisv_snapshot(snapshot)
 
-    return {
+    response = {
         "outcome_id": outcome_id,
         "outcome_type": outcome_type,
         "is_bad": is_bad,
@@ -578,6 +691,9 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         "calibration_excluded": calibration_excluded,
         "prediction_source": prediction_source,
     }
+    if prediction_id:
+        response["idempotent_replay"] = persistence_status == "existing"
+    return response
 
 
 _PROVENANCE_CLAIM_KEYS = frozenset({"verification_source", "phase5_emitter"})
@@ -732,10 +848,16 @@ async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextConten
         })
 
     if "error" in payload:
+        error_code = payload.get("error_code", "DB_ERROR")
+        error_category = payload.get("error_category", "system_error")
+        details = {}
+        if payload.get("canonical_outcome_id"):
+            details["canonical_outcome_id"] = payload["canonical_outcome_id"]
         return [error_response(
             payload["error"],
-            error_code="DB_ERROR",
-            error_category="system_error",
+            error_code=error_code,
+            error_category=error_category,
+            details=details or None,
         )]
 
     return success_response(payload)

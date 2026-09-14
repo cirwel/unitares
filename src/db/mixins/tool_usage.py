@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
@@ -192,6 +193,159 @@ class ToolUsageMixin:
                 last_exc,
             )
             return None
+
+    async def record_bound_outcome_event(
+        self,
+        *,
+        agent_id: str,
+        prediction_id: str,
+        request_digest: str,
+        outcome_type: str,
+        is_bad: bool,
+        outcome_score: Optional[float] = None,
+        session_id: Optional[str] = None,
+        eisv_e: Optional[float] = None,
+        eisv_i: Optional[float] = None,
+        eisv_s: Optional[float] = None,
+        eisv_v: Optional[float] = None,
+        eisv_phi: Optional[float] = None,
+        eisv_verdict: Optional[str] = None,
+        eisv_coherence: Optional[float] = None,
+        eisv_regime: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+        eisv_snapshot: Optional[Dict[str, Any]] = None,
+        verification_source: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Atomically claim a prediction and insert its canonical outcome.
+
+        The unpartitioned binding ledger is the global uniqueness authority.
+        Its claim and the range-partitioned outcome row share one transaction;
+        identical callers replay canonical response material from the ledger.
+        """
+        from config.governance_config import GovernanceConfig
+
+        claim_token = uuid.uuid4()
+        detail_json = json.dumps(detail or {})
+        snapshot_json = json.dumps(eisv_snapshot) if eisv_snapshot is not None else None
+
+        def _decode_json(value: Any) -> Any:
+            if isinstance(value, str):
+                return json.loads(value)
+            return value
+
+        def _result(status: str, claim: Any) -> Dict[str, Any]:
+            return {
+                "status": status,
+                "outcome_id": str(claim["canonical_outcome_id"]),
+                "outcome_type": claim["canonical_outcome_type"],
+                "outcome_score": claim["canonical_outcome_score"],
+                "is_bad": claim["canonical_is_bad"],
+                "detail": _decode_json(claim["canonical_detail"]),
+                "eisv_snapshot": _decode_json(claim["canonical_eisv_snapshot"]),
+            }
+
+        async def _attempt(conn: Any) -> Dict[str, Any]:
+            async with conn.transaction():
+                claim = await conn.fetchrow(
+                    """
+                    INSERT INTO audit.outcome_prediction_bindings AS existing
+                        (agent_id, prediction_id, request_digest, claim_token,
+                         canonical_eisv_snapshot, canonical_outcome_type,
+                         canonical_outcome_score, canonical_is_bad, canonical_detail)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ON CONFLICT (agent_id, prediction_id) DO UPDATE
+                    SET request_digest = existing.request_digest
+                    WHERE existing.request_digest = EXCLUDED.request_digest
+                    RETURNING canonical_outcome_id, canonical_outcome_ts,
+                              request_digest, claim_token, canonical_eisv_snapshot,
+                              canonical_outcome_type, canonical_outcome_score,
+                              canonical_is_bad, canonical_detail
+                    """,
+                    agent_id,
+                    prediction_id,
+                    request_digest,
+                    claim_token,
+                    snapshot_json,
+                    outcome_type,
+                    outcome_score,
+                    is_bad,
+                    detail_json,
+                )
+                if claim is None:
+                    existing = await conn.fetchrow(
+                        """
+                        SELECT canonical_outcome_id, request_digest
+                        FROM audit.outcome_prediction_bindings
+                        WHERE agent_id = $1 AND prediction_id = $2
+                        """,
+                        agent_id,
+                        prediction_id,
+                    )
+                    return {
+                        "status": "conflict",
+                        "outcome_id": str(existing["canonical_outcome_id"]),
+                    }
+
+                owns_claim = str(claim["claim_token"]) == str(claim_token)
+                if not owns_claim:
+                    return _result("existing", claim)
+
+                await conn.fetchrow(
+                    """
+                    INSERT INTO audit.outcome_events
+                        (ts, outcome_id, agent_id, session_id, outcome_type,
+                         outcome_score, is_bad, eisv_e, eisv_i, eisv_s, eisv_v,
+                         eisv_phi, eisv_verdict, eisv_coherence, eisv_regime,
+                         detail, epoch, verification_source)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                            $12, $13, $14, $15, $16, $17, $18)
+                    RETURNING outcome_type, outcome_score, is_bad, detail
+                    """,
+                    claim["canonical_outcome_ts"],
+                    claim["canonical_outcome_id"],
+                    agent_id,
+                    session_id,
+                    outcome_type,
+                    outcome_score,
+                    is_bad,
+                    eisv_e,
+                    eisv_i,
+                    eisv_s,
+                    eisv_v,
+                    eisv_phi,
+                    eisv_verdict,
+                    eisv_coherence,
+                    eisv_regime,
+                    detail_json,
+                    GovernanceConfig.CURRENT_EPOCH,
+                    verification_source,
+                )
+                return _result("created", claim)
+
+        async with self.acquire() as conn:
+            try:
+                return await _attempt(conn)
+            except Exception as exc:
+                last_exc = exc
+
+            if _is_missing_outcome_partition(last_exc):
+                logger.warning(
+                    "record_bound_outcome_event encountered missing outcome_events "
+                    "partition; running maintenance before retrying the whole transaction"
+                )
+                try:
+                    await conn.fetchval("SELECT audit.partition_maintenance()")
+                    return await _attempt(conn)
+                except Exception as retry_exc:
+                    last_exc = retry_exc
+
+            logger.error(
+                "record_bound_outcome_event failed for agent=%s prediction=%s: %s",
+                agent_id,
+                prediction_id,
+                last_exc,
+            )
+            return {"status": "error", "error": str(last_exc)}
 
     async def get_recent_outcomes(
         self,
