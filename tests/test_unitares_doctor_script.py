@@ -2380,6 +2380,56 @@ def test_host_binary_currency_degrades_rather_than_raising_on_bad_brew_output(
     assert doctor.check_host_binary_currency().status is doctor.Status.WARN
 
 
+@pytest.mark.parametrize("stdout", [
+    "[]",
+    json.dumps({"formulae": None, "casks": []}),
+    json.dumps({"formulae": "cloudflared", "casks": []}),
+    json.dumps({"formulae": [1, 2, 3], "casks": []}),
+    json.dumps({"formulae": [], "casks": "nope"}),
+])
+def test_host_binary_currency_warns_rather_than_raising_on_valid_json_wrong_shape(
+    doctor, monkeypatch, stdout
+):
+    """Valid JSON that doesn't match the expected `{formulae: [...], casks:
+    [...]}` shape must degrade to WARN, not raise inside run_checks (a bare
+    `[]`, `formulae` not a list, or non-dict entries all crashed the old
+    unconditional payload.get(...) indexing)."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _fake_run(stdout))
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
+def test_host_binary_currency_tolerates_a_missing_casks_key(doctor, monkeypatch):
+    """A `formulae`-only payload (no `casks` key at all) is a normal shape,
+    not a schema mismatch -- only an explicit wrong-typed value should WARN."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(json.dumps({"formulae": []})),
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.PASS
+
+
+def test_host_binary_currency_disables_brew_auto_update(doctor, monkeypatch):
+    """brew classifies `outdated` as an auto-update command: without
+    HOMEBREW_NO_AUTO_UPDATE=1 forced into the subprocess env, brew's own
+    preflight silently runs `brew update --auto-update` first -- network
+    access and cache mutation from what this check advertises as read-only."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setenv("HOMEBREW_NO_AUTO_UPDATE", "0")
+    captured = {}
+
+    def _capture_run(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _fake_run(_brew_payload())
+
+    monkeypatch.setattr(doctor.subprocess, "run", _capture_run)
+    doctor.check_host_binary_currency()
+
+    assert captured["env"] is not None
+    assert captured["env"].get("HOMEBREW_NO_AUTO_UPDATE") == "1"
+
+
 def test_host_binary_currency_tracks_the_tunnel_that_went_stale(doctor):
     """cloudflared must stay in the tracked set — it is the case that
     motivated the check, and dropping it would silently reopen the gap."""
