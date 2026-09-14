@@ -37,5 +37,6 @@ def test_binding_retention_cannot_outlive_canonical_outcomes() -> None:
     cleanup = partitions.index("cleanup_outcome_prediction_bindings(p_retention_days)")
     assert drop < cleanup
     assert "not exists" in migration
+    assert "outcome.ts = binding.canonical_outcome_ts" in migration
     assert "outcome.outcome_id = binding.canonical_outcome_id" in migration
     assert "beyond outcome partition retention" not in migration
