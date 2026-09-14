@@ -1441,6 +1441,131 @@ def check_resident_agents(loaded: set[str]) -> CheckResult:
                        f"resident agents not loaded: {', '.join(missing)}")
 
 
+# Host binaries this deployment depends on that NO manifest covers.
+#
+# Dependabot watches pip, docker, github-actions and npm; constraints.txt
+# governs the Python resolution; check_ci_python_matrix_sync.py holds the
+# interpreter. None of them can see a Homebrew formula, because there is no
+# file to read. That blind spot is not hypothetical: cloudflared sat on
+# 2026.3.0 until 2026-09-13 -- six months stale, with a known 2026.3.x bug
+# that scripts/ops/ipv6_loopback_proxy.py already carries a workaround for --
+# and nothing reported it. check_ipv6_sidecar below even hardcodes a
+# "cloudflared 2026.3+" assumption while checking only whether the sidecar is
+# loaded, so the one check that named a version could not notice the version.
+#
+# Currency is advisory, so this WARNs and never FAILs: an outdated formula is
+# a thing to schedule, not a broken deployment. Add a formula here when the
+# deployment starts depending on it; there is no manifest to derive it from,
+# which is the whole reason this check exists.
+HOST_BINARIES: tuple[str, ...] = (
+    "cloudflared",      # the tunnel that fronts /mcp for remote connectors
+    "postgresql@17",    # primary store (CLAUDE.md Setup step 1)
+    "redis",            # de-facto session/identity store, not optional
+    "ollama",           # the free/self-hosted inference default
+)
+
+
+def check_host_binary_currency() -> CheckResult:
+    """Report Homebrew formulae this deployment depends on that are outdated.
+
+    Reads `brew outdated --json=v2` rather than shelling per-formula so one
+    subprocess answers for all of them. A formula that is not installed simply
+    does not appear in the outdated set and is not reported -- this check
+    answers "is what you have current", not "is everything installed", which
+    is check_postgres_running's and check_redis_continuity's job.
+    """
+    name, mode = "host_binary_currency", "operator"
+
+    brew = shutil.which("brew")
+    if brew is None:
+        return CheckResult(name, mode, Status.SKIP,
+                           "brew not on PATH (non-Homebrew host); "
+                           "host binaries are tracked manually here")
+
+    # `outdated` is in Homebrew's own AUTO_UPDATE_COMMANDS list: unless we say
+    # otherwise, brew's preflight silently runs `brew update --auto-update`
+    # first, mutating the tap/API cache and hitting the network from what this
+    # check advertises as a read-only diagnostic. Force the override into the
+    # subprocess env ourselves rather than trust the caller's environment
+    # already has it set the way we need.
+    #
+    # HOMEBREW_FORCE_API_AUTO_UPDATE is a separate escape hatch:
+    # Homebrew::API.fetch_api_files! forces a formula/cask API refresh when
+    # that variable is set, REGARDLESS of HOMEBREW_NO_AUTO_UPDATE. A caller or
+    # launch environment carrying it would still make this check fetch and
+    # rewrite API cache state, so it must be stripped from the copied
+    # environment rather than merely overridden -- setting it to "0" or ""
+    # does not un-set it for Homebrew's own `ENV.fetch(...)`-style checks.
+    env = {**os.environ, "HOMEBREW_NO_AUTO_UPDATE": "1"}
+    env.pop("HOMEBREW_FORCE_API_AUTO_UPDATE", None)
+    try:
+        proc = subprocess.run(
+            [brew, "outdated", "--json=v2"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return CheckResult(name, mode, Status.WARN,
+                           "brew outdated timed out after 60s")
+    except OSError as exc:
+        return CheckResult(name, mode, Status.WARN, f"could not run brew outdated: {exc}")
+
+    if proc.returncode != 0:
+        return CheckResult(name, mode, Status.WARN,
+                           f"brew outdated exited {proc.returncode}",
+                           detail=proc.stderr.strip()[:400])
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except (json.JSONDecodeError, ValueError, RecursionError):
+        return CheckResult(name, mode, Status.WARN,
+                           "brew outdated returned unparseable JSON")
+
+    if not isinstance(payload, dict):
+        return CheckResult(name, mode, Status.WARN,
+                           "brew outdated returned an unexpected JSON shape "
+                           "(top level is not an object)")
+    _missing = object()
+    formulae = payload.get("formulae", _missing)
+    formulae = [] if formulae is _missing else formulae
+    casks = payload.get("casks", _missing)
+    casks = [] if casks is _missing else casks
+    if (
+        not isinstance(formulae, list)
+        or not isinstance(casks, list)
+        or not all(isinstance(e, dict) for e in (*formulae, *casks))
+    ):
+        return CheckResult(name, mode, Status.WARN,
+                           "brew outdated returned an unexpected JSON shape")
+
+    tracked = set(HOST_BINARIES)
+    stale: list[str] = []
+    for entry in (*formulae, *casks):
+        entry_name = entry.get("name", "")
+        if not isinstance(entry_name, str):
+            return CheckResult(name, mode, Status.WARN,
+                               "brew outdated returned an unexpected JSON shape")
+        # brew reports taps as "org/tap/formula"; match the bare formula too.
+        if entry_name not in tracked and entry_name.rpartition("/")[2] not in tracked:
+            continue
+        versions = entry.get("installed_versions", [])
+        current_version = entry.get("current_version", "?")
+        if (
+            not isinstance(versions, list)
+            or not all(isinstance(v, str) for v in versions)
+            or not isinstance(current_version, str)
+        ):
+            return CheckResult(name, mode, Status.WARN,
+                               "brew outdated returned an unexpected JSON shape")
+        installed = ", ".join(versions) or "?"
+        stale.append(f"{entry_name} {installed} -> {current_version}")
+
+    if not stale:
+        return CheckResult(name, mode, Status.PASS,
+                           f"{len(tracked)} tracked host binaries current (or absent)")
+    return CheckResult(name, mode, Status.WARN,
+                       f"{len(stale)} tracked host binary/binaries outdated",
+                       detail="; ".join(sorted(stale)))
+
+
 def check_ipv6_sidecar(loaded: set[str]) -> CheckResult:
     name, mode = "ipv6_sidecar", "operator"
     label = "com.unitares.ipv6-loopback-proxy"
@@ -3442,6 +3567,7 @@ def build_checks(
         Check("launchagent_loaded", "operator", lambda: check_launchagent(loaded())),
         Check("resident_agents", "operator", lambda: check_resident_agents(loaded())),
         Check("ipv6_sidecar", "operator", lambda: check_ipv6_sidecar(loaded())),
+        Check("host_binary_currency", "operator", check_host_binary_currency),
         Check("failure_label_live", "operator", lambda: check_failure_label_live(db_url)),
         Check("checkin_stream_live", "operator", lambda: check_checkin_stream_live(db_url)),
         Check("resident_checkin_stale", "operator", lambda: check_resident_checkin_stale(db_url)),
