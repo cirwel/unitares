@@ -1481,10 +1481,18 @@ def check_host_binary_currency() -> CheckResult:
         return CheckResult(name, mode, Status.SKIP,
                            "brew not on PATH (non-Homebrew host); "
                            "host binaries are tracked manually here")
+
+    # `outdated` is in Homebrew's own AUTO_UPDATE_COMMANDS list: unless we say
+    # otherwise, brew's preflight silently runs `brew update --auto-update`
+    # first, mutating the tap/API cache and hitting the network from what this
+    # check advertises as a read-only diagnostic. Force the override into the
+    # subprocess env ourselves rather than trust the caller's environment
+    # already has it set the way we need.
+    env = {**os.environ, "HOMEBREW_NO_AUTO_UPDATE": "1"}
     try:
         proc = subprocess.run(
             [brew, "outdated", "--json=v2"],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, env=env,
         )
     except subprocess.TimeoutExpired:
         return CheckResult(name, mode, Status.WARN,
@@ -1502,9 +1510,26 @@ def check_host_binary_currency() -> CheckResult:
         return CheckResult(name, mode, Status.WARN,
                            "brew outdated returned unparseable JSON")
 
+    if not isinstance(payload, dict):
+        return CheckResult(name, mode, Status.WARN,
+                           "brew outdated returned an unexpected JSON shape "
+                           "(top level is not an object)")
+    _missing = object()
+    formulae = payload.get("formulae", _missing)
+    formulae = [] if formulae is _missing else formulae
+    casks = payload.get("casks", _missing)
+    casks = [] if casks is _missing else casks
+    if (
+        not isinstance(formulae, list)
+        or not isinstance(casks, list)
+        or not all(isinstance(e, dict) for e in (*formulae, *casks))
+    ):
+        return CheckResult(name, mode, Status.WARN,
+                           "brew outdated returned an unexpected JSON shape")
+
     tracked = set(HOST_BINARIES)
     stale: list[str] = []
-    for entry in (*payload.get("formulae", []), *payload.get("casks", [])):
+    for entry in (*formulae, *casks):
         entry_name = str(entry.get("name", ""))
         # brew reports taps as "org/tap/formula"; match the bare formula too.
         if entry_name not in tracked and entry_name.rpartition("/")[2] not in tracked:
