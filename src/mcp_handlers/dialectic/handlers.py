@@ -14,7 +14,7 @@ from numbers import Real
 import re
 from datetime import datetime, timedelta, timezone
 
-from .wait_assessment import assess_wait
+from .wait_assessment import assess_wait, suggests_facilitation
 
 # Import type definitions
 
@@ -891,6 +891,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         awaiting=awaiting_kind,
         orchestrated=bool(reviewer_owed and _has_orchestrated_reviewer_budget(session_data, reviewer_agent_id)),
     )
+    facilitation_supported = suggests_facilitation(wait["assessment"])
 
     whose_move = "nobody — session is terminal"
     next_call: Optional[str] = None
@@ -960,20 +961,38 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                 "proposed_conditions=[...])"
             )
         elif current_agent_role == "paused_agent":
-            whose_move = (
-                "NOT YOURS — the reviewer's rejection stands; wait for the reviewer "
-                "or ask an operator to reassign/facilitate"
-            )
+            if facilitation_supported:
+                whose_move = (
+                    "NOT YOURS — the reviewer's rejection stands; wait for the reviewer "
+                    "or ask an operator to reassign/facilitate"
+                )
+            else:
+                whose_move = (
+                    "NOT YOURS — the reviewer's reconsideration is pending; wait for "
+                    "the reviewer and read wait_assessment.note before intervening"
+                )
         elif current_agent_role == "operator":
-            whose_move = "YOURS — reassign/facilitate unless the reviewer will revise"
-            next_call = (
-                f"dialectic(action='reassign', session_id='{session_id}', "
-                "reason='Facilitate standing reviewer rejection')"
-            )
+            if facilitation_supported:
+                whose_move = "YOURS — reassign/facilitate unless the reviewer will revise"
+                next_call = (
+                    f"dialectic(action='reassign', session_id='{session_id}', "
+                    "reason='Facilitate standing reviewer rejection')"
+                )
+            else:
+                whose_move = (
+                    "the reviewer's — their reconsideration is pending; read "
+                    "wait_assessment.note before intervening"
+                )
         else:
-            whose_move = (
-                "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
-            )
+            if facilitation_supported:
+                whose_move = (
+                    "an operator's — reassign/facilitate unless the reviewer will revise its verdict"
+                )
+            else:
+                whose_move = (
+                    "the reviewer's — their reconsideration is pending; read "
+                    "wait_assessment.note before intervening"
+                )
     elif phase == "synthesis" and reviewer_objection_stands:
         if current_agent_role == "operator":
             whose_move = "YOURS — assign an independent reviewer/facilitator"

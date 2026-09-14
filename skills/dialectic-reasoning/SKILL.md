@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-13"
+last_verified: "2026-09-14"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
@@ -20,8 +20,8 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "e4c5564b37f0ea2c"
-  unitares/src/mcp_handlers/dialectic/session.py: "8065938fced23b6f"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "5c703689f5ad8395"
+  unitares/src/mcp_handlers/dialectic/session.py: "eb5ed22eb5684038"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
   unitares/src/mcp_handlers/dialectic/reviewer.py: "d5e71f324195eb6c"
@@ -242,6 +242,11 @@ responses answer it directly from your seat:
   obligation, so there is no budget to exceed and the field declines to invent
   one; an unclaimed slot at 72 minutes is an unanswered invitation, not a
   missing reviewer.
+
+  Do not reassign or ask for facilitation from a `too_early` or `null`
+  assessment. Wait and read `note`; only `overdue` supports investigating or
+  offering the operator a facilitation path, and even then it does not prove
+  that the reviewer is gone.
 
 Read `whose_move` before concluding a session is hung, and `wait_assessment`
 before concluding it is late. Use

@@ -314,6 +314,7 @@ def classify(pr: dict, threads: int | None, quiet_hours: float, now: datetime) -
     mergeable = (pr.get("mergeable") or "UNKNOWN").upper()
     checks = check_state(pr)
     review = pr.get("reviewDecision")
+    review_requests = pr.get("reviewRequests")
 
     if mergeable == "CONFLICTING":
         finding["class"] = "CONFLICTED"
@@ -324,6 +325,12 @@ def classify(pr: dict, threads: int | None, quiet_hours: float, now: datetime) -
     elif review == "CHANGES_REQUESTED":
         finding["class"] = "REVIEW-OPEN"
         finding["reason"] = "changes requested in a review; waiting on the author"
+    elif "reviewRequests" not in pr or not isinstance(review_requests, list):
+        finding["class"] = "UNKNOWN"
+        finding["reason"] = "review requests could not be established"
+    elif review_requests:
+        finding["class"] = "REVIEW-OPEN"
+        finding["reason"] = f"{len(review_requests)} requested reviewer(s) have not responded"
     elif threads is None:
         finding["class"] = "CI-PENDING"
         finding["reason"] = "review threads could not be read; state indeterminate"

@@ -194,6 +194,38 @@ def test_detects_unindexed_proposal(tree: Path):
     assert "zz-new-thing.md" in result.stdout
 
 
+def test_prose_link_does_not_satisfy_index_coverage(tree: Path):
+    _add_doc(tree, "zz-prose-only.md", status=True, indexed=False)
+    readme = tree / "docs" / "proposals" / "README.md"
+    readme.write_text(
+        readme.read_text()
+        + "\nFurther context: [`zz-prose-only.md`](zz-prose-only.md).\n"
+    )
+    result = _run_tree(tree)
+    assert result.returncode == 1
+    assert "not indexed" in result.stdout
+    assert "no table row" in result.stdout
+    assert "zz-prose-only.md" in result.stdout
+
+
+def test_detects_duplicate_proposal_rows_even_when_counts_match(tree: Path):
+    name = "zz-duplicate-row.md"
+    _add_doc(tree, name, status=True)
+    readme = tree / "docs" / "proposals" / "README.md"
+    line, counts = _counts_line(readme)
+    text = readme.read_text().replace(
+        line,
+        line.replace(f"Active {counts['Active']}", f"Active {counts['Active'] + 1}"),
+        1,
+    )
+    readme.write_text(text + f"\n| [`{name}`]({name}) | **Active** · duplicate |\n")
+
+    result = _run_tree(tree)
+    assert result.returncode == 1
+    assert "duplicate index rows" in result.stdout
+    assert name in result.stdout
+
+
 def test_detects_missing_status_line(tree: Path):
     """A new doc with no status line fails; the body stays canonical for status."""
     doc = tree / "docs" / "proposals" / "zz-no-status.md"

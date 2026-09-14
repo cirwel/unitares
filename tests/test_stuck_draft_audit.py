@@ -46,6 +46,7 @@ def _pr(*, checks, mergeable="MERGEABLE", idle=24.0, age=48.0, number=1):
         "requiredStatusChecks": [{"context": "tests", "app_id": None}],
         "headRefOid": "sampled-head",
         "reviewDecision": "APPROVED",
+        "reviewRequests": [],
     }
 
 
@@ -126,6 +127,33 @@ def test_open_threads_are_review_open():
     f = _classify(_pr(checks=GREEN), threads=2)
     assert f["class"] == "REVIEW-OPEN"
     assert "waiting on the author" in f["reason"]
+
+
+def test_requested_reviewer_is_review_open_even_without_threads():
+    pr = _pr(checks=GREEN)
+    pr["reviewRequests"] = [{"login": "reviewer"}]
+    f = _classify(pr, threads=0)
+    assert f["class"] == "REVIEW-OPEN"
+    assert "requested reviewer" in f["reason"]
+
+
+@pytest.mark.parametrize("requests", [None, "unreadable", {}])
+def test_unreadable_review_requests_are_unknown(requests):
+    pr = _pr(checks=GREEN)
+    pr["reviewRequests"] = requests
+    f = _classify(pr, threads=0)
+    assert f["class"] == "UNKNOWN"
+    assert "review requests" in f["reason"]
+
+
+def test_missing_review_requests_are_unknown():
+    pr = _pr(checks=GREEN)
+    del pr["reviewRequests"]
+    assert _classify(pr, threads=0)["class"] == "UNKNOWN"
+
+
+def test_empty_review_requests_may_proceed():
+    assert _classify(_pr(checks=GREEN), threads=0)["class"] == "UNBLOCKED"
 
 
 def test_pending_checks_are_not_unblocked():
