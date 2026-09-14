@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -103,6 +104,7 @@ STATUS_RE = re.compile(
     re.IGNORECASE,
 )
 LINK_RE = re.compile(r"\]\(([^)]+\.md)\)")
+ROW_LINK_RE = re.compile(r"^\|\s*\[[^]]*\]\(([^)]+\.md)\)\s*\|", re.MULTILINE)
 ROW_TAG_RE = re.compile(r"^\|\s*\[.*?\]\([^)]+\)\s*\|\s*\*\*(" + "|".join(VALID_TAGS) + r")")
 COUNTS_RE = re.compile(
     r"(?:Current counts|Counts at tagging):\s*\n?\s*"
@@ -134,14 +136,24 @@ def main() -> int:
         link.removeprefix("./")
         for link in LINK_RE.findall(index_text)
     }
-    linked_toplevel = {l for l in linked if "/" not in l}
+    row_links = [link.removeprefix("./") for link in ROW_LINK_RE.findall(index_text)]
+    toplevel_row_counts = Counter(link for link in row_links if "/" not in link)
 
-    # 1. Coverage — every proposal is reachable from the index.
-    for name in sorted(on_disk - linked_toplevel - INDEX_EXEMPT):
-        problems.append(
-            f"not indexed: docs/proposals/{name} has no row in README.md. "
-            f"Add one, or add it to INDEX_EXEMPT with the reason."
-        )
+    # 1. Coverage — every proposal has exactly one table row. A prose link is
+    # useful context, but it is not the disposition/status entry this registry
+    # promises and therefore cannot satisfy coverage.
+    for name in sorted(on_disk - INDEX_EXEMPT):
+        row_count = toplevel_row_counts[name]
+        if row_count == 0:
+            problems.append(
+                f"not indexed: docs/proposals/{name} has no table row in README.md. "
+                f"Add one, or add it to INDEX_EXEMPT with the reason."
+            )
+        elif row_count > 1:
+            problems.append(
+                f"duplicate index rows: docs/proposals/{name} has {row_count} table rows "
+                "in README.md; exactly one is required."
+            )
 
     # 2. Dead links — every index link resolves.
     for link in sorted(linked):
@@ -208,8 +220,9 @@ def main() -> int:
         print(f"\n❌ Proposals index guard: {len(problems)} problem(s)")
         return 1
 
+    indexed_count = len(on_disk - INDEX_EXEMPT)
     print(
-        f"✅ Proposals index guard: {len(on_disk)} proposal(s) indexed, "
+        f"✅ Proposals index guard: {indexed_count} proposal(s) have one table row, "
         f"{len(linked)} link(s) resolve, counts match rows"
     )
     return 0

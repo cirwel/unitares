@@ -30,12 +30,13 @@ name: Draft Base Refresh
 #     just pushes, so it over-skips rather than under-skips; that is the safe
 #     direction for a job that writes to someone else's branch.
 #
-#   * Only a head that is still the one the idleness verdict was taken on. The
-#     listing snapshots `headRefOid` beside `updatedAt`; if the branch moved
-#     between the query and the fetch, that verdict describes a commit that is
-#     no longer the head, and an owner push inside that window is precisely the
-#     case the quiet period exists to avoid. Re-checking the OID after the fetch
-#     closes it; the ordinary non-force push closes the later race after that.
+#   * Only a PR whose live state still matches the idleness verdict. The listing
+#     snapshots `headRefOid` beside `updatedAt`; immediately before pushing, the
+#     job re-reads OPEN/draft status, activity, labels, and the head OID. The push
+#     then names that OID in an explicit force-with-lease compare-and-swap, with
+#     force-if-includes as the second history-loss guard. An owner push or opt-out
+#     inside either race window therefore rejects this refresh instead of losing
+#     their work.
 #
 # Label a PR `no-base-refresh` to opt out — for a PR deliberately pinned to an
 # older base, or one stacked on another PR's branch where a base merge would
@@ -195,10 +196,63 @@ jobs:
               skipped=$((skipped+1)); echo "::endgroup::"; continue
             fi
 
+            # The original listing is now stale by construction: fetch and merge
+            # both took time. Re-read every mutable condition that authorizes a
+            # write. Missing or malformed data is not evidence that the PR is
+            # still an idle, open draft.
+            if ! live=$(gh pr view "$num" --repo "$GITHUB_REPOSITORY" \
+                --json state,isDraft,updatedAt,labels,headRefOid 2>/dev/null); then
+              echo "hold: live PR state could not be read before push"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+            if ! jq -e '
+                (type == "object")
+                and ((.state | type) == "string")
+                and ((.isDraft | type) == "boolean")
+                and ((.updatedAt | type) == "string")
+                and ((.labels | type) == "array")
+                and ((.headRefOid | type) == "string")
+                and (all(.labels[]; (.name | type) == "string"))
+              ' >/dev/null <<<"$live"; then
+              echo "hold: live PR state was incomplete before push"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+            live_state=$(jq -r .state <<<"$live")
+            live_draft=$(jq -r .isDraft <<<"$live")
+            live_updated=$(jq -r .updatedAt <<<"$live")
+            live_oid=$(jq -r .headRefOid <<<"$live")
+
+            if [ "$live_state" != "OPEN" ] || [ "$live_draft" != "true" ]; then
+              echo "skip: PR is no longer an open draft"
+              skipped=$((skipped+1)); echo "::endgroup::"; continue
+            fi
+            if jq -e '[.labels[].name] | index("no-base-refresh") != null' \
+                >/dev/null <<<"$live"; then
+              echo "skip: no-base-refresh was added after the listing"
+              skipped=$((skipped+1)); echo "::endgroup::"; continue
+            fi
+            if [ "$live_updated" != "$updated" ]; then
+              echo "hold: PR activity changed after the idleness verdict"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+            if [ "$live_oid" != "$oid" ]; then
+              echo "hold: $head moved before push (${oid:0:7} -> ${live_oid:0:7})"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+
             if [ "${DRY_RUN:-false}" = "true" ]; then
               echo "dry-run: would push $(git rev-parse --short HEAD) to $head"
             else
-              git push origin "HEAD:$head"
+              # Exact expected-OID CAS closes the final race after the live read.
+              # force-if-includes is mandatory alongside the explicit lease so a
+              # history rewrite can never discard a commit absent from this merge.
+              if ! git push \
+                  --force-with-lease="refs/heads/$head:$oid" \
+                  --force-if-includes \
+                  origin "HEAD:refs/heads/$head"; then
+                echo "hold: push lease rejected; $head moved or could not be updated"
+                held=$((held+1)); echo "::endgroup::"; continue
+              fi
               echo "refreshed: pushed merge of $base into $head"
               echo "::notice::PR #$num: approve token-triggered PR workflows and verify required CI on the new head."
             fi

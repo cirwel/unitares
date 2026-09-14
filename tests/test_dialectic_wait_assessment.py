@@ -15,13 +15,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import src.mcp_handlers.context as ctx
 import src.mcp_handlers.dialectic.handlers as handlers
 from src.mcp_handlers.dialectic import wait_assessment as wa
+from tests.helpers import parse_result
 
 
 @pytest.fixture(autouse=True)
@@ -252,6 +253,69 @@ def test_reconsideration_wait_starts_after_paused_response():
         out = handlers._build_dialectic_actionability(data)
     assert out["wait_assessment"]["expected_by_s"] == wa.expected_budget_s(awaiting="reconsideration")
     assert out["wait_assessment"]["assessment"] == wa.TOO_EARLY
+    assert out["next_call"] is None
+    assert "reassign" not in out["whose_move"].lower()
+    assert "facilitat" not in out["whose_move"].lower()
+
+
+def test_overdue_reconsideration_may_suggest_facilitation():
+    data = _synthesis_view(verdict=False, paused_response=True)
+    with patch.object(ctx, "get_context_agent_id", return_value="A"):
+        out = handlers._build_dialectic_actionability(data)
+    assert out["wait_assessment"]["assessment"] == wa.OVERDUE
+    assert "reassign/facilitate" in out["whose_move"]
+
+
+def test_operator_reconsideration_guidance_waits_until_overdue():
+    early = _synthesis_view(verdict=False, paused_response=True)
+    early["transcript"][-1]["timestamp"] = datetime.now(timezone.utc).isoformat()
+    overdue = _synthesis_view(verdict=False, paused_response=True)
+
+    with (
+        patch.object(ctx, "get_context_agent_id", return_value="operator"),
+        patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ),
+    ):
+        early_out = handlers._build_dialectic_actionability(early)
+        overdue_out = handlers._build_dialectic_actionability(overdue)
+
+    assert early_out["wait_assessment"]["assessment"] == wa.TOO_EARLY
+    assert early_out["next_call"] is None
+    assert "reassign" not in early_out["whose_move"].lower()
+    assert "facilitat" not in early_out["whose_move"].lower()
+    assert overdue_out["wait_assessment"]["assessment"] == wa.OVERDUE
+    assert "action='reassign'" in overdue_out["next_call"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reviewer_kind", "expected_assessment"),
+    [("orchestrated", wa.OVERDUE), ("external_consult", None)],
+)
+async def test_default_get_uses_persisted_reviewer_provenance(
+    reviewer_kind,
+    expected_assessment,
+):
+    data = _synthesis_view()
+    data["transcript"][-1]["observed_metrics"] = {
+        "reviewer_backend": {"reviewer_kind": reviewer_kind}
+    }
+
+    with (
+        patch.object(
+            handlers,
+            "load_session_as_dict",
+            new=AsyncMock(return_value=data),
+        ) as fast_load,
+        patch.object(ctx, "get_context_agent_id", return_value="A"),
+    ):
+        response = await handlers.handle_get_dialectic_session({"session_id": "s"})
+
+    out = parse_result(response)
+    fast_load.assert_awaited_once_with("s")
+    assert out["wait_assessment"]["assessment"] == expected_assessment
 
 
 @pytest.mark.parametrize("status", ["resolved", "failed", "timeout", "abandoned"])

@@ -775,6 +775,9 @@ class TestLoadSessionAsDict:
                 "root_cause": "Test cause",
                 "proposed_conditions": json.dumps(["Cond 1"]),
                 "concerns": None,
+                "observed_metrics": {
+                    "reviewer_backend": {"reviewer_kind": "external_consult"}
+                },
                 "agrees": None,
             }
         ]
@@ -810,6 +813,10 @@ class TestLoadSessionAsDict:
         assert len(result["transcript"]) == 1
         assert result["transcript"][0]["phase"] == "thesis"
         assert result["transcript"][0]["proposed_conditions"] == ["Cond 1"]
+        assert result["transcript"][0]["observed_metrics"] == {
+            "reviewer_backend": {"reviewer_kind": "external_consult"}
+        }
+        assert "observed_metrics" in mock_conn.fetch.await_args.args[0]
 
     @pytest.mark.asyncio
     async def test_returns_none_when_session_not_found_in_postgres(self):
