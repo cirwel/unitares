@@ -128,12 +128,21 @@ def build_server_info_payload() -> Dict[str, Any]:
     # aliases): that reads the decorator registry live and so can outrun what
     # tools/list actually serves. FastMCP mounts the wire table exactly once,
     # at auto_register_all_tools() during boot; a plugin's @mcp_tool decorator
-    # registering after that point grows the registry with no matching mount
-    # -- get_public_tool_definitions() narrows to interface_contract's
-    # mounted_tool_names() whenever a server has actually mounted one, so
-    # `advertised` cannot claim more than dispatch will serve. Unmounted
-    # contexts (this module's own tests, a bare script import) still get the
-    # full registry-plus-aliases count, matching the docs guard exactly.
+    # registering after that point grows the registry with no matching mount.
+    # interface_contract.mounted_tool_names() reads that mounted table
+    # directly (sys.modules introspection only -- no schema catalog, no
+    # caching), so narrowing against it here cannot claim more than dispatch
+    # will serve. Unmounted contexts (this module's own tests, a bare script
+    # import) get mounted_tool_names() == None and so the full
+    # registry-plus-aliases count, matching the docs guard exactly.
+    #
+    # Deliberately NOT interface_contract.get_public_tool_definitions(): that
+    # pulls full Tool definitions via tool_schemas.get_tool_definitions() ->
+    # get_pydantic_schemas(), which lazily populates a module-level cache on
+    # first call. get_server_info is a Wave 3a §6 Q1 SHIPPED handler and must
+    # stay mutation-free in its transitive closure (test_wave3a_transitive_
+    # audit.py::test_shipped_handlers_clear pins this) -- this handler only
+    # needs a name-set narrowing, never the schemas themselves.
     #
     # get_tool_registry() reads the decorator registry directly rather than
     # the mcp_handlers.TOOL_HANDLERS snapshot: a plugin's @mcp_tool decorator
@@ -144,15 +153,18 @@ def build_server_info_payload() -> Dict[str, Any]:
     # see the same tools.
     from src.mcp_handlers.decorators import get_tool_registry
     from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
-    from src.interface_contract import get_public_tool_definitions
+    from src.interface_contract import mounted_tool_names
 
     _registry = set(get_tool_registry())
     _aliases = set(AGENT_WORKFLOW_ALIASES)
+    _full_surface = _registry | _aliases
+    _mounted = mounted_tool_names()
+    _advertised_surface = _full_surface if _mounted is None else (_full_surface & _mounted)
     tool_count = len(_registry)
     tool_counts = {
         "registry": len(_registry),
         "workflow_aliases": len(_aliases - _registry),
-        "advertised": len(get_public_tool_definitions(mode="full")),
+        "advertised": len(_advertised_surface),
         "note": (
             "tool_count is `registry`, kept for older clients. "
             "advertised is what tools/list emits."

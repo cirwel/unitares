@@ -172,9 +172,7 @@ class TestGetServerInfo:
             # tool_count is sourced from get_tool_registry() (the decorator
             # registry), not the mcp_handlers.TOOL_HANDLERS snapshot.
             with patch("src.mcp_handlers.decorators.get_tool_registry",
-                       return_value={"tool1": None, "tool2": None}), \
-                 patch("src.interface_contract.get_public_tool_definitions",
-                       return_value=["tool1", "tool2"]):
+                       return_value={"tool1": None, "tool2": None}):
                 result = await handle_get_server_info({})
 
                 data = json.loads(result[0].text)
