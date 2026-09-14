@@ -21,9 +21,31 @@ thread can hold Closed and Parked rows beside Active ones.
 | **Closed** | A recorded decision, a refutation, a superseded draft, a negative result, or a dated record. Retained as provenance. |
 
 The 30-day line is a choice, not a measurement: it separates "someone is working
-this" from "nobody has touched this" and claims nothing else. Counts at tagging:
-Built 21 · Registered 7 · Active 21 · Parked 24 · Closed 14
+this" from "nobody has touched this" and claims nothing else. Current counts:
+Built 21 · Registered 7 · Active 24 · Parked 24 · Closed 14
 (top-level docs; the `resolved/` subfolder is not re-tagged).
+
+These counts are **live, not a snapshot**, and `scripts/dev/check_proposals_index.py`
+fails if they stop matching the rows below. They used to be a snapshot — "counts at
+tagging", 2026-09-03 — and within ten days they were wrong: the line still read
+`Active 21` after [#2156](https://github.com/CIRWEL/unitares/pull/2156) added a row,
+and the tagging count was itself one short. Nothing caught it, because nothing was
+checking. Add a row, change the number in the same commit.
+
+The guard checks this index against itself and the filesystem — coverage, dead links,
+count arithmetic, and whether each doc states a status. It does **not** decide whether
+a tag is *right*: the 30-day line above is a choice, and re-deriving tags in a script
+would make the script the tagging authority and stop this file being canonical for its
+own rule. A doc tagged **Active** that nobody has touched in a year passes the check;
+saying so is this index's job, and revising it is a human's.
+
+**So be precise about what is live here and what is not.** The *counts* are live and
+enforced. The *tags* are a dated reading, last taken 2026-09-03, and nothing re-derives
+them — which means this index answers "what was judged alive on that date, and is every
+doc still accounted for," **not** "what is alive right now." A review
+(dialectic `490c7cf515b89a6e`, 2026-09-13) named the earlier wording a contradiction:
+it claimed the first while only checking the second. Re-tag deliberately when the
+picture changes; do not read an untouched **Active** row as current evidence.
 
 ## Active threads
 
@@ -83,6 +105,7 @@ The ADR-001 thread: do not enable operator-vision delegation as first proposed; 
 |---|---|
 | [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md) | **Parked (since 2026-06-14)** · v0.1 plan, parked — pending council; unbuilt, blocked on the behavioral-EISV arm emitting signal |
 | [`continuous-verdict-blending-v0.md`](continuous-verdict-blending-v0.md) | **Parked (since 2026-06-27)** · v0.2 council-corrected design note — do not implement v0 blend as written; primary fix is verdict-gate hysteresis/dead-band |
+| [`dialectic-terminal-state-fidelity-v0.md`](dialectic-terminal-state-fidelity-v0.md) | **Active** · Decision packet, raised 2026-09-13 — `DialecticPhase.FAILED` is the terminal state for adjudication, exhaustion, reviewer non-completion and error alike, so the kernel's answer to its own "who challenged it?" question is unrecoverable once written. Options: a distinct terminal state (recommended), a structured reason field, or accept. Nothing implemented; companion to issue #2202 |
 | [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md) | **Parked (since 2026-07-01)** · v1 design — making load-bearing taste/authority/irreversible calls cheap to answer (decision-packet output contract; review pass live, dialectic `ESCALATE`/`design_review` are latent unwired scaffolds). Reviewed to v1 2026-06-17; design-first, no code |
 | [`mirror-effectiveness-measurement-v0.md`](mirror-effectiveness-measurement-v0.md) | **Built (partial)** · Phases 0–1 landed (Phase 2 proposed) — deterministic, operator-funded-free measurement of whether a surfaced mirror signal changes agent behavior |
 | [`kg-agent-adoption-pilot-v0.md`](kg-agent-adoption-pilot-v0.md) | **Active** · DRAFT / HOLD — offline fixture independently reviewed; production-plugin probe found the pinned root outside top five for five of six frozen queries, the one audit row required read-only decoder recovery, delayed auto-checkin falsified durable canary isolation, and live parity, scored runs, orchestration promotion, and live actuators remain unauthorized |

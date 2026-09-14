@@ -306,26 +306,6 @@ def create_supersedes_edge(
     return cypher, params
 
 
-def query_response_chain(
-    discovery_id: str,
-    max_depth: int = 10,
-) -> tuple[str, Dict[str, Any]]:
-    """
-    Build Cypher query to traverse response chain.
-    
-    Returns:
-        (cypher_query, params_dict)
-    """
-    params = {"discovery_id": discovery_id}
-    
-    cypher = f"""
-        MATCH path = (d:Discovery)-[:RESPONDS_TO*1..{max_depth}]->(root:Discovery)
-        WHERE d.id = ${{discovery_id}}
-        RETURN path
-    """
-    
-    return cypher, params
-
 
 def query_cross_agent_knowledge_flow(
     limit: int = 100,
@@ -562,43 +542,3 @@ def create_temporally_near_edge(
     """
 
     return cypher, params
-
-
-def create_indexes(graph_name: str = "governance_graph") -> List[tuple[str, Dict[str, Any]]]:
-    """
-    Build SQL statements to create indexes on the AGE graph schema.
-
-    Note: AGE stores label names with mixed case in quoted form, so we must
-    quote them here (e.g., "Discovery" not Discovery) to match the actual
-    relation names like governance_graph."Discovery".
-
-    Returns:
-        List of (sql_statement, params_dict) tuples
-    """
-    indexes = [
-        # Discovery indexes (quoted to match AGE's mixed-case labels)
-        (f'CREATE INDEX IF NOT EXISTS idx_discovery_agent ON {graph_name}."Discovery"(agent_id)', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_discovery_type ON {graph_name}."Discovery"(type)', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_discovery_timestamp ON {graph_name}."Discovery"(timestamp)', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_discovery_severity ON {graph_name}."Discovery"(severity)', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_discovery_status ON {graph_name}."Discovery"(status)', {}),
-
-        # EISV indexes (for self_observation type)
-        (f'CREATE INDEX IF NOT EXISTS idx_eisv_e ON {graph_name}."Discovery"(eisv_e) WHERE type = \'self_observation\'', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_eisv_s ON {graph_name}."Discovery"(eisv_s) WHERE type = \'self_observation\'', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_eisv_v ON {graph_name}."Discovery"(eisv_v) WHERE type = \'self_observation\'', {}),
-
-        # Agent indexes
-        (f'CREATE INDEX IF NOT EXISTS idx_agent_id ON {graph_name}."Agent"(id)', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_agent_status ON {graph_name}."Agent"(status)', {}),
-
-        # Tag indexes
-        (f'CREATE INDEX IF NOT EXISTS idx_tag_name ON {graph_name}."Tag"(name)', {}),
-
-        # Concept indexes
-        (f'CREATE INDEX IF NOT EXISTS idx_concept_id ON {graph_name}."Concept"(id)', {}),
-        (f'CREATE INDEX IF NOT EXISTS idx_concept_label ON {graph_name}."Concept"(label)', {}),
-    ]
-
-    return indexes
-

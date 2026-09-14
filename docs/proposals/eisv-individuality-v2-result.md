@@ -1,5 +1,7 @@
 # EISV individuality v2 — final read result
 
+**Status:** Closed by registered verdict, executed 2026-07-30. This records a **pre-registered stop rule that has already run**: it constrains the analyst against selective re-reads, and is not to be re-run, refreshed or weakened (see the measurement-authority section of `CLAUDE.md`/`AGENTS.md`). The document itself states the only admissible next step — a further attempt requires *changing the measurement* and pre-registering before any of its data exists.
+
 **Registered verdict: FAIL. Inference status: UNTESTED AS DEPLOYED.** The kill criterion in
 [`eisv-individuality-v2-preregistration.md`](eisv-individuality-v2-preregistration.md)
 executed on schedule: the individuality axiom is **retired for raw behavioral

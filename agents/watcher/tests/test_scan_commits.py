@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import threading
 
 import pytest
 
@@ -250,6 +251,66 @@ class TestScanCommitsResilience:
         body = f"fixes {fp}\nalso see {fp}"
         make_subprocess_run(_git_log_record("d" * 40, "fix", body))
         assert watcher_module.scan_commits() == 1
+
+    def test_scan_commit_resolution_preserves_concurrent_surface_receipt(
+        self, make_subprocess_run, monkeypatch, tmp_path
+    ):
+        fp = "abcd1234ef005678"
+        target = tmp_path / "target.py"
+        target.write_text("print('fixture')\n")
+        _seed(
+            watcher_module.FINDINGS_FILE,
+            _seed_finding(fp, status="open", file=str(target)),
+        )
+        make_subprocess_run(_git_log_record("d" * 40, "fix", fp))
+        monkeypatch.setattr(
+            watcher_module,
+            "_resolve_session_scope_root",
+            lambda: tmp_path,
+        )
+        original_write = watcher_module._write_findings_atomic
+        surface_at_write = threading.Event()
+        allow_surface_write = threading.Event()
+        scan_done = threading.Event()
+        scan_result = {}
+
+        def delayed_write(findings):
+            if threading.current_thread().name == "surface":
+                surface_at_write.set()
+                assert allow_surface_write.wait(timeout=2)
+            original_write(findings)
+
+        monkeypatch.setattr(
+            watcher_module,
+            "_write_findings_atomic",
+            delayed_write,
+        )
+        surface = threading.Thread(
+            target=lambda: watcher_module.main(
+                ["--surface-pending", "--audience", "codex:test"]
+            ),
+            name="surface",
+        )
+
+        def scan():
+            scan_result["resolved"] = watcher_module.scan_commits()
+            scan_done.set()
+
+        scanner = threading.Thread(target=scan, name="scan-commits")
+        surface.start()
+        assert surface_at_write.wait(timeout=2)
+        scanner.start()
+        assert not scan_done.wait(timeout=0.2)
+        allow_surface_write.set()
+        surface.join(timeout=2)
+        scanner.join(timeout=2)
+
+        assert not surface.is_alive()
+        assert not scanner.is_alive()
+        assert scan_result == {"resolved": 1}
+        [updated] = _read_findings(watcher_module.FINDINGS_FILE)
+        assert updated["status"] == "confirmed"
+        assert set(updated["surface_receipts"]) == {"codex:test"}
 
 
 class TestScanCommitsLeaseAdvisory:

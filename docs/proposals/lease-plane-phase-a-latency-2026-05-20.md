@@ -1,5 +1,7 @@
 # Lease-plane Phase A latency — first measurement 2026-05-20
 
+**Status:** Dated measurement record, 2026-05-20 — the first read anchoring the substrate-tax gate from `beam-footprint-roadmap-v0.md` v0.3.2. Evaluates the BEAM↔Python boundary using the existing 14-day audit window only, and adds client-side RPC instrumentation for the next one. A reading taken at a moment; retained as provenance, superseded by later windows rather than revised.
+
 Anchors the substrate-tax measurement gate from
 `beam-footprint-roadmap-v0.md` v0.3.2 amendment 2026-05-09: *"lease-plane
 Phase A latency instrumentation producing ≥14d of data."*
