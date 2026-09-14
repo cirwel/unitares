@@ -86,9 +86,7 @@ class TestGetServerInfo:
         # TestServerInfoReportsWhatTheServerActuallyUses for why.
         with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
              patch("src.mcp_handlers.decorators.get_tool_registry",
-                   return_value={"a": None, "b": None, "c": None}), \
-             patch("src.interface_contract.get_public_tool_definitions",
-                   return_value=["a", "b", "c"]):
+                   return_value={"a": None, "b": None, "c": None}):
             from src.mcp_handlers.admin.handlers import handle_get_server_info
             result = await handle_get_server_info({})
 
