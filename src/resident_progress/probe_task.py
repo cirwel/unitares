@@ -75,8 +75,8 @@ class ProgressFlatProbe:
         source_errors = {n: err for n, out, err in results if err is not None}
 
         # Step 4: heartbeat in parallel. Pass per-resident cadence from
-        # the registry so non-continuous residents (Vigil 30min, Steward
-        # 5min, Chronicler daily) aren't all judged against a 60s default.
+        # the registry so non-continuous residents (Vigil 30min,
+        # Chronicler daily) aren't all judged against a 60s default.
         # Residents whose registry cadence is None are event-driven
         # (Watcher) — heartbeat-liveness is the wrong abstraction, so we
         # synthesize an "alive=True, event_driven" status and skip the

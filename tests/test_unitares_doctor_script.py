@@ -2297,3 +2297,196 @@ def test_all_positive_generator_skips_when_table_unavailable(doctor, monkeypatch
 def test_all_positive_generator_is_registered_as_an_operator_check(doctor, tmp_path):
     names = {c.name: c.mode for c in doctor.build_checks(tmp_path, "postgresql://x/y")}
     assert names.get("anchor_all_positive_generator") == "operator"
+
+
+# ---------------------------------------------------------------------------
+# host_binary_currency — the Homebrew blind spot
+# ---------------------------------------------------------------------------
+#
+# Dependabot covers pip, docker, github-actions and npm. A Homebrew formula has
+# no manifest for it to read, so nothing reported cloudflared sitting six months
+# stale on 2026.3.0 while check_ipv6_sidecar hardcoded a "cloudflared 2026.3+"
+# assumption two lines away. These pin the check that closes that gap.
+
+
+def _brew_payload(*formulae):
+    return json.dumps({"formulae": list(formulae), "casks": []})
+
+
+def _fake_run(payload, returncode=0, stderr=""):
+    import subprocess as _sp
+
+    return _sp.CompletedProcess([], returncode, payload, stderr)
+
+
+def test_host_binary_currency_warns_on_a_tracked_stale_formula(doctor, monkeypatch):
+    """The regression this exists for, with the real observed versions."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(_brew_payload(
+            {"name": "cloudflared", "installed_versions": ["2026.3.0"],
+             "current_version": "2026.9.1"},
+        )),
+    )
+    result = doctor.check_host_binary_currency()
+    # WARN, never FAIL: currency is a thing to schedule, not a broken deploy.
+    assert result.status is doctor.Status.WARN
+    assert "2026.3.0" in result.detail and "2026.9.1" in result.detail
+
+
+def test_host_binary_currency_ignores_formulae_this_deployment_does_not_use(
+    doctor, monkeypatch
+):
+    """An outdated formula that is not ours is not this check's business."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(_brew_payload(
+            {"name": "jq", "installed_versions": ["1.6"], "current_version": "1.7"},
+        )),
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.PASS
+
+
+def test_host_binary_currency_matches_a_tapped_formula_name(doctor, monkeypatch):
+    """brew reports taps as org/tap/formula; the bare name must still match."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(_brew_payload(
+            {"name": "cloudflare/cloudflare/cloudflared",
+             "installed_versions": ["2026.3.0"], "current_version": "2026.9.1"},
+        )),
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
+def test_host_binary_currency_skips_without_homebrew(doctor, monkeypatch):
+    """A Linux or Docker host has no brew; that is not a finding."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    result = doctor.check_host_binary_currency()
+    assert result.status is doctor.Status.SKIP
+    assert "brew" in result.message
+
+
+def test_host_binary_currency_degrades_rather_than_raising_on_bad_brew_output(
+    doctor, monkeypatch
+):
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run", lambda *a, **k: _fake_run("not json at all")
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
+@pytest.mark.parametrize("stdout", [
+    "[]",
+    json.dumps({"formulae": None, "casks": []}),
+    json.dumps({"formulae": "cloudflared", "casks": []}),
+    json.dumps({"formulae": [1, 2, 3], "casks": []}),
+    json.dumps({"formulae": [], "casks": "nope"}),
+])
+def test_host_binary_currency_warns_rather_than_raising_on_valid_json_wrong_shape(
+    doctor, monkeypatch, stdout
+):
+    """Valid JSON that doesn't match the expected `{formulae: [...], casks:
+    [...]}` shape must degrade to WARN, not raise inside run_checks (a bare
+    `[]`, `formulae` not a list, or non-dict entries all crashed the old
+    unconditional payload.get(...) indexing)."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _fake_run(stdout))
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
+def test_host_binary_currency_tolerates_a_missing_casks_key(doctor, monkeypatch):
+    """A `formulae`-only payload (no `casks` key at all) is a normal shape,
+    not a schema mismatch -- only an explicit wrong-typed value should WARN."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *a, **k: _fake_run(json.dumps({"formulae": []})),
+    )
+    assert doctor.check_host_binary_currency().status is doctor.Status.PASS
+
+
+@pytest.mark.parametrize("installed_versions", [None, "2026.3.0", {"version": "2026.3.0"}])
+def test_host_binary_currency_warns_on_wrong_typed_installed_versions(
+    doctor, monkeypatch, installed_versions
+):
+    """A malformed tracked entry must not raise while formatting its version."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(
+        doctor.subprocess,
+        "run",
+        lambda *a, **k: _fake_run(_brew_payload({
+            "name": "cloudflared",
+            "installed_versions": installed_versions,
+            "current_version": "2026.9.1",
+        })),
+    )
+    result = doctor.check_host_binary_currency()
+    assert result.status is doctor.Status.WARN
+    assert "unexpected JSON shape" in result.message
+
+
+def test_host_binary_currency_warns_on_json_integer_over_decoder_limit(
+    doctor, monkeypatch
+):
+    """json.loads raises ValueError, not JSONDecodeError, on huge integers."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    stdout = '{"formulae": [9' + ('9' * 5000) + '], "casks": []}'
+    monkeypatch.setattr(doctor.subprocess, "run", lambda *a, **k: _fake_run(stdout))
+    assert doctor.check_host_binary_currency().status is doctor.Status.WARN
+
+
+def test_host_binary_currency_disables_brew_auto_update(doctor, monkeypatch):
+    """brew classifies `outdated` as an auto-update command: without
+    HOMEBREW_NO_AUTO_UPDATE=1 forced into the subprocess env, brew's own
+    preflight silently runs `brew update --auto-update` first -- network
+    access and cache mutation from what this check advertises as read-only."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setenv("HOMEBREW_NO_AUTO_UPDATE", "0")
+    captured = {}
+
+    def _capture_run(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _fake_run(_brew_payload())
+
+    monkeypatch.setattr(doctor.subprocess, "run", _capture_run)
+    doctor.check_host_binary_currency()
+
+    assert captured["env"] is not None
+    assert captured["env"].get("HOMEBREW_NO_AUTO_UPDATE") == "1"
+
+
+def test_host_binary_currency_strips_the_force_api_update_escape_hatch(doctor, monkeypatch):
+    """HOMEBREW_FORCE_API_AUTO_UPDATE forces a formula/cask API refresh in
+    Homebrew::API.fetch_api_files! regardless of HOMEBREW_NO_AUTO_UPDATE --
+    a caller or launch environment carrying it would still make this
+    supposedly read-only check fetch and rewrite API cache state. It must
+    be removed from the subprocess env entirely, not merely overridden."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: "/opt/homebrew/bin/brew")
+    monkeypatch.setenv("HOMEBREW_FORCE_API_AUTO_UPDATE", "1")
+    captured = {}
+
+    def _capture_run(*args, **kwargs):
+        captured["env"] = kwargs.get("env")
+        return _fake_run(_brew_payload())
+
+    monkeypatch.setattr(doctor.subprocess, "run", _capture_run)
+    doctor.check_host_binary_currency()
+
+    assert captured["env"] is not None
+    assert "HOMEBREW_FORCE_API_AUTO_UPDATE" not in captured["env"]
+
+
+def test_host_binary_currency_tracks_the_tunnel_that_went_stale(doctor):
+    """cloudflared must stay in the tracked set — it is the case that
+    motivated the check, and dropping it would silently reopen the gap."""
+    assert "cloudflared" in doctor.HOST_BINARIES
+
+
+def test_host_binary_currency_is_registered_as_an_operator_check(doctor, tmp_path):
+    names = {c.name: c.mode for c in doctor.build_checks(tmp_path, "postgresql://x/y")}
+    assert names.get("host_binary_currency") == "operator"

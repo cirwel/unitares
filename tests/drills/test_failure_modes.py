@@ -2,11 +2,9 @@
 Agent Drill Tests - Failure Mode Testing
 
 Tests governance system behavior under various failure scenarios:
-1. Pi unreachable (SSH tunnel down)
-2. Tool timeout handling
-3. Invalid tool calls
-4. Cross-device retry logic
-5. Graceful degradation
+1. Tool timeout handling
+2. Invalid tool calls
+3. Graceful degradation
 
 Run with: python -m pytest tests/drills/test_failure_modes.py -v
 
@@ -126,61 +124,8 @@ class TestGovernanceHealth:
         print(f"[PASS] Missing params handled: {str(result)[:100]}...")
 
 
-class TestPiOrchestration:
-    """Test Pi orchestration failure modes."""
-
-    def test_pi_health_when_available(self):
-        """Drill 4: Pi health check when tunnel is up."""
-        result = make_mcp_request(GOVERNANCE_URL, "tools/call", {
-            "name": "pi_health",
-            "arguments": {}
-        })
-
-        assert "result" in result, f"Expected result: {result}"
-        content = result["result"]["content"][0]["text"]
-        data = json.loads(content)
-
-        if data.get("success"):
-            print(f"[PASS] Pi healthy, latency: {data.get('latency_ms', 'N/A')}ms")
-        else:
-            print(f"[INFO] Pi unreachable (expected if tunnel down): {data.get('error', 'unknown')}")
-
-    def test_pi_sync_eisv_graceful_failure(self):
-        """Drill 5: EISV sync should fail gracefully if Pi unreachable."""
-        result = make_mcp_request(GOVERNANCE_URL, "tools/call", {
-            "name": "pi_sync_eisv",
-            "arguments": {}
-        })
-
-        assert "result" in result
-        content = result["result"]["content"][0]["text"]
-        data = json.loads(content)
-
-        # Should either succeed or have a proper error message
-        if data.get("success"):
-            print(f"[PASS] Sync succeeded: E={data['eisv']['E']:.2f}")
-        else:
-            assert "error" in data or "Error" in content
-            print(f"[PASS] Graceful failure: {data.get('error', content[:50])}")
-
-    def test_pi_workflow_timeout_handling(self):
-        """Drill 6: Workflow should handle slow Pi responses."""
-        start = time.time()
-        result = make_mcp_request(GOVERNANCE_URL, "tools/call", {
-            "name": "pi_workflow",
-            "arguments": {"workflow": "full_status"}
-        })
-        elapsed = time.time() - start
-
-        assert "result" in result
-        content = result["result"]["content"][0]["text"]
-
-        # Should complete or timeout gracefully
-        print(f"[PASS] Workflow completed in {elapsed:.2f}s")
-
-
-class TestCrossDeviceAudit:
-    """Test cross-device audit logging."""
+class TestAuditLog:
+    """Test audit logging."""
 
     def test_audit_log_exists(self):
         """Drill 7: Audit log should exist and be writable."""
@@ -193,30 +138,6 @@ class TestCrossDeviceAudit:
             print(f"[PASS] Audit log exists: {size} bytes")
         else:
             print(f"[INFO] Audit log not found at {audit_path}")
-
-    def test_eisv_sync_creates_audit_entry(self):
-        """Drill 8: EISV sync should create audit entry."""
-        # Get initial audit log size
-        import os
-        from pathlib import Path
-        audit_path = str(Path(__file__).resolve().parents[2] / "data" / "audit.jsonl")
-        initial_size = os.path.getsize(audit_path) if os.path.exists(audit_path) else 0
-
-        # Trigger a sync
-        make_mcp_request(GOVERNANCE_URL, "tools/call", {
-            "name": "pi_sync_eisv",
-            "arguments": {}
-        })
-
-        # Check if audit log grew
-        if os.path.exists(audit_path):
-            new_size = os.path.getsize(audit_path)
-            if new_size > initial_size:
-                print(f"[PASS] Audit log grew: {initial_size} -> {new_size} bytes")
-            else:
-                print(f"[INFO] Audit log unchanged (Pi may be unreachable)")
-        else:
-            print(f"[INFO] Audit log not found")
 
 
 class TestConsolidatedTools:

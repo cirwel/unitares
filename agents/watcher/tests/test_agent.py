@@ -23,6 +23,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -208,6 +209,60 @@ def test_fingerprint_stable_for_identical_content(watcher_module):
     f_a = _finding(watcher_module, line_content_hash="cafebabe1234")
     f_b = _finding(watcher_module, line_content_hash="cafebabe1234")
     assert f_a.fingerprint == f_b.fingerprint
+
+
+def test_identical_findings_in_two_worktrees_keep_separate_provenance(
+    watcher_module, tmp_path, capsys
+):
+    worktree_a = tmp_path / "worktree-a"
+    worktree_b = tmp_path / "worktree-b"
+    path_a = worktree_a / "src" / "inside.py"
+    path_b = worktree_b / "src" / "inside.py"
+    for path in (path_a, path_b):
+        path.parent.mkdir(parents=True)
+        path.write_text("same code\n")
+    finding_a = _finding(
+        watcher_module,
+        pattern="P011",
+        file=str(path_a),
+        line=1,
+        line_content_hash="same-content",
+    )
+    finding_b = _finding(
+        watcher_module,
+        pattern="P011",
+        file=str(path_b),
+        line=1,
+        line_content_hash="same-content",
+    )
+
+    assert finding_a.fingerprint != finding_b.fingerprint
+    assert watcher_module.persist_findings([finding_a, finding_b]) == [
+        finding_a,
+        finding_b,
+    ]
+
+    for scope_root, finding, other, audience in (
+        (worktree_a, finding_a, finding_b, "codex:a"),
+        (worktree_b, finding_b, finding_a, "codex:b"),
+    ):
+        assert (
+            watcher_module.surface_pending(
+                audience=audience,
+                scope_root=scope_root,
+                check_in=False,
+            )
+            == 0
+        )
+        output = capsys.readouterr().out
+        assert str(finding.file) in output
+        assert str(other.file) not in output
+
+    rows = {
+        row["fingerprint"]: row for row in watcher_module._iter_findings_raw()
+    }
+    assert set(rows[finding_a.fingerprint]["surface_receipts"]) == {"codex:a"}
+    assert set(rows[finding_b.fingerprint]["surface_receipts"]) == {"codex:b"}
 
 
 def test_fingerprint_ignores_non_identifying_fields(watcher_module):
@@ -501,6 +556,82 @@ def test_persist_findings_dedup_hides_repeat_but_not_content_change(watcher_modu
         [f_first, f_content_change, f_duplicate]
     )
     assert second == []
+
+
+def test_persist_findings_bridges_legacy_fingerprint_by_absolute_provenance(
+    watcher_module, tmp_path
+):
+    """The absolute-path rollout must not replay an existing lifecycle row."""
+    target = tmp_path / "worktree" / "src" / "same.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("asyncio.create_task(run())\n")
+    timestamp = _iso(datetime.now(timezone.utc))
+    legacy_fingerprint = "0123456789abcdef"
+    existing = {
+        "pattern": "P001",
+        "file": str(target),
+        "line": 1,
+        "hint": "fire-and-forget",
+        "severity": "high",
+        "detected_at": timestamp,
+        "model_used": "gemma4:latest",
+        "line_content_hash": "aaaaaaaaaaaa",
+        "fingerprint": legacy_fingerprint,
+        "status": "surfaced",
+    }
+    watcher_module._write_findings_atomic([existing])
+    watcher_module.save_dedup({legacy_fingerprint: timestamp})
+    rescanned = watcher_module.Finding(
+        pattern="P001",
+        file=str(target),
+        line=1,
+        hint="fire-and-forget",
+        severity="high",
+        detected_at=timestamp,
+        model_used="gemma4:latest",
+        line_content_hash="aaaaaaaaaaaa",
+    )
+    assert rescanned.fingerprint != legacy_fingerprint
+
+    assert watcher_module.persist_findings([rescanned]) == []
+    assert watcher_module._iter_findings_raw() == [existing]
+    assert watcher_module.load_dedup() == {
+        legacy_fingerprint: timestamp,
+        rescanned.fingerprint: timestamp,
+    }
+
+
+def test_persist_findings_ignores_malformed_legacy_provenance(
+    watcher_module, tmp_path
+):
+    """One malformed historical row must not poison all future scans."""
+    target = tmp_path / "worktree" / "src" / "same.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("asyncio.create_task(run())\n")
+    timestamp = _iso(datetime.now(timezone.utc))
+    malformed = {
+        "pattern": "P001",
+        "file": str(target),
+        "line": "not-a-line",
+        "line_content_hash": "aaaaaaaaaaaa",
+        "fingerprint": "0123456789abcdef",
+        "status": "surfaced",
+    }
+    watcher_module._write_findings_atomic([malformed])
+    watcher_module.save_dedup({malformed["fingerprint"]: timestamp})
+    rescanned = watcher_module.Finding(
+        pattern="P001",
+        file=str(target),
+        line=1,
+        hint="fire-and-forget",
+        severity="high",
+        detected_at=timestamp,
+        model_used="gemma4:latest",
+        line_content_hash="aaaaaaaaaaaa",
+    )
+
+    assert watcher_module.persist_findings([rescanned]) == [rescanned]
+    assert len(watcher_module._iter_findings_raw()) == 2
 
 
 def test_persist_empty_batch_still_lets_sweep_reach_disk(watcher_module):
@@ -1266,8 +1397,11 @@ def test_main_resolve_routes_through_findings_lease_wrapper(
 
 def test_main_print_unresolved_is_read_only_and_unleased(watcher_module, monkeypatch):
     _seed_findings(watcher_module, [_make_raw_entry("aaaaaaaaaaaaaaaa")])
-    monkeypatch.setattr(watcher_module, "_make_identity_client", lambda: object())
-    monkeypatch.setattr(watcher_module, "resolve_identity", lambda _client: None)
+    monkeypatch.setattr(
+        watcher_module,
+        "_make_identity_client",
+        lambda: (_ for _ in ()).throw(AssertionError("unexpected identity call")),
+    )
     monkeypatch.setattr(
         watcher_module,
         "_run_with_watcher_findings_lease",
@@ -1275,6 +1409,174 @@ def test_main_print_unresolved_is_read_only_and_unleased(watcher_module, monkeyp
     )
 
     assert watcher_module.main(["--print-unresolved"]) == 0
+
+
+def test_main_federated_surface_is_network_free(watcher_module, tmp_path, monkeypatch):
+    target = tmp_path / "inside.py"
+    target.write_text("print('fixture')\n")
+    finding = _make_raw_entry("aaaaaaaaaaaaaaaa", file=str(target))
+    _seed_findings(watcher_module, [finding])
+    monkeypatch.setattr(watcher_module, "_resolve_session_scope_root", lambda: tmp_path)
+    for name in (
+        "_make_identity_client",
+        "_do_checkin",
+        "_run_with_watcher_findings_lease",
+    ):
+        monkeypatch.setattr(
+            watcher_module,
+            name,
+            lambda *args, _name=name, **kwargs: (_ for _ in ()).throw(
+                AssertionError(f"unexpected network path: {_name}")
+            ),
+        )
+
+    assert (
+        watcher_module.main(["--surface-pending", "--audience", "codex:test"])
+        == 0
+    )
+    [updated] = watcher_module._iter_findings_raw()
+    assert updated["status"] == "surfaced"
+    assert set(updated["surface_receipts"]) == {"codex:test"}
+
+
+def test_federated_surface_honors_enforced_remote_lease_without_network(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    target = tmp_path / "inside.py"
+    target.write_text("print('fixture')\n")
+    finding = _make_raw_entry("aaaaaaaaaaaaaaaa", file=str(target))
+    _seed_findings(watcher_module, [finding])
+    monkeypatch.setattr(watcher_module, "_resolve_session_scope_root", lambda: tmp_path)
+    monkeypatch.setenv(watcher_module.WATCHER_FINDINGS_LEASE_MODE_ENV, "enforce")
+    monkeypatch.setattr(
+        watcher_module,
+        "_run_with_watcher_findings_lease",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected remote lease call")
+        ),
+    )
+
+    assert (
+        watcher_module.main(["--surface-pending", "--audience", "codex:test"])
+        == 0
+    )
+    assert "#aaaaaaaa" in capsys.readouterr().out
+    assert watcher_module._iter_findings_raw() == [finding]
+
+
+def test_concurrent_federated_surfaces_preserve_both_receipts(
+    watcher_module, tmp_path, monkeypatch
+):
+    target = tmp_path / "inside.py"
+    target.write_text("print('fixture')\n")
+    _seed_findings(
+        watcher_module,
+        [_make_raw_entry("aaaaaaaaaaaaaaaa", file=str(target))],
+    )
+    monkeypatch.setattr(watcher_module, "_resolve_session_scope_root", lambda: tmp_path)
+    original_write = watcher_module._write_findings_atomic
+    first_at_write = threading.Event()
+    allow_first_write = threading.Event()
+    second_done = threading.Event()
+    delayed_once = False
+
+    def delayed_write(findings):
+        nonlocal delayed_once
+        if threading.current_thread().name == "surface-a" and not delayed_once:
+            delayed_once = True
+            first_at_write.set()
+            assert allow_first_write.wait(timeout=2)
+        original_write(findings)
+
+    monkeypatch.setattr(watcher_module, "_write_findings_atomic", delayed_write)
+    results = {}
+
+    def invoke(audience):
+        results[audience] = watcher_module.main(
+            ["--surface-pending", "--audience", audience]
+        )
+        if audience == "codex:b":
+            second_done.set()
+
+    first = threading.Thread(target=invoke, args=("codex:a",), name="surface-a")
+    second = threading.Thread(target=invoke, args=("codex:b",), name="surface-b")
+    first.start()
+    assert first_at_write.wait(timeout=2)
+    second.start()
+    assert not second_done.wait(timeout=0.2)
+    allow_first_write.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert results == {"codex:a": 0, "codex:b": 0}
+    [updated] = watcher_module._iter_findings_raw()
+    assert set(updated["surface_receipts"]) == {"codex:a", "codex:b"}
+
+
+def test_surface_and_scanner_persistence_do_not_lose_a_finding(
+    watcher_module, tmp_path, monkeypatch
+):
+    target = tmp_path / "inside.py"
+    target.write_text("print('fixture')\n")
+    initial = _make_raw_entry("aaaaaaaaaaaaaaaa", file=str(target))
+    _seed_findings(watcher_module, [initial])
+    monkeypatch.setattr(watcher_module, "_resolve_session_scope_root", lambda: tmp_path)
+    original_write = watcher_module._write_findings_atomic
+    surface_at_write = threading.Event()
+    allow_surface_write = threading.Event()
+    scanner_done = threading.Event()
+
+    def delayed_write(findings):
+        if threading.current_thread().name == "surface":
+            surface_at_write.set()
+            assert allow_surface_write.wait(timeout=2)
+        original_write(findings)
+
+    monkeypatch.setattr(watcher_module, "_write_findings_atomic", delayed_write)
+    fresh = watcher_module.Finding(
+        pattern="P011",
+        file=str(target),
+        line=2,
+        hint="new scanner finding",
+        severity="medium",
+        detected_at="2026-09-13T00:00:00Z",
+        model_used="test",
+        fingerprint="bbbbbbbbbbbbbbbb",
+    )
+
+    surface = threading.Thread(
+        target=lambda: watcher_module.main(
+            ["--surface-pending", "--audience", "codex:test"]
+        ),
+        name="surface",
+    )
+
+    def persist():
+        watcher_module.persist_findings([fresh])
+        scanner_done.set()
+
+    scanner = threading.Thread(target=persist, name="scanner")
+    surface.start()
+    assert surface_at_write.wait(timeout=2)
+    scanner.start()
+    assert not scanner_done.wait(timeout=0.2)
+    allow_surface_write.set()
+    surface.join(timeout=2)
+    scanner.join(timeout=2)
+
+    assert not surface.is_alive()
+    assert not scanner.is_alive()
+    findings = watcher_module._iter_findings_raw()
+    assert {finding["fingerprint"] for finding in findings} == {
+        "aaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbb",
+    }
+    delivered = next(
+        finding for finding in findings if finding["fingerprint"] == "aaaaaaaaaaaaaaaa"
+    )
+    assert set(delivered["surface_receipts"]) == {"codex:test"}
 
 
 # --- sweep_stale_findings ---------------------------------------------------
@@ -1749,6 +2051,74 @@ def test_partition_with_no_scope_treats_all_as_in_scope(watcher_module):
     assert out_groups == {}
 
 
+def test_partition_does_not_guess_origin_of_legacy_relative_findings(
+    watcher_module, tmp_path
+):
+    """A shared relative record cannot be attributed to the requesting worktree."""
+    findings = [_make_raw_entry("relative00000000", file="src/inside.py")]
+
+    for scope_root in (tmp_path / "worktree-a", tmp_path / "worktree-b"):
+        scope_root.mkdir()
+        in_scope, out_groups = watcher_module._partition_findings_by_scope(
+            findings, scope_root
+        )
+
+        assert in_scope == []
+        assert out_groups == {"src": 1}
+
+
+def test_print_unresolved_preserves_legacy_relative_finding_across_worktrees(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    finding = _make_raw_entry("relative00000000", file="src/inside.py")
+    _seed_findings(watcher_module, [finding])
+    worktree_a = tmp_path / "worktree-a"
+    worktree_b = tmp_path / "worktree-b"
+    (worktree_a / "src").mkdir(parents=True)
+    (worktree_a / "src" / "inside.py").write_text("present here\n")
+    worktree_b.mkdir()
+
+    for scope_root in (worktree_a, worktree_b):
+        monkeypatch.chdir(scope_root)
+        assert watcher_module.print_unresolved(scope_root=scope_root) == 0
+        output = capsys.readouterr().out
+        assert "Plus 1 finding(s) in other worktrees (src=1)" in output
+        assert watcher_module._iter_findings_raw() == [finding]
+
+
+def test_surface_pending_does_not_revalidate_relative_finding_in_current_worktree(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    finding = _make_raw_entry(
+        "relative00000000",
+        pattern="P001",
+        file="src/inside.py",
+        line=1,
+    )
+    _seed_findings(watcher_module, [finding])
+    worktree_a = tmp_path / "worktree-a"
+    worktree_b = tmp_path / "worktree-b"
+    for root, source in (
+        (worktree_a, "asyncio.create_task(work())\n"),
+        (worktree_b, "print('different worktree')\n"),
+    ):
+        (root / "src").mkdir(parents=True)
+        (root / "src" / "inside.py").write_text(source)
+
+    for scope_root in (worktree_a, worktree_b):
+        monkeypatch.chdir(scope_root)
+        assert (
+            watcher_module.surface_pending(
+                audience=f"codex:{scope_root.name}",
+                scope_root=scope_root,
+                check_in=False,
+            )
+            == 0
+        )
+        assert capsys.readouterr().out == ""
+        assert watcher_module._iter_findings_raw() == [finding]
+
+
 def test_label_for_other_worktree_uses_worktrees_segment(watcher_module):
     assert watcher_module._label_for_other_worktree(
         "/projects/repo/.worktrees/feat-x/src/foo.py"
@@ -1892,6 +2262,102 @@ def test_surface_pending_new_finding_after_chime_still_fires(
     assert "second__" in captured
     # First finding was already surfaced and must NOT re-chime
     assert "first___" not in captured
+
+
+def test_surface_pending_tracks_delivery_per_federated_audience(
+    watcher_module, capsys
+):
+    """One host's chime must not consume another host's notification."""
+    finding = _make_raw_entry("federate00000000", status="surfaced")
+    _seed_findings(watcher_module, [finding])
+
+    watcher_module.surface_pending(audience="claude:worktree-abc")
+    assert "federate" in capsys.readouterr().out
+
+    watcher_module.surface_pending(audience="claude:worktree-abc")
+    assert capsys.readouterr().out == ""
+
+    watcher_module.surface_pending(audience="codex:worktree-abc")
+    assert "federate" in capsys.readouterr().out
+
+    stored = watcher_module._iter_findings_raw()[0]
+    assert stored["status"] == "surfaced"
+    assert set(stored["surface_receipts"]) == {
+        "claude:worktree-abc",
+        "codex:worktree-abc",
+    }
+    assert all(value.endswith("Z") for value in stored["surface_receipts"].values())
+
+
+def test_surface_pending_federated_audience_only_receipts_shown_findings(
+    watcher_module, capsys
+):
+    findings = [
+        _make_raw_entry(f"hi_{i:013d}", severity="high") for i in range(10)
+    ] + [
+        _make_raw_entry("medium__00000000", severity="medium")
+    ]
+    _seed_findings(watcher_module, findings)
+
+    watcher_module.surface_pending(audience="codex:bounded")
+    out = capsys.readouterr().out
+    assert "[HIGH]" in out
+    assert "[MEDIUM]" not in out
+
+    stored = {
+        finding["fingerprint"]: finding
+        for finding in watcher_module._iter_findings_raw()
+    }
+    for i in range(10):
+        assert "codex:bounded" in stored[f"hi_{i:013d}"]["surface_receipts"]
+    assert stored["medium__00000000"]["status"] == "open"
+    assert "surface_receipts" not in stored["medium__00000000"]
+
+
+def test_surface_pending_federated_audience_is_worktree_scoped(
+    watcher_module, tmp_path, capsys
+):
+    scope_root = tmp_path / "current"
+    in_scope = scope_root / "src" / "inside.py"
+    out_scope = tmp_path / "other" / "outside.py"
+    for path in (in_scope, out_scope):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("print('fixture')\n")
+    _seed_findings(
+        watcher_module,
+        [
+            _make_raw_entry("inside__00000000", file=str(in_scope)),
+            _make_raw_entry("outside_00000000", file=str(out_scope)),
+        ],
+    )
+
+    watcher_module.surface_pending(
+        audience="codex:current",
+        scope_root=scope_root,
+    )
+    out = capsys.readouterr().out
+    assert "inside__" in out
+    assert "outside_" not in out
+    assert "other worktrees" not in out
+
+    stored = {
+        finding["fingerprint"]: finding
+        for finding in watcher_module._iter_findings_raw()
+    }
+    assert "codex:current" in stored["inside__00000000"]["surface_receipts"]
+    assert stored["outside_00000000"]["status"] == "open"
+    assert "surface_receipts" not in stored["outside_00000000"]
+
+
+@pytest.mark.parametrize(
+    "audience",
+    ["", "has a space", "slash/not-allowed", "x" * 161],
+)
+def test_surface_pending_rejects_unsafe_audience_keys(
+    watcher_module, audience
+):
+    with pytest.raises(ValueError, match="audience must be"):
+        watcher_module.surface_pending(audience=audience)
 
 
 # ---------------------------------------------------------------------------

@@ -237,8 +237,8 @@ class TestOnboardFailureSurfaces:
 class TestToolMapping:
     @pytest.mark.asyncio
     async def test_checkin_maps_to_sync_state(self):
-        # #1292 dropped the raw process_agent_update twin from the lite MCP
-        # wire; checkin() must call the advertised sync_state alias instead.
+        # checkin() calls the sync_state alias: lite-mode servers between #1292
+        # and #2081 refuse the raw process_agent_update name on /mcp/ (client.py).
         session = AsyncMock()
         session.call_tool = AsyncMock(return_value=make_mcp_result({
             "success": True,
@@ -256,7 +256,7 @@ class TestToolMapping:
 
     @pytest.mark.asyncio
     async def test_get_metrics_maps_to_check_working_state(self):
-        # #1292: raw get_governance_metrics off the lite wire; use the alias.
+        # Alias, not raw get_governance_metrics: see client.get_metrics.
         session = AsyncMock()
         session.call_tool = AsyncMock(return_value=make_mcp_result({
             "success": True,

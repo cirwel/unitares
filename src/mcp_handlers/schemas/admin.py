@@ -1,6 +1,7 @@
 from typing import Any, ClassVar, Dict, Literal, Mapping, Optional, Tuple, Union
 from pydantic import Field, model_validator
 from .mixins import AgentIdentityMixin
+from ..support.coerce import coerce_bool
 
 class ListToolsParams(AgentIdentityMixin):
     """
@@ -22,6 +23,23 @@ class ListToolsParams(AgentIdentityMixin):
         default=False,
         description="If true, order tools by usage frequency."
     )
+    # The handler has read all three of these since the tool existed; none
+    # was declared here, so over the MCP wire FastMCP's transport arg model
+    # (built from this schema) dropped them before dispatch and
+    # list_tools(lite=false) still returned the compact response. Same class
+    # as DescribeToolParams.include_schema/include_full_description above.
+    include_advanced: Union[bool, str, None] = Field(
+        default=True,
+        description="If false, exclude Tier 3 (advanced) tools."
+    )
+    tier: Optional[str] = Field(
+        default="all",
+        description="Filter by tier: 'essential', 'common', 'advanced', or 'all' (case-insensitive; blank means 'all')."
+    )
+    lite: Union[bool, str, None] = Field(
+        default=True,
+        description="If true (default), return minimal response (names + descriptions only, ~500B vs ~4KB)."
+    )
 
     @model_validator(mode='after')
     def coerce_booleans(self):
@@ -36,7 +54,12 @@ class ListToolsParams(AgentIdentityMixin):
             self.verbose = _to_bool(self.verbose)
         if self.progressive is not None:
             self.progressive = _to_bool(self.progressive)
-        
+        # These switches default true in the handler, so invalid and null
+        # values must preserve that default. Use the handler's coercer to keep
+        # schema-validated MCP calls identical to direct/REST dispatch.
+        self.include_advanced = coerce_bool(self.include_advanced, True)
+        self.lite = coerce_bool(self.lite, True)
+
         return self
 
 class DescribeToolParams(AgentIdentityMixin):

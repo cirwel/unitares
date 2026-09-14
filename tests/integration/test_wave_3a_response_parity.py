@@ -262,6 +262,17 @@ SERVER_INFO_FIXTURE: Dict[str, Any] = {
     "version": "0.42.0",
     "build_date": "2026-06-01",
     "tool_count": 100,
+    "tool_counts": {
+        "registry": 100,
+        "workflow_aliases": 8,
+        "advertised": 108,
+        "note": (
+            "tool_count is the dispatch snapshot (TOOL_HANDLERS), kept "
+            "unchanged for older clients. registry is the live decorator "
+            "registry, which can run ahead of it until resynced. "
+            "advertised is what tools/list emits."
+        ),
+    },
     "current_pid": 12345,
     "current_uptime_seconds": 5400,
     "current_uptime_formatted": "1h 30m",

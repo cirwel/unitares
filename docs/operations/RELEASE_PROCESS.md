@@ -6,6 +6,8 @@ package reached a registry. `VERSION` identifies the source tree;
 `PUBLISHED_VERSION` identifies the most recent server release whose tag,
 release page, and container were verified. Public install pins follow
 `PUBLISHED_VERSION`, so a source-version bump cannot advertise missing artifacts.
+The root README carries no pin: its install command reads `PUBLISHED_VERSION`
+from master at install time, so merging the publication PR updates it.
 Merging a change under `docs/public-site/` does deploy GitHub Pages; it does
 not publish a server tag or container.
 

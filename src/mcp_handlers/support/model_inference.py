@@ -79,7 +79,44 @@ def _is_hf_model_id(model: str) -> bool:
     return model.startswith(_HF_MODEL_PREFIXES)
 
 
-def _invocation_gate() -> Dict[str, Any]:
+# Tools that take a ``host_id`` at all. ``consult`` is deliberately absent: it
+# reaches host adapters, but chooses the host itself and exposes no host
+# control, so it can never be the answer to "which tool do I pass this host_id
+# to". A tool added here must also be accepted in some host's
+# ``accepts_host_id_from``, or it can never be recommended.
+_HOST_ID_ACCEPTING_TOOLS = ("call_model", "delegate_inference")
+
+_ROUTING_PRECEDENCE_NOTE = (
+    "Per-host reachability is the host's own accepts_host_id_from. "
+    "invocation.tool is a compatibility-only default and is NOT host-specific "
+    "(tool_authoritative=false); describe_inference_host adds "
+    "invocation.recommended_tool for the host it names."
+)
+
+
+def _recommended_tool(host: Dict[str, Any] | None) -> str | None:
+    """The tool that will actually accept THIS host's ``host_id``.
+
+    Derived from the host's own ``accepts_host_id_from`` rather than maintained
+    beside it, so the recommendation cannot drift from the reachability rule it
+    claims to summarize. The host's declared order decides, which keeps the
+    answer deterministic without a second precedence table to keep in sync.
+
+    Returns None when the caller named no host (the list read) or when nothing
+    the host accepts is a tool that takes a host_id — never a guess.
+    """
+    if not host:
+        return None
+    accepted = host.get("accepts_host_id_from")
+    if not isinstance(accepted, (list, tuple)):
+        return None
+    for tool in accepted:
+        if str(tool) in _HOST_ID_ACCEPTING_TOOLS:
+            return str(tool)
+    return None
+
+
+def _invocation_gate(host: Dict[str, Any] | None = None) -> Dict[str, Any]:
     """Disclose inference-call identity gates on the two discovery reads.
 
     Both discovery tools serve ``pre_onboard``; ``call_model`` does not. So an
@@ -91,6 +128,16 @@ def _invocation_gate() -> Dict[str, Any]:
 
     Derived from the decorator rather than restated, so relaxing or tightening
     the gate cannot leave this text behind claiming the old rule.
+
+    ``host`` names the single host being described, and is None for the list
+    read. The scalar ``tool`` stayed "call_model" for every host long after the
+    adapters moved to ``delegate_inference``, so a caller that followed it was
+    sent to the one tool guaranteed to reject a Claude or Codex host — exactly
+    the shape the paragraph above says this block exists to prevent, reproduced
+    inside it. The scalar cannot be made host-correct and kept compatible with
+    a client that requires it to equal "call_model"; those are contradictory.
+    So it is preserved verbatim, marked non-authoritative, and the host-correct
+    answer is added alongside it as ``recommended_tool``.
     """
     from ..decorators import get_call_identity_requirement
 
@@ -101,6 +148,10 @@ def _invocation_gate() -> Dict[str, Any]:
         # Preserve the original scalar fields for older clients while exposing
         # the complete per-tool map for hosts routed outside call_model.
         "tool": "call_model",
+        # Says out loud what the scalar above is: a frozen default, not a
+        # routing answer. Without this a caller cannot tell the two apart.
+        "tool_authoritative": False,
+        "routing_precedence": _ROUTING_PRECEDENCE_NOTE,
         "requires_identity": call_model_requirement,
         "tools": {
             "call_model": {"requires_identity": call_model_requirement},
@@ -108,6 +159,9 @@ def _invocation_gate() -> Dict[str, Any]:
             "consult": {"requires_identity": consult_requirement},
         },
     }
+    recommended = _recommended_tool(host)
+    if recommended:
+        gate["recommended_tool"] = recommended
     if "required" in {
         call_model_requirement,
         delegate_requirement,
@@ -172,7 +226,7 @@ async def handle_describe_inference_host(arguments: Dict[str, Any]) -> Sequence[
         "success": True,
         "schema": "unitares.inference_host.v0",
         "host": host,
-        "invocation": _invocation_gate(),
+        "invocation": _invocation_gate(host),
     }, agent_id=arguments.get("agent_id"), arguments=arguments)
 
 

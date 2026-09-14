@@ -133,7 +133,6 @@ class CalibrationChecker:
 
         # Backend: postgres (default), json (fallback)
         self._backend = os.getenv("UNITARES_CALIBRATION_BACKEND", "postgres").strip().lower()
-        self._pg_db = None  # PostgreSQL backend (lazy init)
         self._last_json_write = 0.0  # monotonic timestamp of last JSON snapshot write
         # Single-flight PG writer state (#1375): mutations mark dirty, one
         # drain task snapshots at write time so saves can't land out of order.
@@ -155,12 +154,6 @@ class CalibrationChecker:
         # Load existing state or reset
         self.load_state()
 
-    def _get_pg_db(self):
-        """Get PostgreSQL backend (lazy init)."""
-        if self._pg_db is None:
-            from src.db import get_db
-            self._pg_db = get_db()
-        return self._pg_db
 
     def _run_async(self, async_fn, *args, **kwargs):
         """Schedule async function on the running event loop (fire-and-forget).

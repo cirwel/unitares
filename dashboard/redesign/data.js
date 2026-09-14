@@ -739,9 +739,9 @@
     },
 
     // Light freshness map for the residents (label -> {silence, status, coherence}).
-    // The Agents pane uses it to keep lease-anchored in-process residents
-    // (e.g. Steward — zero agent_state rows BY DESIGN, liveness lives in
-    // lease_plane heartbeats) out of the unobserved bucket. `coherence`
+    // The Agents pane uses it to keep a lease-anchored in-process resident
+    // (zero agent_state rows by design, liveness lives in lease_plane
+    // heartbeats) out of the unobserved bucket. `coherence`
     // rides along so the pane can apply DATA.residentLiveness — the SAME
     // predicate the Overview applies — instead of inferring liveness from the
     // mere presence of a silence number.
@@ -791,7 +791,7 @@
         // of them still got three panels under the "Always-on fleet" eyebrow
         // and a live badge — a claim about which residents EXIST, not about
         // their health. Gate them on roster membership, the same predicate
-        // fromResidents() already applies to Chronicler/Steward/Lumen below.
+        // fromResidents() already applies to Chronicler/Lumen below.
         //
         // Only when /v1/residents actually ANSWERED. A momentary outage also
         // arrives as res === null, and reading that as "these residents do not
@@ -813,10 +813,10 @@
           items: h.checks || {}, operator: h.operator_summary || {},
           breakers: { governance: (h.circuit_breakers && h.circuit_breakers.governance || {}).trips_24h || 0, redis: (h.circuit_breakers && h.circuit_breakers.redis || {}).trips_24h || 0 },
           calibration: (h.checks && h.checks.calibration || {}).status, redis: h.redis_present, continuity: h.identity_continuity_mode };
-        // Chronicler, Steward and Lumen have no dedicated summary endpoints —
-        // pull their live state from /v1/residents (cadence-aware rendering
-        // happens in the view). Without these, the tab showed 4 of the 6
-        // residents the Overview strip lists, and the absent two read as dead.
+        // Chronicler and Lumen have no dedicated summary endpoints — pull
+        // their live state from /v1/residents (cadence-aware rendering happens
+        // in the view). Without these, the tab omitted residents the Overview
+        // strip lists, and the absent ones read as dead.
         //
         // `recent_writes` is an ARRAY of write rows (server-capped at 5), not a
         // count. Mapping it onto a numeric `writes` field rendered the literal
@@ -840,7 +840,6 @@
         // /v1/residents itself is down, withFallback drops the whole pane to
         // the snapshot and the badge says so.
         out.chronicler = fromResidents("Chronicler");
-        out.steward = fromResidents("Steward");
         out.lumen = fromResidents("Lumen");
         // Watcher, Sentinel and Vigil build from their own summary endpoints,
         // which carry findings but no liveness — so their status pip was a

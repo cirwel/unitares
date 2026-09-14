@@ -42,7 +42,9 @@ def test_review_nudge_conversion_is_same_session_action_and_bounded():
 
     assert "u.agent_id = n.agent_id" in sql
     assert "u.session_id = n.session_id" in sql
-    assert "u.tool_name IN ('request_review', 'dialectic')" in sql
+    # the dispatched tool, so request_review and request_dialectic_review
+    # both count (tests/test_adoption_kpi_tool_names.py)
+    assert "coalesce(u.payload->>'canonical_tool', u.tool_name) = 'dialectic'" in sql
     assert "u.payload->>'action' = 'request'" in sql
     assert "u.success" in sql
     assert "make_interval(" in sql
@@ -127,9 +129,10 @@ def test_kg_retrieval_counts_only_retrieval_actions():
     sql = adoption_kpi._snapshot_queries()["agent_kg_retrieval"]
 
     assert "u.payload->>'action' IN ('search', 'details')" in sql
-    # assert the tool LIST, not substring-absence — the query comment
-    # explains why search_knowledge_graph was dropped, so it still appears
-    assert "u.tool_name IN ('knowledge', 'search_shared_memory')" in sql
+    # assert the tool filter, not substring-absence — the query comment
+    # explains why search_knowledge_graph was dropped, so it still appears.
+    # The dispatched tool covers search_shared_memory, which reaches knowledge.
+    assert "coalesce(u.payload->>'canonical_tool', u.tool_name) = 'knowledge'" in sql
     # the broad count stays available so the checkpoint log's step-change
     # at the correction date is explainable rather than mysterious
     assert "all_action_calls" in sql

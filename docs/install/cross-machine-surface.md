@@ -114,7 +114,7 @@ These appear in the audit but need no change. Listed so future audits don't re-f
 |-------|------------------|------------------|
 | Port `8767` | Governance MCP (Mac) — `src/mcp_server.py`, dashboards, all governance clients | Canonical governance port |
 | Port `8766` | Anima MCP (Pi) — `scripts/ops/health_watchdog.sh`, `config/claude-desktop-mcp-config.json`, plus skill docs | Canonical anima/Lumen port; lives on a different host |
-| Port `8768` | Gateway MCP (Mac) — `src/gateway/constants.py`, `src/gateway_server.py` | Reduced-surface proxy (6 tools vs 76) for weak external clients; same host as 8767 but **different process** |
+| Port `8768` | Gateway MCP (Mac) — `src/gateway/constants.py`, `src/gateway_server.py` | Reduced-surface proxy (6 tools vs the full governance catalog on 8767) for weak external clients; same host as 8767 but **different process** |
 | `claude-ai_UNITARES` and `unitares-governance` MCP names | MCP client configs across plugin repos | Stable IDs that external clients persist; renaming churns user state |
 
 **The pattern that will trip a future agent:** they'll see `8767` everywhere in governance code and `8766` in one watchdog line, "fix" the watchdog to `8767`, and silently break the anima health check. Reference the `DEFINITIVE_PORTS.md` table before changing any port literal.
