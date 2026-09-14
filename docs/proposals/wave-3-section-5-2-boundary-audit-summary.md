@@ -1,5 +1,7 @@
 # Wave 3 §5.2 boundary-cost audit — committed summary (2026-06-10)
 
+**Status:** **Live CI-enforced artifact, not a proposal.** `scripts/dev/check-wave3-ode-prereq.sh:47` tests for this file before any `elixir/handler_dispatch/` commit is allowed, so deleting or renaming it breaks that gate. The committed summary dates from 2026-06-10; the full analysis is operator-local and gitignored per RFC convention.
+
 This is the CI-checkable summary required by `scripts/dev/check-wave3-ode-prereq.sh`
 before any `elixir/handler_dispatch/` commit (§14 row 1; the full analysis lives in
 the operator-local `docs/handoffs/wave-3-section-5-2-boundary-audit-2026-06-10.md`,

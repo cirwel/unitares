@@ -51,6 +51,15 @@ jobs:
       - name: Run fleet-identity guard
         run: python3 scripts/dev/check_fleet_identity_leak.py
 
+      # docs/proposals/ is over half of all documentation here, and what keeps
+      # it navigable is its index, not the folder. The index is hand-maintained
+      # and had already drifted within ten days of being written — a row added
+      # by #2156 with the summary count left behind, caught by nothing. This
+      # checks coverage, dead links, count arithmetic and status lines. It does
+      # not decide whether a disposition tag is right; that stays a human call.
+      - name: Run proposals index guard
+        run: python3 scripts/dev/check_proposals_index.py
+
       # AGENTS.md and CLAUDE.md are adapter-specific preambles over one shared
       # contract block, and both files (plus docs/dev/DRIFT_LEDGER.md) state
       # that CI enforces byte-parity between them. Until this step existed the

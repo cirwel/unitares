@@ -1,5 +1,7 @@
 # Governed-Effect — Effect-Binding (design v0.2, review-folded)
 
+**Status:** Design v0.2, review-folded — **demand-gated and not built**. The document says so in its own terms: a design pass rather than an implementation plan, to be built only when its §8 trigger fires, because the v0 bounding factors still hold. Successor to the §7 strong-tier re-certification; tracks the one accepted v0 residual named there.
+
 Successor to the §7 strong-tier re-certification (#1074, live 2026-06-26; design
 in `governed-effect-s7-strong-tier-recert.md`). Tracks the one **accepted v0
 residual** named there and in #1075: §7 proves the proposer's *identity
