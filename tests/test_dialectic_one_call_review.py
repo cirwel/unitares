@@ -8,6 +8,7 @@ and `next_call`, including a no-copy way to reuse the saved brief.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -529,6 +530,7 @@ class TestWhoseMove:
     def test_standing_rejection_gives_credentialed_operator_a_reassignment_call(self):
         from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
 
+        overdue_at = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
         with self._ctx("operator-agent"), self._operator():
             out = _build_dialectic_actionability({
                 "session_id": "sess-rejected",
@@ -539,11 +541,16 @@ class TestWhoseMove:
                     "role": "synthesis",
                     "agent_id": "agent-reviewer",
                     "agrees": "false",
+                    "timestamp": overdue_at,
+                    "observed_metrics": {
+                        "reviewer_backend": {"reviewer_kind": "orchestrated"}
+                    },
                 }, {
                     "role": "synthesis",
                     "agent_id": "agent-paused",
                     "agrees": "true",
                     "proposed_conditions": ["revised term"],
+                    "timestamp": overdue_at,
                 }],
             })
         assert out["whose_move"].startswith("YOURS")

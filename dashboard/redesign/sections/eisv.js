@@ -97,7 +97,23 @@
   }
 
   function fmtValue(value) {
-    return value == null ? "—" : Number(value).toFixed(2);
+    return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "—";
+  }
+
+  function observationAge(timestamp) {
+    const time = timestamp && Date.parse(timestamp);
+    if (!Number.isFinite(time)) return "observation time unrecorded";
+    const seconds = Math.floor((Date.now() - time) / 1000);
+    if (seconds < 0) return "observation time ahead of browser clock";
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  }
+
+  function sourceBadge(source) {
+    const label = source === "live" || source === "snapshot" ? source : "unavailable";
+    return `<span class="src-badge ${label}">${label}</span>`;
   }
 
   function sourceOptions(lanes) {
@@ -113,19 +129,23 @@
         <div class="panel-head"><h2>Measurement lanes</h2></div>
         <p class="empty">No source envelope in this window.</p></div>`;
     }
-    const grid = "minmax(140px,1.5fr) repeat(6,minmax(62px,1fr)) minmax(90px,1fr)";
-    const rowStyle = `display:grid;grid-template-columns:${grid};gap:6px;align-items:center;min-width:780px`;
-    const header = ["source", "events", "E", "I", "S", "V", "confidence", "actuator req/app"]
+    const grid = "minmax(210px,2fr) repeat(6,minmax(62px,1fr)) minmax(90px,1fr) minmax(115px,1fr)";
+    const rowStyle = `display:grid;grid-template-columns:${grid};gap:6px;align-items:center;min-width:960px`;
+    const header = ["source / input coverage", "events", "E", "I", "S", "V", "confidence", "actuator req/app", "latest observation"]
       .map((label) => `<div style="font-size:var(--text-xs);color:var(--muted);text-transform:uppercase;letter-spacing:var(--tracking-label)">${label}</div>`).join("");
     const rows = lanes.map((lane) => {
-      const missing = lane.missingObservations
-        ? `${lane.missingObservations} observation(s) have missing inputs: ${(lane.missingInputs || []).join(", ")}`
-        : "No missing inputs reported";
+      const unknown = lane.unknownProvenance ?? lane.events;
+      const missing = [
+        lane.missingObservations ? `${lane.missingObservations} observation(s) with missing inputs: ${(lane.missingInputs || []).join(", ")}` : "",
+        unknown ? `${unknown} observation(s): input coverage unrecorded` : "",
+        !unknown && !lane.missingObservations ? "No missing inputs reported" : "",
+      ].filter(Boolean).join(" · ");
       return `<div style="${rowStyle};padding:7px 0;border-top:1px solid var(--line-2)" title="${esc(missing)}">
-        <div style="font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">${esc(lane.source)}</div>
+        <div style="font-family:var(--font-mono);font-size:var(--text-sm);color:var(--ink-2)">${esc(lane.source)}<div class="sub">${esc(missing)}</div></div>
         <div>${lane.events}</div><div>${fmtValue(lane.E)}</div><div>${fmtValue(lane.I)}</div>
         <div>${fmtValue(lane.S)}</div><div>${fmtValue(lane.V)}</div><div>${fmtValue(lane.confidence)}</div>
-        <div>${lane.enforcementRequested || 0} / ${lane.enforcementApplied || 0}</div></div>`;
+        <div>${lane.enforcementRequested || 0} / ${lane.enforcementApplied || 0}</div>
+        <div title="${esc(lane.latest || "No observation timestamp recorded")}">${observationAge(lane.latest)}</div></div>`;
     }).join("");
     return `<div class="panel" style="margin-bottom:var(--space-5)">
       <div class="panel-head" style="margin-bottom:var(--space-3)"><h2>Measurement lanes</h2>
@@ -175,6 +195,9 @@
   // ---- Per-agent EISV trajectory (drill-down from the heatmap) -------------
   let trajUpper = null, trajLower = null, selectedId = null, selectedName = null;
   let trajPoints = [], trajLoading = false, clickBound = false, controlsBound = false;
+  let trajSource = null, trajContext = null;
+  let inspector = null;
+  let selectionVersion = 0;
 
   function fmtT(t) {
     const d = new Date(t);
@@ -219,21 +242,169 @@
     return Object.keys(counts).sort().map((source) => `${source} ${counts[source]}`).join(" · ");
   }
 
+  function componentsHTML(derivation) {
+    const components = derivation.components;
+    const dimensions = components && components.dimensions;
+    if (!dimensions || typeof dimensions !== "object") {
+      return '<p class="sub">Component contributions were not recorded in this envelope.</p>';
+    }
+    const observed = (value) => value === true ? "observed" : value === false ? "defaulted / unobserved" : "unrecorded";
+    const row = (cells) => `<tr>${cells.map((cell) => `<td style="padding:6px;border-top:1px solid var(--line-2)">${cell}</td>`).join("")}</tr>`;
+    const rows = ["E", "I", "S", "V"].map((dimension) => {
+      const detail = dimensions[dimension];
+      if (!detail || typeof detail !== "object") return "";
+      const terms = Array.isArray(detail.components) ? detail.components.slice(0, 16) : [];
+      const adjustments = Array.isArray(detail.adjustments) ? detail.adjustments.slice(0, 8) : [];
+      const role = detail.measurement_role || "role unrecorded";
+      return `<tr><th colspan="7" style="text-align:left;padding:10px 6px 4px">${dimension} · base ${fmtValue(detail.base_value)} · submitted output ${fmtValue(detail.value)} · ${esc(role)}</th></tr>` +
+        terms.filter((term) => term && typeof term === "object").map((term) => row([
+          esc(term.name), esc(term.source || "unrecorded"), fmtValue(term.value),
+          fmtValue(term.weight), fmtValue(term.weighted_contribution),
+          observed(term.observed), esc(term.default_reason || "—"),
+        ])).join("") + adjustments.filter((term) => term && typeof term === "object").map((term) => row([
+          `${esc(term.name)} (adjustment)`, esc(term.source || "unrecorded"), fmtValue(term.input_value),
+          fmtValue(term.input_weight), `output ${fmtValue(term.output_value)}`,
+          observed(term.observed), `retained weight ${fmtValue(term.retained_weight)}`,
+        ])).join("");
+    }).join("");
+    return `<h3>Recorded component contributions</h3><p class="sub">${esc(components.schema || "version unrecorded")} · submitted sensor outputs before BehavioralState input clamping and EMA; adjustments are applied in recorded order. E/I/S are consumed as behavioral inputs. Sensor V is diagnostic and does not produce behavioral V, which is separately derived as an EMA of raw E−I. Input freshness is unrecorded.</p>
+      <div style="overflow-x:auto"><table style="width:100%;min-width:760px;font-family:var(--font-mono);font-size:var(--text-sm);border-collapse:collapse;text-align:left">
+        <thead><tr>${["component", "source", "value", "weight", "contribution / output", "input", "detail"].map((label) => `<th style="padding:6px">${label}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+
+  function calibrationHTML(derivation) {
+    const signal = derivation.calibration_signal;
+    if (!signal || typeof signal !== "object" || !Object.keys(signal).length) {
+      return '<p class="sub">Calibration scope, freshness, and coverage were not recorded in this envelope.</p>';
+    }
+    const deployed = signal.deployed || {};
+    const candidate = signal.agent_candidate || {};
+    const cell = (value) => esc(value == null ? "unrecorded" : String(value));
+    const row = (label, value) => `<tr><th style="padding:5px;text-align:left">${label}</th><td style="padding:5px">${value}</td></tr>`;
+    return `<h3>Calibration evidence</h3><p class="sub">${cell(signal.schema)} · ${signal.policy_applied === false ? "measurement only; agent candidate is not applied to policy" : "policy status unrecorded"}</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--space-3)">
+        <table style="font-family:var(--font-mono);font-size:var(--text-sm)"><caption style="text-align:left">deployed · ${cell(deployed.scope)}</caption><tbody>
+          ${row("error", fmtValue(deployed.calibration_error))}${row("samples", cell(deployed.sample_count))}${row("eligible samples", cell(deployed.eligible_sample_count))}${row("eligible bins", cell(deployed.eligible_bin_count))}${row("freshness", cell(deployed.freshness_status || deployed.freshness_reason))}
+        </tbody></table>
+        <table style="font-family:var(--font-mono);font-size:var(--text-sm)"><caption style="text-align:left">candidate · ${cell(candidate.scope)}</caption><tbody>
+          ${row("status", cell(candidate.evidence_status))}${row("error", fmtValue(candidate.calibration_error))}${row("samples", cell(candidate.sample_count))}${row("sample window", cell(candidate.sample_window))}${row("eligible samples", cell(candidate.eligible_sample_count))}${row("eligible bins", cell(candidate.eligible_bin_count))}${row("freshness", cell(candidate.freshness_status))}${row("freshness rule", cell(candidate.freshness_rule))}${row("age days", fmtValue(candidate.age_days))}${row("freshness note", cell(candidate.freshness_note))}
+        </tbody></table>
+      </div>`;
+  }
+
+  function compactDuration(seconds) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "duration unrecorded";
+    if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+    if (seconds < 86400) return `${(seconds / 3600).toFixed(seconds % 3600 ? 1 : 0)}h`;
+    return `${(seconds / 86400).toFixed(seconds % 86400 ? 1 : 0)}d`;
+  }
+
+  function trajectoryContextHTML() {
+    if (!trajContext || typeof trajContext !== "object") {
+      return '<p class="sub">Clock-time trajectory context is unrecorded for this source.</p>';
+    }
+    const cadence = trajContext.cadence || {};
+    const transitions = trajContext.transitions || {};
+    const slopes = trajContext.slopes_per_hour || {};
+    const slopeText = ["E", "I", "S", "V"].map((key) => `${key} ${fmtValue(slopes[key])}`).join(" · ");
+    return `<p class="sub">Requested scope: ${cellText(trajContext.observations)} observations over ${compactDuration(trajContext.elapsed_seconds)}; ${cellText(trajContext.points_returned)} plotted. Median cadence ${compactDuration(cadence.median_seconds)}; max gap ${compactDuration(cadence.max_seconds)}. Source transitions ${cellText(transitions.measurement_source)}, maturity transitions ${cellText(transitions.maturity_phase)}. Descriptive slopes/hour: ${slopeText}. These describe recorded measurements, not outcomes.</p>`;
+  }
+
+  function cellText(value) {
+    return esc(value == null ? "unrecorded" : String(value));
+  }
+
+  function renderInspector() {
+    const mount = $("#eisv-observation-inspector");
+    const button = $("#eisv-inspect-latest");
+    if (!mount || !button) return;
+    button.disabled = !!(inspector && inspector.loading);
+    button.setAttribute("aria-expanded", String(!!inspector));
+    button.textContent = inspector ? "Refresh latest observation" : "Inspect latest observation";
+    if (!inspector) { mount.innerHTML = ""; return; }
+    if (inspector.loading) { mount.innerHTML = '<p class="sub">Loading the latest observation…</p>'; return; }
+    const point = inspector.point;
+    const head = `<div class="panel-head"><h3>Latest observation · inputs and derivation</h3><span class="spring"></span>${sourceBadge(inspector.source)}</div>`;
+    if (!point) {
+      mount.innerHTML = head + '<p class="empty">No latest observation is available from this source.</p>';
+      return;
+    }
+    const envelope = point.telemetry_envelope;
+    const time = (envelope && envelope.observed_at) || point.t;
+    const age = `<p class="sub" title="${esc(time || "unrecorded")}">Observation recorded ${esc(time || "at an unrecorded time")} · ${observationAge(time)}. Input timestamps are unrecorded; observation age does not establish input freshness.</p>`;
+    if (!envelope || typeof envelope !== "object") {
+      mount.innerHTML = head + age + '<p class="sub">No derivation envelope is available for this latest state observation. An earlier envelope has not been substituted.</p>';
+      return;
+    }
+    const measurement = envelope.measurement || {};
+    const primary = measurement.primary || {};
+    const behavioral = measurement.behavioral || {};
+    const raw = behavioral.raw_observation || {};
+    const smoothed = behavioral.smoothed || {};
+    const derivation = envelope.derivation || {};
+    const maturity = behavioral.warmup || {};
+    const missing = Array.isArray(derivation.missing_inputs)
+      ? (derivation.missing_inputs.length ? `Missing inputs: ${derivation.missing_inputs.join(", ")}` : "No missing inputs reported")
+      : "Input coverage unrecorded";
+    const rows = ["E", "I", "S", "V"].map((dimension) => `<tr>
+      <th style="padding:6px;text-align:left">${dimension}</th><td>${fmtValue((primary.values || {})[dimension])}</td>
+      <td>${fmtValue(raw[dimension])}</td><td>${fmtValue(smoothed[dimension])}</td></tr>`).join("");
+    const distinction = primary.source === "behavioral"
+      ? "Primary values use the behavioral estimate. Raw E/I/S are clamped inputs before smoothing; behavioral V is an EMA of their raw E−I imbalance."
+      : "Primary values use a separate instrument; the latent behavioral observations below do not explain the primary values.";
+    const features = derivation.inputs && derivation.inputs.features;
+    const featureRows = features && typeof features === "object" ? Object.entries(features).slice(0, 20).map(([name, value]) =>
+      `<span><code>${esc(name)}</code> ${fmtValue(value)}</span>`).join(" · ") : "";
+    mount.innerHTML = head + age +
+      `<p class="sub">Primary source: <code>${esc(primary.source || "unknown")}</code> · behavioral input: <code>${esc(behavioral.observation_source || "unrecorded")}</code> · maturity: ${esc(maturity.phase || "unrecorded")}. ${distinction}</p>
+       <p class="sub">${esc(missing)}. Observation count: ${fmtValue(behavioral.updates)}. V has no independent raw behavioral input; formula version: ${esc(behavioral.v_formula_version ?? "unrecorded")}.</p>
+       <table style="width:100%;max-width:640px;font-family:var(--font-mono);font-size:var(--text-sm);text-align:left"><thead><tr><th>dimension</th><th>primary</th><th>raw behavioral</th><th>smoothed behavioral</th></tr></thead><tbody>${rows}</tbody></table>
+       ${componentsHTML(derivation)}
+       ${calibrationHTML(derivation)}
+       ${featureRows ? `<details><summary>Recorded input features</summary><p class="sub">${featureRows}</p></details>` : ""}`;
+  }
+
+  async function inspectLatest() {
+    if (!selectedId || (inspector && inspector.loading)) return;
+    const version = selectionVersion;
+    const id = selectedId;
+    inspector = { loading: true };
+    renderInspector();
+    let result;
+    try {
+      result = await DATA.agentHistory(id, { mode: "recent", limit: 1, includeTelemetry: "latest" });
+    } catch {
+      result = null;
+    }
+    if (selectionVersion !== version) return;
+    const points = (result && result.data && result.data.points) || [];
+    // The history API orders by (recorded_at, state_id), so the final row is
+    // newest even when multiple observations share a timestamp. Selecting by
+    // timestamp alone could choose the older equal-time row whose envelope was
+    // intentionally omitted by include_telemetry=latest.
+    const latest = points.length ? points[points.length - 1] : null;
+    inspector = { loading: false, point: latest, source: result && result.source };
+    renderInspector();
+  }
+
   function renderTrajectory() {
     const mount = $("#eisv-trajectory");
     if (!mount) return;
     const headHTML = (sub) => `<div class="panel-head" style="margin-bottom:var(--space-3)">
         <h2>${selectedName ? esc(selectedName) + " · trajectory" : "Agent trajectory"}</h2>
-        <span class="spring"></span><span class="fresh">${sub}</span></div>`;
+        <span class="spring"></span><span class="fresh">${sub}</span>${trajSource ? sourceBadge(trajSource) : ""}</div>`;
     const note = (txt) => `<p style="color:var(--muted);font-size:var(--text-sm);margin:0">${txt}</p>`;
     let inner;
-    if (!selectedId) inner = headHTML("click a resident above") + note("Select a resident in the heatmap to see its own EISV check-in history.");
+    if (!selectedId) inner = headHTML("click a resident above") + note("Select a resident in the heatmap to see its own EISV observation history.");
     else if (trajLoading) inner = headHTML("loading…") + note("Loading trajectory…");
-    else if (!trajPoints.length) inner = headHTML("no history") + note("No check-in history available" + (MODEL.source === "snapshot" ? " offline." : "."));
-    else inner = headHTML(trajPoints.length + " check-ins · " + trajectorySources()) +
+    else if (!trajPoints.length) inner = headHTML("no history") + note("No observation history available" + (trajSource === "snapshot" ? " offline." : "."));
+    else inner = headHTML(trajPoints.length + " state observations · " + esc(trajectorySources())) +
       `<div style="height:210px"><canvas id="eisv-traj-upper"></canvas></div>
-       <div style="height:170px;margin-top:var(--space-3)"><canvas id="eisv-traj-lower"></canvas></div>`;
+       <div style="height:170px;margin-top:var(--space-3)"><canvas id="eisv-traj-lower"></canvas></div>
+       ${trajectoryContextHTML()}`;
+    if (selectedId && !trajLoading) inner += `<div style="margin-top:var(--space-4)"><button id="eisv-inspect-latest" class="theme-toggle" aria-expanded="false" aria-controls="eisv-observation-inspector">Inspect latest observation</button><div id="eisv-observation-inspector" style="margin-top:var(--space-3)"></div></div>`;
     mount.innerHTML = `<div class="panel" style="margin-bottom:var(--space-5)">${inner}</div>`;
+    renderInspector();
     if (selectedId && !trajLoading && trajPoints.length) buildTrajectory();
   }
 
@@ -245,15 +416,21 @@
   }
 
   async function selectAgent(id, name) {
+    const version = ++selectionVersion;
     selectedId = id; selectedName = name; trajLoading = true; trajPoints = [];
+    trajSource = null; trajContext = null; inspector = null;
+    if (trajUpper) { trajUpper.destroy(); trajUpper = null; }
+    if (trajLower) { trajLower.destroy(); trajLower = null; }
     renderTrajectory(); applySelectionHighlight();
     // Compact provenance is present on every point. Full derivation histories
     // remain an explicit API opt-in and are unnecessary for these charts.
     const r = await DATA.agentHistory(id, { mode: "all", limit: 120 });
-    if (selectedId !== id) return; // a newer selection won — drop this result
+    if (selectionVersion !== version) return; // a newer selection won — drop this result
     trajLoading = false;
     // withFallback wraps the result as { source, data: { points, ... } }.
     trajPoints = (r && r.data && r.data.points) || [];
+    trajSource = r && r.source;
+    trajContext = r && r.data && r.data.trajectoryContext;
     renderTrajectory();
   }
 
@@ -264,6 +441,7 @@
     const mount = document.getElementById("eisv-mount");
     if (!mount) return;
     mount.addEventListener("click", (e) => {
+      if (e.target.closest("#eisv-inspect-latest")) { inspectLatest(); return; }
       const row = e.target.closest("[data-traj-id]");
       if (!row || !mount.contains(row)) return;
       const id = row.getAttribute("data-traj-id");
@@ -346,6 +524,7 @@
     if (hm) { hm.innerHTML = heatmapHTML(MODEL.residents); applySelectionHighlight(); }
     const badge = document.querySelector("#eisv-mount .src-badge");
     if (badge) { badge.className = "src-badge " + MODEL.source; badge.textContent = MODEL.source; }
+    if (inspector && !inspector.loading) renderInspector();
   }
 
   async function load() {

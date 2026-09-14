@@ -7,6 +7,7 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import json
 import os
 
 from starlette.responses import JSONResponse
@@ -27,7 +28,9 @@ async def http_agent_history(request):
     identity_id/recorded_at). E lives in state_json, the rest are columns.
     Returns oldest→newest points so the chart reads left-to-right. Synthetic
     bootstrap rows are excluded, and agent-authored reports stay explicitly
-    separated from automatic substrate interpretations.
+    separated from automatic substrate interpretations. Trajectory statistics
+    cover the requested observations before chart decimation. Full telemetry
+    envelopes are opt-in: true includes every point, latest only the final one.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not access._check_http_auth(request, http_api_token=http_api_token):
@@ -42,9 +45,14 @@ async def http_agent_history(request):
     # 'all' = ~`limit` real check-ins sampled evenly across the agent's whole
     # lifespan (decimation, not averaging — every point is a real check-in).
     mode = "all" if request.query_params.get("mode") == "all" else "recent"
-    include_telemetry = str(
+    telemetry_option = str(
         request.query_params.get("include_telemetry", "")
-    ).strip().lower() in ("1", "true", "yes")
+    ).strip().lower()
+    include_telemetry = telemetry_option in ("1", "true", "yes", "latest")
+    telemetry_mode = (
+        "latest" if telemetry_option == "latest"
+        else "all" if include_telemetry else "none"
+    )
     try:
         from src.db import get_db
         db = get_db()
@@ -65,7 +73,7 @@ async def http_agent_history(request):
                        AND agent_id LIKE substring($1 from '([0-9a-f]{8})$') || '%'
                 ),
                 numbered AS (
-                    SELECT s.recorded_at,
+                    SELECT s.state_id, s.recorded_at,
                            (s.state_json->>'E')::real AS e,
                            s.integrity AS i, s.entropy AS s_entropy, s.volatility AS v,
                            s.coherence, s.risk_score, s.state_json,
@@ -73,7 +81,15 @@ async def http_agent_history(request):
                                     s.state_json->>'epistemic_class') AS epistemic_class,
                            (jsonb_typeof(s.state_json->'eisv_telemetry') = 'object')
                                AS telemetry_available,
-                           row_number() OVER (ORDER BY s.recorded_at) AS rn,
+                           coalesce(s.state_json #>>
+                               '{eisv_telemetry,measurement,primary,source}',
+                               'unknown') AS primary_source,
+                           coalesce(s.state_json #>>
+                               '{eisv_telemetry,policy_evaluation,maturity_gate,measurement_phase}',
+                               s.state_json #>>
+                               '{eisv_telemetry,measurement,behavioral,warmup,phase}',
+                               'unknown') AS maturity_phase,
+                           row_number() OVER (ORDER BY s.recorded_at, s.state_id) AS rn,
                            count(*) OVER () AS total,
                            count(*) FILTER (
                                WHERE coalesce(s.epistemic_class,
@@ -89,16 +105,86 @@ async def http_agent_history(request):
                            ) OVER () AS telemetry_total
                     FROM core.agent_state s
                     WHERE s.identity_id IN (SELECT identity_id FROM ids) AND s.synthetic = false
+                ),
+                requested AS (
+                    -- Select the requested observation window BEFORE sampling.
+                    -- For mode=all, chart decimation must not enlarge cadence
+                    -- gaps or remove observations from the regression.
+                    SELECT *, CASE WHEN primary_source = 'behavioral' THEN
+                        coalesce(state_json #>>
+                            '{eisv_telemetry,measurement,behavioral,observation_source}',
+                            state_json #>>
+                            '{eisv_telemetry,measurement,submitted_sensor,source}',
+                            primary_source)
+                        ELSE primary_source END AS measurement_source
+                    FROM numbered
+                    WHERE $3 = 'all' OR rn > total - $2
+                ),
+                timed AS (
+                    SELECT *,
+                        extract(epoch FROM (recorded_at - min(recorded_at) OVER ()))
+                            ::double precision / 3600.0 AS elapsed_hours,
+                        extract(epoch FROM (recorded_at - lag(recorded_at) OVER w))
+                            ::double precision AS gap_seconds,
+                        lag(primary_source) OVER w AS previous_primary_source,
+                        lag(measurement_source) OVER w AS previous_measurement_source,
+                        lag(maturity_phase) OVER w AS previous_maturity_phase
+                    FROM requested
+                    WINDOW w AS (ORDER BY rn)
+                ),
+                trajectory AS (
+                    SELECT jsonb_build_object(
+                        'observations', count(*),
+                        'first_observed_at', min(recorded_at),
+                        'last_observed_at', max(recorded_at),
+                        'elapsed_seconds', CASE WHEN count(*) > 1 THEN
+                            extract(epoch FROM (max(recorded_at) - min(recorded_at)))
+                            ELSE NULL END,
+                        'cadence', jsonb_build_object(
+                            'gap_count', count(gap_seconds),
+                            'zero_gap_count', count(*) FILTER (WHERE gap_seconds = 0),
+                            'median_seconds', percentile_cont(0.5)
+                                WITHIN GROUP (ORDER BY gap_seconds),
+                            'p95_seconds', percentile_cont(0.95)
+                                WITHIN GROUP (ORDER BY gap_seconds),
+                            'max_seconds', max(gap_seconds)),
+                        'transitions', jsonb_build_object(
+                            'primary_source', count(*) FILTER (
+                                WHERE previous_primary_source IS NOT NULL
+                                AND primary_source <> previous_primary_source),
+                            'measurement_source', count(*) FILTER (
+                                WHERE previous_measurement_source IS NOT NULL
+                                AND measurement_source <> previous_measurement_source),
+                            'maturity_phase', count(*) FILTER (
+                                WHERE previous_maturity_phase IS NOT NULL
+                                AND maturity_phase <> previous_maturity_phase),
+                            'unknown_source_observations', count(*) FILTER (
+                                WHERE measurement_source = 'unknown'),
+                            'unknown_maturity_observations', count(*) FILTER (
+                                WHERE maturity_phase = 'unknown')),
+                        'slopes_per_hour', jsonb_build_object(
+                            'E', regr_slope(e, elapsed_hours),
+                            'I', regr_slope(i, elapsed_hours),
+                            'S', regr_slope(s_entropy, elapsed_hours),
+                            'V', regr_slope(v, elapsed_hours)),
+                        'slope_observations', jsonb_build_object(
+                            'E', regr_count(e, elapsed_hours),
+                            'I', regr_count(i, elapsed_hours),
+                            'S', regr_count(s_entropy, elapsed_hours),
+                            'V', regr_count(v, elapsed_hours))
+                    ) AS trajectory_stats
+                    FROM timed
                 )
-                SELECT recorded_at, e, i, s_entropy, v, coherence, risk_score,
+                SELECT timed.recorded_at, e, i, s_entropy, v, coherence, risk_score,
                        state_json, epistemic_class, telemetry_available, total,
-                       agent_report_total, substrate_total, telemetry_total
-                FROM numbered
+                       agent_report_total, substrate_total, telemetry_total,
+                       trajectory_stats
+                FROM timed CROSS JOIN trajectory
                 WHERE CASE WHEN $3 = 'all'
                            THEN (rn % GREATEST(1, (total / $2)::int) = 0 OR rn = 1 OR rn = total)
-                           ELSE rn > total - $2
+                           ELSE true
                       END
-                ORDER BY recorded_at
+                ORDER BY rn
                 """,
                 agent_id, limit, mode,
             )
@@ -108,7 +194,7 @@ async def http_agent_history(request):
         telemetry_total = rows[0]["telemetry_total"] if rows else 0
         from src.eisv_telemetry import summarize_state_eisv_telemetry
         points = []
-        for r in rows:
+        for index, r in enumerate(rows):
             state_json = r["state_json"] if isinstance(r["state_json"], dict) else {}
             point = {
                 "t": r["recorded_at"].isoformat(),
@@ -133,9 +219,19 @@ async def http_agent_history(request):
                 "telemetry_available": bool(r["telemetry_available"]),
                 "telemetry": summarize_state_eisv_telemetry(state_json),
             }
-            if include_telemetry and isinstance(state_json.get("eisv_telemetry"), dict):
+            envelope_requested = telemetry_mode == "all" or (
+                telemetry_mode == "latest" and index == len(rows) - 1
+            )
+            if envelope_requested and isinstance(state_json.get("eisv_telemetry"), dict):
                 point["telemetry_envelope"] = state_json["eisv_telemetry"]
             points.append(point)
+        trajectory_stats = rows[0].get("trajectory_stats") if rows else None
+        if isinstance(trajectory_stats, str):
+            trajectory_stats = json.loads(trajectory_stats)
+        trajectory_context = _history_trajectory_context(
+            trajectory_stats, agent_id=agent_id, mode=mode,
+            limit=limit, points_returned=len(points), total=total,
+        )
         return JSONResponse({
             "success": True,
             "agent_id": agent_id,
@@ -150,10 +246,64 @@ async def http_agent_history(request):
                 "telemetry_envelopes": telemetry_total,
             },
             "telemetry_included": include_telemetry,
+            "telemetry_mode": telemetry_mode,
+            "trajectory_context": trajectory_context,
             "points": points,
         })
     except Exception as exc:  # noqa: BLE001 — read-only panel endpoint, degrade gracefully
         return JSONResponse({"success": False, "error": str(exc)}, status_code=500)
+
+
+def _history_trajectory_context(stats, *, agent_id, mode, limit, points_returned, total):
+    """Describe the SQL observation scope without inferring policy or outcomes."""
+    stats = dict(stats) if isinstance(stats, dict) else {}
+    observations = stats.get("observations", 0 if total == 0 else None)
+    transitions = stats.get("transitions") or {
+        "primary_source": 0 if total == 0 else None,
+        "measurement_source": 0 if total == 0 else None,
+        "maturity_phase": 0 if total == 0 else None,
+        "unknown_source_observations": 0 if total == 0 else None,
+        "unknown_maturity_observations": 0 if total == 0 else None,
+    }
+    return {
+        "schema": "eisv.trajectory-context.v1",
+        "subject": {"kind": "agent", "agent_id": agent_id},
+        "source": "core.agent_state",
+        "policy_applied": False,
+        "requested_window": {
+            "mode": mode,
+            "limit": limit,
+            "basis": "all_observations" if mode == "all" else "latest_observations",
+        },
+        "observations": observations,
+        "points_returned": points_returned,
+        "total_observations": total,
+        "sampling": "event_index_decimation" if mode == "all" else "none",
+        "status": "no_observations" if total == 0 else (
+            "available" if stats else "unavailable"
+        ),
+        "first_observed_at": stats.get("first_observed_at"),
+        "last_observed_at": stats.get("last_observed_at"),
+        "elapsed_seconds": stats.get("elapsed_seconds"),
+        "cadence": stats.get("cadence") or {
+            "gap_count": 0 if total == 0 else None,
+            "zero_gap_count": 0 if total == 0 else None,
+            "median_seconds": None, "p95_seconds": None, "max_seconds": None,
+        },
+        "transitions": transitions,
+        "slopes_per_hour": stats.get("slopes_per_hour") or dict.fromkeys("EISV"),
+        "slope_observations": stats.get("slope_observations") or {
+            key: 0 if total == 0 else None for key in "EISV"
+        },
+        "slope_method": "ordinary_least_squares_on_recorded_at",
+        "limitations": [
+            "Slopes describe recorded measurements per wall-clock hour, not outcomes.",
+            "Source or maturity transitions can change the measurement regime; "
+            "the regression does not correct for these changes.",
+            "Unknown provenance remains unknown and transitions include changes "
+            "to or from unknown; synthetic bootstrap rows are excluded.",
+        ],
+    }
 
 
 async def http_automations(request):

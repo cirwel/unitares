@@ -83,7 +83,7 @@
         <span class="dot-pip" style="background:${presence.color}"></span>
         <h2 style="font-family:var(--font-display)">${a.label ? esc(a.label) : "anon"}</h2>
         ${tierBadge(a.tier, true)} ${basin}
-        <span class="verdict ${verdictClass(m.verdict) === "ok" ? "" : verdictClass(m.verdict) === "warn" ? "warn" : "danger"}"><span class="pip"></span><span>${esc(m.verdict || "—")}</span></span>
+        ${policyBand(m)}
         <span class="spring"></span>
         <button class="theme-toggle" id="ag-detail-close">✕ close</button>
       </div>
@@ -240,6 +240,13 @@
     return "danger";
   }
 
+  function policyBand(m) {
+    const verdict = m && m.verdict;
+    if (!verdict) return '<span class="tag" title="No policy band was recorded">—</span>';
+    const source = m.verdictSource || "source unavailable";
+    return `<span class="tag ${verdictClass(verdict)}" title="Policy interpretation · ${esc(source)}">policy · ${esc(verdict)}</span>`;
+  }
+
   // `always` = detail panel (state every agent's tier, even unknown). Rows omit
   // unknown/absent: ~77 of 100 live rows carry no earned tier, and a badge on
   // all of them buries the ~23 that mean something.
@@ -365,7 +372,7 @@
         <td><div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
             <span style="font-weight:500;color:var(--ink)"${a.redacted ? ' title="identifiers redacted server-side"' : ""}>${name}</span> ${tierBadge(a.tier)} ${rowBadges(a, st)}${pinTag}
           </div>${a.purpose ? `<div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px">${a.purpose}</div>` : ""}</td>
-        <td><span class="tag ${verdictClass(a.metrics.verdict)}">${a.metrics.verdict || "—"}</span></td>
+        <td>${policyBand(a.metrics)}</td>
         <td class="mono">${num(a.metrics.coherence)}</td>
         <td class="mono" title="${esc(a.metrics.riskSource || "risk source unavailable")}">${num(a.metrics.risk)}</td>
         <td class="mono">${(a.updates || 0).toLocaleString()}</td>
@@ -374,7 +381,7 @@
       </tr>`;
     };
     const head = `<thead><tr>
-      <th></th><th>Agent</th><th title="Governance policy verdict at the last check-in">Verdict</th><th>Coh</th><th title="Resolved risk used for the last governance verdict. Open a row to inspect separate Φ telemetry when available.">Decision risk</th><th>State rows</th><th>Presence</th><th>Last observation</th>
+      <th></th><th>Agent</th><th title="Governance policy interpretation at the last check-in; not verified task quality">Policy band</th><th>Coh</th><th title="Resolved risk used for the last governance verdict. Open a row to inspect separate Φ telemetry when available.">Decision risk</th><th>State rows</th><th>Presence</th><th>Last observation</th>
     </tr></thead>`;
     const sm = MODEL.summary || {};
     const unknownPresence = typeof sm.presenceUnknown === "number" || typeof sm.presenceUnavailable === "number"

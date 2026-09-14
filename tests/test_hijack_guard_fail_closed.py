@@ -283,3 +283,208 @@ class TestMiddlewareHijackGuardRefusal:
         assert retry_kwargs.get("force_new") is True
         assert retry_kwargs.get("spawn_reason") == "dispatch_auto_mint"
         assert isinstance(result, tuple), "Non-strict dispatch should proceed"
+
+
+class _RaisesOnceOnCreated(dict):
+    """A resolver result that binds normally, then raises the first time
+    ``created`` is read, and reads normally after that."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._raised = False
+
+    def get(self, key, default=None):
+        if key == "created" and not self._raised:
+            self._raised = True
+            raise RuntimeError("bookkeeping failed after binding")
+        return super().get(key, default)
+
+
+class TestMiddlewareResolverExceptionFailsClosed:
+    """A resolver that raises must not open the gate a resolver miss closes.
+
+    The typed refusal above runs only on a RETURNED session_resolve_miss or
+    hijack rejection. Until 2026-09-13 an exception skipped it: the middleware
+    logged at debug, continued with no bound identity, and ran the handler, so
+    knowledge(note) wrote under a derived anonymous writer id with
+    STRICT_IDENTITY_REQUIRED on.
+    """
+
+    @staticmethod
+    async def _dispatch(name, arguments, resolve_mock):
+        patches = _middleware_patches(resolve_mock, AsyncMock())
+        for p in patches:
+            p.start()
+        try:
+            ctx = DispatchContext()
+            result = await resolve_identity(name, arguments, ctx)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+        return result, ctx
+
+    @pytest.mark.parametrize(
+        "resolver_outcome",
+        [
+            pytest.param({}, id="empty-result"),
+            pytest.param(
+                {"error": "identity_store_unavailable"},
+                id="error-without-resume-failed",
+            ),
+            pytest.param(
+                {"agent_uuid": "", "created": False, "persisted": False},
+                id="empty-agent-uuid",
+            ),
+            pytest.param(
+                RuntimeError("identity store unavailable"),
+                id="resolver-exception",
+            ),
+            pytest.param(
+                {"resume_failed": True, "error": "session_resolve_miss"},
+                id="known-resume-failure",
+            ),
+            pytest.param(
+                {"resume_failed": True, "error": "future_refusal"},
+                id="hard-resume-refusal",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_strict_write_pipeline_requires_a_truthy_binding(
+        self, monkeypatch, resolver_outcome
+    ):
+        """Every resolver failure shape stops the real dispatch pipeline."""
+        from src.mcp_handlers import dispatch_tool
+
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        handler = AsyncMock(return_value=[])
+        if isinstance(resolver_outcome, Exception):
+            resolve_mock = AsyncMock(side_effect=resolver_outcome)
+        else:
+            resolve_mock = AsyncMock(return_value=dict(resolver_outcome))
+
+        with patch(
+            "src.mcp_handlers.context.get_session_signals", return_value=None
+        ), patch(
+            "src.mcp_handlers.identity.handlers.derive_session_key",
+            new=AsyncMock(return_value="agent-strict-final-guard"),
+        ), patch(
+            "src.mcp_handlers.identity.handlers.resolve_session_identity",
+            resolve_mock,
+        ), patch.dict(
+            "src.mcp_handlers.TOOL_HANDLERS", {"knowledge": handler}
+        ):
+            result = await dispatch_tool(
+                "knowledge",
+                {"action": "note", "content": "strict final-guard probe"},
+            )
+
+        assert _refusal_payload(result).get("status") == "identity_required"
+        handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_strict_refuses_write_when_resolver_raises(self, monkeypatch):
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        resolve_mock = AsyncMock(side_effect=RuntimeError("identity store unavailable"))
+
+        result, _ = await self._dispatch(
+            "knowledge", {"action": "note", "summary": "probe"}, resolve_mock
+        )
+
+        payload = _refusal_payload(result)
+        assert payload.get("status") == "identity_required"
+        assert (payload.get("surface_context") or {}).get("identity_resolution") == "failed"
+        assert "handler did not run" in (payload.get("hint") or "")
+        assert "identity store unavailable" not in json.dumps(payload), (
+            "the refusal must not echo the resolver's exception text"
+        )
+        # A server-side failure is not a missing identity: steering the caller to
+        # onboard would split its work from the identity it already has.
+        calls = [option.get("call", "") for option in payload.get("safe_options") or []]
+        assert calls and not any("onboard" in call for call in calls), calls
+
+    @pytest.mark.asyncio
+    async def test_strict_ignores_a_cached_binding_with_no_identity(self, monkeypatch):
+        """A sticky binding with an empty agent_uuid must not bind and dispatch.
+
+        Its early return used to bind the empty value and run the handler
+        unbound. It now falls through to resolution, which refuses under strict.
+        """
+        from types import SimpleNamespace
+
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        empty = SimpleNamespace(agent_uuid="", source="mcp", session_key="agent-empty")
+        consult = AsyncMock(
+            return_value=SimpleNamespace(binding=empty, transport_key="transport-empty")
+        )
+        resolve_mock = AsyncMock(
+            return_value={"resume_failed": True, "error": "session_resolve_miss"}
+        )
+
+        with patch(
+            "src.mcp_handlers.middleware.identity_step.consult_sticky_binding", consult
+        ):
+            result, ctx = await self._dispatch(
+                "knowledge", {"action": "note", "summary": "probe"}, resolve_mock
+            )
+
+        assert resolve_mock.await_count == 1, "an empty binding must fall through to resolution"
+        assert _refusal_payload(result).get("status") == "identity_required"
+        assert not ctx.bound_agent_id
+
+    @pytest.mark.asyncio
+    async def test_strict_lets_a_read_through_when_resolver_raises(self, monkeypatch):
+        """A read may run unbound, so a failed resolution does not refuse it.
+
+        client_session_id is identity proof, so the call skips the early
+        unbound-read shortcut and reaches resolution, which is the path under test.
+        """
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        resolve_mock = AsyncMock(side_effect=RuntimeError("identity store unavailable"))
+
+        result, ctx = await self._dispatch(
+            "knowledge",
+            {"action": "search", "query": "x", "client_session_id": "agent-reader"},
+            resolve_mock,
+        )
+
+        assert resolve_mock.await_count == 1, "the read must reach resolution"
+        assert isinstance(result, tuple), "a read proceeds when resolution raises"
+        assert ctx.bound_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_non_strict_still_continues_unbound(self, monkeypatch):
+        monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+        resolve_mock = AsyncMock(side_effect=RuntimeError("identity store unavailable"))
+
+        result, ctx = await self._dispatch(
+            "knowledge", {"action": "note", "summary": "probe"}, resolve_mock
+        )
+
+        assert isinstance(result, tuple), "non-strict behavior is unchanged"
+        assert ctx.bound_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_strict_keeps_an_identity_bound_before_the_failure(self, monkeypatch):
+        """An exception after binding leaves an attributed call; it is not refused.
+
+        The X-Agent-Id recovery step is stubbed to return the bound identity so
+        the result's first read of ``created`` happens after binding, in the
+        ephemeral-marking step, which is where this fake raises. This pins the
+        truthy-binding half of the refusal condition: without it, every
+        exception under strict mode would refuse, bound or not.
+        """
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+        bound = "12121212-3434-4565-8787-909090909090"
+        resolve_mock = AsyncMock(return_value=_RaisesOnceOnCreated(agent_uuid=bound))
+
+        with patch(
+            "src.mcp_handlers.middleware.identity_step._maybe_recover_via_x_agent_id",
+            AsyncMock(return_value=bound),
+        ):
+            result, ctx = await self._dispatch(
+                "knowledge", {"action": "note", "summary": "probe"}, resolve_mock
+            )
+
+        assert isinstance(result, tuple), "a bound call proceeds"
+        assert ctx.bound_agent_id == bound

@@ -31,6 +31,18 @@ from src.mcp_handlers.dialectic.session import (
 
 
 @pytest.fixture(autouse=True)
+def _synthesis_caller_bound_as_named_agent():
+    """These tests exercise synthesis behavior, not caller binding.
+
+    A synthesis requires a caller bound as the identity it submits for
+    (``dialectic/auth.py`` ``caller_is_bound_as``); that requirement is tested in
+    ``tests/test_dialectic_synthesis_bound_caller.py``.
+    """
+    with patch("src.mcp_handlers.dialectic.auth.caller_is_bound_as", return_value=True):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_module_state():
     _SESSION_LOCKS.clear()
     ACTIVE_SESSIONS.clear()
