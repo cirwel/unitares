@@ -53,7 +53,7 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
-  unitares/src/mcp_handlers/observability/outcome_events.py: "33aedcb2231bc732"
+  unitares/src/mcp_handlers/observability/outcome_events.py: "e8f54fde55262386"
 ---
 
 # Governance Fundamentals
