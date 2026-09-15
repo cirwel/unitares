@@ -23,6 +23,28 @@ from mcp.types import TextContent
 from tests.helpers import parse_result
 
 
+def _install_bound_outcome_mock(mock_db, outcome_id):
+    """Install the atomic binding API while preserving canonical replay data."""
+    canonical = None
+
+    async def record_bound(**kwargs):
+        nonlocal canonical
+        if canonical is None:
+            canonical = {
+                "status": "created",
+                "outcome_id": outcome_id,
+                "outcome_type": kwargs["outcome_type"],
+                "outcome_score": kwargs["outcome_score"],
+                "is_bad": kwargs["is_bad"],
+                "detail": kwargs["detail"],
+                "eisv_snapshot": kwargs["eisv_snapshot"],
+            }
+            return dict(canonical)
+        return {**canonical, "status": "existing"}
+
+    mock_db.record_bound_outcome_event = AsyncMock(side_effect=record_bound)
+
+
 # ============================================================================
 # Phase 5: auto-emit calibration wiring
 # ============================================================================
@@ -621,6 +643,7 @@ class TestPredictionIdLookup:
         from src.monitor_prediction import register_tactical_prediction
         mock_db = MagicMock()
         mock_db.record_outcome_event = AsyncMock(return_value='oe-pid-1')
+        _install_bound_outcome_mock(mock_db, 'oe-pid-1')
         mock_db.get_latest_eisv_by_agent_id = AsyncMock(return_value={
             'E': 0.7, 'I': 0.75, 'S': 0.15, 'V': -0.03,
             'phi': 0.1, 'verdict': 'safe', 'coherence': 0.48, 'regime': 'CONVERGENCE',
@@ -683,7 +706,7 @@ class TestPredictionIdLookup:
         assert seq_kwargs['signal_source'] == 'tests'
 
         # Detail preserves provenance
-        _, db_kwargs = mock_db.record_outcome_event.call_args
+        _, db_kwargs = mock_db.record_bound_outcome_event.call_args
         assert db_kwargs['detail']['reported_confidence'] == 0.9
         assert db_kwargs['detail']['prediction_id'] == pid
         assert db_kwargs['detail']['prediction_source'] == 'registry'
@@ -694,6 +717,7 @@ class TestPredictionIdLookup:
         """If prediction_id is unknown to the monitor, fall back to _prev_confidence."""
         mock_db = MagicMock()
         mock_db.record_outcome_event = AsyncMock(return_value='oe-pid-2')
+        _install_bound_outcome_mock(mock_db, 'oe-pid-2')
         mock_db.get_latest_eisv_by_agent_id = AsyncMock(return_value={
             'E': 0.7, 'I': 0.75, 'S': 0.15, 'V': -0.03,
             'phi': 0.1, 'verdict': 'safe', 'coherence': 0.48, 'regime': 'CONVERGENCE',
@@ -734,7 +758,7 @@ class TestPredictionIdLookup:
 
         # The fallback confidence is still RESOLVED and recorded (the id was
         # not in the registry), and the row persists.
-        _, db_kwargs = mock_db.record_outcome_event.call_args
+        _, db_kwargs = mock_db.record_bound_outcome_event.call_args
         assert db_kwargs['detail']['reported_confidence'] == 0.55
         assert db_kwargs['detail']['prediction_source'] == 'prev_confidence_fallback'
         assert db_kwargs['detail']['prediction_id'] == 'pid-stale'
@@ -796,6 +820,7 @@ def _make_outcome_mock_db():
     """Shared mock DB for TestPredictionBindingEcho tests."""
     mock_db = MagicMock()
     mock_db.record_outcome_event = AsyncMock(return_value='oe-binding-1')
+    _install_bound_outcome_mock(mock_db, 'oe-binding-1')
     mock_db.get_latest_eisv_by_agent_id = AsyncMock(return_value={
         'E': 0.7, 'I': 0.75, 'S': 0.15, 'V': -0.03,
         'phi': 0.1, 'verdict': 'safe', 'coherence': 0.48, 'regime': 'CONVERGENCE',
@@ -843,7 +868,7 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'registry'
-        _, db_kwargs = mock_db.record_outcome_event.call_args
+        _, db_kwargs = mock_db.record_bound_outcome_event.call_args
         assert db_kwargs['detail']['prediction_binding'] == 'registry'
         # Record is consumed
         assert open_predictions[pid].get('consumed') is True
@@ -877,7 +902,7 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'missing_prediction'
-        _, db_kwargs = mock_db.record_outcome_event.call_args
+        _, db_kwargs = mock_db.record_bound_outcome_event.call_args
         assert db_kwargs['detail']['prediction_binding'] == 'missing_prediction'
 
     @pytest.mark.asyncio
@@ -914,7 +939,7 @@ class TestPredictionBindingEcho:
 
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'ttl_expired_fallback'
-        _, db_kwargs = mock_db.record_outcome_event.call_args
+        _, db_kwargs = mock_db.record_bound_outcome_event.call_args
         assert db_kwargs['detail']['prediction_binding'] == 'ttl_expired_fallback'
         # Record must NOT have been consumed
         assert open_predictions[pid].get('consumed') is not True
@@ -979,20 +1004,10 @@ class TestPredictionBindingEcho:
 # ============================================================================
 
 class TestPredictionBindingConcurrencyCanary:
-    """Regression canary, NOT a correctness assertion. Documents current
-    behavior under racing outcome_events for the same prediction_id.
-    The lock fix is explicitly deferred per spec §4. If this test ever
-    starts failing because both calls resolve as `registry`, the race
-    has become observable and the lock is no longer optional.
-    """
+    """The database claim makes racing identical submissions one outcome."""
 
     @pytest.mark.asyncio
-    async def test_concurrent_outcome_events_one_wins_one_misses(self):
-        """Under typical scheduling, one call consumes the prediction (registry)
-        and the other misses (missing_prediction). Both must NOT resolve as registry
-        simultaneously without a lock — which is the future failure mode this canary
-        documents.
-        """
+    async def test_concurrent_outcome_events_share_canonical_binding(self):
         import asyncio
         from src.monitor_prediction import register_tactical_prediction
         mock_db = MagicMock()
@@ -1001,7 +1016,8 @@ class TestPredictionBindingConcurrencyCanary:
             'phi': 0.1, 'verdict': 'safe', 'coherence': 0.48, 'regime': 'CONVERGENCE',
         })
         mock_db.get_latest_confidence_before = AsyncMock(return_value=None)
-        mock_db.record_outcome_event = AsyncMock(side_effect=['oe-c1', 'oe-c2'])
+        mock_db.record_outcome_event = AsyncMock(return_value='unused')
+        _install_bound_outcome_mock(mock_db, 'oe-canonical')
 
         open_predictions = {}
         pid = register_tactical_prediction(open_predictions, confidence=0.7)
@@ -1032,14 +1048,10 @@ class TestPredictionBindingConcurrencyCanary:
                 }),
             )
 
-        bindings = sorted(parse_result(r)['prediction_binding'] for r in results)
-        # Under typical async scheduling: one wins (registry), one misses (missing_prediction).
-        # Under unlucky scheduling without a lock, both could resolve as registry —
-        # which is the failure mode this canary will eventually catch.
-        assert bindings.count('registry') <= 1, (
-            "Concurrency race made both calls resolve to registry — "
-            "the lock fix deferred in v1 is no longer optional"
-        )
+        parsed = [parse_result(result) for result in results]
+        assert {item['outcome_id'] for item in parsed} == {'oe-canonical'}
+        assert {item['prediction_binding'] for item in parsed} == {'registry'}
+        assert mock_db.record_bound_outcome_event.await_count == 2
 
 
 # ============================================================================
