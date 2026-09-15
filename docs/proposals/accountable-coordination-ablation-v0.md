@@ -51,9 +51,16 @@ result.
 ## Experimental arms
 
 All arms use the same frozen source snapshot, task-family distribution,
-model/provider and reasoning level, agent count, eligible tools, prompts outside
-the treatment, token and wall-clock ceilings, validator, and operator-intervention
-budget.
+model/provider and reasoning level, agent count, non-treatment tools, prompts
+outside the treatment, token and wall-clock ceilings, validator, and
+operator-intervention budget. Arm-specific coordination adapters and capabilities
+differ only as declared below.
+
+All model-visible coordination, handoff, review, and policy-interaction calls and
+tokens count against the common model-call and token ceilings. Deterministic
+outer-ledger capture and sealed scorer execution are outside the treatment budget
+because every arm receives them; their compute, latency, and storage cost are
+metered separately and reported rather than attributed to an arm.
 
 | Arm | Available coordination | Withheld treatment |
 |---|---|---|
@@ -141,6 +148,13 @@ Each episode emits one content-addressed receipt with at least:
 | Validation | scorer and test digests, raw result hash, score, missingness reason |
 | Terminal state | complete, failed, invalid, safety-stop or infrastructure-stop; reason and timestamp |
 
+A treatment-level policy denial or contained interdiction is an observed outcome,
+not a `safety-stop`: it remains in the assigned arm and is scored under the frozen
+intention-to-treat rule. `safety-stop` is reserved for an experiment-level
+operator abort, such as sandbox escape, production or protected-cohort access,
+scorer leakage, an exhausted safety budget, or a critical common-mode
+enforcement defect.
+
 Raw prompts, messages, model responses, patches, and validator output remain in
 a private experiment directory with restrictive permissions. Repository
 artifacts contain schemas, hashes, bounded metadata, and publication results,
@@ -156,7 +170,8 @@ the confirmatory read is complete.
 Preflight must demonstrate:
 
 - treatment adapters expose exactly the capabilities declared for their arm;
-- the model, non-treatment prompt, source snapshot, tools, and budgets match;
+- the model, non-treatment prompt, source snapshot, non-treatment tools, and
+  budgets match, with arm-specific capabilities matching the assignment;
 - all required outer-ledger sinks and validators are reachable;
 - production endpoints and credentials are absent;
 - no prior task-family artifact is present in context or shared storage.
@@ -213,7 +228,8 @@ The primary claim is supported only if:
 2. the 95% interval for D-minus-B lies strictly above zero;
 3. treatment, compute, model, tool, scorer, and intervention budgets match;
 4. every included family has a complete outer receipt;
-5. no cross-arm leak, outcome peek, scorer drift, or safety stop occurred.
+5. no cross-arm leak, outcome peek, scorer drift, experiment-level safety stop,
+   or common-mode repair occurred in the included block.
 
 If the point estimate is negative, report observed underperformance with its
 interval. If the statistical conditions fail, the claim is unsupported for the
@@ -222,6 +238,12 @@ the numerical result is favorable.
 
 ## Relationship to existing evaluations
 
+- The frozen accountable multi-principal testbed preregistration v1.1 tests
+  safety and governance across prompt-only, log-only, federated, and centralized
+  regimes, protocol baselines, adversarial scenarios, and scale. This study
+  instead tests task-outcome efficacy relative to ordinary ephemeral
+  coordination. Neither protocol amends, satisfies, or supplies confirmatory
+  evidence for the other.
 - The KG agent-adoption pilot (#1934, #1944 and #1949) tests retrieval,
   surfacing, source use, cost, and exit behavior. It remains HOLD. Its frozen
   corpus and adverse canary evidence must not be changed or folded into this
@@ -249,7 +271,9 @@ No confirmatory execution begins until an immutable enrollment artifact freezes:
 - outer-ledger schema and private raw-output location;
 - contamination, missingness and intention-to-treat rules;
 - blinded evaluator and publication owner;
-- safety-stop and common-mode repair procedure.
+- experiment-level safety-stop and common-mode repair procedure, plus
+  intention-to-treat scoring for treatment-level denials and contained
+  interdictions.
 
 An incomplete enrollment authorizes, at most, an explicitly labelled plumbing
 pilot.
