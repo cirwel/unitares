@@ -342,9 +342,14 @@ async def test_expired_binding_cleanup_allows_new_canonical_submission(
 
     connection = await asyncpg.connect(TEST_DB_URL)
     try:
-        retained = await connection.fetchval(
-            "SELECT audit.cleanup_outcome_prediction_bindings(0)"
-        )
+        probe = connection.transaction()
+        await probe.start()
+        try:
+            retained = await connection.fetchval(
+                "SELECT audit.cleanup_outcome_prediction_bindings(0)"
+            )
+        finally:
+            await probe.rollback()
         assert retained == 0
         await connection.execute(
             "DELETE FROM audit.outcome_events WHERE outcome_id = $1::uuid",
@@ -384,23 +389,39 @@ async def test_cleanup_uses_full_partitioned_outcome_key(isolated_binding_agent)
 
     connection = await asyncpg.connect(TEST_DB_URL)
     try:
-        await connection.execute(
-            """
-            UPDATE audit.outcome_prediction_bindings
-            SET canonical_outcome_ts = canonical_outcome_ts - INTERVAL '1 day'
-            WHERE agent_id = $1 AND prediction_id = $2
-            """,
-            isolated_binding_agent,
-            prediction_id,
-        )
-        removed = await connection.fetchval(
-            "SELECT audit.cleanup_outcome_prediction_bindings(0)"
-        )
+        probe = connection.transaction()
+        await probe.start()
+        try:
+            await connection.execute(
+                """
+                UPDATE audit.outcome_prediction_bindings
+                SET canonical_outcome_ts = canonical_outcome_ts - INTERVAL '1 day'
+                WHERE agent_id = $1 AND prediction_id = $2
+                """,
+                isolated_binding_agent,
+                prediction_id,
+            )
+            removed = await connection.fetchval(
+                "SELECT audit.cleanup_outcome_prediction_bindings(0)"
+            )
+            counts = await connection.fetchrow(
+                """
+                SELECT
+                    (SELECT count(*) FROM audit.outcome_prediction_bindings
+                     WHERE agent_id = $1 AND prediction_id = $2) AS bindings,
+                    (SELECT count(*) FROM audit.outcome_events
+                     WHERE agent_id = $1 AND detail->>'prediction_id' = $2) AS outcomes
+                """,
+                isolated_binding_agent,
+                prediction_id,
+            )
+        finally:
+            await probe.rollback()
     finally:
         await connection.close()
 
     assert removed == 1
-    assert dict(await _counts(isolated_binding_agent, prediction_id)) == {
+    assert dict(counts) == {
         "bindings": 0,
         "outcomes": 1,
     }
