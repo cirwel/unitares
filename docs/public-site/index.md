@@ -1,11 +1,14 @@
-# Runtime governance for long-lived AI agents
+# Accountability infrastructure for long-running AI agents
 
-*The missing middle between pre-deployment evaluation and post-incident forensics.*
+*Many agents, one record.*
 
-UNITARES is a self-hosted MCP and HTTP service that gives long-running agent
-processes accountable identities, evidence-linked check-ins, and policy responses
-with named reasons. It complements evals, guardrails, and sandboxes; it does not
-replace them.
+UNITARES is self-hosted accountability infrastructure for operators running
+multiple AI agents. Its federation kernel connects independent runtimes to one
+operator-controlled server over MCP or HTTP, where they share a durable record
+while keeping their own models, tools, and runtimes. The goal is simple: agent
+work should remain attributable, reviewable, and recoverable even when the
+process that started it is gone. It runs beside evals, guardrails, and
+sandboxes and replaces none of them.
 
 **Current public releases:** [server v2.21.0](https://github.com/cirwel/unitares/releases/tag/v2.21.0)
 · [Python SDK 0.3.0](https://pypi.org/project/unitares-sdk/0.3.0/)
@@ -86,8 +89,10 @@ negative. UNITARES does not claim to prove correctness, ethics, safety, or
 incident prevention. It makes process identity, telemetry, evidence, and policy
 history inspectable so those claims can be tested rather than assumed.
 
-## Federation is a research direction
+## Cross-operator federation is a research direction
 
+Federation in the product sense, independent runtimes sharing one
+operator-controlled server, is deployed. Federation between operators is not.
 Today, each deployment is governed by its own operator. The architecture exposes
 versioned telemetry, provenance, identity, and named policy decisions so future
 work can test cross-operator attestations without centralizing raw telemetry.
