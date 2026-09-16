@@ -22,7 +22,7 @@ thread can hold Closed and Parked rows beside Active ones.
 
 The 30-day line is a choice, not a measurement: it separates "someone is working
 this" from "nobody has touched this" and claims nothing else. Current counts:
-Built 21 · Registered 7 · Active 26 · Parked 24 · Closed 14
+Built 21 · Registered 7 · Active 27 · Parked 24 · Closed 14
 (top-level docs; the `resolved/` subfolder is not re-tagged).
 
 These counts are **live, not a snapshot**, and `scripts/dev/check_proposals_index.py`
