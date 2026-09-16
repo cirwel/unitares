@@ -27,10 +27,10 @@ CHROME_CANDIDATES = (
     "chromium",
 )
 
-TAGLINE = "A federation kernel for accountable AI agents."
+TAGLINE = "Accountability infrastructure for long-running AI agents."
 SUBLINE = (
-    "Identity, claims and evidence, review, outcomes, and reconstruction "
-    "across agent runtimes."
+    "Many agents, one record: identity, claims and evidence, review, outcomes, "
+    "and reconstruction across agent runtimes."
 )
 
 PAGE = """<!doctype html>

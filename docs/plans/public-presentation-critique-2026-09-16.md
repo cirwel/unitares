@@ -198,3 +198,31 @@ Nothing technical was removed. The noun list became the four things a reader can
 - Copy measurements: strip frontmatter, tags, comments, and Astro expressions from each page; count words, sentences, the negation regexes above, and the self-reference regexes above.
 - Claims replay: load `src/data/claims.json`, map each source URL to the same path in a local `unitares` checkout, assert each `must_contain` string; assert each `site_says` string against the stripped page text. Sources all matched; eight `site_says` strings did not (listed in §3). The `unitares-resident` README was not available locally and its entry is unverified.
 - Not verified here: the deployed site (not fetched), the claim that the governance plugin is TypeScript (JSON-LD), and the `unitares-resident` status line.
+
+## Decisions taken, 2026-09-16
+
+The operator delegated the decisions above on the same day. Taken as follows,
+each reversible in one file:
+
+- **The sentence** is the README's: tagline "Accountability infrastructure for
+  long-running AI agents" and the README's first three sentences as the
+  definition. The site headline is *Many agents, one record.* No new sentence
+  was written; the README already carried the operator's own, and one sentence
+  everywhere beats a better sentence somewhere. Pinned by the Pages-build test
+  here and by the site's claims register.
+- **"Agent" means software** on the product pages; "people and agents" where
+  both are meant. The research page keeps "principals".
+- **The site's name is CIRWEL Research** everywhere a visitor sees it; the
+  organisation stays CIRWEL Systems in the colophon and the JSON-LD.
+- **A corrections record returns**, limited to figures, statuses, and claims,
+  rendered on the research page rather than in every colophon.
+- **cirwel.org is the front door.** The Pages landing is aligned to the same
+  sentence and restyled to the house tokens rather than retired, because it is
+  the generated evaluator surface and hosts the glossary.
+
+Landed in `cirwel/cirwel-site` PR #49 (site, `EDITORIAL.md`, share card,
+claims register, corrections record) and in this pull request (Pages landing,
+glossary intro, social-card tagline constant, this record). The social-preview
+PNG itself was not regenerated here; it is a maintainer render that needs
+Chrome and the Google Fonts CSS, and it is a repository setting rather than a
+served file.
