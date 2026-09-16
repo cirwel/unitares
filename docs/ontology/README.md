@@ -51,7 +51,8 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 
 **External prior-art and competitive triage** (inputs to the paper's §10 spine):
 - [`trajectory-identity-prior-art-2026-06.md`](trajectory-identity-prior-art-2026-06.md) — foundational-theory anchors and their verdicts
-- [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md) — runtime-governance neighbors: MI9 (head-to-head) and Auton (different layer)
+- [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md) — claims falsification audit and market map: every public claim typed and classed against the strongest substitute opened (cloud agent platforms, A2A, NeMo Relay, AgentLens, the IETF audit-trail draft); supersedes the June map
+- [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md) — runtime-governance neighbors: MI9 (head-to-head) and Auton (different layer); superseded as the market map by the 2026-09 audit, paper-positioning verdicts stand
 - [`neohorse-1-triage-2026-09.md`](neohorse-1-triage-2026-09.md) — NeoHorse-1 (arXiv:2609.08183); training-plane neighbor, not encroaching, but it collides on the word *harness*
 
 **Dated records**:
