@@ -11,6 +11,10 @@ runtime systems, audit products) and asked for a falsification audit before
 more implementation. The scan's conclusion is adopted; its table is not,
 because it mixed verified products with names this audit could not find and
 graded capability claims as "refuted" when a substitute merely exists.
+**Companion:** `competitive-survival-audit-2026-09.md` (opened the same day
+as PR #2257) asks the product question this audit does not: whether to
+keep, merge, or stop investing. This audit asks only which public claims
+survive contact with the substitutes. Read the two together.
 **Method:** every public claim was enumerated from six surfaces (the root
 README, `PRODUCT_DEFINITION.md`, the public site, the trust contract, the
 preprint's title, and the Mercor Expression of Interest draft). For each, the
