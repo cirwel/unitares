@@ -44,8 +44,8 @@ GLOSSARY_BLOB = f"{REPO_URL}/blob/master/docs/ontology/glossary.md"
 # dropped into internal jargon. Kept short; the discipline speaks for itself.
 INTRO_MD = """\
 !!! note "What this is"
-    A living glossary for [UNITARES]({repo}) — runtime state telemetry for
-    long-lived AI agents. Every term is defined by **the question it answers**,
+    A living glossary for [UNITARES]({repo}) — accountability infrastructure
+    for long-running AI agents. Every term is defined by **the question it answers**,
     not by a list of examples, because a term pinned to its discriminating
     question survives redefinition while one pinned to examples rots. The page
     shows its own drift corrections on purpose: a system that hands you its own
@@ -60,38 +60,46 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0e1116">
+<meta name="theme-color" content="#F5F1E8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15110D" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <title>{title}</title>
 <style>
-  :root{{--bg:#0e1116;--panel:#161b22;--line:#2a313c;--ink:#e6edf3;--dim:#8b949e;--acc:#58a6ff}}
+  /* The CIRWEL house register, as cirwel.org sets it: cream and oxblood by
+     day, bistre and verdigris by night, hairlines instead of cards. Tokens are
+     copied from cirwel-site's tailwind.config.mjs; system serifs stand in for
+     Bodoni Moda and EB Garamond because this page ships no webfonts. */
+  :root{{--bg:245 241 232;--line:201 192 174;--ink:26 22 18;--dim:92 84 74;--acc:122 31 31;color-scheme:light}}
+  @media (prefers-color-scheme: dark){{:root{{--bg:21 17 13;--line:85 74 60;--ink:219 210 191;--dim:168 159 144;--acc:127 175 162;color-scheme:dark}}}}
   *{{box-sizing:border-box}}
-  body{{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}}
-  header{{position:sticky;top:0;z-index:5;background:#0e1116ee;backdrop-filter:blur(6px);border-bottom:1px solid var(--line);padding:14px 22px;display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}}
-  header .brand{{font-weight:650;letter-spacing:.01em}}
-  header nav a{{color:var(--dim);text-decoration:none;margin-right:14px;font-size:14px}}
-  header nav a.active,header nav a:hover{{color:var(--ink)}}
-  main{{max-width:880px;margin:0 auto;padding:30px 22px 90px}}
-  h1,h2,h3{{line-height:1.25}} h1{{font-size:26px;margin-top:0}} h2{{margin-top:34px;border-bottom:1px solid var(--line);padding-bottom:6px;scroll-margin-top:80px}} h3{{margin-top:26px}}
-  a{{color:var(--acc)}}
-  a:focus-visible{{outline:2px solid var(--acc);outline-offset:3px}}
-  code{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em;background:#1c232c;border:1px solid var(--line);border-radius:5px;padding:.08em .4em}}
-  pre{{background:#1c232c;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto}} pre code{{border:0;padding:0;background:none}}
-  table{{border-collapse:collapse;width:100%;margin:14px 0;font-size:14.5px;display:block;overflow-x:auto}}
-  th,td{{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}}
-  th{{background:#1c232c;color:var(--dim);font-size:12.5px;text-transform:uppercase;letter-spacing:.4px}}
-  blockquote{{border-left:3px solid var(--acc);background:#1c232c;margin:16px 0;padding:10px 16px;border-radius:0 8px 8px 0;color:var(--dim)}}
-  main > p:first-of-type{{font-size:18px;color:#b8c3cf;max-width:760px}}
-  .hero-actions{{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0 6px}}
-  .hero-actions a{{display:inline-flex;align-items:center;min-height:40px;padding:8px 14px;border:1px solid var(--line);border-radius:8px;font-weight:600;text-decoration:none}}
-  .hero-actions .primary{{background:var(--acc);border-color:var(--acc);color:#07111f}}
-  .hero-actions .secondary{{background:var(--panel);color:var(--ink)}}
+  body{{margin:0;background:rgb(var(--bg));color:rgb(var(--ink));font:17px/1.6 Georgia,"Times New Roman",serif}}
+  header{{position:sticky;top:0;z-index:5;background:rgb(var(--bg) / .94);backdrop-filter:blur(4px);border-bottom:1px solid rgb(var(--line));padding:14px 22px;display:flex;gap:22px;align-items:baseline;flex-wrap:wrap}}
+  header .brand{{font-family:Didot,"Bodoni MT",Georgia,serif;font-weight:700;font-variant-caps:all-small-caps;letter-spacing:.08em;font-size:19px}}
+  header nav a{{color:rgb(var(--dim));text-decoration:none;margin-right:16px;font:500 12.5px/1 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.14em;text-transform:uppercase}}
+  header nav a.active,header nav a:hover{{color:rgb(var(--acc))}}
+  main{{max-width:880px;margin:0 auto;padding:36px 22px 90px}}
+  h1,h2,h3{{font-family:Didot,"Bodoni MT",Georgia,serif;font-weight:600;line-height:1.15;letter-spacing:-.01em}}
+  h1{{font-size:38px;margin:0 0 14px}} h2{{font-size:26px;margin-top:44px;border-bottom:1px solid rgb(var(--line));padding-bottom:8px;scroll-margin-top:80px}} h3{{font-size:20px;margin-top:28px}}
+  a{{color:inherit;text-decoration:underline;text-decoration-color:rgb(var(--acc) / .4);text-underline-offset:.2em}} a:hover{{text-decoration-color:rgb(var(--acc))}}
+  a:focus-visible{{outline:2px solid rgb(var(--acc));outline-offset:3px}}
+  code{{font-family:ui-monospace,"JetBrains Mono",Menlo,monospace;font-size:.86em;color:rgb(var(--ink))}}
+  pre{{border-top:1px solid rgb(var(--line));border-bottom:1px solid rgb(var(--line));padding:14px 2px;overflow:auto;font-size:14px;line-height:1.7}} pre code{{border:0;padding:0;background:none}}
+  table{{border-collapse:collapse;width:100%;margin:14px 0;font-size:15px;display:block;overflow-x:auto}}
+  th,td{{border-top:1px solid rgb(var(--line));padding:9px 12px 9px 0;text-align:left;vertical-align:top}}
+  tr:last-child td{{border-bottom:1px solid rgb(var(--line))}}
+  th{{color:rgb(var(--dim));font:500 12px/1.4 ui-monospace,"JetBrains Mono",Menlo,monospace;text-transform:uppercase;letter-spacing:.14em;border-top:0}}
+  blockquote{{border-left:2px solid rgb(var(--acc));margin:16px 0;padding:6px 18px;color:rgb(var(--dim))}}
+  main > p:first-of-type{{font-family:Didot,"Bodoni MT",Georgia,serif;font-style:italic;font-size:22px;color:rgb(var(--dim));margin-top:0}}
+  .hero-actions{{display:flex;flex-wrap:wrap;gap:12px;margin:22px 0 8px}}
+  .hero-actions a{{display:inline-flex;align-items:center;min-height:40px;padding:8px 16px;border:1px solid rgb(var(--acc));border-radius:0;font:500 12.5px/1 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.14em;text-transform:uppercase;text-decoration:none}}
+  .hero-actions .primary{{background:rgb(var(--acc));color:rgb(var(--bg))}}
+  .hero-actions .secondary{{color:rgb(var(--acc))}}
   .hero-actions a:hover{{filter:brightness(1.08)}}
-  .admonition{{border:1px solid var(--line);border-left:3px solid var(--acc);background:#161b22;border-radius:0 8px 8px 0;padding:12px 16px;margin:18px 0}}
-  .admonition-title{{font-weight:600;color:var(--ink);margin:0 0 6px}}
-  hr{{border:0;border-top:1px solid var(--line);margin:28px 0}}
-  footer{{max-width:880px;margin:0 auto;padding:0 22px 50px;color:var(--dim);font-size:12.5px;border-top:1px solid var(--line)}}
-  @media (max-width:560px){{.hero-actions a{{width:100%;justify-content:center}}}}
+  .admonition{{border-top:1px solid rgb(var(--line));border-bottom:1px solid rgb(var(--line));border-left:2px solid rgb(var(--acc));padding:12px 16px;margin:18px 0}}
+  .admonition-title{{font:500 12px/1.4 ui-monospace,"JetBrains Mono",Menlo,monospace;text-transform:uppercase;letter-spacing:.14em;color:rgb(var(--acc));margin:0 0 6px}}
+  hr{{border:0;border-top:1px solid rgb(var(--line));margin:28px 0}}
+  footer{{max-width:880px;margin:0 auto;padding:18px 22px 50px;color:rgb(var(--dim));font:400 12.5px/1.6 ui-monospace,"JetBrains Mono",Menlo,monospace;letter-spacing:.04em;border-top:1px solid rgb(var(--line))}}
+  @media (max-width:560px){{.hero-actions a{{width:100%;justify-content:center}} h1{{font-size:30px}}}}
 </style>
 </head>
 <body>
@@ -139,7 +147,7 @@ def build(out_dir: Path, cname: str | None) -> None:
     # Product/evaluator landing page. Its copy remains reviewable as markdown.
     out_dir.joinpath("index.html").write_text(
         PAGE_TEMPLATE.format(
-            title="UNITARES — Runtime Governance for AI Agents",
+            title="UNITARES — Accountability infrastructure for long-running AI agents",
             home_active=' class="active"',
             glossary_active="",
             audit_active="",

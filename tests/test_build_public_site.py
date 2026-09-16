@@ -16,7 +16,17 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     server_version = (PROJECT_ROOT / "PUBLISHED_VERSION").read_text(encoding="utf-8").strip()
     landing_text = " ".join(landing.split())
 
-    assert "Runtime governance for long-lived AI agents" in landing_text
+    # The landing copies the README's tagline and definition verbatim; cirwel.org
+    # pins the same strings against the README (its claims register), so one
+    # sentence stays one sentence across every surface.
+    assert "Accountability infrastructure for long-running AI agents" in landing_text
+    readme_text = " ".join((PROJECT_ROOT / "README.md").read_text(encoding="utf-8").split())
+    definition = (
+        "Its federation kernel connects independent runtimes to one operator-controlled "
+        "server over MCP or HTTP"
+    )
+    assert definition in readme_text
+    assert definition in landing_text
     assert "External adoption remains unvalidated" in landing_text
     assert "did not establish predictive lift" in landing_text
     assert "read-specific power" in landing_text
