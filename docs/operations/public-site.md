@@ -75,6 +75,24 @@ Recommended alias: **`unitares.cirwel.org`**. To switch:
 That's the whole switch — one flag + one DNS record. The site content and source
 of truth are unchanged; only the served hostname moves.
 
+## Copy discipline: one sentence, owned by the README
+
+The landing page's heading and first paragraph copy the root README's tagline
+("Accountability infrastructure for long-running AI agents") and its first three
+sentences verbatim, and `tests/test_build_public_site.py` asserts the definition
+sentence is present in both files. cirwel.org pins the same strings against the
+README through its claims register (`cirwel-site/src/data/claims.json`) and
+states the rule in its `EDITORIAL.md`; the social card's tagline constant in
+`scripts/dev/brand/render_social_preview.py` follows the README too. To change
+the sentence, change the README first, then this landing page, then the site.
+Ten different phrasings were live across these surfaces on 2026-09-16
+(`docs/plans/public-presentation-critique-2026-09-16.md`); this is what keeps it
+at one.
+
+The page is set in the CIRWEL house register (cream and oxblood, bistre and
+verdigris at night) with system serifs, so it reads as the same publication as
+cirwel.org without shipping webfonts.
+
 ## What it publishes (and what it doesn't)
 
 Deliberately scoped to the landing page, glossary, and drift audit rather than
