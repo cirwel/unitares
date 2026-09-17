@@ -384,4 +384,9 @@ architecture docs — a usability result carries no evidence about either.
 
 ## Amendment log
 
-- (none — v0 as registered)
+- **v0.1, 2026-09-02.** The lane-P read runs under the `corrected` fixture
+  rule and condition 4 is restated to match. Made before any enrollment,
+  window start or lane-P access, and recorded inline in the protocol above.
+  Decision record: governed session `e4ebf589a1c79b9d`; mechanism: PR #2062
+  and its follow-up. Rows written before this amendment are not affected
+  because no cohort window had started.

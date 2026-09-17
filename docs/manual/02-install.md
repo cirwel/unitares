@@ -63,10 +63,12 @@ Use `list_tools(category=...)` to browse and `describe_tool(tool_name=...,
 action=...)` for the full parameters of one operation. Action authorization
 and identity gates are unchanged.
 
-Earlier releases used `minimal`, `standard`, `lite`, and `full` discovery
-profiles. v2.23.0 defaulted to the fifteen-tool `standard` profile. Those
-releases still require their own configuration instructions; changing an old
-server's environment does not install the unified catalog.
+Earlier releases used `minimal`, `lite`, and `full` discovery profiles. The
+`standard` profile existed only on unreleased master between #2102 and #2137
+and never shipped in a release; v2.22.1 is the latest release and defaults to
+`minimal` as described below. Those releases still require their own
+configuration instructions; changing an old server's environment does not
+install the unified catalog.
 
 v2.22.0 defaults to the five-tool `minimal` profile and has no `standard`. Its
 published Compose file does not forward `GOVERNANCE_TOOL_MODE` either, so

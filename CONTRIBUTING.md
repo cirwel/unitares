@@ -38,20 +38,22 @@ pytest tests/test_<specific>.py                    # now resolvable
 
 `-c constraints.txt` is not optional decoration. The ranges in
 `requirements-full.txt` float, so without it pip resolves whatever is newest on
-PyPI today rather than the versions CI and production actually run — currently
-`mcp` 2.x instead of the pinned 1.29.0, which makes most of the suite fail to
-*collect*. Reach for the `mcp-newest` lane (CI runs it as an advisory job) when
-testing the unconstrained resolution is the point; otherwise always pass `-c`.
+PyPI today rather than the versions CI and production actually run. The `mcp`
+pin is the one that bites: a release other than the one `constraints.txt`
+carries can make most of the suite fail to *collect*, not merely to pass.
+Reach for the `mcp-newest` lane (CI runs it as an advisory job) when testing
+the unconstrained resolution is the point; otherwise always pass `-c`.
 
 **On an environment that already has dependencies installed**, that command is
 not enough on its own. A pip constraint binds only when pip decides to install
 a package; it does not downgrade one already present that satisfies the range.
 An existing venv — or one seeded by `pip install -e .` — therefore keeps its
-newer `mcp` and the install still reports success. Rebuild the venv, or pin
-explicitly:
+own `mcp` and the install still reports success. Rebuild the venv, or pin
+explicitly to the version `constraints.txt` carries. Its `mcp==` line is the
+source of truth; do not copy a version number from this file:
 
 ```bash
-pip install "mcp==1.29.0" -r requirements-full.txt -c constraints.txt
+pip install "$(grep -E '^mcp==' constraints.txt)" -r requirements-full.txt -c constraints.txt
 ```
 
 See the header of [`constraints.txt`](constraints.txt) for why each pin is
