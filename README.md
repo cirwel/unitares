@@ -19,9 +19,8 @@ connected. Recover work across restarts, context loss, and handoffs.
 
 An agent reports that its fix is done and the tests pass. By morning its
 session has restarted, its context is gone, and another process has taken over
-the task. Which process made that claim, what backed it, did anyone challenge
-it, and what happened? Logs show each run; they do not keep those answers
-connected across the handoff.
+the task. Who said it? What supports it? Who challenged it? What happened? Each
+run leaves its own log, and the answers scatter across them.
 
 UNITARES is self-hosted accountability infrastructure for operators running
 multiple AI agents. Its federation kernel connects independent runtimes to one
