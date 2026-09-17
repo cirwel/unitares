@@ -71,6 +71,42 @@ add it to the roster and restart the governance server *before* it first
 onboards. `scripts/ops/provision_doctor_identity.py` is the worked example: it
 refuses to write its anchor when the read-back shows the tags were not granted.
 
+### Anchoring a resident that was minted without the SDK
+
+The SDK writes `~/.unitares/anchors/<name>.json` at first onboard and resumes
+from it in every later process with
+`identity(agent_uuid=..., continuity_token=..., resume=true)` (PATH 0: the
+token's signature and `aid` claim are the ownership proof; its `exp` is
+deliberately ignored, see `extract_token_agent_uuid`). A rostered identity minted
+any other way — a `start_session` call from an orchestrator, a session whose
+name was added to the roster afterwards — has no such file. Its identity is
+carried only by a process-local session binding, which works until the first
+process boundary after `UNITARES_IDENTITY_STRICT=strict` /
+`STRICT_IDENTITY_REQUIRED=true` lands: the binding-only resume is refused with
+`lineage_declaration_required`, and the two alternatives the refusal names
+(`force_new=true`, `parent_agent_id=...`) mint a successor rather than resume
+the identity. Any baseline keyed on the original UUID is lost either way.
+
+`scripts/ops/provision_resident_anchor.py` is the operator-side repair. Run it
+where the governance server's environment is available, so the signing secret
+(`UNITARES_CONTINUITY_TOKEN_SECRET`, else `UNITARES_HTTP_API_TOKEN`, else
+`UNITARES_API_TOKEN`) matches the server's:
+
+```bash
+python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name>          # dry run
+python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --apply
+```
+
+It reads the identity back (must be `active` and carry `persistent` +
+`autonomous`), mints a token bound to the UUID, proves that token resumes the
+same UUID on the live server, and only then writes the anchor (`0600`). It never
+mints an identity, never writes tags, and refuses to replace an existing anchor
+without `--force`. The anchor is a credential: it stays outside git and outside
+any session record. A resident resuming from it should present the fresh token
+the resume returns on its first check-in if that check-in is refused with a
+resume miss (the SDK's own one-retry rebind), and write that fresh token back to
+the anchor at session end.
+
 ## Two neighbouring env vars that are NOT this one
 
 - **`UNITARES_RESIDENT_AGENTS`** — a route-local override for `/v1/residents`

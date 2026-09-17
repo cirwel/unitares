@@ -4,7 +4,7 @@ description: >
   Use when setting up or operating the UNITARES Discord bridge — a standalone bot that
   surfaces governance events, agent presence, Lumen's state, and explicit operator
   actions as a living Discord server.
-last_verified: "2026-08-17"
+last_verified: "2026-09-17"
 freshness_days: 14
 source_files:
   - unitares-discord-bridge/src/bridge/bot.py
@@ -14,6 +14,14 @@ source_files:
   - unitares-discord-bridge/src/bridge/hud.py
   - unitares-discord-bridge/src/bridge/lumen.py
   - unitares-discord-bridge/src/bridge/iterations.py
+source_digests:
+  unitares-discord-bridge/src/bridge/bot.py: "4bbc77ac0ab62bdf"
+  unitares-discord-bridge/src/bridge/acks.py: "0f718b44ed130959"
+  unitares-discord-bridge/src/bridge/config.py: "ebe2d773bef04501"
+  unitares-discord-bridge/src/bridge/server_setup.py: "8ef33d50b336d341"
+  unitares-discord-bridge/src/bridge/hud.py: "a4b1d3e3d2b77dbb"
+  unitares-discord-bridge/src/bridge/lumen.py: "fe5bafcf89c7ecc1"
+  unitares-discord-bridge/src/bridge/iterations.py: "776cef186a6990b4"
 ---
 
 # Discord Bridge
