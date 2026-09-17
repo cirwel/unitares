@@ -78,8 +78,10 @@ of truth are unchanged; only the served hostname moves.
 ## Copy discipline: one sentence, owned by the README
 
 The landing page's heading and first paragraph copy the root README's tagline
-("Accountability infrastructure for long-running AI agents") and its first three
-sentences verbatim, and `tests/test_build_public_site.py` asserts the definition
+("Accountability infrastructure for long-running AI agents") and the three
+sentences of its definition paragraph (the one beginning "UNITARES is
+self-hosted accountability infrastructure") verbatim. The README's opening
+problem paragraph above it is README-only and is not copied. The build test `tests/test_build_public_site.py` asserts the definition
 sentence is present in both files. cirwel.org pins the same strings against the
 README through its claims register (`cirwel-site/src/data/claims.json`) and
 states the rule in its `EDITORIAL.md`; the social card's tagline constant in
