@@ -3,23 +3,33 @@
 The script exists because a rostered identity minted through ``start_session``
 (not the SDK) has no anchor, and under strict identity the first process
 boundary strands it: binding-only resume is refused, and ``force_new`` /
-``parent_agent_id`` mint a successor instead of resuming. The revenue-engine
-run-up worker lost its fifth session to exactly that on 2026-09-03.
+``parent_agent_id`` mint a successor instead of resuming.
 
-What these pin:
+Most of what follows pins defects found in adversarial review on 2026-09-17,
+after the first version shipped. The sharpest one, and the reason this file
+looks the way it does:
 
-1. Nothing is written on a dry run, on any refusal, or when the live resume
-   does not come back with the same UUID.
-2. The minted token's ``aid`` claim is the resident's UUID and is signed with
-   the same secret the server reads, so PATH 0 accepts it.
-3. The script never mints an identity and never writes tags: its only calls
-   are an ``agent get`` read-back and one ``identity`` resume.
+    ``UNITARES_IDENTITY_STRICT`` defaults to ``log``. In that mode a PATH 0
+    resume whose token FAILS its ownership check logs, broadcasts
+    ``identity_hijack_suspected``, and resumes anyway. The uuid in the
+    response still matches. Reproduced live against v2.22.1 with an expired
+    token: ``success: true``, ``resumed: true``, matching uuid, alongside
+    ``proof_origin: "server_inferred"``, ``caller_proven: false`` and an
+    ``identity_warnings`` entry ``continuity_token_invalid``.
+
+    So the first version's verify -- which compared only the uuid -- returned
+    a green result for a token the server had explicitly rejected, and wrote
+    an anchor whose failure surfaced only at the resident's next session.
+    ``test_verify_refuses_*`` are that repro.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -27,9 +37,8 @@ import pytest
 from src.mcp_handlers.identity.session import extract_token_agent_uuid
 from src.mcp_handlers.identity.shared import make_client_session_id
 
-MODULE_PATH = (
-    Path(__file__).resolve().parents[1] / "scripts" / "ops" / "provision_resident_anchor.py"
-)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+MODULE_PATH = REPO_ROOT / "scripts" / "ops" / "provision_resident_anchor.py"
 _spec = importlib.util.spec_from_file_location("provision_resident_anchor", MODULE_PATH)
 pra = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
@@ -38,21 +47,42 @@ _spec.loader.exec_module(pra)
 
 UUID = "b1b28308-dca3-46df-8e8b-5a23a524fe39"
 OTHER_UUID = "34b595dc-9628-41ff-b960-54857f99ba72"
-NAME = "worker-a"
+NAME = "Worker-A"          # deliberately mixed case: the filename must lowercase
+LOWER = "worker-a"
 SECRET = "test-continuity-secret"
 
 
-def _agent_get(status: str = "active", tags: list[str] | None = None, nested: bool = False) -> dict:
-    row = {"status": status, "tags": ["persistent", "autonomous"] if tags is None else tags}
+def _agent_get(status: str = "active", tags: list[str] | None = None,
+               label: str | None = LOWER, nested: bool = False) -> dict:
+    row = {"status": status,
+           "tags": ["persistent", "autonomous"] if tags is None else tags,
+           "label": label}
     return {"name": "agent", "success": True,
             "result": {"agent": row} if nested else row}
 
 
-def _identity_ok(uuid: str = UUID, fresh_token: str | None = "v1.fresh.sig") -> dict:
-    body = {"success": True, "tool": "identity", "agent_uuid": uuid, "resumed": True,
-            "raw_governance": {"uuid": uuid}}
+def _identity_ok(uuid: str = UUID, fresh_token: str | None = "v1.fresh.sig",
+                 proof_origin: str = "caller_asserted",
+                 source: str = "continuity_token",
+                 warnings: list | None = None) -> dict:
+    """A real-shaped PATH 0 response.
+
+    Field names and nesting come from a live v2.22.1 identity() response: the
+    uuid arrives as ``uuid`` (not ``agent_uuid``), and the assurance block
+    appears both at top level and under ``identity_context``.
+    """
+    assurance = {"tier": "strong", "score": 1.0, "session_source": source,
+                 "caller_proven": proof_origin == "caller_asserted",
+                 "proof_origin": proof_origin}
+    body = {"success": True, "uuid": uuid, "resumed": True, "resumed_by_uuid": True,
+            "client_session_id": make_client_session_id(uuid),
+            "session_resolution_source": source,
+            "identity_assurance": assurance,
+            "identity_context": {"identity_assurance": assurance}}
     if fresh_token:
         body["continuity_token"] = fresh_token
+    if warnings:
+        body["identity_warnings"] = warnings
     return {"name": "identity", "success": True, "result": body}
 
 
@@ -63,11 +93,11 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", SECRET)
     monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
     monkeypatch.delenv("UNITARES_API_TOKEN", raising=False)
-    return anchors / f"{NAME}.json"
+    monkeypatch.delenv("UNITARES_UDS_SOCKET", raising=False)
+    return anchors / f"{LOWER}.json"
 
 
 def _wire(monkeypatch, responses):
-    """Route _call by tool name; a callable response is invoked with the arguments."""
     seen = []
 
     def fake_call(name, arguments, token):
@@ -79,6 +109,186 @@ def _wire(monkeypatch, responses):
     return seen
 
 
+# --------------------------------------------------------------------------
+# The verify gate: a matching uuid is not proof.
+# --------------------------------------------------------------------------
+
+def test_verify_refuses_when_server_rejected_the_token(env, monkeypatch, capsys):
+    """The live repro: success, resumed, uuid matches, token was NOT the proof."""
+    _wire(monkeypatch, {
+        "agent": _agent_get(),
+        "identity": _identity_ok(
+            proof_origin="server_inferred",
+            source="agent_uuid_direct_fastpath",
+            warnings=[{"code": "continuity_token_invalid",
+                       "resolved_via": "agent_uuid_direct_fastpath",
+                       "message": "failed verification"}]),
+    })
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
+    assert not env.exists()
+    err = capsys.readouterr().err
+    assert "REJECTED the token" in err
+    assert "signing secret" in err
+
+
+def test_verify_refuses_when_resolved_by_another_route(env, monkeypatch, capsys):
+    """No explicit warning, but the assurance block says it was not the token."""
+    _wire(monkeypatch, {
+        "agent": _agent_get(),
+        "identity": _identity_ok(proof_origin="server_inferred",
+                                 source="agent_uuid_direct_fastpath"),
+    })
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
+    assert not env.exists()
+    assert "not by the token" in capsys.readouterr().err
+
+
+def test_verify_accepts_only_a_token_proven_resume(env, monkeypatch):
+    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    call = [a for n, a in seen if n == "identity"][0]
+    assert call["agent_uuid"] == UUID and call["resume"] is True
+    assert extract_token_agent_uuid(call["continuity_token"]) == UUID
+    data = json.loads(env.read_text())
+    assert data["agent_uuid"] == UUID
+    assert data["client_session_id"] == make_client_session_id(UUID)
+    assert data["continuity_token"] == "v1.fresh.sig"
+
+
+def test_uuid_mismatch_still_refused(env, monkeypatch):
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok(uuid=OTHER_UUID)})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
+    assert not env.exists()
+
+
+def test_reads_uuid_from_the_real_field_name(env, monkeypatch):
+    """A live PATH 0 response carries `uuid`, not `agent_uuid`."""
+    resp = _identity_ok()
+    assert "agent_uuid" not in resp["result"], "fixture must match the real shape"
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": resp})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+
+
+# --------------------------------------------------------------------------
+# Identity replacement must never be silent.
+# --------------------------------------------------------------------------
+
+def test_same_uuid_anchor_is_a_noop_exit_zero(env, monkeypatch):
+    env.parent.mkdir(parents=True)
+    env.write_text(json.dumps({"agent_uuid": UUID}))
+    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    assert seen == [], "a re-run on the same identity must not touch the server"
+
+
+def test_refuses_to_repoint_at_a_different_uuid(env, monkeypatch, capsys):
+    env.parent.mkdir(parents=True)
+    env.write_text(json.dumps({"agent_uuid": OTHER_UUID}))
+    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
+    assert json.loads(env.read_text())["agent_uuid"] == OTHER_UUID
+    assert seen == []
+    assert "--replace-identity" in capsys.readouterr().err
+
+
+def test_replace_identity_names_the_displaced_uuid(env, monkeypatch, capsys):
+    env.parent.mkdir(parents=True)
+    env.write_text(json.dumps({"agent_uuid": OTHER_UUID}))
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME,
+                     "--apply", "--replace-identity"]) == 0
+    assert json.loads(env.read_text())["agent_uuid"] == UUID
+    assert OTHER_UUID in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# The filename is a lookup key.
+# --------------------------------------------------------------------------
+
+def test_refuses_when_the_server_label_does_not_match_the_filename(env, monkeypatch, capsys):
+    _wire(monkeypatch, {"agent": _agent_get(label="something-else"),
+                        "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
+    assert not env.exists()
+    assert "resolve_resident_uuid" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("bad", ["../escape", "a/b", "", ".hidden", "UPPER/../x"])
+def test_rejects_names_that_could_escape_the_anchor_dir(env, monkeypatch, bad):
+    seen = _wire(monkeypatch, {"agent": _agent_get()})
+    assert pra.main(["--agent-uuid", UUID, "--name", bad, "--apply"]) == 2
+    assert seen == []
+    assert not list(env.parent.glob("**/*.json")) if env.parent.exists() else True
+
+
+def test_filename_is_lowercased_from_a_mixed_case_name(env, monkeypatch):
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    assert env.name == f"{LOWER}.json" and env.exists()
+
+
+# --------------------------------------------------------------------------
+# The anchor is a credential: how it reaches disk matters.
+# --------------------------------------------------------------------------
+
+def test_anchor_is_never_world_readable_and_dir_is_private(env, monkeypatch):
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    assert stat.S_IMODE(env.parent.stat().st_mode) == 0o700
+    assert not list(env.parent.glob("*.tmp")), "temp file must not survive"
+
+
+def test_existing_directory_mode_is_left_alone(env, monkeypatch):
+    """A deliberate 0o750 (group-readable for a service account) must survive."""
+    env.parent.mkdir(parents=True)
+    os.chmod(env.parent, 0o750)
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    assert stat.S_IMODE(env.parent.stat().st_mode) == 0o750
+
+
+def test_concurrent_temp_names_do_not_collide(env, monkeypatch, tmp_path):
+    """A fixed '<stem>.tmp' made two simultaneous runs destroy each other."""
+    env.parent.mkdir(parents=True)
+    (env.parent / f"{LOWER}.tmp").write_text("squatter")
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    assert json.loads(env.read_text())["agent_uuid"] == UUID
+    assert (env.parent / f"{LOWER}.tmp").read_text() == "squatter"
+
+
+def test_written_anchor_round_trips_through_the_sdk_reader(env, monkeypatch):
+    """The only assertion that catches key-name drift against the real consumer."""
+    sdk_src = REPO_ROOT / "agents" / "sdk" / "src"
+    if str(sdk_src) not in sys.path:
+        sys.path.insert(0, str(sdk_src))
+    from unitares_sdk.utils import load_json_state
+
+    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+
+    saved = load_json_state(env)
+    # These three names are what UnitaresAgent._load_session reads.
+    assert saved["agent_uuid"] == UUID
+    assert saved["client_session_id"] == make_client_session_id(UUID)
+    assert saved["continuity_token"] == "v1.fresh.sig"
+
+
+def test_uds_persistent_resident_gets_a_token_free_anchor(env, monkeypatch):
+    """The SDK deliberately writes uuid-only there; a token would be a leak."""
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", "/tmp/unitares.sock")
+    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    data = json.loads(env.read_text())
+    assert data == {"agent_uuid": UUID}
+    assert "identity" not in {n for n, _ in seen}
+
+
+# --------------------------------------------------------------------------
+# Refusals that predate the review, still pinned.
+# --------------------------------------------------------------------------
+
 def test_dry_run_reads_but_writes_nothing(env, monkeypatch, capsys):
     seen = _wire(monkeypatch, {"agent": _agent_get()})
     assert pra.main(["--agent-uuid", UUID, "--name", NAME]) == 0
@@ -87,25 +297,10 @@ def test_dry_run_reads_but_writes_nothing(env, monkeypatch, capsys):
     assert "Dry run" in capsys.readouterr().out
 
 
-def test_apply_mints_token_bound_to_uuid_and_writes_anchor(env, monkeypatch):
-    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
-    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
-
-    identity_calls = [args for name, args in seen if name == "identity"]
-    assert len(identity_calls) == 1
-    call = identity_calls[0]
-    assert call["agent_uuid"] == UUID
-    assert call["resume"] is True
-    # The proof PATH 0 checks: signature under the server's secret, aid == uuid.
-    assert extract_token_agent_uuid(call["continuity_token"]) == UUID
-
-    data = json.loads(env.read_text())
-    assert data["agent_uuid"] == UUID
-    assert data["client_session_id"] == make_client_session_id(UUID)
-    assert data["display_name"] == NAME
-    # The server-reissued token is what the SDK would have stored.
-    assert data["continuity_token"] == "v1.fresh.sig"
-    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+def test_dry_run_flag_is_accepted_and_contradiction_refused(env, monkeypatch):
+    _wire(monkeypatch, {"agent": _agent_get()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--dry-run"]) == 0
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--dry-run", "--apply"]) == 2
 
 
 def test_only_reads_agent_and_resumes_never_mints_or_tags(env, monkeypatch):
@@ -114,46 +309,23 @@ def test_only_reads_agent_and_resumes_never_mints_or_tags(env, monkeypatch):
     assert sorted({n for n, _ in seen}) == ["agent", "identity"]
     for name, args in seen:
         if name == "agent":
-            assert args["action"] == "get"
-            assert "tags" not in args
-        assert name != "start_session"
-        assert not args.get("force_new")
+            assert args["action"] == "get" and "tags" not in args
+        assert name != "start_session" and not args.get("force_new")
 
 
-def test_keeps_minted_token_when_server_reissues_none(env, monkeypatch):
-    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok(fresh_token=None)})
-    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
-    stored = json.loads(env.read_text())["continuity_token"]
-    assert extract_token_agent_uuid(stored) == UUID
-
-
-def test_no_verify_skips_resume_and_stores_minted_token(env, monkeypatch):
-    seen = _wire(monkeypatch, {"agent": _agent_get()})
+def test_no_verify_writes_an_unproven_anchor_without_touching_the_server(env, monkeypatch, capsys):
+    seen = _wire(monkeypatch, {})
     assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply", "--no-verify"]) == 0
-    assert [n for n, _ in seen] == ["agent"]
-    stored = json.loads(env.read_text())["continuity_token"]
-    assert extract_token_agent_uuid(stored) == UUID
-
-
-def test_refuses_existing_anchor_without_force(env, monkeypatch, capsys):
-    env.parent.mkdir(parents=True)
-    env.write_text(json.dumps({"agent_uuid": OTHER_UUID}))
-    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
-    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
-    assert json.loads(env.read_text())["agent_uuid"] == OTHER_UUID
-    assert seen == []
-    assert "--force" in capsys.readouterr().err
-
-    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply", "--force"]) == 0
-    assert json.loads(env.read_text())["agent_uuid"] == UUID
+    assert seen == [], "--no-verify is for an unreachable server; it must make no calls"
+    assert extract_token_agent_uuid(json.loads(env.read_text())["continuity_token"]) == UUID
+    assert "UNPROVEN" in capsys.readouterr().out
 
 
 def test_refuses_without_signing_secret(env, monkeypatch, capsys):
     monkeypatch.delenv("UNITARES_CONTINUITY_TOKEN_SECRET")
     seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
     assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
-    assert not env.exists()
-    assert seen == []
+    assert not env.exists() and seen == []
     assert "UNITARES_CONTINUITY_TOKEN_SECRET" in capsys.readouterr().err
 
 
@@ -164,33 +336,44 @@ def test_refuses_archived_identity(env, monkeypatch):
 
 
 def test_refuses_when_roster_tags_were_not_granted(env, monkeypatch, capsys):
-    """An identity without persistent+autonomous is archived by the orphan sweep."""
-    seen = _wire(monkeypatch, {"agent": _agent_get(tags=["ephemeral"]), "identity": _identity_ok()})
+    seen = _wire(monkeypatch, {"agent": _agent_get(tags=["ephemeral"]),
+                               "identity": _identity_ok()})
     assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
     assert not env.exists()
     assert "identity" not in {n for n, _ in seen}
     assert "UNITARES_RESIDENTS" in capsys.readouterr().err
 
 
-def test_refuses_when_resume_returns_a_different_uuid(env, monkeypatch, capsys):
-    _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok(uuid=OTHER_UUID)})
+def test_agent_read_error_is_reported_not_swallowed_as_inactive(env, monkeypatch, capsys):
+    _wire(monkeypatch, {"agent": {"result": {"success": False, "error": "Agent not found"}}})
     assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
-    assert not env.exists()
-    assert OTHER_UUID in capsys.readouterr().err
-
-
-def test_refuses_when_resume_is_refused(env, monkeypatch, capsys):
-    refusal = {"name": "identity", "success": True,
-               "result": {"success": False, "error": "Bare agent_uuid resume is not permitted.",
-                          "recovery": {"reason": "bare_uuid_resume_denied"}}}
-    _wire(monkeypatch, {"agent": _agent_get(), "identity": refusal})
-    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 1
-    assert not env.exists()
-    assert "bare_uuid_resume_denied" in capsys.readouterr().err
+    assert "Agent not found" in capsys.readouterr().err
 
 
 def test_rejects_malformed_uuid(env, monkeypatch):
     seen = _wire(monkeypatch, {"agent": _agent_get()})
     assert pra.main(["--agent-uuid", "not-a-uuid", "--name", NAME, "--apply"]) == 2
-    assert seen == []
-    assert not env.exists()
+    assert seen == [] and not env.exists()
+
+
+def test_dry_run_does_not_need_the_server_modules(tmp_path):
+    """The first version imported server code before the dry-run return, so a
+    dry run on a plain interpreter died with ModuleNotFoundError: mcp AFTER
+    it had already hit the network."""
+    probe = (
+        "import importlib.util, os, sys\n"
+        f"spec = importlib.util.spec_from_file_location('pra', {str(MODULE_PATH)!r})\n"
+        "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        "m._call = lambda n, a, t: {'result': {'status': 'active', "
+        "'tags': ['persistent','autonomous'], 'label': 'probe'}}\n"
+        f"m.ANCHOR_DIR = __import__('pathlib').Path({str(tmp_path)!r})\n"
+        "sys.exit(m.main(['--agent-uuid','b1b28308-dca3-46df-8e8b-5a23a524fe39',"
+        "'--name','probe']))\n"
+    )
+    env = {**os.environ, "UNITARES_CONTINUITY_TOKEN_SECRET": "x",
+           "PYTHONPATH": ""}
+    env.pop("UNITARES_UDS_SOCKET", None)
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True,
+                          text=True, env=env, cwd=str(REPO_ROOT))
+    assert proc.returncode == 0, f"dry run failed: {proc.stderr[-800:]}"
+    assert "ModuleNotFoundError" not in proc.stderr
