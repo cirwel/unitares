@@ -358,3 +358,19 @@ def test_missing_extra_surface_is_skipped_not_an_error(
     )
 
     assert doc_health.check_contested_claims([]) == []
+
+
+def test_shipped_extra_surfaces_still_cover_the_known_drifters(doc_health):
+    """Assert the real tuple, not a monkeypatched stand-in.
+
+    The tests above patch _CONTESTED_EXTRA_SURFACES to exercise the code path.
+    That means a refactor could quietly drop a path from the shipped tuple and
+    every one of them would still pass -- reintroducing the CITATION.cff blind
+    spot this list exists to close.
+    """
+    assert set(doc_health._CONTESTED_EXTRA_SURFACES) >= {
+        "CITATION.cff",
+        "pyproject.toml",
+        "src/tool_modes.py",
+        "scripts/dev/brand/render_social_preview.py",
+    }

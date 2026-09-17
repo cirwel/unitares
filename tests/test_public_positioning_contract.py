@@ -103,8 +103,8 @@ def test_every_positioning_surface_shares_one_tagline() -> None:
 def test_non_markdown_reader_surfaces_are_pinned() -> None:
     """CITATION.cff drifted because nothing but .md was ever checked."""
     checks = check_doc_drift.PUBLIC_POSITIONING_CHECKS
-    assert check_doc_drift.CANONICAL_TAGLINE in checks["CITATION.cff"]
-    assert check_doc_drift.CANONICAL_TAGLINE in checks["README.md"]
+    for surface in ("README.md", "CITATION.cff", "docs/public-site/index.md"):
+        assert check_doc_drift.CANONICAL_TAGLINE in checks[surface], surface
 
 
 def test_citation_software_title_carries_the_tagline() -> None:
@@ -113,3 +113,20 @@ def test_citation_software_title_carries_the_tagline() -> None:
         line for line in citation.splitlines() if line.startswith("title:")
     )
     assert check_doc_drift.CANONICAL_TAGLINE[1][0].casefold() in title_line.casefold()
+
+
+def test_the_repo_description_guard_is_actually_wired() -> None:
+    """A guard nothing invokes is not coverage, whatever the registry says.
+
+    check_repo_description.py shipped wired to nothing while
+    CANONICAL_SOURCES.md claimed the surface was covered -- the same
+    "reports green, guards nothing" failure the positioning checks exist to
+    prevent.
+    """
+    workflows = (PROJECT_ROOT / ".github" / "workflows").glob("*.yml")
+    invoked = [
+        wf.name
+        for wf in workflows
+        if "check_repo_description.py" in wf.read_text(encoding="utf-8")
+    ]
+    assert invoked, "no workflow runs scripts/diagnostics/check_repo_description.py"
