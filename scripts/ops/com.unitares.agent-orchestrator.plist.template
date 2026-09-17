@@ -9,9 +9,14 @@
   bearer-auth fail-closed (HTTPAuth → 503 if AGENT_ORCHESTRATOR_BEARER_TOKEN is
   unset). No cloud host needed — see elixir/agent_orchestrator/scripts/start.sh.
 
-  Do NOT load this until a real consumer dispatches through it (the orchestrated
-  dialectic-reviewer wiring) — an idle supervisor with no caller is its own
-  inventory (2026-06-24 Wave-3 gate framing-note caveat).
+  Load this only with a consumer behind it. The first consumer, the orchestrated
+  dialectic reviewer (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW on the governance
+  MCP), was named on 2026-06-23 (Wave-3 gate, Decision A) and has dispatched
+  governed review sessions through this job since (for one recorded example see
+  docs/operations/public-presentation-audit-2026-09-10.md). Loading is the
+  standing posture on a host that runs that reviewer. An idle supervisor with no
+  caller is its own inventory (2026-06-24 Wave-3 gate framing-note caveat), so
+  unload it wherever the reviewer is off.
 
   Install (render __VARS__ then load):
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \

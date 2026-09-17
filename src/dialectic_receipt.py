@@ -30,8 +30,10 @@ Does not prove: that either party *intended* the resolution, or that the
 parties' symmetric signatures are valid — a peer cannot check those and the
 receipt does not claim to. ``both_signatures_present`` reports only that two
 non-empty signature strings were stored; note that an LLM-assisted session
-signs ``signature_a`` with a fallback key derived from the agent uuid when no
-api_key is on file, and leaves ``signature_b`` empty. Party-level
+signs ``signature_a`` with the agent's ``api_key`` when one is on file and
+stores an empty string when none is (#2155 removed the uuid-derived fallback
+key, which was forgeable from public data), and leaves ``signature_b`` empty
+either way, so a keyless session's record reports as ``unsigned``. Party-level
 non-repudiation would need party-held asymmetric keys, a separate decision
 (shelved 2026-04-19).
 
