@@ -6,3 +6,7 @@
 /.github/ @cirwel
 /db/postgres/migrations/ @cirwel
 /SECURITY.md @cirwel
+
+# EISV instrument-preservation pin: a changed golden file is an instrument change.
+/tests/fixtures/eisv_preservation/ @cirwel
+/tests/eisv_preservation_driver.py @cirwel

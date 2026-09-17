@@ -13,10 +13,10 @@ This is operational, not aspirational: every step below maps to code already mer
 | #1132 | Hijack-check helper extracted from PATH 1 | ✅ merged |
 | #1129 | Shadow dual-write (writes the mirror when the flag is on) | ✅ merged |
 | #1130 | Birth-cohort parity checker (`scripts/ops/session_mirror_parity_check.py`) | ✅ merged |
-| **#1135** | **TTL/NX parity fix + reaper** (Codex review #1, #4) | **OPEN — merge BEFORE the soak** |
-| #1137 | Parity flip-gate (`--gate`) + api_key_hash note (Codex review #2, #3) | OPEN — needed before the flip decision |
+| #1135 | TTL/NX parity fix + reaper (Codex review #1, #4) | ✅ merged |
+| #1137 | Parity flip-gate (`--gate`) + api_key_hash note (Codex review #2, #3) | ✅ merged |
 
-**Merge order now:** the original stack is merged. **#1135 MUST merge before you enable the shadow flag** — it fixes the TTL/NX guard bug (an expired row wrongly blocking a fresh claim), and that bug would skew the soak's parity numbers (spurious `missing_in_pg`). #1137 is needed before the flip decision, not before the soak.
+**Merge order now:** the whole stack is merged. The TTL/NX guard fix is on `SessionMixin`'s NX-claim path (`src/db/mixins/session.py`, the `Codex review #1: TTL/NX parity` note), the reaper is in `core.cleanup_expired_sessions()` inside `db/postgres/migrations/051_session_mirror_tables.sql`, and the flip-gate flags (`--gate`, `--min-cohort`, `--min-ratio`) are in `scripts/ops/session_mirror_parity_check.py`. Nothing below waits on a merge; applying migration 051 to the live database is still the manual Step 1.
 
 ## Step 1 — apply migration 051 (manual)
 

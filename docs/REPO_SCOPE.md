@@ -42,9 +42,10 @@ contracts.
   (the commit-level analogue of `Co-Authored-By`, which this repo also omits).
   The guard checks three places, in three separate steps: changed files, the PR
   body, and **the PR's commit messages** — a trailer stripped from one still
-  fails on another. Fixing the PR body needs a fresh `pull_request` event
-  (close/reopen or push); a rerun replays the body GitHub snapshotted at trigger
-  time. `<!-- scope-guard: allow-register -->` exempts the register check only —
+  fails on another. Fixing the PR body and re-running is enough: the
+  normalize step reads the description live from the API (`pulls.get`), not
+  from the frozen `pull_request` payload, so a re-run lints what is published
+  now. `<!-- scope-guard: allow-register -->` exempts the register check only —
   this check and the operator-local-path check always run, on every PR.
 
 ## Metered model-cloud dependencies

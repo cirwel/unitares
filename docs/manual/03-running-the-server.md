@@ -76,7 +76,7 @@ python src/mcp_server.py --port 8767
 
 ### Public host / remote connector (Claude.ai, Perplexity, …)
 
-1. **Host/Origin allowlist (DNS-rebinding protection, on by default).** A request with an un-allowlisted `Host` is rejected with **HTTP 403** *before* auth — which surfaces in clients as a generic auth/"API key" error. List both the bare host and the `:*` form:
+1. **Host/Origin allowlist (DNS-rebinding protection, on by default).** A request with an un-allowlisted `Host` is rejected with **HTTP 421**, and only *after* auth: `make_streamable_mcp_asgi` in `src/services/mcp_transport_service.py` runs `authorize_mcp_request` before handing the request to the SDK session manager that validates the `Host`, so an uncredentialed client stops at 401 and learns nothing about the allowlist. (403 is an Origin rejection, not a Host one.) List both the bare host and the `:*` form:
 
    ```bash
    export UNITARES_BIND_ALL_INTERFACES=1
@@ -131,7 +131,7 @@ launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 launchctl list | grep unitares
 ```
 
-Defaults bind loopback-only and use the trust-auth Postgres connection. Other tunables are inline at the top of the rendered plist.
+The template sets `UNITARES_BIND_ALL_INTERFACES=1` and passes no `--host`, so the rendered plist binds `0.0.0.0`, not loopback — remove that key, or set `UNITARES_MCP_HOST=127.0.0.1`, for a loopback-only install (`default_listen_host` in `src/mcp_listen_config.py`). Its `DB_POSTGRES_URL` names the `postgres` role and password rather than the user/password-free trust-auth DSN. Other tunables are inline at the top of the rendered plist.
 
 ---
 
