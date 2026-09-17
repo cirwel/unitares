@@ -266,3 +266,111 @@ def test_allows_the_corrected_boundary_contract_prose(
         "which the handler never read.\n",
     )
     assert warnings == []
+
+
+def test_flags_retired_public_tagline(tmp_path, monkeypatch, doc_health):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "UNITARES is runtime governance for heterogeneous AI-agent fleets.",
+    )
+    assert any("retired public tagline" in warning for warning in warnings)
+
+
+def test_flags_retired_long_lived_taglines(tmp_path, monkeypatch, doc_health):
+    for retired in (
+        "Infrastructure for long-lived AI agents",
+        "Runtime governance for long-lived AI agents",
+        "It provides runtime state telemetry for long-lived AI agents.",
+    ):
+        warnings = _warnings(
+            tmp_path / retired[:12].replace(" ", "_"),
+            monkeypatch,
+            doc_health,
+            retired,
+        )
+        assert any(
+            "retired public tagline" in warning for warning in warnings
+        ), retired
+
+
+def test_flags_hyphenated_fleet_variants(tmp_path, monkeypatch, doc_health):
+    """The retired framings also shipped as "AI-agent fleets".
+
+    docs/REVIEWER_GUIDE.md carried this variant while the un-hyphenated
+    pattern reported the repository clean.
+    """
+    for retired in (
+        "UNITARES is runtime state telemetry for long-lived AI-agent fleets.",
+        "Runtime governance for heterogeneous AI-agent fleets",
+        "Infrastructure for long-lived AI-agent fleets",
+    ):
+        warnings = _warnings(
+            tmp_path / str(abs(hash(retired))),
+            monkeypatch,
+            doc_health,
+            retired,
+        )
+        assert any(
+            "retired public tagline" in warning for warning in warnings
+        ), retired
+
+
+def test_allows_the_canonical_sentence_and_the_paper_title(
+    tmp_path, monkeypatch, doc_health
+):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "Accountability infrastructure for long-running AI agents. The paper is "
+        "titled Information-Theoretic Governance of Heterogeneous Agent Fleets, "
+        "and long-lived AI agents are the population it studies.",
+    )
+    assert warnings == []
+
+
+def test_non_markdown_surfaces_are_scanned(tmp_path, monkeypatch, doc_health):
+    """CITATION.cff is not .md, so collect_md_files() never reaches it.
+
+    The retired software title survived several positioning passes for exactly
+    this reason: every check walked markdown only.
+    """
+    citation = tmp_path / "CITATION.cff"
+    citation.write_text(
+        'title: "UNITARES: runtime governance for heterogeneous AI-agent fleets"\n'
+    )
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(doc_health, "_CONTESTED_EXTRA_SURFACES", ("CITATION.cff",))
+
+    warnings = doc_health.check_contested_claims([])
+
+    assert any("CITATION.cff:1" in warning for warning in warnings)
+
+
+def test_missing_extra_surface_is_skipped_not_an_error(
+    tmp_path, monkeypatch, doc_health
+):
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        doc_health, "_CONTESTED_EXTRA_SURFACES", ("does/not/exist.toml",)
+    )
+
+    assert doc_health.check_contested_claims([]) == []
+
+
+def test_shipped_extra_surfaces_still_cover_the_known_drifters(doc_health):
+    """Assert the real tuple, not a monkeypatched stand-in.
+
+    The tests above patch _CONTESTED_EXTRA_SURFACES to exercise the code path.
+    That means a refactor could quietly drop a path from the shipped tuple and
+    every one of them would still pass -- reintroducing the CITATION.cff blind
+    spot this list exists to close.
+    """
+    assert set(doc_health._CONTESTED_EXTRA_SURFACES) >= {
+        "CITATION.cff",
+        "pyproject.toml",
+        "src/tool_modes.py",
+        "scripts/dev/brand/render_social_preview.py",
+    }
