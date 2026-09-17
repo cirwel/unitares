@@ -124,6 +124,26 @@ drill per deployment: fresh volumes, load the SQL dump, drop the RDB into
 the Redis volume, `docker compose up`, confirm `onboard()` sees the expected
 identity history.
 
+### Redis 7 to 8 rollout
+
+Redis Open Source supports upgrading a standalone Redis 7.x instance to Redis
+8. This stack persists session and identity state in the `redis-data` volume,
+so upgrade that service during a maintenance window rather than treating it as
+a disposable cache:
+
+1. Run the Redis backup and restore drill above while the service is still on
+   Redis 7.
+2. Pull the new image and recreate only Redis: `docker compose pull redis &&
+   docker compose up -d redis`.
+3. Wait for `docker compose exec -T redis redis-cli PING` to return `PONG`,
+   then verify that an existing MCP client can resolve its session identity.
+4. Keep the copied RDB/AOF artifacts until the deployment has completed a
+   normal session-TTL cycle without Redis errors.
+
+The Compose definition tracks `redis:8-alpine` for patch updates within Redis
+8. Rollback is an operator decision: stop Redis and restore the pre-upgrade
+snapshot into the named volume before starting a Redis 7 image again.
+
 ## Migration and cutover
 
 The invariant: **exactly one instance is canonical at a time, and the tunnel
