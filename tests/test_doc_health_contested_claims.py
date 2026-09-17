@@ -295,6 +295,28 @@ def test_flags_retired_long_lived_taglines(tmp_path, monkeypatch, doc_health):
         ), retired
 
 
+def test_flags_hyphenated_fleet_variants(tmp_path, monkeypatch, doc_health):
+    """The retired framings also shipped as "AI-agent fleets".
+
+    docs/REVIEWER_GUIDE.md carried this variant while the un-hyphenated
+    pattern reported the repository clean.
+    """
+    for retired in (
+        "UNITARES is runtime state telemetry for long-lived AI-agent fleets.",
+        "Runtime governance for heterogeneous AI-agent fleets",
+        "Infrastructure for long-lived AI-agent fleets",
+    ):
+        warnings = _warnings(
+            tmp_path / str(abs(hash(retired))),
+            monkeypatch,
+            doc_health,
+            retired,
+        )
+        assert any(
+            "retired public tagline" in warning for warning in warnings
+        ), retired
+
+
 def test_allows_the_canonical_sentence_and_the_paper_title(
     tmp_path, monkeypatch, doc_health
 ):

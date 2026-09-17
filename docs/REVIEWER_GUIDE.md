@@ -10,7 +10,7 @@ This guide is for a cold evaluator deciding whether UNITARES is real, what layer
 
 ## One-sentence read
 
-UNITARES is runtime state telemetry for long-lived AI-agent fleets: agents check
+UNITARES is accountability infrastructure for long-running AI agents: agents check
 in after units of work, the server estimates drift and calibration through
 staged cold-start, fixed-threshold, and self-relative scoring, and policy or
 review layers can consume that state mid-run.
