@@ -969,6 +969,16 @@ def build_experience_envelope(
             "unmeasurable_edges",
         ).items():
             state_summary.setdefault(key, value)
+        # A paused check-in defaults to mirror mode, whose payload carries the
+        # policy action only under the `verdict` wrapper, not `decision.action`,
+        # so the lifts above missed it and a paused agent reading
+        # state_summary.action saw nothing. action_summary already
+        # resolved the action from every shape; reuse it here.
+        action_summary = envelope.get("action_summary")
+        action_summary = action_summary if isinstance(action_summary, dict) else {}
+        for key in ("action", "sub_action"):
+            if action_summary.get(key) is not None:
+                state_summary.setdefault(key, action_summary[key])
         if coherence is not None:
             if legacy:
                 # Match get_governance_metrics's inline badge (runtime_queries.py's
@@ -984,7 +994,15 @@ def build_experience_envelope(
                 state_summary["coherence"] = coherence
         if risk is not None:
             state_summary["risk_score"] = risk
-        if prediction_id:
+        if state_summary.get("action") == "pause":
+            # The generic continuation text below was emitted on pause verdicts
+            # too, telling a paused agent to "keep working". Match recovery_hint.
+            next_action = (
+                "Paused - stop this line of work and do not continue it. Call "
+                "self_recovery(action='review', reflection='...') to request "
+                "resumption."
+            )
+        elif prediction_id:
             # The id already sits in the canonical payload; naming it here is
             # what makes registry-bound record_result discoverable — otherwise
             # the outcome grades a confidence borrowed from an unrelated
