@@ -53,9 +53,10 @@ Edit the overrides in your private deployment location →
 next load. Changing the redacted example in this public repo does **not** affect
 any live census.
 
-## Known gap
+## Where the tool lives
 
-The census tool itself is not yet version-controlled (it lives only at
-`~/.local/bin/unitares-automations`). Versioning the tool is a separate
-follow-up; the operator's private overrides at least preserve the judgment it
-consumes.
+The census tool is tracked in this repo at `scripts/ops/unitares-automations`
+(`load_overrides` / `apply_overrides` are the functions described above);
+`automation-census-setup.md` covers getting it onto `PATH`. What stays outside
+the repo is the live census data — the operator's real classifications — in the
+private deployment location described above.
