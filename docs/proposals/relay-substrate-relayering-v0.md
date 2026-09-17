@@ -1,10 +1,10 @@
 # Re-layering on NeMo Relay — exporter and gate shipped, substrate decision packet open (v0)
 
-**Status:** DRAFT decision packet, 2026-09-16. The integration it describes is
-built and tested (`unitares_sdk.integrations.nemo_relay`, optional extra); no
-runtime posture, flag, threshold, or roadmap commitment changes with this
-document. The three parking questions below are operator decisions, and none
-is recorded as taken.
+**Status:** Decision recorded 2026-09-17; drafted 2026-09-16. The integration
+it describes is built and tested (`unitares_sdk.integrations.nemo_relay`,
+optional extra). The operator adopted the recommendation below on 2026-09-17
+with one clause inverted; see *Decision*. No runtime posture, flag, or
+threshold changes with that adoption, and nothing is parked or retired by it.
 **Tracking:** companion to the roadmap's *Now* item (independent evidence,
 #1607) and to the BEAM roadmap's V0.4 resolution and the signed Wave 3
 go-decision, which this packet does not reopen.
@@ -82,19 +82,63 @@ put it. That is a scope question for the operator, raised once, here.
 4. Publish the integration upstream as a NeMo Agent Toolkit plugin package
    once the Relay path has one external operator behind it.
 
-## Ninety-day evidence gate
+## Decision (operator, 2026-09-17)
 
-The re-layering is judged on evidence that will exist by mid-December 2026,
-not on this week's reading:
+The operator adopted the recommendation, by the option letters in the decision
+table above. Recorded here because the packet asked for a decision and got one;
+the reasoning that changed one clause is stated so a later reader can disagree
+with it on the merits.
 
-- one operator other than the maintainer running the Relay path under the
-  independent-operator cohort protocol (`independent-operator-cohort-preregistration-v0.md`);
-- the side-by-side harness run named above, reported per deployment and never
-  pooled;
-- the upstream plugin submission's review state.
+| # | Recommendation | Decision |
+|---|---|---|
+| 1 | Keep the record kernel | **Adopted.** No change to anything. The affirmation is the point: identity, claims and evidence, review, outcomes and reconstruction stay here, and neither NVIDIA repository was found to offer them. |
+| 2 | Relay as default transport for new host integrations; hold the hook chain | **Adopted — option (b)** on the hook-chain row. New harness integrations are written against the Relay plugin. The existing `session-start` / `post-edit` / `post-stop` chain keeps running, unchanged, for every harness it serves today. Option (c), retiring it, stays unavailable until the side-by-side run below is done. |
+| 3 | Park the execute half of the governed-effect plane | **Adopted as direction — option (b)** on the execute-plane row, and *not yet executed*. The recommendation was written "subject to the design read," and that read has not happened, so nothing is flagged off, parked, or deleted by this decision. What changes is that the design read becomes scheduled work rather than an open question. |
+| 4 | Publish upstream once the Relay path has one external operator | **Adopted with the precondition inverted: publish first.** |
+| — | Surface lease plane / Plexus | **Unchanged.** Out of scope for this packet, still deferred to the Plexus thread. No decision taken. |
 
-A fair zero on any of these banks the datum and moves to the next lever; it
-does not close the track.
+### Why row 4's precondition was inverted
+
+As drafted, the condition was self-blocking. Upstream publication in the NeMo
+Agent Toolkit's third-party plugin registry is the most plausible channel by
+which an operator who has never heard of this project would discover the
+integration. Requiring an external operator *before* publishing gates the
+acquisition channel on having already acquired, and no elapsed time resolves
+that. The drafting agent wrote the clause; it was a structural error, and the
+correction is recorded rather than quietly dropped.
+
+Inverting it changes what gets published, not what gets claimed. The submission
+carries the integration and its documented boundaries; it carries no efficacy
+claim, and the claim ledger's rows on prevention and predictive lift are
+untouched.
+
+### What this decision does not do
+
+- It does not reopen the BEAM V0.4 resolution or the signed Wave 3
+  GO-WITH-REDUCED-SCOPE decision, exactly as the constraint above states.
+- It does not amend, weaken, or anticipate the independent-operator cohort
+  protocol (`independent-operator-cohort-preregistration-v0.md`). That protocol
+  is pre-registered and its stop rule binds the analyst. Publishing a plugin
+  upstream is a distribution act; enrolling an operator in that cohort is a
+  separate, registered act with its own terms, and this decision touches
+  neither its terms nor its reporting rules.
+- It parks nothing, retires nothing, and enables no flag.
+- It grades no capability on a usage count.
+
+## What replaces the ninety-day evidence gate
+
+The gate named mid-December 2026. It is replaced, not relaxed: the same three
+items remain the evidence, but two of them arrive by being done rather than by
+being waited for, and the third never gated anything it was being used to gate.
+
+| Item | Was | Is now |
+|---|---|---|
+| Side-by-side harness run: one harness under both paths against the same server, comparing identity binding, check-in count within cadence tolerance, and pause delivery | A December milestone | A named action. It is the sole remaining condition on retiring the hook chain (row 1, option (c)). Reported per deployment, never pooled. |
+| Design read: whether an intercept-based commit path can carry the S7 strong-tier re-certification and the per-effect veto without a second credential boundary | A December milestone | A named action, and the sole condition on executing row 2's parking. Until it is answered, the execute plane stays exactly as it is. |
+| One operator other than the maintainer running the Relay path | A gate on publishing upstream | Telemetry, and the evidence path for efficacy claims — which is what it always was. It no longer blocks publication, because publication is how it becomes reachable. A fair zero here banks the datum and moves to the next lever; it does not close the track. |
+
+Neither action has a date attached, because attaching one to work nobody is
+scheduled to do is what produced the deadlock this section replaces.
 
 ## Risks
 

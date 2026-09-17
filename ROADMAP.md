@@ -46,6 +46,12 @@ by releases and canonical documentation, not by this file.
   ([#1606](https://github.com/cirwel/unitares/issues/1606)).
 - Maintain and test the compatibility map for the server, SDK, governance
   plugin, and host adapters.
+- Submit the NeMo Relay integration upstream as a NeMo Agent Toolkit plugin
+  package, and run one harness side by side under the Relay path and the
+  existing hook chain against the same server. Both follow from the 2026-09-17
+  decision in
+  [`docs/proposals/relay-substrate-relayering-v0.md`](docs/proposals/relay-substrate-relayering-v0.md);
+  neither carries an efficacy claim.
 
 ## Recently shipped (see releases and the changelog for detail)
 
