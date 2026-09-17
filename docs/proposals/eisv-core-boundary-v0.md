@@ -1,7 +1,8 @@
 # EISV / core boundary: a neutral checkpoint spine with EISV as a versioned subscriber (v0)
 
-**Status:** DRAFT proposal, 2026-09-17, revised the same day after adversarial
-design review (Section 11). Documentation only. This document changes no runtime
+**Status:** DRAFT proposal, 2026-09-17, revised the same day after an advisory
+consult, a governed architecture review whose rejection still stands, and a Codex
+pull-request review (Section 11). Documentation only. This document changes no runtime
 behavior, schema, flag, default, threshold, response shape, or registered
 protocol. It authorizes, at most, the two implementation stages named in
 [Authorization](#13-authorization): an observational checkpoint seam and an
@@ -32,8 +33,9 @@ relevant facts were re-read at `master` for this proposal:
 |---|---|---|
 | Every check-in runs the estimator, with no bypass | `execute_locked_update` calls `process_update_authenticated_async` (`src/mcp_handlers/updates/phases.py`); exceptions re-raise | A checkpoint cannot exist unless EISV succeeds |
 | The persisted checkpoint row is an EISV row | `core.agent_state`: `entropy`, `integrity`, `volatility`, `coherence`, `regime`, `state_json`; keyed `(identity_id, recorded_at)` | The only durable "a check-in happened" record is an estimator output |
-| The prediction key is minted and held by the estimator | `GovernanceMonitor.register_tactical_prediction` into the in-memory `_open_predictions` (`src/governance_monitor.py`) | Outcome binding, the record's only grading mechanism, hangs off monitor memory |
+| The prediction key is minted and held by the estimator | `GovernanceMonitor.register_tactical_prediction` into the in-memory `_open_predictions` (`src/governance_monitor.py`) | Prediction-bound outcome grading hangs off monitor memory |
 | Outcomes embed estimator state inline | `audit.outcome_events.eisv_e … eisv_regime`; `audit.outcome_prediction_bindings.canonical_eisv_snapshot` | An outcome is stored as an EISV observation, not as a fact about a checkpoint |
+| Calibration is also graded without any prediction binding | `_post_update_auto_outcome` records calibration from the check-in's own `ctx.confidence` on auto-emitted outcomes (`phases.py`) | A second grading path exists with no prediction identity at all, so ownership of grading cannot be assigned by moving the registry alone |
 | Write authority depends on the estimator | pause refuses the check-in and knowledge `store` / `note` (`check_agent_can_operate`, per #2258) | An unvalidated estimator gates part of the record it should only annotate |
 | Export is estimator history | `export` writes the monitor's rolling EISV history, not claims (#2258) | No portable record exists without EISV |
 | Post-update side effects are one fixed sequence | `execute_post_update_effects`: health/baselines → CIRS/drift → record state → save baseline → auto outcome → trajectory → phase-5 evidence → lineage | Record writes and estimator writes are interleaved |
@@ -68,9 +70,26 @@ a separate, explicitly enabled consumer of assessments.
 
 EISV stays connected to trajectories. It stops owning them.
 
-The living key is a **Stage 3** artifact. Before the read, nothing minted is
-durable or continuable: Stages 1 and 2 are instruments for testing whether the
-contract below is complete, not the first rows of the future record.
+**What "living key" means.** A checkpoint is an **immutable occurrence**. It is
+never edited, merged, or re-pointed. It is "living" only in the sense that
+records keep attaching to it after it is written: a claim filed later, an
+objection raised a week on, an outcome that lands after CI finishes. Claims and
+outcomes are many-to-many attachments, not alternative spine keys, because
+either can be absent, late, or plural for one unit of work.
+
+**Distinct identities, never conflated:**
+
+| Identity | Denotes |
+|---|---|
+| `attempt_id` | One submitted check-in, whatever happened to it |
+| `checkpoint_id` | An accepted attempt; the occurrence records attach to |
+| refusal / deferral occurrence | An attempt that a gate refused or deferred, with its class (Section 4.6) |
+| `assessor_run_id` | One immutable fold of one assessor over one identity's checkpoints |
+| `prediction_id` | A forecast attached to a checkpoint; zero or more per checkpoint |
+
+The durable living key is a **Stage 3** artifact. Before the read, nothing
+minted is durable or continuable: Stages 1 and 2 are instruments for testing
+whether the contract below is complete, not the first rows of the future record.
 
 ## 3. Dependency direction
 
@@ -138,11 +157,11 @@ target's guarantees.
 | `checkpoint_id` | Durable, immutable id; the living key | Diagnostic only; not continuable, never referenced by any other record, never reused in Stage 3 |
 | `idempotency_key` | Client- or adapter-supplied key; a retried or duplicated delivery of an accepted check-in maps to the existing checkpoint | Not provided; duplicates and retries are visible as separate diagnostic records |
 | `identity` | `agent_uuid`, salted digest of `client_session_id`, `parent_agent_id`, `tier`, `proof_origin` | `agent_uuid` and `tier` / `proof_origin` only |
-| `order` | `seq`: durable per-identity monotonic integer assigned in the same transaction as the checkpoint; `prev_checkpoint_id`; `recorded_at` (UTC, offset-bearing); `seq` is authoritative over any timestamp or UUID time component under clock skew or rollback | `seq` per server process, resets on restart; `process_run_id` distinguishes runs; multi-instance serving of one identity is out of contract and flagged |
+| `order` | `seq`: durable per-identity monotonic integer assigned in the same transaction as the checkpoint; `prev_checkpoint_id`; `recorded_at` (UTC, offset-bearing); `seq` is authoritative over any timestamp or UUID time component under clock skew or rollback | `seq` per server process, assigned **after** the per-agent lock is released, in the order the live path completed; resets on restart; `process_run_id` distinguishes runs; multi-instance serving of one identity is out of contract and flagged |
 | `provenance` | `epistemic_class`, `producer` (name and version), `transport` | same |
 | `report` | Retention policy decided by the operator (Section 12) | Nothing: no text, excerpt, or digest |
 | `enforcement_regime` | Active gates and their configuration digest | Active gate names only |
-| `status` | `accepted`; refused and failed cases under a taxonomy the operator decides (Section 12) | Accepted check-ins only |
+| `attempt_id`, `kind` | Every attempt gets an `attempt_id`; `kind` is `accepted`, `refused`, `deferred`, or `failed` under the occurrence taxonomy (Section 4.6); only `accepted` mints a `checkpoint_id` | Emitted for every kind whose class is already known at an existing return point, as an O(1) enqueue adding no error-path work; kinds not observable that way are listed as unavailable |
 | `links` | Cardinality-aware children: predictions, discoveries, dialectic sessions, artifact URIs | None |
 
 ### 4.2 Assessor input snapshot (owned by the assessor adapter)
@@ -159,6 +178,16 @@ restored behavioral baseline state, the clock (prediction TTL and gap handling),
 and any random or cache-dependent path. An input the seam cannot see without
 modifying estimator internals is **named as not captured**. Estimator internals
 are not modified before the read to capture it.
+
+**Consequence, stated plainly.** Several decisive inputs are created as locals
+inside `GovernanceMonitor.process_update` and discarded: the wall-clock-derived
+`effective_dt` and gap-saturation state, the raw one-hour tool-usage statistics,
+and the continuity metrics. A seam outside that call cannot capture the values
+the estimator actually used. Before the preservation horizon the snapshot is
+therefore **partial by construction**, every assessment replayed from it is
+`replayable: false`, and parity cannot be exact on any field those inputs reach.
+Exact, same-point capture requires instrumenting the estimator, which waits for
+the horizon (Section 12, decision 5).
 
 ### 4.3 `assessment.produced.v0`
 
@@ -177,8 +206,10 @@ are not modified before the read to capture it.
 `outcome_id`, `checkpoint_id`, the specific `prediction_id` child it grades,
 outcome type and score, `verification_source`, producer identity, artifact URIs.
 No assessor fields. Several predictions per checkpoint are allowed, because the
-phase-5 evidence emitter already mints one per evidence row. Not produced in
-Stages 1 or 2.
+phase-5 evidence path can attach predictions to evidence rows as well as the
+check-in's own. It does not always mint one per row: an evidence row carrying an
+explicit `prediction_id` reuses it, and no id is minted when the check-in has no
+confidence. Section 4.6 fixes those cases. Not produced in Stages 1 or 2.
 
 ### 4.5 Delivery semantics
 
@@ -195,6 +226,44 @@ drops. The shadow replay stalls on a gap or a `process_run_id` change and
 reports it; it never fills or skips. A shadow stream is labelled incomplete
 whenever drops, gaps, or restarts occurred.
 
+### 4.6 Occurrence taxonomy and prediction cardinality (fixed before data)
+
+Both are **preconditions**, recorded in this document and confirmed by the
+operator before Stage 1 code merges, and in any case before any shadow data is
+collected. Leaving them to judgment after shadow observations exist would let
+the observations choose the definitions.
+
+Proposed taxonomy for attempt `kind`:
+
+| Kind | Meaning | Example return point today |
+|---|---|---|
+| `accepted` | The estimator ran and the check-in was recorded | normal completion of `execute_post_update_effects` |
+| `refused` | A policy gate declined the check-in | `AGENT_PAUSED` / circuit breaker |
+| `deferred` | Accepted for later handling rather than now | none known today; listed so it is not invented later |
+| `failed` | Validation, authentication, identity, cancellation, or infrastructure failure | identity refusal contracts, schema validation, estimator exception |
+
+`failed` carries a sub-class from exactly that list. An attempt that fails
+before an identity is resolved has no identity; it is recorded without one, not
+attributed to a guessed identity.
+
+Proposed prediction cardinality and matching:
+
+- zero or more predictions per checkpoint; the check-in's advertised prediction
+  is marked `advertised`, and evidence-row mints are marked `evidence_row` with
+  their row index;
+- an outcome grades exactly one prediction, named explicitly by
+  `prediction_id`; an outcome without one attaches to its checkpoint as an
+  ungraded outcome and is never matched to a prediction by time or recency;
+- an evidence row that supplies an existing `prediction_id` attaches to that
+  prediction and mints nothing; a reused id from another checkpoint is recorded
+  as a cross-checkpoint reference, never duplicated;
+- no confidence means no prediction; the checkpoint records that none was minted;
+- one prediction is graded at most once (the existing exactly-once binding);
+- grading without a prediction, such as calibration recorded from an
+  auto-emitted outcome and the check-in's own confidence, is recorded as an
+  **unbound grading** by the assessor that consumed it, never retroactively bound
+  to a prediction.
+
 ## 5. Path dependence and policy feedback
 
 Separating the estimator from the record does not make its outputs context-free.
@@ -206,7 +275,9 @@ Separating the estimator from the record does not make its outputs context-free.
    input window from the same starting state.
 2. **Side inputs are not in the check-in.** Section 4.2 makes them an adapter's
    responsibility and requires the snapshot to be the values the live estimator
-   actually used, taken at one defined point, not a later reconstruction.
+   actually used, taken at one defined point, not a later reconstruction. Before
+   the horizon that is not achievable for inputs local to `process_update`, and
+   the snapshot says so rather than approximating them (Section 4.2).
 3. **Policy feedback and selection.** Advice reaches the agent and changes its
    next report; a pause refuses later check-ins, removing checkpoints; the
    trajectory-identity enrichment adjusts the risk shown in the response without
@@ -249,9 +320,9 @@ not exported, not surfaced to agents, not read by any tool, and not a record.
 | Stage | Change | Runtime effect | Gate to enter |
 |---|---|---|---|
 | **0** (this document) | Proposal and index row | None | Review in Section 11 |
-| **1 — observational seam** | Behind a default-off flag, build a diagnostic checkpoint and EISV input snapshot from values the live path has already computed; emit off-lock through a bounded dropping queue to the diagnostic sink | Flag off: none. Flag on: an O(1) copy under the existing lock and an off-lock file append; verified by Section 8.1 | Stage-1 issue accepted |
+| **1 — observational seam** | Behind a default-off flag, build diagnostic attempt occurrences, checkpoints and EISV input snapshots from values the live path has already computed; emit off-lock through a bounded dropping queue to the diagnostic sink | Flag off: none. Flag on: no work inside the per-agent lock; after release, a copy of already-computed values, id minting, and an enqueue; file append on a separate worker. Verified by Section 8.1 in CI; production equivalence is not claimed from fixtures, which is why the flag stays off on the read-feeding deployment (below) | The Section 8.1 harness exists and passes against current code; Section 4.6 confirmed by the operator |
 | **2 — out-of-process shadow replay** | A separate process, never the governance server, replays the diagnostic stream through an isolated `eisv-behavioral` instance and compares with read-only extracts of live rows | None on the server | Stage 1 green on CI and the parity plan preregistered |
-| **3 — ownership move** | Durable checkpoints with idempotency and `seq`, checkpoint children for predictions and links, outcomes by `checkpoint_id`, export bundle, `core.agent_state` behind a compatibility view | Schema and response additions | **Not authorized.** After the preservation horizon in Section 9, on an explicit operator decision |
+| **3 — ownership move** | Durable checkpoints with idempotency and `seq`, checkpoint children for predictions and links, outcomes by `checkpoint_id`, export bundle, `core.agent_state` behind a compatibility view that preserves the legacy join: the registered read selects the latest state across **every** `core.identities` row sharing `o.agent_id`, so Stage 3 needs an explicit `agent_id` → identity → checkpoint mapping and a tie policy for equal `recorded_at` | Schema and response additions | **Not authorized.** After the preservation horizon in Section 9, on an explicit operator decision |
 | **4 — authority posture** | Enforcement explicitly configured; advisory by default for new installs | Default change | **Not authorized.** Separate operator decision after Stage 3 |
 
 Compatibility commitments through every stage:
@@ -269,13 +340,24 @@ Compatibility commitments through every stage:
 - Stage 1 and 2 roll back by turning the flag off and deleting the sink; no
   other state exists to unwind.
 
+**Where the flag may be on before the preservation horizon.** Stage 1 and
+Stage 2 code may merge with the flag off. Before the horizon it may be enabled
+only in CI and on deployments whose data cannot enter the 2026-12-01 read.
+Enabling it on the deployment that feeds the read waits for the horizon or an
+explicit, recorded operator waiver. What is frozen is the registered instrument
+(the estimator, its persisted rows, their timing, and the registered join), not
+the repository. The governed review preserved a stricter position, that no
+Stage 1 code should merge before the horizon at all (Section 11.2); that
+disagreement is an open operator decision (Section 12).
+
 ## 8. Verification
 
 ### 8.1 Instrument-preservation contract (Stage 1 gate)
 
 Stage 1 must show, with the flag off and on, over a fixture sequence covering
-warmup transitions, a pause, a restart with state restore, and concurrent
-check-ins for one identity:
+warmup transitions, a pause, a restart with state restore, concurrent
+check-ins for one identity, several `core.identities` rows sharing one
+`agent_id`, and a check-in gap long enough to saturate the elapsed-time scaling:
 
 - identical tool responses;
 - identical rows, row counts, and column values in `core.agent_state`,
@@ -284,13 +366,25 @@ check-ins for one identity:
 - identical post-update effect order and transaction boundaries;
 - identical `recorded_at` ordering and identical selection by the registered
   join at `lead` 0 and 30 minutes for every fixture outcome;
+- identical estimator inputs as read at update time, identical EMA and Welford
+  baseline update values, and identical policy decisions (action, sub_action,
+  pause state) for every fixture check-in;
+- identical results from the registered read's query functions run against the
+  fixture database;
+- identical failure behavior when the estimator raises, when PostgreSQL or Redis
+  is unavailable, and when the diagnostic sink is full, unwritable, or raises:
+  the enabled path is fail-open and can never delay, suppress, retry, or mutate
+  a legacy write;
 - identical `epoch`, prediction registry contents, TTL state, baseline counters
   and cache contents, and identical outputs for the next *N* updates after the
   fixture ends (so delayed divergence is caught);
-- on the operator deployment, before and after enabling the flag, a comparison
-  of check-in latency distribution and of the lock hold time.
+- on a deployment that does not feed the registered read, before and after
+  enabling the flag, a comparison of check-in latency distribution and of the
+  lock hold time.
 
-The last item is the only production measurement and uses no outcome data.
+The harness for every item except the last is written **first, against current
+code, with no seam present** (Section 14). It is the baseline Stage 1 must then
+match. The latency comparison uses no outcome data.
 
 ### 8.2 Shadow parity (Stage 2)
 
@@ -299,7 +393,9 @@ implementation**. Agreement is fidelity to that implementation, not correctness:
 a shared bug or wrong ordering replicates perfectly. It therefore has two
 separate parts.
 
-**Parity plan, preregistered before any live shadow data is read:** corpus and
+**Parity plan, preregistered before any live shadow data is read**, and after
+the occurrence taxonomy and prediction matching rules in Section 4.6 are
+confirmed: corpus and
 window, assessor and adapter versions, per-field tolerances, mismatch taxonomy
 (ordering, missing input, clock, restart, drop or gap, unexplained), stopping
 rule, owner, and the Stage 3 blocking rule. Discrete fields (action,
@@ -313,8 +409,9 @@ decision (tolerance, version, taxonomy, or which assessor run to trust) may be
 chosen by reference to them. The plan and its results are not inputs to the
 registered read.
 
-**Equivalence runs.** Offline fixtures in CI and the live diagnostic stream
-replayed out of process, reported as agreement rates by mismatch class, with
+**Equivalence runs.** Offline fixtures in CI and a live diagnostic stream
+replayed out of process (before the preservation horizon, only from a deployment
+that does not feed the registered read; Section 7), reported as agreement rates by mismatch class, with
 incomplete streams (drops, gaps, restarts) reported separately and never used
 as evidence of agreement.
 
@@ -396,7 +493,7 @@ not a governed review. Dispositions:
 | 7 | Parity tuning could become an outcome proxy (major) | **Accepted.** Preregistered parity plan and a scientific firewall (8.2). |
 | 8 | Regime tagging does not protect against selection (major) | **Accepted.** Stated as metadata, not correction (5.3, 9). |
 | 9 | Unchanged columns and joins do not preserve the instrument (blocking) | **Accepted.** Instrument-preservation contract as the Stage 1 gate (8.1). |
-| 10 | Refusal capture premature and ambiguous (major) | **Accepted.** Removed from Stages 1–2; taxonomy is an operator decision (4.1, 12). |
+| 10 | Refusal capture premature and ambiguous (major) | **Accepted at first, then reversed in part by the governed review (11.2, condition 5).** The taxonomy is now fixed before code (4.6) and Stage 1 records refusals only where the class is already known at an existing return point, with no added error-path work. The consult's concern about changing error-path work is kept as that constraint. |
 | 11 | Single `prediction_id` field loses phase-5 multiplicity (major) | **Accepted.** Cardinality-aware children in the target; excluded from Stages 1–2 (4.1, 4.4). |
 | 12 | Diagnostic file is an ungoverned behavioral log (major) | **Accepted.** Minimization, permissions, rotation, deletion, no text or session derivatives (6). |
 | 13 | Ownership asserted without enforcement (minor) | **Partially accepted.** Stage 1 adds an import-boundary test; the module ownership map, mutation permissions, and forbidden cross-store transaction checks belong to Stage 3 and are named there, not built now. |
@@ -411,33 +508,68 @@ and clock semantics, flag scoping and rollback, the scientific firewall, sink
 governance, and the validity disclaimer are now addressed in 4.1, 4.5, 6, 7,
 8.1, 8.2, and 9. **Pre-read capture repairs** are recorded as a separate hazard
 (9) and left to their own check. The **complete estimator input inventory** is
-not produced by this document: it is a Stage 1 deliverable (4.2), because
+not produced by this document: it is a deliverable of the first implementation issue (14), because
 producing it by reading the code now would be the unverified description the
 parity test exists to replace.
 
 ### 11.2 Governed architecture review
 
-*(pending: one dialectic session against this revision)*
+One dialectic `review` session, `134b6a9e32abf9f9`, opened 2026-09-17 against
+commit `226cbdc6`. The server spawned an independent reviewer
+(`DialecticReviewer_439075bb`, Codex backend, not degraded). Its verdict was
+**`agrees=false`** with five conditions. The proposal's author replied once
+(`agrees=false`) with the dispositions below. **The session is not resolved**,
+and this document does not treat it as resolved: the reviewer's rejection
+stands until the reviewer or the operator acts on it.
+
+Reviewer's root cause, accepted as stated: occurrence capture, estimator state
+transition, prediction identity, outcome attribution, and policy authority are
+conflated in one path-dependent transaction, so refusal, repeated predictions,
+and policy-caused censorship are unrepresentable or ambiguous.
+
+| # | Reviewer condition | Disposition |
+|---|---|---|
+| 1 | Before the preservation horizon, merge only documentation and a preregistered implementation contract; no Stage 1 runtime code, flags, or hooks until an operator-declared preservation release | **Disputed; standing disagreement.** Accepted that the draft contradicted itself (its own thesis condition forbade runtime change before the horizon while authorizing Stage 1) and that default-off code can still alter imports, scheduling, and failure paths. Not accepted that Stage 1 code must wait: the mandate for this proposal authorizes a neutral seam and a shadow implementation. Resolution proposed by the author: code merges flag-off; the flag is enabled before the horizon only in CI and on deployments that cannot feed the read; the read-feeding deployment waits for the horizon or a recorded operator waiver (Section 7). The first issue is the preservation harness against current code, which contains no seam (Section 14). Whether that suffices is an **operator decision** (Section 12). |
+| 2 | `checkpoint_id` is an immutable occurrence key, with distinct attempt, accepted-checkpoint, refusal/deferral, and assessor-run identities; claims and outcomes attach many-to-many | **Accepted** (Section 2). |
+| 3 | Instrument preservation mechanically testable: writes, timestamps and order, estimator inputs and EMA/Welford updates, policy decisions, query results, failure behavior; enabled path fail-open and unable to delay, suppress, retry, or mutate legacy writes | **Accepted** (Section 8.1). |
+| 4 | Preregister prediction cardinality and outcome matching before any shadow data | **Accepted** (Section 4.6). |
+| 5 | Stage 1 emits distinguishable attempted, refused, and deferred occurrences or shows why they are unavailable | **Accepted with a constraint** (Sections 4.1, 4.6): only where the class is known at an existing return point, with no added error-path work; unavailable kinds are listed. This reverses in part the consult's finding 10. |
 
 ### 11.3 Pull-request review by Codex
 
-*(pending)*
+An explicit Codex review of PR #2278 at commit `226cbdc6` (`codex exec`,
+read-only sandbox, spawned through the agent orchestrator, exit 0) returned
+**`VERDICT: FINDINGS(5)`**. Each finding was checked against the cited source
+before disposition; all five hold.
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | The seam cannot capture the inputs the estimator used: `effective_dt`, raw tool-usage statistics, and continuity metrics are locals inside `GovernanceMonitor.process_update`, so "same-point snapshot" contradicts "not captured" | **Accepted.** The pre-read snapshot is declared partial by construction, replays are `replayable: false`, parity cannot be exact on fields those inputs reach, and exact capture waits for post-horizon instrumentation (4.2, 12). |
+| 2 | Work inside the per-agent lock changes contention, and the estimator's elapsed-time scaling depends on wall time, so enabling Stage 1 can move later `recorded_at` values and transitions; fixtures cannot prove production equivalence | **Accepted.** Stage 1 does no work inside the lock (4.1, 7); fixtures cover a saturating gap (8.1); production equivalence is not claimed, which reinforces keeping the flag off on the read-feeding deployment (7). |
+| 3 | The registered join selects the latest state across every identity row sharing `o.agent_id`, so per-identity checkpoints need an explicit legacy mapping and tie policy | **Accepted.** Added to Stage 3's compatibility requirement (7) and to the 8.1 fixtures. |
+| 4 | Phase 5 does not always mint one prediction per evidence row: explicit ids are reused, and nothing is minted without confidence | **Accepted.** Statement corrected (4.4); reuse and no-confidence rules fixed (4.6). |
+| 5 | Prediction binding is not the only grading path: auto outcomes record calibration from the check-in's own confidence with no prediction id | **Accepted.** Coupling table corrected (1); unbound grading defined and assigned to the consuming assessor (4.6). |
 
 ## 12. Open operator decisions
 
-1. **Parity standard.** Tolerances, window, stopping rule, and the acceptable
-   explained-mismatch rate, fixed in the preregistered parity plan.
-2. **Refused and failed check-ins.** Whether they become checkpoints, and the
-   taxonomy: policy refusal, validation rejection, authentication failure,
-   cancellation, infrastructure failure.
-3. **Report-text retention.** The report is transient today and truncated in
+1. **Sequencing before the horizon (standing disagreement).** The governed
+   reviewer holds that only documentation and a preregistered implementation
+   contract may merge before the preservation horizon. This proposal holds that
+   Stage 1 and 2 code may merge flag-off and run in CI and on deployments that
+   cannot feed the read, with the read-feeding deployment waiting for the horizon
+   or a recorded waiver. Both positions are recorded in 11.2; the operator
+   chooses.
+2. **Occurrence taxonomy and prediction matching (Section 4.6).** Confirm or
+   amend before Stage 1 code merges.
+3. **Parity standard.** Tolerances, window, stopping rule, and the acceptable
+   explained-mismatch rate, fixed in the preregistered parity plan. Given 4.2,
+   decide whether a partial, non-replayable parity before the horizon is worth
+   running at all, or whether Stage 2 waits for instrumentation.
+4. **Report-text retention.** The report is transient today and truncated in
    excerpts (#2267 §4.3). The target can carry nothing, a salted digest, an
    excerpt, or the full text under a retention policy.
-4. **Prediction cardinality.** Confirm checkpoint children as the model and
-   whether the advertised prediction is distinguished from evidence-row mints.
-5. **Uncapturable inputs.** For inputs that cannot be snapshotted without
-   modifying the estimator, accept non-replayability before the read, or schedule
-   the instrumentation after the preservation horizon.
+5. **Estimator instrumentation after the horizon.** Whether to instrument
+   `process_update` so the input snapshot is exact, bumping `epoch`.
 6. **Preservation horizon.** What counts as the read's report being final.
 7. **Post-read authority posture** for the maintainer deployment and for new
    installs, taken after Stage 3 rather than bundled with it.
@@ -446,35 +578,53 @@ parity test exists to replace.
 
 Merging this document authorizes Stage 1 and Stage 2 only: default-off, lossy,
 observational, non-authoritative, with no database write, no default change, no
-response change, and no modification of estimator internals. Stage 3 and Stage 4
-require a new, explicit operator decision recorded against this document after
-the preservation horizon in Section 9.
+response change, no work inside the per-agent lock, and no modification of
+estimator internals. Before the preservation horizon the flag may be enabled only
+in CI and on deployments that cannot feed the 2026-12-01 read, unless the operator
+records a waiver. Stage 1 code does not merge before the harness in Section 14
+exists and the Section 4.6 rules are confirmed. If the operator adopts the
+reviewer's stricter sequencing (Section 12, decision 1), this authorization
+narrows to that harness and the documentation until the horizon. Stage 3 and
+Stage 4 require a new, explicit operator decision recorded against this document
+after the horizon.
 
 ## 14. First implementation issue
 
-**Title:** Observational checkpoint seam: capture a diagnostic checkpoint and EISV
-input snapshot behind a default-off flag, gated by an instrument-preservation test
+**Title:** Instrument-preservation harness for the check-in path: pin current
+EISV writes, timing, inputs, decisions, and registered-join selection in CI
 
-**Scope:**
+**Why this first.** Both reviews converge on it. It changes no runtime code,
+contains no seam and no flag, and so is acceptable under either sequencing
+position in Section 12. Every later stage is gated on matching it, and it is the
+only way to show that a seam changed nothing.
 
-- A core module defining the pre-read `CheckpointRecord` (Section 4.1, pre-read
-  column) with no imports from estimator modules, enforced by an import-boundary
-  test.
-- An EISV adapter module defining `eisv-inputs.v0` (Section 4.2) that copies
-  values the live path has already computed, and a written inventory of every
-  estimator input it could not see, each marked not captured.
-- In `execute_locked_update`, for accepted check-ins only and only when the flag
-  is on: mint a diagnostic id, assign per-process `seq` and `process_run_id`, and
-  enqueue the record and snapshot. Serialization and file writes happen off-lock
-  through a bounded queue that drops on overflow and counts drops.
-- The diagnostic sink per Section 6, and the flag documented in `docs/FLAGS.md`
-  as not agent-visible.
-- No database, Redis, knowledge-graph, response, or estimator-internal change.
+**Scope (tests and fixtures only):**
 
-**Acceptance:** every item in Section 8.1 passes in CI with the flag off and on;
-the import-boundary test passes; `seq` is strictly increasing per identity within
-one process under concurrent check-ins; the input inventory is committed with the
-change.
+- A fixture sequence through the real check-in path covering: warmup
+  transitions into fixed thresholds and self-relative scoring; a pause and a
+  refused follow-up; a restart with state restore; concurrent check-ins for one
+  identity; several `core.identities` rows sharing one `agent_id`; a gap long
+  enough to saturate elapsed-time scaling (with the clock injected, not slept);
+  phase-5 evidence rows with and without explicit `prediction_id` and with no
+  confidence; and an auto-emitted outcome that records calibration.
+- Canonicalized captures of: tool responses; rows and values in
+  `core.agent_state`, `audit.outcome_events` (every `eisv_*`),
+  `audit.outcome_prediction_bindings`, and `audit.events`; post-update effect
+  order; policy decisions; the prediction registry, TTL state, baseline counters
+  and caches; calibration records; and outputs of the next *N* updates.
+- The registered read's own query functions from
+  `scripts/analysis/eisv_skeptic_report.py` run against the fixture database,
+  asserting which state row each fixture outcome selects at `lead` 0 and 30. No
+  production data and no outcome discrimination statistics are read or computed.
+- Failure-path fixtures: estimator exception, PostgreSQL unavailable, Redis
+  unavailable.
+- A written inventory, committed with the harness, of every estimator input read
+  at update time, marking which are locals inside `process_update`.
 
-**Out of scope:** the out-of-process replay and parity plan (Stage 2), refused
-check-ins, prediction linkage, and any durable identifier.
+**Acceptance:** the harness passes deterministically on `master` in CI (no
+wall-clock or ordering flakiness across repeated runs); it fails when any pinned
+value is perturbed in a deliberate mutation check; it adds no runtime import,
+flag, or behavior.
+
+**Out of scope:** the seam, the flag, the diagnostic sink, the shadow replay, and
+any durable identifier.
