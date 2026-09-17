@@ -37,6 +37,10 @@ response it returned.
 | Policy and recovery | Return a proceed or pause action with a named reason and next step; support governed recovery and review paths. |
 | Operator visibility | Inspect lifecycle, state, evidence, and decision history through MCP, HTTP, and a self-hosted dashboard. |
 
+Tool-boundary enforcement, trace emission, and agent-to-agent transport are not
+this server's job: runtime middleware (NeMo Relay has a shipped integration),
+OpenTelemetry, and A2A own those. UNITARES keeps the record beside them.
+
 The deployed policy path uses auditable behavioral state estimation. The
 mathematical formulation in the companion paper remains a research target and
 parallel diagnostic path, not the live decision mechanism.
