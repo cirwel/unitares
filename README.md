@@ -41,7 +41,7 @@ recoverable even when the process that started it is gone.
   continue earlier work.
 
 Together, these form an operator-owned accountability layer across coding
-agents, research agents, always-on service agents, and custom runtimes.
+agents, research agents, background agents, and custom runtimes.
 
 ## Install
 
