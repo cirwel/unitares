@@ -54,6 +54,7 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 - [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md) — runtime-governance neighbors: MI9 (head-to-head) and Auton (different layer)
 - [`competitive-survival-audit-2026-09.md`](competitive-survival-audit-2026-09.md) — product-level keep/merge/stop audit against A2A, NeMo Relay, cloud control planes, and observability standards
 - [`neohorse-1-triage-2026-09.md`](neohorse-1-triage-2026-09.md) — NeoHorse-1 (arXiv:2609.08183); training-plane neighbor, not encroaching, but it collides on the word *harness*
+- [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md) — claims falsification audit and market map: every public claim typed and classed against the strongest substitute opened (cloud agent platforms, A2A, NeMo Relay, AgentLens, the IETF audit-trail draft); supersedes the June map as the market map, the June paper-positioning verdicts stand
 
 **Dated records**:
 - [`ledger-triage-2026-06-11.md`](ledger-triage-2026-06-11.md) — read-only triage of the deferred/blocked `plan.md` rows against their unblock triggers
