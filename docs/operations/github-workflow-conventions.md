@@ -162,6 +162,21 @@ created, and so every run since — on each push to master plus hourly — exite
 early having done nothing. Restoring it would put a second updater in a race
 with GitHub's native one.
 
+**Drafts are the one case GitHub's updater never covers** — a draft cannot take
+`--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
+open draft that is behind, conflict-free, and idle for 12h, every four hours.
+It never marks ready or merges, and the `no-base-refresh` label opts a PR out.
+It is not a second updater racing the native one: it touches only what GitHub
+will not. Two rules carried over from the retired queue updater and from PR
+#2250 (2026-09-16). It pushes with the `DRAFT_BASE_REFRESH_TOKEN` repository
+secret — a fine-grained token scoped to this repository with `Contents: read
+and write` — because a `GITHUB_TOKEN` push creates the head's `pull_request`
+runs in the approval-required state: #2250's refreshed head sat `blocked` with
+eight parked workflows until a maintainer approved them by hand, less
+mergeable than the stale head it replaced. And a missing secret is loud rather
+than inert: the sweep withholds every push and fails the run, and after each
+real push it fails unless a `Tests` run is actually queued on the new head.
+
 **Do not stack more than two deep.** Each level must land in order, and every
 merge below re-dirties everything above. A three-deep stack built 2026-08-13
 produced a conflicted middle PR within hours, purely from its own base moving.
