@@ -244,6 +244,13 @@ def _prediction_id_for_phase5_evidence(ctx: UpdateContext, evidence: dict) -> st
     can resolve through outcome_event's one-shot registry path independently.
     Reusing the process_update response's single prediction id would bind only
     the first row; the rest would fall into missing/consumed fallback lanes.
+
+    The mint is ``advertise=False``: the reply surfaces the monitor's
+    ``_last_prediction_id``, and this emitter runs after the check-in minted
+    its own. An advertised evidence mint replaced that pointer with an id the
+    row then claimed through the exactly-once binding, so the caller was
+    handed a consumed id and its ``outcome_event`` came back
+    PREDICTION_REUSE_CONFLICT (observed live 2026-09-16).
     """
     explicit_prediction_id = evidence.get("prediction_id")
     if explicit_prediction_id:
@@ -256,7 +263,11 @@ def _prediction_id_for_phase5_evidence(ctx: UpdateContext, evidence: dict) -> st
     decision = (ctx.result or {}).get("decision") or {}
     decision_action = decision.get("action")
     try:
-        minted = register_prediction(float(ctx.confidence), decision_action=decision_action)
+        minted = register_prediction(
+            float(ctx.confidence),
+            decision_action=decision_action,
+            advertise=False,
+        )
         return str(minted) if minted else None
     except Exception as exc:
         logger.debug("Phase-5 prediction id mint skipped: %s", exc, exc_info=True)
