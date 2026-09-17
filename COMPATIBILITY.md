@@ -35,11 +35,34 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
-- v2.23.0 preserves registered callable names, input schemas, and lifecycle
-  envelopes; no database migration is introduced. Discovery profiles are gone
+- v2.23.0 preserves lifecycle envelopes; it does not preserve the registered
+  callable names, the `dialectic` wire schema, or the database schema.
+  `direct_resume_if_safe`, deprecated 2026-01-29 and advertised only in `full`
+  mode, is removed with no alias (#2093); the old name now returns
+  `tool_not_found_error`. Repoint callers at `self_recovery(action="quick")`
+  when risk is below 0.40 with no void, and at `self_recovery(action="review")`
+  with a reflection otherwise; the removed tool resumed without a reflection up
+  to 0.60, and retiring that band is the substance of the removal. `dialectic`
+  drops the `vote` parameter from its wire schema (#2103); no handler read it,
+  and the schema still ignores undeclared keys, so a client that keeps sending
+  it is not rejected and needs no change. No other advertised parameter is
+  removed or renamed; `cirs_protocol`, `observe`, `describe_tool` and
+  `list_tools` gain declarations instead, which tightens validation for REST
+  and in-process callers that used to receive those keys raw: a string boolean
+  is now parsed, and an explicit null for a parameter that has a default is
+  refused. One database migration is introduced,
+  `db/postgres/migrations/070_outcome_prediction_bindings.sql`, and the server
+  never applies migrations itself: run
+  `python3 scripts/dev/apply_migrations.py --apply` against an existing
+  database, or `scripts/install/bootstrap_postgres.sh --apply` on a fresh one,
+  before the new code starts. Until it lands, an `outcome_event` /
+  `record_result` call carrying `prediction_id` fails with `DB_ERROR`; calls
+  without one are unaffected. `scripts/ops/deploy-mcp.sh` refuses to restart
+  across that gap and prints the apply recipe. Discovery profiles are gone
   (#2137): every transport advertises one complete catalog — every registered
   tool plus the primary workflow aliases — so a client that selected tools from
-  discovery on v2.22.0 sees additional names and no removals. Legacy
+  discovery on v2.22.0 sees additional names, and no removals beyond
+  `direct_resume_if_safe`, which only `full` mode advertised. Legacy
   `GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
   but ignored, `minimal` included, so that value no longer restores the v2.22.0
   default surface; see the

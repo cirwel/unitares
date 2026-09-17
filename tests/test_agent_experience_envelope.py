@@ -368,6 +368,34 @@ def test_sync_state_envelope_emits_recovery_hint_when_degraded():
     assert env["risk_summary"].startswith("risk high")
 
 
+def test_sync_state_envelope_pause_surfaces_action_and_stop_guidance():
+    # Mirror-mode pause shape: the action lives under `verdict`, not `decision`.
+    payload = {
+        "success": True,
+        "verdict": {"value": "pause"},
+        "prediction_id": "p-1",
+        "metrics": {"coherence": 0.5, "risk_score": 1.0},
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env["action_summary"]["action"] == "pause"
+    assert env["state_summary"]["action"] == "pause"
+    assert "keep working" not in env["next_action"].lower()
+    assert "self_recovery(action='review'" in env["next_action"]
+
+
+def test_sync_state_envelope_proceed_keeps_continuation_guidance():
+    payload = {
+        "success": True,
+        "decision": {"action": "proceed"},
+        "prediction_id": "p-2",
+        "metrics": {"coherence": 0.5, "risk_score": 0.2},
+    }
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert env["state_summary"]["action"] == "proceed"
+    assert env["next_action"].startswith("Keep working")
+    assert "prediction_id='p-2'" in env["next_action"]
+
+
 def test_every_recovery_hint_names_a_callable_tool():
     """recovery_hint is the first route an agent takes when degraded.
 

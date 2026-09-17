@@ -15,11 +15,14 @@ Here federation means many independent runtimes and harnesses sharing one
 operator-controlled server and authority domain. “Kernel” describes that shared
 accountability boundary. It is not a claim that UNITARES owns execution,
 replicates state across independent servers, or has proved better outcomes than
-a structured handoff. Its current mechanisms map to five questions:
+a structured handoff. Runtimes interoperate with each other over their own
+transports or an agent-to-agent protocol such as A2A; UNITARES is the record
+behind them, not the transport between them. Its current mechanisms map to
+five questions:
 
 | Question | Deployed mechanism | Boundary |
 |---|---|---|
-| **Who said it?** | Fresh process identity and explicit lineage. | Lineage links work; it does not confer authority or make two processes one identity. |
+| **Who said it?** | Fresh process identity and explicit lineage. | Lineage links work; it does not confer authority or make two processes one identity. A process identity is an attribution record, not a credential; workload-identity systems remain the credential layer. |
 | **What supports it?** | Derived check-in state, durable attributed findings, corrections, and provenance. | The original `sync_state` report text is transient; durable claims require a finding. This wording introduces no new object schema or automatic evidence verification. |
 | **Who challenged it?** | Structured review records, disagreement, conditions, and resolution. | A reviewer must participate; requesting review is not completing review. |
 | **What happened?** | Typed outcome events and prediction binding. | Caller reports need independent evidence to establish correctness. |

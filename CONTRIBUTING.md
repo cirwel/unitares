@@ -41,7 +41,7 @@ pytest tests/test_<specific>.py                    # now resolvable
 PyPI today rather than the versions CI and production actually run. The `mcp`
 pin is the one that bites: a release other than the one `constraints.txt`
 carries can make most of the suite fail to *collect*, not merely to pass.
-Reach for the `mcp-newest` lane (CI runs it as an advisory job) when testing
+Reach for the `mcp-newest` lane (CI runs it as a blocking job) when testing
 the unconstrained resolution is the point; otherwise always pass `-c`.
 
 **On an environment that already has dependencies installed**, that command is
