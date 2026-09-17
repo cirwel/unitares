@@ -4,13 +4,23 @@ All tests use mocks — no real DB, no real heartbeat calls.
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
 from src.resident_progress.probe_task import STARTUP_GRACE_TICKS, ProgressFlatProbe
-from src.resident_progress.registry import ResidentConfig
+from src.resident_progress.registry import (
+    RESIDENT_PROGRESS_MANIFEST_ENV,
+    ResidentConfig,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ---------------------------------------------------------------------------
@@ -629,3 +639,144 @@ async def test_never_seen_marked_distinct_from_silent(monkeypatch):
     assert row.suppressed_reason == "never_seen"
     assert row.candidate is False
     assert row.heartbeat_alive is False
+
+
+# ---------------------------------------------------------------------------
+# Shared source: several residents may name one source
+# ---------------------------------------------------------------------------
+
+_UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+_UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+_UUID_C = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+_SHORT_WINDOW = timedelta(seconds=1800)
+_LONG_WINDOW = timedelta(days=30)
+
+
+def _patch_registry_sharing_one_source(monkeypatch):
+    """Three residents on one source: a and c share a window, b does not."""
+    def _cfg(window, cadence):
+        return ResidentConfig(
+            source="agent_checkins", metric="checkin_count",
+            window=window, threshold=1, expected_cadence_s=cadence,
+        )
+
+    monkeypatch.setattr(
+        "src.resident_progress.probe_task.RESIDENT_PROGRESS_REGISTRY",
+        {
+            "resident-a": _cfg(_SHORT_WINDOW, 300),
+            "resident-b": _cfg(_LONG_WINDOW, None),
+            "resident-c": _cfg(_SHORT_WINDOW, 300),
+        },
+    )
+    uuids = {"resident-a": _UUID_A, "resident-b": _UUID_B, "resident-c": _UUID_C}
+    monkeypatch.setattr(
+        "src.resident_progress.probe_task.resolve_resident_uuid", uuids.get,
+    )
+
+
+@pytest.mark.asyncio
+async def test_residents_sharing_a_source_read_their_own_window_counts(monkeypatch):
+    """One fetch per (source, window) group, read back only by that group.
+
+    Keyed on the source name alone, the last group's result replaced the
+    others, and a resident whose group was replaced read 0 from a dict that
+    did not contain its UUID.
+    """
+    _patch_registry_sharing_one_source(monkeypatch)
+    counts = {
+        _SHORT_WINDOW: {_UUID_A: 7, _UUID_C: 4},
+        _LONG_WINDOW: {_UUID_B: 3},
+    }
+
+    async def _fetch(uuids, window):
+        return {u: counts[window][u] for u in uuids}
+
+    source = MagicMock()
+    source.fetch = AsyncMock(side_effect=_fetch)
+    writer = MagicMock()
+    writer.write = AsyncMock()
+
+    probe = _make_probe(sources_by_name={"agent_checkins": source}, writer=writer)
+    await probe.tick()
+
+    assert source.fetch.await_count == 2
+    assert {
+        (awaited.args[1], frozenset(awaited.args[0]))
+        for awaited in source.fetch.await_args_list
+    } == {
+        (_SHORT_WINDOW, frozenset({_UUID_A, _UUID_C})),
+        (_LONG_WINDOW, frozenset({_UUID_B})),
+    }
+
+    rows = writer.write.call_args_list[0][0][0]
+    assert {
+        r.resident_label: (r.metric_value, r.window_seconds, r.suppressed_reason)
+        for r in rows
+    } == {
+        "resident-a": (7, 1800, None),
+        "resident-b": (3, 2592000, None),
+        "resident-c": (4, 1800, None),
+    }
+
+
+@pytest.mark.asyncio
+async def test_source_error_stays_inside_its_window_group(monkeypatch):
+    """A failed fetch marks only the residents of its (source, window) group.
+
+    Keyed on the source name alone, one group's error marked every resident
+    naming that source as source_error, including those whose fetch succeeded.
+    """
+    _patch_registry_sharing_one_source(monkeypatch)
+
+    async def _fetch(uuids, window):
+        if window == _SHORT_WINDOW:
+            raise RuntimeError("statement timeout")
+        return {u: 2 for u in uuids}
+
+    source = MagicMock()
+    source.fetch = AsyncMock(side_effect=_fetch)
+    writer = MagicMock()
+    writer.write = AsyncMock()
+
+    probe = _make_probe(sources_by_name={"agent_checkins": source}, writer=writer)
+    await probe.tick()
+
+    by_label = {r.resident_label: r for r in writer.write.call_args_list[0][0][0]}
+    for label in ("resident-a", "resident-c"):
+        assert by_label[label].suppressed_reason == "source_error"
+        assert by_label[label].metric_value is None
+        assert by_label[label].error_details == {
+            "source": "agent_checkins",
+            "error": "RuntimeError: statement timeout",
+        }
+    healthy = by_label["resident-b"]
+    assert healthy.suppressed_reason is None
+    assert healthy.error_details is None
+    assert healthy.metric_value == 2
+
+
+def test_manifest_sharing_a_source_imports_in_a_fresh_interpreter(tmp_path):
+    """The server imports this module lazily inside the supervised probe task,
+    so an import-time raise stopped progress probing for every resident and
+    showed up only as a background-task crash. Import it the way a server
+    start does: a new interpreter whose registry comes from the manifest env.
+    """
+    entry = {"source": "agent_checkins", "metric": "checkin_count", "threshold": 1}
+    manifest = tmp_path / "resident_progress.json"
+    manifest.write_text(json.dumps({
+        "resident-a": {**entry, "window_seconds": 1800, "expected_cadence_s": 300},
+        "resident-b": {**entry, "window_seconds": 2592000, "expected_cadence_s": None},
+    }))
+
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "from src.resident_progress import probe_task; "
+         "print(sorted(probe_task.RESIDENT_PROGRESS_REGISTRY))"],
+        cwd=REPO_ROOT,
+        env={**os.environ, RESIDENT_PROGRESS_MANIFEST_ENV: str(manifest)},
+        capture_output=True, text=True, timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    # Both entries loaded, so the import did not pass on an empty registry.
+    assert proc.stdout.strip() == "['resident-a', 'resident-b']"
