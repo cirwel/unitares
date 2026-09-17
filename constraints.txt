@@ -9,9 +9,10 @@
 #
 # Policy: pin here only dependencies where CI/production drift has actually
 # bitten. Bump a pin deliberately, in the same PR that prepares the production
-# move (and deploy the interpreter bump with it). The `mcp-newest` advisory CI
+# move (and deploy the interpreter bump with it). The blocking `mcp-newest` CI
 # job tests the newest in-range resolution WITHOUT these constraints, so
-# coverage of upcoming versions is a deliberate lane, not an accident.
+# coverage of upcoming versions is a deliberate lane, not an accident, and
+# green there is the precondition for bumping a pin here.
 #
 # production-python: 3.14
 #
@@ -42,9 +43,10 @@
 # leaves that newer version in place and reports success. CI never hits this
 # because every run starts from a clean image; a developer's venv does.
 #
-# The failure is not subtle once it happens (an env carrying mcp 2.x fails to
-# COLLECT most of the suite, not merely to pass it), but the install that
-# caused it looked clean. On an existing environment, pin explicitly:
+# The drift is quiet now that the pin is mcp 2.x: a stale env keeps whatever
+# newer in-range release it resolved first, the suite still collects, and the
+# mismatch with production surfaces only in whatever seam that release
+# changed. On an existing environment, pin explicitly:
 #
 #   pip install "mcp==2.2.0" -r requirements-full.txt -c constraints.txt
 #
@@ -61,7 +63,7 @@
 #          the installed transport instead of hardcoding one.
 #   [done] a widened `mcp` pin in agents/sdk/pyproject.toml (otherwise the
 #          constrained sdk-package install hard-errors on the conflict).
-#   [done] a green mcp-newest lane — the advisory job resolves mcp 2.x and
+#   [done] a green mcp-newest lane — the blocking job resolves mcp 2.x and
 #          tests/test_mcp_dependency_canary.py passes against it.
 #   [done] the production interpreter bump — live py3.14 moved 1.29.0 -> 2.1.1
 #          and :8767/:8768 restarted via `cirwel update` on 2026-09-02.
