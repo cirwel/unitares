@@ -47,11 +47,14 @@ by releases and canonical documentation, not by this file.
 - Maintain and test the compatibility map for the server, SDK, governance
   plugin, and host adapters.
 - Submit the NeMo Relay integration upstream as a NeMo Agent Toolkit plugin
-  package, and run one harness side by side under the Relay path and the
-  existing hook chain against the same server. Both follow from the 2026-09-17
-  decision in
-  [`docs/proposals/relay-substrate-relayering-v0.md`](docs/proposals/relay-substrate-relayering-v0.md);
-  neither carries an efficacy claim.
+  package, once the cohort protocol carries the clarification that submission
+  owes it; run one harness side by side under the Relay path and the existing
+  hook chain against the same server; and complete the execute-plane design
+  read, which compares three live options and decides none of them in advance.
+  All three follow from the 2026-09-17 decision in
+  [`docs/proposals/relay-substrate-relayering-v0.md`](docs/proposals/relay-substrate-relayering-v0.md)
+  and report at its 2026-11-03 renew-or-stop checkpoint. None carries an
+  efficacy claim.
 
 ## Recently shipped (see releases and the changelog for detail)
 
