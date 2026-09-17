@@ -35,8 +35,14 @@ asyncpg>=0.29.0,<1.0.0
 # Redis runtime continuity support (required in production; demo degrades local-only)
 redis>=5.0.0,<9.0.0
 
-# Semantic search support (optional - for knowledge graph semantic queries)
-sentence-transformers>=2.2.0,<7.0.0
+# Optional embedding backend for knowledge-graph semantic queries. Not
+# installed by default: it requires torch, whose Linux wheel metadata pulls
+# cuda-toolkit, cudnn, nccl, nvshmem and triton with no GPU check and no
+# opt-out — measured at 5.9 GB installed versus 162 MB without. Semantic search
+# falls back to Postgres FTS when it is missing, and the response says so
+# (search_degraded). Uncomment here, or install the extra:
+#   pip install -e ".[full,embeddings]" -c constraints.txt
+# sentence-transformers>=2.2.0,<7.0.0
 
 # Numerical computation (used by governance_monitor, calibration, etc.)
 numpy>=1.24.0,<3.0.0

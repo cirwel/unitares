@@ -22,6 +22,14 @@ updates:
           - "prometheus-client"
           - "requests"
           - "python-dotenv"
+        update-types:
+          - "minor"
+          - "patch"
+      # sentence-transformers left the `full` extra and requirements-full.txt;
+      # it is opt-in via the `embeddings` extra, so a bump is not a runtime-dep
+      # bump and should not be labelled as one.
+      optional-embeddings:
+        patterns:
           - "sentence-transformers"
         update-types:
           - "minor"
