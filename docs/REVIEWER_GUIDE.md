@@ -1,7 +1,7 @@
 # UNITARES Reviewer Guide
 
 **Created:** May 23, 2026  
-**Last Updated:** August 11, 2026
+**Last Updated:** September 16, 2026
 **Status:** Active
 
 ---
@@ -10,17 +10,20 @@ This guide is for a cold evaluator deciding whether UNITARES is real, what layer
 
 ## One-sentence read
 
-UNITARES is runtime state telemetry for long-lived AI-agent fleets: agents check
-in after units of work, the server estimates drift and calibration through
-staged cold-start, fixed-threshold, and self-relative scoring, and policy or
-review layers can consume that state mid-run.
-Whether the telemetry predicts incidents or helps prevent them remains an open,
-measured question.
+UNITARES is a self-hosted federation kernel for agent identity, claims and
+evidence, review, outcomes, and reconstruction: independent agent runtimes share
+one operator-controlled record over MCP or HTTP (see the
+[product definition](PRODUCT_DEFINITION.md)). One part of that record is runtime
+state: agents check in after units of work, and the server estimates drift and
+calibration through staged cold-start, fixed-threshold, and self-relative
+scoring that policy or review layers can consume mid-run.
+Whether that state signal predicts incidents or helps prevent them remains an
+open, measured question.
 
 ## What this is
 
 - A governance MCP + HTTP server for agent runtime state.
-- A continuous check-in loop: `onboard` -> `process_agent_update` -> `outcome_event` -> `get_governance_metrics`.
+- A continuous check-in loop: `start_session` -> `sync_state` -> `record_result` -> `check_working_state`. These are the agent-facing workflow names; the implementation tools they route to are `onboard`, `process_agent_update`, `outcome_event`, and `get_governance_metrics` (mapping in [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md)).
 - A proprioceptive signal layer for agent strain/coherence/overload, documented in [`docs/ontology/eisv-proprioception-contract.md`](ontology/eisv-proprioception-contract.md).
 - A calibration layer that combines self-reported confidence with exogenous outcomes such as tests, exit codes, and tool results.
 - A continuity and audit layer for long-running and repeated agent process-instances.
@@ -63,11 +66,15 @@ treat it as proposed, not shipped.
 ## Fast path: three minutes
 
 ```bash
-git clone https://github.com/CIRWEL/unitares.git
+v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION)
+git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
 ```
+
+This is the README install pinned to the latest verified release; cloning
+`master` instead gets unreleased work.
 
 `make demo` is an installation smoke test. It onboards a fresh process, sends six
 check-ins, and prints the response shape and warmup position. The run stays below
@@ -78,13 +85,13 @@ question.
 If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports:
 
 ```bash
-POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 docker compose up -d --wait
+POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
 ```
 
 ## Ten-minute path
 
-1. Read the top of [`README.md`](../README.md) through the self-regulation loop.
+1. Read the top of [`README.md`](../README.md) through "How it works", then the one-page [product definition](PRODUCT_DEFINITION.md).
 2. Run `make demo` and inspect `scripts/demo/quick_demo.py`.
 3. Open the dashboard screenshots in `docs/assets/` to see the operator view.
 4. Inspect `src/mcp_handlers/` for the MCP surface and `governance_core/` for pure governance logic.
@@ -105,9 +112,9 @@ UNITARES is for teams operating agents that persist long enough to drift: coding
 
 The first integration is deliberately small:
 
-1. Give each process-instance an identity with `onboard`.
-2. Send one `process_agent_update` after each meaningful unit of work.
-3. Send `outcome_event` when a hard result exists: test passed/failed, tool rejected, task completed/failed, CI signal, or external observation. Treat ordinary CI/test failures as task-negative evidence unless a separate contract, authority, or harm boundary was crossed.
+1. Give each process-instance an identity with `start_session(force_new=true)`.
+2. Send one `sync_state` after each meaningful unit of work.
+3. Send `record_result` when a hard result exists: test passed/failed, tool rejected, task completed/failed, CI signal, or external observation. Treat ordinary CI/test failures as task-negative evidence unless a separate contract, authority, or harm boundary was crossed.
 4. Let the agent read the returned state and verdict before deciding whether to proceed, narrow scope, ask for review, or pause.
 
 This complements evals, guardrails, and sandboxes. Evals ask whether a model should be deployed. Guardrails and sandboxes constrain actions. UNITARES asks what the already-running agent is doing now, whether it is still calibrated to its own baseline, and whether it should self-regulate.
