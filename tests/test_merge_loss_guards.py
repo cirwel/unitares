@@ -33,9 +33,21 @@ d="$STUB_DATA"
 printf '%s\\n' "$*" >> "$d/calls.log"
 case "$*" in
   "label create"*) exit 0 ;;
+  *"pr list"*"--json number,url,state"*)
+    [ -f "$d/pr_list_open.fail" ] && exit 1
+    cat "$d/pr_list_open.json" 2>/dev/null || echo "[]" ;;
   "pr list"*)
     [ -f "$d/pr_list.fail" ] && exit 1
     cat "$d/pr_list.json" 2>/dev/null || echo "[]" ;;
+  "api repos/"*"/commits/"*"/pulls")
+    [ -f "$d/commit_pulls.fail" ] && exit 1
+    printf 'x' >> "$d/pulls_calls"
+    n=$(wc -c < "$d/pulls_calls" | tr -d ' ')
+    if [ -f "$d/commit_pulls_second.json" ] && [ "$n" -ge 2 ]; then
+      cat "$d/commit_pulls_second.json"
+    else
+      cat "$d/commit_pulls.json" 2>/dev/null || echo "[]"
+    fi ;;
   "issue list"*)
     cat "$d/issue_list.json" 2>/dev/null || echo "[]" ;;
   "issue create"*) echo "https://github.com/example/repo/issues/999" ;;
@@ -80,6 +92,10 @@ def guard_env(tmp_path):
     env["STUB_DATA"] = str(data)
     env["GITHUB_STEP_SUMMARY"] = str(summary)
     env["GITHUB_REPOSITORY"] = "example/repo"
+    # The orphan guard waits for a not-yet-opened PR before alarming. Every
+    # pre-existing case asserts the instantaneous verdict, so the wait is off
+    # unless a test opts in; otherwise each firing case would sleep 120s.
+    env["ORPHAN_GUARD_PR_GRACE_S"] = "0"
     return env, data, summary
 
 
@@ -199,6 +215,133 @@ def test_orphan_push_compare_failure_still_alarms_as_indeterminate(guard_env):
     proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/dead", PUSHED_SHA="b" * 40)
     assert proc.returncode == 1  # dead-branch push is anomalous regardless
     assert "INDETERMINATE" in calls(data)  # ...but the recipe must not blind cherry-pick
+
+
+def test_orphan_push_suppressed_when_an_open_pr_contains_the_pushed_sha(guard_env):
+    """The re-land case: work cherry-picked to a fresh branch is tracked.
+
+    This branch's own PRs are all merged and the push carries unlanded
+    commits, so every pre-existing signal says alarm. It is still not a
+    strand, because an open PR elsewhere contains the commit.
+    """
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "ahead",
+        "commits": [{"sha": "a" * 40, "commit": {"message": "docs: the re-landed work"}}],
+    }))
+    (data / "commit_pulls.json").write_text(json.dumps([{"number": 77, "state": "open"}]))
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/reused", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 0, proc.stderr
+    log = calls(data)
+    assert "issue create" not in log
+    assert "issue comment" not in log
+    assert "tracked, not stranded" in summary.read_text()
+    assert "#77" in summary.read_text()
+
+
+def test_orphan_push_suppressed_when_a_new_pr_opened_on_the_same_branch(guard_env):
+    """Branch reuse: the new round's PR is open by the time the guard looks."""
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "ahead",
+        "commits": [{"sha": "a" * 40, "commit": {"message": "feat: round two"}}],
+    }))
+    (data / "pr_list_open.json").write_text(json.dumps([
+        {"number": 88, "url": "u", "state": "OPEN"}
+    ]))
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/reused", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 0, proc.stderr
+    assert "issue create" not in calls(data)
+    assert "#88" in summary.read_text()
+
+
+def test_orphan_push_does_not_trust_a_merged_row_from_the_open_query(guard_env):
+    """A suppression must never rest on a MERGED PR coming back from --state open.
+
+    The guard asks for open PRs but re-checks the state field, so a gh (or a
+    stub) that ignores the filter cannot silence a real finding.
+    """
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    (data / "pr_list_open.json").write_text(json.dumps([MERGED_PR]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "ahead",
+        "commits": [{"sha": "a" * 40, "commit": {"message": "fix: the lost work"}}],
+    }))
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/dead", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 1, proc.stderr
+    assert "ORPHAN PUSH" in summary.read_text()
+
+
+def test_orphan_push_still_fires_when_the_grace_window_finds_nothing(guard_env):
+    """An abandoned push acquires no PR, so the wait only delays the alarm."""
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "ahead",
+        "commits": [{"sha": "a" * 40, "commit": {"message": "fix: genuinely stranded"}}],
+    }))
+    proc = run_guard(
+        "orphan_push_guard.py", env,
+        BRANCH="claude/dead", PUSHED_SHA="b" * 40,
+        ORPHAN_GUARD_PR_GRACE_S="1",
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "issue create" in calls(data)
+    assert "ORPHAN PUSH" in summary.read_text()
+
+
+def test_orphan_push_suppressed_when_the_pr_opens_during_the_grace_window(guard_env):
+    """The race this closes: the PR did not exist when the guard first looked.
+
+    The stub answers empty on the first lookup and returns the PR on the
+    second, so this asserts the guard looks AGAIN after an empty first
+    answer. The wait between the two is `time.sleep`, in-process and not
+    observable from a stub, so the re-check is what is tested here.
+    """
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "ahead",
+        "commits": [{"sha": "a" * 40, "commit": {"message": "docs: pushed then PR'd"}}],
+    }))
+    (data / "commit_pulls.json").write_text("[]")
+    (data / "commit_pulls_second.json").write_text(
+        json.dumps([{"number": 99, "state": "open"}])
+    )
+
+    proc = run_guard(
+        "orphan_push_guard.py", env,
+        BRANCH="claude/reused", PUSHED_SHA="b" * 40,
+        ORPHAN_GUARD_PR_GRACE_S="1",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "issue create" not in calls(data)
+    assert "tracked, not stranded" in summary.read_text()
+    assert "#99" in summary.read_text()
+    # Two lookups: the one that found nothing, and the one after the wait.
+    assert (data / "pulls_calls").read_text() == "xx"
+
+
+def test_orphan_push_fires_when_the_tracking_lookup_itself_fails(guard_env):
+    """Fail-open on the suppression, not on the finding.
+
+    A guard that swallowed its own alarm because a lookup errored would be
+    worse than a noisy one, so a failed tracking probe leaves the alarm.
+    """
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    (data / "compare.json").write_text(json.dumps({
+        "status": "ahead",
+        "commits": [{"sha": "a" * 40, "commit": {"message": "fix: the lost work"}}],
+    }))
+    (data / "pr_list_open.fail").touch()
+    (data / "commit_pulls.fail").touch()
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/dead", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 1, proc.stderr
+    assert "ORPHAN PUSH" in summary.read_text()
 
 
 def test_orphan_push_degrades_visibly_on_api_failure(guard_env):
