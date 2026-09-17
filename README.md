@@ -41,7 +41,7 @@ recoverable even when the process that started it is gone.
   continue earlier work.
 
 Together, these form an operator-owned accountability layer across coding
-agents, research agents, residents, and custom runtimes.
+agents, research agents, always-on service agents, and custom runtimes.
 
 ## Install
 
@@ -80,7 +80,7 @@ act on them with evidence.
 UNITARES is working toward an operator experience where a fleet can be brought
 under accountable operation in one step: identities are configured, handoffs
 are enforceable, important evidence survives, reviews bind to the work they
-govern, and outcomes improve the next decision.
+govern, and outcomes are recorded where the next decision can use them.
 
 The larger aim is infrastructure for agent systems that can accumulate useful
 experience without losing authorship, challenge, or operational control as they
