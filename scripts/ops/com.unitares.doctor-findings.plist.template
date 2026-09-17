@@ -36,11 +36,11 @@
 
       python3 is PINNED to an interpreter that has the repo's DEPENDENCIES, not
       merely a new enough version. launchd's minimal PATH resolves python3 to
-      /usr/bin/python3 (3.9.6) while the repo targets 3.12+ — but "3.12+" is
+      /usr/bin/python3 (3.9.6) while the repo targets 3.14+ — but "3.14+" is
       not the whole requirement and reading it as such is how this broke.
 
       escalation imports agents.common.findings, which imports httpx at module
-      level. A bare Homebrew python satisfies "3.12+" and still lacks httpx, so
+      level. A bare Homebrew python satisfies "3.14+" and still lacks httpx, so
       the sweep runs, diagnoses correctly, logs its findings — and every
       post_finding raises ModuleNotFoundError. Point this at a venv that has the
       project installed. Verify before trusting it:
@@ -56,7 +56,7 @@
 
     Before installing, substitute the placeholders:
       __UNITARES_ROOT__ -> absolute path to the deploy checkout
-      PYTHON_BIN            -> absolute path to a 3.12+ interpreter
+      PYTHON_BIN            -> absolute path to a 3.14+ interpreter
 
     Example:
       sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \

@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 # Only the newest revision of a branch is actionable. Cancel superseded runs so
-# an active PR does not consume twelve database-backed runners for stale commits.
+# an active PR does not consume database-backed runners for stale commits.
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -31,21 +31,20 @@ jobs:
         # as a 401-eliciting auth header and falls back to a no-TTY prompt.
         persist-credentials: false
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.14
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
-        python-version: '3.12'
-        cache: 'pip'
-        cache-dependency-path: |
-          requirements-full.txt
-          constraints.txt
+        python-version: '3.14'
 
     - name: Install dependencies
       # -c constraints.txt pins drift-bitten deps to the production resolution;
       # the blocking mcp-newest job covers the unconstrained resolution.
+      # uv instead of pip: the same requirements and constraints, installed
+      # into the setup-python interpreter. pip spent 88-105s of every job here
+      # (run 35190809793), holding a runner other PRs were queued behind.
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements-full.txt -c constraints.txt
+        python -m pip install uv
+        uv pip install --system -r requirements-full.txt -c constraints.txt
 
     - name: Validate CI/Python version sync
       run: |
@@ -165,89 +164,38 @@ jobs:
       # requires-python floor so adding interpreters cannot change what the
       # floor measures: a line reachable only under one interpreter would
       # otherwise count. tests/test_ci_test_gate.py pins this to the floor.
-      COVERAGE_LEG: '3.12'
+      COVERAGE_LEG: '3.14'
 
     strategy:
       fail-fast: false
       matrix:
-        # 3.12 is the .python-version dev default and the requires-python
-        # floor. 3.14 is the production interpreter's minor series (the
-        # LaunchAgent runs 3.14.0, the Docker digest pins its own patch, and
-        # setup-python resolves the newest 3.14.x; patch parity is not
-        # claimed): constraints.txt declares
-        # it (`# production-python:`), the Dockerfile base image and the
-        # LaunchAgent templates under scripts/ops carry it, and
-        # check_ci_python_matrix_sync.py holds all of those and this list to
-        # one value, and checks that the setup-python step below consumes
-        # the matrix. Until 2026-09-02 the pytest suite ran on 3.12 only;
-        # the only 3.14 exercise CI had was docker-quickstart's demo, which
-        # runs no tests. The floor leg is the coverage leg (COVERAGE_LEG);
-        # the production leg is pass/fail evidence. The production suite uses
-        # four broader shards below instead of duplicating all eight coverage
-        # shards: one run otherwise exposes 21 immediately eligible jobs to a
-        # 20-runner GitHub Free account before any other branch run competes
-        # for capacity. Every leg feeds the
-        # required `test (3.12)` context below, so a 3.14 regression blocks
-        # merge.
-        python-version: ['3.12', '3.14']
-        # Top-level tests are split by filename. Nested tests and agents keep a
-        # dedicated shard. Each job gets its own DB and filesystem, avoiding the
-        # shared-state hazards of pytest-xdist.
+        # One interpreter. 3.14 is the requires-python floor AND the production
+        # interpreter (constraints.txt `# production-python:`, the Dockerfile
+        # base image, the ops LaunchAgent templates); check_ci_python_matrix_sync.py
+        # holds all of those and this list to one value, and checks that the
+        # setup-python step below consumes the matrix.
         #
-        # The wall clock of this workflow is the SLOWEST shard, not the sum, so
-        # the boundaries are chosen to flatten the spread rather than to give
-        # each letter range a similar file count (file count predicts runtime
-        # poorly: the old tests-q-t held 129 files and ran 228s while tests-c-d
-        # held 138 and ran 171s).
+        # From 2026-09-02 to 2026-09-17 the matrix also ran a 3.12 floor leg
+        # (eight coverage shards) beside four 3.14 shards: 18 jobs per run on a
+        # GitHub Free account capped at 20 concurrent jobs across every run. With
+        # several PRs open, shards waited 6-15 minutes for a runner (run
+        # 35190809793: 152 job-minutes queued, 63 running, 23.8 min wall clock).
+        # Nothing deployed ran 3.12, so the server floor moved to 3.14. The SDK
+        # keeps its own >=3.12 floor, exercised by the sdk-package job below.
+        # Re-adding an interpreter is one matrix entry, but price the queue first.
+        python-version: ['3.14']
+        # Top-level tests are split by filename. Nested tests and agents ride with
+        # the smallest letter group. Each job gets its own DB and filesystem,
+        # avoiding the shared-state hazards of pytest-xdist.
         #
-        # Boundaries re-cut 2026-09-08 against measured per-group runtimes under
-        # COVERAGE_CORE=sysmon (below) -- the old ones were cut before that, and
-        # the fast core does not shrink every group equally. Every group here was
-        # run and observed green. The numbers are one machine's seconds, so read
-        # them as a spread, not as CI times; the "after" column gives both runs
-        # where they were measured twice, because run-to-run variance on a shared
-        # machine is ~10% and quoting the friendlier run would overstate this:
-        #
-        #     before (old boundaries)     after (these boundaries)
-        #     a-b   41.1s                 a-c   88.9 / 90.9s
-        #     c-d   91.2s                 d-e   79.3 / 80.8s
-        #     e-h   88.1s                 f-i   69.2 / 68.0s
-        #     i-l   86.9s                 j-m   87.2 / 96.0s
-        #     m-p   60.7s                 n-r   68.4 / 74.6s
-        #     q-t  108.1s  <- critical    s-t   76.5 / 76.4s
-        #     u-z   39.9s                 u-z   39.9 / 39.4s
-        #     agents-and-nested 23.3s     agents-and-nested 23.3 / 22.3s
-        #     critical shard 108.1s       critical shard 88.9-96.0s (-11 to -18%)
-        #
-        # The "before" column is a single run per group, so the honest reading is
-        # that the spread tightened from 23-108s to 22-96s, not that the critical
-        # shard landed on one exact number.
-        #
-        # tests-a-c and tests-j-m are the binding constraints and neither can be
-        # split without pushing another group above it, so this is the floor for
-        # seven contiguous letter groups. A ninth shard was measured too and
-        # bought nothing: it lands on the same critical path for two more
-        # runners. Re-cut these boundaries from measurement, not from intuition,
-        # whenever the spread drifts again.
-        shard: [tests-a-c, tests-d-e, tests-f-i, tests-j-m, tests-n-r, tests-s-t, tests-u-z, agents-and-nested]
-        # Keep the measured eight-way split for the instrumented 3.12 coverage
-        # leg. The uninstrumented 3.14 production leg runs the same files in
-        # four broader groups, retaining full interpreter coverage with four
-        # fewer runner allocations and dependency/database setup cycles.
-        exclude:
-          - {python-version: '3.14', shard: tests-a-c}
-          - {python-version: '3.14', shard: tests-d-e}
-          - {python-version: '3.14', shard: tests-f-i}
-          - {python-version: '3.14', shard: tests-j-m}
-          - {python-version: '3.14', shard: tests-n-r}
-          - {python-version: '3.14', shard: tests-s-t}
-          - {python-version: '3.14', shard: tests-u-z}
-          - {python-version: '3.14', shard: agents-and-nested}
-        include:
-          - {python-version: '3.14', shard: tests-a-e}
-          - {python-version: '3.14', shard: tests-f-m}
-          - {python-version: '3.14', shard: tests-n-t}
-          - {python-version: '3.14', shard: tests-u-z-and-agents}
+        # Four shards, not eight: at this suite's size the fixed per-job cost
+        # (runner, Postgres container, dependency install) is a large share of a
+        # shard, and every shard is a runner slot other PRs compete for. These are
+        # the groups the 3.14 leg already ran; their test steps measured
+        # 203-243s uninstrumented in CI (run 35190809793), now with coverage.
+        # The wall clock is the SLOWEST shard: re-cut from measured --durations
+        # output, not from file counts, whenever the spread drifts.
+        shard: [tests-a-e, tests-f-m, tests-n-t, tests-u-z-and-agents]
 
     # Without a database, 333 tests across 29 modules skip themselves — every
     # migration test among them. The suite went green while the riskiest surface
@@ -289,17 +237,16 @@ jobs:
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: ${{ matrix.python-version }}
-        cache: 'pip'
-        cache-dependency-path: |
-          requirements-full.txt
-          constraints.txt
 
     - name: Install dependencies
       # -c constraints.txt pins drift-bitten deps to the production resolution;
       # the blocking mcp-newest job covers the unconstrained resolution.
+      # uv instead of pip: the same requirements and constraints, installed
+      # into the setup-python interpreter. pip spent 88-105s of every job here
+      # (run 35190809793), holding a runner other PRs were queued behind.
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements-full.txt -c constraints.txt
+        python -m pip install uv
+        uv pip install --system -r requirements-full.txt -c constraints.txt
 
     - name: Create test database
       env:
@@ -311,9 +258,8 @@ jobs:
       env:
         COVERAGE_FILE: .coverage.${{ matrix.python-version }}.${{ matrix.shard }}
         # Measure through CPython's sys.monitoring (PEP 669) instead of the
-        # C trace function for this line-only coverage configuration. Both
-        # interpreters support sys.monitoring; only the 3.12 leg measures
-        # coverage. The tested coverage.py 7.16.0 falls back for unsupported
+        # C trace function for this line-only coverage configuration (3.12+
+        # support sys.monitoring); only the COVERAGE_LEG measures coverage. The tested coverage.py 7.16.0 falls back for unsupported
         # configurations. Branch/context equivalence is not claimed here.
         #
         # Measured on tests/test_[q-t]*.py (the slowest shard), same machine,
@@ -331,30 +277,6 @@ jobs:
         COVERAGE_CORE: sysmon
       run: |
         case "${{ matrix.shard }}" in
-          tests-a-c)
-            targets=(tests/test_[a-c]*.py)
-            ;;
-          tests-d-e)
-            targets=(tests/test_[d-e]*.py)
-            ;;
-          tests-f-i)
-            targets=(tests/test_[f-i]*.py)
-            ;;
-          tests-j-m)
-            targets=(tests/test_[j-m]*.py)
-            ;;
-          tests-n-r)
-            targets=(tests/test_[n-r]*.py)
-            ;;
-          tests-s-t)
-            targets=(tests/test_[s-t]*.py)
-            ;;
-          tests-u-z)
-            targets=(tests/test_[u-z]*.py)
-            ;;
-          agents-and-nested)
-            targets=(agents/ tests/*/ tests/smoke_test.py)
-            ;;
           tests-a-e)
             targets=(tests/test_[a-e]*.py)
             ;;
@@ -394,10 +316,11 @@ jobs:
     # Preserve the branch-protection context while the expensive work fans out
     # above. `always()` plus the explicit shard guard ensures a failed matrix
     # leg cannot turn this required check into a harmless skip. The context
-    # name is fixed by branch protection; since 2026-09-02 it gates every
-    # interpreter leg of the matrix, not only 3.12, and the per-leg step
-    # below names the leg that failed. Renaming the context means updating
-    # the protection rule in the same change.
+    # name is fixed by branch protection; it gates every leg of the matrix,
+    # and the per-leg step below names the leg that failed. The "(3.12)" is
+    # historical: the suite runs on 3.14 only since 2026-09-17. Renaming the
+    # context means updating the protection rule in the same change, and every
+    # open PR whose last run reported the old name then needs a fresh run.
     name: test (3.12)
     if: ${{ always() }}
     needs: test_shard
@@ -406,10 +329,10 @@ jobs:
       contents: read
       actions: read   # list this run's jobs (the per-leg check below)
     env:
-      COVERAGE_LEG: '3.12'
+      COVERAGE_LEG: '3.14'
       # Expanded matrix legs after exclude/include; tests/test_ci_test_gate.py
       # recomputes this value from the matrix so the two cannot drift.
-      EXPECTED_SHARD_LEGS: '12'
+      EXPECTED_SHARD_LEGS: '4'
 
     steps:
     - name: Require every test shard to pass
@@ -419,19 +342,19 @@ jobs:
         exit 1
 
     - name: Require every shard leg of this run to pass
-      # `needs.test_shard.result` is one value collapsed over twelve legs.
+      # `needs.test_shard.result` is one value collapsed over every leg.
       # GitHub lets a single failed leg be re-run alone, and that re-run can
       # report the job as success while another leg's failure from the
       # earlier attempt still stands (github.com/orgs/community/discussions/26822).
       # elixir-tests.yml avoids the trap by not using a matrix; the shard
       # job is a matrix by design, so instead ask the Actions API for the
-      # latest execution of every job in this run and require all twelve shard legs
+      # latest execution of every job in this run and require every shard leg
       # present and successful. A missing leg is a failure, not a pass.
       # Partial re-runs: `filter=latest` returns each job's latest execution.
       # A leg re-run alone contributes its new conclusion; legs not re-run
       # keep their earlier one. The gate therefore aggregates the latest
       # execution of every leg across attempts: it passes only when all
-      # twelve are present and each one's latest execution succeeded, and
+      # of them are present and each one's latest execution succeeded, and
       # it fails on any leg that is absent or whose latest execution is not
       # a success. That is what closes the masking hazard: a leg whose most
       # recent execution failed cannot be hidden behind a re-run of another.
@@ -466,10 +389,10 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.14
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
-        python-version: '3.12'
+        python-version: '3.14'
 
     - name: Install coverage tooling
       run: python -m pip install "coverage[toml]>=7,<8"
@@ -477,9 +400,9 @@ jobs:
     - name: Download shard coverage data
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       with:
-        # Only the coverage leg's data: the floor keeps its 3.12 meaning and
-        # `coverage combine` sees eight distinct files rather than sixteen of
-        # which byte-identical pairs would be skipped as duplicates.
+        # Only the coverage leg's data, so a second interpreter added later
+        # cannot change what the floor measures, and `coverage combine` never
+        # sees byte-identical pairs it would skip as duplicates.
         pattern: coverage-data-${{ env.COVERAGE_LEG }}-*
         path: coverage-data
         merge-multiple: true
@@ -494,7 +417,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
       with:
-        name: coverage-report-3.12
+        name: coverage-report-3.14
         path: htmlcov/
         if-no-files-found: warn
 
@@ -572,10 +495,10 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.14
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
-        python-version: '3.12'
+        python-version: '3.14'
 
     - name: Build and install the server package
       run: |
@@ -656,6 +579,9 @@ jobs:
         persist-credentials: false
 
     - name: Set up Python 3.12
+      # The SDK's own requires-python floor (agents/sdk/pyproject.toml), which
+      # stays below the server's: outside consumers install the SDK, not the
+      # server. This job is that floor's only test.
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
         python-version: '3.12'
@@ -715,10 +641,10 @@ jobs:
       with:
         persist-credentials: false
 
-    - name: Set up Python 3.12
+    - name: Set up Python 3.14
       uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
       with:
-        python-version: '3.12'
+        python-version: '3.14'
 
     - name: Install newest in-range dependencies (no constraints, on purpose)
       # A fresh unconstrained resolve of requirements-full.txt already picks
