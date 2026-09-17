@@ -48,6 +48,12 @@ recoverable even when the process that started it is gone.
 - **Reconstruction** — give a successor the records needed to understand and
   continue earlier work.
 
+These are mechanisms that run and leave records, which is a different claim from
+improving outcomes. The frozen outcome-lift read did not establish predictive
+lift — inconclusive rather than ruled out — and prevention or improvement from
+pausing remains untested. The [claim ledger](docs/EVIDENCE_AND_LIMITS.md) marks
+which side of that line each capability sits on.
+
 Together, these form an operator-owned accountability layer across coding
 agents, research agents, background agents, and custom runtimes. What it adds
 to a record of what happened is adjudication: disagreement, conditions, and

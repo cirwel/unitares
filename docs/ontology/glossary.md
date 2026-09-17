@@ -49,11 +49,11 @@ load-bearing in more than one sense; none of the senses is wrong.
 |---|---|---|
 | `substrate (inference)` | What inference engine generates this behavior? (GPT-5.5, Opus, Qwen, Ollama) | `harness-substrate-plurality.md` — "Model / substrate \| What inference substrate generates behavior?" |
 | `substrate (deployment / identity layer)` | What persistent hardware/disk/DB/config survives a process restart and can *earn* continuity? (Lumen's Pi) | `identity.md` five-layer table — "Substrate \| persistent hardware, disk, DB, configuration"; Appendix "Substrate-Earned Identity" |
-| `substrate (runtime / scheduler)` | What execution model runs the work — per-process scheduling + protocol-level checkout vs. a shared asyncio loop? | `CLAUDE.md` / `AGENTS.md` "Substrate Tax" — "does not exist on substrates with per-process scheduling and protocol-level connection checkout (e.g., BEAM / db_connection)" |
+| `substrate (runtime / scheduler)` | What execution model runs the work — per-process scheduling + protocol-level checkout vs. a shared asyncio loop? | `UNIFIED_ARCHITECTURE.md` *asyncpg, Redis and the anyio scheduler* — per-process scheduling with protocol-level connection checkout "should not express this shape", recorded there as a design expectation whose comparison channel holds no rows |
 
 These three are orthogonal axes. An agent can switch `substrate (inference)`
 (swap model) while holding `substrate (deployment)` constant (same Pi), running
-on a `substrate (runtime)` that has no anyio coupling (BEAM). Always qualify
+on a `substrate (runtime)` with a different scheduling model (BEAM). Always qualify
 which axis you mean in cross-doc prose.
 
 ### fingerprint — **three** distinct questions
