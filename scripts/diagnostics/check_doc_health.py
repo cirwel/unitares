@@ -961,10 +961,27 @@ _CONTESTED_SKIP_FILES = {
     "falsifiability-power-audit-2026-08-23.md",
 }
 
+# Reader-facing surfaces that are not markdown, so collect_md_files() never
+# reaches them. CITATION.cff carried a retired tagline undetected for exactly
+# this reason: GitHub renders it in "Cite this repository", but no check
+# looked at anything but .md. Paths are repo-relative; a missing one is
+# skipped rather than failing, so this list can name optional surfaces.
+_CONTESTED_EXTRA_SURFACES: tuple[str, ...] = (
+    "CITATION.cff",
+    "pyproject.toml",
+    "src/tool_modes.py",
+    "scripts/dev/brand/render_social_preview.py",
+)
+
 
 def check_contested_claims(md_files: list[Path]) -> list[str]:
     warnings = []
-    for fpath in md_files:
+    extra = [
+        REPO_ROOT / rel
+        for rel in _CONTESTED_EXTRA_SURFACES
+        if (REPO_ROOT / rel).is_file()
+    ]
+    for fpath in list(md_files) + extra:
         rel = fpath.relative_to(REPO_ROOT)
         if rel.name in _CONTESTED_SKIP_FILES:
             continue

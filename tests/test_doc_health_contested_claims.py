@@ -329,3 +329,32 @@ def test_allows_the_canonical_sentence_and_the_paper_title(
         "and long-lived AI agents are the population it studies.",
     )
     assert warnings == []
+
+
+def test_non_markdown_surfaces_are_scanned(tmp_path, monkeypatch, doc_health):
+    """CITATION.cff is not .md, so collect_md_files() never reaches it.
+
+    The retired software title survived several positioning passes for exactly
+    this reason: every check walked markdown only.
+    """
+    citation = tmp_path / "CITATION.cff"
+    citation.write_text(
+        'title: "UNITARES: runtime governance for heterogeneous AI-agent fleets"\n'
+    )
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(doc_health, "_CONTESTED_EXTRA_SURFACES", ("CITATION.cff",))
+
+    warnings = doc_health.check_contested_claims([])
+
+    assert any("CITATION.cff:1" in warning for warning in warnings)
+
+
+def test_missing_extra_surface_is_skipped_not_an_error(
+    tmp_path, monkeypatch, doc_health
+):
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(
+        doc_health, "_CONTESTED_EXTRA_SURFACES", ("does/not/exist.toml",)
+    )
+
+    assert doc_health.check_contested_claims([]) == []

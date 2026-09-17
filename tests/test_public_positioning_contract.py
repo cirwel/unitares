@@ -90,3 +90,26 @@ def test_readme_badge_urls_are_not_volatile(tmp_path: Path) -> None:
     )
 
     assert check_doc_drift.readme_volatility_failures(tmp_path) == []
+
+
+def test_every_positioning_surface_shares_one_tagline() -> None:
+    """A surface may omit the tagline, but must not carry a variant of it."""
+    for rel_path, requirements in check_doc_drift.PUBLIC_POSITIONING_CHECKS.items():
+        taglines = [req for req in requirements if req[0] == "canonical tagline"]
+        if taglines:
+            assert taglines == [check_doc_drift.CANONICAL_TAGLINE], rel_path
+
+
+def test_non_markdown_reader_surfaces_are_pinned() -> None:
+    """CITATION.cff drifted because nothing but .md was ever checked."""
+    checks = check_doc_drift.PUBLIC_POSITIONING_CHECKS
+    assert check_doc_drift.CANONICAL_TAGLINE in checks["CITATION.cff"]
+    assert check_doc_drift.CANONICAL_TAGLINE in checks["README.md"]
+
+
+def test_citation_software_title_carries_the_tagline() -> None:
+    citation = (PROJECT_ROOT / "CITATION.cff").read_text(encoding="utf-8")
+    title_line = next(
+        line for line in citation.splitlines() if line.startswith("title:")
+    )
+    assert check_doc_drift.CANONICAL_TAGLINE[1][0].casefold() in title_line.casefold()
