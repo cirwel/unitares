@@ -785,6 +785,19 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 
 _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     (
+        re.compile(
+            r"Runtime governance for (?:heterogeneous AI-agent fleets"
+            r"|long-lived AI agents)"
+            r"|Infrastructure for long-lived AI agents"
+            r"|runtime state telemetry for long-lived AI agents",
+            re.IGNORECASE,
+        ),
+        "retired public tagline: the product sentence is the README's — "
+        "'Accountability infrastructure for long-running AI agents.' — and "
+        "every surface copies it verbatim; see the registry and the site's "
+        "EDITORIAL.md",
+    ),
+    (
         re.compile(r"that argument has a measured failure rate", re.IGNORECASE),
         "corrected: a static hint inventory has no observed failure-rate "
         "denominator; review caller/profile reachability and severity separately",
@@ -947,6 +960,9 @@ _CONTESTED_SKIP_FILES = {
     # Quotes each corrected phrasing verbatim in order to correct it; the
     # was/now table is the record of what these rules exist to prevent.
     "falsifiability-power-audit-2026-08-23.md",
+    # Tabulates all ten live phrasings of the product sentence, retired ones
+    # included, as the evidence for choosing one. Same rationale as above.
+    "public-presentation-critique-2026-09-16.md",
 }
 
 

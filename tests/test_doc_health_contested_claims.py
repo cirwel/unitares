@@ -266,3 +266,44 @@ def test_allows_the_corrected_boundary_contract_prose(
         "which the handler never read.\n",
     )
     assert warnings == []
+
+
+def test_flags_retired_public_tagline(tmp_path, monkeypatch, doc_health):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "UNITARES is runtime governance for heterogeneous AI-agent fleets.",
+    )
+    assert any("retired public tagline" in warning for warning in warnings)
+
+
+def test_flags_retired_long_lived_taglines(tmp_path, monkeypatch, doc_health):
+    for retired in (
+        "Infrastructure for long-lived AI agents",
+        "Runtime governance for long-lived AI agents",
+        "It provides runtime state telemetry for long-lived AI agents.",
+    ):
+        warnings = _warnings(
+            tmp_path / retired[:12].replace(" ", "_"),
+            monkeypatch,
+            doc_health,
+            retired,
+        )
+        assert any(
+            "retired public tagline" in warning for warning in warnings
+        ), retired
+
+
+def test_allows_the_canonical_sentence_and_the_paper_title(
+    tmp_path, monkeypatch, doc_health
+):
+    warnings = _warnings(
+        tmp_path,
+        monkeypatch,
+        doc_health,
+        "Accountability infrastructure for long-running AI agents. The paper is "
+        "titled Information-Theoretic Governance of Heterogeneous Agent Fleets, "
+        "and long-lived AI agents are the population it studies.",
+    )
+    assert warnings == []
