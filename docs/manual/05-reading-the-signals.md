@@ -95,7 +95,7 @@ The most important interpretation rule. The deployed EISV is **auditable heurist
 
 Whether the numbers add useful signal beyond simple baselines is an **open,
 measured question.** The
-[falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc)
+[falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-inspect-the-registered-evidence-dont-trust-this-doc)
 tests ranking (AUC), calibration (Brier), and the selection cost of reporting the
 best of several candidates. In the frozen 2026-08-09 trusted-anchor matrix,
 every overall scope/window/lead slice is `NON_DETECTION` against the
