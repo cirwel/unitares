@@ -55,7 +55,7 @@ result = sync_state(
 )
 action = result.get("action_summary", {}).get("action")
 
-if action in ("pause", "reject"):
+if action == "pause":  # reject-severity verdicts arrive as pause with sub_action="reject"
     stop_and_request_review(result)  # implement this in the host client
 ```
 
@@ -114,7 +114,7 @@ Verdicts also carry a **margin** (`comfortable` / `tight` / `critical`) indicati
 
 A central design stance: the project does not ask you to believe the numbers by
 prose. On a fresh clone, the
-[falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-grade-eisv-yourself-dont-trust-this-doc)
+[falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-inspect-the-registered-evidence-dont-trust-this-doc)
 asks whether EISV/prior-state telemetry adds signal over a simple
 previous-outcome baseline on AUC and Brier, then compares the selected best
 candidate with a matching permutation null. In the frozen 2026-08-09
