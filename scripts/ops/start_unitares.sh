@@ -36,7 +36,7 @@ if [ ! -d ".venv" ]; then
         echo "  Options:"
         echo "    1. Install venv support:  apt install python3-venv  (Debian/Ubuntu)"
         echo "                              dnf install python3-pip    (Fedora/RHEL)"
-        echo "                              brew install python@3.12   (macOS)"
+        echo "                              brew install python@3.14   (macOS)"
         echo "    2. Skip local setup and use remote mode instead:"
         echo "         export UNITARES_HTTP_API_TOKEN=<token>"
         echo "         curl -H 'Authorization: Bearer <token>' https://your-host.example/v1/tools"

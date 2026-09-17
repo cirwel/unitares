@@ -48,7 +48,7 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/confidence.py: "00cc04e1f54278b4"
   unitares/src/eisv_telemetry.py: "24f1a47911850263"
-  unitares/src/services/runtime_queries.py: "70cfc8d1a7ee7975"
+  unitares/src/services/runtime_queries.py: "f948bb168a59aad4"
   unitares/src/mcp_handlers/response_formatter.py: "1dce49d5fa405c49"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
@@ -171,7 +171,7 @@ The actionable levels are `tight`, `warning`, and `critical` — each carries a 
 
 | Field | Values | Meaning |
 |---|---|---|
-| `margin_scope` | `all_edges`, `measured_edges_only` | Whether every edge was judged, or only some of them (emitted on `comfortable` and `tight`; absent on `settling`, `warning`, `critical`) |
+| `margin_scope` | `all_edges`, `measured_edges_only` | Whether every edge was judged, or only some of them. `GovernanceConfig.compute_proprioceptive_margin` sets it only on `comfortable`/`tight`, but several decision paths in `GovernanceConfig.make_decision` and `monitor_decision.make_decision` re-emit it with a default of `all_edges`, so an `all_edges` reading beside a `settling`/`warning`/`critical` margin is that default and not a finding that every edge was judged |
 | `unmeasurable_edges` | list of edge names | The edges that had no band to judge against, so they were not assessed at all |
 
 An edge is unmeasurable when it has no threshold band for this agent. Coherence is the usual case, and the gate is provenance, not history: the coherence edge is judged only when `coherence_role` is `behavioral_update_consistency` (`GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE`), the history window carries that same role, and at least 10 samples exist. With the deployed `legacy_tanh_v` / `ode_control_feedback` producer the edge stays unmeasurable no matter how much history accumulates, so `comfortable` normally arrives as `margin_scope: measured_edges_only` with `unmeasurable_edges: ["coherence"]`. `comfortable` with `margin_scope: measured_edges_only` means "clear of the edges we could judge", not "nothing is near": read `unmeasurable_edges` for what was never assessed. Prefer the live values over assuming a fixed enum across runtime versions — `check_working_state()` is the source of truth.

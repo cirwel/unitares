@@ -173,7 +173,7 @@ UNITARES governance MCP server. A behavioral governance framework for AI agents 
 
 ## Stack
 
-- Python 3.12+, asyncio
+- Python 3.14+, asyncio
 - PostgreSQL@17 + AGE 1.7.0 (Apache Graph Extension) via Homebrew
 - Redis — de-facto primary session/identity store, **not optional** (boots in degraded local-only mode without it, but most live sessions exist only in Redis; see `docs/proposals/redis-retirement-v0.md`)
 - Pydantic v2 for parameter validation
@@ -200,6 +200,7 @@ Surfaces:
 - **`docs/ontology/plan.md`** — chronological state ledger; two sessions appending rows in the same window collide trivially. If a session is already editing it, branch from its head rather than starting parallel.
 - **Active proposal/RFC docs in hot phase** — the Plexus / lease-plane / BEAM thread (`docs/proposals/plexus-scope.md`, `surface-lease-plane-v0.md`, `surface-lease-plane-phase-a-plan.md`, `beam-footprint-roadmap-v0.md`, `beam-coordination-kernel.md`). Restructure-during-flight is normal here; same rule as plan.md.
 - **Large test-layout consolidation** — `tests/`. Before deleting more than ~200 lines of tests, surface intent in a draft PR or issue first; a stale −3496 diff (`feat/agentskills-compat`) was lost to drift this way.
+- **Reader-facing product prose** — `README.md`, `docs/PRODUCT_DEFINITION.md`, `ROADMAP.md`. Not slot-based: the collision is semantic, two sessions rewriting neighbouring paragraphs from the same brief. Four PRs touched `README.md` over 2026-09-16/17, and two sessions worked the *same* recommended-rewrites table from `docs/ontology/competitive-analysis-2026-09.md` without either knowing: #2277 landed the A2A boundary and the record exports, then #2280 rebased onto them and discarded its own versions of both. A shared source document is the tell — if a table or audit lists the edits, assume someone else has the same list. The positioning lints (`PUBLIC_POSITIONING_CHECKS` in `scripts/diagnostics/check_doc_drift.py`, `_CONTESTED_CLAIMS` in `check_doc_health.py`) pin the product *sentence* and the retired wordings; they will not notice a duplicated paragraph or a competing phrasing of the same idea, so coordination is the only control that applies here.
 
 This section protects against wasted parallel work across agents, not just mistakes within one session. The deeper fix is upstream of any single agent: do not run multiple agents on the same single-writer surface in the same window.
 

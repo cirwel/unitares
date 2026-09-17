@@ -97,15 +97,46 @@ python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <nam
 python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --apply
 ```
 
-It reads the identity back (must be `active` and carry `persistent` +
-`autonomous`), mints a token bound to the UUID, proves that token resumes the
-same UUID on the live server, and only then writes the anchor (`0600`). It never
-mints an identity, never writes tags, and refuses to replace an existing anchor
-without `--force`. The anchor is a credential: it stays outside git and outside
-any session record. A resident resuming from it should present the fresh token
-the resume returns on its first check-in if that check-in is refused with a
-resume miss (the SDK's own one-retry rebind), and write that fresh token back to
-the anchor at session end.
+It reads the identity back (must be `active`, carry `persistent` +
+`autonomous`, and have a server label equal to `<name>` lowercased, because the
+FILENAME is what `resident_progress.resolve_resident_uuid` looks the anchor up
+by), mints a token bound to the UUID, proves the server ACCEPTED that token as
+the thing that resolved the resume, and only then writes the anchor (`0600`,
+via a temp file created private and fsync'd, so the token is never briefly
+world-readable). It never mints an identity and never writes tags. An anchor
+that already names the same UUID is left alone, exit 0. An anchor naming a
+different UUID is refused unless you pass `--replace-identity`, which prints the
+displaced UUID: a silent repoint is how a resident forks.
+
+⛔**A matching UUID is not proof, which is why the verify checks more than the
+UUID.** `UNITARES_IDENTITY_STRICT` defaults to `log`, and in that mode a PATH 0
+resume whose token fails its ownership check logs, broadcasts
+`identity_hijack_suspected`, and resumes anyway — with the correct UUID in the
+response. Reproduced against v2.22.1 with an expired token: `success: true`,
+`resumed: true`, matching UUID, and alongside them
+`proof_origin: "server_inferred"`, `caller_proven: false`,
+`session_resolution_source: "agent_uuid_direct_fastpath"`, plus an explicit
+`identity_warnings` entry `continuity_token_invalid`. A verify that compared
+only the UUID therefore returned green for a token the server had rejected,
+usually because the operator's signing secret differed from the server's, and
+deferred the failure to the resident's next session. The script now requires
+`proof_origin: "caller_asserted"` (or a continuity-token
+`session_resolution_source`) and refuses on that warning.
+
+On a UDS deployment a `persistent` resident attests by peer credential rather
+than by token, and the SDK deliberately writes a UUID-only anchor for it
+(`_save_session`). The script matches that and writes no token there, rather
+than leaking a bearer credential into a file designed to hold none.
+
+The anchor is a credential: it stays outside git and outside any session record.
+A resident resuming from it should present the fresh token the resume returns on
+its first check-in if that check-in is refused with a resume miss (the SDK's own
+one-retry rebind), and write that fresh token back to the anchor at session end.
+
+One side effect worth knowing: an anchor for a `persistent` UUID satisfies the
+dedicated-substrate condition in `evaluate_substrate_earned`, which is one of
+the exemptions the strict write gate honours. The file is a write-gate
+credential, not merely a lookup hint.
 
 ## Two neighbouring env vars that are NOT this one
 
@@ -170,6 +201,12 @@ Set this on the **governance server** plist (the probe runs there). Each entry's
 `sentinel_pulse`, `agent_checkins`) or a third-party source discovered via entry
 point (below). Labels are lowercase to match the anchor filenames under
 `~/.unitares/anchors/`.
+
+Several residents may name the same `source`. The probe fetches once per
+distinct `(source, window_seconds)` pair and keys results and errors on that
+pair, not on the source name. Residents that share both the source and the
+window share one fetch; a different window gets its own fetch and its own
+counts. A failed fetch marks only that pair's residents `source_error`.
 
 ### Bringing your own progress source
 

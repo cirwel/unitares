@@ -62,7 +62,7 @@ z-score scoring against a 30-update target.
 
 **Secondary system: ODE (diagnostic only)** — coupled differential equations run in parallel but do not drive verdicts. The ODE provides a dynamical-systems lens for analysis but behavioral verdicts override.
 
-The grounding path lives in `src/dual_log/`, `src/behavioral_sensor.py`, `src/behavioral_state.py`, and `src/behavioral_assessment.py`. The ODE engine lives in `governance_core` (compiled package, unitares-core).
+The grounding path lives in `src/dual_log/`, `src/behavioral_sensor.py`, `src/behavioral_state.py`, and `src/behavioral_assessment.py`. The ODE engine lives in `governance_core/` at the top level of this repo — pure Python, no separate install (it was a private compiled wheel, `unitares-core`, until it was folded back in 2026-04).
 
 ### 3. Ethical Drift
 
@@ -129,7 +129,7 @@ See [dev/CIRCUIT_BREAKER_DIALECTIC.md](dev/CIRCUIT_BREAKER_DIALECTIC.md) for the
 Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonical retrieval backend** (`UNITARES_KNOWLEDGE_BACKEND=postgres`, default); Apache AGE is an **optional graph backend** for queries that benefit from cypher-style traversal (`UNITARES_KNOWLEDGE_BACKEND=age`). The factory lives in [`src/knowledge_graph.py`](../src/knowledge_graph.py).
 
 - Discoveries tagged with agent state, severity, and type
-- Searchable across all agents and sessions via hybrid RRF
+- Searchable across all agents and sessions; hybrid RRF (vector + FTS) requires the AGE backend — `KnowledgeGraphPostgres` exposes no `semantic_search`, and `UNITARES_ENABLE_HYBRID` defaults off
 - Agents build on each other's findings — no re-discovery of known issues
 
 ## Database Architecture
@@ -145,7 +145,7 @@ Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonic
 |  +- governance_graph (AGE)   |     There is no SQLite.
 |  +- dialectic.*              |
 |  +- core.calibration         |
-|  +- core.tool_usage          |
+|  +- audit.tool_usage         |
 |                              |
 |  Redis (port 6379)           |     De-facto primary session store —
 |  audit_log.jsonl (raw)       |     not optional; degraded local-only without it.
@@ -241,9 +241,9 @@ anyio isolation (Redis guards, sync blocking I/O, performance caches):
 
 | File | Role |
 |------|------|
-| `governance_core.dynamics` | EISV differential equations (compiled) |
-| `governance_core.coherence` | Coherence function C(V, Theta) (compiled) |
-| `governance_core.adaptive_governor` | PID controller, oscillation detection (compiled) |
+| `governance_core.dynamics` | EISV differential equations |
+| `governance_core.coherence` | Coherence function C(V, Theta) |
+| `governance_core.adaptive_governor` | PID controller, oscillation detection |
 | `config/governance_config.py` | Thresholds, margin computation |
 | `src/mcp_server.py` | MCP server entry point |
 | `src/mcp_handlers/core.py` | `process_agent_update` handler |
