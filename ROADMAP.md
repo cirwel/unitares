@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last reviewed:** 2026-08-16
+**Last reviewed:** 2026-09-17
 
 This roadmap states priorities, not delivery dates. Deployed behavior is defined
 by releases and canonical documentation, not by this file.
@@ -30,6 +30,14 @@ by releases and canonical documentation, not by this file.
   whether identity, attestation, and enforcement survive a principal who does
   not share this authority. The cohort above does not establish it, and it does
   not gate the cohort. See [`docs/SCOPE_AND_THREAT_MODEL.md`](docs/SCOPE_AND_THREAT_MODEL.md).
+
+- **Two exports, for legibility rather than capability:** an audit-trail export
+  in the shape of the IETF Agent Audit Trail draft, and standard trace emission
+  under the OpenTelemetry GenAI conventions (still in development upstream).
+  Both let an evaluator read the record without this server's own tooling;
+  neither adds a mechanism or an efficacy claim. Recorded as gaps by the
+  2026-09 claims audit
+  ([`docs/ontology/competitive-analysis-2026-09.md`](docs/ontology/competitive-analysis-2026-09.md)).
 
 ## Next — reduce maintenance and integration friction
 
