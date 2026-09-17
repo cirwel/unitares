@@ -447,6 +447,64 @@ class TestAnchorWrite:
 
 
 # ---------------------------------------------------------------------------
+# Two consecutive calls — the rotation itself, not a seeded anchor
+# ---------------------------------------------------------------------------
+
+class TestKeyRotationAcrossCalls:
+    """Every test above seeds the anchor by hand, and TestAnchorWrite checks the
+    write in isolation. Neither proves the two halves agree: a write keyed on
+    one candidate set and a read probing another would pass both suites while
+    every real rotation still minted. This drives the actual sequence — call 1
+    threads client_session_id and resumes, call 2 omits it so the derived key
+    rotates — against one shared Redis."""
+
+    @pytest.mark.asyncio
+    async def test_uuid_survives_client_session_id_dropped_on_second_call(self):
+        redis = FakeRedis()
+        db = _make_db()
+        # Only the key derived from call 1's client_session_id has a live row
+        # (derivation appends a model scope, e.g. ":claude"). Call 2's
+        # fingerprint-derived key has none, so PATH 1/2 genuinely miss.
+        live = MagicMock(agent_id=AGENT_UUID)
+        db.get_session = AsyncMock(
+            side_effect=lambda key, *a, **k: (
+                live if key.startswith(STABLE_CSID) else None
+            )
+        )
+        scheduled, spy = TestAnchorWrite._run_inline()
+
+        with _Stack(_patches(redis, db)), \
+             patch("src.mcp_handlers.context.get_session_signals", return_value=FakeSignals()), \
+             patch("src.mcp_handlers.identity.shared._session_identities", {}), \
+             patch("src.background_tasks.create_tracked_task", side_effect=spy):
+            _, _, first = await resolve_identity(
+                "sync_state", {"client_session_id": STABLE_CSID}, DispatchContext(),
+            )
+            for _ in range(4):
+                await __import__("asyncio").sleep(0)
+            assert "identity_anchor_write" in scheduled, (
+                "call 1 resumed but left nothing for a rotated key to recover from"
+            )
+
+            _, second_args, second = await resolve_identity(
+                "sync_state", {}, DispatchContext(),
+            )
+
+        assert first.bound_agent_id == AGENT_UUID
+        assert first.identity_result["created"] is False
+        assert second.session_key != first.session_key, (
+            "precondition: the second call's session key must actually rotate"
+        )
+        assert second.bound_agent_id == AGENT_UUID, (
+            "rotated session key minted a phantom UUID instead of recovering"
+        )
+        assert second.identity_result["created"] is False
+        assert second.identity_result["recovered_via"] == "identity_anchor"
+        assert second_args["client_session_id"] == STABLE_CSID
+        assert second.identity_result.get("spawn_reason") != "dispatch_auto_mint"
+
+
+# ---------------------------------------------------------------------------
 # #1319 boundary — a REFUSED resume is not a MISSING one
 # ---------------------------------------------------------------------------
 
