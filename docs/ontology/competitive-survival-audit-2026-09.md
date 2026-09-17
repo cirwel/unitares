@@ -254,10 +254,41 @@ must remain usable locally without a required vendor or metered service.
    accountability workflow, not a larger catalog.
 
 These are decisions for the operator, informed by the re-layering packet in
-[#2255](https://github.com/cirwel/unitares/pull/2255); this audit does not revoke
-previous go-decisions. Freezing investment is a portfolio decision, not a
-conclusion from zero usage. It does not require deleting deployed capabilities.
-Existing compatibility paths can remain while the product boundary is tested.
+[#2255](https://github.com/cirwel/unitares/pull/2255), which merged on
+2026-09-16; this audit does not revoke previous go-decisions or propose rolling
+back its optional Relay adapter. Freezing investment is a portfolio decision,
+not a conclusion from zero usage. It does not require deleting deployed
+capabilities. Existing compatibility paths can remain while the product boundary
+is tested.
+
+## Reconciliation of PRs #2255–#2258
+
+The four pull requests answer different questions and should not be collapsed
+into a synthetic consensus. The claims map supplies evidence, the independent
+review preserves disagreement, this audit makes a portfolio recommendation, and
+the Relay pull request changes runtime behavior. Their reconciled dispositions
+are:
+
+| PR | Role | Reconciled disposition |
+|---|---|---|
+| [#2255](https://github.com/cirwel/unitares/pull/2255) | Optional NeMo Relay adapter plus a Relay tool-policy gate | **Already merged. Retain the adapter; correct the authority default in a dedicated follow-up.** `RelayPluginConfig.enforce` is currently `true`, so installing the component enables EISV-derived tool blocking unless the operator opts out. Change that default to `false`, document enforcement as experimental opt-in, and do not treat its in-band tool failures as independent outcome evidence. Do not remove the exporter or make Relay a required substrate. |
+| [#2256](https://github.com/cirwel/unitares/pull/2256) | Claims falsification audit, market map, and proposed reader-facing wording | **Evidence and positioning owner.** Land when its checks pass, before this audit. It owns the shared positioning rewrite; later product documents should cite it rather than fork another description. |
+| [#2258](https://github.com/cirwel/unitares/pull/2258) | Point-in-time adversarial review of this audit | **Durable dissent record.** Land when its author declares it ready, before this audit. Preserve the disagreements as written; this audit's disposition table records which recommendations changed the synthesis. |
+| [#2257](https://github.com/cirwel/unitares/pull/2257) | Competitive-survival synthesis and investment recommendation | **Merge last.** It depends conceptually on #2256 and #2258 and records the post-merge correction required by #2255. It remains a recommendation until the operator ratifies each reaffirm-or-freeze decision. |
+
+This produces one decision sequence without pretending the documents agree on
+every diagnosis:
+
+1. preserve the evidence and the dissent (#2256 and #2258, in either order);
+2. correct #2255's authority-expanding default without discarding the adapter;
+3. merge this synthesis only after those records are durable; and
+4. run the capture-plus-retrieval pilot before funding another platform surface.
+
+The short-term code correction is deliberately narrow. It does not rewire the
+EISV instrument during the registered read window, change server policy, or
+assert that Relay observations validate the estimator. Any later move from
+substrate check-ins to a raw accountability-event seam belongs with the portable
+bundle design and must be evaluated separately.
 
 ## Demand risk
 
@@ -376,10 +407,10 @@ Failure retires a lever, not the accountability goal.
 
 ## Immediate 7-day actions
 
-1. Resolve the contradictions between this audit, the claims map in
-   [#2256](https://github.com/cirwel/unitares/pull/2256), and the Relay policy
-   gate in #2255 before merging any of them. In particular, runtime telemetry and
-   a stronger enforcement point do not validate EISV.
+1. Open a focused follow-up to #2255 that changes the Relay integration's
+   `enforce` default from `true` to `false` and describes the gate as an
+   experimental opt-in. Runtime telemetry and a stronger enforcement point do
+   not validate EISV.
 2. Let #2256 own any reader-facing positioning rewrite; do not start a competing
    PR on that single-writer surface.
 3. Specify one portable accountability bundle linking claims, evidence,
