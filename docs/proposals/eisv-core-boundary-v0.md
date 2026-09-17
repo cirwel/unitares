@@ -1,10 +1,11 @@
 # EISV / core boundary: a neutral checkpoint spine with EISV as a versioned subscriber (v0)
 
-**Status:** DRAFT proposal, 2026-09-17. Documentation only. This document
-changes no runtime behavior, schema, flag, default, threshold, response shape,
-or registered protocol. It authorizes, at most, the two implementation stages
-named in [Authorization](#authorization): a neutral checkpoint seam and a shadow
-subscriber, both default-off and non-authoritative.
+**Status:** DRAFT proposal, 2026-09-17, revised the same day after adversarial
+design review (Section 11). Documentation only. This document changes no runtime
+behavior, schema, flag, default, threshold, response shape, or registered
+protocol. It authorizes, at most, the two implementation stages named in
+[Authorization](#13-authorization): an observational checkpoint seam and an
+out-of-process shadow replay, both default-off, lossy, and non-authoritative.
 **Scope:** how the accountability record (identity, checkpoint, ordering,
 provenance, claims, evidence, objections, outcomes, artifact links) stops being
 owned by the EISV state estimator, without disturbing the estimator during its
@@ -35,16 +36,18 @@ relevant facts were re-read at `master` for this proposal:
 | Outcomes embed estimator state inline | `audit.outcome_events.eisv_e … eisv_regime`; `audit.outcome_prediction_bindings.canonical_eisv_snapshot` | An outcome is stored as an EISV observation, not as a fact about a checkpoint |
 | Write authority depends on the estimator | pause refuses the check-in and knowledge `store` / `note` (`check_agent_can_operate`, per #2258) | An unvalidated estimator gates part of the record it should only annotate |
 | Export is estimator history | `export` writes the monitor's rolling EISV history, not claims (#2258) | No portable record exists without EISV |
-| Post-update side effects are one fixed sequence | `execute_post_update_effects`: health/baselines → CIRS/drift → record state → save baseline → auto outcome → trajectory → phase-5 evidence → lineage | Ordering of record writes and estimator writes is interleaved |
+| Post-update side effects are one fixed sequence | `execute_post_update_effects`: health/baselines → CIRS/drift → record state → save baseline → auto outcome → trajectory → phase-5 evidence → lineage | Record writes and estimator writes are interleaved |
 
 Two further facts constrain any change:
 
-1. **The registered 2026-12-01 read depends on this exact coupling.** The
-   ablation instruments join each outcome to the latest `core.agent_state` row
-   at or before `o.ts − lead` and read `audit.outcome_events.eisv_*`
-   (`scripts/analysis/eisv_skeptic_report.py`, imported by
-   `eisv_ablation_matrix.py`). Changing what, when, or how those rows are written
-   before the read is instrument drift.
+1. **The registered 2026-12-01 read depends on this exact coupling, including
+   its timing.** The ablation instruments join each outcome to the latest
+   `core.agent_state` row at or before `o.ts − lead` and read
+   `audit.outcome_events.eisv_*` (`scripts/analysis/eisv_skeptic_report.py`,
+   imported by `eisv_ablation_matrix.py`). Keeping the columns and the query is
+   not enough: a change to update order, lock duration, exception timing, or
+   `recorded_at` can make that join select a different row near a boundary.
+   Section 8.1 turns this into a tested contract.
 2. **Capture, not EISV, is where the record failed on a real incident.** On
    #2168 the UNITARES arm recovered no positive fact about the unit, and the
    failure decomposed into a missing CI/git producer, nothing surfacing the
@@ -65,6 +68,10 @@ a separate, explicitly enabled consumer of assessments.
 
 EISV stays connected to trajectories. It stops owning them.
 
+The living key is a **Stage 3** artifact. Before the read, nothing minted is
+durable or continuable: Stages 1 and 2 are instruments for testing whether the
+contract below is complete, not the first rows of the future record.
+
 ## 3. Dependency direction
 
 ```
@@ -78,16 +85,17 @@ host hooks / SDK / adapters (plugin post-stop, Relay exporter, CI producer)
 └───────────────┬────────────────────────────────────────────────┘
                 │ checkpoint.recorded (ordered per identity)
                 ▼
-      ┌─────────────────────┐          ┌─────────────────────────┐
-      │ assessors           │          │ exporters / bundle      │
-      │ eisv-behavioral@N   │          │ (no assessor required)  │
-      │ (research variants) │          └─────────────────────────┘
-      └─────────┬───────────┘
+      ┌──────────────────────────┐     ┌─────────────────────────┐
+      │ assessor adapters        │     │ exporters / bundle      │
+      │  own their input snapshot│     │ (no assessor required)  │
+      │  eisv-behavioral@N       │     └─────────────────────────┘
+      │  (research variants)     │
+      └─────────┬────────────────┘
                 │ assessment.produced (advisory, keyed by checkpoint_id)
                 ▼
       ┌─────────────────────┐
       │ enforcement (opt-in)│ reads assessments; may refuse writes;
-      │ pause / circuit brk │ its refusals are recorded as checkpoints
+      │ pause / circuit brk │ its decisions are recorded
       └─────────────────────┘
 ```
 
@@ -97,281 +105,376 @@ Rules:
   `governance_monitor`, `behavioral_state`, `governance_core` dynamics,
   calibration, or trajectory identity. A checkpoint is valid with zero
   assessors.
-- **Assessors depend on core, never the reverse.** An assessor reads checkpoints
-  and its own prior assessments. It cannot write claims, outcomes, identity, or
-  another assessor's state.
-- **Enforcement depends on assessments and is off unless configured.** It is
-  the only component allowed to turn an assessment into a refusal. Its
-  decisions are themselves recorded, so the record shows what the gate
-  suppressed.
-- **Outcomes bind to checkpoints, not to assessments.** An assessment may be
-  graded by an outcome through the checkpoint it annotated. The outcome row does
-  not carry assessor state.
+- **Core carries no assessor-specific fields.** What an assessor needs beyond
+  neutral checkpoint facts (tool-usage windows, calibration scalars, baselines,
+  clocks) is captured by that assessor's adapter into an **assessor input
+  snapshot** that references `checkpoint_id` and is versioned by the adapter. A
+  change to EISV's inputs changes the EISV adapter, never the checkpoint
+  contract.
+- **Assessors depend on core, never the reverse.** An assessor reads checkpoints,
+  its own input snapshots, and its own prior assessments. It cannot write claims,
+  outcomes, identity, or another assessor's state.
+- **Enforcement depends on assessments and is off unless configured.** It is the
+  only component allowed to turn an assessment into a refusal. Its decisions are
+  recorded.
+- **Outcomes bind to checkpoints, not to assessments.** An outcome row carries no
+  assessor state; an analysis joins through `checkpoint_id` and names the
+  assessor version it chose.
 
 Target, not current: today every arrow above is reversed or fused. Section 7
 states how the arrows move without breaking the read.
 
 ## 4. Event contract (v0)
 
-Three events. Field names are proposals; types are normative for the shadow
-stage.
+Field names are proposals. The **target semantics** (Stage 3) and the
+**pre-read semantics** (Stages 1 and 2) are stated separately, because the
+review showed that a non-durable implementation cannot honestly promise the
+target's guarantees.
 
 ### 4.1 `checkpoint.recorded.v0`
 
+| Field | Target meaning (Stage 3) | Pre-read (Stages 1–2) |
+|---|---|---|
+| `checkpoint_id` | Durable, immutable id; the living key | Diagnostic only; not continuable, never referenced by any other record, never reused in Stage 3 |
+| `idempotency_key` | Client- or adapter-supplied key; a retried or duplicated delivery of an accepted check-in maps to the existing checkpoint | Not provided; duplicates and retries are visible as separate diagnostic records |
+| `identity` | `agent_uuid`, salted digest of `client_session_id`, `parent_agent_id`, `tier`, `proof_origin` | `agent_uuid` and `tier` / `proof_origin` only |
+| `order` | `seq`: durable per-identity monotonic integer assigned in the same transaction as the checkpoint; `prev_checkpoint_id`; `recorded_at` (UTC, offset-bearing); `seq` is authoritative over any timestamp or UUID time component under clock skew or rollback | `seq` per server process, resets on restart; `process_run_id` distinguishes runs; multi-instance serving of one identity is out of contract and flagged |
+| `provenance` | `epistemic_class`, `producer` (name and version), `transport` | same |
+| `report` | Retention policy decided by the operator (Section 12) | Nothing: no text, excerpt, or digest |
+| `enforcement_regime` | Active gates and their configuration digest | Active gate names only |
+| `status` | `accepted`; refused and failed cases under a taxonomy the operator decides (Section 12) | Accepted check-ins only |
+| `links` | Cardinality-aware children: predictions, discoveries, dialectic sessions, artifact URIs | None |
+
+### 4.2 Assessor input snapshot (owned by the assessor adapter)
+
+Referenced by `checkpoint_id`; versioned by the adapter (`eisv-inputs.v0`). For
+`eisv-behavioral` it lists every input the live estimator reads at update time
+that the check-in does not carry. Each field states its **source**, **read
+time**, and whether the read is **pure**.
+
+The inventory is part of the deliverable, not an assumption. Known candidates
+from `phases.py` and `governance_monitor.py`: the one-hour tool-usage window,
+continuity metrics, the fleet-shared calibration scalar, the anomaly baseline,
+restored behavioral baseline state, the clock (prediction TTL and gap handling),
+and any random or cache-dependent path. An input the seam cannot see without
+modifying estimator internals is **named as not captured**. Estimator internals
+are not modified before the read to capture it.
+
+### 4.3 `assessment.produced.v0`
+
 | Field | Meaning |
 |---|---|
-| `checkpoint_id` | Server-minted, immutable, time-ordered UUID (v7). The living key. Minted once per accepted check-in, inside the per-agent lock, before any assessor runs. |
-| `identity` | `agent_uuid`, `client_session_id` digest (never the raw string), `parent_agent_id` when declared, identity `tier` and `proof_origin` as resolved. |
-| `order` | `seq` (per-identity monotonic integer assigned under the agent lock), `prev_checkpoint_id`, `recorded_at` (UTC, offset-bearing), `server_instance`. |
-| `provenance` | `epistemic_class` (existing five values), `producer` (hook, SDK, adapter name and version), `transport` (`mcp`, `rest`, `stdio`). |
-| `report` | `digest` of the submitted report text, `retention` (`transient` today), declared `complexity` / `confidence` as submitted. |
-| `side_inputs` | Digest and, in shadow, the values of every non-checkpoint input the current estimator reads at update time (tool-usage window, continuity metrics, fleet calibration scalar, anomaly baseline, clock). |
-| `enforcement_regime` | Which gates were active when this checkpoint was accepted (`none`, `circuit_breaker`, …) and the gate configuration digest. |
-| `status` | `accepted` or `refused` (with the refusing component and reason). A refused check-in is still a checkpoint. |
-| `links` | Optional references: `prediction_id`, discovery ids, dialectic session ids, artifact URIs (commit SHA, PR, CI run, issue). |
-
-### 4.2 `assessment.produced.v0`
-
-| Field | Meaning |
-|---|---|
-| `assessment_id`, `checkpoint_id` | The assessment annotates exactly one checkpoint. |
-| `assessor` | `name` (`eisv-behavioral`), `version`, `epoch` (matches `core.agent_state.epoch` semantics), `config_digest` (thresholds, class calibration overlay, shadow/apply flags). |
-| `input_window` | `from_seq`, `to_seq`, `prior_assessment_id`: the path this fold consumed. |
-| `state` | E, I, S, V, Φ, coherence, risk, regime, warmup phase and baselined status, each with its provenance label (`measured`, `derived`, `prior`, `unknown`). |
+| `assessment_id`, `checkpoint_id` | One assessment annotates exactly one checkpoint. |
+| `assessor` | `name`, `version`, `epoch` (matches `core.agent_state.epoch` semantics), `config_digest` (thresholds, class calibration overlay, shadow/apply flags). |
+| `run` | `assessor_run_id`, `resumed_from_assessment_id`, `discontinuity` marker. Any resume that is not bit-identical to the prior state mints a new `assessor_run_id`; runs are immutable and never merged. |
+| `input_window` | `from_seq`, `to_seq`, `input_snapshot_version`. |
+| `state` | E, I, S, V, Φ, coherence, risk, regime, warmup phase, baselined status, baseline counters; each with its provenance label (`measured`, `derived`, `prior`, `unknown`). |
 | `advice` | `action`, `sub_action`, `reason`, `verdict_confidence`, `evidence_basis`. Advisory by definition. |
-| `determinism` | `replayable` true only when every side input was captured; otherwise the missing inputs are named. |
+| `determinism` | `replayable` only when every inventoried input was captured; otherwise the missing inputs are named. |
 
-### 4.3 `outcome.bound.v0`
+### 4.4 `outcome.bound.v0` (target only)
 
-`outcome_id`, `checkpoint_id` (the checkpoint whose prediction is graded),
-`prediction_id`, outcome type and score, `verification_source`, producer
-identity, and artifact URIs. No assessor fields. An analysis that needs the
-assessor state at grading time joins through `checkpoint_id` to the assessment
-it wants, and names the assessor version it chose.
+`outcome_id`, `checkpoint_id`, the specific `prediction_id` child it grades,
+outcome type and score, `verification_source`, producer identity, artifact URIs.
+No assessor fields. Several predictions per checkpoint are allowed, because the
+phase-5 evidence emitter already mints one per evidence row. Not produced in
+Stages 1 or 2.
 
-### 4.4 Delivery semantics
+### 4.5 Delivery semantics
 
-- **Per-identity total order.** Assessors consume an identity's checkpoints in
-  `seq` order, exactly once. EMA smoothing and the Welford baseline are
-  order-dependent folds; out-of-order or duplicated delivery produces a
-  different trajectory, not a noisy copy of the same one.
-- **Gaps block, they do not skip.** A missing `seq` stalls that identity's
-  assessor and raises a named gap. Skipping would silently change the fold.
-- **Restart is part of the contract.** Today the monitor restores from
-  persisted state and baselines. An assessor declares its resume point as
-  `prior_assessment_id`; a restart that resumes from a different point is a
-  different path and must be labelled so.
-- **Refusals are ordered like accepted checkpoints.** An assessor declares
-  whether it folds refused checkpoints. The current estimator never sees them,
-  so `eisv-behavioral@current` declares `folds_refused: false`.
+**Target (Stage 3):** per-identity total order and exactly-once delivery to each
+assessor, from a durable log with idempotent appends. EMA smoothing and the
+Welford baseline are order-dependent folds: out-of-order or duplicated delivery
+produces a different trajectory, not a noisy copy. A gap stalls that identity's
+assessor and raises a named gap; skipping would silently change the fold.
+
+**Pre-read (Stages 1–2):** best-effort, lossy, observational. The live request
+path never blocks, retries, waits on, or reads the result of anything in this
+proposal. Emission uses a bounded queue that drops on overflow and counts the
+drops. The shadow replay stalls on a gap or a `process_run_id` change and
+reports it; it never fills or skips. A shadow stream is labelled incomplete
+whenever drops, gaps, or restarts occurred.
 
 ## 5. Path dependence and policy feedback
 
 Separating the estimator from the record does not make its outputs context-free.
-Three effects must stay visible in the design rather than be lost at the seam:
 
 1. **Ordering and baselines.** State at checkpoint *n* depends on every earlier
    accepted checkpoint of that identity, the warmup stage (cold-start prior,
    fixed thresholds, then self-relative scoring), and the baseline that the
-   post-update phase saves. Two assessors, or the same assessor on two
-   deliveries, are comparable only on the same `input_window`.
-2. **Side inputs are not in the check-in.** The current update reads live
-   state outside the report: the one-hour tool-usage window, continuity
-   metrics, the fleet-shared calibration scalar, the anomaly baseline, and the
-   clock (prediction TTL and gap handling). A replay without those values is a
-   different instrument. The contract therefore captures them as `side_inputs`
-   and marks assessments non-replayable when any are absent.
-3. **Policy feedback.** Advice reaches the agent and changes its next report; a
-   pause refuses later check-ins and so removes checkpoints from the stream; the
-   trajectory-identity enrichment adjusts the risk shown in the response
-   without changing the persisted `risk_score`. The checkpoint stream is
-   therefore shaped by the enforcement regime that was active. Consequences:
-   - `enforcement_regime` is recorded on every checkpoint;
-   - assessments produced under different regimes are never pooled;
-   - offline replay of an alternative assessor over a recorded stream is a
-     counterfactual about **estimation only**, never about behavior, because
-     the stream was generated under the live assessor's feedback.
+   post-update phase saves. Two assessor runs are comparable only on the same
+   input window from the same starting state.
+2. **Side inputs are not in the check-in.** Section 4.2 makes them an adapter's
+   responsibility and requires the snapshot to be the values the live estimator
+   actually used, taken at one defined point, not a later reconstruction.
+3. **Policy feedback and selection.** Advice reaches the agent and changes its
+   next report; a pause refuses later check-ins, removing checkpoints; the
+   trajectory-identity enrichment adjusts the risk shown in the response without
+   changing the persisted `risk_score`; enforcement also changes check-in timing
+   and which outcomes become observable. Recording `enforcement_regime` makes the
+   regime visible. **It does not neutralize the feedback**, and no analysis may
+   treat regime tagging as a correction for selection.
+4. **Retrospective path repair is prohibited.** A restored or re-derived prior
+   state is a new assessor run (Section 4.3), never a continuation of the
+   original, and never joined into the registered read.
+
+Consequently, offline replay of an alternative assessor over a recorded stream
+is a counterfactual about **estimation only**, never about behavior, because the
+stream was generated under the live assessor's feedback.
 
 ## 6. Storage boundary
 
-| Store | Owner after separation | In this proposal's authorized stages |
+| Store | Owner after separation (target) | In Stages 1–2 |
 |---|---|---|
 | `core.identities`, `core.agents`, sessions, lineage | core | unchanged |
-| checkpoint records | core (new) | not persisted to the database; shadow sink only |
-| `knowledge.discoveries`, `core.dialectic_sessions` / messages, conditions | core (links to `checkpoint_id` added later) | unchanged |
-| `audit.outcome_events`, `audit.outcome_prediction_bindings` | core, without `eisv_*` columns in the target | unchanged; `eisv_*` keep being written through the read |
-| `core.agent_state` | EISV (becomes the `eisv-behavioral` assessment store; later exposed through a compatibility view) | unchanged, keeps being written |
-| agent baselines, class calibration overlay, calibration history | EISV | unchanged; shadow must not write them |
-| in-memory prediction registry | core (keyed by `checkpoint_id`) in the target | unchanged |
-| `audit.events` | core | unchanged; shadow emits no rows |
+| checkpoint records | core (new, durable) | not in any database; diagnostic sink only |
+| assessor input snapshots | the assessor adapter | diagnostic sink only |
+| `knowledge.discoveries`, `core.dialectic_sessions` / messages, conditions | core (links to `checkpoint_id` later) | unchanged |
+| `audit.outcome_events`, `audit.outcome_prediction_bindings` | core, without `eisv_*` columns | unchanged; `eisv_*` keep being written |
+| `core.agent_state` | EISV (becomes the `eisv-behavioral` assessment store behind a compatibility view) | unchanged, keeps being written |
+| agent baselines, class calibration overlay, calibration history | EISV | unchanged; nothing in this proposal writes them |
+| in-memory prediction registry | core, as checkpoint children | unchanged |
+| `audit.events` | core | unchanged; no new rows |
 
-The shadow sink is an append-only, operator-local NDJSON file per server
-instance, outside the repository and outside the database, behind a flag that
-defaults off. It is deliberately not durable infrastructure: the point of the
-shadow stage is to test the contract, not to create a second record.
+**Diagnostic sink governance (Stages 1–2).** An operator-local NDJSON file per
+server process, outside the repository and the database, created with owner-only
+permissions, rotated by size, and deleted when the parity plan's window closes.
+It holds no report text or digest of it, no `client_session_id` or derivative,
+no artifact URIs, and no outcome data. Input-snapshot values are included only
+where the preregistered parity plan (Section 8.2) names them as necessary. It is
+not exported, not surfaced to agents, not read by any tool, and not a record.
 
 ## 7. Compatibility strategy
-
-Staged so that nothing an agent, adopter, analysis, or registered read depends on
-moves before the operator decides it should.
 
 | Stage | Change | Runtime effect | Gate to enter |
 |---|---|---|---|
 | **0** (this document) | Proposal and index row | None | Review in Section 11 |
-| **1 — neutral seam** | Build a `CheckpointRecord` inside the agent lock after identity resolution and before `process_update_authenticated_async`; capture `seq`, `prev_checkpoint_id`, side inputs, regime; hand it to a no-op sink by default | None with the flag off; with it on, only the shadow sink file is written | Stage-1 issue accepted |
-| **2 — shadow subscriber** | An isolated `eisv-behavioral` assessor instance consumes the seam's stream and writes assessments to the shadow sink; parity harness compares them with live rows | Reads live state; writes only the shadow sink | Stage-1 no-behavior-change test green on CI |
-| **3 — ownership move** | `checkpoints` table, `checkpoint_id` on outcomes, claims and dialectic links, export bundle from the record, `core.agent_state` behind a compatibility view | Schema and response additions | **Not authorized.** After the 2026-12-01 read is reported, and on an explicit operator decision |
+| **1 — observational seam** | Behind a default-off flag, build a diagnostic checkpoint and EISV input snapshot from values the live path has already computed; emit off-lock through a bounded dropping queue to the diagnostic sink | Flag off: none. Flag on: an O(1) copy under the existing lock and an off-lock file append; verified by Section 8.1 | Stage-1 issue accepted |
+| **2 — out-of-process shadow replay** | A separate process, never the governance server, replays the diagnostic stream through an isolated `eisv-behavioral` instance and compares with read-only extracts of live rows | None on the server | Stage 1 green on CI and the parity plan preregistered |
+| **3 — ownership move** | Durable checkpoints with idempotency and `seq`, checkpoint children for predictions and links, outcomes by `checkpoint_id`, export bundle, `core.agent_state` behind a compatibility view | Schema and response additions | **Not authorized.** After the preservation horizon in Section 9, on an explicit operator decision |
 | **4 — authority posture** | Enforcement explicitly configured; advisory by default for new installs | Default change | **Not authorized.** Separate operator decision after Stage 3 |
 
-Compatibility commitments that hold through every stage:
+Compatibility commitments through every stage:
 
 - Tool names, aliases, and response envelopes are unchanged by Stages 1 and 2.
-- `prediction_id` keeps its current meaning. In Stage 3 it becomes a field of
-  the checkpoint, and existing ids stay resolvable.
-- `core.agent_state` and `audit.outcome_events.eisv_*` keep being written with
-  today's semantics at least until the 2026-12-01 read is reported; afterwards
-  any change bumps `epoch` and is announced as an instrument change.
+  The flag is not agent-visible and not policy-visible.
+- `prediction_id` keeps its current meaning. Stage 3 makes it a child of the
+  checkpoint and keeps existing ids resolvable.
+- `core.agent_state` and `audit.outcome_events.eisv_*` keep today's semantics
+  until the preservation horizon (Section 9); afterwards any change bumps
+  `epoch` and is announced as an instrument change.
 - The Relay integration's `enforce` default is not changed here. The audit's
-  recommendation to make it opt-in (#2257, seven-day action 1) remains a
-  separate focused change and is consistent with Section 3.
+  recommendation to make it opt-in (#2257, seven-day action 1) remains a separate
+  focused change and is consistent with Section 3.
+- Stage 1 and 2 roll back by turning the flag off and deleting the sink; no
+  other state exists to unwind.
 
-## 8. Shadow parity test
+## 8. Verification
 
-Parity asks one question: **given the checkpoint stream the seam captures, does
-an isolated subscriber reproduce the live estimator?** If it cannot, the event
-contract is missing an input and Stage 3 would silently change the instrument.
+### 8.1 Instrument-preservation contract (Stage 1 gate)
 
-**Isolation requirements (a failing isolation check fails the test):**
+Stage 1 must show, with the flag off and on, over a fixture sequence covering
+warmup transitions, a pause, a restart with state restore, and concurrent
+check-ins for one identity:
 
-- the shadow assessor has its own monitor, behavioral state, and baseline
-  objects; module singletons it would otherwise share (the calibration checker,
-  the tool-usage tracker, the baseline cache) are read through a snapshot and
-  never mutated;
-- no writes to PostgreSQL, Redis, the knowledge graph, calibration files, or
-  `audit.events`; enforced by running the shadow path with those clients
-  replaced by write-refusing doubles in tests, and by a live-mode assertion on
-  connection usage;
-- no access to outcome rows. Parity compares assessment to assessment. It never
-  joins outcomes, so it cannot become an interim outcome-discrimination read
-  under the stop rule.
+- identical tool responses;
+- identical rows, row counts, and column values in `core.agent_state`,
+  `audit.outcome_events` (including every `eisv_*` value),
+  `audit.outcome_prediction_bindings`, and `audit.events`;
+- identical post-update effect order and transaction boundaries;
+- identical `recorded_at` ordering and identical selection by the registered
+  join at `lead` 0 and 30 minutes for every fixture outcome;
+- identical `epoch`, prediction registry contents, TTL state, baseline counters
+  and cache contents, and identical outputs for the next *N* updates after the
+  fixture ends (so delayed divergence is caught);
+- on the operator deployment, before and after enabling the flag, a comparison
+  of check-in latency distribution and of the lock hold time.
 
-**Two layers:**
+The last item is the only production measurement and uses no outcome data.
 
-1. **Offline, deterministic (CI).** Recorded fixture streams, including warmup
-   boundaries, a restart with state restore, a pause and refusal, a gap, and a
-   concurrent-check-in race, run through the live update path and the shadow
-   path. Expected: identical `action` and `sub_action`; identical warmup phase;
-   floats equal within a declared tolerance; every mismatch attributed to a named
-   missing side input.
-2. **Live shadow (operator deployment, flag on).** Dual-run over a fixed window.
-   Mismatches are classified as ordering, side-input, clock, restart, refused
-   checkpoint, or unexplained. Unexplained mismatches block Stage 3.
+### 8.2 Shadow parity (Stage 2)
 
-The tolerance, the live window length, and the acceptable rate of explained
-mismatches are **operator decisions** (Section 12), fixed before the live shadow
-runs and not revised after its output is seen.
+Parity asks whether an isolated replay reproduces the **current
+implementation**. Agreement is fidelity to that implementation, not correctness:
+a shared bug or wrong ordering replicates perfectly. It therefore has two
+separate parts.
+
+**Parity plan, preregistered before any live shadow data is read:** corpus and
+window, assessor and adapter versions, per-field tolerances, mismatch taxonomy
+(ordering, missing input, clock, restart, drop or gap, unexplained), stopping
+rule, owner, and the Stage 3 blocking rule. Discrete fields (action,
+sub_action, regime, warmup phase, epoch, baselined status, baseline counters)
+require exact equality; continuous fields have per-field tolerances, and any
+continuous difference that straddles a decision threshold counts as a mismatch.
+
+**Scientific firewall.** Parity work never reads outcome rows, labels, the
+ablation instruments' outputs, or any operational-success signal, and no parity
+decision (tolerance, version, taxonomy, or which assessor run to trust) may be
+chosen by reference to them. The plan and its results are not inputs to the
+registered read.
+
+**Equivalence runs.** Offline fixtures in CI and the live diagnostic stream
+replayed out of process, reported as agreement rates by mismatch class, with
+incomplete streams (drops, gaps, restarts) reported separately and never used
+as evidence of agreement.
+
+**Independent contract tests.** Hand-specified fold fixtures that check
+ordering, restart, and warmup behavior against the contract in Section 4.5,
+independent of the current implementation's output.
+
+Unexplained mismatches block Stage 3. Explained mismatches are the inventory of
+what the contract is missing.
 
 ## 9. Scientific validation
 
-The separation is an engineering change to where records live. It is not
-evidence about EISV and must not be reported as such.
+The separation is an engineering change to where records live. **Neither the
+spine nor parity establishes EISV validity, predictive value, causal relevance,
+calibration, or authority.** All remain governed by the stop rule and the
+contract's tested-claims ledger.
 
 - **The registered read is untouched.** The live estimator, its thresholds, its
-  persisted rows, and the join the read uses do not change before the read is
-  reported. Shadow output is never part of the read's cohort.
-- **The claim status does not move.** Outcome grounding stays governed by the
-  stop rule and the contract's tested-claims ledger; this document neither
-  strengthens nor weakens any row. Parity is a fidelity property of the
-  instrument's implementation, not validity of what it measures.
-- **Versioned assessors make future evaluation cleaner, not easier to pass.**
-  Every assessment carries assessor version, epoch, config digest, input window,
-  and enforcement regime. Evaluations name those tuples and never pool across
-  them. An alternative assessor evaluated offline over recorded streams inherits
-  Section 5's limit: estimation counterfactual only.
-- **A FAIL at the read does not retire the boundary.** Under the stop rule a
-  FAIL closes scheduled outcome-prediction reads. The spine is justified by the
-  accountability record regardless of the read's result, and EISV continues as
-  label-free telemetry either way.
-- **A PASS does not authorize enforcement.** It reopens outcome-grounding
-  questions; authority posture remains Stage 4's separate decision.
+  persisted rows, its timing, and the join the read uses do not change. No
+  shadow output enters the read's cohort.
+- **Preservation horizon.** The fields, semantics, and timing the read depends
+  on stay unchanged until the operator declares the read's report final,
+  including any correction or reproduction inspection, not merely until it is
+  first reported. The read already writes an access receipt. Before Stage 3
+  starts, the read's inputs are preserved as an immutable extract: source query
+  revision, row extract and hash, labels, leads, and analysis environment. This
+  preserves inspectability; it authorizes no re-run.
+- **Selection is metadata, not a correction.** The read's report names the
+  enforcement exposure, deployment dates, and censoring by pause for its cohort
+  (Section 5.3).
+- **Pre-read capture repairs are a separate hazard.** #2267 names capture
+  repairs such as a CI/git producer. A repair that adds or changes outcome
+  producers before the read changes outcome availability and possibly the label
+  pipeline. Such repairs are outside this proposal and need their own check
+  against the stop rule.
+- **Versioned assessors make later evaluation cleaner, not easier to pass.**
+  Evaluations name the assessor, adapter, run, epoch, input window, and regime
+  tuple, and never pool across them.
+- **A FAIL at the read does not retire the boundary.** The spine is justified by
+  the accountability record; EISV continues as label-free telemetry either way.
+- **A PASS does not authorize enforcement.** Authority posture remains Stage 4's
+  separate decision.
 
 ## 10. Non-goals
 
 - Physically extracting EISV into another package, service, or repository.
 - Any schema migration, table, column, index, or constraint change.
-- Any default change, including verdict thresholds, pause delivery, the
-  circuit breaker, and the Relay `enforce` default.
-- New EISV features, estimator repairs, re-fits, or re-runs of any registered or
-  withdrawn analysis.
+- Any default change, including verdict thresholds, pause delivery, the circuit
+  breaker, and the Relay `enforce` default.
+- Modifying estimator internals, new EISV features, estimator repairs, re-fits,
+  or re-runs of any registered or withdrawn analysis.
+- Durable ids, idempotency, or cross-instance ordering before Stage 3.
+- Recording refused or failed check-ins before the operator decides their
+  taxonomy.
 - Changing identity tier policy (#807) or the identity/onboarding surface.
 - The portable accountability bundle itself. The spine is its substrate; the
   bundle stays its own design.
-- A CI or git producer for the record. #2267 names it as a capture repair; it is
-  enabled by `artifact links` but not designed here.
+- A CI or git producer for the record, and any other capture repair.
 - Retiring the ODE path, renaming tools, or reducing the alias table.
 - An issue tree. Exactly one first implementation issue is proposed.
 
 ## 11. Review record
 
-This section records the adversarial design review of this draft and its
-dispositions. It is filled in as the review proceeds and preserves objections
-that were not resolved.
+### 11.1 Advisory consult (architecture and science)
+
+One `consult` (purpose `critique`, effort `thorough`, consultation
+`93fbdd25-aea9-4b7e-9cd7-770cc429bd94`) against the first draft returned 18
+findings, 5 marked blocking, plus 9 omissions. Its authority is advisory; it is
+not a governed review. Dispositions:
+
+| # | Finding (severity) | Disposition |
+|---|---|---|
+| 1 | In-process `seq` and per-process NDJSON cannot deliver exactly-once or durable order (blocking) | **Accepted.** Stages 1–2 are best-effort and observational; exactly-once, idempotency, and durable `seq` moved to Stage 3 (4.1, 4.5). |
+| 2 | "Gaps block" contradicts "no runtime change" (blocking) | **Accepted.** The live path never blocks or retries; only the out-of-process replay stalls; lossy streams labelled (4.5). |
+| 3 | Non-durable ids cannot become the living key (blocking) | **Accepted, first option.** Pre-read ids are diagnostic-only and never continued (2, 4.1). The alternative, a durable append boundary before the read, is **rejected** as a schema change inside the read window. |
+| 4 | The "neutral" checkpoint embedded EISV inputs, recreating the reverse dependency (major) | **Accepted.** Inputs moved to an adapter-owned, versioned input snapshot (3, 4.2). |
+| 5 | A shadow can perturb the live instrument without writing (blocking) | **Accepted.** Stage 2 runs out of process; Stage 1 copies only already-computed values and emits off-lock; latency and lock-hold measured (7, 8.1). |
+| 6 | Side-input snapshot timing unspecified (major) | **Accepted.** One snapshot point, per-field source, read time, purity; uncapturable inputs named rather than captured by modifying internals (4.2). |
+| 7 | Parity tuning could become an outcome proxy (major) | **Accepted.** Preregistered parity plan and a scientific firewall (8.2). |
+| 8 | Regime tagging does not protect against selection (major) | **Accepted.** Stated as metadata, not correction (5.3, 9). |
+| 9 | Unchanged columns and joins do not preserve the instrument (blocking) | **Accepted.** Instrument-preservation contract as the Stage 1 gate (8.1). |
+| 10 | Refusal capture premature and ambiguous (major) | **Accepted.** Removed from Stages 1–2; taxonomy is an operator decision (4.1, 12). |
+| 11 | Single `prediction_id` field loses phase-5 multiplicity (major) | **Accepted.** Cardinality-aware children in the target; excluded from Stages 1–2 (4.1, 4.4). |
+| 12 | Diagnostic file is an ungoverned behavioral log (major) | **Accepted.** Minimization, permissions, rotation, deletion, no text or session derivatives (6). |
+| 13 | Ownership asserted without enforcement (minor) | **Partially accepted.** Stage 1 adds an import-boundary test; the module ownership map, mutation permissions, and forbidden cross-store transaction checks belong to Stage 3 and are named there, not built now. |
+| 14 | Live output is not an oracle (major) | **Accepted.** Parity reported as agreement with the implementation, plus independent contract tests (8.2). |
+| 15 | Float tolerance near discontinuities (minor) | **Accepted.** Exact equality for discrete fields; threshold-straddling differences are mismatches (8.2). |
+| 16 | Retrospective path repair (major) | **Accepted.** Immutable runs, new run id on any non-identical resume, never joined into the read (4.3, 5.4). |
+| 17 | "After the read is reported" is too weak (major) | **Accepted.** Preservation horizon until the operator declares the report final, plus an immutable read extract (9). |
+| 18 | "Identical monitor state" not observable (minor) | **Accepted.** Enumerated state plus the next *N* updates (8.1). |
+
+Omissions: idempotency and retry, lock and transaction boundary, `recorded_at`
+and clock semantics, flag scoping and rollback, the scientific firewall, sink
+governance, and the validity disclaimer are now addressed in 4.1, 4.5, 6, 7,
+8.1, 8.2, and 9. **Pre-read capture repairs** are recorded as a separate hazard
+(9) and left to their own check. The **complete estimator input inventory** is
+not produced by this document: it is a Stage 1 deliverable (4.2), because
+producing it by reading the code now would be the unverified description the
+parity test exists to replace.
+
+### 11.2 Governed architecture review
+
+*(pending: one dialectic session against this revision)*
+
+### 11.3 Pull-request review by Codex
 
 *(pending)*
 
 ## 12. Open operator decisions
 
-1. **Parity standard.** Float tolerance, live shadow window, and the acceptable
-   explained-mismatch rate for Section 8.
-2. **Refused check-ins as checkpoints.** Recording them makes the record show
-   what the gate suppressed; it also changes stream completeness, which matters
-   for any future assessor that folds them.
+1. **Parity standard.** Tolerances, window, stopping rule, and the acceptable
+   explained-mismatch rate, fixed in the preregistered parity plan.
+2. **Refused and failed check-ins.** Whether they become checkpoints, and the
+   taxonomy: policy refusal, validation rejection, authentication failure,
+   cancellation, infrastructure failure.
 3. **Report-text retention.** The report is transient today and truncated in
-   excerpts (#2267 §4.3). The spine can carry a digest only, an excerpt, or the
-   full text under a retention policy.
-4. **`prediction_id` relation.** Field of the checkpoint (one prediction per
-   checkpoint) or child records (several predictions per checkpoint, as the
-   phase-5 evidence emitter already mints).
-5. **Side-input capture versus accepting non-replayability** for inputs that are
-   expensive to snapshot.
-6. **Post-read authority posture** for the maintainer deployment and for new
+   excerpts (#2267 §4.3). The target can carry nothing, a salted digest, an
+   excerpt, or the full text under a retention policy.
+4. **Prediction cardinality.** Confirm checkpoint children as the model and
+   whether the advertised prediction is distinguished from evidence-row mints.
+5. **Uncapturable inputs.** For inputs that cannot be snapshotted without
+   modifying the estimator, accept non-replayability before the read, or schedule
+   the instrumentation after the preservation horizon.
+6. **Preservation horizon.** What counts as the read's report being final.
+7. **Post-read authority posture** for the maintainer deployment and for new
    installs, taken after Stage 3 rather than bundled with it.
 
 ## 13. Authorization
 
-Merging this document authorizes Stage 1 and Stage 2 only, each default-off and
-non-authoritative, and nothing that writes to the database, changes a default,
-or alters a response. Stage 3 and Stage 4 require a new, explicit operator
-decision recorded against this document after the 2026-12-01 read is reported.
+Merging this document authorizes Stage 1 and Stage 2 only: default-off, lossy,
+observational, non-authoritative, with no database write, no default change, no
+response change, and no modification of estimator internals. Stage 3 and Stage 4
+require a new, explicit operator decision recorded against this document after
+the preservation horizon in Section 9.
 
 ## 14. First implementation issue
 
-**Title:** Neutral checkpoint seam: capture `CheckpointRecord` v0 inside the
-check-in lock behind a default-off shadow flag, with a no-behavior-change test
+**Title:** Observational checkpoint seam: capture a diagnostic checkpoint and EISV
+input snapshot behind a default-off flag, gated by an instrument-preservation test
 
 **Scope:**
 
-- Add a `CheckpointRecord` dataclass matching Section 4.1 in a new core module
-  with no imports from EISV modules (enforced by an import-boundary test).
-- Build it in `execute_locked_update` after identity resolution and before the
-  estimator call: mint `checkpoint_id` (UUIDv7), assign in-process `seq` and
-  `prev_checkpoint_id` per identity, capture `side_inputs` values that the
-  estimator reads in the same request, and record `enforcement_regime`.
-- Record refused check-ins at their refusal point with `status: refused`.
-- Hand the record to a sink: no-op by default; NDJSON file when a new flag
-  (default off) is set. No database, Redis, knowledge-graph, or response change.
-- Document the flag in `docs/FLAGS.md`.
+- A core module defining the pre-read `CheckpointRecord` (Section 4.1, pre-read
+  column) with no imports from estimator modules, enforced by an import-boundary
+  test.
+- An EISV adapter module defining `eisv-inputs.v0` (Section 4.2) that copies
+  values the live path has already computed, and a written inventory of every
+  estimator input it could not see, each marked not captured.
+- In `execute_locked_update`, for accepted check-ins only and only when the flag
+  is on: mint a diagnostic id, assign per-process `seq` and `process_run_id`, and
+  enqueue the record and snapshot. Serialization and file writes happen off-lock
+  through a bounded queue that drops on overflow and counts drops.
+- The diagnostic sink per Section 6, and the flag documented in `docs/FLAGS.md`
+  as not agent-visible.
+- No database, Redis, knowledge-graph, response, or estimator-internal change.
 
-**Acceptance:**
+**Acceptance:** every item in Section 8.1 passes in CI with the flag off and on;
+the import-boundary test passes; `seq` is strictly increasing per identity within
+one process under concurrent check-ins; the input inventory is committed with the
+change.
 
-- With the flag off and on, identical tool responses, identical rows written to
-  `core.agent_state`, `audit.outcome_events`, and `audit.events`, and identical
-  monitor state for a fixture sequence covering warmup, pause, refusal, and a
-  concurrent check-in.
-- Import-boundary test: the new module imports nothing from the estimator.
-- `seq` is strictly increasing per identity under concurrent check-ins in the
-  fixture.
-- No change to the files and joins the registered read uses.
-
-**Out of scope for the issue:** the shadow assessor (Stage 2), any persistence,
-and any response field.
+**Out of scope:** the out-of-process replay and parity plan (Stage 2), refused
+check-ins, prediction linkage, and any durable identifier.
