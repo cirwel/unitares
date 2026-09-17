@@ -40,7 +40,7 @@
 ## Step 1 — Install Homebrew packages
 
 ```bash
-brew install postgresql@17 pgvector redis python@3.12 git
+brew install postgresql@17 pgvector redis python@3.14 git
 brew services start postgresql@17
 brew services start redis
 ```
@@ -121,7 +121,7 @@ psql "$DB_POSTGRES_URL" -c "SELECT extname, extversion FROM pg_extension WHERE e
 ## Step 4 — Python virtualenv and dependencies
 
 ```bash
-python3.12 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements-full.txt -c constraints.txt

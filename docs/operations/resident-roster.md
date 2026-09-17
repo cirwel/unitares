@@ -171,6 +171,12 @@ Set this on the **governance server** plist (the probe runs there). Each entry's
 point (below). Labels are lowercase to match the anchor filenames under
 `~/.unitares/anchors/`.
 
+Several residents may name the same `source`. The probe fetches once per
+distinct `(source, window_seconds)` pair and keys results and errors on that
+pair, not on the source name. Residents that share both the source and the
+window share one fetch; a different window gets its own fetch and its own
+counts. A failed fetch marks only that pair's residents `source_error`.
+
 ### Bringing your own progress source
 
 A deployment running an out-of-tree resident needs a metric that says whether

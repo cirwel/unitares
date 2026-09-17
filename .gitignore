@@ -90,6 +90,10 @@ tests/fixtures/*
 # `tests/fixtures/`) and selectively unignore.
 !tests/fixtures/wave3a_response_golden/
 !tests/fixtures/wave3a_response_golden/**
+# EISV instrument-preservation golden trajectories (load-bearing pin; see
+# docs/operations/eisv-instrument-preservation-harness.md).
+!tests/fixtures/eisv_preservation/
+!tests/fixtures/eisv_preservation/**
 tests/data/
 data/exports/
 data/mcp_server_sse*.log
