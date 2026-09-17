@@ -165,11 +165,11 @@ class Check:
 def check_python_version() -> CheckResult:
     name, mode = "python_version", "local"
     v = sys.version_info
-    if v >= (3, 12):
+    if v >= (3, 14):
         return CheckResult(name, mode, Status.PASS, f"Python {v.major}.{v.minor}.{v.micro}")
     return CheckResult(
         name, mode, Status.FAIL,
-        f"Python 3.12+ required (got {v.major}.{v.minor}.{v.micro})",
+        f"Python 3.14+ required (got {v.major}.{v.minor}.{v.micro})",
     )
 
 
