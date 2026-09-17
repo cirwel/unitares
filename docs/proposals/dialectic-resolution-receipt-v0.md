@@ -82,7 +82,7 @@ Design points that came out of review rather than the first draft:
 |---|---|
 | The holder of the private half of `kid` persisted, as `resolved`, a record whose covered fields had exactly these values | That either party intended the resolution |
 | The session id and party identifiers the deployment associated with the record | That the parties' symmetric signatures are valid; a peer cannot check them |
-| Whether two non-empty signature strings were stored (`both_signatures_present`) | That `signature_a` was keyed on a real `api_key`: an LLM-assisted session with no key on file signs with a fallback derived from the agent uuid and leaves `signature_b` empty |
+| Whether two non-empty signature strings were stored (`both_signatures_present`) | That `signature_a` was keyed on a real `api_key`. An LLM-assisted session signs it with the agent's key when one is on file, stores an empty string when none is (#2155 removed the uuid-derived fallback, which was forgeable from public data, so such a record reports `unsigned`), and leaves `signature_b` empty either way |
 | The `iat` the signer wrote | When the record was actually created; `iat` is a claim, unchecked, with no expiry and no revocation |
 
 A named `reviewer_agent_id` can therefore appear on a record that reviewer never

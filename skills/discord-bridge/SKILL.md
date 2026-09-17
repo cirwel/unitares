@@ -4,7 +4,7 @@ description: >
   Use when setting up or operating the UNITARES Discord bridge — a standalone bot that
   surfaces governance events, agent presence, Lumen's state, and explicit operator
   actions as a living Discord server.
-last_verified: "2026-08-17"
+last_verified: "2026-09-17"
 freshness_days: 14
 source_files:
   - unitares-discord-bridge/src/bridge/bot.py
@@ -14,6 +14,14 @@ source_files:
   - unitares-discord-bridge/src/bridge/hud.py
   - unitares-discord-bridge/src/bridge/lumen.py
   - unitares-discord-bridge/src/bridge/iterations.py
+source_digests:
+  unitares-discord-bridge/src/bridge/bot.py: "4bbc77ac0ab62bdf"
+  unitares-discord-bridge/src/bridge/acks.py: "0f718b44ed130959"
+  unitares-discord-bridge/src/bridge/config.py: "ebe2d773bef04501"
+  unitares-discord-bridge/src/bridge/server_setup.py: "8ef33d50b336d341"
+  unitares-discord-bridge/src/bridge/hud.py: "a4b1d3e3d2b77dbb"
+  unitares-discord-bridge/src/bridge/lumen.py: "fe5bafcf89c7ecc1"
+  unitares-discord-bridge/src/bridge/iterations.py: "776cef186a6990b4"
 ---
 
 # Discord Bridge
@@ -34,10 +42,10 @@ The bridge operates across several visible layers:
 2. **HUD**: A live fleet view with agent counts and measured EISV; missing state is rendered as `no state`, never as a seed vector.
 3. **Resident findings**: Sentinel and Doctor have dedicated channels by default; other residents fall back to `#residents`.
 4. **Lumen**: Optional physical state, drawings, sensor availability, and weekly Q&A digest from Anima.
-5. **Self-iteration attention**: Read-only, provenance-labeled proposals/reviews/canaries go to `#lumen-iterations`, with review-ready and recovery-critical mirrors to signals/alerts.
+5. **Self-iteration attention**: Read-only, provenance-labeled proposals/reviews/canaries go to `#lumen-iterations`; high-priority items are mirrored to `#signals` and critical ones to `#alerts` as well.
 6. **Class routing / violations**: Typed WebSocket events can be mirrored to class-specific channels when enabled.
 7. **Phase-B lease transitions**: An optional operator-managed channel receives lease-plane transition events.
-8. **Acknowledgements**: Configured reactions emit `bridge.ack` delivery receipts; acknowledgement is never an approval signature.
+8. **Acknowledgements**: Configured reactions emit `bridge.ack` receipts that governance joins to the matching `bridge.delivery` record; acknowledgement is never an approval signature.
 
 ## Operator Actions and Authority
 
@@ -80,7 +88,7 @@ Core environment variables:
 | `DISCORD_BOT_TOKEN` | Discord bot token with appropriate permissions |
 | `DISCORD_GUILD_ID` | Target Discord server ID |
 | `GOVERNANCE_MCP_URL` | Governance base URL (default: `http://localhost:8767`) |
-| `ANIMA_MCP_URL` | Optional Anima/Lumen URL; leave unset to omit those live reads |
+| `ANIMA_MCP_URL` | Anima/Lumen base URL. The Lumen pollers start whenever their channels exist, so leaving it unset reads as an unreachable Lumen (HUD `Lumen: DOWN`, an offline post after two failed sensor ticks), not as an omitted surface |
 
 Important optional configuration:
 
@@ -114,13 +122,13 @@ degrade the Lumen surfaces without taking down governance delivery.
 Key design decisions:
 
 - **Polling plus event subscription**: The bridge polls MCP/REST surfaces for state and also subscribes to the governance WebSocket for typed events not present in `/api/events`.
-- **Read-heavy, write-light**: The bridge reads governance state frequently and writes back only for governed identity, explicit operator commands, and acknowledgement receipts.
-- **SQLite cursor-based delivery**: Tracks what has been sent to Discord to avoid duplicate messages. Uses cursors per channel per event type.
+- **Read-heavy, write-light**: The bridge reads governance state frequently and writes back only for governed identity, explicit operator commands, and delivery/acknowledgement receipts.
+- **SQLite cursor-based delivery**: Tracks what has been sent to Discord to avoid duplicate messages. One integer cursor over the `/api/events` feed, advanced to the batch's highest event id (including events that failed to dispatch, so a poison event cannot lock it), plus a bounded seen-set of self-iteration deliveries keyed by attention id and channel.
 - **Rate-limited message queue**: Messages are queued and sent with 150ms spacing to respect Discord rate limits.
 - **Stateless restarts**: The bridge can restart cleanly — cursor tracking means it picks up where it left off without replaying history. On a failed event fetch (`fetch_events` returns `None` on error), the poller never resets its cursor — it waits for the next poll, so governance stalls cannot trigger a feed replay to Discord.
 - **Liveness heartbeat + external watchdog**: The event loop rewrites a heartbeat file (`BRIDGE_HEARTBEAT_PATH`, default `~/.unitares/discord-bridge.heartbeat`) each poll iteration. The `com.unitares.bridge-liveness-watchdog` LaunchAgent (unitares repo, `scripts/ops/`) uses it to detect a wedged loop — process alive but loop hung — and restarts the bridge, which launchd `KeepAlive` alone cannot catch.
 - **Reaction acknowledgements**: A raw reaction listener accepts only configured acknowledgement emoji, ignores the bot's own reactions, joins receipts to deliveries by `discord_message_id`, and sends a hashed operator ID. Receipt delivery is best-effort and never takes down the Discord event loop.
-- **Governed identity**: On startup the bridge best-effort mints its own UNITARES identity so polling traffic can be attributed when governance is available.
+- **Governed identity**: On startup the bridge best-effort mints its own UNITARES identity and echoes the returned `client_session_id` on every tool call, so HUD reads, commands, and receipts are attributed when governance is available.
 - **Honest HUD authority**: The operator tier supplies true agent UUIDs for
   metric joins. Without it, the HUD degrades visibly to `no state` rather than
   rendering fabricated defaults.

@@ -2005,14 +2005,32 @@ class UNITARESMonitor:
     # module docstring for how this feeds the anytime-valid e-process.
     # ------------------------------------------------------------------
 
-    def register_tactical_prediction(self, confidence: float, *, decision_action: Optional[str] = None) -> str:
-        """Mint a prediction id for this (agent, confidence) pair and register it."""
+    def register_tactical_prediction(
+        self,
+        confidence: float,
+        *,
+        decision_action: Optional[str] = None,
+        advertise: bool = True,
+    ) -> str:
+        """Mint a prediction id for this (agent, confidence) pair and register it.
+
+        ``advertise`` controls whether the id becomes ``_last_prediction_id``,
+        the pointer the check-in reply surfaces as its top-level
+        ``prediction_id``. The check-in's own mint advertises. A mint that is
+        bound to an outcome in the same request (the Phase-5 evidence emitter
+        mints one id per ``recent_tool_results`` row and claims it at once)
+        must pass ``advertise=False``: advertising it would hand the caller an
+        id the exactly-once binding has already consumed, so its later
+        ``outcome_event`` is refused as PREDICTION_REUSE_CONFLICT while the
+        check-in's real prediction expires unadvertised.
+        """
         pid = _register_prediction(
             self._open_predictions, confidence,
             decision_action=decision_action,
             prediction_ttl_seconds=self._prediction_ttl_seconds,
         )
-        self._last_prediction_id = pid
+        if advertise:
+            self._last_prediction_id = pid
         return pid
 
     def lookup_prediction(self, prediction_id: str) -> Optional[Dict[str, Any]]:

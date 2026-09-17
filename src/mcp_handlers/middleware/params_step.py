@@ -33,9 +33,12 @@ _BROWSABLE_CALLS = call_set(
 # request_dialectic_review and status. None of those names ever reached this
 # step after the router consolidation (they arrive as observe, agent,
 # dialectic and get_governance_metrics), so the exemptions they described did
-# not apply. archive_agent's survives through agent. Whether
-# observe(action='agent') and the dialectic phases should carry an exemption
-# is an open decision, not something this set was already doing.
+# not apply. archive_agent's survives through agent. The 2026-09-13 council on
+# identity posture decided against exemptions for observe(action='agent') and
+# the dialectic phases (#2234): in the dialectic phases agent_id names the
+# actor, so an exemption would let a bound caller submit as another
+# participant, and observe names another agent through target_agent_id, which
+# this guard does not inspect. tests/test_identity_guard_teaching.py pins both.
 _OPERATOR_TARGET_CALLS = call_set(
     "inject_identity.operator_targets",
     tools={

@@ -40,6 +40,12 @@ dev = [
     "pytest>=7.4.0,<10.0.0",
     "pytest-asyncio>=0.21.0,<2.0.0",
 ]
+# NeMo Relay runtime integration (`unitares_sdk.integrations.nemo_relay`).
+# Optional and imported lazily: the SDK never needs it unless the plugin is
+# registered. Free and Apache-2.0; no metered API sits behind it.
+nemo-relay = [
+    "nemo-relay>=0.8.4,<1.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/cirwel/unitares"

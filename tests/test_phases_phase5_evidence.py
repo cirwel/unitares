@@ -287,7 +287,9 @@ async def test_evidence_iteration_mints_prediction_ids_for_unbound_items(monkeyp
     assert ctx.monitor.register_tactical_prediction.call_count == 2
     for call in ctx.monitor.register_tactical_prediction.call_args_list:
         assert call.args == (0.72,)
-        assert call.kwargs == {"decision_action": "proceed"}
+        # advertise=False: an evidence mint is claimed in this same request and
+        # must not become the reply's prediction_id.
+        assert call.kwargs == {"decision_action": "proceed", "advertise": False}
 
 
 @pytest.mark.asyncio
