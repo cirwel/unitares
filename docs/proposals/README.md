@@ -22,7 +22,7 @@ thread can hold Closed and Parked rows beside Active ones.
 
 The 30-day line is a choice, not a measurement: it separates "someone is working
 this" from "nobody has touched this" and claims nothing else. Current counts:
-Built 21 · Registered 7 · Active 27 · Parked 24 · Closed 14
+Built 21 · Registered 7 · Active 28 · Parked 24 · Closed 14
 (top-level docs; the `resolved/` subfolder is not re-tagged).
 
 These counts are **live, not a snapshot**, and `scripts/dev/check_proposals_index.py`
@@ -161,6 +161,7 @@ The measurement thread: derivations, ablations, and the registered reads. The st
 | [`exponential-growth-dynamics-v0.md`](exponential-growth-dynamics-v0.md) | **Built** · Site B (cohort priors) fully wired — the pure primitive merged in PR #1334 |
 | [`eisv-stage0-bridge-b-label-routing.md`](eisv-stage0-bridge-b-label-routing.md) | **Built (partial)** · Half (a) shipped in PR #1210; half (b) remains an active routing and population specification |
 | [`substrate-portability-checkin-v0.md`](substrate-portability-checkin-v0.md) | **Built** · Canaries only; changes no math |
+| [`eisv-core-boundary-v0.md`](eisv-core-boundary-v0.md) | **Active** · DRAFT proposal (2026-09-17) — a neutral checkpoint spine keyed by `checkpoint_id` owns identity, ordering, provenance, claims, evidence, objections, outcomes and artifact links; EISV becomes a versioned, path-dependent subscriber producing advisory assessments; enforcement separately opt-in. Documentation only; authorizes only a default-off neutral seam and shadow subscriber; ownership move and authority posture wait for the 2026-12-01 read and an operator decision |
 | [`eisv-outcome-grounding-stop-rule-v0.md`](eisv-outcome-grounding-stop-rule-v0.md) | **Registered** · Registered 2026-12-01 read (proposed 2026-07-31; evidence-scope correction 2026-08-17). The fixture-rule decision packet above governs what the read does with post-cutoff rows. Never re-run or refreshed |
 | [`eisv-individuality-v2-preregistration.md`](eisv-individuality-v2-preregistration.md) | **Closed** · PRE-REGISTERED 2026-07-02 and executed on schedule; consumed by the result row below |
 | [`eisv-individuality-v2-result.md`](eisv-individuality-v2-result.md) | **Closed** · Registered verdict FAIL; inference status UNTESTED AS DEPLOYED. The individuality axiom is retired for raw behavioral EISV as currently measured; a further attempt must change the measurement and pre-register before any of its data exists |
