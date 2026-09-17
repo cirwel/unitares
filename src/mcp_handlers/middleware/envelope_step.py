@@ -969,9 +969,10 @@ def build_experience_envelope(
             "unmeasurable_edges",
         ).items():
             state_summary.setdefault(key, value)
-        # A compact check-in carries its policy action under `verdict`, not
-        # `decision.action`, so the lifts above missed it and a paused agent
-        # reading state_summary.action saw nothing. action_summary already
+        # A paused check-in defaults to mirror mode, whose payload carries the
+        # policy action only under the `verdict` wrapper, not `decision.action`,
+        # so the lifts above missed it and a paused agent reading
+        # state_summary.action saw nothing. action_summary already
         # resolved the action from every shape; reuse it here.
         action_summary = envelope.get("action_summary")
         action_summary = action_summary if isinstance(action_summary, dict) else {}

@@ -369,7 +369,7 @@ def test_sync_state_envelope_emits_recovery_hint_when_degraded():
 
 
 def test_sync_state_envelope_pause_surfaces_action_and_stop_guidance():
-    # Compact pause shape: the action lives under `verdict`, not `decision`.
+    # Mirror-mode pause shape: the action lives under `verdict`, not `decision`.
     payload = {
         "success": True,
         "verdict": {"value": "pause"},
