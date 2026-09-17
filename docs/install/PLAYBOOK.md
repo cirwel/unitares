@@ -129,9 +129,12 @@ pip install -r requirements-full.txt -c constraints.txt
 
 `-c constraints.txt` pins the dependencies where CI/production drift has
 actually bitten, so a fresh install resolves what the project is tested and
-deployed against rather than whatever is newest on PyPI today. Omitting it
-currently installs `mcp` 2.x in place of the pinned 1.29.0, which breaks the
-server's push stream silently. If you are installing over an existing
+deployed against rather than whatever is newest on PyPI today. The `mcp` pin
+is the one that bites: omit `-c` and pip resolves whatever the declared range
+allows, and an `mcp` release other than the one `constraints.txt` carries can
+break the client transport the server and SDK connect over while the install
+itself still reports success. The `mcp==` line in `constraints.txt` is the
+source of truth for that version. If you are installing over an existing
 environment, note that a constraint does not downgrade an already-present
 package — see the header of `constraints.txt`.
 

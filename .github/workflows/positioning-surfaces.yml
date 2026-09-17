@@ -1,0 +1,34 @@
+name: Positioning Surfaces
+
+# The GitHub repository description is a reader-facing positioning surface that
+# is not a file, so no repository-scanning check can ever see it. It drifted to
+# a retired tagline and survived several positioning passes because nothing
+# looked at it. The file surfaces are covered by check_doc_health.py and
+# check_doc_drift.py on every push; this workflow covers the one that is not a
+# file.
+#
+# Scheduled rather than per-push: the description changes in the GitHub UI, not
+# in a commit, so a push is the wrong trigger. A drift here is not urgent, but
+# it is invisible, which is why it needs its own alarm.
+#
+# GITHUB_TOKEN-only, no metered APIs (execution-cost policy).
+
+on:
+  schedule:
+    - cron: "23 15 * * 1"   # Mondays 15:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  description:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check the repository description against the canonical tagline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/diagnostics/check_repo_description.py

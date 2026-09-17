@@ -133,12 +133,22 @@ README_VOLATILE_PATTERNS: tuple[tuple[str, str], ...] = (
 # them cannot quietly rename the product. Changing the category is an edit here.
 PRODUCT_CATEGORY: tuple[str, tuple[str, ...]] = ("product category", ("federation kernel",))
 
+# The one public product sentence, settled 2026-09-16 and owned by README.md.
+# Surfaces that introduce the product carry it verbatim; the registry row in
+# docs/dev/CANONICAL_SOURCES.md is the prose record. Declared once here so a
+# surface cannot be aligned to a near-miss of it.
+CANONICAL_TAGLINE: tuple[str, tuple[str, ...]] = (
+    "canonical tagline",
+    ("Accountability infrastructure for long-running AI agents",),
+)
+
 # The root README is the concise product surface. Detailed qualifications live
 # in the linked product, capability, and evidence documents rather than being
 # repeated beside every earned claim on the landing page.
 PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     "README.md": [
         PRODUCT_CATEGORY,
+        CANONICAL_TAGLINE,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -231,6 +241,13 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ("fresh-process identity", ("fresh processes receive fresh identities",)),
         ("external-processing boundary", ("optional inference and integrations",)),
     ],
+    # Citation metadata is a reader-facing surface: GitHub renders the software
+    # title in "Cite this repository" and archives index it. It carried a
+    # retired tagline until 2026-09-16 because the contested-claims scan walks
+    # .md only and nothing else looked here.
+    "CITATION.cff": [CANONICAL_TAGLINE],
+    # The generated Pages landing is the evaluator's other front door.
+    "docs/public-site/index.md": [CANONICAL_TAGLINE],
 }
 
 
