@@ -50,6 +50,9 @@ or [User Manual](../manual/README.md).
 
 ## Validation and evidence records
 
+- [`eisv-instrument-preservation-harness.md`](eisv-instrument-preservation-harness.md) —
+  partial, tests-only pin of the EISV estimator and of the read's join mechanics
+  (not the anchor-scoped registered cohort), with the estimator input inventory.
 - [`agent-analysis-provenance.md`](agent-analysis-provenance.md) — mark every
   load-bearing claim tree / system / inferred; the tree is not the deployment.
 - [`model-harness-risk-cohorts.md`](model-harness-risk-cohorts.md) — prospective,
