@@ -322,7 +322,7 @@ not exported, not surfaced to agents, not read by any tool, and not a record.
 | **0** (this document) | Proposal and index row | None | Review in Section 11 |
 | **1 — observational seam** | Behind a default-off flag, build diagnostic attempt occurrences, checkpoints and EISV input snapshots from values the live path has already computed; emit off-lock through a bounded dropping queue to the diagnostic sink | Flag off: none. Flag on: no work inside the per-agent lock; after release, a copy of already-computed values, id minting, and an enqueue; file append on a separate worker. Verified by Section 8.1 in CI; production equivalence is not claimed from fixtures, which is why the flag stays off on the read-feeding deployment (below) | The Section 8.1 harness exists and passes against current code; Section 4.6 confirmed by the operator |
 | **2 — out-of-process shadow replay** | A separate process, never the governance server, replays the diagnostic stream through an isolated `eisv-behavioral` instance and compares with read-only extracts of live rows | None on the server | Stage 1 green on CI and the parity plan preregistered |
-| **3 — ownership move** | Durable checkpoints with idempotency and `seq`, checkpoint children for predictions and links, outcomes by `checkpoint_id`, export bundle, `core.agent_state` behind a compatibility view that preserves the legacy join: the registered read selects the latest state across **every** `core.identities` row sharing `o.agent_id`, so Stage 3 needs an explicit `agent_id` → identity → checkpoint mapping and a tie policy for equal `recorded_at` | Schema and response additions | **Not authorized.** After the preservation horizon in Section 9, on an explicit operator decision |
+| **3 — ownership move** | Durable checkpoints with idempotency and `seq`, checkpoint children for predictions and links, outcomes by `checkpoint_id`, export bundle, `core.agent_state` behind a compatibility view that preserves the legacy join: the registered read selects the latest state through `core.identities` by `o.agent_id`, so Stage 3 needs an explicit `agent_id` → identity → checkpoint mapping. The schema makes that mapping one-to-one and tie-free (`core.identities.agent_id` is unique; `core.agent_state` is unique on `(identity_id, recorded_at)`) | Schema and response additions | **Not authorized.** After the preservation horizon in Section 9, on an explicit operator decision |
 | **4 — authority posture** | Enforcement explicitly configured; advisory by default for new installs | Default change | **Not authorized.** Separate operator decision after Stage 3 |
 
 Compatibility commitments through every stage:
@@ -357,8 +357,8 @@ changed nothing in it.
 
 Stage 1 must show, with the flag off and on, over a fixture sequence covering
 warmup transitions, a pause, a restart with state restore, concurrent
-check-ins for one identity, several `core.identities` rows sharing one
-`agent_id`, and a check-in gap long enough to saturate the elapsed-time scaling:
+check-ins for one identity, and a check-in gap long enough to saturate the
+elapsed-time scaling:
 
 - identical tool responses;
 - identical rows, row counts, and column values in `core.agent_state`,
@@ -563,7 +563,7 @@ before disposition; all five hold.
 |---|---|---|
 | 1 | The seam cannot capture the inputs the estimator used: `effective_dt`, raw tool-usage statistics, and continuity metrics are locals inside `GovernanceMonitor.process_update`, so "same-point snapshot" contradicts "not captured" | **Accepted.** The pre-read snapshot is declared partial by construction, replays are `replayable: false`, parity cannot be exact on fields those inputs reach, and exact capture waits for post-horizon instrumentation (4.2, 12). |
 | 2 | Work inside the per-agent lock changes contention, and the estimator's elapsed-time scaling depends on wall time, so enabling Stage 1 can move later `recorded_at` values and transitions; fixtures cannot prove production equivalence | **Accepted.** Stage 1 does no work inside the lock (4.1, 7); fixtures cover a saturating gap (8.1); production equivalence is not claimed, which reinforces keeping the flag off on the read-feeding deployment (7). |
-| 3 | The registered join selects the latest state across every identity row sharing `o.agent_id`, so per-identity checkpoints need an explicit legacy mapping and tie policy | **Accepted.** Added to Stage 3's compatibility requirement (7) and to the 8.1 fixtures. |
+| 3 | The registered join selects the latest state across every identity row sharing `o.agent_id`, so per-identity checkpoints need an explicit legacy mapping and tie policy | **Partly accepted, corrected later the same day.** The mapping requirement stands (7). The premise of several identity rows per `agent_id`, and of ties, does not: `core.identities.agent_id` is unique (`identities_agent_id_key`) and `core.agent_state` is unique on `(identity_id, recorded_at)`, verified against the live and test schemas while building the Section 14 harness. The fixture this finding first added to 8.1 and 14 was impossible and has been removed. |
 | 4 | Phase 5 does not always mint one prediction per evidence row: explicit ids are reused, and nothing is minted without confidence | **Accepted.** Statement corrected (4.4); reuse and no-confidence rules fixed (4.6). |
 | 5 | Prediction binding is not the only grading path: auto outcomes record calibration from the check-in's own confidence with no prediction id | **Accepted.** Coupling table corrected (1); unbound grading defined and assigned to the consuming assessor (4.6). |
 
@@ -639,7 +639,7 @@ only way to show that a seam changed nothing.
 - A fixture sequence through the real check-in path covering: warmup
   transitions into fixed thresholds and self-relative scoring; a pause and a
   refused follow-up; a restart with state restore; concurrent check-ins for one
-  identity; several `core.identities` rows sharing one `agent_id`; a gap long
+  identity; a gap long
   enough to saturate elapsed-time scaling (with the clock injected, not slept);
   phase-5 evidence rows with and without explicit `prediction_id` and with no
   confidence; and an auto-emitted outcome that records calibration.
