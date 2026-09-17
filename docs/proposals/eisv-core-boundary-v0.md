@@ -340,15 +340,16 @@ Compatibility commitments through every stage:
 - Stage 1 and 2 roll back by turning the flag off and deleting the sink; no
   other state exists to unwind.
 
-**Where the flag may be on before the preservation horizon.** Stage 1 and
-Stage 2 code may merge with the flag off. Before the horizon it may be enabled
-only in CI and on deployments whose data cannot enter the 2026-12-01 read.
-Enabling it on the deployment that feeds the read waits for the horizon or an
-explicit, recorded operator waiver. What is frozen is the registered instrument
-(the estimator, its persisted rows, their timing, and the registered join), not
-the repository. The governed review preserved a stricter position, that no
-Stage 1 code should merge before the horizon at all (Section 11.2); that
-disagreement is an open operator decision (Section 12).
+**Sequencing before the preservation horizon.** Merged code reaches the
+deployment that feeds the 2026-12-01 read through normal deploys, even with its
+flag off, and can change imports, initialization, scheduling, and failure
+behavior there. Until the operator decides otherwise (Section 12, decision 1),
+Stage 1 and Stage 2 runtime code therefore wait for the horizon or an explicit,
+recorded operator waiver. Only the tests-only harness in Section 14 and
+documentation proceed before it. With a waiver, the flag may be enabled only in
+CI and on deployments whose data cannot enter the read. What is frozen is the
+registered instrument; the harness exists to show that anything landing later
+changed nothing in it.
 
 ## 8. Verification
 
@@ -535,6 +536,22 @@ and policy-caused censorship are unrepresentable or ambiguous.
 | 4 | Preregister prediction cardinality and outcome matching before any shadow data | **Accepted** (Section 4.6). |
 | 5 | Stage 1 emits distinguishable attempted, refused, and deferred occurrences or shows why they are unavailable | **Accepted with a constraint** (Sections 4.1, 4.6): only where the class is known at an existing return point, with no added error-path work; unavailable kinds are listed. This reverses in part the consult's finding 10. |
 
+**Reviewer's second response (round 4, `agrees=false`).** The reviewer accepted
+the revised root cause and found conditions 2 to 5 substantively addressed, and
+restated condition 1 more strictly: before the horizon, no Stage 1 or Stage 2
+runtime code, schema, flags, hooks, imports, scheduling changes, or deployment
+artifacts may land without an explicit recorded operator waiver. Its reason: a
+flag-off merge still reaches the read-feeding deployment through normal deploys,
+where imports, initialization, scheduling, resource contention, and failure
+behavior can change even with the flag off, so freezing only the data path does
+not preserve the instrument; and a mandate for the proposal is not a recorded
+waiver of that risk. **The author does not dispute the deployment point**: merged
+code is deployed to the maintainer's server, which feeds the read. The proposal
+therefore does not rebut the condition; it leaves the choice between the strict
+sequencing and a recorded waiver to the operator (Section 12, decision 1). Per
+the review protocol the author does not reply a second time, and the session
+stays unresolved pending the operator.
+
 ### 11.3 Pull-request review by Codex
 
 An explicit Codex review of PR #2278 at commit `226cbdc6` (`codex exec`,
@@ -552,13 +569,16 @@ before disposition; all five hold.
 
 ## 12. Open operator decisions
 
-1. **Sequencing before the horizon (standing disagreement).** The governed
-   reviewer holds that only documentation and a preregistered implementation
-   contract may merge before the preservation horizon. This proposal holds that
-   Stage 1 and 2 code may merge flag-off and run in CI and on deployments that
-   cannot feed the read, with the read-feeding deployment waiting for the horizon
-   or a recorded waiver. Both positions are recorded in 11.2; the operator
-   chooses.
+1. **Sequencing before the horizon (standing rejection).** The governed
+   reviewer holds that before the preservation horizon nothing but documentation,
+   a preregistered implementation contract, and (compatible with that position)
+   the tests-only harness in Section 14 may land, unless the operator records an
+   explicit waiver, because merged code reaches the read-feeding deployment even
+   with its flag off. The author's earlier position (merge flag-off, enable only
+   off the read-feeding deployment) does not answer the deployment point. The
+   operator chooses: **(a)** strict sequencing, so Stages 1 and 2 wait for the
+   horizon; or **(b)** a recorded waiver naming the accepted risk, optionally
+   with the seam excluded from the read-feeding deployment's build.
 2. **Occurrence taxonomy and prediction matching (Section 4.6).** Confirm or
    amend before Stage 1 code merges.
 3. **Parity standard.** Tolerances, window, stopping rule, and the acceptable
@@ -582,9 +602,10 @@ response change, no work inside the per-agent lock, and no modification of
 estimator internals. Before the preservation horizon the flag may be enabled only
 in CI and on deployments that cannot feed the 2026-12-01 read, unless the operator
 records a waiver. Stage 1 code does not merge before the harness in Section 14
-exists and the Section 4.6 rules are confirmed. If the operator adopts the
-reviewer's stricter sequencing (Section 12, decision 1), this authorization
-narrows to that harness and the documentation until the horizon. Stage 3 and
+exists and the Section 4.6 rules are confirmed. Until the operator decides Section 12,
+decision 1, the governed reviewer's stricter condition is the operative default:
+only the Section 14 harness and documentation proceed before the horizon, and
+Stage 1 or 2 runtime code needs either the horizon or a recorded waiver. Stage 3 and
 Stage 4 require a new, explicit operator decision recorded against this document
 after the horizon.
 
