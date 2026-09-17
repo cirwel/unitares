@@ -42,12 +42,49 @@ name: Draft Base Refresh
 # older base, or one stacked on another PR's branch where a base merge would
 # pull in the wrong history.
 #
-# GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
-# A bot push does not establish fresh CI: GITHUB_TOKEN-triggered pull_request
-# synchronize runs require maintainer approval, and ordinary push runs are
-# suppressed. Approve the resulting PR workflows and verify all required checks
-# on the refreshed head before declaring readiness. This workflow does not
-# approve runs or grant itself a broader token.
+# Credentials. Every read uses GITHUB_TOKEN. The PUSH uses the repository
+# secret DRAFT_BASE_REFRESH_TOKEN and nothing else. A head pushed with
+# GITHUB_TOKEN gets its `pull_request` workflow runs created in the
+# approval-required state — GitHub documents it: "when a workflow using
+# GITHUB_TOKEN creates or updates a pull request, the resulting pull_request
+# event creates workflow runs in an approval-required state" — so every
+# required check on the refreshed head waits for a maintainer's click, and
+# the draft is LESS mergeable than the stale head it replaced. PR #2250,
+# 2026-09-16: eight workflows parked at 19:37Z, `mergeable_state: blocked`,
+# approved by hand at 23:06Z. The repository's contributor-approval policy
+# does not clear it: github-actions[bot] already had a merged commit on
+# master and was gated anyway, because the rule is about the token, not the
+# actor. GitHub's own remedy is the one used here: "use a GitHub App
+# installation access token or a personal access token instead of
+# GITHUB_TOKEN when creating or updating the pull request."
+#
+# The secret is a fine-grained personal access token, or a GitHub App
+# installation token minted in a preceding step, with `Contents: read and
+# write` on THIS repository only. That permission can push to this
+# repository's unprotected branches and nothing more: it cannot read
+# secrets, approve runs, mark a PR ready, or land on master, which branch
+# protection guards from admins too. actions/checkout persists it as the
+# checkout's git credential, so `git push` is the only place it acts. The
+# merge commit stays authored by github-actions[bot]; the push is
+# authenticated as the token's owner, which is what lets GitHub run CI on it.
+#
+#   gh secret set DRAFT_BASE_REFRESH_TOKEN --repo <owner>/<repo>
+#
+# Without the secret the sweep still lists, merges, and reports, but WITHHOLDS
+# every push and fails the run when it withheld one. A green run that
+# refreshed nothing would be instrumentation failing toward "healthy" — the
+# retired pr-queue-autoupdate.yml did exactly that for weeks behind a PAT
+# nobody created (docs/operations/github-workflow-conventions.md §4). If
+# report-only is the intent, disable the workflow or label the drafts.
+# GITHUB_TOKEN itself carries `contents: read`, so a gate bug cannot push.
+#
+# After each push the job polls the Tests workflow (CI_WORKFLOW) for a
+# `pull_request` run on the new head, up to CI_WAIT_SECONDS. A run parked in
+# approval-required, or no run at all, fails the job and stops the sweep from
+# pushing further heads. The merge already pushed stays where it is: undoing
+# it would be the history rewrite this workflow promises never to do.
+#
+# No metered APIs (execution-cost policy); a repository-scoped token is not one.
 # https://docs.github.com/en/actions/concepts/security/github_token
 
 on:
@@ -63,10 +100,15 @@ on:
         description: "Skip drafts touched within this many hours (0 disables)"
         type: string
         default: ""
+      pr_number:
+        description: "Refresh only this PR number; empty sweeps every eligible draft"
+        type: string
+        default: ""
 
 permissions:
-  contents: write        # push the merge commit to the PR branch
+  contents: read         # reads only; the push credential is the secret above
   pull-requests: read
+  actions: read          # confirm the pushed head's CI run exists
 
 concurrency:
   # Scheduled and manual runs must not race each other into the same branch.
@@ -81,13 +123,25 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+          # Persisted into the checkout's git config, so the push below is
+          # authenticated as the token's owner (header). The fallback only
+          # serves a read-only sweep: the script never pushes without the secret.
+          token: ${{ secrets.DRAFT_BASE_REFRESH_TOKEN || github.token }}
 
       - name: Merge base into behind-but-clean drafts
         env:
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ inputs.dry_run }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           # Kept equal to stuck_draft_audit.py's --quiet-hours default on purpose.
           QUIET_HOURS: ${{ inputs.quiet_hours || '12' }}
+          # A GitHub expression, so the script learns whether the secret exists
+          # without ever holding its value.
+          PUSH_TOKEN_CONFIGURED: ${{ secrets.DRAFT_BASE_REFRESH_TOKEN != '' }}
+          # The workflow whose pull_request run proves a pushed head can be
+          # checked at all; its `test (3.12)` job is the branch-protection context.
+          CI_WORKFLOW: tests.yml
+          CI_WAIT_SECONDS: '180'
         run: |
           set -euo pipefail
 
@@ -112,9 +166,68 @@ jobs:
             echo "::error::QUIET_HOURS must be at most 8760 (one year); got '$QUIET_HOURS'."
             exit 1
           fi
+          # Empty sweeps everything; anything else must be a bare PR number.
+          case "$PR_NUMBER" in
+            *[!0-9]*) echo "::error::pr_number must be a PR number or empty (got '$PR_NUMBER')."; exit 1 ;;
+          esac
+          case "$CI_WAIT_SECONDS" in
+            ''|*[!0-9]*) echo "::error::CI_WAIT_SECONDS must be a nonnegative integer (got '$CI_WAIT_SECONDS')."; exit 1 ;;
+          esac
+          if [ "${#CI_WAIT_SECONDS}" -gt 4 ]; then
+            echo "::error::CI_WAIT_SECONDS must be under 10000 (got '$CI_WAIT_SECONDS')."
+            exit 1
+          fi
+
+          # What this run may do to a branch. `push` is the only mode that
+          # writes; the other two go through the same listing, fetch, and merge
+          # so their report is the one a push would have acted on.
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            mode=dry-run
+          elif [ "$PUSH_TOKEN_CONFIGURED" = "true" ]; then
+            mode=push
+          else
+            mode=no-token
+            echo "::warning::DRAFT_BASE_REFRESH_TOKEN is not configured: this sweep reports and withholds every push. A GITHUB_TOKEN push strands the head in approval-required CI (workflow header)."
+          fi
 
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # The CI workflow triggers on pull_request only for PRs into the
+          # default branch, so a refreshed head elsewhere legitimately has no
+          # run to find. Unknown stays empty, which verifies every base: a
+          # false red beats a skipped check.
+          default_branch=$(gh repo view "$GITHUB_REPOSITORY" --json defaultBranchRef \
+            --jq '.defaultBranchRef.name // ""' 2>/dev/null || echo "")
+
+          # State of CI_WORKFLOW's pull_request run on a head, polled up to
+          # CI_WAIT_SECONDS: a live status (queued, in_progress, ...),
+          # completed:<conclusion>, action_required (parked awaiting approval),
+          # absent (no run), or unreadable (the API could not be read). The last
+          # three are not evidence that the head can be checked.
+          ci_state_for() {
+            local sha="$1" state deadline
+            deadline=$(( $(date -u +%s) + CI_WAIT_SECONDS ))
+            while :; do
+              if ! state=$(gh api \
+                  "repos/$GITHUB_REPOSITORY/actions/workflows/$CI_WORKFLOW/runs?event=pull_request&head_sha=$sha&per_page=20" \
+                  --jq '[.workflow_runs[]
+                         | if .conclusion == "action_required" then "action_required"
+                           elif .status == "completed" then "completed:\(.conclusion)"
+                           else .status end]
+                        | first // "absent"' 2>/dev/null); then
+                state=unreadable
+              fi
+              case "$state" in
+                absent|unreadable) ;;
+                *) printf '%s\n' "$state"; return ;;
+              esac
+              if [ "$(date -u +%s)" -ge "$deadline" ]; then
+                printf '%s\n' "$state"; return
+              fi
+              sleep 10
+            done
+          }
 
           # mergeable/mergeStateStatus are computed lazily by GitHub; a fresh
           # query can return UNKNOWN. Ask once, and treat UNKNOWN as "skip" —
@@ -124,7 +237,7 @@ jobs:
             --json number,isDraft,headRefName,headRepositoryOwner,baseRefName,mergeStateStatus,labels,updatedAt,headRefOid \
             > prs.json
 
-          refreshed=0; skipped=0; held=0
+          refreshed=0; withheld=0; skipped=0; held=0; ci_failed=0
           now_s=$(date -u +%s)
           while read -r pr; do
             num=$(jq -r .number <<<"$pr")
@@ -163,6 +276,14 @@ jobs:
 
             if [ -z "$oid" ] || [ "$oid" = "null" ]; then
               echo "hold: headRefOid missing, so the idleness verdict cannot be pinned to a commit"
+              held=$((held+1)); echo "::endgroup::"; continue
+            fi
+
+            # A head this sweep already pushed could not be checked. Whatever
+            # broke — the credential, the API, GitHub — would break the next
+            # push the same way, and one stranded head is enough to diagnose.
+            if [ "$ci_failed" = 1 ]; then
+              echo "hold: an earlier push in this sweep did not establish CI; no further heads are pushed"
               held=$((held+1)); echo "::endgroup::"; continue
             fi
 
@@ -240,33 +361,83 @@ jobs:
               held=$((held+1)); echo "::endgroup::"; continue
             fi
 
-            if [ "${DRY_RUN:-false}" = "true" ]; then
-              echo "dry-run: would push $(git rev-parse --short HEAD) to $head"
-            else
-              # Exact expected-OID CAS closes the final race after the live read.
-              # force-if-includes is mandatory alongside the explicit lease so a
-              # history rewrite can never discard a commit absent from this merge.
-              if ! git push \
-                  --force-with-lease="refs/heads/$head:$oid" \
-                  --force-if-includes \
-                  origin "HEAD:refs/heads/$head"; then
-                echo "hold: push lease rejected; $head moved or could not be updated"
-                held=$((held+1)); echo "::endgroup::"; continue
-              fi
-              echo "refreshed: pushed merge of $base into $head"
-              echo "::notice::PR #$num: approve token-triggered PR workflows and verify required CI on the new head."
-            fi
-            refreshed=$((refreshed+1))
+            case "$mode" in
+              dry-run)
+                echo "dry-run: would push $(git rev-parse --short HEAD) to $head"
+                refreshed=$((refreshed+1))
+                ;;
+              no-token)
+                echo "withheld: would push $(git rev-parse --short HEAD) to $head, but DRAFT_BASE_REFRESH_TOKEN is not configured and a GITHUB_TOKEN push would strand the head in approval-required CI"
+                withheld=$((withheld+1))
+                ;;
+              push)
+                # Exact expected-OID CAS closes the final race after the live read.
+                # force-if-includes is mandatory alongside the explicit lease so a
+                # history rewrite can never discard a commit absent from this merge.
+                if ! git push \
+                    --force-with-lease="refs/heads/$head:$oid" \
+                    --force-if-includes \
+                    origin "HEAD:refs/heads/$head"; then
+                  echo "hold: push lease rejected; $head moved or could not be updated"
+                  held=$((held+1)); echo "::endgroup::"; continue
+                fi
+                refreshed=$((refreshed+1))
+                new_oid=$(git rev-parse HEAD)
+                echo "refreshed: pushed merge of $base into $head (${new_oid:0:7})"
+
+                # The push is not the outcome; a head that can be checked is.
+                if [ -n "$default_branch" ] && [ "$base" != "$default_branch" ]; then
+                  echo "unverified: $CI_WORKFLOW runs on pull_request only for PRs into $default_branch, so no run is expected on this head"
+                else
+                  ci=$(ci_state_for "$new_oid")
+                  case "$ci" in
+                    queued|in_progress|waiting|requested|pending|completed:success)
+                      echo "::notice::PR #$num: refreshed to ${new_oid:0:7}; its $CI_WORKFLOW run is $ci."
+                      ;;
+                    completed:*)
+                      echo "::notice::PR #$num: refreshed to ${new_oid:0:7}; its $CI_WORKFLOW run already finished ($ci) — read the head's checks before trusting it."
+                      ;;
+                    action_required)
+                      echo "::error::PR #$num: the refreshed head ${new_oid:0:7} is parked in approval-required CI. The push credential does not establish CI (workflow header); approve the head's runs by hand. No further heads are pushed in this sweep."
+                      ci_failed=1
+                      ;;
+                    *)
+                      echo "::error::PR #$num: no $CI_WORKFLOW pull_request run could be confirmed on the refreshed head ${new_oid:0:7} within ${CI_WAIT_SECONDS}s ($ci). Check the head by hand. No further heads are pushed in this sweep."
+                      ci_failed=1
+                      ;;
+                  esac
+                fi
+                ;;
+            esac
             echo "::endgroup::"
-          done < <(jq -c '.[] | select(.isDraft)
-                          | select([.labels[].name] | index("no-base-refresh") | not)' prs.json)
+          done < <(jq -c --arg only "$PR_NUMBER" '
+                     .[] | select(.isDraft)
+                         | select([.labels[].name] | index("no-base-refresh") | not)
+                         | select($only == "" or (.number | tostring) == $only)' prs.json)
 
           {
-            echo "## Draft base refresh"
-            echo "- refreshed: $refreshed"
+            echo "## Draft base refresh ($mode)"
+            case "$mode" in
+              dry-run)  echo "- would refresh: $refreshed" ;;
+              no-token) echo "- withheld (DRAFT_BASE_REFRESH_TOKEN not configured): $withheld" ;;
+              push)     echo "- refreshed: $refreshed" ;;
+            esac
             echo "- skipped:   $skipped"
-            echo "- held (active within ${QUIET_HOURS}h, or idleness unreadable): $held"
+            echo "- held (active within ${QUIET_HOURS}h, idleness unreadable, or after a CI failure): $held"
             echo
             echo "Readiness and merge are untouched by this job by design."
-            echo "GITHUB_TOKEN synchronize workflows require maintainer approval; a refresh is not evidence that CI ran."
+            if [ "$ci_failed" = 1 ]; then
+              echo "**A refreshed head did not get a $CI_WORKFLOW run; see the annotations.**"
+            elif [ "$mode" = "push" ] && [ "$refreshed" -gt 0 ]; then
+              echo "Each refreshed head has a $CI_WORKFLOW pull_request run, or the notice above says why not."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ci_failed" = 1 ]; then
+            echo "::error::A refreshed head could not be checked; the sweep stopped pushing. See the annotations above."
+            exit 1
+          fi
+          if [ "$withheld" -gt 0 ]; then
+            echo "::error::$withheld draft(s) are behind and idle but were not refreshed: DRAFT_BASE_REFRESH_TOKEN is not configured, and a GITHUB_TOKEN push would strand each head in approval-required CI (PR #2250, 2026-09-16). Provision the secret (workflow header), label the drafts no-base-refresh, or disable this workflow."
+            exit 1
+          fi
