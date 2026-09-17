@@ -53,7 +53,7 @@ result = sync_state(
     confidence=0.8,
     client_session_id=session["client_session_id"],
 )
-action = result.get("state_summary", {}).get("action")
+action = result.get("action_summary", {}).get("action")
 
 if action in ("pause", "reject"):
     stop_and_request_review(result)  # implement this in the host client
