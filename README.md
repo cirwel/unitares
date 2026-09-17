@@ -25,7 +25,9 @@ run leaves its own log, and the answers scatter across them.
 UNITARES is self-hosted accountability infrastructure for operators running
 multiple AI agents. Its federation kernel connects independent runtimes to one
 operator-controlled server over MCP or HTTP, where they share a durable record
-while keeping their own models, tools, and runtimes.
+while keeping their own models, tools, and runtimes. They interoperate with
+each other over their own transports or A2A; UNITARES is the record behind
+them, not the transport between them.
 
 The goal is simple: agent work should remain attributable, reviewable, and
 recoverable even when the process that started it is gone.
@@ -33,7 +35,8 @@ recoverable even when the process that started it is gone.
 ## What UNITARES gives you
 
 - **Identity and lineage** — know which process acted and where inherited work
-  came from.
+  came from. This is a record for attribution, not a credential; platform
+  workload identity remains the credential layer.
 - **Claims and evidence** — retain important findings, corrections, and their
   provenance outside any one context window.
 - **Governed review** — preserve disagreement, conditions, and resolution as
@@ -46,7 +49,9 @@ recoverable even when the process that started it is gone.
   continue earlier work.
 
 Together, these form an operator-owned accountability layer across coding
-agents, research agents, background agents, and custom runtimes.
+agents, research agents, background agents, and custom runtimes. What it adds
+to a record of what happened is adjudication: disagreement, conditions, and
+outcomes bound to the process that made the claim.
 
 ## Install
 
