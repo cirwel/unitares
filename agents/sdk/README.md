@@ -224,3 +224,69 @@ for that migration window.
 - Watcher (`agents/watcher/agent.py`) uses a different execution
   model (sync, hook-driven, one-shot per tool-use event) and does not
   subclass `GovernanceAgent`.
+
+## NeMo Relay integration
+
+`unitares_sdk.integrations.nemo_relay` attaches UNITARES to
+[NVIDIA NeMo Relay](https://github.com/NVIDIA/NeMo-Relay), the agent runtime
+that owns lifecycle events and tool-boundary middleware for Python, Node and
+Rust agents. Install the extra and register the plugin kind:
+
+```bash
+pip install "unitares-sdk[nemo-relay]"
+```
+
+```python
+from nemo_relay import plugin as relay_plugin
+from unitares_sdk.integrations.nemo_relay import install
+
+unitares = install()   # registers plugin kind "unitares"
+await relay_plugin.initialize(relay_plugin.PluginConfig(components=[
+    relay_plugin.ComponentSpec(kind="unitares", config={
+        "rest_url": "http://127.0.0.1:8767/v1/tools/call",
+        "checkin_every_tool_calls": 20,
+    }),
+]))
+```
+
+What it does, and what it deliberately does not claim:
+
+- **One identity per run.** Each root Relay scope mints a fresh UNITARES
+  identity (`force_new=true`), the strict-identity contract's normal path.
+  Nested agent scopes share it unless `subagent_identities` is on, in which
+  case each becomes a lineage-linked identity with `spawn_reason="subagent"`.
+- **Substrate check-ins, not agent reports.** Tool and LLM counts are filed
+  every `checkin_every_tool_calls` tool calls and at run end under
+  `epistemic_class="substrate_interpretation"`, with no confidence, because
+  the integration holds no belief about the work.
+- **Outcomes with honest provenance.** Tool errors become `task_failed` and
+  guardrail rejections become `tool_rejected` outcome events. They keep the
+  server's default `verification_source`; the integration runs inside the
+  agent's process, so this is in-band evidence, not an external signal.
+  Rejections issued by the integration's own gate are never filed as
+  outcomes, so the governor does not grade its own enforcement.
+- **A contestable gate.** With `enforce` on (the default), a Relay
+  conditional-execution guardrail refuses tool calls for a run whose latest
+  policy action is `pause` or `reject`. The refusal names the verdict, the
+  guidance, and the review path. The gate never touches the network, so
+  enforcement latency is bounded by the check-in cadence.
+- **Fail-open by default.** A scope the exporter has not bound yet, or an
+  unreachable server, allows the call and logs. `fail_closed: true` refuses
+  instead.
+
+| Config key | Default | Meaning |
+|---|---|---|
+| `rest_url` | `http://127.0.0.1:8767/v1/tools/call` | REST tool endpoint of the governance server |
+| `timeout` | `10.0` | Seconds per server call, on the worker thread |
+| `agent_name` | `relay-run` | Display-name prefix; the run's scope name is appended |
+| `checkin_every_tool_calls` | `20` | Substrate check-in cadence within a run |
+| `enforce` | `true` | Register the policy gate |
+| `fail_closed` | `false` | Refuse tool calls for unbound runs or when the gate cannot resolve its scope |
+| `record_tool_failures` | `true` | File tool errors and foreign guardrail rejections as outcome events |
+| `subagent_identities` | `false` | Mint a lineage-linked identity per nested agent scope |
+| `guardrail_priority` | `100` | Relay guardrail order; lower runs first |
+
+Network calls run on a private worker thread; the Relay subscriber only
+enqueues. Tests inject a fake client through `install(client_factory=...)`,
+so the integration is exercised without a server; the end-to-end test
+against the real runtime skips when the extra is absent.
