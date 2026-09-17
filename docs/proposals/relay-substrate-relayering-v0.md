@@ -132,6 +132,18 @@ atomically observe. Split-brain accountability is the risk the read exists to
 rule in or out. The read carries no implementation authority; a gate document
 under Wave 3's own terms still owes ratification before anything is built.
 
+**The read was written on 2026-09-17** and is at
+[`execute-plane-design-read-v0.md`](execute-plane-design-read-v0.md), its
+conditions pre-registered in a commit before its analysis. **Row 3's status is
+unchanged by it** — the read concluding is not the operator deciding, and the
+read has no authority to fill the row in. It reports that the intercept option
+is not ruled out on the conditions it registered, that the custodian plane
+carries three properties an intercept structurally cannot (exclusion, execution
+by a party other than the proposer, crash-durable recovery), and that the
+evidence supports a composition none of the three option letters expresses. It
+asks the operator one question in return: whether row 3's three options are
+still the right three.
+
 ### Row 4 changes an item's governance role, and says so
 
 The packet made upstream publication conditional on an external operator
@@ -184,7 +196,7 @@ an evidence gate:
 | Item | Instrument | On 2026-11-03 |
 |---|---|---|
 | Side-by-side harness run: one harness under both paths against the same server, comparing identity binding, check-in count within cadence tolerance, and pause delivery. Reported per deployment, never pooled. | Named action; sole condition on row 2's option (c) | Report done or not done. If not done, the operator renews, redirects or stops it explicitly. |
-| Design read on the execute plane, per the charter above | Named action; row 3 stays undecided until it concludes | Same. Row 3's "no decision" status is renewed explicitly or the work is stopped. |
+| Design read on the execute plane, per the charter above | Named action, **written 2026-09-17**. Concluding it does not decide row 3 — it has no authority to, and row 3 stays undecided until the operator acts | The item reports done. Row 3's "no decision" status is renewed explicitly, decided, or the track is stopped; the read's question about whether the three options are still the right three is answered or deferred on the record. |
 | One operator other than the maintainer running the Relay path | Telemetry, and the evidence path for efficacy claims — **changed from a publication precondition on 2026-09-17**, see row 4 | Reported as a count, with no authority to retire anything. A fair zero banks the datum and moves to the next lever. |
 
 The 2026-11-03 checkpoint reports status and forces an explicit renew-or-stop.
