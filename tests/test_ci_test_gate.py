@@ -24,27 +24,21 @@ def _ci_shard(path: Path) -> str | None:
     relative = path.relative_to(PROJECT_ROOT).as_posix()
 
     if relative.startswith("agents/") or relative.count("/") > 1:
-        return "agents-and-nested"
+        return "tests-u-z-and-agents"
     if relative == "tests/smoke_test.py":
-        return "agents-and-nested"
+        return "tests-u-z-and-agents"
     if not relative.startswith("tests/test_"):
         return None
 
     first_letter = path.name.removeprefix("test_")[:1].lower()
-    if "a" <= first_letter <= "c":
-        return "tests-a-c"
-    if "d" <= first_letter <= "e":
-        return "tests-d-e"
-    if "f" <= first_letter <= "i":
-        return "tests-f-i"
-    if "j" <= first_letter <= "m":
-        return "tests-j-m"
-    if "n" <= first_letter <= "r":
-        return "tests-n-r"
-    if "s" <= first_letter <= "t":
-        return "tests-s-t"
+    if "a" <= first_letter <= "e":
+        return "tests-a-e"
+    if "f" <= first_letter <= "m":
+        return "tests-f-m"
+    if "n" <= first_letter <= "t":
+        return "tests-n-t"
     if "u" <= first_letter <= "z":
-        return "tests-u-z"
+        return "tests-u-z-and-agents"
     return None
 
 
@@ -57,17 +51,8 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert "needs: smoke" not in shard_job
     assert "timeout-minutes: 20" in shard_job
     assert (
-        "shard: [tests-a-c, tests-d-e, tests-f-i, tests-j-m, tests-n-r, "
-        "tests-s-t, tests-u-z, agents-and-nested]" in shard_job
+        "shard: [tests-a-e, tests-f-m, tests-n-t, tests-u-z-and-agents]" in shard_job
     )
-    assert "targets=(tests/test_[a-c]*.py)" in shard_job
-    assert "targets=(tests/test_[d-e]*.py)" in shard_job
-    assert "targets=(tests/test_[f-i]*.py)" in shard_job
-    assert "targets=(tests/test_[j-m]*.py)" in shard_job
-    assert "targets=(tests/test_[n-r]*.py)" in shard_job
-    assert "targets=(tests/test_[s-t]*.py)" in shard_job
-    assert "targets=(tests/test_[u-z]*.py)" in shard_job
-    assert "targets=(agents/ tests/*/ tests/smoke_test.py)" in shard_job
     assert "targets=(tests/test_[a-e]*.py)" in shard_job
     assert "targets=(tests/test_[f-m]*.py)" in shard_job
     assert "targets=(tests/test_[n-t]*.py)" in shard_job
@@ -117,7 +102,11 @@ def test_local_test_entrypoints_keep_realistic_coverage_floor() -> None:
 # in constraints.txt, the Dockerfile, the scripts/ops templates, and the
 # test_shard matrix, and they sabotage copies of each input to prove the
 # checker that enforces it in the smoke job fails closed rather than passing
-# while proving nothing.
+# while proving nothing. Since 2026-09-17 the floor IS the production
+# interpreter (3.14), so the matrix is one leg; the sabotage cases below use an
+# interpreter that is neither, so they cannot pass by coinciding with it.
+
+OTHER_INTERPRETER = "3.13"
 
 CHECKER_PATH = PROJECT_ROOT / "scripts" / "diagnostics" / "check_ci_python_matrix_sync.py"
 WORKFLOW_PATH = PROJECT_ROOT / ".github" / "workflows" / "tests.yml"
@@ -189,10 +178,8 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
     assert "if: ${{ always() && matrix.python-version == env.COVERAGE_LEG }}" in shard_job
     assert "pattern: coverage-data-${{ env.COVERAGE_LEG }}-*" in workflow_text
 
-    # The aggregator checks every leg's latest execution across attempts. The
-    # floor uses all eight shards while production replaces those combinations with
-    # four broader include entries, so count the expanded matrix rather than a
-    # hand-maintained number.
+    # The aggregator checks every leg's latest execution across attempts, so
+    # count the expanded matrix rather than trusting a hand-maintained number.
     matrix = workflow["jobs"]["test_shard"]["strategy"]["matrix"]
     expanded = [
         {"python-version": version, "shard": shard}
@@ -214,15 +201,11 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
         }
         for version in matrix["python-version"]
     }
-    assert legs_by_version["3.12"] == set(matrix["shard"])
-    assert legs_by_version["3.14"] == {
-        "tests-a-e",
-        "tests-f-m",
-        "tests-n-t",
-        "tests-u-z-and-agents",
+    assert legs_by_version == {
+        floor: {"tests-a-e", "tests-f-m", "tests-n-t", "tests-u-z-and-agents"}
     }
     expected_legs = len(expanded)
-    assert expected_legs == 12
+    assert expected_legs == 4
     test_job = workflow["jobs"]["test"]
     assert test_job["env"]["EXPECTED_SHARD_LEGS"] == str(expected_legs)
     assert test_job["permissions"]["actions"] == "read"
@@ -283,31 +266,32 @@ def test_checker_fails_closed_under_sabotage(checker, tmp_path, monkeypatch, cap
         path = tmp_path / "tests.yml"; path.write_text(text, encoding="utf-8")
         monkeypatch.setattr(checker, "TEST_WORKFLOW_PATH", path)
     elif sabotage == "setup_python_ignores_matrix":
-        # The matrix still lists both interpreters, but every leg would run 3.12.
+        # The matrix still reads as covered, but every leg would run a literal.
         path = _with_replacement(
             tmp_path, WORKFLOW_PATH,
             "        python-version: ${{ matrix.python-version }}\n",
-            f"        python-version: '{floor}'\n",
+            f"        python-version: '{OTHER_INTERPRETER}'\n",
         )
         monkeypatch.setattr(checker, "TEST_WORKFLOW_PATH", path)
     elif sabotage == "decoy_list_in_another_job":
         # A bracketed list in the smoke job must not stand in for the shard matrix.
         text = MATRIX_LIST_RE.sub(_matrix_without_production, workflow_text, count=1)
+        assert f"    - name: Set up Python {tag}\n" in text
         text = text.replace(
-            "    - name: Set up Python 3.12\n",
-            f"    # python-version: ['{floor}', '{tag}']\n    - name: Set up Python 3.12\n",
+            f"    - name: Set up Python {tag}\n",
+            f"    # python-version: ['{floor}', '{tag}']\n    - name: Set up Python {tag}\n",
             1,
         )
         path = tmp_path / "tests.yml"; path.write_text(text, encoding="utf-8")
         monkeypatch.setattr(checker, "TEST_WORKFLOW_PATH", path)
     elif sabotage == "dockerfile_disagrees":
         path = tmp_path / "Dockerfile"
-        path.write_text(f"FROM python:{floor}-slim@sha256:0000\n", encoding="utf-8")
+        path.write_text(f"FROM python:{OTHER_INTERPRETER}-slim@sha256:0000\n", encoding="utf-8")
         monkeypatch.setattr(checker, "DOCKERFILE_PATH", path)
     elif sabotage == "template_disagrees":
         templates = tmp_path / "ops"; templates.mkdir()
         (templates / "com.example.plist.template").write_text(
-            f"<string>/Library/Frameworks/Python.framework/Versions/{floor}/bin/python3</string>\n",
+            f"<string>/Library/Frameworks/Python.framework/Versions/{OTHER_INTERPRETER}/bin/python3</string>\n",
             encoding="utf-8",
         )
         monkeypatch.setattr(checker, "OPS_TEMPLATES_DIR", templates)
