@@ -10,15 +10,12 @@ This guide is for a cold evaluator deciding whether UNITARES is real, what layer
 
 ## One-sentence read
 
-UNITARES is a self-hosted federation kernel for agent identity, claims and
-evidence, review, outcomes, and reconstruction: independent agent runtimes share
-one operator-controlled record over MCP or HTTP (see the
-[product definition](PRODUCT_DEFINITION.md)). One part of that record is runtime
-state: agents check in after units of work, and the server estimates drift and
-calibration through staged cold-start, fixed-threshold, and self-relative
-scoring that policy or review layers can consume mid-run.
-Whether that state signal predicts incidents or helps prevent them remains an
-open, measured question.
+UNITARES is accountability infrastructure for long-running AI agents: agents check
+in after units of work, the server estimates drift and calibration through
+staged cold-start, fixed-threshold, and self-relative scoring, and policy or
+review layers can consume that state mid-run.
+Whether the telemetry predicts incidents or helps prevent them remains an open,
+measured question.
 
 ## What this is
 
