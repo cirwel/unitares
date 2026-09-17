@@ -594,6 +594,22 @@ before disposition; all five hold.
 7. **Post-read authority posture** for the maintainer deployment and for new
    installs, taken after Stage 3 rather than bundled with it.
 
+### 12.1 Operator disposition, 2026-09-17
+
+The drafting agent recommended an answer to each decision above; the operator
+replied "Proceed". The record is that instruction applied to those
+recommendations, not an independently worded operator ruling on each item:
+
+| # | Adopted disposition |
+|---|---|
+| 1 | **Strict sequencing (a).** No waiver. Before the preservation horizon only the Section 14 harness and documentation proceed; Stage 1 and Stage 2 runtime code wait. This satisfies the governed reviewer's condition 1; the dialectic session itself is resolved only by the reviewer or by operator reassignment, not by this note. |
+| 2 | **Confirmed** as written in Section 4.6. |
+| 3 | **No pre-horizon parity.** Stage 2 waits for instrumentation; the harness input inventory stands in for what a partial parity would have shown. |
+| 4 | **Salted digest only** until a retention policy is designed. |
+| 5 | **Yes**, instrument `process_update` after the horizon, bumping `epoch`. |
+| 6 | **Final** when the read's report is merged and no correction is filed within 14 days. |
+| 7 | **Advisory by default for new installs; circuit breaker kept on the maintainer deployment**, decided separately after Stage 3. |
+
 ## 13. Authorization
 
 Merging this document authorizes Stage 1 and Stage 2 only: default-off, lossy,
@@ -602,10 +618,9 @@ response change, no work inside the per-agent lock, and no modification of
 estimator internals. Before the preservation horizon the flag may be enabled only
 in CI and on deployments that cannot feed the 2026-12-01 read, unless the operator
 records a waiver. Stage 1 code does not merge before the harness in Section 14
-exists and the Section 4.6 rules are confirmed. Until the operator decides Section 12,
-decision 1, the governed reviewer's stricter condition is the operative default:
-only the Section 14 harness and documentation proceed before the horizon, and
-Stage 1 or 2 runtime code needs either the horizon or a recorded waiver. Stage 3 and
+exists and the Section 4.6 rules are confirmed. Under the disposition in Section 12.1, only
+the Section 14 harness and documentation proceed before the horizon; Stage 1 and
+Stage 2 runtime code wait for it. Stage 3 and
 Stage 4 require a new, explicit operator decision recorded against this document
 after the horizon.
 
