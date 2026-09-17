@@ -92,7 +92,7 @@ Every check-in resolves to one of four verdicts:
 | `pause` | Needs attention | Stop, reflect, consider a dialectic review |
 | `reject` | Significant concern | Open a dialectic review to resolve/contest, or bring in a human |
 
-Verdicts also carry a **margin** (`comfortable` / `tight` / `critical`) indicating proximity to the basin boundary. Definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py).
+Verdicts also carry a **margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`) indicating proximity to the nearest measurable *decision threshold* — risk, void, or coherence — which is a different notion of edge from basin membership: an agent inside the `boundary` basin can still report `comfortable`. Verdict definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py); the margin levels come from `GovernanceConfig.compute_proprioceptive_margin`.
 
 ## 1.6 Supporting concepts
 

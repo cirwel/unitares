@@ -18,10 +18,10 @@ PostgreSQL+AGE (5432)            Redis (6379)
   durable identity rows            live session bindings
   core.agent_state                 identity continuity
   audit.events
-  core.discoveries (AGE)
+  knowledge.discoveries / governance_graph (AGE)
   dialectic.*
   core.calibration
-  core.tool_usage
+  audit.tool_usage
 ```
 
 Operational guidance: do **not** create additional PostgreSQL instances, databases, or migration layers — it's a single-Postgres / schema-isolation model ([`../operations/database_architecture.md`](../operations/database_architecture.md)). The production data dictionary is [`../operations/DATA_NOTES.md`](../operations/DATA_NOTES.md).

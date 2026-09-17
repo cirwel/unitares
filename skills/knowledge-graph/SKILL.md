@@ -199,8 +199,10 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
 - **When a finding is outdated, archive it** with a note about what superseded it.
 - **Periodically audit stale open entries** with `knowledge(action="audit")`
   (read-only), and run `knowledge(action="cleanup")` (dry-run by default) to
-  apply the lifecycle archival passes. Cleanup has no domain or tag scope and
-  never touches open entries; staleness scoring is `audit`'s job.
+  apply the lifecycle archival passes. Cleanup has no domain or tag scope, and
+  it does not score staleness — that is `audit`'s job. It does write to open
+  rows: the tag-canonicalization pass rewrites their tags, and the ephemeral
+  pass archives `ephemeral`-tagged open rows older than 7 days.
 
 Unresolved entries create noise. Closed loops create trust in the graph.
 Open-entry staleness warnings use the latest write (`updated_at` when present),

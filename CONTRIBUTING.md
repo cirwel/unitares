@@ -28,10 +28,10 @@ New behavior needs a test. New tests should live in `tests/` alongside the exist
 
 ### Fresh / remote environments
 
-The project requires **Python 3.12+** (`pyproject.toml` `requires-python`), and `pytest` lives in `requirements-full.txt` — a bare `pip install -e .` won't pull it. Some cloud/CI/web containers (including Claude Code on the web) default `python3` to an older interpreter and don't pre-install the full deps, so set up an explicit 3.12 venv once per environment:
+The project requires **Python 3.14+** (`pyproject.toml` `requires-python`), and `pytest` lives in `requirements-full.txt` — a bare `pip install -e .` won't pull it. Some cloud/CI/web containers (including Claude Code on the web) default `python3` to an older interpreter and don't pre-install the full deps, so set up an explicit 3.14 venv once per environment:
 
 ```bash
-python3.12 -m venv .venv && . .venv/bin/activate   # use any 3.12+ interpreter
+python3.14 -m venv .venv && . .venv/bin/activate   # use any 3.14+ interpreter
 pip install -r requirements-full.txt -c constraints.txt   # same resolution CI installs
 pytest tests/test_<specific>.py                    # now resolvable
 ```
@@ -71,7 +71,7 @@ Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_age
 
 ## Code style
 
-- Python 3.12+. Format touched Python files with `ruff format` and lint with
+- Python 3.14+. Format touched Python files with `ruff format` and lint with
   `ruff check`. CI currently gates the configured Ruff rule set (unused imports)
   but does not run a repository-wide format check.
 - Type hints encouraged but not enforced repo-wide; new modules should be fully typed.
