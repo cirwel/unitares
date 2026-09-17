@@ -29,6 +29,10 @@ The result establishes that the scenario, scorer, and both reconstruction paths 
 
 The next step is stage 1 against actual retained UNITARES records and naturally produced Git/handoff artifacts. Only after capture coverage is measured should stage 2 compare retrieval effort. The frozen multi-scenario evaluation remains unchanged.
 
+## Stage 1 — first capture datum (2026-09-17)
+
+Stage 1 has now been run once, on a real incident with nothing authored for the test: issue #2168, an orphan-push-guard finding of 2026-09-12, was reconstructed twice, from Git, PR, CI and issue artifacts alone and from UNITARES records alone, each pass adversarially verified, and the two were then compared. The comparison is [capture-stage-2168-v0.md](capture-stage-2168-v0.md); the two arms are [capture-stage-2168-artifacts-arm.md](capture-stage-2168-artifacts-arm.md) and [capture-stage-2168-unitares-arm.md](capture-stage-2168-unitares-arm.md), and the fact ledger is [capture-stage-2168-ledger.md](capture-stage-2168-ledger.md). One incident, one operator, one reader family, no transcript arm and no pre-fixed rubric: it is a datum for the capture stage, not a pilot result.
+
 Oracle manifest SHA-256: `78fd4c0c161373dfd548022b63ae66a7b6e4a4e2c6ef15de10b74022f91b331e`
 
 Reproduce from the repository root:
