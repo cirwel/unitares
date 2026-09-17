@@ -359,21 +359,48 @@ def test_rejects_malformed_uuid(env, monkeypatch):
 def test_dry_run_does_not_need_the_server_modules(tmp_path):
     """The first version imported server code before the dry-run return, so a
     dry run on a plain interpreter died with ModuleNotFoundError: mcp AFTER
-    it had already hit the network."""
+    it had already hit the network.
+
+    The probe blocks ``mcp`` itself instead of trusting the ambient
+    interpreter. Whatever runs this suite has the server's dependency tree
+    installed, so a version of this test that merely clears PYTHONPATH passes
+    without ever exercising the import it exists to protect. The probe also
+    asserts that _server_modules() still fails under the block, so the day the
+    server helpers stop pulling in mcp this test fails loudly (re-point the
+    block at whatever the new hard dependency is) rather than going quietly
+    vacuous.
+    """
     probe = (
-        "import importlib.util, os, sys\n"
+        "import importlib.util, sys\n"
+        "class _NoMCP:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name == 'mcp' or name.startswith('mcp.'):\n"
+        "            raise ModuleNotFoundError('No module named ' + repr(name))\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, _NoMCP())\n"
         f"spec = importlib.util.spec_from_file_location('pra', {str(MODULE_PATH)!r})\n"
         "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        "try:\n"
+        "    m._server_modules()\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "else:\n"
+        "    sys.exit(3)\n"
         "m._call = lambda n, a, t: {'result': {'status': 'active', "
         "'tags': ['persistent','autonomous'], 'label': 'probe'}}\n"
         f"m.ANCHOR_DIR = __import__('pathlib').Path({str(tmp_path)!r})\n"
         "sys.exit(m.main(['--agent-uuid','b1b28308-dca3-46df-8e8b-5a23a524fe39',"
         "'--name','probe']))\n"
     )
-    env = {**os.environ, "UNITARES_CONTINUITY_TOKEN_SECRET": "x",
-           "PYTHONPATH": ""}
+    env = {**os.environ, "UNITARES_CONTINUITY_TOKEN_SECRET": "x"}
     env.pop("UNITARES_UDS_SOCKET", None)
     proc = subprocess.run([sys.executable, "-c", probe], capture_output=True,
                           text=True, env=env, cwd=str(REPO_ROOT))
+    assert proc.returncode != 3, (
+        "the probe no longer reproduces a bare interpreter: _server_modules() "
+        "succeeded with mcp blocked. Re-point the block at the server helpers' "
+        "current hard dependency."
+    )
     assert proc.returncode == 0, f"dry run failed: {proc.stderr[-800:]}"
     assert "ModuleNotFoundError" not in proc.stderr
+    assert not list(tmp_path.iterdir()), "a dry run wrote an anchor"
