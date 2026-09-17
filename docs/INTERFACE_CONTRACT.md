@@ -181,8 +181,10 @@ parameter model, and `describe_tool(tool_name=..., action=...)` serves it. The
 narrowed schema is a description of one call, not a second contract: the wire
 still accepts and ignores the parameters of other actions.
 
-Core currently supports `mcp>=1.26.0,<3.0.0`. Both admitted major versions are
-tested, and the newest in-range resolution is a blocking CI lane. A client
+Core currently supports `mcp>=1.26.0,<3.0.0`, but CI exercises only the 2.x
+major: every lane but `mcp-newest` installs under `constraints.txt`, whose
+`mcp` pin is a 2.x release, and the blocking `mcp-newest` lane resolves the
+newest in-range version, which is 2.x as well. A client
 should negotiate the UNITARES contract above rather than infer compatibility
 from its locally installed MCP package version.
 

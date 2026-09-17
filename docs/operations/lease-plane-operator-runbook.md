@@ -138,8 +138,9 @@ Once attached, useful commands:
 :dbg.tracer()
 :dbg.p(pid, [:m, :c])
 
-# Count active leases right now
-UnitaresLeasePlane.Stats.active_lease_count()
+# Count the local_beam lease holders alive right now (remote-heartbeat
+# leases are DB rows with no holder process)
+UnitaresLeasePlane.LeaseSupervisor.count_holders()
 ```
 
 The point: when something is wrong, you don't add print statements and redeploy. You attach, look, and decide.
