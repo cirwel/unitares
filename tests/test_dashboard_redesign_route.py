@@ -15,6 +15,16 @@ import pytest
 from src.http_api import http_dashboard_redesign
 
 
+@pytest.fixture(autouse=True)
+def _no_http_api_token(monkeypatch):
+    # src/agent_metadata_model.py loads the repo's .env at import, so a local
+    # checkout whose .env sets UNITARES_HTTP_API_TOKEN sends the entry page
+    # into the token-inject auth check, which needs request.client that _req()
+    # does not have. CI has no .env. The inject branch is covered with a real
+    # peer in tests/test_dashboard_token_injection.py.
+    monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
+
+
 def _req(file: str):
     return SimpleNamespace(path_params={"file": file})
 
