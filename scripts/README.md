@@ -141,7 +141,7 @@ checks:
 | `count_tools.py` | Canonical tool counter — counts from the runtime decorator registry (`--json`, `--by-module`); `count_tools.resolve_advertised_tool_count` counts the full-mode catalog (registry plus workflow aliases) under the same available-or-not rule. A mounted server in a narrower mode may list fewer names. Without runtime deps it reports *unavailable* rather than a number (`available: false` in JSON, the `unavailable` sentinel on stdout); `--require-registry` makes that an exit-2 failure. |
 | `update_docs_tool_count.py` | Check (`--check`) or update (`--update`) tool-count references in docs against two distinct quantities from `count_tools.py`: the registry count (`NN registered tools`, or the older `**NN tools**` shapes) and the full-mode catalog (`NN advertised tools`, registry plus workflow aliases). Each guarded file declares which quantities it must state; a missing one fails, and a file with no recognised count is reported as unenforced. Without runtime deps `--check` skips and says so — it enforces nothing; `--require-registry` (used by the CI `smoke` gate) turns that skip into a failure. |
 | `check_ci_python_matrix_sync.py` | Interpreter contract: the tests.yml `test_shard` matrix (parsed, and its setup-python step must consume it) includes pyproject's `requires-python` floor and the `# production-python:` marker in `constraints.txt`, which must equal the Dockerfile base image and any framework interpreter hardcoded in `scripts/ops` templates. Unreadable input is a failure, not a pass. Wired into the CI `smoke` gate. |
-| `validate_tool_modes.py` | Asserts `TOOL_CATEGORIES` partitions the advertised roster (registered tools + workflow aliases) exactly, that every alias resolves, that `full` equals the roster, that minimal is exactly the five-tool checkpoint loop, and that lite carries the loop plus `list_tools` / `describe_tool` | `python3 scripts/diagnostics/validate_tool_modes.py` |
+| `validate_tool_modes.py` | Asserts `TOOL_CATEGORIES` partitions the advertised roster (registered tools + workflow aliases) exactly, that every `tool_stability` alias resolves to a schema tool, that `full` equals the roster, and that every legacy mode (`minimal`, `standard`, `lite`, `operator_readonly`, `operator_recovery`) and category setting resolves to that same complete roster — legacy modes no longer select a narrower surface | `python3 scripts/diagnostics/validate_tool_modes.py` |
 
 ### `migration/`
 Database maintenance scripts (corpus re-embedding, ghost agent cleanup, knowledge graph maintenance).
@@ -149,8 +149,7 @@ Database maintenance scripts (corpus re-embedding, ghost agent cleanup, knowledg
 ### `git-hooks/`
 Git hook scripts.
 
-- `pre-commit-combined` is the current default pre-commit hook installed by `scripts/ops/install_git_hooks.sh`
-- `pre-commit` is the older script-proliferation-only hook retained for reference
+- `pre-commit-combined` is the only hook script here, and is what `scripts/ops/install_git_hooks.sh` copies to `.git/hooks/pre-commit`
 
 ### `archive/`
 Archived scripts organized by type — completed migrations, deprecated CLI tools, one-off session scripts.

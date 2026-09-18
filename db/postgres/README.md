@@ -207,7 +207,7 @@ And an all-NULL registry is cheap to match, because the chain then reduces to
 `version:name` pairs anyone can reproduce, which is why a partially-anchored
 match is close to no evidence at all.
 
-The table below is a milestone summary, not the full migration ledger. See `db/postgres/migrations/` for every numbered migration; the current checked-in series runs through `036_r2_lineage_lifecycle.sql`.
+The table below is a milestone summary, not the full migration ledger; it stops well short of the end of the series. See `db/postgres/migrations/` for every numbered migration — that directory listing, not this table, is the authoritative extent of the checked-in series.
 
 | Version | Migration | Description |
 |---------|-----------|-------------|

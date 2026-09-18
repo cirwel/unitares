@@ -9,7 +9,8 @@ otherwise only discoverable by reading it.
 
 The KG is shared memory: one agent records a discovery, another finds and
 builds on it. All actions route through the consolidated `knowledge(...)` tool
-(aliases: `search_shared_memory` → search, `record_result` → outcome).
+(aliases: `search_shared_memory` → search, `store_finding` → store,
+`update_finding` → update).
 
 1. **A writes** — `knowledge(action="store", summary=..., discovery_type=...,
    severity=..., tags=[...])` → a discovery with `id` (UTC-timestamp), the
@@ -103,7 +104,9 @@ version column and no conflict detection. Specifically:
 ### Status lifecycle
 
 Valid statuses (`VALID_DISCOVERY_STATUSES`, mirrored by a CHECK constraint):
-`open`, `resolved`, `archived`, `disputed`, `closed`, `wont_fix`, `superseded`.
+`open`, `resolved`, `archived`, `disputed`, `closed`, `wont_fix`,
+`superseded`, `cold`. `cold` is the lifecycle's deep-archive tier, written by
+`KnowledgeGraphLifecycle._move_to_cold`.
 
 There is **no state machine** — any status may transition to any other; updates
 validate membership only, not the transition. Treat the lifecycle as advisory.
