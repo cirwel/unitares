@@ -3,7 +3,7 @@
 **Created:** June 20, 2026
 **Status:** Living document. Expect churn; the field is inventing terms and so are we.
 **Companion to:** `docs/ontology/identity.md`, `docs/ontology/harness-substrate-plurality.md`, `docs/ontology/beam-coordination-kernel.md`
-**Audit trail:** `docs/ontology/glossary-drift-audit-2026-06-20.md` (point-in-time sweep that seeded this file)
+**Audit trail:** `docs/ontology/glossary-drift-audit-2026-06-20.md` (point-in-time sweep that seeded this file); `docs/ontology/glossary-drift-audit-2026-09-18.md` (re-sweep: ODE coupling correction, V / coherence / drift / storage-column homonyms)
 
 ---
 
@@ -185,9 +185,72 @@ for users; keep it consistent with this entry.
 | `free energy (ODE V)` | What is the running E−I imbalance accumulator? | `governance_core/dynamics.py` — `V` is "like Helmholtz free energy", a signed integrator |
 | `free energy (variational −F)` | What is `E` as negative variational free energy under a generative model? | `src/grounding/free_energy.py` — Tier-1 FEP, **explicitly stubbed** (`NotImplementedError`, "Phase 2") |
 
-The first ships and drives nothing on its own; the second is the *target* `E`
-semantics and is honestly not-yet-implemented. Don't let "free energy" stand
-unqualified across the two.
+The first ships and does not own the verdict, but it is not inert: through
+coherence it feeds part of behavioral `E` and `I` (see the `coherence` entry
+below). The second is the *target* `E` semantics and is honestly
+not-yet-implemented. Don't let "free energy" stand unqualified across the two.
+
+### V — four quantities share one letter (code level)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `V (behavioral)` | Which side of the E−I imbalance is leading right now, smoothed? EMA of E−I, `[-1, 1]`, the value in `metrics['V']`. | `src/behavioral_state.py`; runtime `src/governance_glossary.py` `EISV_DIMENSIONS["V"]` |
+| `V (ODE)` | What is the damped running integral of the E−I imbalance? `[-2, 2]`, "like Helmholtz free energy". | `governance_core/dynamics.py` module docstring |
+| `V (coherence input)` | Which V does the coherence scalar read? The **ODE** V, not the behavioral one. | `governance_core/coherence.py` — "depends on the signed void integral V" |
+| `V (embodied, instantaneous)` | What is the undamped E−I imbalance of a sensor-driven agent this tick? | `anima-mcp` `eisv_mapper.py` — "V is Valence — the signed E-I imbalance shared with governance" |
+
+⛔ **`metrics['V']` and the V that coherence is computed from are different
+variables.** The primary-EISV promotion moved `metrics['V']` to the behavioral
+sense and left coherence reading the ODE sense. Two naming layers sit on top
+of this, and neither is a fifth quantity: reader-facing docs call V
+**Valence**, while code, the DB and the papers keep **Void** (`void_*`,
+`void_active`, `void_alert`); and the persisted column holding V is
+`core.agent_state.volatility` (see `storage column` below). The violation
+taxonomy's "Void Compliance" class is an unrelated word (null-and-void).
+
+### coherence — one field, three producers (code level)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `coherence (ODE control feedback)` | What is the ODE's V-driven feedback term `C(V, Θ)`? The **deployed** value in `metrics['coherence']` and `core.agent_state.coherence`. | `governance_core/coherence.py`; `src/coherence_provenance.py` source `legacy_tanh_v`, role `ode_control_feedback` |
+| `coherence (manifold)` | How structurally consistent is the (E, I, S) state? Canonical **only** under `UNITARES_GROUNDING_APPLY`, which is off; shadow-computed otherwise. | `src/grounding/coherence.py::compute_coherence`; source `manifold`, role `eis_structural_measurement` |
+| `coherence (behavioral)` | How consistent is this agent's sequence of behavioral updates? | `src/coherence_provenance.py` source `behavioral_assessment`, role `behavioral_update_consistency` |
+
+The dangerous reading is the everyday one: "coherence" sounds like a health
+measure, and the deployed producer is a controller output. Docstrings in both
+coherence modules have described the manifold form as canonical; as deployed
+it is not. Read `coherence_source` / `coherence_role` on responses, or
+`state_json.coherence_form` on stored rows, and never infer the producer from
+the scalar's range. Because behavioral `E` and `I` still blend in the legacy
+`C(V)` term (`docs/EISV_COMPUTATION.md`), this is also the channel through
+which the ODE reaches the verdict path.
+
+### drift — deviation, self-report, and the S axis
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `drift (deviation components)` | How far have calibration, complexity, coherence and stability moved from baseline? Server-computed telemetry. | `src/governance_glossary.py` `DRIFT_COMPONENTS` |
+| `drift (ethical_drift input)` | What drift pressure does the *caller* report for this update? The three positional `ethical_drift` slots — self-attested input, not measurement. | `src/governance_glossary.py` `ETHICAL_DRIFT_VECTOR_COMPONENTS`; `src/mcp_handlers/schemas/core.py` |
+| `drift (S axis)` | How far is the work drifting from this agent's own usual pattern? The runtime description of `S` ("Entropy"). | `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
+
+The Rosetta table below uses `drift` as the `standard` name for the deviation
+signal, which is fine on public surfaces. In technical prose, qualify it: the
+self-attested and server-computed senses carry different evidential weight, and
+a reader who binds "drift" to the caller's own `ethical_drift` report will
+over-read it as measurement.
+
+### storage column — persisted column names do not match EISV letters (code level)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `core.agent_state.entropy` | Where is **S** persisted? (not E) | `src/agent_storage.py` — `record_agent_state(entropy=S, …)` |
+| `core.agent_state.volatility` | Where is **V** persisted? ("void maps to volatility column") | `src/db/mixins/state.py` |
+| `core.agent_state.state_json.E` | Where is **E** persisted? It has no column of its own. | `src/db/mixins/state.py` mapping comment |
+
+Column names answer "what did the schema's author call it", not "which EISV
+axis is this". Reading the `entropy` column as E yields a plausible-looking
+level (visibly lower than `state_json.E`) and has already produced a wrong
+analysis. Map by the writer, not by the column name.
 
 ---
 
@@ -231,8 +294,10 @@ against a baseline.
 These are places where the vocabulary lags the thing. Tracked here so the gap is
 explicit, not silently papered over by reusing a near-term.
 
-- **BEAM-resident agent has no `harness (agent body)` value.** The lease enum
-  is `hermes / claude_code / codex / dispatch / lumen` — there is no value for
+- **BEAM-resident agent has no `harness (agent body)` value.** The documented
+  lease `harness` values are `hermes / claude_code / codex / dispatch / lumen`
+  (`beam-coordination-kernel.md`, an open "etc." list rather than a closed
+  enum) — none of them names
   an agent whose body *is* a BEAM/OTP process (Sentinel Wave 1, Wave 3 handler
   dispatch). The BEAM coordination kernel itself is **not** a harness — it is a
   coordination substrate, a peer of UNITARES governance (it explicitly
@@ -328,7 +393,7 @@ naming convenience, not a rigor claim.
 register is aspirational, all `~`, zero earned" — **was wrong, and reading the
 code corrected it.** Three rows are `◐ research-lens`, not `~`:
 
-- `governance_core/dynamics.py` is a **real thermodynamic ODE** (full `dE/dt…dV/dt`,
+- `governance_core/dynamics.py` is a **real dynamical-systems ODE** (full `dE/dt…dV/dt`,
   RK4, coherence feedback, soft barriers, `compute_equilibrium`, contraction-theory
   convergence, and `check_basin` — a genuine bistable basin of attraction).
 - `src/grounding/free_energy.py` already implements the **"name nothing more
@@ -339,17 +404,29 @@ code corrected it.** Three rows are `◐ research-lens`, not `~`:
   runtime.
 - `docs/EISV_COMPUTATION.md` already states the deployed-vs-target split this table
   was re-deriving: deployed EISV = "auditable heuristic blends, EMA-smoothed";
-  target = `E`as`−F`, `I`as mutual information, `S`as entropy. **The ODE "runs in
-  parallel and does NOT drive verdicts."**
+  target = `E`as`−F`, `I`as mutual information, `S`as entropy. The ODE is **not
+  the verdict owner**: behavioral assessment owns the post-warmup verdict.
 
-So the accurate finding is sharper than "aspirational": **the physics is built but
-not wired.** Your system is two loops — a heuristic verdict path (EMA + z-score +
-`BASIN_HIGH` health gate) that drives decisions, and a parallel thermodynamic ODE
-that's a research lens. Promoting a `◐` to `✓` does not mean *building* the math;
-it means **wiring the existing ODE/grounding forms onto the verdict path** — a real
-control-loop change to trajectory/telemetry, gated tier-by-tier with the provenance
-honesty already in place. That is the single most important thing this whole
-glossary exercise surfaced.
+**Second correction (2026-09-18).** This passage originally quoted
+`EISV_COMPUTATION.md` as saying the ODE "runs in parallel and does NOT drive
+verdicts", and built a "two independent loops" reading on it. That source was
+corrected on 2026-08-29: the old line "describes authority, not causal
+independence." The behavioral sensor still blends the legacy ODE `C(V)`
+coherence term into 25–30% of `E` and 30–40% of `I`, and uses ODE-derived
+regime inputs. So the ODE does not *decide* verdicts, but it does *reach* them,
+through a compatibility coupling rather than through its attractor semantics.
+
+So the accurate finding is sharper than "aspirational": **the physics is built
+but not wired as physics.** The verdict path is a heuristic loop (EMA + z-score +
+`BASIN_HIGH` health gate) that owns decisions; the ODE is a research lens whose
+only verdict-path influence is the legacy coherence term leaking into `E`/`I`.
+Promoting a `◐` to `✓` does not mean *building* the math; it means **wiring the
+existing ODE/grounding forms onto the verdict path deliberately, as the thing they
+claim to be** — a real control-loop change to trajectory/telemetry, gated
+tier-by-tier with the provenance honesty already in place. The existing coupling
+is compatibility debt, not a head start: it changes the `E`/`I` distribution and
+every downstream baseline, so removing or replacing it needs a shadow evaluation
+first.
 
 The register model still holds for these nine rows (four grading registers plus
 the `standard` public-naming column); if a referent won't fit a
