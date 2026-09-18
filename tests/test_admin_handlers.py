@@ -944,6 +944,66 @@ class TestHealthCheck:
 class TestIssue165HealthCapabilitySplit:
 
     @pytest.mark.asyncio
+    async def test_missing_embedder_is_named_in_the_operator_summary(
+        self, mock_mcp_server, patch_context_agent_id,
+    ):
+        """A missing embedder must reach degraded_checks and first_action.
+
+        Every other case in this file patches embeddings_available to True, so
+        the embedder_ok=False branch — the one the shipped container runs, since
+        requirements-docker.txt excludes sentence-transformers — had no coverage.
+        Without it the knowledge_graph check emitted status 'degraded', a value
+        the aggregation sets did not recognise, and the operator saw
+        overall_status 'moderate' with an empty degraded_checks and
+        first_action 'No action needed.'
+        """
+        mock_audit = MagicMock()
+        mock_audit.log_file = MagicMock()
+        mock_audit.log_file.exists.return_value = True
+
+        mock_db = AsyncMock()
+        mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
+        mock_db.init = AsyncMock()
+
+        mock_cal = MagicMock()
+        mock_cal.get_pending_updates.return_value = 0
+
+        with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
+             patch("src.calibration.calibration_checker", mock_cal), \
+             patch("src.telemetry.telemetry_collector", MagicMock()), \
+             patch("src.audit_log.audit_logger", mock_audit), \
+             patch("src.db.get_db", return_value=mock_db), \
+             patch("src.embeddings.embeddings_available", return_value=False), \
+             patch("src.knowledge_graph.backend_supports_semantic_search", return_value=True), \
+             patch("src.knowledge_graph.selected_backend_name", return_value="age"), \
+             patch("src.calibration_db.calibration_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.audit_db.audit_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.cache.is_redis_available", return_value=False):
+
+            from src.services.runtime_queries import get_health_check_data
+            data = await get_health_check_data({})
+
+            kg = data["checks"]["knowledge_graph"]
+            assert kg["embedder_available"] is False
+            assert kg["semantic_search_reachable"] is False
+            assert kg["status"] == "degraded"
+            assert "Embedder service not loaded" in kg["warning"]
+
+            # The reporting contract: a degraded component is counted, listed,
+            # and named as the next action.
+            summary = data["operator_summary"]
+            assert summary["overall_status"] != "healthy"
+            assert "knowledge_graph" in summary["degraded_checks"]
+            # Whichever component sorts first, the degraded branch must fire
+            # rather than falling through to the "No action needed." default.
+            assert summary["first_action"].startswith("Review the first degraded component:")
+            assert data["status_breakdown"]["degraded"] >= 1
+
+    @pytest.mark.asyncio
     async def test_embedder_up_but_backend_lacks_semantic_search(
         self, mock_mcp_server, patch_context_agent_id,
     ):
