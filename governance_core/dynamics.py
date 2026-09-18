@@ -17,8 +17,8 @@ Mathematical Framework:
 where:
     E: Energy (exploration/productive capacity) [0,1]
     I: Information integrity [0,1]
-    S: Semantic uncertainty [0,2]
-    V: E-I imbalance integral (damped accumulator, like Helmholtz free energy) [-2,2]
+    S: Semantic uncertainty [0.001,1] (bounds: parameters.DynamicsParams)
+    V: E-I imbalance integral (damped accumulator, like Helmholtz free energy) [-1,1]
         V > 0: energy surplus (running hot), V < 0: integrity surplus (running careful)
         Feeds a directional controller: C(V,Θ) = Cmax · 0.5 · (1 + tanh(C₁·V))
         An embodied agent's sensor layer submits a signed E-I imbalance in the

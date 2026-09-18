@@ -1461,8 +1461,8 @@ class UNITARESMonitor:
         if GovConfig.BEHAVIORAL_VERDICT_ENABLED and self._behavioral_state.confidence >= 0.3:
             beh_verdict_map = {"safe": "safe", "caution": "caution", "high-risk": "high-risk"}
             behavioral_verdict = beh_verdict_map.get(behavioral_assessment.verdict)
-            # Φ floors verdict/risk by default; UNITARES_PHI_TELEMETRY_ONLY makes
-            # the behavioral/residual assessment authoritative instead (Φ → telemetry).
+            # UNITARES_PHI_TELEMETRY_ONLY (default on) makes the behavioral/residual
+            # assessment authoritative (Φ → telemetry); with it off, Φ floors verdict/risk.
             unitares_verdict, risk_score = resolve_verdict_risk(
                 unitares_verdict,
                 risk_score,

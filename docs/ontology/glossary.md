@@ -3,7 +3,7 @@
 **Created:** June 20, 2026
 **Status:** Living document. Expect churn; the field is inventing terms and so are we.
 **Companion to:** `docs/ontology/identity.md`, `docs/ontology/harness-substrate-plurality.md`, `docs/ontology/beam-coordination-kernel.md`
-**Audit trail:** `docs/ontology/glossary-drift-audit-2026-06-20.md` (point-in-time sweep that seeded this file)
+**Audit trail:** `docs/ontology/glossary-drift-audit-2026-06-20.md` (point-in-time sweep that seeded this file); `docs/ontology/glossary-drift-audit-2026-09-18.md` (re-sweep: ODE coupling correction; V / coherence / drift / entropy homonyms; persistence false friends)
 
 ---
 
@@ -168,7 +168,7 @@ published wire field and consumers depend on it. Qualify the sense, keep the key
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `basin (attractor)` | Which equilibrium will the system's own EISV *dynamics* flow to? | `governance_core/dynamics.py::check_basin` — bistable `I>0.5` high/low/boundary; the parallel ODE (research lens) |
+| `basin (attractor)` | Which equilibrium will the system's own EISV *dynamics* flow to? | `governance_core/dynamics.py::check_basin` — bistable `I>0.5` high/low/boundary; the ODE (research lens) |
 | `basin (health band)` | Is each EISV axis inside its *configured* healthy box, so self-relative deviation should count as risk? | `src/behavioral_assessment.py::_basin_health_gate` (#689), `config.governance_config.BASIN_HIGH` — the **verdict-driving** gate |
 
 This is the dangerous kind: only the second sense drives verdicts, and it is a
@@ -185,9 +185,79 @@ for users; keep it consistent with this entry.
 | `free energy (ODE V)` | What is the running E−I imbalance accumulator? | `governance_core/dynamics.py` — `V` is "like Helmholtz free energy", a signed integrator |
 | `free energy (variational −F)` | What is `E` as negative variational free energy under a generative model? | `src/grounding/free_energy.py` — Tier-1 FEP, **explicitly stubbed** (`NotImplementedError`, "Phase 2") |
 
-The first ships and drives nothing on its own; the second is the *target* `E`
-semantics and is honestly not-yet-implemented. Don't let "free energy" stand
-unqualified across the two.
+The first ships and does not own the post-warmup verdict, but it is not inert:
+through coherence it feeds part of behavioral `E` and `I` (see the `coherence`
+entry below). The second is the *target* `E` semantics and is honestly
+not-yet-implemented. Don't let "free energy" stand unqualified across the two.
+
+### V — three quantities share one letter (code level)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `V (behavioral)` | Which side of the E−I imbalance is leading right now, smoothed? EMA of E−I, `[-1, 1]` (same range as the ODE V, so range cannot tell them apart); the value in `metrics['V']` once the agent is warm. | `src/behavioral_state.py`; runtime `src/governance_glossary.py` `EISV_DIMENSIONS["V"]` |
+| `V (ODE)` | What is the damped running integral of the E−I imbalance? "Like Helmholtz free energy"; clamped to `[-1, 1]` by default. | `governance_core/dynamics.py` module docstring; bounds in `governance_core/parameters.py` `DynamicsParams` |
+| `V (embodied, instantaneous)` | What is the undamped E−I imbalance of a sensor-driven agent this tick? | *external:* `anima-mcp` `eisv_mapper.py` — "V is Valence — the signed E-I imbalance shared with governance" (separate repo; not checked by the drift gate) |
+
+⛔ **`metrics['V']` and the V that coherence is computed from can be different
+variables.** Coherence always reads the **ODE** V (`governance_core/coherence.py`,
+"depends on the signed void integral V"). `metrics['V']` is the behavioral V
+only when `primary_eisv_source == "behavioral"` (behavioral confidence ≥ 0.3);
+before warmup it is `ode_fallback`. Read `primary_eisv_source` before
+comparing the two. Two naming layers sit on top of this, and neither is a
+fourth quantity: reader-facing docs call V **Valence**, while code, the DB and
+the papers keep **Void** (`void_*`, `void_active`, `void_alert`); and the
+persisted column holding V is `core.agent_state.volatility` (see *Persistence
+false friends* below). The violation taxonomy's "Void Compliance" class is an
+unrelated word (null-and-void).
+
+### coherence — one field, three producers (code level)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `coherence (ODE control feedback)` | What is the ODE's V-driven feedback term `C(V, Θ)`? The **deployed** value in `metrics['coherence']` and `core.agent_state.coherence`. | `governance_core/coherence.py`; `src/coherence_provenance.py` source `legacy_tanh_v`, role `ode_control_feedback` |
+| `coherence (manifold)` | How structurally consistent is the (E, I, S) state? Canonical **only** under `UNITARES_GROUNDING_APPLY`, which is off; shadow-computed otherwise. | `src/grounding/coherence.py::compute_coherence`; source `manifold`, role `eis_structural_measurement` |
+| `coherence (behavioral)` | How consistent is this agent's sequence of behavioral updates? | `src/coherence_provenance.py` source `behavioral_assessment`, role `behavioral_update_consistency` |
+
+The dangerous reading is the everyday one: "coherence" sounds like a health
+measure, and the deployed producer is a controller output. Earlier docstrings
+in both coherence modules described the manifold form as canonical; both were
+corrected and now mark it non-canonical as deployed. Read `coherence_source` /
+`coherence_role` on responses, or `state_json.coherence_form` on stored rows,
+and never infer the producer from the scalar's range. Because behavioral `E`
+and `I` still blend in the legacy `C(V)` term (`docs/EISV_COMPUTATION.md`),
+this is also one of the channels through which the ODE reaches the verdict
+path after warmup.
+
+### drift — deviation, self-report, and the S axis
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `drift (deviation components)` | How far have calibration, complexity, coherence and stability moved from baseline? Server-computed telemetry. | `src/governance_glossary.py` `DRIFT_COMPONENTS` |
+| `drift (ethical_drift input)` | What drift pressure does the *caller* report for this update? The three positional `ethical_drift` slots — self-attested input, not measurement. | `src/governance_glossary.py` `ETHICAL_DRIFT_VECTOR_COMPONENTS`; `src/mcp_handlers/schemas/core.py` |
+| `drift (S axis)` | How far is the work drifting from this agent's own usual pattern? The runtime description of `S` ("Entropy"). | `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
+
+The third row is partly part-of rather than a pure homonym: `S_obs` *consumes*
+the deviation signal (`drift_norm`, 0.40 weight — `docs/EISV_COMPUTATION.md`),
+so "S is drift" and "S contains drift" are both approximately true. It stays
+listed because readers meet the S description and the deviation components
+under the same word. The Rosetta table below uses `drift` as the `standard`
+name for the deviation signal, which is fine on public surfaces. In technical
+prose, qualify it: the
+self-attested and server-computed senses carry different evidential weight, and
+a reader who binds "drift" to the caller's own `ethical_drift` report will
+over-read it as measurement.
+
+### entropy — heuristic S axis vs. target entropy H (code level)
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `entropy (S axis, deployed)` | How unsettled is this agent's work relative to its own normal? A heuristic blend of drift, regime instability and complexity divergence, labelled "Entropy". | `docs/EISV_COMPUTATION.md` (`S_obs`); runtime `src/governance_glossary.py` `EISV_DIMENSIONS["S"]` |
+| `entropy (target H)` | What is the entropy of the agent's response distribution? The paper's target semantics; **not computed** on the primary path. | `docs/EISV_COMPUTATION.md` — "No entropy, mutual information, or free energy is computed on the primary path" |
+
+The label "Entropy" on `S` borrows the target word for a heuristic, so this is
+the same deployed-vs-target split as `free energy`. Qualify it whenever a
+sentence could be read as a measurement of H. The persisted column named
+`entropy` is a third, unrelated trap; see *Persistence false friends*.
 
 ---
 
@@ -199,6 +269,20 @@ unqualified across the two.
 | `proof of life (externally-observed)` | How does a *supervising* process attest the subject died, without the subject's cooperation? (the owner watches the process and reports its end) | `beam-coordination-kernel.md` — OTP monitors/supervision; live today in `dispatch_beam` holder leases (`Process.monitor` → `:DOWN` release) |
 
 The first is a *claim the subject makes*; the second is a *fact something watching it reports* — different questions, so binding the wrong one is the bug. The recurring false-archival incidents are self-attested-only liveness read as death (absence of a heartbeat is not observed death), and it is weakest exactly at silent-hang, where a heartbeat can outlive the work. Where an owning monitor exists (a BEAM orchestrator holding the agent's OS process), the observed sense is authoritative and the self-attested one is the fallback for agents with no supervisor. Sourcing the *archival gate* from the observed sense is proposed, not yet canonical (KG `2026-06-21T16:20:42`, "liveness should be monitor-delegated, not self-reported").
+
+---
+
+## Persistence false friends
+
+Not homonyms: each is a single-sense storage name whose word suggests the wrong
+EISV axis. Map a column to an axis by its writer, not by its name. Canonical
+mapping: `src/db/mixins/state.py` (see rule 3 — this note points there rather
+than re-defining it).
+
+- `core.agent_state.entropy` holds **S** (`src/agent_storage.py`,
+  `record_agent_state(entropy=S, …)`), not E.
+- `core.agent_state.volatility` holds **V** ("void maps to volatility column").
+- **E** has no column; it lives in `state_json.E`.
 
 ---
 
@@ -231,8 +315,10 @@ against a baseline.
 These are places where the vocabulary lags the thing. Tracked here so the gap is
 explicit, not silently papered over by reusing a near-term.
 
-- **BEAM-resident agent has no `harness (agent body)` value.** The lease enum
-  is `hermes / claude_code / codex / dispatch / lumen` — there is no value for
+- **BEAM-resident agent has no `harness (agent body)` value.** The documented
+  lease `harness` values are `hermes / claude_code / codex / dispatch / lumen`
+  (`beam-coordination-kernel.md`, an open "etc." list rather than a closed
+  enum) — none of them names
   an agent whose body *is* a BEAM/OTP process (Sentinel Wave 1, Wave 3 handler
   dispatch). The BEAM coordination kernel itself is **not** a harness — it is a
   coordination substrate, a peer of UNITARES governance (it explicitly
@@ -299,7 +385,7 @@ One row per **referent**; columns are its name in each register. This bounds the
 not by uncontrolled vocabulary. Status marks the `fep` column specifically:
 
 - **✓ earned** — mapping holds and *drives behavior* (verdict path) today.
-- **◐ research-lens** — implemented as real math in the **parallel ODE / grounding tiers**, but **not wired to the verdict path**; honest, not decorative, but not yet load-bearing. (Added 2026-06-20 after reading the code; see correction below.)
+- **◐ research-lens** — implemented as real math in the **ODE / grounding tiers**, but **not wired to the verdict path as the mapped physics** (the ODE owns only the cold-start Φ verdict, and after warmup leaks into `E`/`I` through compatibility coupling — see the second correction below); honest, not decorative, but not yet load-bearing. (Added 2026-06-20 after reading the code; see correction below.)
 - **~ candidate** — plausible conceptual fit, *not yet* implemented anywhere; decorative if shipped as fact.
 - **✗ false friend** — looks like a synonym across registers but is a different referent; do not conflate.
 
@@ -328,7 +414,7 @@ naming convenience, not a rigor claim.
 register is aspirational, all `~`, zero earned" — **was wrong, and reading the
 code corrected it.** Three rows are `◐ research-lens`, not `~`:
 
-- `governance_core/dynamics.py` is a **real thermodynamic ODE** (full `dE/dt…dV/dt`,
+- `governance_core/dynamics.py` is a **real dynamical-systems ODE** (full `dE/dt…dV/dt`,
   RK4, coherence feedback, soft barriers, `compute_equilibrium`, contraction-theory
   convergence, and `check_basin` — a genuine bistable basin of attraction).
 - `src/grounding/free_energy.py` already implements the **"name nothing more
@@ -339,17 +425,37 @@ code corrected it.** Three rows are `◐ research-lens`, not `~`:
   runtime.
 - `docs/EISV_COMPUTATION.md` already states the deployed-vs-target split this table
   was re-deriving: deployed EISV = "auditable heuristic blends, EMA-smoothed";
-  target = `E`as`−F`, `I`as mutual information, `S`as entropy. **The ODE "runs in
-  parallel and does NOT drive verdicts."**
+  target = `E`as`−F`, `I`as mutual information, `S`as entropy. The ODE is **not
+  the verdict owner**: behavioral assessment owns the post-warmup verdict.
 
-So the accurate finding is sharper than "aspirational": **the physics is built but
-not wired.** Your system is two loops — a heuristic verdict path (EMA + z-score +
-`BASIN_HIGH` health gate) that drives decisions, and a parallel thermodynamic ODE
-that's a research lens. Promoting a `◐` to `✓` does not mean *building* the math;
-it means **wiring the existing ODE/grounding forms onto the verdict path** — a real
-control-loop change to trajectory/telemetry, gated tier-by-tier with the provenance
-honesty already in place. That is the single most important thing this whole
-glossary exercise surfaced.
+**Second correction (2026-09-18).** This passage originally quoted
+`EISV_COMPUTATION.md` as saying the ODE "runs in parallel and does NOT drive
+verdicts", and built a "two independent loops" reading on it. That source was
+corrected on 2026-08-29: the old line "describes authority, not causal
+independence." The behavioral sensor still blends the legacy ODE `C(V)`
+coherence term into 25–30% of `E` and 30–40% of `I`, and uses ODE-derived
+regime inputs. Two more channels exist: for check-ins 1–2 the verdict is owned
+by the Φ cold-start prior, and Φ is evaluated on the ODE state
+(`src/monitor_phi.py`); and when a caller omits confidence, 55% of the fallback
+estimate's base is the same legacy `C(V_ODE)` scalar, which feeds calibration
+history (`docs/EISV_COMPUTATION.md`, `src/confidence.py`). So the ODE owns the
+cold-start verdict and does not own the post-warmup verdict, but after warmup it
+still *reaches* verdicts, through compatibility couplings rather than through its
+attractor semantics.
+
+So the accurate finding is sharper than "aspirational": **the physics is built
+but not wired as physics.** The verdict path is a heuristic loop (EMA + z-score +
+`BASIN_HIGH` health gate) that owns post-warmup decisions; the ODE is a research
+lens that owns the cold-start Φ verdict and otherwise reaches the verdict path
+only through compatibility couplings (the `C(V)` term in `E`/`I`, the regime
+inputs, the confidence fallback).
+Promoting a `◐` to `✓` does not mean *building* the math; it means **wiring the
+existing ODE/grounding forms onto the verdict path deliberately, as the thing they
+claim to be** — a real control-loop change to trajectory/telemetry, gated
+tier-by-tier with the provenance honesty already in place. The existing coupling
+is compatibility debt, not a head start: it changes the `E`/`I` distribution and
+every downstream baseline, so removing or replacing it needs a shadow evaluation
+first.
 
 The register model still holds for these nine rows (four grading registers plus
 the `standard` public-naming column); if a referent won't fit a
