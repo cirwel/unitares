@@ -68,7 +68,12 @@ async def test_embed_returns_list_of_floats():
     # Inject mock model directly
     service._model = mock_model
 
-    result = await service.embed("test text")
+    # _ensure_model() gates on availability BEFORE returning an injected model,
+    # so this test passed only while sentence-transformers happened to be
+    # installed. It is now an opt-in extra, so state the assumption instead of
+    # inheriting it from the environment.
+    with patch("src.embeddings.SENTENCE_TRANSFORMERS_AVAILABLE", True):
+        result = await service.embed("test text")
 
     assert isinstance(result, list)
     assert len(result) == 384
@@ -90,7 +95,10 @@ async def test_embed_batch_returns_list_of_embeddings():
     service._model = mock_model
 
     texts = ["hello", "world", "test"]
-    result = await service.embed_batch(texts)
+    # Same reason as test_embed_returns_list_of_floats: the availability gate
+    # runs before the injected model is returned.
+    with patch("src.embeddings.SENTENCE_TRANSFORMERS_AVAILABLE", True):
+        result = await service.embed_batch(texts)
 
     assert isinstance(result, list)
     assert len(result) == 3

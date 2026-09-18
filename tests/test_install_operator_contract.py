@@ -40,6 +40,81 @@ def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
         assert "cryptography>=41.0.0,<51.0.0" in _read(requirements_file)
 
 
+def _requirement_name(requirement: str) -> str:
+    """'sentence-transformers>=2.2.0,<7.0.0' -> 'sentence-transformers'."""
+    return re.split(r"[<>=!~\[;]", requirement, maxsplit=1)[0].strip().lower()
+
+
+def _installed_names(relative: str) -> set[str]:
+    """Package names a pip requirements file actually installs.
+
+    Commented lines are deliberately excluded: both requirements-docker.txt and
+    requirements-full.txt park an opt-in dependency as a commented re-enable
+    line, and a commented line installs nothing.
+    """
+    names = set()
+    for line in _read(relative).splitlines():
+        line = line.strip()
+        if not line or line.startswith(("#", "-r ", "-c ", "--")):
+            continue
+        names.add(_requirement_name(line))
+    return names
+
+
+def test_full_extra_and_requirements_full_agree_on_what_is_installed() -> None:
+    """pyproject's `full` extra and requirements-full.txt are hand-maintained
+    separately, and nothing compared them as sets.
+
+    That is how sentence-transformers came to sit in both while the container
+    excluded it, and it is how a later edit to one file could silently miss the
+    other: CI installs requirements-full.txt, the documented dev setup installs
+    `.[full]`, so a divergence gives the two paths different dependency trees
+    with no failing check anywhere.
+
+    Directional on purpose. requirements-full.txt is a superset — it also
+    carries the `dev` extra plus fakeredis, which is in no extra at all — so
+    this asserts only that nothing in `full` is missing from it.
+    """
+    extras = tomllib.loads(_read("pyproject.toml"))["project"][
+        "optional-dependencies"
+    ]
+    full = {_requirement_name(requirement) for requirement in extras["full"]}
+    installed = _installed_names("requirements-full.txt")
+
+    missing = sorted(full - installed)
+    assert not missing, (
+        f"in pyproject's `full` extra but not installed by "
+        f"requirements-full.txt: {missing}"
+    )
+
+
+def test_optional_extras_are_not_installed_by_default() -> None:
+    """A package in an opt-in extra must not arrive by default anyway.
+
+    `embeddings` exists because sentence-transformers pulls torch and, on
+    Linux, the whole CUDA wheel set with no GPU check (5.9 GB installed versus
+    162 MB without). The extra only means something if the default install
+    paths leave it out, so assert that rather than trusting the comment.
+    """
+    extras = tomllib.loads(_read("pyproject.toml"))["project"][
+        "optional-dependencies"
+    ]
+    optional = {_requirement_name(r) for r in extras["embeddings"]}
+
+    for requirements_file in ("requirements-full.txt", "requirements-docker.txt"):
+        leaked = sorted(optional & _installed_names(requirements_file))
+        assert not leaked, (
+            f"{requirements_file} installs {leaked}, which the `embeddings` "
+            f"extra exists to keep off the default path"
+        )
+
+    full = {_requirement_name(r) for r in extras["full"]}
+    assert not (optional & full), (
+        "the `embeddings` extra duplicates a package already in `full`, so "
+        "`.[full]` would install it regardless"
+    )
+
+
 def test_dev_install_provides_starlette_testclient_backend() -> None:
     project = tomllib.loads(_read("pyproject.toml"))["project"]
     dev = project["optional-dependencies"]["dev"]
