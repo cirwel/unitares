@@ -23,11 +23,13 @@ What this shows:
   estimates complexity from the *shape* of the output (length, code blocks,
   list items, paragraphs, questions, tool mentions), never from what the text
   claims about the work. Step 4 describes a hard rewrite under a low
-  self-report (0.25), but it is one plain sentence, so the server reads it as
-  simple and its complexity divergence is the smallest of the six. The large
-  divergences are steps 5 and 6, where the self-report (0.6, 0.7) exceeds what
-  the short output shows. An agent's description of difficulty is not
-  evidence of difficulty; tests/test_quick_demo.py pins this ordering.
+  self-report (0.25), but it is one plain sentence: its derived complexity
+  lands close to that self-report, so its complexity divergence is the
+  smallest of the six. The large divergences are steps 5 and 6, where the
+  self-report (0.6, 0.7) exceeds what the short output shows. An agent's
+  description of difficulty is not evidence of difficulty.
+  tests/test_quick_demo.py pins this ordering through
+  ContinuityLayer.process_update, the method the server calls per check-in.
 - Warmup position, printed per step. Scoring switches from fixed thresholds to
   the agent's own baseline at 25 check-ins (``is_baselined``, derived from
   ``BASELINE_WARMUP_UPDATES`` in ``src/behavioral_state.py``); this run reaches
@@ -117,7 +119,7 @@ TRAJECTORY = [
     ("Reviewed PR #482, requested one change.",                              0.25, 0.9),
     # The text *describes* three new invariants and a lease-ladder rework under
     # a self-report of 0.25. The server does not read descriptions: one plain
-    # sentence derives as simple, so this step's divergence is the smallest.
+    # sentence derives close to 0.25, so this step's divergence is the smallest.
     ("Rewrote the session-pool acquisition path under contention; "
      "added 3 new invariants, reworked the lease ladder, "
      "and shimmed the asyncpg cursor wrap.",                                  0.25, 0.85),
