@@ -65,8 +65,10 @@ RESIDENT_PROGRESS_MANIFEST_ENV = "UNITARES_RESIDENT_PROGRESS_MANIFEST"
 
 # Everything one malformed entry can raise while being built: KeyError (a
 # required key is absent), ValueError (int("soon"), or ResidentConfig's own
-# cadence guard), TypeError (int(None), or a non-string source/metric).
-_ENTRY_ERRORS = (KeyError, ValueError, TypeError)
+# cadence guard), TypeError (int(None), or a non-string source/metric), and
+# OverflowError, which is not a ValueError: int() of JSON's Infinity or 1e999
+# raises it, and so does a window_seconds past timedelta's range.
+_ENTRY_ERRORS = (KeyError, ValueError, TypeError, OverflowError)
 
 
 def _build_resident_config(entry: dict) -> ResidentConfig:
@@ -141,9 +143,12 @@ def load_resident_progress_registry(
     """Load the resident-progress registry from a JSON manifest.
 
     Reads ``path`` if given, else ``UNITARES_RESIDENT_PROGRESS_MANIFEST``.
-    Unset, empty, missing, or unreadable => empty registry (no residents
-    probed), the user-agnostic default. Read once at import; tests that vary
-    the roster set the env/path and call this helper directly.
+    Unset, empty, missing, unreadable or unparseable => empty registry (no
+    residents probed), the user-agnostic default; every case but unset or
+    empty logs a WARNING naming the file. Read once at import; tests that vary
+    the roster set the env/path and call this helper directly. Reading is not
+    bounded: a path whose read never finishes, such as a FIFO with no writer
+    or one whose writer never closes it, stalls whatever imports this module.
     """
     raw = str(path) if path is not None else os.environ.get(
         RESIDENT_PROGRESS_MANIFEST_ENV, ""
@@ -159,10 +164,15 @@ def load_resident_progress_registry(
             manifest_path,
         )
         return {}
-    except (json.JSONDecodeError, OSError) as e:
+    # ValueError covers JSONDecodeError and two failures that are not one: a
+    # manifest that is not UTF-8 (UnicodeDecodeError) and an integer past the
+    # int-digit limit. RecursionError is what json raises for nesting past the
+    # decoder's recursion limit. All three escaped the import before.
+    except (OSError, ValueError, RecursionError) as e:
         logger.warning(
-            "resident-progress manifest %s unreadable (%s); probing no residents",
-            manifest_path, e,
+            "resident-progress manifest %s unreadable (%s: %s); "
+            "probing no residents",
+            manifest_path, type(e).__name__, e,
         )
         return {}
     if not isinstance(doc, dict):
