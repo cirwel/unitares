@@ -92,6 +92,17 @@ _MALFORMED_ENTRIES = {
     "null_threshold": ({**_GOOD_ENTRY, "threshold": None}, "TypeError"),
     "nonstring_source": ({**_GOOD_ENTRY, "source": {"name": "kg_writes"}},
                          "TypeError"),
+    # OverflowError is not a ValueError, so a guard of the three classes above
+    # let these through: int() of Infinity (json loads Infinity and 1e999 as
+    # float('inf')), and a window past timedelta's range.
+    "infinite_window": ({**_GOOD_ENTRY, "window_seconds": float("inf")},
+                        "OverflowError"),
+    "infinite_threshold": ({**_GOOD_ENTRY, "threshold": float("inf")},
+                           "OverflowError"),
+    "infinite_cadence": ({**_GOOD_ENTRY, "expected_cadence_s": float("inf")},
+                         "OverflowError"),
+    "window_past_timedelta": ({**_GOOD_ENTRY, "window_seconds": 10**20},
+                              "OverflowError"),
 }
 
 
@@ -200,6 +211,101 @@ def test_load_registry_rejects_non_object_manifest(tmp_path, payload, caplog):
     assert "not an object" in caplog.text
 
 
+def _write_unparseable(manifest: Path, kind: str) -> None:
+    """Leave a manifest at ``manifest`` that cannot be read or parsed."""
+    good = json.dumps({"resident-a": _GOOD_ENTRY})
+    if kind == "not_utf8":
+        # 0xFF never starts a UTF-8 sequence, and under a single-byte locale it
+        # decodes to a character no JSON document can start with.
+        manifest.write_bytes(b"\xff" + good.encode())
+    elif kind == "huge_integer":
+        # Past the int-digit limit json.loads raises a plain ValueError.
+        manifest.write_text('{"resident-a": {"threshold": 1' + "0" * 5000 + "}}")
+    elif kind == "truncated":
+        manifest.write_text(good[:-1])
+    elif kind == "directory":
+        manifest.mkdir()
+
+
+# The error each kind is named with; None where it depends on the locale
+# (UnicodeDecodeError under UTF-8, JSONDecodeError under a single-byte one).
+_UNPARSEABLE = {
+    "not_utf8": None,
+    "huge_integer": "ValueError",
+    "truncated": "JSONDecodeError",
+    "directory": "IsADirectoryError",
+}
+
+
+@pytest.mark.parametrize("kind", list(_UNPARSEABLE))
+def test_load_registry_survives_an_unparseable_manifest(tmp_path, kind, caplog):
+    """A manifest that cannot be read or parsed loads as empty, with a warning
+    that names the error.
+
+    The loader caught only JSONDecodeError and OSError, so a manifest that was
+    not UTF-8, or held an integer past the digit limit, raised a different
+    ValueError out of the import.
+    """
+    manifest = tmp_path / "residents.json"
+    _write_unparseable(manifest, kind)
+    with caplog.at_level(logging.WARNING, logger="src.resident_progress.registry"):
+        assert load_resident_progress_registry(manifest) == {}
+    assert "unreadable" in caplog.text
+    if _UNPARSEABLE[kind]:
+        assert _UNPARSEABLE[kind] in caplog.text
+
+
+def _run_fresh(code: str, manifest: Path) -> subprocess.CompletedProcess:
+    """Run ``code`` in a new interpreter whose registry comes from ``manifest``.
+
+    The child puts this checkout first on sys.path itself rather than relying
+    on ``-c`` to put the cwd there: PYTHONSAFEPATH turns that off, and an
+    inherited PYTHONPATH could then import another tree, so the test would
+    pass against the wrong code.
+    """
+    return subprocess.run(
+        [sys.executable, "-c",
+         f"import sys; sys.path.insert(0, {str(REPO_ROOT)!r}); {code}"],
+        cwd=REPO_ROOT,
+        env={**os.environ, RESIDENT_PROGRESS_MANIFEST_ENV: str(manifest)},
+        capture_output=True, text=True, timeout=120,
+    )
+
+
+_PRINT_REGISTRY = ("from src.resident_progress import probe_task; "
+                   "print(sorted(probe_task.RESIDENT_PROGRESS_REGISTRY))")
+
+
+def test_overflowing_entry_manifest_imports_in_a_fresh_interpreter(tmp_path):
+    """An Infinity window raised OverflowError out of the import, past a guard
+    that caught only KeyError, ValueError and TypeError."""
+    manifest = tmp_path / "resident_progress.json"
+    manifest.write_text(json.dumps({
+        "resident-a": _GOOD_ENTRY,
+        "resident-bad": {**_GOOD_ENTRY, "window_seconds": float("inf")},
+    }))
+
+    proc = _run_fresh(_PRINT_REGISTRY, manifest)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "['resident-a']"
+
+
+def test_too_deeply_nested_manifest_imports_in_a_fresh_interpreter(tmp_path):
+    """Valid JSON nested past the decoder's recursion limit makes json.loads
+    raise RecursionError, which is not a ValueError. It runs in a child so the
+    depth cannot disturb this interpreter."""
+    manifest = tmp_path / "resident_progress.json"
+    depth = 200_000
+    manifest.write_text("[" * depth + "]" * depth)
+
+    proc = _run_fresh(_PRINT_REGISTRY, manifest)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "[]"
+    assert "unreadable (RecursionError" in proc.stderr
+
+
 def test_malformed_entry_manifest_imports_in_a_fresh_interpreter(tmp_path):
     """The server imports this module lazily inside an already running server,
     so an import-time raise passed server start and then stopped progress
@@ -214,14 +320,7 @@ def test_malformed_entry_manifest_imports_in_a_fresh_interpreter(tmp_path):
         "resident-c": {**_GOOD_ENTRY, "expected_cadence_s": None},
     }))
 
-    proc = subprocess.run(
-        [sys.executable, "-c",
-         "from src.resident_progress import probe_task; "
-         "print(sorted(probe_task.RESIDENT_PROGRESS_REGISTRY))"],
-        cwd=REPO_ROOT,
-        env={**os.environ, RESIDENT_PROGRESS_MANIFEST_ENV: str(manifest)},
-        capture_output=True, text=True, timeout=120,
-    )
+    proc = _run_fresh(_PRINT_REGISTRY, manifest)
 
     assert proc.returncode == 0, proc.stderr
     # The good entries loaded, so the import neither raised nor degraded the
@@ -246,15 +345,12 @@ def test_event_driven_exemption_survives_a_malformed_sibling(tmp_path):
         "resident-bad": {k: v for k, v in _GOOD_ENTRY.items() if k != "source"},
     }))
 
-    proc = subprocess.run(
-        [sys.executable, "-c",
-         "import types;"
-         "from src.background_tasks import _get_expected_interval;"
-         "print(_get_expected_interval(types.SimpleNamespace("
-         "label='resident-evt', tags=['persistent', 'autonomous'])))"],
-        cwd=REPO_ROOT,
-        env={**os.environ, RESIDENT_PROGRESS_MANIFEST_ENV: str(manifest)},
-        capture_output=True, text=True, timeout=120,
+    proc = _run_fresh(
+        "import types;"
+        "from src.background_tasks import _get_expected_interval;"
+        "print(_get_expected_interval(types.SimpleNamespace("
+        "label='resident-evt', tags=['persistent', 'autonomous'])))",
+        manifest,
     )
 
     assert proc.returncode == 0, proc.stderr
