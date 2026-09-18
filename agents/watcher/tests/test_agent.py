@@ -4949,3 +4949,33 @@ def test_fully_usable_chunked_file_clears_the_counter(
 
     assert not watcher_module._model_failure_path(detector).exists()
     assert watcher_module._chunk_pass is None, "the chunked-pass record must not leak"
+
+
+@pytest.mark.parametrize("detector", ["scan", "review"])
+def test_busy_region_warns_but_does_not_count_as_a_failure(
+    watcher_module, tmp_path, monkeypatch, detector
+):
+    """Contention is not a detector failure, so a usable region still clears
+    the counter; but a region skipped as busy was not scanned, and the pass
+    must say so rather than read as a full scan."""
+    target = _two_region_file(watcher_module, tmp_path, monkeypatch, detector)
+    watcher_module._record_model_failure(RuntimeError("earlier outage"), detector)
+    calls = {"n": 0}
+
+    def model(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise watcher_module.ModelBusy("slot held")
+        return {"text": '{"findings": []}', "model_used": "m", "tokens_used": 1}
+
+    logged: list[str] = []
+    real_log = watcher_module.log
+    monkeypatch.setattr(
+        watcher_module, "log", lambda msg, *a, **k: (logged.append(msg), real_log(msg, *a, **k))
+    )
+    monkeypatch.setattr(watcher_module, "call_model", model)
+
+    _run(watcher_module, detector, target)
+
+    assert not watcher_module._model_failure_path(detector).exists()
+    assert any("1 of 2 regions were skipped (model busy)" in m for m in logged)

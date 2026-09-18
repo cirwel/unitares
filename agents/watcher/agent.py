@@ -1414,7 +1414,7 @@ def _run_chunked(detector: str, file_path: str, regions: list[str], one) -> list
     """Scan every region, then settle the failure counter for the whole file."""
     global _chunk_pass
     outer = _chunk_pass
-    _chunk_pass = {"detector": detector, "failed": 0, "succeeded": 0}
+    _chunk_pass = {"detector": detector, "failed": 0, "succeeded": 0, "busy": 0}
     found: list = []
     try:
         for r in regions:
@@ -1430,7 +1430,20 @@ def _run_chunked(detector: str, file_path: str, regions: list[str], one) -> list
         )
     elif state["succeeded"]:
         _clear_model_failures(detector)
+    # Contention is not a detector failure (see ModelBusy), so it never moves
+    # the counter, but a region skipped for it was still not scanned.
+    if state["busy"]:
+        log(
+            f"{detector} {file_path}: {state['busy']} of {len(regions)} regions "
+            "were skipped (model busy); the file is not fully scanned",
+            "warning",
+        )
     return found
+
+
+def _note_busy_region(detector: str) -> None:
+    if _chunk_pass is not None and _chunk_pass["detector"] == detector:
+        _chunk_pass["busy"] += 1
 
 
 def _record_model_failure(exc: Exception, detector: str = "scan") -> None:
@@ -2964,6 +2977,7 @@ def scan_file(
         # Contention, not capability. Skipping keeps the detector-down counter
         # meaningful; counting this would fire "detector down" under load.
         log(f"scan skipped — {e}", "warning")
+        _note_busy_region("scan")
         return []
     except Exception as e:
         log(f"model call failed: {e}", "error")
@@ -3076,6 +3090,7 @@ def review_file(
         # Contention, not capability. Skipping keeps the detector-down counter
         # meaningful; counting this would fire "detector down" under load.
         log(f"scan skipped — {e}", "warning")
+        _note_busy_region("review")
         return []
     except Exception as e:
         log(f"model call failed: {e}", "error")
