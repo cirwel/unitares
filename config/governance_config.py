@@ -1420,9 +1420,10 @@ def _apply_class_calibration_overlay() -> None:
     absent one, so the warning is the only trace that tells them apart. With
     the variable unset no overlay was asked for, and nothing is logged. A null
     or empty section counts as absent, and top-level keys outside this schema
-    (a ``_comment``, say) are ignored. The one input this cannot skip is a
-    path that blocks when opened, such as a FIFO with no writer: the import
-    waits on it.
+    (a ``_comment``, say) are ignored. Reading is not bounded: a path whose
+    read never finishes, such as a FIFO with no writer or one whose writer
+    never closes it, stalls the import, and a file too large to hold in memory
+    fails it.
     """
     path = os.getenv("UNITARES_CLASS_CALIBRATION", "").strip()
     if not path:
