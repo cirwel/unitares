@@ -26,11 +26,13 @@ What it refuses to do
   reachable, not recorded, or genuinely quiet — and this data alone cannot
   distinguish the first three from each other. Silence here is a coverage
   finding, not a false-positive rate of zero.
-* **Call an unscored caller a clean one.** The detector reads English
-  first-person narration. A templated status line or a state digest cannot fire
-  it, so those rows are excluded from the prose denominator and reported as
-  their own bucket. A rate over the wider set understates what enabling would do
-  to the agents that actually write prose.
+* **Divide one population by another.** Every rate below draws its numerator and
+  denominator from the same set of rows. An earlier draft took firings from all
+  live rows and divided by first-person rows only, on the false premise that the
+  detector needs a first-person pronoun to fire; on traffic whose firings were
+  mostly pronoun-free that reported a false-positive rate above 1.0 — on the
+  exact number the enable gate consumes. Input shape is now a **stratum**,
+  reported on both sides of each rate, never a filter applied to one side.
 
 Usage
 -----
@@ -106,8 +108,38 @@ def _rate(numerator: int, denominator: int) -> Optional[float]:
     return round(numerator / denominator, 6)
 
 
+def _stratum(rows: List[Dict[str, Any]], label: str) -> Dict[str, Any]:
+    """Counts and rates for one stratum, numerator and denominator from IT.
+
+    This function is the whole guard against the defect described in the module
+    docstring: a rate can only be built from rows that are in ``rows``, so it is
+    bounded in [0, 1] by construction and no caller can pair a wider numerator
+    with a narrower denominator.
+    """
+    fired = [row for row in rows if row.get("fired")]
+    escalated = [row for row in fired if row.get("escalated_verdict")]
+    proceeded = [
+        row
+        for row in escalated
+        if str(row.get("live_action") or "").strip().lower()
+        in {"proceed", "approve", "continue"}
+    ]
+    return {
+        "stratum": label,
+        "rows": len(rows),
+        "fired": len(fired),
+        "escalated_verdict": len(escalated),
+        "escalated_while_fleet_proceeded": len(proceeded),
+        "rates": {
+            "fired": _rate(len(fired), len(rows)),
+            "escalated_verdict": _rate(len(escalated), len(rows)),
+            "escalated_while_fleet_proceeded": _rate(len(proceeded), len(rows)),
+        },
+    }
+
+
 def summarize(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
-    """Aggregate shadow rows into the soak report. Pure.
+    """Aggregate rows into the soak report. Pure.
 
     Rows may arrive as payloads (DB or JSONL export) or as raw audit-log lines;
     provenance does not change the result.
@@ -127,48 +159,44 @@ def summarize(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     live = [row for row in current if row.get("measurement_scope") == "live"]
     simulation = [row for row in current if row.get("measurement_scope") == "simulation"]
 
-    # A rate needs rows that were written whether or not they fired. Any window
-    # containing a narrowed mode has a denominator this data cannot supply.
-    non_all_modes = {mode for mode in modes if mode != RECORD_ALL}
-    rate_computable = bool(live) and not non_all_modes
+    # Shadow rows answer "what WOULD the floor have done". Applied rows are the
+    # enabled floor actually escalating. Pooling them would let enforcement
+    # inflate a false-positive rate about a decision not yet taken.
+    shadow = [row for row in live if not row.get("applied")]
+    applied = [row for row in live if row.get("applied")]
 
-    scoreable = [row for row in live if row.get("scoreable")]
+    # A rate needs rows written whether or not they fired. Any window containing
+    # a narrowed mode has a denominator this data cannot supply.
+    non_all_modes = {mode for mode in modes if mode != RECORD_ALL}
+    rate_computable = bool(shadow) and not non_all_modes
+
+    scoreable = [row for row in shadow if row.get("scoreable")]
     unscoreable_reasons: Counter = Counter(
         row.get("unscoreable_reason") or "unknown"
-        for row in live
+        for row in shadow
         if not row.get("scoreable")
     )
-    # The prose denominator: rows the detector could structurally fire on. A
-    # first-person pronoun is necessary for its verb-object patterns, not
-    # sufficient — this bucket excludes what cannot fire, it does not certify
-    # what remains.
-    prose = [row for row in scoreable if row.get("first_person")]
-    non_prose = len(scoreable) - len(prose)
 
-    fired = [row for row in live if row.get("would_fire")]
-    escalated = [row for row in fired if row.get("would_escalate_verdict")]
-    # The candidate false positives: the deployment proceeded, and enabling the
-    # floor would have raised the verdict on that same check-in. Candidate, not
-    # confirmed — whether the escalation was wrong is a human read of `matches`.
-    candidate_false_positives = [
-        row
-        for row in escalated
-        if str(row.get("live_action") or "").strip().lower() in {"proceed", "approve", "continue"}
-    ]
-    agreed_escalations = [
-        row
-        for row in escalated
-        if str(row.get("live_action") or "").strip().lower() not in {"proceed", "approve", "continue"}
-    ]
+    # Input shape is a STRATUM, not a filter. Each sub-rate is computed inside
+    # its own stratum, so none can exceed 1.0 and none borrows a numerator from
+    # the other. See the module docstring for the defect this replaced.
+    first_person = [row for row in scoreable if row.get("first_person")]
+    pronoun_free = [row for row in scoreable if not row.get("first_person")]
 
-    bands: Counter = Counter(row.get("verdict") or "unknown" for row in fired)
+    overall = _stratum(scoreable, "scoreable")
     categories: Counter = Counter()
-    for row in fired:
+    bands: Counter = Counter()
+    for row in shadow:
+        if not row.get("fired"):
+            continue
+        bands[row.get("verdict") or "unknown"] += 1
         for key in (row.get("categories") or {}):
             categories[key] += 1
 
     agents = {row.get("agent_id") for row in live if row.get("agent_id")}
-    firing_agents = {row.get("agent_id") for row in fired if row.get("agent_id")}
+    firing_agents = {
+        row.get("agent_id") for row in shadow if row.get("fired") and row.get("agent_id")
+    }
 
     report: Dict[str, Any] = {
         "event_type": EVENT_TYPE,
@@ -179,36 +207,33 @@ def summarize(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "rows_by_measurement_scope": dict(scopes),
         "live_rows": len(live),
         "simulation_rows": len(simulation),
+        "applied_rows": len(applied),
+        "shadow_rows": len(shadow),
         "distinct_agents": len(agents),
         "denominator": {
             "computable": rate_computable,
-            "all_evaluations": len(live),
+            "shadow_evaluations": len(shadow),
             "scoreable": len(scoreable),
-            "prose": len(prose),
-            "scoreable_non_prose": non_prose,
             "unscoreable_reasons": dict(unscoreable_reasons),
         },
         "firings": {
-            "would_fire": len(fired),
-            "would_escalate_verdict": len(escalated),
-            "candidate_false_positives": len(candidate_false_positives),
-            "escalations_the_fleet_also_acted_on": len(agreed_escalations),
+            "fired": overall["fired"],
+            "escalated_verdict": overall["escalated_verdict"],
+            "candidate_false_positives": overall["escalated_while_fleet_proceeded"],
             "distinct_firing_agents": len(firing_agents),
             "bands": dict(bands),
             "categories": dict(categories.most_common()),
         },
         "rates": {},
+        "strata": {},
         "caveats": [],
     }
 
     if rate_computable:
-        report["rates"] = {
-            "would_fire_over_scoreable": _rate(len(fired), len(scoreable)),
-            "would_fire_over_prose": _rate(len(fired), len(prose)),
-            "would_escalate_over_prose": _rate(len(escalated), len(prose)),
-            "candidate_false_positive_over_prose": _rate(
-                len(candidate_false_positives), len(prose)
-            ),
+        report["rates"] = dict(overall["rates"])
+        report["strata"] = {
+            "first_person": _stratum(first_person, "first_person"),
+            "pronoun_free": _stratum(pronoun_free, "pronoun_free"),
         }
     else:
         if non_all_modes:
@@ -218,10 +243,10 @@ def summarize(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
                 "evaluations. The denominator is absent from the data, not zero. "
                 f"Set {RECORD_ALL!r} and re-soak."
             )
-        if not live:
+        if not shadow:
             report["caveats"].append(
-                "No live rows in this window. This is one of four states and "
-                "this data cannot say which: " + "; ".join(ZERO_STATES)
+                "No live shadow rows in this window. This is one of four states "
+                "and this data cannot say which: " + "; ".join(ZERO_STATES)
             )
 
     if simulation:
@@ -229,24 +254,27 @@ def summarize(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
             f"{len(simulation)} simulation row(s) excluded from every rate; "
             "synthetic traffic is not a false-positive corpus."
         )
-    if non_prose:
+    if applied:
         report["caveats"].append(
-            f"{non_prose} scoreable row(s) carry no first-person pronoun. The "
-            "detector reads English first-person narration, so those callers are "
-            "UNSCORED by this channel, not cleared by it. `*_over_prose` excludes "
-            "them; `would_fire_over_scoreable` does not and reads lower for it."
+            f"{len(applied)} row(s) carry applied=true — the floor was ENABLED "
+            "for that traffic and those escalations were enforced, not "
+            "hypothetical. They are excluded from every rate here, which is "
+            "about a decision already taken on that traffic, not a pending one."
         )
-    if fired and not report["firings"]["categories"]:
+    if rate_computable and report["strata"]["pronoun_free"]["fired"]:
         report["caveats"].append(
-            "Firings recorded with no category detail — rows predate the "
-            "category capture or were truncated."
+            f"{report['strata']['pronoun_free']['fired']} firing(s) in rows with "
+            "no first-person pronoun. The detector does not require one, so this "
+            "is expected and is reported as its own stratum rather than dropped. "
+            "Do not exclude these rows from a headline rate: they are real "
+            "firings on real traffic."
         )
-    if rate_computable and not fired:
+    if rate_computable and not overall["fired"]:
         report["caveats"].append(
             "Zero firings over a recorded denominator. This is the one zero here "
             "that IS informative: the instrument ran and wrote "
-            f"{len(live)} evaluation(s). It bounds the false-positive rate over "
-            "this window's traffic; it establishes nothing about recall."
+            f"{len(shadow)} shadow evaluation(s). It bounds the false-positive "
+            "rate over this window's traffic; it establishes nothing about recall."
         )
 
     return report
@@ -257,31 +285,36 @@ def render(report: Dict[str, Any]) -> str:
         f"verification-floor shadow soak — {report['schema']}",
         "",
         f"rows                    {report['rows_total']}"
-        f"  (live {report['live_rows']}, simulation {report['simulation_rows']})",
+        f"  (live {report['live_rows']}: shadow {report['shadow_rows']}, "
+        f"applied {report['applied_rows']}; simulation {report['simulation_rows']})",
         f"record modes seen       {report['rows_by_record_mode']}",
         f"distinct agents         {report['distinct_agents']}",
         "",
-        "denominator",
-        f"  evaluations           {report['denominator']['all_evaluations']}",
+        "denominator (shadow rows only)",
+        f"  evaluations           {report['denominator']['shadow_evaluations']}",
         f"  scoreable             {report['denominator']['scoreable']}",
-        f"  prose (can fire)      {report['denominator']['prose']}",
-        f"  scoreable non-prose   {report['denominator']['scoreable_non_prose']}",
         f"  unscoreable           {report['denominator']['unscoreable_reasons']}",
         "",
         "firings",
-        f"  would fire            {report['firings']['would_fire']}",
-        f"  would escalate        {report['firings']['would_escalate_verdict']}",
+        f"  fired                 {report['firings']['fired']}",
+        f"  escalated verdict     {report['firings']['escalated_verdict']}",
         f"  candidate FPs         {report['firings']['candidate_false_positives']}"
         "   (fleet proceeded, floor would have raised the verdict)",
-        f"  fleet also acted      {report['firings']['escalations_the_fleet_also_acted_on']}",
         f"  bands                 {report['firings']['bands']}",
         f"  categories            {report['firings']['categories']}",
         "",
     ]
     if report["rates"]:
-        lines.append("rates")
+        lines.append("rates over scoreable shadow rows")
         for key, value in report["rates"].items():
             lines.append(f"  {key:<38} {value}")
+        lines.append("")
+        lines.append("by input stratum (each rate inside its own stratum)")
+        for name, stratum in report["strata"].items():
+            lines.append(
+                f"  {name:<16} rows={stratum['rows']:<6} fired={stratum['fired']:<5} "
+                f"fired_rate={stratum['rates']['fired']}"
+            )
     else:
         lines.append("rates                   NOT REPORTED (see caveats)")
     if report["caveats"]:

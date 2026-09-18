@@ -2460,37 +2460,45 @@ def check_verification_floor_shadow_recorded(db_url: str) -> CheckResult:
 
     This check exists so it cannot look like that again. ``auto_attest`` is
     emitted once per check-in on the same pass, so it is the denominator that
-    says traffic existed. Traffic with no shadow rows is the "not recorded"
-    state, which is not a false-positive rate of zero.
+    says traffic existed. Traffic with no rows is the "not recorded" state, which
+    is not a false-positive rate of zero.
+
+    The sink records under BOTH flag states (``applied`` distinguishes them), so
+    enabling the floor -- the goal state -- does not silence it. A check that
+    could only pass while the floor stayed off would WARN forever the moment the
+    work it supports succeeded.
     """
     name, mode = "verification_floor_shadow_recorded", "operator"
+    # event_type is filtered in the predicate, not only in FILTER clauses, so
+    # this uses idx_events_type_ts instead of scanning the whole 7-day window.
     row = _psql_row(db_url, (
         "SELECT "
         "count(*) FILTER (WHERE event_type = 'verification_floor_shadow'), "
         "count(*) FILTER (WHERE event_type = 'auto_attest') "
-        "FROM audit.events WHERE ts > now() - interval '7 days'"
+        "FROM audit.events "
+        "WHERE event_type IN ('verification_floor_shadow', 'auto_attest') "
+        "AND ts > now() - interval '7 days'"
     ))
     if row is None:
         return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
-    shadow, checkins = int(row[0]), int(row[1])
+    recorded, checkins = int(row[0]), int(row[1])
     if checkins == 0:
         return CheckResult(name, mode, Status.SKIP,
-                           "no check-ins in 7d — nothing for the shadow to read")
-    if shadow == 0:
+                           "no check-ins in 7d — nothing for the instrument to read")
+    if recorded == 0:
         return CheckResult(
             name, mode, Status.WARN,
             f"0 verification_floor_shadow rows against {checkins} check-in(s) "
-            "in 7d — the shadow is default-on, so this reads NOT RECORDED, not "
-            "'no firings'",
-            detail="either the floor itself is enabled (in which case the "
-                   "applied signal is surfaced instead and this is expected), "
-                   "GOVERNANCE_VERIFICATION_FLOOR_SHADOW is false, "
-                   "GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD is 'off', or "
-                   "the sink detached — check before reading any rate from "
+            "in 7d — the instrument records under both flag states, so this "
+            "reads NOT RECORDED, not 'no firings'",
+            detail="GOVERNANCE_VERIFICATION_FLOOR_SHADOW is false and the floor "
+                   "is off, GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD is "
+                   "'off', or the sink detached — establish which before "
+                   "reading any rate from "
                    "scripts/analysis/verification_floor_shadow_read.py",
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"{shadow} verification_floor_shadow row(s) over "
+                       f"{recorded} verification_floor_shadow row(s) over "
                        f"{checkins} check-in(s) in 7d")
 
 

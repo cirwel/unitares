@@ -460,8 +460,10 @@ class GovernanceConfig:
     # sink and scripts/analysis/verification_floor_shadow_read.py for the read.
     # Sink verbosity: GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD=all|firings|off.
     #
-    # Kill switch: GOVERNANCE_VERIFICATION_FLOOR_SHADOW=false. Inert while the
-    # real floor is enabled (the applied signal is already surfaced).
+    # Kill switch: GOVERNANCE_VERIFICATION_FLOOR_SHADOW=false. This flag governs
+    # the in-band surfacing and the verdict no-op only; the SINK records under
+    # both flag states (rows carry `applied`), so enabling the real floor does
+    # not silence the evidence trail.
     VERIFICATION_FLOOR_SHADOW = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR_SHADOW', 'true').lower() == 'true'
 
     # Cold-start risk confirmation telemetry.  The shadow evaluator records

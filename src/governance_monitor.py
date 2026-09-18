@@ -1491,52 +1491,61 @@ class UNITARESMonitor:
         self._last_verification_signal = None
         self._last_verification_shadow = None
         self._pending_verification_shadow_row = None
-        if GovConfig.VERIFICATION_FLOOR_ENABLED:
+        _v_signal = None
+        _v_applied = False
+        if GovConfig.VERIFICATION_FLOOR_ENABLED or GovConfig.VERIFICATION_FLOOR_SHADOW:
             from governance_core.verification import score_harm_confession
-            _vsig = score_harm_confession(agent_state.get('response_text', '') or '')
-            unitares_verdict, risk_score = apply_verification_floor(
-                unitares_verdict, risk_score, _vsig.verdict, _vsig.score,
+            _v_signal = score_harm_confession(agent_state.get('response_text', '') or '')
+            _v_verdict_before, _v_risk_before = unitares_verdict, risk_score
+            _v_verdict_after, _v_risk_after = apply_verification_floor(
+                unitares_verdict, risk_score, _v_signal.verdict, _v_signal.score,
             )
-            self._last_verification_signal = _vsig
+        if GovConfig.VERIFICATION_FLOOR_ENABLED:
+            _v_applied = True
+            unitares_verdict, risk_score = _v_verdict_after, _v_risk_after
+            self._last_verification_signal = _v_signal
         elif GovConfig.VERIFICATION_FLOOR_SHADOW:
             # Shadow mode: same signal, zero verdict/risk effect. The in-band
-            # result key is still surfaced only when the floor WOULD fire — a
-            # clean check-in should not grow a key that says nothing. The
-            # durable record is the other half and has the opposite rule: it
-            # writes the non-firings too, because the enable decision asks for a
-            # false-positive RATE and a numerator without a denominator cannot
-            # answer it (issue #2169; src/verification_floor_shadow.py).
-            from governance_core.verification import score_harm_confession
-            _vshadow = score_harm_confession(agent_state.get('response_text', '') or '')
-            if _vshadow.score > 0.0:
-                self._last_verification_shadow = _vshadow
+            # result key is surfaced only when the floor WOULD fire — a clean
+            # check-in should not grow a key that says nothing.
+            if _v_signal.score > 0.0:
+                self._last_verification_shadow = _v_signal
                 logger.info(
                     f"verification floor SHADOW for {self.agent_id}: would raise "
-                    f"to {_vshadow.verdict} (score {_vshadow.score:.2f}); not applied"
+                    f"to {_v_signal.verdict} (score {_v_signal.score:.2f}); not applied"
                 )
-            # Build the durable row here, where the pre-floor verdict/risk pair
-            # still exists, through the SAME pure combiner the enabled floor
-            # uses — so the recorded counterfactual is the real combination and
-            # not a reimplementation of it. Emitted after the decision is made.
+
+        # The durable record has the opposite rule from the in-band key on both
+        # counts: it writes the non-firings too, because the enable decision asks
+        # for a false-positive RATE and a numerator without a denominator cannot
+        # answer it; and it writes under BOTH flag states, because recording only
+        # the shadow would recreate the same hole one flag flip later (issue
+        # #2169; src/verification_floor_shadow.py). Built here, where the
+        # pre-floor verdict/risk pair still exists; emitted once the decision is
+        # known. Optional measurement on a mandatory path, so it fails open.
+        if _v_signal is not None:
             try:
                 from src.verification_floor_shadow import (
                     evaluate as _vshadow_eval,
+                    record_mode as _vshadow_mode,
                     should_record as _vshadow_should_record,
                 )
-                _shadow_verdict_after, _shadow_risk_after = apply_verification_floor(
-                    unitares_verdict, risk_score, _vshadow.verdict, _vshadow.score,
-                )
-                if _vshadow_should_record(_vshadow.score > 0.0):
+                _vshadow_record_mode = _vshadow_mode()
+                if _vshadow_should_record(
+                    _v_signal.score > 0.0, mode=_vshadow_record_mode
+                ):
                     self._pending_verification_shadow_row = _vshadow_eval(
-                        _vshadow,
+                        _v_signal,
                         response_text=agent_state.get('response_text', '') or '',
-                        verdict_before=unitares_verdict,
-                        risk_before=risk_score,
-                        verdict_after=_shadow_verdict_after,
-                        risk_after=_shadow_risk_after,
+                        verdict_before=_v_verdict_before,
+                        risk_before=_v_risk_before,
+                        verdict_after=_v_verdict_after,
+                        risk_after=_v_risk_after,
+                        applied=_v_applied,
                         measurement_scope=(
                             "simulation" if self._simulation_active else "live"
                         ),
+                        mode=_vshadow_record_mode,
                     )
             except Exception as exc:  # optional measurement, mandatory path
                 logger.debug(f"verification floor shadow row skipped: {exc}")
@@ -1602,12 +1611,12 @@ class UNITARESMonitor:
         except Exception as exc:
             logger.debug(f"coherence gate shadow skipped: {exc}")
 
-        # Emit the verification-floor shadow row now that the decision exists:
-        # the verdict delta alone does not say whether enabling the floor would
-        # have cost anyone a pause, and pairing it with the action the
-        # deployment actually took does. `decision` is the pre-gap-suppression
-        # action here, matching what `log_auto_attest` records below, so the two
-        # are joinable. MUTATES NOTHING and fails open.
+        # Emit the verification-floor row now that the decision exists: the
+        # verdict delta alone does not say whether the floor cost anyone a pause,
+        # and pairing it with the action the deployment actually took does.
+        # `decision` is the pre-gap-suppression action here, matching what
+        # `log_auto_attest` records below, so the two are joinable.
+        # MUTATES NOTHING and fails open.
         _vshadow_row = getattr(self, "_pending_verification_shadow_row", None)
         if _vshadow_row is not None:
             try:

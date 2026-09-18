@@ -167,14 +167,21 @@ What landed for #2169:
   and the mode is stamped on every row so a later reader can tell "no non-firings
   occurred" from "this deployment was configured not to write them."
 - **The counterfactual, not just the score.** Each row carries the pre-floor
-  verdict/risk pair, the pair `apply_verification_floor` *would* have produced from it
-  (through the same pure function the enabled floor uses), and the action the deployment
-  actually took. The candidate false positives are the rows where the fleet proceeded and
-  the floor would have raised the verdict.
+  verdict/risk pair, the pair `apply_verification_floor` produced from it (through the
+  same pure function the floor itself uses), and the action the deployment actually took.
+  The candidate false positives are the rows where the fleet proceeded and the floor
+  would have raised the verdict.
+- **Both flag states, one instrument.** `applied` distinguishes a shadow row from an
+  enforced one. Recording only the shadow would recreate the same hole one flag flip
+  later, and would leave "no rows against live traffic" permanently ambiguous.
+- **Input shape is a stratum, never a filter.** The detector reads English verb-object
+  prose, but a first-person pronoun is neither necessary nor sufficient — a pronoun-free
+  confession scores 0.7975 / high-risk. Every rate draws its numerator and denominator
+  from the same stratum, so none can exceed 1.
 - **Read:** `scripts/analysis/verification_floor_shadow_read.py`. It reports the rate
-  over the prose denominator, partitions out simulation rows and callers the detector
-  cannot score, and **refuses to divide** when the window's rows carry no denominator —
-  reporting the four states a zero can be in instead.
+  over scoreable shadow rows, breaks it down by input stratum, partitions out simulation
+  and applied rows, and **refuses to divide** when the window's rows carry no denominator
+  — reporting the four states a zero can be in instead.
 
 What this does **not** do: it does not enable anything, does not recommend enabling
 anything, and does not discharge the gate. It makes one clause of one bullet below

@@ -31,11 +31,11 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
 source_digests:
-  unitares/config/governance_config.py: "e1bc20f0b8ba6b63"
+  unitares/config/governance_config.py: "4b5515a262c2238d"
   unitares/governance_core/coherence.py: "ef819003ee72b388"
   unitares/governance_core/parameters.py: "84bf47ca540bbc49"
   unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
-  unitares/src/governance_monitor.py: "a83538045095fa6a"
+  unitares/src/governance_monitor.py: "0666d2703aaa3129"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/governance_glossary.py: "251e06209e038a13"
   unitares/src/behavioral_state.py: "e214a51c1d7763c7"

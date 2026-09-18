@@ -25,15 +25,22 @@ way to tell an empty window from an unrecorded one. So the default record mode
 emits a row for **every** evaluation, firing or not, and each row carries what is
 needed to partition the denominator honestly:
 
-* ``scoreable`` / ``unscoreable_reason`` — the detector abstains below 8
-  characters, and those rows are not benign traffic that came back clean.
-* ``text_chars`` / ``text_words`` / ``first_person`` — a cheap prose-shape proxy.
-  The detector reads English first-person narration, so it is *structurally*
-  incapable of firing for a templated status line or a state digest. Those
-  callers are **unscored** by this channel, not cleared by it
-  (``governance_core/verification.py``, final docstring bullet). A rate computed
-  over them understates the false-positive risk of enabling the floor, so the
-  reader has to be able to exclude them and say that it did.
+* ``scoreable`` / ``unscoreable_reason`` — the detector abstains on input it
+  will not assess at all, and those rows are not benign traffic that came back
+  clean.
+* ``text_chars`` / ``text_words`` / ``first_person`` — the shape of the input,
+  recorded as **descriptive strata, never as an eligibility filter**. The
+  detector reads English verb-object prose about actions already taken, so a
+  templated status line or a state digest is unlikely to fire it
+  (``governance_core/verification.py``, final docstring bullet) — but "unlikely"
+  is the whole claim. A first-person pronoun is neither necessary nor sufficient:
+  ``"Disabled telemetry for the run; deleted snapshots afterwards."`` scores
+  0.7975 / high-risk with no pronoun at all. An earlier draft of this module
+  called the pronoun *necessary* and let the reader divide firings from every row
+  by a first-person-only denominator; on traffic whose firings were mostly
+  pronoun-free that produced a false-positive rate above 1.0. Stratify on this
+  field, never gate on it, and keep any numerator in the same stratum as its
+  denominator.
 * ``measurement_scope`` — ``simulation`` rows are synthetic traffic and must
   never be pooled into a live rate.
 * ``record_mode`` — stamped on every row so a later reader can distinguish "no
@@ -53,9 +60,18 @@ retention as the other shadow instruments it will be read beside.
 
 Volume posture
 --------------
-Default-on shadow plus a row per evaluation is one small audit row per check-in on
-every deployment. That is the cost of a denominator, and it is stated rather than
-hidden. ``GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD`` narrows it:
+A row per evaluation is one small audit row per check-in on every deployment.
+That is the cost of a denominator, and it is stated rather than hidden. Two costs,
+not one:
+
+* **Storage** — one ``audit.events`` row and one JSONL line per check-in.
+* **Latency** — ``AuditLogger._write_entry`` ``fsync``s each JSONL append under an
+  exclusive lock, so this adds a *second* synchronous fsync to the check-in path
+  beside the ``auto_attest`` row already written there, roughly doubling the
+  audit fsync cost of a check-in. The Postgres half is fire-and-forget and adds
+  nothing. ``UNITARES_AUDIT_WRITE_JSONL=0`` removes the fsync for both.
+
+``GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD`` narrows the volume:
 
 * ``all`` (default) — every evaluation. The only mode from which a rate is
   computable.
@@ -63,6 +79,14 @@ hidden. ``GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD`` narrows it:
   reader refuses to report a rate from these and says why.
 * ``off`` — no rows. Restores the pre-#2169 state of affairs deliberately, which
   is not the same as it happening by accident.
+
+Both flag states, one instrument
+--------------------------------
+The row is written whether the floor is off (shadow) or on (enforcing);
+``applied`` says which. Recording only the shadow would recreate the same hole one
+flag flip later — the enforcing floor's firings would change verdicts with no
+durable record of the signal behind them — and would make "no rows against live
+traffic" permanently ambiguous for the doctor check that watches this sink.
 
 Matched spans
 -------------
@@ -101,10 +125,6 @@ _RECORD_MODES = (RECORD_ALL, RECORD_FIRINGS, RECORD_OFF)
 MAX_MATCHES = 8
 MAX_MATCH_CHARS = 120
 
-#: Mirrors ``score_harm_confession``'s abstention guard. Duplicated as a constant
-#: here only to *name* the unscoreable row; the detector remains authoritative.
-MIN_SCOREABLE_CHARS = 8
-
 _FIRST_PERSON = re.compile(r"\b(i|i'm|i've|i'll|my|me|we|we're|we've|our)\b")
 
 
@@ -127,23 +147,31 @@ def record_mode() -> str:
     return RECORD_ALL
 
 
-def should_record(would_fire: bool, mode: Optional[str] = None) -> bool:
-    """Whether a row with this firing state is written under ``mode``."""
+def should_record(fired: bool, mode: Optional[str] = None) -> bool:
+    """Whether a row with this firing state is written under ``mode``.
+
+    Callers on the check-in path resolve :func:`record_mode` once and pass it to
+    both this and :func:`evaluate`. Resolving it independently in each would emit
+    the unrecognised-value warning twice per check-in, forever, on the mandatory
+    path — a log flood as the penalty for a typo in a telemetry flag.
+    """
     resolved = mode or record_mode()
     if resolved == RECORD_OFF:
         return False
     if resolved == RECORD_FIRINGS:
-        return bool(would_fire)
+        return bool(fired)
     return True
 
 
 def _text_shape(response_text: Optional[str]) -> Dict[str, Any]:
     """Describe the input's shape without retaining it.
 
-    ``first_person`` is a proxy, not a classifier. It says the text contains a
-    first-person pronoun, which is a necessary condition for the detector's
-    verb-object patterns to fire and nothing more. Read it to *exclude* rows the
-    channel could never score, never to certify that a row was scored well.
+    ``first_person`` says only that the text contains a first-person pronoun. It
+    is **not** a precondition for the detector to fire — none of the category
+    patterns require one, and a pronoun-free confession scores high-risk — so it
+    is a descriptive stratum, never an eligibility filter. Use it to compare
+    first-person against pronoun-free traffic, with each rate's numerator drawn
+    from the same stratum as its denominator.
     """
     text = response_text or ""
     stripped = text.strip()
@@ -173,42 +201,47 @@ def evaluate(
     risk_before: float,
     verdict_after: Optional[str],
     risk_after: float,
+    applied: bool = False,
     measurement_scope: str = "live",
     mode: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the row for one shadow evaluation. Pure; applies nothing.
+    """Build the row for one verification-floor evaluation. Pure; applies nothing.
 
-    ``verdict_after`` / ``risk_after`` are the counterfactual — what
-    ``apply_verification_floor`` WOULD have produced from the live pre-floor pair.
-    They are computed by the caller through the same pure function the enabled
-    floor uses, so the row records the real combination rather than a
-    reimplementation of it.
+    ``verdict_after`` / ``risk_after`` are what ``apply_verification_floor``
+    produced from the live pre-floor pair — the counterfactual when ``applied`` is
+    False, the enforced result when it is True. The caller computes them through
+    the same pure function the floor itself uses, so the row records the real
+    combination rather than a reimplementation of it.
 
     Every evaluation produces a row of the same shape, so an abstention is an
     explicit observation rather than an absence.
     """
     score = float(getattr(signal, "score", 0.0) or 0.0)
     abstained = bool(getattr(signal, "abstained", False))
-    would_fire = score > 0.0
+    fired = score > 0.0
     shape = _text_shape(response_text)
 
     unscoreable_reason: Optional[str] = None
     if not shape["text_chars"]:
         unscoreable_reason = "empty_response_text"
     elif abstained:
-        unscoreable_reason = "detector_abstained_below_min_length"
+        # The detector abstains on two arms — too short, and no alphabetic
+        # character at all — and does not say which. Naming a length here would
+        # mislabel the second arm, so the reason names the abstention, not a
+        # threshold this module does not own.
+        unscoreable_reason = "detector_abstained"
 
     return {
         "schema": SCHEMA,
         "detector": DETECTOR,
         "record_mode": mode or record_mode(),
         "measurement_scope": measurement_scope,
-        # Never an enforcement. Shadow rows carry this for the same reason the
-        # result-dict key does: so no downstream reader can mistake a would-fire
-        # record for something that happened to an agent.
-        "applied": False,
+        # Whether this signal was combined into the live verdict. False is the
+        # shadow row a reader must never mistake for an enforcement; True is the
+        # enabled floor actually escalating.
+        "applied": bool(applied),
         "evaluated": True,
-        "would_fire": would_fire,
+        "fired": fired,
         "score": round(score, 4),
         "verdict": getattr(signal, "verdict", None),
         "categories": dict(getattr(signal, "categories", {}) or {}),
@@ -217,14 +250,13 @@ def evaluate(
         "abstained": abstained,
         "scoreable": unscoreable_reason is None,
         "unscoreable_reason": unscoreable_reason,
-        # The counterfactual, recorded as a delta so the false-positive question
-        # ("how many clean check-ins would this have escalated?") is answerable
-        # without re-deriving it from the score.
+        # The delta, so the false-positive question ("how many clean check-ins
+        # would this escalate?") is answerable without re-deriving it from score.
         "verdict_before": verdict_before,
         "verdict_after": verdict_after,
         "risk_before": round(float(risk_before), 6),
         "risk_after": round(float(risk_after), 6),
-        "would_escalate_verdict": verdict_after != verdict_before,
+        "escalated_verdict": verdict_after != verdict_before,
         "risk_delta": round(float(risk_after) - float(risk_before), 6),
         **shape,
     }
@@ -240,9 +272,9 @@ def attach_live_decision(
     """Stamp the decision the deployment actually took onto the row.
 
     The verdict delta alone does not say whether enabling the floor would have
-    cost anyone a pause. Pairing it with the live action does: the candidate
-    false positives are the rows where ``would_escalate_verdict`` is true and the
-    deployment proceeded.
+    cost anyone a pause. Pairing it with the live action does: on a shadow row the
+    candidate false positives are those where ``escalated_verdict`` is true and
+    the deployment proceeded anyway.
 
     This is the *pre-gap-suppression* action, matching what ``log_auto_attest``
     records on the same check-in, so the two are joinable.

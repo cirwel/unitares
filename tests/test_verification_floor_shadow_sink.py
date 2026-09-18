@@ -99,19 +99,19 @@ class TestRecordMode:
     def test_default_records_every_evaluation(self, monkeypatch):
         monkeypatch.delenv("GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD", raising=False)
         assert record_mode() == RECORD_ALL
-        assert should_record(would_fire=False) is True
-        assert should_record(would_fire=True) is True
+        assert should_record(fired=False) is True
+        assert should_record(fired=True) is True
 
     def test_firings_mode_drops_the_denominator(self, monkeypatch):
         monkeypatch.setenv("GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD", "firings")
         assert record_mode() == RECORD_FIRINGS
-        assert should_record(would_fire=False) is False
-        assert should_record(would_fire=True) is True
+        assert should_record(fired=False) is False
+        assert should_record(fired=True) is True
 
     def test_off_mode_records_nothing(self, monkeypatch):
         monkeypatch.setenv("GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD", "off")
         assert record_mode() == RECORD_OFF
-        assert should_record(would_fire=True) is False
+        assert should_record(fired=True) is False
 
     def test_typo_falls_back_to_all_not_to_silence(self, monkeypatch):
         # A misspelled sink flag must not reproduce the blind-instrument state
@@ -133,9 +133,9 @@ class TestRowShape:
             mode=RECORD_ALL,
         )
         assert row["schema"] == SCHEMA
-        assert row["would_fire"] is True
+        assert row["fired"] is True
         assert row["applied"] is False
-        assert row["would_escalate_verdict"] is True
+        assert row["escalated_verdict"] is True
         assert row["risk_delta"] > 0
         assert row["scoreable"] is True
         assert row["categories"]
@@ -153,9 +153,9 @@ class TestRowShape:
             mode=RECORD_ALL,
         )
         assert row["evaluated"] is True
-        assert row["would_fire"] is False
+        assert row["fired"] is False
         assert row["scoreable"] is True
-        assert row["would_escalate_verdict"] is False
+        assert row["escalated_verdict"] is False
         assert row["risk_delta"] == 0.0
 
     def test_templated_caller_is_unscored_not_cleared(self):
@@ -171,7 +171,7 @@ class TestRowShape:
             risk_after=0.1,
             mode=RECORD_ALL,
         )
-        assert row["would_fire"] is False
+        assert row["fired"] is False
         assert row["first_person"] is False
 
     def test_empty_text_is_named_unscoreable(self):
@@ -210,13 +210,82 @@ class TestRowShape:
 
     def test_attach_live_decision_makes_the_fp_question_answerable(self):
         row = attach_live_decision(
-            {"would_escalate_verdict": True},
+            {"escalated_verdict": True},
             action="proceed",
             sub_action=None,
             live_verdict="safe",
         )
         assert row["live_action"] == "proceed"
         assert row["live_verdict"] == "safe"
+
+
+class TestFirstPersonIsAStratumNotAFilter:
+    """Regression: the detector does NOT require a first-person pronoun.
+
+    The first draft of this module documented the pronoun as a necessary
+    condition for firing and let the reader use it as a denominator filter. It is
+    not necessary, and treating it as one produced a false-positive rate above
+    1.0 on the number the enable gate consumes.
+    """
+
+    PRONOUN_FREE = (
+        "Disabled telemetry for the run; deleted snapshots afterwards."
+    )
+
+    def test_detector_fires_without_a_first_person_pronoun(self):
+        signal = score_harm_confession(self.PRONOUN_FREE)
+        assert signal.score > 0.0, (
+            "if this ever becomes true, the pronoun is still not a precondition "
+            "by construction — check _CATEGORY_SPECS before relaxing anything"
+        )
+        assert signal.verdict == "high-risk"
+
+    def test_such_a_row_is_recorded_as_firing_and_pronoun_free(self):
+        signal = score_harm_confession(self.PRONOUN_FREE)
+        row = evaluate(
+            signal,
+            response_text=self.PRONOUN_FREE,
+            verdict_before="safe",
+            risk_before=0.26,
+            verdict_after="high-risk",
+            risk_after=signal.score,
+            mode=RECORD_ALL,
+        )
+        # Both must be true at once: this is the combination the false premise
+        # said could not exist.
+        assert row["fired"] is True
+        assert row["first_person"] is False
+        assert row["scoreable"] is True
+
+
+class TestAppliedRowsAreRecordedToo:
+    """The record must not depend on the flag state it exists to inform."""
+
+    def test_enabled_floor_writes_an_applied_row(self, monkeypatch, sink):
+        _set(monkeypatch, floor=True, shadow=False)
+        result = UNITARESMonitor("vfs-applied", load_state=False).process_update(
+            _checkin(SABOTAGE)
+        )
+        assert result["decision"]["action"] == "pause"
+        rows = [payload for _, payload in sink.rows]
+        assert len(rows) == 1
+        assert rows[0]["applied"] is True
+        assert rows[0]["fired"] is True
+        # verdict_before is the PRE-floor verdict even though the floor applied.
+        assert rows[0]["verdict_before"] != rows[0]["verdict_after"]
+        assert rows[0]["escalated_verdict"] is True
+
+    def test_enabled_floor_on_benign_writes_a_non_firing_applied_row(
+        self, monkeypatch, sink
+    ):
+        _set(monkeypatch, floor=True, shadow=False)
+        UNITARESMonitor("vfs-applied-clean", load_state=False).process_update(
+            _checkin(BENIGN)
+        )
+        rows = [payload for _, payload in sink.rows]
+        assert len(rows) == 1
+        assert rows[0]["applied"] is True
+        assert rows[0]["fired"] is False
 
 
 class TestRecordFailsOpen:
@@ -236,14 +305,14 @@ class TestEndToEnd:
         assert result["decision"]["action"] == "proceed"
         rows = [payload for _, payload in sink.rows]
         assert len(rows) == 1
-        assert rows[0]["would_fire"] is True
+        assert rows[0]["fired"] is True
         assert rows[0]["applied"] is False
         assert rows[0]["measurement_scope"] == "live"
         assert rows[0]["live_action"] == "proceed"
         # The counterfactual is the real combination, computed through the same
         # pure function the enabled floor uses.
         assert rows[0]["verdict_after"] == "high-risk"
-        assert rows[0]["would_escalate_verdict"] is True
+        assert rows[0]["escalated_verdict"] is True
 
     def test_non_firing_reaches_the_sink_too(self, monkeypatch, sink):
         # This is the property the whole issue turns on: without the clean
@@ -253,7 +322,7 @@ class TestEndToEnd:
         assert "verification_floor_shadow" not in result  # in-band stays quiet
         rows = [payload for _, payload in sink.rows]
         assert len(rows) == 1
-        assert rows[0]["would_fire"] is False
+        assert rows[0]["fired"] is False
         assert rows[0]["scoreable"] is True
 
     def test_firings_mode_writes_only_the_numerator(self, monkeypatch, sink):
@@ -273,13 +342,21 @@ class TestEndToEnd:
         self._monitor("vfs-killed").process_update(_checkin(SABOTAGE))
         assert sink.rows == []
 
-    def test_no_shadow_row_while_the_real_floor_is_enabled(self, monkeypatch, sink):
-        # With the floor on, the applied signal is surfaced and enforced; a
-        # shadow row would be a would-fire record of something that DID fire.
+    def test_enabled_floor_writes_an_applied_row_not_a_shadow_one(
+        self, monkeypatch, sink
+    ):
+        # With the floor on, the signal is enforced rather than hypothetical, so
+        # the row says applied=true. Recording nothing here would recreate the
+        # #2169 hole one flag flip later, and would leave the doctor check
+        # permanently unable to tell an enabled floor from a detached sink.
         _set(monkeypatch, floor=True, shadow=True)
         result = self._monitor("vfs-enabled").process_update(_checkin(SABOTAGE))
         assert result["decision"]["action"] == "pause"
-        assert sink.rows == []
+        assert "verification_floor" in result
+        assert "verification_floor_shadow" not in result
+        rows = [payload for _, payload in sink.rows]
+        assert len(rows) == 1
+        assert rows[0]["applied"] is True
 
     def test_sink_failure_does_not_break_the_checkin(self, monkeypatch):
         _set(monkeypatch, floor=False, shadow=True)
