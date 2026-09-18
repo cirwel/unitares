@@ -208,3 +208,74 @@ def test_enrich_threads_the_ceiling_into_persisted_metadata():
 
     assert out["corroboration_grade"] == "tool_observed"
     assert out["evidence_weight"] == 0.65
+
+
+def test_capping_also_downgrades_the_field_level_verdicts():
+    """A capped row must not report its claims MORE verified than an honest one.
+
+    The field verdicts are derived from the pre-cap evidence flags, so before
+    this was fixed a capped row reported verified=['commit','pr'] while a
+    genuinely tool_observed row reported those same fields UNVERIFIED.
+    """
+    capped = assess_outcome_corroboration(
+        "task_completed",
+        {"evidence": [{"source": "ci", "ci_verified": True, "pr": 42, "commit_sha": "abc"}]},
+        "agent_reported_tool_result",
+        ceiling="tool_observed",
+    )
+    honest = assess_outcome_corroboration(
+        "task_completed",
+        {"tool": "pytest", "kind": "test", "exit_code": 0, "pr": 42, "commit_sha": "abc"},
+        "agent_reported_tool_result",
+    )
+
+    assert capped.grade == honest.grade == "tool_observed"
+    # The claim fields the cap stripped authority for are no longer "verified".
+    assert "pr" not in capped.verified_fields
+    assert "commit" not in capped.verified_fields
+    assert {"pr", "commit"} <= set(capped.unverified_fields)
+    # And the honest row is not made to look worse than the capped one.
+    assert {"pr", "commit"} <= set(honest.unverified_fields)
+
+
+def test_capping_never_raises_a_verification_flag_it_did_not_earn():
+    """Capping TO tool_observed must not assert a tool observation."""
+    capped = assess_outcome_corroboration(
+        "task_completed",
+        {"source": "sensor_sync", "test_command": "pytest -q"},
+        "agent_reported_tool_result",
+        ceiling="tool_observed",
+    )
+    assert capped.grade == "tool_observed"
+    assert capped.verified_fields == []
+
+
+def test_ceiling_for_verification_source_caps_only_self_attested_rows():
+    from src.outcome_corroboration import ceiling_for_verification_source
+
+    assert ceiling_for_verification_source("agent_reported_tool_result") == "tool_observed"
+    # Server-controlled provenance keeps the full range.
+    assert ceiling_for_verification_source("external_signal") is None
+    assert ceiling_for_verification_source("server_observation") is None
+    # Unknown/NULL provenance is deliberately not capped -- see the docstring.
+    assert ceiling_for_verification_source(None) is None
+
+
+def test_stored_self_attested_row_regrades_to_the_capped_value():
+    """A read-side re-grade must reproduce what was recorded, not what the
+    row's caller-supplied detail text can still claim."""
+    from src.outcome_corroboration import ceiling_for_verification_source
+
+    stored_detail = {"source": "sensor_sync", "summary": "did the thing"}
+    source = "agent_reported_tool_result"
+
+    uncapped = assess_outcome_corroboration("task_completed", stored_detail, source)
+    regraded = assess_outcome_corroboration(
+        "task_completed",
+        stored_detail,
+        source,
+        ceiling=ceiling_for_verification_source(source),
+    )
+
+    assert uncapped.grade == "substrate_observed"   # what the audit used to report
+    assert regraded.grade == "tool_observed"        # what was actually persisted

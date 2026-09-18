@@ -49,6 +49,25 @@ GRADE_ORDER = (
 
 _GRADE_RANK = {grade: rank for rank, grade in enumerate(GRADE_ORDER)}
 
+#: verification_source values that denote a caller attesting its OWN result.
+#: Such a row can never be graded above TOOL_OBSERVED -- at write time or when
+#: an audit surface re-grades it later -- because the two top grades assert a
+#: non-agent observation.
+SELF_ATTESTED_SOURCES = frozenset({"agent_reported_tool_result"})
+
+
+def ceiling_for_verification_source(verification_source: str | None) -> str | None:
+    """Ceiling implied by a row's recorded provenance, or None for no cap.
+
+    Read-side callers use this so a stored row re-grades to what was recorded,
+    not to what its caller-supplied ``detail`` text can still claim. Unknown or
+    NULL provenance is deliberately NOT capped here: that would silently
+    re-report pre-column history, which is a separate decision.
+    """
+    if verification_source in SELF_ATTESTED_SOURCES:
+        return TOOL_OBSERVED
+    return None
+
 _CLAIM_FIELD_FAMILIES = {
     "pr": {
         "pr",
@@ -305,7 +324,15 @@ def _verified_fields_from_contexts(
     external_verified: bool,
     substrate_verified: bool,
     tool_observed: bool,
+    trust_context_markers: bool = True,
 ) -> set[str]:
+    """Field-level verdicts for the claims in ``detail``.
+
+    ``trust_context_markers=False`` skips the per-context sweep below, whose
+    authority comes entirely from caller-supplied ``verified`` markers and
+    source strings. A capped grade passes False: a submitting path that cannot
+    self-certify its GRADE cannot self-certify those markers either.
+    """
     fields = (
         _declared_verified_fields(detail)
         if external_verified or substrate_verified
@@ -316,6 +343,8 @@ def _verified_fields_from_contexts(
         fields.update(claimed)
     if tool_observed:
         fields.update(claimed & {"command", "test"})
+    if not trust_context_markers:
+        return fields
     for context in _nested_contexts(detail):
         if not _has_verified_marker(context):
             continue
@@ -388,6 +417,25 @@ def assess_outcome_corroboration(
             "submitting path cannot self-certify"
         )
         grade = ceiling
+        # The field-level verdicts were derived from the PRE-cap evidence
+        # flags, so leaving them alone made a capped row report its claims
+        # verified while a genuinely tool_observed row reports the same fields
+        # unverified -- the cap would have made a self-attested row look MORE
+        # corroborated than an honest one. Re-derive them against the grade
+        # actually awarded. A flag is never raised here, only dropped: capping
+        # to TOOL_OBSERVED does not assert a tool observation that the evidence
+        # never showed.
+        external = external and _GRADE_RANK[grade] >= _GRADE_RANK[EXTERNALLY_VERIFIED]
+        substrate = substrate and _GRADE_RANK[grade] >= _GRADE_RANK[SUBSTRATE_OBSERVED]
+        tool = tool and _GRADE_RANK[grade] >= _GRADE_RANK[TOOL_OBSERVED]
+        verified = _verified_fields_from_contexts(
+            detail_map,
+            external_verified=external,
+            substrate_verified=substrate,
+            tool_observed=tool,
+            trust_context_markers=False,
+        )
+        unverified = claimed - verified
 
     if source is None:
         reasons.append("verification_source unset; treated conservatively")

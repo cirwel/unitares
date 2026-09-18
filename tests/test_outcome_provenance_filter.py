@@ -284,6 +284,77 @@ class TestServerDerivedProvenance:
         assert "_CORROBORATION_CEILING_KEY, None" in inline
 
 
+class TestCeilingIsActuallyWired:
+    """Behavioural cover for the cap, not source-text cover.
+
+    The tests above assert on `inspect.getsource` substrings. Deleting
+    `ceiling=corroboration_ceiling,` from the write path disables the cap
+    completely and still left all of them passing -- which is how this gap was
+    found. This one fails when the wiring is removed.
+    """
+
+    def test_write_path_forwards_the_ceiling_to_the_grader(self):
+        import asyncio
+        from unittest.mock import patch
+        from src.mcp_handlers.observability import outcome_events as oe
+
+        class _Stop(Exception):
+            """Abort the write path right after the grader call."""
+
+        seen = {}
+
+        def _spy(detail, *, outcome_type, verification_source, ceiling=None):
+            seen["ceiling"] = ceiling
+            raise _Stop()
+
+        args = {
+            "outcome_type": "task_completed",
+            "agent_id": "test-agent-ceiling",
+            "detail": {"source": "sensor_sync"},
+            "verification_source": "agent_reported_tool_result",
+            oe._CORROBORATION_CEILING_KEY: oe.TOOL_OBSERVED,
+        }
+        with patch.object(oe, "enrich_detail_with_corroboration", _spy):
+            try:
+                _run(oe._record_outcome_event_inline(args))
+            except _Stop:
+                pass
+
+        assert seen.get("ceiling") == "tool_observed", (
+            "the write path did not forward the ceiling to the grader -- the "
+            "cap is inert and every public outcome_event can self-label again"
+        )
+
+    def test_server_ingestion_forwards_no_ceiling(self):
+        """The same seam proves the server path is genuinely uncapped."""
+        import asyncio
+        from unittest.mock import patch
+        from src.mcp_handlers.observability import outcome_events as oe
+
+        class _Stop(Exception):
+            pass
+
+        seen = {}
+
+        def _spy(detail, *, outcome_type, verification_source, ceiling=None):
+            seen["ceiling"] = ceiling
+            raise _Stop()
+
+        args = {
+            "outcome_type": "trajectory_validated",
+            "agent_id": "test-agent-ceiling",
+            "detail": {"source": "trajectory_self_validation"},
+            "verification_source": "server_observation",
+        }
+        with patch.object(oe, "enrich_detail_with_corroboration", _spy):
+            try:
+                _run(oe._record_outcome_event_inline(args))
+            except _Stop:
+                pass
+
+        assert seen.get("ceiling") is None
+
+
 class TestCallerControlledEvidenceVocabulary:
     """Documents a caller-controlled path this PR does NOT close.
 
