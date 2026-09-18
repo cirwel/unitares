@@ -77,6 +77,9 @@ def test_key_ignores_local_diff_config(repo):
     ("VERDICT: CLEAN\nor\nVERDICT: FINDINGS(2)\n", ("FINDINGS", 2)),
     ("no verdict here", None),
     ("the VERDICT: CLEAN is inline, not a line", None),
+    # Codex round 2 on #2318: trailing content after the verdict must void it.
+    ("VERDICT: CLEAN\nactually, x.py:9 has a flaw\n", None),
+    ("VERDICT: CLEAN\n\n  \n", ("CLEAN", 0)),
 ])
 def test_parse_verdict(text, expected):
     assert rg.parse_verdict(text) == expected

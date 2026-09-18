@@ -110,6 +110,10 @@ the test run one.
 - The record is keyed on the diff (path + blob of every changed file against
   the merge base), not the commit, so a base merge that leaves the PR's files
   alone — including `draft-base-refresh.yml`'s — keeps it.
+- The gate proves a review was recorded, not that it was honest: every agent
+  posts through the same GitHub account, so a comment cannot distinguish a
+  real review from an author's own. A record whose reviewer is the PR's own
+  author is not a review.
 - Bot PRs (dependabot) get no exemption: the incident that motivated "no
   mechanical exemption" was a dependency bump.
 

@@ -39,6 +39,15 @@ access. The latest record whose key matches the head decides the status:
 A failed or expired run is recorded as FAILED, never as clean: absence of
 findings from a reviewer that did not finish is not a review.
 
+What the gate does NOT establish
+--------------------------------
+That the record was honest. Every agent on this repo posts through the
+operator's GitHub account, so a comment cannot tell a real review from one an
+author wrote about its own diff, and nothing here signs reviewer output. The
+gate makes a review impossible to FORGET and visible to check — the record and
+its full text sit on the PR — not impossible to fake by an author with write
+access. Treat a `record` whose reviewer is the PR's own author as no review.
+
 Cost
 ----
 The CI side reads comments with GITHUB_TOKEN and calls no model. The review
@@ -70,7 +79,7 @@ DEFAULT_BUDGET_S = 1800  # pipeline skill: clean codex completions ran 1-21 min
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 
-VERDICT_RE = re.compile(r"^\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*$", re.M)
+VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
     r"<!--\s*" + re.escape(MARKER) + r"\s+(?P<attrs>[^>]*?)\s*-->"
 )
@@ -204,10 +213,13 @@ def dispositions_complete(text: str, n: int) -> bool:
 
 
 def parse_verdict(text: str) -> tuple[str, int] | None:
-    matches = VERDICT_RE.findall(text or "")
-    if not matches:
+    # The verdict must be the LAST non-empty line: "VERDICT: CLEAN" followed
+    # by "actually, one more thing…" is not a clean review.
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    m = VERDICT_RE.fullmatch(lines[-1]) if lines else None
+    if m is None:
         return None
-    word, n = matches[-1]
+    word, n = m.groups()
     return ("CLEAN", 0) if word == "CLEAN" else ("FINDINGS", int(n))
 
 
