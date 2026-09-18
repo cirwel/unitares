@@ -213,3 +213,14 @@ def test_a_stale_last_message_is_not_posted_as_this_runs_verdict(tmp_path, monke
     monkeypatch.setattr(rg.subprocess, "Popen", lambda *a, **k: FakeProc())
     text, note = rg.run_reviewer("claude", "p", tmp_path, 5)
     assert note == "exit 0" and rg.parse_verdict(text) is None
+
+
+def test_key_handles_a_non_utf8_file_name(repo):
+    # Codex round 9 on #2318: decoding git's output as text crashed here.
+    # Built in the index, not on disk: APFS refuses non-UTF-8 names outright.
+    blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+                          input=b"x\n", capture_output=True, check=True).stdout.strip()
+    subprocess.run([b"git", b"-C", bytes(repo), b"update-index", b"--add",
+                    b"--cacheinfo", b"100644," + blob + b",bad-\xff.txt"], check=True)
+    _git(repo, "commit", "-q", "-m", "odd name")
+    assert len(rg.diff_key("master", "HEAD")) == 64

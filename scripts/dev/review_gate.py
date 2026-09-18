@@ -126,9 +126,13 @@ def gh_json(*args: str):
 
 def diff_key(base: str, head: str) -> str:
     mb = git("merge-base", base, head).strip()
-    raw = git("-c", "core.quotePath=true", "diff", "--raw", "--no-renames",
-              "--full-index", "--no-abbrev", "--no-ext-diff", "-z", mb, head)
-    return hashlib.sha256(raw.encode("utf-8", "surrogateescape")).hexdigest()
+    # Bytes, not text: -z keeps path bytes verbatim, and a non-UTF-8 file
+    # name must hash, not crash (a crash leaves the PR pending forever).
+    raw = subprocess.run(
+        ["git", "diff", "--raw", "--no-renames", "--full-index", "--no-abbrev",
+         "--no-ext-diff", "-z", mb, head],
+        capture_output=True, check=True).stdout
+    return hashlib.sha256(raw).hexdigest()
 
 
 def diff_text(base: str, head: str) -> str:
