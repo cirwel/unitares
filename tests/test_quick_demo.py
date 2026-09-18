@@ -148,3 +148,40 @@ def test_trajectory_stays_under_baseline_and_carries_no_confession():
         lowered = text.lower()
         for marker in confession_markers:
             assert marker not in lowered, f"confession-style step reintroduced: {text!r}"
+
+
+
+@pytest.mark.parametrize(
+    "tool_usage_stats",
+    [
+        None,
+        # A real demo run: the onboard call is attributed to the minted agent,
+        # so the server's 1-hour window holds one call for every check-in.
+        {"unique_tools": 1, "total_calls": 1, "error_rate": 0.0, "files_modified": 0},
+    ],
+    ids=["no-tool-usage", "one-onboard-call"],
+)
+def test_step4_description_is_not_divergence_evidence(tool_usage_stats):
+    """The docstring once said step 4's divergence was visible because its text
+    describes hard work under a low self-report. Derived complexity reads output
+    shape, not claims, so step 4 is the *least* divergent step and steps 5-6
+    (self-report above a short output) are the most. Driven through
+    ContinuityLayer.process_update, the method GovernanceMonitor calls on each
+    check-in, in trajectory order, so the tool-usage blend and cross-validation
+    branch are exercised too."""
+    from src.dual_log.continuity import ContinuityLayer
+
+    layer = ContinuityLayer("quick-demo-test")  # no redis: in-memory only
+    divergence = [
+        layer.process_update(
+            response_text=text,
+            self_complexity=complexity,
+            self_confidence=confidence,
+            client_session_id="s",
+            tool_usage_stats=tool_usage_stats,
+        ).complexity_divergence
+        for text, complexity, confidence in quick_demo.TRAJECTORY
+    ]
+
+    assert divergence[3] == min(divergence)
+    assert max(divergence) in (divergence[4], divergence[5])
