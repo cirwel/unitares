@@ -31,7 +31,7 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
 source_digests:
-  unitares/config/governance_config.py: "4b5515a262c2238d"
+  unitares/config/governance_config.py: "009d0d226d1ab71d"
   unitares/governance_core/coherence.py: "ef819003ee72b388"
   unitares/governance_core/parameters.py: "84bf47ca540bbc49"
   unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
