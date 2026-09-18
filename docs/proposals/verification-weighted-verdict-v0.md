@@ -187,6 +187,11 @@ What this does **not** do: it does not enable anything, does not recommend enabl
 anything, and does not discharge the gate. It makes one clause of one bullet below
 answerable with a number instead of a shrug.
 
+The floor's dormancy and its wake condition are recorded in
+[`docs/operations/dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
+(Theme 6), including the two cautions that apply to any number read out of the shadow
+record — the pronoun-free stratum, and unscored-is-not-cleared.
+
 **Still required before the flag is enabled in any live deployment** (this is the
 two-part gate — the draft can merge as inert scaffolding, but enabling is the deliberate
 act):
