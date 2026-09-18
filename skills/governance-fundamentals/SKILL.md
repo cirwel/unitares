@@ -48,7 +48,7 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/confidence.py: "00cc04e1f54278b4"
   unitares/src/eisv_telemetry.py: "24f1a47911850263"
-  unitares/src/services/runtime_queries.py: "70cfc8d1a7ee7975"
+  unitares/src/services/runtime_queries.py: "f948bb168a59aad4"
   unitares/src/mcp_handlers/response_formatter.py: "1dce49d5fa405c49"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
