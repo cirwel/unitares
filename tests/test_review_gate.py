@@ -149,3 +149,25 @@ def test_an_empty_dispositions_record_does_not_clear_the_gate():
     k = "k" * 64
     comments = [_comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="")]
     assert rg.latest_matching(comments, k).status()[0] == "pending"
+
+
+def test_a_later_clean_on_the_same_diff_does_not_clear_open_findings():
+    # Codex round 3 on #2318: re-rolling the reviewer (or `record`) until it
+    # says CLEAN must not drop a finding that was never fixed or disposed.
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FINDINGS", 1, False, "codex"), url="findings"),
+        _comment(rg.Record(k, "CLEAN", 0, False, "claude"), url="clean"),
+    ]
+    got = rg.latest_matching(comments, k)
+    assert got.url == "findings" and got.status()[0] == "pending"
+
+
+def test_disposed_findings_then_clean_is_clean():
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FINDINGS", 1, False, "codex")),
+        _comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="1. rebutted: x"),
+        _comment(rg.Record(k, "CLEAN", 0, False, "codex"), url="clean"),
+    ]
+    assert rg.latest_matching(comments, k).url == "clean"

@@ -181,8 +181,14 @@ def parse_record(body: str) -> Record | None:
 
 
 def latest_matching(comments: list[dict], key: str) -> Record | None:
-    """Latest trusted record for `key`. Comments arrive oldest first."""
-    found = None
+    """The record that decides `key`'s status. Comments arrive oldest first.
+
+    Normally the latest trusted record. But findings on a diff stay open until
+    they are disposed or the diff changes: a later CLEAN on the SAME diff — a
+    re-run that came back quieter, or a `record` — does not clear them, or
+    re-rolling the reviewer would be a way to drop a finding silently.
+    """
+    found = open_findings = None
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
             continue
@@ -193,6 +199,10 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
                 rec.disposed = False
             rec.url = c.get("html_url", "")
             found = rec
+            if rec.verdict == "FINDINGS":
+                open_findings = None if rec.disposed else rec
+    if open_findings is not None and found is not None and found.verdict == "CLEAN":
+        return open_findings
     return found
 
 
