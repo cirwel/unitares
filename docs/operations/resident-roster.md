@@ -218,10 +218,17 @@ that is quiet.
 
 An entry is skipped when it is missing `source`, `metric`, `window_seconds` or
 `threshold`; when `window_seconds`, `threshold` or `expected_cadence_s` is not
-a number (`expected_cadence_s` may be `null`, meaning event-driven, but must
-otherwise be positive); or when `source` or `metric` is not a string. A
-manifest whose top level is not a JSON object — a bare array, say — loads as
-empty, the same as an absent file.
+a number, or is one too large to use — `Infinity`, `1e999`, or a window past
+the range of a Python `timedelta` (`expected_cadence_s` may be `null`, meaning
+event-driven, but must otherwise be positive); or when `source` or `metric` is
+not a string.
+
+A manifest that cannot be read or parsed as JSON — including one that is not
+UTF-8, is nested past the JSON decoder's recursion limit, or holds an integer
+longer than Python's 4,300-digit limit — loads as empty with a `WARNING` naming
+the file and the error, and so does one whose top level is not a JSON object,
+such as a bare array. Reading is not bounded: a manifest path whose read never
+finishes, such as a FIFO with no writer, stalls whatever imports the registry.
 
 It degrades rather than refusing to start because of *where* the registry is
 built. It is built at module import, and every importer imports the module
