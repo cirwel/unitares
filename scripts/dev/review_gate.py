@@ -250,7 +250,8 @@ def repo_slug() -> str:
 
 
 def current_pr() -> dict | None:
-    proc = subprocess.run(["gh", "pr", "view", "--json", "number,headRefOid,headRefName"],
+    proc = subprocess.run(["gh", "pr", "view", "--json",
+                           "number,headRefOid,headRefName,baseRefName"],
                           text=True, capture_output=True)
     return json.loads(proc.stdout) if proc.returncode == 0 else None
 
@@ -300,15 +301,17 @@ def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
 
 def _resolve(args) -> tuple[int, str, str, str]:
     """PR number, repo, key, reviewer label for HEAD. Refuses a stale push."""
+    info = current_pr() if args.pr is None else gh_json(
+        "pr", "view", str(args.pr), "--json", "number,headRefOid,headRefName,baseRefName")
+    if info is None:
+        raise SystemExit("review_gate: no PR for this branch — ship it first (ship.sh opens one)")
+    # Key against the PR's own base, as CI does — not a fixed master.
+    args.base = args.base or f"origin/{info['baseRefName']}"
     remote, _, branch = args.base.partition("/")
     git("fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{args.base}",
         check=False)
     head = git("rev-parse", "HEAD").strip()
     key = diff_key(args.base, head)
-    info = current_pr() if args.pr is None else gh_json(
-        "pr", "view", str(args.pr), "--json", "number,headRefOid,headRefName")
-    if info is None:
-        raise SystemExit("review_gate: no PR for this branch — ship it first (ship.sh opens one)")
     pushed = info["headRefOid"]
     if pushed != head:
         known = subprocess.run(["git", "cat-file", "-e", f"{pushed}^{{commit}}"],
@@ -392,7 +395,7 @@ def cmd_dispose(args) -> int:
 
 
 def cmd_key(args) -> int:
-    print(diff_key(args.base, "HEAD"))
+    print(diff_key(args.base or DEFAULT_BASE, "HEAD"))
     return 0
 
 
@@ -430,7 +433,8 @@ def cmd_ci(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    p.add_argument("--base", default=DEFAULT_BASE)
+    p.add_argument("--base", default=None,
+                   help="base ref to key against (default: the PR's base branch on origin)")
     p.add_argument("--pr", type=int, default=None)
     sub = p.add_subparsers(dest="cmd", required=True)
 
