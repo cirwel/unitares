@@ -60,7 +60,7 @@ source_digests:
 
 ## What UNITARES Is
 
-UNITARES provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists. The thermodynamic / ODE model remains useful as a research lens and telemetry; do not present it as cold-start authority or live verdict authority.
+UNITARES provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists. The dynamical-systems (ODE) model remains useful as a research lens and telemetry; do not present it as cold-start authority or live verdict authority.
 
 ## EISV State Vector
 
