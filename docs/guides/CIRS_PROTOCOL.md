@@ -152,8 +152,8 @@ Most CIRS signals are emitted automatically during `process_agent_update()`. You
 | Hook | When it fires |
 |------|---------------|
 | Void-alert helper | After check-in if |V| > threshold |
-| State-announce helper | After every check-in |
-| Resonance-signal helper | If neighbor agents have similar state |
+| State-announce helper | Every fifth check-in — `auto_emit_state_announce` emits only when the update count is 1 or a multiple of 5 |
+| Resonance-signal helper | When the agent's own resonance flag changes — resonance-alert on entering, stability-restored on leaving |
 
 Additional standalone signals:
 - `resonance_alert` — emitted when multi-agent resonance detected

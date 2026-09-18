@@ -187,8 +187,8 @@ handle_my_group = action_router(
 
 The action-router helper handles action extraction, validation, error messages with valid
 actions + examples, parameter remapping, and MCP registration. Think about
-`pre_onboard_actions` deliberately: 6 of the 8 live routers use it, and omitting it gates
-every action behind the strict-identity check.
+`pre_onboard_actions` deliberately: 7 of the 8 live routers use it — `export` is the one
+that does not — and omitting it gates every action behind the strict-identity check.
 
 Individual handlers should use `register=False`:
 ```python

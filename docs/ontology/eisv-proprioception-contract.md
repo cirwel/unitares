@@ -712,10 +712,16 @@ calibration scoping; individuality remains UNIDENTIFIED** (corrected 2026-07-31;
 this row previously read "REFUTED BY CONSTRUCTION" and overstated).
 The mechanism is real and re-verified: `cal_I` carries 50–60% of I
 (`_compute_I` in `src/behavioral_sensor.py`) and comes from `get_mean_calibration_error`
-(`src/mcp_handlers/updates/context.py`), which takes no `agent_id` — it averages
-bins from a module-level singleton keyed by confidence range only, and `agent_id`
-appears **zero** times in `src/calibration.py`. Every agent receives the identical
-scalar on the same tick.
+(`src/mcp_handlers/updates/context.py`), whose live return is still the fleet
+mean — an unweighted average of the `compute_calibration_metrics()` bins with at
+least five samples, held in a module-level singleton keyed by confidence range
+only. `src/calibration.py` itself is no longer agent-blind: since #2194 it
+carries `bins_by_agent`, `tactical_bins_by_agent` and
+`compute_agent_calibration_candidate`, and `get_mean_calibration_error` records
+that per-agent estimate on the update context as
+`_calibration_signal["agent_candidate"]` under `mode: measurement_only` /
+`policy_applied: False`. The deployed input did not move: every agent still
+receives the identical scalar on the same tick.
 
 But the inference previously drawn from that mechanism does not follow, on three
 independent grounds:
