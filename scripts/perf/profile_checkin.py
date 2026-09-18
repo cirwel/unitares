@@ -315,11 +315,12 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "  note: enrich_mirror_signals (KG semantic search) is the known tail; it skips in\n"
             "  routine compact and is bounded by UNITARES_KG_SEARCH_TIMEOUT_S + cadence + dedup,\n"
-            "  so routine traffic pays little. What remains is real but modest, and structural:\n"
-            "  the anyio+asyncpg shared-loop amplification (CLAUDE.md 'Substrate Tax') — a bug\n"
-            "  class per-process substrates (BEAM/db_connection) lack by construction. On that\n"
-            "  architecture axis it is modest supporting evidence for such a substrate; it is\n"
-            "  not decided on latency and is not a priority-setter on its own."
+            "  so routine traffic pays little. What remains is real but modest, and its cause\n"
+            "  is open: the shared-loop amplification this shape was once credited to was\n"
+            "  re-attributed to a sequential-await loop (UNIFIED_ARCHITECTURE.md, 'asyncpg,\n"
+            "  Redis and the anyio scheduler'), so read a residual here as unattributed rather\n"
+            "  than as substrate evidence. It is not decided on latency and is not a\n"
+            "  priority-setter on its own."
         )
 
     print()
