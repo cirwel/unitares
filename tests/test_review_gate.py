@@ -244,3 +244,14 @@ def test_a_failed_rerun_does_not_hide_open_findings():
     ]
     got = rg.latest_matching(comments, k)
     assert got.url == "findings" and got.verdict == "FINDINGS" and not got.disposed
+
+
+def test_reviewer_input_survives_a_non_utf8_file_name(repo):
+    # Codex round 12 on #2318: diff_text decoded strictly and crashed.
+    blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+                          input=b"x\n", capture_output=True, check=True).stdout.strip()
+    subprocess.run([b"git", b"-C", bytes(repo), b"update-index", b"--add",
+                    b"--cacheinfo", b"100644," + blob + b",bad-\xff.txt"], check=True)
+    _git(repo, "commit", "-q", "-m", "odd name")
+    _git(repo, "config", "core.quotePath", "false")
+    assert "bad-" in rg.diff_text("master", "HEAD")

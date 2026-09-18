@@ -136,7 +136,10 @@ def diff_key(base: str, head: str) -> str:
 
 
 def diff_text(base: str, head: str) -> str:
-    return git("diff", "--no-color", "--no-ext-diff", f"{base}...{head}")
+    # Reviewer input only; undecodable path bytes become U+FFFD, not a crash.
+    out = subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", f"{base}...{head}"],
+                         capture_output=True, check=True).stdout
+    return out.decode("utf-8", "replace")
 
 
 # --------------------------------------------------------------------------
@@ -384,7 +387,10 @@ def cmd_review(args) -> int:
 
 
 def cmd_record(args) -> int:
-    pr, repo, key, _ = _resolve(args)
+    pr, repo, key, branch = _resolve(args)
+    if branch.startswith(f"{args.reviewer_name}/"):
+        raise SystemExit(f"review_gate: {args.reviewer_name} authored {branch}; its own "
+                         "record is not a review")
     text = Path(args.file).read_text()
     parsed = parse_verdict(text)
     if parsed is None:
