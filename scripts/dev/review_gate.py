@@ -188,7 +188,7 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
     re-run that came back quieter, or a `record` — does not clear them, or
     re-rolling the reviewer would be a way to drop a finding silently.
     """
-    found = open_findings = None
+    found, open_findings = None, []
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
             continue
@@ -200,9 +200,17 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
             rec.url = c.get("html_url", "")
             found = rec
             if rec.verdict == "FINDINGS":
-                open_findings = None if rec.disposed else rec
-    if open_findings is not None and found is not None and found.verdict == "CLEAN":
-        return open_findings
+                # A disposition answers ONE findings record — the most recent
+                # open one, with the same count — never every earlier one.
+                if not rec.disposed:
+                    open_findings.append(rec)
+                elif open_findings and open_findings[-1].findings == rec.findings:
+                    open_findings.pop()
+                else:
+                    rec.disposed = False  # answers nothing that is open
+                    open_findings.append(rec)
+    if open_findings and found is not None and (found.verdict == "CLEAN" or found.disposed):
+        return open_findings[-1]
     return found
 
 
@@ -314,6 +322,9 @@ def _resolve(args) -> tuple[int, str, str, str]:
 def cmd_review(args) -> int:
     pr, repo, key, branch = _resolve(args)
     reviewer = args.reviewer or default_reviewer(branch)
+    if branch.startswith(f"{reviewer}/"):
+        raise SystemExit(f"review_gate: {reviewer} does not review its own {branch} — "
+                         "the review is by the other model")
     existing = None if args.fresh else latest_matching(pr_comments(repo, pr), key)
     if existing and existing.verdict != "FAILED":
         state, desc = existing.status()
@@ -368,8 +379,8 @@ def cmd_record(args) -> int:
 def cmd_dispose(args) -> int:
     pr, repo, key, _ = _resolve(args)
     prior = latest_matching(pr_comments(repo, pr), key)
-    if prior is None or prior.verdict != "FINDINGS":
-        raise SystemExit("review_gate: no FINDINGS record for this diff to dispose")
+    if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
+        raise SystemExit("review_gate: no open FINDINGS record for this diff to dispose")
     text = Path(args.file).read_text()
     if not dispositions_complete(text, prior.findings):
         raise SystemExit(f"review_gate: dispositions need a numbered entry for each of the "

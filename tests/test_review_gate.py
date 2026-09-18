@@ -171,3 +171,29 @@ def test_disposed_findings_then_clean_is_clean():
         _comment(rg.Record(k, "CLEAN", 0, False, "codex"), url="clean"),
     ]
     assert rg.latest_matching(comments, k).url == "clean"
+
+
+def test_one_disposition_answers_one_findings_record():
+    # Codex round 4 on #2318: disposing a later FINDINGS(2) must not clear an
+    # earlier, unanswered FINDINGS(1) on the same diff.
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FINDINGS", 1, False, "codex"), url="first"),
+        _comment(rg.Record(k, "FINDINGS", 2, False, "claude"), url="second"),
+        _comment(rg.Record(k, "FINDINGS", 2, True, "claude"), url="disp2",
+                 text="1. fixed\n2. rebutted: y"),
+    ]
+    got = rg.latest_matching(comments, k)
+    assert got.url == "first" and got.status()[0] == "pending"
+    comments.append(_comment(rg.Record(k, "FINDINGS", 1, True, "codex"),
+                             url="disp1", text="1. fixed"))
+    assert rg.latest_matching(comments, k).status()[0] == "success"
+
+
+def test_a_disposition_with_the_wrong_count_answers_nothing():
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FINDINGS", 2, False, "codex")),
+        _comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="1. fixed"),
+    ]
+    assert rg.latest_matching(comments, k).status()[0] == "pending"
