@@ -208,6 +208,44 @@ pair, not on the source name. Residents that share both the source and the
 window share one fetch; a different window gets its own fetch and its own
 counts. A failed fetch marks only that pair's residents `source_error`.
 
+### A malformed entry costs that resident, not the roster
+
+An entry that cannot be built is **skipped with a `WARNING` naming the label
+and the error**, and the rest of the roster loads. Grep the server log for
+`resident-progress manifest entry` after editing the manifest — a skipped
+resident is simply never probed, which otherwise looks identical to a resident
+that is quiet.
+
+An entry is skipped when it is missing `source`, `metric`, `window_seconds` or
+`threshold`; when `window_seconds`, `threshold` or `expected_cadence_s` is not
+a number (`expected_cadence_s` may be `null`, meaning event-driven, but must
+otherwise be positive); or when `source` or `metric` is not a string. A
+manifest whose top level is not a JSON object — a bare array, say — loads as
+empty, the same as an absent file.
+
+It degrades rather than refusing to start because of *where* the registry is
+built. It is built at module import, and every importer imports the module
+lazily from inside an already-running server: the supervised
+`progress_flat_probe_task`, `/v1/progress_flat/recent`, and the silence
+detector's event-driven check. A raise therefore could not fail the start it
+would need to fail — it passed config load and server start, and only then
+stopped progress probing for **every** resident, leaving a background-task
+crash line as its only trace.
+
+That last importer is why the blast radius exceeded the probe.
+`background_tasks._get_expected_interval` consults `is_event_driven_label`
+first, inside a `try/except Exception: pass`. That `except` swallowed the
+import crash and fell through to the cadence fallbacks, so an event-driven
+resident carrying an `autonomous` tag went from exempt (no expected interval)
+to one of 300s — and the silence detector escalates
+`lifecycle_silent_critical` at 5x the interval. One unrelated typo in the
+manifest turned a quiet-but-healthy event-driven resident into a recurring
+false critical page.
+
+`ResidentConfig` itself still raises on a bad cadence. The skip is the manifest
+parser's policy for untrusted deployment config, not a relaxation of the
+dataclass guard, so a bad cadence constructed in code still fails loudly.
+
 ### Bringing your own progress source
 
 A deployment running an out-of-tree resident needs a metric that says whether
