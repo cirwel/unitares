@@ -22,15 +22,25 @@ sys.path.insert(0, str(project_root))
 # --- Unit tests for EmbeddingsService ---
 
 
-def test_module_import_does_not_load_sentence_transformers():
-    """Capability checks must not import the heavyweight model runtime."""
+@pytest.mark.parametrize("module", ["src.embeddings", "src.reranker"])
+def test_module_import_does_not_load_sentence_transformers(module):
+    """Capability checks must not import the heavyweight model runtime.
+
+    src.reranker is covered here too: it held a module-level
+    `from sentence_transformers import CrossEncoder` long after src.embeddings
+    deferred the same import (#1904 measured that deferral at
+    6.05s/618MB -> 1.00s/140MB). Only src.embeddings was guarded, so the
+    regression was invisible — any module-level import of src.reranker pulled
+    torch back into the process.
+    """
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "import sys; import src.embeddings; "
-                "assert 'sentence_transformers' not in sys.modules"
+                f"import sys; import {module}; "
+                "assert 'sentence_transformers' not in sys.modules, "
+                f"'{module} imported sentence_transformers at module scope'"
             ),
         ],
         cwd=project_root,
@@ -58,7 +68,12 @@ async def test_embed_returns_list_of_floats():
     # Inject mock model directly
     service._model = mock_model
 
-    result = await service.embed("test text")
+    # _ensure_model() gates on availability BEFORE returning an injected model,
+    # so this test passed only while sentence-transformers happened to be
+    # installed. It is now an opt-in extra, so state the assumption instead of
+    # inheriting it from the environment.
+    with patch("src.embeddings.SENTENCE_TRANSFORMERS_AVAILABLE", True):
+        result = await service.embed("test text")
 
     assert isinstance(result, list)
     assert len(result) == 384
@@ -80,7 +95,10 @@ async def test_embed_batch_returns_list_of_embeddings():
     service._model = mock_model
 
     texts = ["hello", "world", "test"]
-    result = await service.embed_batch(texts)
+    # Same reason as test_embed_returns_list_of_floats: the availability gate
+    # runs before the injected model is returned.
+    with patch("src.embeddings.SENTENCE_TRANSFORMERS_AVAILABLE", True):
+        result = await service.embed_batch(texts)
 
     assert isinstance(result, list)
     assert len(result) == 3

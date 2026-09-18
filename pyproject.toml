@@ -48,7 +48,6 @@ full = [
     "prometheus-client>=0.19.0,<1.0.0",
     "asyncpg>=0.29.0,<1.0.0",
     "redis>=5.0.0,<9.0.0",
-    "sentence-transformers>=2.2.0,<7.0.0",
     "requests>=2.31.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0.0",
     # Ed25519 signing/verification for the Agent Identity Credential (AIC)
@@ -58,6 +57,18 @@ full = [
     # Passkey ceremonies for the browser dashboard. Imported lazily so the
     # core (non-HTTP) install remains minimal.
     "webauthn>=2.8.0,<4.0.0",
+]
+# Semantic search for the knowledge graph. Separate from `full` because
+# sentence-transformers requires torch, whose Linux wheel metadata pulls
+# cuda-toolkit, cudnn, nccl, nvshmem and triton unconditionally — no GPU check,
+# no opt-out. Measured on 3.12: `.[full]` resolved to 5.9 GB with it and 162 MB
+# without, 92% of the difference being NVIDIA wheels. The container already
+# made this call (requirements-docker.txt, "saves ~1.3 GB"); this aligns the pip
+# paths with it. src/embeddings.py and src/reranker.py both degrade when it is
+# absent, so installing it is a choice about semantic search, not about whether
+# the server runs.
+embeddings = [
+    "sentence-transformers>=2.2.0,<7.0.0",
 ]
 dev = [
     "pytest>=7.4.0,<10.0.0",

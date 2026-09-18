@@ -21,10 +21,14 @@ Phase 3 of docs/plans/2026-04-20-kg-retrieval-rebuild.md.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from src.logging_utils import get_logger
+
+if TYPE_CHECKING:
+    from sentence_transformers import CrossEncoder
 
 logger = get_logger(__name__)
 
@@ -69,13 +73,16 @@ def reranker_enabled() -> bool:
     return _flag_enabled("UNITARES_ENABLE_RERANKER", default=False)
 
 
-try:
-    from sentence_transformers import CrossEncoder
-    CROSS_ENCODER_AVAILABLE = True
-except ImportError:
-    CROSS_ENCODER_AVAILABLE = False
+# Capability check only — importing sentence_transformers here pulled torch and
+# transformers into every process that merely imported this module. The same
+# deferral was applied to src/embeddings.py (#1904: 6.05s/618MB -> 1.00s/140MB)
+# and never to this module; the real import now lives in _ensure_model(), which
+# is the only place a model is actually loaded.
+CROSS_ENCODER_AVAILABLE = importlib.util.find_spec("sentence_transformers") is not None
+if not CROSS_ENCODER_AVAILABLE:
     logger.warning(
-        "sentence-transformers CrossEncoder not available; reranker disabled."
+        "sentence-transformers CrossEncoder not available; reranker disabled. "
+        'Install the extra: pip install -e ".[full,embeddings]" -c constraints.txt'
     )
 
 
@@ -108,6 +115,17 @@ class CrossEncoderReranker:
             loop = asyncio.get_running_loop()
 
             def _load():
+                # Deferred: this is the first point a model is genuinely needed,
+                # so it is the first point worth paying the torch import for.
+                # find_spec above proves the package resolves, not that the
+                # symbol exists, so a missing CrossEncoder still surfaces here
+                # as the same RuntimeError the availability gate raises.
+                try:
+                    from sentence_transformers import CrossEncoder
+                except ImportError as exc:
+                    raise RuntimeError(
+                        "sentence-transformers CrossEncoder not installed"
+                    ) from exc
                 logger.info(f"Loading cross-encoder reranker: {self.model_name} (key={self.model_key})")
                 model = CrossEncoder(self.model_name)
                 logger.info(f"Cross-encoder loaded: {self.model_name}")
