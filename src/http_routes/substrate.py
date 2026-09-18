@@ -403,6 +403,9 @@ async def http_harness_outcome(request):
 
     try:
         from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+        # Operator-gated route: vouched ingestion, so server-controlled
+        # provenance keeps the grader's full range.
+        args["_trusted_ingestion"] = True
         payload = await _record_outcome_event_inline(args)
         if "error" in payload:
             return JSONResponse(

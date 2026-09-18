@@ -244,90 +244,19 @@ class TestServerDerivedProvenance:
         )
 
 
-    def test_public_handler_caps_the_corroboration_grade(self):
-        """Stripping the explicit provenance keys does not reach the grader's
-        FREE-TEXT vocabulary (_source_text also reads source / evidence_source /
-        evidence_kind / observed_by / captured_by / epistemic_class), so
-        detail={"source": "sensor_sync"} still reached SUBSTRATE_OBSERVED 0.85.
-        The public path caps at TOOL_OBSERVED: the two top grades assert a
-        NON-AGENT observation, and this caller is an agent attesting itself.
-        """
-        import inspect
-        from src.mcp_handlers.observability import outcome_events as oe
+class TestCappingIsTheDefault:
+    """The 2026-09-18 dialectic review (a36255d62a1310f3) rejected an OPT-IN
+    ceiling: a future public write path that forgot to pass it would inherit
+    the full grade range silently. Trust is now opt-in and capping is the
+    default, so a path that forgets anything is capped rather than uncapped.
 
-        src = inspect.getsource(oe.handle_outcome_event)
-        code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
-        assert "_CORROBORATION_CEILING_KEY] = TOOL_OBSERVED" in code
-        # Assigned AFTER the arguments copy, so a caller supplying the key is
-        # overwritten rather than honoured -- same shape as verification_source.
-        assert code.index("_gate_args = {") < code.index("_CORROBORATION_CEILING_KEY]")
-
-    def test_cap_leaves_calibration_gate_membership_unchanged(self):
-        """The cap lands exactly ON the gate, not below it: capped rows still
-        train calibration, so this is the hardening the outcome_events comment
-        tracks -- not the grade-capping product decision deferred below."""
-        from src.mcp_handlers.observability.outcome_events import (
-            _MIN_TACTICAL_EVIDENCE_WEIGHT,
-        )
-        from src.outcome_corroboration import GRADE_WEIGHTS, TOOL_OBSERVED
-
-        assert GRADE_WEIGHTS[TOOL_OBSERVED] == _MIN_TACTICAL_EVIDENCE_WEIGHT
-
-    def test_internal_ingestion_keeps_the_full_grade_range(self):
-        """Server-controlled callers reach _record_outcome_event_inline
-        directly and pass no ceiling, so external_signal / server_observation
-        ingestion is unaffected."""
-        import inspect
-        from src.mcp_handlers.observability import outcome_events as oe
-
-        inline = inspect.getsource(oe._record_outcome_event_inline)
-        assert "_CORROBORATION_CEILING_KEY, None" in inline
-
-
-class TestCeilingIsActuallyWired:
-    """Behavioural cover for the cap, not source-text cover.
-
-    The tests above assert on `inspect.getsource` substrings. Deleting
-    `ceiling=corroboration_ceiling,` from the write path disables the cap
-    completely and still left all of them passing -- which is how this gap was
-    found. This one fails when the wiring is removed.
+    These are behavioural. The earlier versions asserted on `inspect.getsource`
+    substrings and all passed with the cap deleted outright.
     """
 
-    def test_write_path_forwards_the_ceiling_to_the_grader(self):
-        import asyncio
-        from unittest.mock import patch
-        from src.mcp_handlers.observability import outcome_events as oe
-
-        class _Stop(Exception):
-            """Abort the write path right after the grader call."""
-
-        seen = {}
-
-        def _spy(detail, *, outcome_type, verification_source, ceiling=None):
-            seen["ceiling"] = ceiling
-            raise _Stop()
-
-        args = {
-            "outcome_type": "task_completed",
-            "agent_id": "test-agent-ceiling",
-            "detail": {"source": "sensor_sync"},
-            "verification_source": "agent_reported_tool_result",
-            oe._CORROBORATION_CEILING_KEY: oe.TOOL_OBSERVED,
-        }
-        with patch.object(oe, "enrich_detail_with_corroboration", _spy):
-            try:
-                _run(oe._record_outcome_event_inline(args))
-            except _Stop:
-                pass
-
-        assert seen.get("ceiling") == "tool_observed", (
-            "the write path did not forward the ceiling to the grader -- the "
-            "cap is inert and every public outcome_event can self-label again"
-        )
-
-    def test_server_ingestion_forwards_no_ceiling(self):
-        """The same seam proves the server path is genuinely uncapped."""
-        import asyncio
+    @staticmethod
+    def _ceiling_seen(args):
+        """Run the real write path far enough to capture the grader call."""
         from unittest.mock import patch
         from src.mcp_handlers.observability import outcome_events as oe
 
@@ -340,19 +269,95 @@ class TestCeilingIsActuallyWired:
             seen["ceiling"] = ceiling
             raise _Stop()
 
-        args = {
-            "outcome_type": "trajectory_validated",
-            "agent_id": "test-agent-ceiling",
-            "detail": {"source": "trajectory_self_validation"},
-            "verification_source": "server_observation",
-        }
         with patch.object(oe, "enrich_detail_with_corroboration", _spy):
             try:
-                _run(oe._record_outcome_event_inline(args))
+                _run(oe._record_outcome_event_inline(dict(args)))
             except _Stop:
                 pass
+        return seen.get("ceiling", "NEVER_CALLED")
 
-        assert seen.get("ceiling") is None
+    def _base(self, **kw):
+        args = {
+            "outcome_type": "task_completed",
+            "agent_id": "test-agent-ceiling",
+            "detail": {"source": "sensor_sync"},
+        }
+        args.update(kw)
+        return args
+
+    def test_unvouched_write_is_capped(self):
+        assert self._ceiling_seen(
+            self._base(verification_source="agent_reported_tool_result")
+        ) == "tool_observed"
+
+    def test_unvouched_write_is_capped_even_claiming_server_provenance(self):
+        """The invariant that makes a forgotten path safe: an unvouched caller
+        is capped by what it IS, not by what it claims. Deriving the cap from
+        verification_source alone would re-expose the grader the moment a new
+        handler forgot the source downgrade -- the schema lets a caller ask for
+        external_signal."""
+        for claimed in ("external_signal", "server_observation"):
+            assert self._ceiling_seen(
+                self._base(verification_source=claimed)
+            ) == "tool_observed", claimed
+
+    def test_write_path_with_no_provenance_at_all_is_capped(self):
+        """Safe by omission: the enumeration condition in practice. Rather than
+        listing today's public entrypoints, this pins the property EVERY path
+        inherits -- pass nothing, get capped."""
+        assert self._ceiling_seen(self._base()) == "tool_observed"
+
+    def test_vouched_server_observation_keeps_the_full_range(self):
+        """The inversion must not silently disarm legitimate ingestion: the
+        operator-gated routes and in-process emitters still reach substrate and
+        external grades."""
+        assert self._ceiling_seen(
+            self._base(
+                outcome_type="trajectory_validated",
+                verification_source="server_observation",
+                _trusted_ingestion=True,
+            )
+        ) is None
+
+    def test_vouched_caller_does_not_get_a_blanket_pass(self):
+        """A vouched site that emits AGENT-attested rows -- the Phase-5 evidence
+        loop does exactly this -- keeps those rows capped."""
+        assert self._ceiling_seen(
+            self._base(
+                verification_source="agent_reported_tool_result",
+                _trusted_ingestion=True,
+            )
+        ) == "tool_observed"
+
+    def test_public_handler_strips_a_caller_supplied_trust_key(self):
+        """A caller must not be able to vouch for ITSELF. The invariant above is
+        behavioural; this guards the one line that keeps the key from reaching
+        it through the decorated MCP tool."""
+        import inspect
+        from src.mcp_handlers.observability import outcome_events as oe
+
+        src = inspect.getsource(oe.handle_outcome_event)
+        code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+        assert "_gate_args.pop(_TRUSTED_INGESTION_KEY, None)" in code
+
+    def test_trusted_call_sites_are_the_expected_four(self):
+        """A new `_trusted_ingestion=True` is a trust grant and should be a
+        deliberate, reviewable act -- not something that accretes."""
+        import pathlib as _pl
+
+        root = _pl.Path(__file__).parent.parent
+        vouched = sorted(
+            str(f.relative_to(root))
+            for f in root.glob("src/**/*.py")
+            if '"_trusted_ingestion": True' in f.read_text()
+            or 'args["_trusted_ingestion"] = True' in f.read_text()
+        )
+        assert vouched == [
+            "src/http_routes/sentinel.py",
+            "src/http_routes/substrate.py",
+            "src/mcp_handlers/dialectic/resolution.py",
+            "src/mcp_handlers/updates/phases.py",
+        ], vouched
 
 
 class TestCallerControlledEvidenceVocabulary:

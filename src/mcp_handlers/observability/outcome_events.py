@@ -28,6 +28,7 @@ from src.grounding.outcome_anchors import (
 from src.outcome_corroboration import (
     GRADE_WEIGHTS,
     TOOL_OBSERVED,
+    ceiling_for_verification_source,
     enrich_detail_with_corroboration,
 )
 logger = get_logger(__name__)
@@ -425,9 +426,24 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # (Phase-5 evidence loop, dialectic resolution) pass their own value
     # explicitly. Default here is the v1 schema default for safety.
     verification_source = arguments.get("verification_source") or "agent_reported_tool_result"
-    # Server-controlled ingestion leaves this unset and keeps the grader's full
-    # range; the public agent path sets it (see the outcome_event tool below).
-    corroboration_ceiling = arguments.pop(_CORROBORATION_CEILING_KEY, None)
+    # TRUST IS OPT-IN, CAPPING IS THE DEFAULT.
+    #
+    # An unvouched caller is capped at TOOL_OBSERVED whatever it claims -- not
+    # merely when it claims to be an agent. That is deliberate: deriving the cap
+    # from `verification_source` alone would re-expose the grader the moment a
+    # future public handler forgot the source downgrade, since the schema lets a
+    # caller ASK for external_signal.
+    #
+    # A vouched in-process or operator-gated caller still does not get a blanket
+    # pass: its ceiling comes from the provenance it recorded, so a trusted site
+    # that emits agent-attested rows (the Phase-5 evidence loop does) keeps those
+    # rows capped while its server-observed rows stay uncapped.
+    trusted_ingestion = bool(arguments.pop(_TRUSTED_INGESTION_KEY, False))
+    corroboration_ceiling = (
+        ceiling_for_verification_source(verification_source)
+        if trusted_ingestion
+        else TOOL_OBSERVED
+    )
     detail = enrich_detail_with_corroboration(
         detail,
         outcome_type=outcome_type,
@@ -702,9 +718,11 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
 
 _PROVENANCE_CLAIM_KEYS = frozenset({"verification_source", "phase5_emitter"})
 
-#: Internal, never caller-settable: the public MCP path assigns this AFTER
-#: copying ``arguments``, so a caller supplying it is overwritten, not honoured.
-_CORROBORATION_CEILING_KEY = "_corroboration_ceiling"
+#: Internal, never caller-settable. Its ABSENCE means untrusted, so a write
+#: path that forgets everything is capped rather than uncapped -- the inversion
+#: the 2026-09-18 dialectic review (a36255d62a1310f3) required. The public MCP
+#: path pops it off the caller's arguments below.
+_TRUSTED_INGESTION_KEY = "_trusted_ingestion"
 
 
 def _strip_provenance_claims(value):
@@ -839,13 +857,11 @@ async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextConten
     # evidence_kind / observed_by / captured_by / epistemic_class, none of them
     # stripped, and _has_substrate_evidence matches those against
     # _TRUSTED_SUBSTRATE_MARKERS with no verified-marker requirement -- so
-    # detail={"source": "sensor_sync"} still reached SUBSTRATE_OBSERVED (0.85),
-    # above the 0.65 calibration gate, on a bare assertion. Rather than teach
-    # the grader to distrust its own vocabulary (which server-controlled
-    # ingestion legitimately uses), cap the grade here, where the trust fact is
-    # already established: the two top grades assert that a NON-AGENT observer
-    # saw this, and an agent attesting its own result is not that observer.
-    _gate_args[_CORROBORATION_CEILING_KEY] = TOOL_OBSERVED
+    # detail={"source": "sensor_sync"} still reached SUBSTRATE_OBSERVED (0.85).
+    # The grade is capped in _record_outcome_event_inline, which now caps by
+    # default; this path only has to make sure the caller cannot vouch for
+    # ITSELF by supplying the internal trust key.
+    _gate_args.pop(_TRUSTED_INGESTION_KEY, None)
     if _claimed_source and _claimed_source != "agent_reported_tool_result":
         logger.info(
             "outcome_event: downgraded caller-claimed verification_source=%r to "
