@@ -224,3 +224,12 @@ def test_key_handles_a_non_utf8_file_name(repo):
                     b"--cacheinfo", b"100644," + blob + b",bad-\xff.txt"], check=True)
     _git(repo, "commit", "-q", "-m", "odd name")
     assert len(rg.diff_key("master", "HEAD")) == 64
+
+
+def test_a_reviewer_that_cannot_start_is_a_failure_not_an_exception(tmp_path, monkeypatch):
+    # Codex round 10 on #2318: a missing CLI raised instead of recording FAILED.
+    def boom(*a, **k):
+        raise FileNotFoundError("codex")
+    monkeypatch.setattr(rg.subprocess, "Popen", boom)
+    text, note = rg.run_reviewer("codex", "p", tmp_path, 5)
+    assert note.startswith("could not start codex")

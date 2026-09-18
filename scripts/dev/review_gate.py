@@ -285,8 +285,11 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     log = out_dir / "reviewer.log"
     with open(log, "w") as fh:
         # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
-        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh,
-                                stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+        except OSError as exc:  # reviewer CLI missing or not executable
+            return str(exc), f"could not start {reviewer}: {exc.__class__.__name__}"
         try:
             rc = proc.wait(timeout=budget_s)
         except subprocess.TimeoutExpired:

@@ -21,7 +21,8 @@ name: Review Gate
 
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # edited: a PR retargeted to another base has a different diff on the same head.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   issue_comment:
     types: [created, edited, deleted]
 
