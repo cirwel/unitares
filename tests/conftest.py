@@ -738,7 +738,7 @@ async def live_postgres_backend():
         TEST_DB_URL,
         can_connect_to_test_db,
         ensure_test_database_schema,
-        TRUNCATE_SQL,
+        truncate_test_tables,
         CALIBRATION_RESET_SQL,
     )
 
@@ -759,7 +759,7 @@ async def live_postgres_backend():
     await be.init()
 
     async with be.acquire() as conn:
-        await conn.execute(TRUNCATE_SQL)
+        await truncate_test_tables(conn)
         await conn.execute(CALIBRATION_RESET_SQL)
 
     yield be

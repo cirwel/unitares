@@ -63,20 +63,74 @@ class ResidentConfig:
 RESIDENT_PROGRESS_MANIFEST_ENV = "UNITARES_RESIDENT_PROGRESS_MANIFEST"
 
 
+# Everything one malformed entry can raise while being built: KeyError (a
+# required key is absent), ValueError (int("soon"), or ResidentConfig's own
+# cadence guard), TypeError (int(None), or a non-string source/metric).
+_ENTRY_ERRORS = (KeyError, ValueError, TypeError)
+
+
+def _build_resident_config(entry: dict) -> ResidentConfig:
+    """Build one ResidentConfig from a manifest entry, raising on bad input.
+
+    ``source`` and ``metric`` are checked for stringness here because nothing
+    downstream does: ``ResidentConfig`` is a plain dataclass that does not
+    validate field types, and the probe groups its fetches on
+    ``(source, window)`` tuples — so a nested object as a source is unhashable
+    and raises inside ``tick()``, taking down the probe for the whole fleet
+    rather than for one resident.
+    """
+    for key in ("source", "metric"):
+        if not isinstance(entry[key], str):
+            raise TypeError(
+                f"{key} must be a string, got {type(entry[key]).__name__}"
+            )
+    cadence = entry.get("expected_cadence_s")
+    return ResidentConfig(
+        source=entry["source"],
+        metric=entry["metric"],
+        window=timedelta(seconds=int(entry["window_seconds"])),
+        threshold=int(entry["threshold"]),
+        expected_cadence_s=None if cadence is None else int(cadence),
+    )
+
+
 def parse_resident_progress_manifest(doc: dict) -> dict[str, ResidentConfig]:
-    """Build the label→ResidentConfig registry from a parsed manifest dict."""
+    """Build the label→ResidentConfig registry from a parsed manifest dict.
+
+    A malformed entry is skipped with a WARNING naming it, and the rest of the
+    roster still loads — the same way ``load_resident_progress_registry``
+    degrades on a bad *file*. Raising here instead escapes the module import,
+    and every importer of this module imports it lazily inside an already
+    running server, so a one-entry typo passed config load and server start
+    and only then stopped progress probing for every resident, leaving a
+    background-task crash line as its only trace. ``ResidentConfig`` still
+    raises on a bad cadence: skipping is this parser's policy for untrusted
+    deployment config, not a relaxation of the dataclass guard.
+    """
     registry: dict[str, ResidentConfig] = {}
+    skipped = 0
     for label, entry in doc.items():
         # Underscore-prefixed keys (e.g. "_comment") are manifest metadata.
         if label.startswith("_") or not isinstance(entry, dict):
             continue
-        cadence = entry.get("expected_cadence_s")
-        registry[label] = ResidentConfig(
-            source=entry["source"],
-            metric=entry["metric"],
-            window=timedelta(seconds=int(entry["window_seconds"])),
-            threshold=int(entry["threshold"]),
-            expected_cadence_s=None if cadence is None else int(cadence),
+        try:
+            registry[label] = _build_resident_config(entry)
+        except _ENTRY_ERRORS as e:
+            skipped += 1
+            logger.warning(
+                "resident-progress manifest entry %r is malformed "
+                "(%s: %s); skipping it and loading the rest of the roster",
+                label, type(e).__name__, e,
+            )
+    if skipped and not registry:
+        # Say which empty this is. An empty registry probes nobody, and
+        # "no manifest configured" is the user-agnostic default, so without
+        # this line a wholly-rejected manifest reads in the log exactly like
+        # a deployment that never wanted the probe.
+        logger.warning(
+            "resident-progress manifest named %d resident(s) and every one "
+            "was skipped; probing no residents",
+            skipped,
         )
     return registry
 
@@ -109,6 +163,17 @@ def load_resident_progress_registry(
         logger.warning(
             "resident-progress manifest %s unreadable (%s); probing no residents",
             manifest_path, e,
+        )
+        return {}
+    if not isinstance(doc, dict):
+        # A bare array or string is valid JSON but not a manifest, so it never
+        # reaches the JSONDecodeError arm above — without this it raised
+        # AttributeError out of the import, the same escape a malformed entry
+        # used to take.
+        logger.warning(
+            "resident-progress manifest %s is a %s, not an object; "
+            "probing no residents",
+            manifest_path, type(doc).__name__,
         )
         return {}
     return parse_resident_progress_manifest(doc)
