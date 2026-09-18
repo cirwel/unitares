@@ -19,9 +19,15 @@ UNITARES_DEMO_URL=http://127.0.0.1:18767/v1/tools/call.
 What this shows:
 - The agent onboards and gets a real UUID + session.
 - Six check-ins land and each returns a well-formed decision + four scores.
-- Complexity divergence is visible on step 4, where the self-reported
-  complexity (0.25) contradicts the work the text describes. That signal is
-  server-derived and does not require the agent to cooperate.
+- What "server-derived complexity" does and does not read. The server
+  estimates complexity from the *shape* of the output (length, code blocks,
+  list items, paragraphs, questions, tool mentions), never from what the text
+  claims about the work. Step 4 describes a hard rewrite under a low
+  self-report (0.25), but it is one plain sentence, so the server reads it as
+  simple and its complexity divergence is the smallest of the six. The large
+  divergences are steps 5 and 6, where the self-report (0.6, 0.7) exceeds what
+  the short output shows. An agent's description of difficulty is not
+  evidence of difficulty; tests/test_quick_demo.py pins this ordering.
 - Warmup position, printed per step. Scoring switches from fixed thresholds to
   the agent's own baseline at 25 check-ins (``is_baselined``, derived from
   ``BASELINE_WARMUP_UPDATES`` in ``src/behavioral_state.py``); this run reaches
@@ -97,8 +103,8 @@ def _health_url() -> str:
 
 # (response_text, complexity_self_report, confidence_self_report)
 # Inputs a real agent loop would plausibly emit: three routine check-ins, one
-# where the self-reported complexity contradicts the described work, then
-# declining confidence. Indices 0-2 are the clean head that
+# whose text describes more work than it self-reports, then declining
+# confidence. Indices 0-2 are the clean head that
 # tests/integration/test_drift_trajectory_fullstack.py asserts against.
 #
 # There is deliberately no step where the agent confesses a failure in its own
@@ -109,8 +115,9 @@ TRAJECTORY = [
     ("Refactored auth middleware; tests pass.",                              0.3, 0.85),
     ("Added rate limiter; rolled out behind flag.",                          0.35, 0.85),
     ("Reviewed PR #482, requested one change.",                              0.25, 0.9),
-    # Complexity divergence: self-report says trivial, the text describes
-    # three new invariants and a lease-ladder rework. Server-derived signal.
+    # The text *describes* three new invariants and a lease-ladder rework under
+    # a self-report of 0.25. The server does not read descriptions: one plain
+    # sentence derives as simple, so this step's divergence is the smallest.
     ("Rewrote the session-pool acquisition path under contention; "
      "added 3 new invariants, reworked the lease ladder, "
      "and shimmed the asyncpg cursor wrap.",                                  0.25, 0.85),

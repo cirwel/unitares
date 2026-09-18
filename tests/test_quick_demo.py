@@ -148,3 +148,24 @@ def test_trajectory_stays_under_baseline_and_carries_no_confession():
         lowered = text.lower()
         for marker in confession_markers:
             assert marker not in lowered, f"confession-style step reintroduced: {text!r}"
+
+
+def test_step4_description_is_not_divergence_evidence():
+    """The docstring once said step 4's divergence was visible because its text
+    describes hard work under a low self-report. Derived complexity reads output
+    shape, not claims, so step 4 is the *least* divergent step and steps 5-6
+    (self-report above a short output) are the most. Pin that ordering so the
+    demo's prose cannot drift back into describing a signal the server lacks."""
+    from src.dual_log.continuity import compute_continuity_metrics
+    from src.dual_log.operational import create_operational_entry
+    from src.dual_log.reflective import create_reflective_entry
+
+    divergence = []
+    for text, complexity, confidence in quick_demo.TRAJECTORY:
+        op = create_operational_entry("demo", text, "s")
+        refl = create_reflective_entry("demo", complexity=complexity, confidence=confidence)
+        divergence.append(compute_continuity_metrics(op, refl).complexity_divergence)
+
+    assert divergence[3] == min(divergence)
+    assert divergence[4] > divergence[3] and divergence[5] > divergence[3]
+    assert max(divergence) in (divergence[4], divergence[5])
