@@ -425,10 +425,14 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # (Phase-5 evidence loop, dialectic resolution) pass their own value
     # explicitly. Default here is the v1 schema default for safety.
     verification_source = arguments.get("verification_source") or "agent_reported_tool_result"
+    # Server-controlled ingestion leaves this unset and keeps the grader's full
+    # range; the public agent path sets it (see the outcome_event tool below).
+    corroboration_ceiling = arguments.pop(_CORROBORATION_CEILING_KEY, None)
     detail = enrich_detail_with_corroboration(
         detail,
         outcome_type=outcome_type,
         verification_source=verification_source,
+        ceiling=corroboration_ceiling,
     )
 
     evidence_weight = float(detail.get("evidence_weight") or 0.0)
@@ -698,6 +702,10 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
 
 _PROVENANCE_CLAIM_KEYS = frozenset({"verification_source", "phase5_emitter"})
 
+#: Internal, never caller-settable: the public MCP path assigns this AFTER
+#: copying ``arguments``, so a caller supplying it is overwritten, not honoured.
+_CORROBORATION_CEILING_KEY = "_corroboration_ceiling"
+
 
 def _strip_provenance_claims(value):
     """Remove caller-claimable provenance keys from ``detail`` at every depth.
@@ -826,6 +834,18 @@ async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextConten
     # it means restructuring the grader's trust model, not sanitizing input.
     if _gate_args.get("detail"):
         _gate_args["detail"] = _strip_provenance_claims(_gate_args["detail"])
+    # Stripping the explicit keys does not reach the grader's FREE-TEXT source
+    # vocabulary: _source_text also reads source / evidence_source /
+    # evidence_kind / observed_by / captured_by / epistemic_class, none of them
+    # stripped, and _has_substrate_evidence matches those against
+    # _TRUSTED_SUBSTRATE_MARKERS with no verified-marker requirement -- so
+    # detail={"source": "sensor_sync"} still reached SUBSTRATE_OBSERVED (0.85),
+    # above the 0.65 calibration gate, on a bare assertion. Rather than teach
+    # the grader to distrust its own vocabulary (which server-controlled
+    # ingestion legitimately uses), cap the grade here, where the trust fact is
+    # already established: the two top grades assert that a NON-AGENT observer
+    # saw this, and an agent attesting its own result is not that observer.
+    _gate_args[_CORROBORATION_CEILING_KEY] = TOOL_OBSERVED
     if _claimed_source and _claimed_source != "agent_reported_tool_result":
         logger.info(
             "outcome_event: downgraded caller-claimed verification_source=%r to "

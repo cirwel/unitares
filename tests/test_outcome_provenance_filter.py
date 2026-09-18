@@ -244,6 +244,46 @@ class TestServerDerivedProvenance:
         )
 
 
+    def test_public_handler_caps_the_corroboration_grade(self):
+        """Stripping the explicit provenance keys does not reach the grader's
+        FREE-TEXT vocabulary (_source_text also reads source / evidence_source /
+        evidence_kind / observed_by / captured_by / epistemic_class), so
+        detail={"source": "sensor_sync"} still reached SUBSTRATE_OBSERVED 0.85.
+        The public path caps at TOOL_OBSERVED: the two top grades assert a
+        NON-AGENT observation, and this caller is an agent attesting itself.
+        """
+        import inspect
+        from src.mcp_handlers.observability import outcome_events as oe
+
+        src = inspect.getsource(oe.handle_outcome_event)
+        code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+        assert "_CORROBORATION_CEILING_KEY] = TOOL_OBSERVED" in code
+        # Assigned AFTER the arguments copy, so a caller supplying the key is
+        # overwritten rather than honoured -- same shape as verification_source.
+        assert code.index("_gate_args = {") < code.index("_CORROBORATION_CEILING_KEY]")
+
+    def test_cap_leaves_calibration_gate_membership_unchanged(self):
+        """The cap lands exactly ON the gate, not below it: capped rows still
+        train calibration, so this is the hardening the outcome_events comment
+        tracks -- not the grade-capping product decision deferred below."""
+        from src.mcp_handlers.observability.outcome_events import (
+            _MIN_TACTICAL_EVIDENCE_WEIGHT,
+        )
+        from src.outcome_corroboration import GRADE_WEIGHTS, TOOL_OBSERVED
+
+        assert GRADE_WEIGHTS[TOOL_OBSERVED] == _MIN_TACTICAL_EVIDENCE_WEIGHT
+
+    def test_internal_ingestion_keeps_the_full_grade_range(self):
+        """Server-controlled callers reach _record_outcome_event_inline
+        directly and pass no ceiling, so external_signal / server_observation
+        ingestion is unaffected."""
+        import inspect
+        from src.mcp_handlers.observability import outcome_events as oe
+
+        inline = inspect.getsource(oe._record_outcome_event_inline)
+        assert "_CORROBORATION_CEILING_KEY, None" in inline
+
+
 class TestCallerControlledEvidenceVocabulary:
     """Documents a caller-controlled path this PR does NOT close.
 

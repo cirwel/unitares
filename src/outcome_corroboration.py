@@ -35,6 +35,20 @@ GRADE_RISK = {
     EXTERNALLY_VERIFIED: "low",
 }
 
+#: Grades ordered weakest -> strongest. A ``ceiling`` clamps a computed grade to
+#: at most the named tier: the two top grades assert a NON-AGENT observation, so
+#: a path that already knows its caller is an agent attesting its own result can
+#: cap there without the grader having to distrust its own vocabulary.
+GRADE_ORDER = (
+    CLAIM_ONLY,
+    SELF_REPORT_WITH_REFS,
+    TOOL_OBSERVED,
+    SUBSTRATE_OBSERVED,
+    EXTERNALLY_VERIFIED,
+)
+
+_GRADE_RANK = {grade: rank for rank, grade in enumerate(GRADE_ORDER)}
+
 _CLAIM_FIELD_FAMILIES = {
     "pr": {
         "pr",
@@ -326,8 +340,15 @@ def assess_outcome_corroboration(
     outcome_type: str,
     detail: Mapping[str, Any] | None = None,
     verification_source: str | None = None,
+    ceiling: str | None = None,
 ) -> CorroborationAssessment:
-    """Grade the independent evidence visible for an outcome event."""
+    """Grade the independent evidence visible for an outcome event.
+
+    ``ceiling`` clamps the result to at most that grade. Callers use it when the
+    submitting path itself establishes an upper bound on what the evidence can
+    be -- an agent attesting its own result cannot reach a grade that asserts
+    someone else observed it, whatever its ``detail`` says.
+    """
     detail_map = _as_dict(detail)
     source = verification_source or detail_map.get("verification_source")
     source = str(source) if source else None
@@ -361,6 +382,13 @@ def assess_outcome_corroboration(
         grade = CLAIM_ONLY
         reasons.append("no independent evidence beyond the claim")
 
+    if ceiling in _GRADE_RANK and _GRADE_RANK[grade] > _GRADE_RANK[ceiling]:
+        reasons.append(
+            f"grade capped at {ceiling}: {grade} asserts an observation the "
+            "submitting path cannot self-certify"
+        )
+        grade = ceiling
+
     if source is None:
         reasons.append("verification_source unset; treated conservatively")
     elif source == "agent_reported_tool_result" and grade in {CLAIM_ONLY, SELF_REPORT_WITH_REFS}:
@@ -385,6 +413,7 @@ def enrich_detail_with_corroboration(
     *,
     outcome_type: str,
     verification_source: str | None,
+    ceiling: str | None = None,
 ) -> dict[str, Any]:
     """Return a detail copy with corroboration metadata added."""
     payload = _as_dict(detail)
@@ -392,6 +421,7 @@ def enrich_detail_with_corroboration(
         outcome_type=outcome_type,
         detail=payload,
         verification_source=verification_source,
+        ceiling=ceiling,
     )
     payload.update(assessment.as_metadata())
     return payload
