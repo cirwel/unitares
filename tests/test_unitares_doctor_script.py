@@ -949,6 +949,30 @@ def test_grounding_stage_live_passes_when_flowing(doctor, monkeypatch):
     assert result.status == doctor.Status.PASS
 
 
+def test_verification_floor_shadow_recorded_warns_on_traffic_with_no_rows(
+    doctor, monkeypatch
+):
+    # The failure this exists to catch (#2169): the shadow ran on every check-in
+    # and stored nothing, which looks exactly like a shadow that found nothing.
+    _mock_psql(doctor, monkeypatch, "0|3144\n")
+    result = doctor.check_verification_floor_shadow_recorded("postgresql://x/y")
+    assert result.status == doctor.Status.WARN
+    assert "NOT RECORDED" in result.message
+
+
+def test_verification_floor_shadow_recorded_skips_without_checkins(doctor, monkeypatch):
+    # No traffic is not a silent instrument; there was nothing to read.
+    _mock_psql(doctor, monkeypatch, "0|0\n")
+    result = doctor.check_verification_floor_shadow_recorded("postgresql://x/y")
+    assert result.status == doctor.Status.SKIP
+
+
+def test_verification_floor_shadow_recorded_passes_when_flowing(doctor, monkeypatch):
+    _mock_psql(doctor, monkeypatch, "3144|3144\n")
+    result = doctor.check_verification_floor_shadow_recorded("postgresql://x/y")
+    assert result.status == doctor.Status.PASS
+
+
 def test_label_join_overlap_warns_on_disjoint_populations(doctor, monkeypatch):
     _mock_psql(doctor, monkeypatch, "26|126|0\n")
     result = doctor.check_label_join_overlap("postgresql://x/y")

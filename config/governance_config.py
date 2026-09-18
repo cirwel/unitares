@@ -445,14 +445,25 @@ class GovernanceConfig:
     # layer and is council-gated (docs/proposals/verification-weighted-verdict-v0.md).
     VERIFICATION_FLOOR_ENABLED = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR', 'false').lower() == 'true'
 
-    # Shadow of the verification floor: compute and surface the SAME deterministic
-    # signal with ZERO verdict/risk effect, so live traffic accumulates the
+    # Shadow of the verification floor: compute the SAME deterministic signal
+    # with ZERO verdict/risk effect, so live traffic accumulates the
     # false-positive/recall record the proposal's own acceptance gate requires
     # before any enable decision (verification-weighted-verdict-v0.md — "a real
     # false-positive-regression pass on a larger benign corpus"). Default ON:
-    # pure regex on response_text, telemetry-only, surfaced only when it would
-    # fire. Kill switch: GOVERNANCE_VERIFICATION_FLOOR_SHADOW=false. Inert while
-    # the real floor is enabled (the applied signal is already surfaced).
+    # pure regex on response_text, telemetry-only.
+    #
+    # It is surfaced in-band only when it WOULD fire, and recorded durably in
+    # audit.events as `verification_floor_shadow` — including the non-firings,
+    # which are the denominator the rate needs. Between the Phase-2 wiring and
+    # #2169 only the in-band surfacing existed, so the record this comment
+    # promised accumulated nowhere: see src/verification_floor_shadow.py for the
+    # sink and scripts/analysis/verification_floor_shadow_read.py for the read.
+    # Sink verbosity: GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD=all|firings|off.
+    #
+    # Kill switch: GOVERNANCE_VERIFICATION_FLOOR_SHADOW=false. This flag governs
+    # the in-band surfacing and the verdict no-op only; the SINK records under
+    # both flag states (rows carry `applied`), so enabling the real floor does
+    # not silence the evidence trail.
     VERIFICATION_FLOOR_SHADOW = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR_SHADOW', 'true').lower() == 'true'
 
     # Cold-start risk confirmation telemetry.  The shadow evaluator records

@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**169 flags.**
+**170 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -33,6 +33,7 @@ index; that one is the curated decision record.
 | `GOVERNANCE_URL` | varies: `'http://localhost:8767/mcp/'` (src/gateway/constants.py); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | read by _governance_url() | src/gateway/constants.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py (+2 more) |
 | `GOVERNANCE_VERIFICATION_FLOOR` | `'false'` | — | config/governance_config.py |
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW` | `'true'` | — | config/governance_config.py |
+| `GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD` | `''` | Which rows this deployment writes: ``all`` (default), ``firings``, ``off`` | src/verification_floor_shadow.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_ADJUDICATION_ABSTAIN_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
@@ -111,10 +112,10 @@ index; that one is the curated decision record.
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
-| `UNITARES_IDENTITY_STRICT` | varies: `'log'` (config/governance_config.py:1550); `IDENTITY_STRICT_MODE` (config/governance_config.py:1559) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
+| `UNITARES_IDENTITY_STRICT` | varies: `'log'` (config/governance_config.py:1561); `IDENTITY_STRICT_MODE` (config/governance_config.py:1570) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_INCLUDE_API_KEY_IN_RESPONSES` | `None (no reader fallback)` | Include onboarding guidance, API key hints, welcome message. | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py |
-| `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1672); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1683) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
+| `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1683); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1694) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
 | `UNITARES_KG_PROACTIVE_EVERY` | `'0'` | Add a cadence gate to explicit check-in KG recall; never enable it alone | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_KG_SEARCH_TIMEOUT_S` | `'0.25'` | — | src/mcp_handlers/updates/enrichments.py |
@@ -155,7 +156,7 @@ index; that one is the curated decision record.
 | `UNITARES_PAUSE_AUTO_EXPIRE_SECONDS` | `str(72 * 3600)` | — | config/governance_config.py |
 | `UNITARES_PHASE5_EVIDENCE_WRITE` | `''` | Record recent tool results when Phase-5 evidence writes are enabled. | src/mcp_handlers/updates/phases.py |
 | `UNITARES_PHI_TELEMETRY_ONLY` | `'1'` | Whether Φ is demoted to telemetry (UNITARES_PHI_TELEMETRY_ONLY) | config/governance_config.py |
-| `UNITARES_PREFIX_BIND_FINGERPRINT` | varies: `'off'` (config/governance_config.py:1634); `PREFIX_BIND_FINGERPRINT_MODE` (config/governance_config.py:1643) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
+| `UNITARES_PREFIX_BIND_FINGERPRINT` | varies: `'off'` (config/governance_config.py:1645); `PREFIX_BIND_FINGERPRINT_MODE` (config/governance_config.py:1654) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_PROCESS_UPDATE_RESPONSE_MODE` | `'auto'` | Apply response mode filtering to fully-built response_data | src/mcp_handlers/response_formatter.py, src/mcp_handlers/updates/pipeline.py |
 | `UNITARES_PROGRESS_FLAT_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Resident-progress telemetry probe | src/background_tasks.py |
 | `UNITARES_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
@@ -173,7 +174,7 @@ index; that one is the curated decision record.
 | `UNITARES_SENSOR_COUPLING` | `None (no reader fallback)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py |
 | `UNITARES_SERVER_LOCK_FILE` | `'.mcp_server.lock'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |
 | `UNITARES_SERVER_PID_FILE` | `'.mcp_server.pid'` | Resolve the server PID/lock path or use the repo-local data path | src/process_management.py |
-| `UNITARES_SESSION_FINGERPRINT_CHECK` | varies: `'log'` (config/governance_config.py:1586); `SESSION_FINGERPRINT_CHECK_MODE` (config/governance_config.py:1597) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
+| `UNITARES_SESSION_FINGERPRINT_CHECK` | varies: `'log'` (config/governance_config.py:1597); `SESSION_FINGERPRINT_CHECK_MODE` (config/governance_config.py:1608) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_SESSION_MIRROR_APPLY` | `''` | Whether the resolver READS the PostgreSQL session mirror as a source of truth (UNITARES_SESSION_MIRROR_APPLY) | config/governance_config.py |
 | `UNITARES_SESSION_MIRROR_SHADOW` | `''` | Whether to dual-write session/identity bindings into the PostgreSQL mirror tables (core.session_bindings, core.onboard_pins) alongside the R | config/governance_config.py |
 | `UNITARES_STDIO_PROXY_HTTP_BEARER_TOKEN` | `None (no reader fallback)` | — | src/mcp_server_std.py |

@@ -144,6 +144,49 @@ What shipped:
   benign → still `proceed` (no false pause); flag-on must not downgrade a genuine
   high-drift pause (one-sided). Plus the pure-fn escalate-only/never-lower cases.
 
+### Phase 2.5 — the shadow's record (landed)
+
+The Phase-2 wiring also shipped a **shadow** (`GOVERNANCE_VERIFICATION_FLOOR_SHADOW`,
+default **ON**): the same deterministic signal with zero verdict/risk effect, so live
+traffic would accumulate the false-positive record this section asks for. It did not.
+Until issue #2169 a shadow firing was written onto the returned result dict and onto
+`_last_governance_result`, and that was the whole lifecycle — no table, no column, no
+aggregator, no reader. Every persistence writer on the check-in path is key-selective,
+so the key was dropped by all of them. The evidence the enable decision waits on was
+being computed once per check-in, on every default deployment, and discarded.
+
+What landed for #2169:
+
+- **Sink:** `src/verification_floor_shadow.py` → `audit.events` as
+  `verification_floor_shadow`, the same sink and monthly-partition retention as
+  `grounding_shadow` and `coherence_gate_shadow`. No migration; the table is generic
+  and already indexed on `(event_type, ts DESC)`.
+- **A denominator, not a log of firings.** The question this gate asks is a *rate*, so
+  the default record mode writes a row for **every** evaluation, not only the
+  would-fires. `GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD=all|firings|off` narrows it,
+  and the mode is stamped on every row so a later reader can tell "no non-firings
+  occurred" from "this deployment was configured not to write them."
+- **The counterfactual, not just the score.** Each row carries the pre-floor
+  verdict/risk pair, the pair `apply_verification_floor` produced from it (through the
+  same pure function the floor itself uses), and the action the deployment actually took.
+  The candidate false positives are the rows where the fleet proceeded and the floor
+  would have raised the verdict.
+- **Both flag states, one instrument.** `applied` distinguishes a shadow row from an
+  enforced one. Recording only the shadow would recreate the same hole one flag flip
+  later, and would leave "no rows against live traffic" permanently ambiguous.
+- **Input shape is a stratum, never a filter.** The detector reads English verb-object
+  prose, but a first-person pronoun is neither necessary nor sufficient — a pronoun-free
+  confession scores 0.7975 / high-risk. Every rate draws its numerator and denominator
+  from the same stratum, so none can exceed 1.
+- **Read:** `scripts/analysis/verification_floor_shadow_read.py`. It reports the rate
+  over scoreable shadow rows, breaks it down by input stratum, partitions out simulation
+  and applied rows, and **refuses to divide** when the window's rows carry no denominator
+  — reporting the four states a zero can be in instead.
+
+What this does **not** do: it does not enable anything, does not recommend enabling
+anything, and does not discharge the gate. It makes one clause of one bullet below
+answerable with a number instead of a shrug.
+
 **Still required before the flag is enabled in any live deployment** (this is the
 two-part gate — the draft can merge as inert scaffolding, but enabling is the deliberate
 act):
@@ -151,7 +194,10 @@ act):
 - The owners' sign-off and a review of the safety envelope: the same two-part gate
   `continuous-verdict-blending-v0.md` states for verdict-path changes.
 - A real false-positive-regression pass on a larger benign-coding corpus (the bundled
-  eval corpus is small by design).
+  eval corpus is small by design). Live shadow traffic is now recorded against a
+  denominator and can serve as that corpus — see Phase 2.5. Recording it is not running
+  it: a soak that has not yet accumulated rows produces a zero that says "not recorded",
+  not "no false positives".
 - Decision: should a verification-driven pause carry its own `reason` string
   (currently it reuses the self-attested-risk pause message; the `verification_floor`
   block already discloses provenance, but the prose could be sharper).
@@ -170,6 +216,9 @@ act):
 - [x] (Phase 2) actuator wiring landed **default-off**: `apply_verification_floor` + gated
   `process_update` call site + `verification_floor` result surfacing + interior safety
   tests (`tests/test_verification_floor_wiring.py`); 212 existing governance/φ tests still green.
+- [x] (Phase 2.5) the shadow's durable sink + denominator + reader
+  (`src/verification_floor_shadow.py`, `scripts/analysis/verification_floor_shadow_read.py`),
+  closing issue #2169 — the shadow ran default-on and persisted nowhere.
 - [ ] (Phase 2 enable) the owners' sign-off and a review of the safety envelope, plus a
   larger false-positive-regression corpus, before the flag is turned on in any live
   deployment.

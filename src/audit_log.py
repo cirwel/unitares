@@ -225,6 +225,36 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_verification_floor_shadow(self, agent_id: str, payload: Dict):
+        """Record one verification-floor shadow evaluation.
+
+        The floor runs in shadow by default (``GOVERNANCE_VERIFICATION_FLOOR_SHADOW``)
+        while the floor itself is off, so that the false-positive/recall record
+        its enable decision requires accumulates on live traffic. Before #2169
+        that record accumulated nowhere: a firing was written onto the returned
+        result dict and discarded with the process.
+
+        Measurement only — ``applied`` is always False and nothing reads this to
+        make a decision. The payload's shape is owned by
+        :func:`src.verification_floor_shadow.evaluate`, which is also where the
+        denominator contract is documented: the default record mode emits a row
+        for every evaluation, not only for firings, because the question is a
+        rate and a numerator alone cannot answer it.
+
+        Passed through as a whole dict rather than expanded into keyword
+        arguments: the instrument owns its schema (it is versioned in-band as
+        ``schema``), and a 20-parameter signature would have to be edited in
+        lockstep with it for no gain.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="verification_floor_shadow",
+            confidence=0.0,
+            details=dict(payload or {}),
+        )
+        self._write_entry(entry)
+
     def log_pause_auto_expired(self, agent_id: str,
                                 original_paused_at: Optional[str],
                                 elapsed_seconds: float):
