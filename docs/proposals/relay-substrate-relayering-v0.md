@@ -1,10 +1,11 @@
 # Re-layering on NeMo Relay — exporter and gate shipped, substrate decision packet open (v0)
 
-**Status:** DRAFT decision packet, 2026-09-16. The integration it describes is
-built and tested (`unitares_sdk.integrations.nemo_relay`, optional extra); no
-runtime posture, flag, threshold, or roadmap commitment changes with this
-document. The three parking questions below are operator decisions, and none
-is recorded as taken.
+**Status:** Decision recorded 2026-09-17 and revised the same day after
+adversarial review; drafted 2026-09-16. The integration it describes is built
+and tested (`unitares_sdk.integrations.nemo_relay`, optional extra). Two of the
+three questions are decided and the execute-half question is deliberately left
+open; see *Decision*. No runtime posture, flag, or threshold changes, and
+nothing is parked or retired.
 **Tracking:** companion to the roadmap's *Now* item (independent evidence,
 #1607) and to the BEAM roadmap's V0.4 resolution and the signed Wave 3
 go-decision, which this packet does not reopen.
@@ -82,19 +83,154 @@ put it. That is a scope question for the operator, raised once, here.
 4. Publish the integration upstream as a NeMo Agent Toolkit plugin package
    once the Relay path has one external operator behind it.
 
-## Ninety-day evidence gate
+## Decision (operator, 2026-09-17)
 
-The re-layering is judged on evidence that will exist by mid-December 2026,
-not on this week's reading:
+The operator adopted the recommendation on 2026-09-17, by the option letters in
+the decision table above. The record below was revised the same day after an
+adversarial review through the Codex host adapter, which returned two blocking
+findings against the first draft; both are fixed here and named in *What the
+review changed*.
 
-- one operator other than the maintainer running the Relay path under the
-  independent-operator cohort protocol (`independent-operator-cohort-preregistration-v0.md`);
-- the side-by-side harness run named above, reported per deployment and never
-  pooled;
-- the upstream plugin submission's review state.
+| # | Surface | State | Authority | Deciding evidence | Not authorised |
+|---|---|---|---|---|---|
+| 1 | Record kernel | **Decided: keep.** No change to anything. | Operator, 2026-09-17 | — | — |
+| 2 | Host hook chain | **Decided: option (b).** New harness integrations are written against the Relay plugin; the existing `session-start` / `post-edit` / `post-stop` chain keeps running unchanged for every harness it serves. | Operator, 2026-09-17 | Side-by-side run, for option (c) only | Retiring the hook chain. Option (c) is unavailable until the run exists. |
+| 3 | Governed-effect execute plane | **No decision.** Option (b) is the *hypothesis the design read tests*; (a) and (c) remain live alternatives. | None taken | The design read (charter below) | Anything. Nothing is parked, flagged off, prioritised, or deleted, and no option holds default status. |
+| 4 | Upstream publication | **Decided: publish first**, reversing the packet's ordering. | Operator, 2026-09-17 | — | Any efficacy claim riding on the submission. |
+| 5 | Surface lease plane / Plexus | **Unchanged**, out of scope. | — | — | — |
 
-A fair zero on any of these banks the datum and moves to the next lever; it
-does not close the track.
+### Row 3 records no decision, and that is deliberate
+
+The first draft of this record adopted option (b) "as direction only, not
+executed." The review found that formulation harmful, and it was right: naming
+a preferred option before its deciding evidence exists biases the read toward
+confirming that option rather than comparing three, and it shifts the burden so
+that later evidence must overturn an adopted direction instead of informing an
+open choice. That is the failure the shared contract's rule against stating a
+deciding standard after the fact exists to prevent.
+
+Nothing is lost by declining to decide. The signed Wave 3 decision
+(`wave-3-go-decision-2026-08-16.md`, GO-WITH-REDUCED-SCOPE, 2026-08-22)
+authorises *scope, not an implementation start*: "Building begins only after
+that gate exists and is met. No implementation PR may cite this signature as
+its authority." The execute half is therefore permitted subject to a gate that
+does not yet exist, not obliged. Deferring a decision defers nothing that was
+scheduled to be built, which also answers the review's question about whether
+this relitigates Wave 3 by execution: it does not, because Wave 3 authorised no
+execution to relitigate.
+
+**Design-read charter.** The read compares (a), (b) and (c) as live options and
+must state disconfirming conditions for each before it begins. Its subject is
+whether an intercept-based commit path can carry the S7 strong-tier
+re-certification and the per-effect veto without a second credential boundary.
+The review named the shape the answer needs: a failure-mode and authority
+matrix covering identity binding, intent, decision, veto, actual execution,
+replacement, retry, timeout, audit durability and recovery — because an
+in-process intercept can block, replace, retry or fail before the record sees
+the intended action, and the record can veto on state the runtime cannot
+atomically observe. Split-brain accountability is the risk the read exists to
+rule in or out. The read carries no implementation authority; a gate document
+under Wave 3's own terms still owes ratification before anything is built.
+
+**The read was written on 2026-09-17** and is at
+[`execute-plane-design-read-v0.md`](execute-plane-design-read-v0.md), its
+conditions pre-registered in a commit before its analysis. **Row 3's status is
+unchanged by it** — the read concluding is not the operator deciding, and the
+read has no authority to fill the row in. It reports that the intercept option
+is not ruled out on the conditions it registered, that the custodian plane
+carries three properties an intercept structurally cannot (exclusion, execution
+by a party other than the proposer, crash-durable recovery), and that the
+evidence supports a composition none of the three option letters expresses. It
+asks the operator one question in return: whether row 3's three options are
+still the right three.
+
+### Row 4 changes an item's governance role, and says so
+
+The packet made upstream publication conditional on an external operator
+already running the Relay path. That ordering is circular on its face: it makes
+publication contingent on an outcome publication was meant to help produce.
+Reversing it is the operator's decision, taken on 2026-09-17.
+
+Two corrections to how the first draft argued it, both from the review:
+
+- **The registry is not established as an acquisition channel.** The first
+  draft claimed the NeMo Agent Toolkit's third-party plugin registry is the most
+  plausible route by which an unknown operator would find this integration.
+  That is an unproven empirical claim, and cheaper channels exist that the draft
+  ignored: a release announcement, an ecosystem issue or discussion, a documented
+  pilot invitation, direct outreach. The circularity above stands without the
+  claim; the claim is withdrawn. Whether the registry is browsed by operators
+  seeking plugins, accepts this package, and permits install without
+  maintainer-mediated setup is unknown and is part of what submitting will
+  establish.
+- **The external-operator item's role changed; it was not clarified.** The first
+  draft said the item returns to "what it always was." That was wrong. In the
+  packet it was an explicit precondition on publishing, and demoting it to
+  telemetry and the evidence path for efficacy claims is a substantive change in
+  its decision role, not a re-description. Recording it as a clarification would
+  have been exactly the retroactive move the measurement-authority rule forbids.
+
+**Consequence that follows, and is owed.** Publication changes who can
+encounter, install and self-select into the cohort, which touches recruitment
+channel, population, version exposure and support burden. The pre-registered
+independent-operator cohort protocol
+(`independent-operator-cohort-preregistration-v0.md`) is **not** amended by this
+decision, and its stop rule, independence criteria and per-deployment reporting
+are untouched. But before any recruitment occurs, that protocol owes a dated
+clarification distinguishing registry discovery from cohort enrollment and
+stating that discovery through publication is permitted. Publishing before that
+clarification exists is not authorised here.
+
+### What replaces the ninety-day evidence gate
+
+The packet named mid-December 2026. Two of its three items are
+maintainer-controlled and arrive by being done rather than by being waited for,
+so the date was doing no evidence work on them. The first draft removed the date
+outright. The review found that a defect, and it was right: the date was the only
+mechanism making an un-started action visible as overdue, and without it
+provisional choices harden silently while "named work" sits indefinitely.
+
+The date returns as a **process control**, which is a different instrument from
+an evidence gate:
+
+| Item | Instrument | On 2026-11-03 |
+|---|---|---|
+| Side-by-side harness run: one harness under both paths against the same server, comparing identity binding, check-in count within cadence tolerance, and pause delivery. Reported per deployment, never pooled. | Named action; sole condition on row 2's option (c) | Report done or not done. If not done, the operator renews, redirects or stops it explicitly. |
+| Design read on the execute plane, per the charter above | Named action, **written 2026-09-17**. Concluding it does not decide row 3 — it has no authority to, and row 3 stays undecided until the operator acts | The item reports done. Row 3's "no decision" status is renewed explicitly, decided, or the track is stopped; the read's question about whether the three options are still the right three is answered or deferred on the record. |
+| One operator other than the maintainer running the Relay path | Telemetry, and the evidence path for efficacy claims — **changed from a publication precondition on 2026-09-17**, see row 4 | Reported as a count, with no authority to retire anything. A fair zero banks the datum and moves to the next lever. |
+
+The 2026-11-03 checkpoint reports status and forces an explicit renew-or-stop.
+It reads no outcome, grades nothing, and authorises no removal. It is unrelated
+to the registered 2026-12-01 confirmatory read, which it deliberately precedes
+and must not be confused with, and it falls clear of that protocol's
+2026-11-15 publication blackout.
+
+### What this decision does not do
+
+- It does not reopen the BEAM V0.4 resolution or the signed Wave 3 decision,
+  for the reason given under row 3: that signature authorised scope and
+  explicitly not an implementation start.
+- It does not amend, weaken or anticipate the pre-registered cohort protocol.
+  It does create an obligation against it, stated under row 4.
+- It parks nothing, retires nothing, enables no flag, deletes nothing.
+- It grades no capability on a usage count, and adds no efficacy claim.
+
+### What the review changed
+
+An adversarial review was requested through the Codex host adapter on
+2026-09-17 (advisory model evidence, not a governed review verdict; a governed
+verdict would come from `request_review`). It returned seven findings against
+the first draft of this record. Two were blocking and both are fixed above:
+row 3's "adopted as direction" became "no decision" with a charter, and the
+deleted date returned as a dated process control. Three were should-fix and are
+also fixed: the registry claim is withdrawn, the external-operator demotion is
+recorded as a role change rather than a clarification with its protocol
+obligation named, and the Wave 3 question is answered from the signed text
+rather than asserted. The review's remaining points — the split-brain failure
+mode and the status table — are folded into the charter and the table at the
+top of this section. Its own summary named the biggest error as treating the
+external-operator condition as though it had always been telemetry; that
+correction is the paragraph under row 4.
 
 ## Risks
 

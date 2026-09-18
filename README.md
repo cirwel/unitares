@@ -11,7 +11,7 @@ Give every process an identity. Keep claims, evidence, reviews, and outcomes
 connected. Recover work across restarts, context loss, and handoffs.
 
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
-[![Python](https://img.shields.io/badge/python-3.12+-5C544A?style=flat-square&labelColor=1A1612)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.14+-5C544A?style=flat-square&labelColor=1A1612)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-5C544A?style=flat-square&labelColor=1A1612)](LICENSE)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19647159-7A1F1F?style=flat-square&labelColor=1A1612)](https://doi.org/10.5281/zenodo.19647159)
 
@@ -47,6 +47,12 @@ recoverable even when the process that started it is gone.
   checkpoints in an agent's loop.
 - **Reconstruction** — give a successor the records needed to understand and
   continue earlier work.
+
+These are mechanisms that run and leave records, which is a different claim from
+improving outcomes. The frozen outcome-lift read did not establish predictive
+lift — inconclusive rather than ruled out — and prevention or improvement from
+pausing remains untested. The [claim ledger](docs/EVIDENCE_AND_LIMITS.md) marks
+which side of that line each capability sits on.
 
 Together, these form an operator-owned accountability layer across coding
 agents, research agents, background agents, and custom runtimes. What it adds

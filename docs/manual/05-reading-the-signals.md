@@ -103,9 +103,10 @@ best-of-candidates null (selective p = 0.070–0.567). Unadjusted lift sometimes
 appears, usually in `prior_risk`, `prior_s`, or dispersion, but none clears
 p < 0.05 after that correction. There is **no demonstrated prevention**. A
 `NON_DETECTION` slice does not separate "no association" from "too small a cohort
-to see one"; the
-[power audit](../operations/falsifiability-power-audit-2026-08-23.md) measures
-which applies here. Run both yourself before treating EISV as load-bearing.
+to see one", and the
+[power audit](../operations/falsifiability-power-audit-2026-08-23.md) does not
+settle which applies: it withdrew its original power table and states that it
+"cannot quantify what it could have detected" for the frozen cohort. Run both yourself before treating EISV as load-bearing.
 
 For optional intuition (not a spec),
 [`../essays/tonality-metaphor.md`](../essays/tonality-metaphor.md) uses a bounded

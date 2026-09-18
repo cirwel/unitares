@@ -46,6 +46,18 @@ by releases and canonical documentation, not by this file.
   ([#1606](https://github.com/cirwel/unitares/issues/1606)).
 - Maintain and test the compatibility map for the server, SDK, governance
   plugin, and host adapters.
+- Submit the NeMo Relay integration upstream as a NeMo Agent Toolkit plugin
+  package, once the cohort protocol carries the clarification that submission
+  owes it; run one harness side by side under the Relay path and the existing
+  hook chain against the same server; and answer the execute-plane design read,
+  [`docs/proposals/execute-plane-design-read-v0.md`](docs/proposals/execute-plane-design-read-v0.md),
+  written 2026-09-17 against conditions pre-registered before its analysis. It
+  decides nothing and asks one question back: whether row 3's three options are
+  still the right three, given that the evidence supports a composition none of
+  them expresses. All three follow from the 2026-09-17 decision in
+  [`docs/proposals/relay-substrate-relayering-v0.md`](docs/proposals/relay-substrate-relayering-v0.md)
+  and report at its 2026-11-03 renew-or-stop checkpoint. None carries an
+  efficacy claim.
 
 ## Recently shipped (see releases and the changelog for detail)
 

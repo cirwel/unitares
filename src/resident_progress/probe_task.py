@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from src.resident_progress.heartbeat import HeartbeatStatus
 from src.resident_progress.registry import (
     RESIDENT_PROGRESS_REGISTRY,
+    ResidentConfig,
     resolve_resident_uuid,
 )
 from src.resident_progress.snapshot_writer import SnapshotRow
@@ -17,6 +18,17 @@ from src.resident_progress.snapshot_writer import SnapshotRow
 logger = logging.getLogger(__name__)
 
 STARTUP_GRACE_TICKS = 2
+
+
+def _source_group(cfg: ResidentConfig) -> tuple[str, int]:
+    """The (source, window_seconds) pair a resident is fetched and read under.
+
+    Several residents may name the same source. Residents that also share a
+    window share one fetch; a different window is a separate fetch with its
+    own counts and its own error, so both the fetch and the read are keyed
+    here, never on the source name alone.
+    """
+    return cfg.source, int(cfg.window.total_seconds())
 
 
 class ProgressFlatProbe:
@@ -58,21 +70,21 @@ class ProgressFlatProbe:
         # Step 3: group sources, fetch in parallel with isolated errors
         groups: dict[tuple[str, int], list[str]] = defaultdict(list)
         for label, agent_uuid in resolved.items():
-            cfg = RESIDENT_PROGRESS_REGISTRY[label]
-            groups[(cfg.source, int(cfg.window.total_seconds()))].append(agent_uuid)
+            groups[_source_group(RESIDENT_PROGRESS_REGISTRY[label])].append(agent_uuid)
 
-        async def _call_source(name, window_s, uuids):
+        async def _call_source(group, uuids):
+            name, window_s = group
             try:
                 out = await self._sources[name].fetch(uuids, timedelta(seconds=window_s))
-                return name, out, None
+                return group, out, None
             except Exception as e:
-                return name, None, f"{type(e).__name__}: {e}"
+                return group, None, f"{type(e).__name__}: {e}"
 
         results = await asyncio.gather(*[
-            _call_source(n, w, u) for (n, w), u in groups.items()
+            _call_source(group, uuids) for group, uuids in groups.items()
         ])
-        source_outputs = {n: out for n, out, err in results if err is None}
-        source_errors = {n: err for n, out, err in results if err is not None}
+        source_outputs = {g: out for g, out, err in results if err is None}
+        source_errors = {g: err for g, out, err in results if err is not None}
 
         # Step 4: heartbeat in parallel. Pass per-resident cadence from
         # the registry so non-continuous residents (Vigil 30min,
@@ -102,9 +114,10 @@ class ProgressFlatProbe:
         resident_rows: list[SnapshotRow] = []
         for label, agent_uuid in resolved.items():
             cfg = RESIDENT_PROGRESS_REGISTRY[label]
-            window_s = int(cfg.window.total_seconds())
+            group = _source_group(cfg)
+            window_s = group[1]
             hb = hb_by_uuid[agent_uuid]
-            if cfg.source in source_errors:
+            if group in source_errors:
                 row = SnapshotRow(
                     probe_tick_id=tick_id, ticked_at=now,
                     resident_label=label, resident_uuid=agent_uuid,
@@ -113,7 +126,7 @@ class ProgressFlatProbe:
                     metric_below_threshold=None, heartbeat_alive=hb.alive,
                     candidate=False, suppressed_reason="source_error",
                     error_details={"source": cfg.source,
-                                   "error": source_errors[cfg.source]},
+                                   "error": source_errors[group]},
                     liveness_inputs=hb.to_jsonable(),
                     loop_detector_state=None,
                 )
@@ -130,7 +143,7 @@ class ProgressFlatProbe:
                     loop_detector_state=None,
                 )
             else:
-                metric = source_outputs[cfg.source].get(agent_uuid, 0)
+                metric = source_outputs[group].get(agent_uuid, 0)
                 below = metric < cfg.threshold
                 # Distinguish "never checked in" from "went silent". A fresh
                 # resident with last_update=None looks identical to a long
@@ -208,19 +221,3 @@ class ProgressFlatProbe:
                     logger.warning(
                         "[PROGRESS_FLAT] candidate audit emit failed: %s", e,
                     )
-
-
-def _verify_unique_source_names() -> None:
-    seen = set()
-    for cfg in RESIDENT_PROGRESS_REGISTRY.values():
-        if cfg.source in seen:
-            raise RuntimeError(
-                f"resident-progress registry has duplicate source name "
-                f"'{cfg.source}' — orchestrator's source_outputs dict cannot "
-                f"distinguish them. If you intentionally share a source across "
-                f"residents, change source_outputs to key on (name, window) tuple."
-            )
-        seen.add(cfg.source)
-
-
-_verify_unique_source_names()

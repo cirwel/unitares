@@ -22,15 +22,25 @@ sys.path.insert(0, str(project_root))
 # --- Unit tests for EmbeddingsService ---
 
 
-def test_module_import_does_not_load_sentence_transformers():
-    """Capability checks must not import the heavyweight model runtime."""
+@pytest.mark.parametrize("module", ["src.embeddings", "src.reranker"])
+def test_module_import_does_not_load_sentence_transformers(module):
+    """Capability checks must not import the heavyweight model runtime.
+
+    src.reranker is covered here too: it held a module-level
+    `from sentence_transformers import CrossEncoder` long after src.embeddings
+    deferred the same import (#1904 measured that deferral at
+    6.05s/618MB -> 1.00s/140MB). Only src.embeddings was guarded, so the
+    regression was invisible — any module-level import of src.reranker pulled
+    torch back into the process.
+    """
     result = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "import sys; import src.embeddings; "
-                "assert 'sentence_transformers' not in sys.modules"
+                f"import sys; import {module}; "
+                "assert 'sentence_transformers' not in sys.modules, "
+                f"'{module} imported sentence_transformers at module scope'"
             ),
         ],
         cwd=project_root,

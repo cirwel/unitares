@@ -5,7 +5,7 @@
   and replace all PLACEHOLDER values with your actual paths and credentials.
 
   Required changes:
-    - /PATH/TO/PYTHON3     -> your Python 3.12+ interpreter
+    - /PATH/TO/PYTHON3     -> your Python 3.14+ interpreter
     - /PATH/TO/UNITARES    -> your unitares project checkout
     - /YOUR/HOME           -> your home directory
     - ALLOWED_HOSTS/ORIGINS -> your LAN IPs or remove if localhost-only

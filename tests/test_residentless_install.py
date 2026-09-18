@@ -26,6 +26,7 @@ config, no name means anything.
 """
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -41,6 +42,7 @@ from src.http_routes.residents import (
     _load_resident_silence_seconds,
     _resolve_resident_labels,
 )
+from src.resident_progress.probe_task import ProgressFlatProbe
 
 
 @pytest.fixture
@@ -153,6 +155,37 @@ class TestDefaultsCarryNoFleet:
     def test_an_adopter_can_declare_their_own(self, monkeypatch, residentless):
         monkeypatch.setenv("UNITARES_RESIDENT_SILENCE_SECONDS", "kestrel=900,tern=86400")
         assert _load_resident_silence_seconds() == {"kestrel": 900, "tern": 86400}
+
+
+class TestTheProgressProbeRunsWithNoManifest:
+    @pytest.mark.asyncio
+    async def test_a_tick_probes_nobody_and_records_only_itself(self, monkeypatch):
+        # The progress roster is its own manifest (UNITARES_RESIDENT_PROGRESS_MANIFEST),
+        # empty by default. The tick groups residents by (source, window); with
+        # no residents there is no group, so nothing is fetched or evaluated and
+        # the probe's own row is the whole write.
+        monkeypatch.setattr(
+            "src.resident_progress.probe_task.RESIDENT_PROGRESS_REGISTRY", {}
+        )
+        source = MagicMock(fetch=AsyncMock())
+        heartbeat = MagicMock(evaluate=AsyncMock())
+        writer = MagicMock(write=AsyncMock())
+        audit = MagicMock(emit=AsyncMock())
+
+        await ProgressFlatProbe(
+            sources_by_name={"agent_checkins": source},
+            heartbeat_evaluator=heartbeat,
+            writer=writer,
+            audit_emitter=audit,
+        ).tick()
+
+        source.fetch.assert_not_awaited()
+        heartbeat.evaluate.assert_not_awaited()
+        audit.emit.assert_not_awaited()
+        written = [row for awaited in writer.write.await_args_list for row in awaited.args[0]]
+        assert [(r.resident_label, r.metric_value) for r in written] == [
+            ("progress_flat_probe", 0)
+        ]
 
 
 class TestTheGuardCoversWhatShips:

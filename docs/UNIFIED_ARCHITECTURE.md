@@ -62,7 +62,7 @@ z-score scoring against a 30-update target.
 
 **Secondary system: ODE (diagnostic only)** — coupled differential equations run in parallel but do not drive verdicts. The ODE provides a dynamical-systems lens for analysis but behavioral verdicts override.
 
-The grounding path lives in `src/dual_log/`, `src/behavioral_sensor.py`, `src/behavioral_state.py`, and `src/behavioral_assessment.py`. The ODE engine lives in `governance_core` (compiled package, unitares-core).
+The grounding path lives in `src/dual_log/`, `src/behavioral_sensor.py`, `src/behavioral_state.py`, and `src/behavioral_assessment.py`. The ODE engine lives in `governance_core/` at the top level of this repo — pure Python, no separate install (it was a private compiled wheel, `unitares-core`, until it was folded back in 2026-04).
 
 ### 3. Ethical Drift
 
@@ -129,7 +129,7 @@ See [dev/CIRCUIT_BREAKER_DIALECTIC.md](dev/CIRCUIT_BREAKER_DIALECTIC.md) for the
 Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonical retrieval backend** (`UNITARES_KNOWLEDGE_BACKEND=postgres`, default); Apache AGE is an **optional graph backend** for queries that benefit from cypher-style traversal (`UNITARES_KNOWLEDGE_BACKEND=age`). The factory lives in [`src/knowledge_graph.py`](../src/knowledge_graph.py).
 
 - Discoveries tagged with agent state, severity, and type
-- Searchable across all agents and sessions via hybrid RRF
+- Searchable across all agents and sessions; hybrid RRF (vector + FTS) requires the AGE backend — `KnowledgeGraphPostgres` exposes no `semantic_search`, and `UNITARES_ENABLE_HYBRID` defaults off
 - Agents build on each other's findings — no re-discovery of known issues
 
 ## Database Architecture
@@ -145,7 +145,7 @@ Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonic
 |  +- governance_graph (AGE)   |     There is no SQLite.
 |  +- dialectic.*              |
 |  +- core.calibration         |
-|  +- core.tool_usage          |
+|  +- audit.tool_usage         |
 |                              |
 |  Redis (port 6379)           |     De-facto primary session store —
 |  audit_log.jsonl (raw)       |     not optional; degraded local-only without it.
@@ -161,16 +161,57 @@ Python's asyncio. When a handler `await`s DB/Redis work, the two scheduler model
 can interact in ways that hold connections across unrelated awaits and amplify
 latency by orders of magnitude. Measured 2026-05-04 on the governance-MCP request
 path: KG calls that complete in 21–71ms standalone ran at ~4,464ms in-handler — a
-~60× amplification, with the floor sub-100ms and the rest in scheduling,
-pool-acquisition, and event-loop contention. The Sentinel-loop call site
+~60× amplification, with the floor sub-100ms. That figure is order-of-magnitude
+only: other call paths gave 8–253×, and it was never pinned to a single handler. The Sentinel-loop call site
 (`agents/sentinel/agent.py`) was mitigated to ">400 cycles, zero failures" via
 PR #290, but that fix is one workaround at one site, not closure of the bug class.
 
-The class is structural to anyio + asyncio + asyncpg / Redis on a shared event
-loop and does not exist on substrates with per-process scheduling and
-protocol-level connection checkout (BEAM / db_connection). Three incidents over
-the last year, with new variants emerging on different surfaces (most recently
-the `load_metadata_async` N-await loop on observe handlers, PR #348 follow-up).
+**The attribution was withdrawn; the measurement was not.** The roadmap had
+registered the test in advance: PR #350 (merged 2026-05-05) dropped `force=True`
+from six observe sub-handlers, removing a 3221-await `load_metadata_async` loop
+from the request path, and steady-state fell to 92–182ms. The V0.2 RESOLUTION of
+[`proposals/beam-footprint-roadmap-v0.md`](proposals/beam-footprint-roadmap-v0.md)
+records the verdict — "the 60× amplification floor was the 3221-await loop, not
+anyio/asyncio coupling at the substrate layer". That surface is the one this
+section cited until now as the class's most recent new variant: PR #348's
+follow-up and PR #350 are the same change, so the 2026-05-04 measurement and the
+"recent recurrence" were one event counted twice. Every floor raised since
+resolved Python-side as well (#354, #360, #361, and #533's 104× p50 collapse),
+and the roadmap's V0.4 RESOLUTION (2026-06-25) retired latency as a migration
+decision gate on that basis.
+
+What remains, stated at its real strength:
+
+- **No measured instance is not absence.** The signature sub-type
+  `coordination_failure.mcp_handler_timeout.tool_decorator` last fired
+  2026-05-04. Five of the six wired sub-types have never fired, and the window
+  behind that zero ran well below reference write load, so it is a coverage
+  state rather than a clean bill — the four-state distinction CLAUDE.md requires
+  before a zero is cited applies here too.
+- **The incident record is three shipped mitigations, not three amplification
+  events:** #84 (identity anyio-asyncio guard), #218 (ExecutorPool, deployed
+  2026-04-27) and #290 (Sentinel forced-release poll, 2026-05-02), with S17
+  (Redis-from-handler deadlock, 2026-04-26) as a fourth guard. The newest is
+  2026-05-02; nothing has been added since.
+- **The asyncpg half is mitigated; the Redis half is not.** ExecutorPool keeps
+  asyncpg off the anyio loop. Async Redis clients remain unwrapped, so that path
+  is untested rather than cleared, and the `asyncio.wait_for` guards below are
+  the only protection on it.
+- **The serialization ceiling is a separate and live claim**, and it belongs to
+  the mitigation rather than to anyio: asyncpg work runs on one
+  `ExecutorPool-loop` thread, and `execute_locked_update` serializes per agent
+  through a shared mutex. Measured 2026-05-28 against a fresh-identity load
+  generator: p50 51ms at four concurrent workers, 281ms at eight, 554ms at
+  sixteen, zero errors.
+- **The BEAM comparison is a design expectation, not a result.** Per-process
+  scheduling with protocol-level connection checkout should not express this
+  shape, but the comparison channel `measurement.beam_python_boundary.request`
+  holds no rows, so nothing here measures it.
+
+Whether to keep or retire the framing is an operator decision the roadmap has
+deliberately left open: its 2026-05-28 amendment sets out two readings and
+declines to choose between them. This section records what is measured and what
+is not, and does not make that call.
 
 **Current posture (PR #218, deployed 2026-04-27).** `get_db()` returns an
 `ExecutorPool`-wrapped backend (`src/db/executor_pool.py`). asyncpg operations run
@@ -200,9 +241,9 @@ anyio isolation (Redis guards, sync blocking I/O, performance caches):
 
 | File | Role |
 |------|------|
-| `governance_core.dynamics` | EISV differential equations (compiled) |
-| `governance_core.coherence` | Coherence function C(V, Theta) (compiled) |
-| `governance_core.adaptive_governor` | PID controller, oscillation detection (compiled) |
+| `governance_core.dynamics` | EISV differential equations |
+| `governance_core.coherence` | Coherence function C(V, Theta) |
+| `governance_core.adaptive_governor` | PID controller, oscillation detection |
 | `config/governance_config.py` | Thresholds, margin computation |
 | `src/mcp_server.py` | MCP server entry point |
 | `src/mcp_handlers/core.py` | `process_agent_update` handler |
