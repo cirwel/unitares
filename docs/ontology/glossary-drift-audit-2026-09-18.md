@@ -30,9 +30,17 @@ The runtime glossary had already been updated to match
 (`EISV_DIMENSIONS["E"]`: "still contains a legacy ODE control-feedback level
 term"); the doc glossary was the stale copy.
 
-**Fix:** the Rosetta correction section now carries a dated second correction
-that separates authority from coupling, and the `free energy (ODE V)` note no
-longer says the ODE "drives nothing".
+The first draft of this fix overcorrected: it said the `C(V)` term was the
+ODE's *only* verdict-path influence. Review found three more channels: the Φ
+cold-start prior that owns check-ins 1–2 is evaluated on the ODE state
+(`src/monitor_phi.py`); the ODE-derived regime inputs to the behavioral sensor;
+and the confidence fallback, 55% of whose base is `C(V_ODE)`
+(`src/confidence.py`).
+
+**Fix:** the Rosetta correction section now carries a dated second correction:
+the ODE owns the cold-start verdict, does not own the post-warmup verdict, and
+reaches it after warmup through compatibility couplings. The `◐ research-lens`
+definition and the `free energy (ODE V)` note were brought in line with it.
 
 ### 2. Physics-register word in a published file (DRIFT, medium)
 
@@ -45,8 +53,8 @@ rewritten passage.
 
 ### 3. Unmarked homonyms missing from the glossary (DRIFT, medium)
 
-- **`V`** — four quantities: behavioral EMA of E−I `[-1, 1]` (`metrics['V']`),
-  ODE damped integral `[-2, 2]`, the ODE V that coherence reads, and the
+- **`V`** — three quantities: behavioral EMA of E−I (`metrics['V']` once
+  warm), the ODE damped integral (which coherence always reads), and the
   embodied instantaneous imbalance. Plus two naming layers (Valence in reader
   docs, Void in code/DB/papers) that are not extra quantities.
 - **`coherence`** — three producers (`legacy_tanh_v` ODE control feedback,
@@ -57,11 +65,14 @@ rewritten passage.
   `ethical_drift` input slots, and the runtime description of `S`. The
   Rosetta table listed `drift` as "already standard", which is true for public
   naming and hides the self-attested/measured split in technical prose.
-- **Persisted column names** — `core.agent_state.entropy` holds S,
-  `volatility` holds V, and E lives only in `state_json.E`. Reading the
-  `entropy` column as E has already produced a wrong analysis.
+- **`entropy`** — the deployed S axis is a heuristic blend labelled "Entropy";
+  the paper's target is response-distribution entropy H, which is not computed
+  on the primary path. Same deployed-vs-target split as `free energy`.
 
-**Fix:** four new entries under "High-risk homonyms".
+**Fix:** four new entries under "High-risk homonyms". Persisted column names
+(`core.agent_state.entropy` holds S, `volatility` holds V, E only in
+`state_json.E`) are single-sense names, not homonyms, so they went into a new
+*Persistence false friends* note rather than the homonym table.
 
 ### 4. Open gap overstated the lease schema (DRIFT, low)
 
@@ -83,6 +94,30 @@ defaults to on (`config/governance_config.py::phi_telemetry_only`), so by
 default Φ is telemetry. The glossary's Φ entry was already correct.
 
 **Fix:** comment corrected.
+
+### 6. Stale bounds in the ODE module docstring (code drift, low)
+
+`governance_core/dynamics.py` gave V as `[-2,2]` and S as `[0,2]`.
+`governance_core/parameters.py` `DynamicsParams` clamps V to `[-1, 1]` and S to
+`[0.001, 1]`; the "~2.0" in `dynamics.py` is the width of the V range, not a
+bound. Live rows agree: over 30 days no ODE V left `[-1, 1]`. The first draft of
+this change copied `[-2, 2]` into the glossary.
+
+**Fix:** docstring bounds corrected; the glossary V rows now say both V senses
+share `[-1, 1]`, so range cannot tell them apart.
+
+## Review round
+
+Three independent reviews ran on the first draft: a conceptual review against
+the glossary's own rules, a source-accuracy review of every checkable claim,
+and a read-only check against the live database and configuration. The
+source-accuracy review found no factual errors. The conceptual review produced
+the finding-1 overcorrection, the reclassification of persisted column names,
+the `entropy` homonym, and the removal of the `V (coherence input)` row (a
+routing fact, not a separate question). The live check confirmed the storage
+mapping (7,155 of 7,155 recent rows), that 99.76% of stored rows over 7 days
+carry `coherence_form = legacy_tanh_v` (the rest are synthetic fixtures), and
+the live flag state; it also found finding 6.
 
 ## Re-verified, no drift
 
