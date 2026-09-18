@@ -1,0 +1,53 @@
+name: Review Gate
+
+# Sets the `review` commit status on a PR's head: success only when a review
+# record exists for the PR's CURRENT diff and it is clean or its findings are
+# disposed. Records are PR comments posted by scripts/dev/review.sh (or its
+# `record` subcommand for a council/human review); scripts/dev/review_gate.py
+# documents the format and the diff key.
+#
+# Why pull_request_target: a fork's `pull_request` token cannot write a commit
+# status. This job never executes PR code — it checks out the BASE branch (the
+# trusted review_gate.py) and fetches the PR head only as git objects to hash.
+# Keep it that way: no step may run, source, or install anything from the head.
+#
+# Why issue_comment: the record arrives as a comment, after CI has already run
+# on the push. The comment event re-evaluates the head without a new push.
+#
+# GITHUB_TOKEN only; no model is called here (execution-cost policy). The
+# review itself runs on the author's side.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  statuses: write
+
+concurrency:
+  group: review-gate-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, 'unitares-review v1'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set review status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: python3 scripts/dev/review_gate.py --pr "$PR" ci --repo "$GITHUB_REPOSITORY" --post-status

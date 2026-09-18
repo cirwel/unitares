@@ -1,0 +1,128 @@
+"""Tests for scripts/dev/review_gate.py — the review record and its CI status.
+
+The load-bearing property is the diff key: it must survive a base merge that
+does not touch the PR's files (or draft-base-refresh would void every review),
+and it must change when the PR's own content does (or a stale review would
+pass a new diff)."""
+from __future__ import annotations
+
+import importlib.util
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dev" / "review_gate.py"
+_spec = importlib.util.spec_from_file_location("review_gate", SCRIPT)
+rg = importlib.util.module_from_spec(_spec)
+sys.modules["review_gate"] = rg
+_spec.loader.exec_module(rg)
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    r = tmp_path / "repo"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "master")
+    _git(r, "config", "user.email", "t@example.invalid")
+    _git(r, "config", "user.name", "t")
+    (r / "a.txt").write_text("a\n")
+    (r / "b.txt").write_text("b\n")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "-m", "base")
+    _git(r, "checkout", "-q", "-b", "feature")
+    (r / "a.txt").write_text("a changed\n")
+    _git(r, "commit", "-q", "-am", "feature change")
+    monkeypatch.chdir(r)
+    return r
+
+
+def test_key_survives_a_base_merge_that_does_not_touch_the_pr(repo):
+    before = rg.diff_key("master", "HEAD")
+    _git(repo, "checkout", "-q", "master")
+    (repo / "b.txt").write_text("b moved on master\n")
+    _git(repo, "commit", "-q", "-am", "master moves")
+    _git(repo, "checkout", "-q", "feature")
+    assert rg.diff_key("master", "HEAD") == before  # base moved, not merged
+    _git(repo, "merge", "-q", "--no-edit", "master")
+    assert rg.diff_key("master", "HEAD") == before  # base merged in
+
+
+def test_key_changes_when_the_pr_content_changes(repo):
+    before = rg.diff_key("master", "HEAD")
+    (repo / "a.txt").write_text("a changed again\n")
+    _git(repo, "commit", "-q", "-am", "more")
+    assert rg.diff_key("master", "HEAD") != before
+
+
+def test_key_ignores_local_diff_config(repo):
+    before = rg.diff_key("master", "HEAD")
+    _git(repo, "config", "diff.noprefix", "true")
+    _git(repo, "config", "diff.algorithm", "histogram")
+    _git(repo, "config", "diff.renames", "copies")
+    assert rg.diff_key("master", "HEAD") == before
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("looks fine\nVERDICT: CLEAN\n", ("CLEAN", 0)),
+    ("1. x.py:3 bad\nVERDICT: FINDINGS(1)", ("FINDINGS", 1)),
+    ("**VERDICT: FINDINGS(12)**", ("FINDINGS", 12)),
+    # The prompt quotes both forms; only the reviewer's last line counts.
+    ("VERDICT: CLEAN\nor\nVERDICT: FINDINGS(2)\n", ("FINDINGS", 2)),
+    ("no verdict here", None),
+    ("the VERDICT: CLEAN is inline, not a line", None),
+])
+def test_parse_verdict(text, expected):
+    assert rg.parse_verdict(text) == expected
+
+
+def _comment(rec, association="OWNER", url="u"):
+    return {"author_association": association, "html_url": url,
+            "body": rg.render_marker(rec) + "\nreview text"}
+
+
+def test_marker_roundtrip():
+    rec = rg.Record("k" * 64, "FINDINGS", 3, True, "codex")
+    got = rg.parse_record(rg.render_marker(rec) + "\nbody")
+    assert (got.key, got.verdict, got.findings, got.disposed, got.reviewer) == \
+        (rec.key, "FINDINGS", 3, True, "codex")
+
+
+def test_latest_matching_record_wins_and_other_keys_are_ignored():
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FINDINGS", 2, False, "codex"), url="first"),
+        _comment(rg.Record("other" * 12, "CLEAN", 0, False, "codex"), url="stale"),
+        _comment(rg.Record(k, "FINDINGS", 2, True, "codex"), url="disposed"),
+    ]
+    got = rg.latest_matching(comments, k)
+    assert got.url == "disposed" and got.status()[0] == "success"
+
+
+def test_untrusted_authors_cannot_post_a_record():
+    k = "k" * 64
+    comments = [_comment(rg.Record(k, "CLEAN", 0, False, "x"), association="NONE"),
+                _comment(rg.Record(k, "CLEAN", 0, False, "x"), association="CONTRIBUTOR")]
+    assert rg.latest_matching(comments, k) is None
+
+
+@pytest.mark.parametrize("verdict,disposed,state", [
+    ("CLEAN", False, "success"),
+    ("FINDINGS", True, "success"),
+    ("FINDINGS", False, "pending"),
+    ("FAILED", False, "failure"),
+])
+def test_status_mapping(verdict, disposed, state):
+    assert rg.Record("k", verdict, 1, disposed, "codex").status()[0] == state
+
+
+def test_reviewer_is_the_other_model():
+    assert rg.default_reviewer("codex/fix-x") == "claude"
+    assert rg.default_reviewer("claude/fix-x") == "codex"
+    assert rg.default_reviewer("kenny/fix-x") == "codex"
