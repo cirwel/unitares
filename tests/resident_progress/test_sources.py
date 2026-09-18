@@ -25,9 +25,19 @@ async def test_kg_source_returns_zero_for_unknown_uuid(test_db):
 async def test_kg_source_counts_recent_rows(test_db):
     uuid = "10000000-0000-0000-0000-000000000001"
     async with test_db.acquire() as conn:
+        # Delete first, like _seed_identity_with_state below. The source counts
+        # rows INSIDE the window, so the fixture row has to be recent on every
+        # run, not merely present. `ON CONFLICT (id) DO NOTHING` kept the first
+        # run's row and never refreshed `created_at`, so against a persistent
+        # governance_test this test passed once and then failed on every run
+        # after that row aged past the hour. CI never saw it: each CI run gets
+        # a fresh database, where the first insert is always the recent one.
+        await conn.execute(
+            "DELETE FROM knowledge.discoveries WHERE id = $1", "test-row-task4-1",
+        )
         await conn.execute(
             "INSERT INTO knowledge.discoveries (id, agent_id, type, summary) "
-            "VALUES ($1, $2, 'note', 'x') ON CONFLICT (id) DO NOTHING",
+            "VALUES ($1, $2, 'note', 'x')",
             "test-row-task4-1", uuid,
         )
     src = KnowledgeDiscoverySource(test_db)
