@@ -13,6 +13,8 @@ name: Review Gate
 #
 # Why issue_comment: the record arrives as a comment, after CI has already run
 # on the push. The comment event re-evaluates the head without a new push.
+# Edits and deletions re-evaluate too, whatever the body now says: a record
+# edited away or deleted must not leave its green status standing.
 #
 # GITHUB_TOKEN only; no model is called here (execution-cost policy). The
 # review itself runs on the author's side.
@@ -21,7 +23,7 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
-    types: [created, edited]
+    types: [created, edited, deleted]
 
 permissions:
   contents: read
@@ -37,7 +39,8 @@ jobs:
   gate:
     if: >-
       github.event_name == 'pull_request_target' ||
-      (github.event.issue.pull_request && contains(github.event.comment.body, 'unitares-review v1'))
+      (github.event.issue.pull_request &&
+        (github.event.action != 'created' || contains(github.event.comment.body, 'unitares-review v1')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
