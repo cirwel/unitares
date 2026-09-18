@@ -11,7 +11,10 @@ class _LazyNumpy:
         return getattr(numpy, name)
 np = _LazyNumpy()
 
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 
 # =================================================================
@@ -1349,6 +1352,47 @@ def get_delta_norm_max(agent_class: str = "default") -> ScaleConstant:
     return DELTA_NORM_MAX_BY_CLASS.get(agent_class, DELTA_NORM_MAX_DEFAULT)
 
 
+def _overlay_healthy_operating_point(cls: str, triple) -> None:
+    HEALTHY_OPERATING_POINT_BY_CLASS[cls] = (
+        float(triple[0]), float(triple[1]), float(triple[2]))
+
+
+def _overlay_delta_norm_max(cls: str, val) -> None:
+    DELTA_NORM_MAX_BY_CLASS[cls] = ScaleConstant(
+        name=f"DELTA_NORM_MAX[{cls}]", value=float(val),
+        measured_on="", corpus_size=0, percentile=None,
+        provenance="overlay",
+        notes="Deployment-local (UNITARES_CLASS_CALIBRATION).")
+
+
+def _overlay_void_threshold(cls: str, val) -> None:
+    GovernanceConfig.VOID_THRESHOLD_BY_CLASS[cls] = float(val)
+
+
+def _overlay_label_interval(label: str, secs) -> None:
+    LABEL_CHECKIN_INTERVALS[label] = int(secs)
+
+
+# Overlay section -> how one of its entries is applied. The overlay loop guards
+# every section and every entry the same way, so a new section belongs in this
+# table rather than in a loop of its own, which would need its own guard.
+_OVERLAY_SECTIONS = {
+    "healthy_operating_point": _overlay_healthy_operating_point,
+    "delta_norm_max": _overlay_delta_norm_max,
+    "void_threshold": _overlay_void_threshold,
+    "label_intervals": _overlay_label_interval,
+}
+
+# Everything one malformed entry can raise while being applied: TypeError (the
+# wrong JSON type, e.g. null where a number belongs or a number where the
+# [E, I, S] list belongs), ValueError (a non-numeric string, a NaN interval, or
+# ScaleConstant's non-positive guard), IndexError / KeyError (a short or keyed
+# operating point), and OverflowError — the easy one to miss, since it is not a
+# ValueError: float() of an integer beyond the float range raises it, and so
+# does int() of JSON's Infinity or 1e999.
+_OVERLAY_ENTRY_ERRORS = (TypeError, ValueError, IndexError, KeyError, OverflowError)
+
+
 def _apply_class_calibration_overlay() -> None:
     """Merge a deployment-local per-class calibration overlay into the
     class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file.
@@ -1362,11 +1406,24 @@ def _apply_class_calibration_overlay() -> None:
         {
           "healthy_operating_point": {"<class>": [E, I, S], ...},
           "delta_norm_max":          {"<class>": <float>, ...},
-          "void_threshold":          {"<class>": <float>, ...}
+          "void_threshold":          {"<class>": <float>, ...},
+          "label_intervals":         {"<label>": <seconds>, ...}
         }
 
-    Fail-soft: a missing/unreadable/malformed file is a silent no-op so the
-    user-agnostic defaults always stand.
+    Fail-soft, but not silent. This runs at import on the server's eager path,
+    so a raise here stops the governance server from starting. Anything
+    unusable is skipped with a WARNING naming it, and whatever remains still
+    applies: a file that cannot be opened or parsed as JSON, or whose top
+    level is not an object, skips the whole overlay; a section that is not an
+    object skips that section; an entry that does not coerce skips that entry.
+    A skipped section leaves the same user-agnostic defaults in place as an
+    absent one, so the warning is the only trace that tells them apart. With
+    the variable unset no overlay was asked for, and nothing is logged. A null
+    or empty section counts as absent, and top-level keys outside this schema
+    (a ``_comment``, say) are ignored. Reading is not bounded: a path whose
+    read never finishes, such as a FIFO with no writer or one whose writer
+    never closes it, stalls the import, and a file too large to hold in memory
+    fails it.
     """
     path = os.getenv("UNITARES_CLASS_CALIBRATION", "").strip()
     if not path:
@@ -1375,39 +1432,40 @@ def _apply_class_calibration_overlay() -> None:
         import json
         with open(os.path.expanduser(path)) as fh:
             data = json.load(fh)
-    except (OSError, ValueError):
+    # RecursionError, not ValueError, is what json.load raises for valid JSON
+    # nested deeper than the decoder's recursion limit.
+    except (OSError, ValueError, RecursionError) as e:
+        logger.warning(
+            "class-calibration overlay %s could not be loaded (%s: %s); "
+            "applying none of it", path, type(e).__name__, e)
         return
     if not isinstance(data, dict):
+        logger.warning(
+            "class-calibration overlay %s is a %s, not an object; "
+            "applying none of it", path, type(data).__name__)
         return
 
-    for cls, triple in (data.get("healthy_operating_point") or {}).items():
-        try:
-            HEALTHY_OPERATING_POINT_BY_CLASS[cls] = (
-                float(triple[0]), float(triple[1]), float(triple[2]))
-        except (TypeError, ValueError, IndexError, KeyError):
-            pass
-
-    for cls, val in (data.get("delta_norm_max") or {}).items():
-        try:
-            DELTA_NORM_MAX_BY_CLASS[cls] = ScaleConstant(
-                name=f"DELTA_NORM_MAX[{cls}]", value=float(val),
-                measured_on="", corpus_size=0, percentile=None,
-                provenance="overlay",
-                notes="Deployment-local (UNITARES_CLASS_CALIBRATION).")
-        except (TypeError, ValueError):
-            pass
-
-    for cls, val in (data.get("void_threshold") or {}).items():
-        try:
-            GovernanceConfig.VOID_THRESHOLD_BY_CLASS[cls] = float(val)
-        except (TypeError, ValueError):
-            pass
-
-    for label, secs in (data.get("label_intervals") or {}).items():
-        try:
-            LABEL_CHECKIN_INTERVALS[label] = int(secs)
-        except (TypeError, ValueError):
-            pass
+    for section, apply_entry in _OVERLAY_SECTIONS.items():
+        entries = data.get(section)
+        if entries is None:
+            continue
+        if not isinstance(entries, dict):
+            # The old read, `(data.get(section) or {}).items()`, raised
+            # AttributeError out of the import for any truthy non-object — a
+            # list, a number, a string — and took a falsy one for no section.
+            logger.warning(
+                "class-calibration overlay %s: section %r is a %s, not an "
+                "object; skipping it and applying the other sections",
+                path, section, type(entries).__name__)
+            continue
+        for key, value in entries.items():
+            try:
+                apply_entry(key, value)
+            except _OVERLAY_ENTRY_ERRORS as e:
+                logger.warning(
+                    "class-calibration overlay %s: %s entry %r is malformed "
+                    "(%s: %s); skipping it and applying the rest",
+                    path, section, key, type(e).__name__, e)
 
 
 _apply_class_calibration_overlay()
