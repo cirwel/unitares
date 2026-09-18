@@ -82,9 +82,9 @@ def test_parse_verdict(text, expected):
     assert rg.parse_verdict(text) == expected
 
 
-def _comment(rec, association="OWNER", url="u"):
+def _comment(rec, association="OWNER", url="u", text="1. fixed in abc\n2. rebutted: x"):
     return {"author_association": association, "html_url": url,
-            "body": rg.render_marker(rec) + "\nreview text"}
+            "body": rg.render_marker(rec) + "\n" + text}
 
 
 def test_marker_roundtrip():
@@ -126,3 +126,23 @@ def test_reviewer_is_the_other_model():
     assert rg.default_reviewer("codex/fix-x") == "claude"
     assert rg.default_reviewer("claude/fix-x") == "codex"
     assert rg.default_reviewer("kenny/fix-x") == "codex"
+
+
+@pytest.mark.parametrize("text,n,ok", [
+    ("", 1, False),
+    ("   \n", 1, False),
+    ("1. fixed in abc123", 1, True),
+    ("1. fixed\n", 2, False),
+    ("1) fixed\n2: rebutted, the caller checks it", 2, True),
+    ("#1. fixed\n#2. fixed", 2, True),
+])
+def test_dispositions_must_cover_every_finding(text, n, ok):
+    assert rg.dispositions_complete(text, n) is ok
+
+
+def test_an_empty_dispositions_record_does_not_clear_the_gate():
+    # Codex's finding on #2318: a disposed=1 marker over an empty body turned
+    # the check green. CI must judge the body, not trust the marker.
+    k = "k" * 64
+    comments = [_comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="")]
+    assert rg.latest_matching(comments, k).status()[0] == "pending"

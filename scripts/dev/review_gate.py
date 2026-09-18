@@ -177,8 +177,11 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
             continue
-        rec = parse_record(c.get("body", ""))
+        body = c.get("body", "")
+        rec = parse_record(body)
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
+            if rec.disposed and not dispositions_complete(body, rec.findings):
+                rec.disposed = False
             rec.url = c.get("html_url", "")
             found = rec
     return found
@@ -187,6 +190,17 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
 def pr_comments(repo: str, pr: int) -> list[dict]:
     pages = gh_json("api", "--paginate", "--slurp", f"repos/{repo}/issues/{pr}/comments")
     return [c for page in pages for c in page]
+
+
+def dispositions_complete(text: str, n: int) -> bool:
+    """One numbered, non-empty entry per finding: `1. ...` through `n. ...`.
+
+    A disposed record clears the gate, so an empty or partial dispositions
+    body must not: that would drop findings silently, which the delivery
+    contract forbids. Checked on the CI side too, not just when posting.
+    """
+    numbered = {int(m) for m in re.findall(r"^\s*#?(\d+)[.):]\s+\S", text or "", re.M)}
+    return n > 0 and all(k in numbered for k in range(1, n + 1))
 
 
 def parse_verdict(text: str) -> tuple[str, int] | None:
@@ -218,7 +232,7 @@ def default_reviewer(branch: str) -> str:
 
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tuple[str, str]:
     """Return (final text, status note). Never raises on reviewer failure."""
-    last = out_dir / "last-message.txt"
+    last = (out_dir / "last-message.txt").resolve()
     if reviewer == "codex":
         cmd = ["codex", "exec", "--sandbox", "read-only", "-C", os.getcwd(),
                "--output-last-message", str(last), prompt]
@@ -335,6 +349,9 @@ def cmd_dispose(args) -> int:
     if prior is None or prior.verdict != "FINDINGS":
         raise SystemExit("review_gate: no FINDINGS record for this diff to dispose")
     text = Path(args.file).read_text()
+    if not dispositions_complete(text, prior.findings):
+        raise SystemExit(f"review_gate: dispositions need a numbered entry for each of the "
+                         f"{prior.findings} finding(s) — `1. <fixed in …|rebutted: why>` …")
     rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer)
     post_record(pr, rec, f"dispositions for FINDINGS({prior.findings}) — {prior.url}", text)
     print(f"[review] {rec.status()[1]}")
