@@ -30,10 +30,19 @@ red X and the issue land minutes after the push, not inside the pushing
 terminal — this shortens loss-to-record from days to minutes; it does not
 interrupt the pusher mid-flow.
 
-Known false positive: deliberately reusing a branch name for a new round
-of work fires this guard on pushes made before the new PR opens (ten
-branch names carried multiple PRs in the last 400). The issue text says
-how to resolve; fresh `<author>/<topic>-<id>` names avoid it entirely.
+Branch reuse used to be a known false positive: a session that reuses a
+branch name for a new round of work pushes BEFORE opening the new PR, and
+the guard ran seconds later, so no instantaneous check could see the PR
+that was about to exist (ten branch names carried multiple PRs in the last
+400; #2265 and #2294 are two instances one day apart). It is now handled
+in the alarm path rather than in the issue text: before firing, the guard
+looks for an OPEN PR that will land this push — one whose head is this
+branch, or one that already CONTAINS the pushed commit, which is the
+re-land case where the work moved to a fresh branch — and waits out a
+grace window to give a push-then-open-PR sequence time to complete.
+An abandoned push never acquires either, so it still fires, minutes later
+as the docstring below already allows. Fresh `<author>/<topic>-<id>` names
+still avoid the window entirely.
 
 Fail-open on API errors, but degraded is never silent — see
 merge_loss_common.py. When the guard DOES fire, issue-filing failures do
@@ -44,6 +53,9 @@ Env (set by .github/workflows/orphan-push-guard.yml):
   BRANCH             the pushed branch (github.ref_name)
   PUSHED_SHA         the pushed tip (github.sha)
   DEFAULT_BRANCH     the repo default branch (falls back to master)
+  ORPHAN_GUARD_PR_GRACE_S  seconds to wait for a not-yet-opened PR before
+                     alarming (default 120; 0 disables the wait). Only the
+                     would-fire path pays it; healthy pushes return early.
 """
 
 from __future__ import annotations
@@ -51,6 +63,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 
 from merge_loss_common import (
     degraded,
@@ -82,6 +95,60 @@ def orphan_commits(repo: str, newest_pr: dict, sha: str, base: str):
     if cmp.get("status") in ("identical", "behind"):
         return [], None
     return cmp.get("commits", []), None
+
+
+DEFAULT_GRACE_S = 120
+GRACE_ENV = "ORPHAN_GUARD_PR_GRACE_S"
+
+
+def grace_seconds() -> int:
+    """The configured wait, clamped to sane bounds. A bad value is not fatal."""
+    raw = os.environ.get(GRACE_ENV)
+    if raw is None:
+        return DEFAULT_GRACE_S
+    try:
+        return max(0, min(int(raw), 600))
+    except ValueError:
+        return DEFAULT_GRACE_S
+
+
+def open_pr_tracking(repo: str, branch: str, sha: str):
+    """An OPEN PR that will land this push, if one exists.
+
+    Two shapes, because a push can be tracked by a PR that is not on this
+    branch. (1) An open PR whose head IS this branch — the ordinary reuse
+    case, checked again here because the caller's first look ran before the
+    PR existed. (2) An open PR that already CONTAINS the pushed commit,
+    which is the re-land case: the work was cherry-picked to a fresh branch
+    and this branch's own PRs are all long merged.
+
+    Fail-open by design: on an API error this returns None, which leaves
+    the caller's alarm path exactly as it was. A guard that suppressed its
+    own finding because a lookup failed would be worse than a noisy one.
+    """
+    try:
+        prs = gh_json(
+            "pr", "list", "-R", repo,
+            "--head", branch,
+            "--state", "open",
+            "--json", "number,url,state",
+            "--limit", "5",
+        )
+        for pr in prs or []:
+            # Re-checked rather than trusted: --state is a request, and a
+            # suppression must never rest on a MERGED row coming back.
+            if pr.get("state") == "OPEN":
+                return pr
+    except GhError:
+        pass
+    try:
+        containing = gh_json("api", f"repos/{repo}/commits/{sha}/pulls")
+    except GhError:
+        return None
+    for pr in containing or []:
+        if pr.get("state") == "open":
+            return pr
+    return None
 
 
 def main() -> int:
@@ -118,6 +185,23 @@ def main() -> int:
             f"push carries nothing beyond what the PR landed — PRUNABLE hygiene, not loss."
         )
         return 0
+
+    # This push carries unlanded work. Before alarming, give a
+    # push-then-open-PR sequence the chance to have completed: the first PR
+    # lookup above ran within seconds of the push, so it cannot see a PR
+    # opened immediately after it.
+    grace = grace_seconds()
+    for waited in [0, *([grace] if grace else [])]:
+        if waited:
+            time.sleep(waited)
+        tracking = open_pr_tracking(repo, branch, sha)
+        if tracking:
+            summary(
+                f"{GUARD}: `{branch}` received `{sha[:9]}` after PR #{newest['number']} "
+                f"was {newest['state']}, but open PR #{tracking['number']} will land it "
+                f"— tracked, not stranded."
+            )
+            return 0
 
     if err is not None:
         commit_list = f"({err} — treat as INDETERMINATE: verify by content diff before re-landing, do not blind cherry-pick; `python3 scripts/dev/stranded_work_audit.py` gives the full classification)"

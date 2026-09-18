@@ -975,13 +975,23 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     status_breakdown = {
         "healthy": sum(1 for s in statuses if s == "healthy"),
         "warning": sum(1 for s in statuses if s == "warning"),
+        "degraded": sum(1 for s in statuses if s == "degraded"),
         "deprecated": sum(1 for s in statuses if s == "deprecated"),
         "unavailable": sum(1 for s in statuses if s == "unavailable"),
         "error": sum(1 for s in statuses if s == "error"),
     }
     failing_checks = sorted(name for name, check in effective_checks.items() if check.get("status") == "error")
+    # `degraded` belongs here: the knowledge-graph check emits it when the embedder
+    # or the backend's semantic_search is missing. It was absent from this set and
+    # from status_breakdown above, so a degraded component pushed overall_status to
+    # "moderate" while degraded_checks stayed empty and first_action still read
+    # "No action needed." — a permanently non-green health check naming no cause.
+    # The shipped container excludes sentence-transformers (requirements-docker.txt),
+    # so that combination was the default there, not an edge case.
     degraded_checks = sorted(
-        name for name, check in effective_checks.items() if check.get("status") in {"warning", "deprecated", "unavailable"}
+        name
+        for name, check in effective_checks.items()
+        if check.get("status") in {"warning", "degraded", "deprecated", "unavailable"}
     )
 
     first_action = "No action needed."
