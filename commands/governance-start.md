@@ -34,11 +34,11 @@ same-live-owner diagnostic rebinds.
 Call `onboard()` against UNITARES using the strongest honest mode:
 
 - default: a fresh session onboards fresh — pass `force_new=true` with no `parent_agent_id`
-- declare lineage only for a real causal event: a dispatched subagent (`parent_agent_id=<dispatcher uuid>`, `spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id=<prior uuid>`, `spawn_reason="new_session"`). Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`).
+- declare lineage only for a real causal event: a dispatched subagent (`parent_agent_id=<dispatcher uuid>`, `spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id=<prior uuid>`, `spawn_reason="new_session"`). Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`) and the claim cleared, unless `spawn_reason` marks a dispatched child (`subagent`, `dispatch`, `dialectic_reviewer`) or a `compaction` continuation — those relationships expect the parent to still be live.
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
 
-`start_session(...)` is an equivalent alias (same parameters, same rules). Invoking the alias returns the normalized agent-experience envelope — `next_action`/`state_summary` first, `agent_uuid` and `client_session_id` lifted to the top level, and the full canonical payload (including `session_resolution_source` and the other cache fields below) under `raw_governance`.
+`start_session(...)` is an equivalent alias (same parameters, same rules). Invoking the alias returns the normalized agent-experience envelope — `next_action`/`state_summary` first, `agent_uuid` and `client_session_id` lifted to the top level, and the canonical payload under `raw_governance`. That payload defaults to `response_mode="minimal"`, which carries `uuid`, `agent_id`, `display_name` and `client_session_id` but omits `session_resolution_source` and `continuity_token_supported`; pass `response_mode="full"` when you need `session_resolution_source` for the cache below.
 
 Do not use bare `identity(agent_uuid=<uuid>, resume=true)`. UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 

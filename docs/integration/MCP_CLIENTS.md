@@ -78,9 +78,11 @@ tool runs:
 
 1. **Host/Origin allowlist (DNS-rebinding protection, on by default).** The
    request arrives with `Host: gov.example.org`, which is rejected with
-   **HTTP 403** unless allowlisted. A 403 here surfaces in the client as a
-   generic auth/"API key" error even though the cause is the Host gate — it
-   runs *before* auth. Fix:
+   **HTTP 421** unless allowlisted; 403 is the SDK's Origin rejection, not a
+   Host one. A 421 is not an auth failure and no credential fixes it. Note
+   the order: this server's own bearer/OAuth gate runs *ahead* of the SDK's
+   `Host` check, so on a gated deployment an uncredentialed request stops at
+   401 and never reaches the allowlist. Fix:
 
    ```bash
    export UNITARES_BIND_ALL_INTERFACES=1
