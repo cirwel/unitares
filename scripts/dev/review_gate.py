@@ -188,9 +188,9 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
     """The record that decides `key`'s status. Comments arrive oldest first.
 
     Normally the latest trusted record. But findings on a diff stay open until
-    they are disposed or the diff changes: a later CLEAN on the SAME diff — a
-    re-run that came back quieter, or a `record` — does not clear them, or
-    re-rolling the reviewer would be a way to drop a finding silently.
+    they are disposed or the diff changes: a later CLEAN or FAILED on the SAME
+    diff — a re-run that came back quieter or crashed, or a `record` — does not
+    clear or hide them, or re-rolling the reviewer would drop a finding silently.
     """
     found, open_findings = None, []
     for c in comments:
@@ -213,9 +213,9 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
                 else:
                     rec.disposed = False  # answers nothing that is open
                     open_findings.append(rec)
-    if open_findings and found is not None and (found.verdict == "CLEAN" or found.disposed):
-        return open_findings[-1]
-    return found
+    # Open findings decide the status whatever came after them on this diff —
+    # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
+    return open_findings[-1] if open_findings else found
 
 
 def pr_comments(repo: str, pr: int) -> list[dict]:

@@ -233,3 +233,14 @@ def test_a_reviewer_that_cannot_start_is_a_failure_not_an_exception(tmp_path, mo
     monkeypatch.setattr(rg.subprocess, "Popen", boom)
     text, note = rg.run_reviewer("codex", "p", tmp_path, 5)
     assert note.startswith("could not start codex")
+
+
+def test_a_failed_rerun_does_not_hide_open_findings():
+    # Codex round 11 on #2318: FAILED after FINDINGS made dispose unreachable.
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FINDINGS", 1, False, "codex"), url="findings"),
+        _comment(rg.Record(k, "FAILED", 0, False, "claude"), url="failed"),
+    ]
+    got = rg.latest_matching(comments, k)
+    assert got.url == "findings" and got.verdict == "FINDINGS" and not got.disposed
