@@ -81,7 +81,8 @@ def reranker_enabled() -> bool:
 CROSS_ENCODER_AVAILABLE = importlib.util.find_spec("sentence_transformers") is not None
 if not CROSS_ENCODER_AVAILABLE:
     logger.warning(
-        "sentence-transformers CrossEncoder not available; reranker disabled."
+        "sentence-transformers CrossEncoder not available; reranker disabled. "
+        'Install the extra: pip install -e ".[full,embeddings]" -c constraints.txt'
     )
 
 

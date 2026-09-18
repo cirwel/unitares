@@ -35,11 +35,27 @@ asyncpg>=0.29.0,<1.0.0
 # Redis runtime continuity support (required in production; demo degrades local-only)
 redis>=5.0.0,<9.0.0
 
-# Semantic search support (optional - for knowledge graph semantic queries)
-sentence-transformers>=2.2.0,<7.0.0
+# Optional embedding backend for knowledge-graph semantic queries. Not
+# installed by default: it requires torch, whose Linux wheel metadata pulls
+# cuda-toolkit, cudnn, nccl, nvshmem and triton with no GPU check and no
+# opt-out — measured at 5.9 GB installed versus 162 MB without. Semantic search
+# falls back to Postgres FTS when it is missing, and the response says so
+# (search_degraded). Uncomment here, or install the extra:
+#   pip install -e ".[full,embeddings]" -c constraints.txt
+# sentence-transformers>=2.2.0,<7.0.0
 
 # Numerical computation (used by governance_monitor, calibration, etc.)
 numpy>=1.24.0,<3.0.0
+
+# Declared explicitly because it used to arrive transitively, via
+# sentence-transformers -> scikit-learn -> scipy. That dependency is now the
+# opt-in `embeddings` extra, and scipy is not optional here: the EISV
+# closed-form and contraction analyses under scripts/analysis/ import it at
+# module scope, and tests/test_eisv_general_solution.py and
+# tests/test_analysis_tools.py exercise them on every CI run. (Shipped source
+# is unaffected -- src/concept_extraction.py already guards its scipy import
+# and falls back to threshold clustering.)
+scipy>=1.10.0,<2.0.0
 
 # HTTP client (used by integration tests)
 requests>=2.31.0,<3.0.0

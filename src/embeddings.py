@@ -78,8 +78,9 @@ SENTENCE_TRANSFORMERS_AVAILABLE = (
 )
 if not SENTENCE_TRANSFORMERS_AVAILABLE:
     logger.warning(
-        "sentence-transformers not available. Install with: "
-        "pip install sentence-transformers"
+        "sentence-transformers not available; semantic search falls back to "
+        "Postgres FTS. Install the extra: "
+        'pip install -e ".[full,embeddings]" -c constraints.txt'
     )
 
 
@@ -107,8 +108,8 @@ class EmbeddingsService:
         """Lazy load model on first use."""
         if not SENTENCE_TRANSFORMERS_AVAILABLE:
             raise RuntimeError(
-                "sentence-transformers not installed. "
-                "Install with: pip install sentence-transformers"
+                "sentence-transformers not installed. Install the extra: "
+                'pip install -e ".[full,embeddings]" -c constraints.txt'
             )
 
         if self._model is not None:
