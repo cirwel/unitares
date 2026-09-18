@@ -317,6 +317,14 @@ def _resolve(args) -> tuple[int, str, str, str]:
     head = git("rev-parse", "HEAD").strip()
     key = diff_key(args.base, head)
     pushed = info["headRefOid"]
+    # ship.sh starts the review right after `git push`, and GitHub's API can
+    # report the previous head for a few seconds. Wait for it rather than
+    # refuse: a refusal here means the reflexive review silently never runs.
+    for _ in range(12):
+        if pushed == head:
+            break
+        time.sleep(5)
+        pushed = gh_json("pr", "view", str(info["number"]), "--json", "headRefOid")["headRefOid"]
     if pushed != head:
         known = subprocess.run(["git", "cat-file", "-e", f"{pushed}^{{commit}}"],
                                capture_output=True).returncode == 0
