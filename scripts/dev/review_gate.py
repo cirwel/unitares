@@ -238,7 +238,8 @@ def parse_verdict(text: str) -> tuple[str, int] | None:
     if m is None:
         return None
     word, n = m.groups()
-    return ("CLEAN", 0) if word == "CLEAN" else ("FINDINGS", int(n))
+    # FINDINGS(0) is a clean review; as FINDINGS it could never be disposed.
+    return ("CLEAN", 0) if word == "CLEAN" or int(n) == 0 else ("FINDINGS", int(n))
 
 
 # --------------------------------------------------------------------------
@@ -264,6 +265,9 @@ def default_reviewer(branch: str) -> str:
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tuple[str, str]:
     """Return (final text, status note). Never raises on reviewer failure."""
     last = (out_dir / "last-message.txt").resolve()
+    # A previous run's output must never stand in for this run's: a --fresh
+    # claude run would otherwise post the old codex verdict.
+    last.unlink(missing_ok=True)
     if reviewer == "codex":
         cmd = ["codex", "exec", "--sandbox", "read-only", "-C", os.getcwd(),
                "--output-last-message", str(last), prompt]

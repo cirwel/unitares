@@ -80,6 +80,8 @@ def test_key_ignores_local_diff_config(repo):
     # Codex round 2 on #2318: trailing content after the verdict must void it.
     ("VERDICT: CLEAN\nactually, x.py:9 has a flaw\n", None),
     ("VERDICT: CLEAN\n\n  \n", ("CLEAN", 0)),
+    # Codex round 7 on #2318: FINDINGS(0) would otherwise pend forever.
+    ("VERDICT: FINDINGS(0)", ("CLEAN", 0)),
 ])
 def test_parse_verdict(text, expected):
     assert rg.parse_verdict(text) == expected
@@ -197,3 +199,17 @@ def test_a_disposition_with_the_wrong_count_answers_nothing():
         _comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="1. fixed"),
     ]
     assert rg.latest_matching(comments, k).status()[0] == "pending"
+
+
+def test_a_stale_last_message_is_not_posted_as_this_runs_verdict(tmp_path, monkeypatch):
+    # Codex round 7 on #2318: a prior codex CLEAN in the cache must not be
+    # read back as a later claude run's output.
+    (tmp_path / "last-message.txt").write_text("VERDICT: CLEAN\n")
+
+    class FakeProc:
+        pid = 0
+        def wait(self, timeout=None):
+            return 0
+    monkeypatch.setattr(rg.subprocess, "Popen", lambda *a, **k: FakeProc())
+    text, note = rg.run_reviewer("claude", "p", tmp_path, 5)
+    assert note == "exit 0" and rg.parse_verdict(text) is None
