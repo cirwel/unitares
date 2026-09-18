@@ -3,11 +3,13 @@
 ``config/governance_config.py`` applies the ``UNITARES_CLASS_CALIBRATION``
 overlay at module import, and the module sits on the server's eager import path
 (``src.mcp_server`` -> ``governance_monitor`` -> ``governance_config``), so a
-raise out of the overlay is a governance server that does not start. Two shapes
-escaped: a section that was not an object, because each section was read as
-``(data.get(section) or {}).items()`` outside the per-entry guard; and an entry
-raising OverflowError, which the per-entry guards did not catch. Both now skip
-the offending section or entry with a WARNING naming it, and the rest applies.
+raise out of the overlay is a governance server that does not start. Three
+shapes escaped: a section that was not an object, because each section was read
+as ``(data.get(section) or {}).items()`` outside the per-entry guard; an entry
+raising OverflowError, which the per-entry guards did not catch; and a file
+nested too deeply for the JSON decoder, whose RecursionError the file-level
+catch missed. Each now skips the offending file, section or entry with a
+WARNING naming it, and whatever remains applies.
 """
 from __future__ import annotations
 
@@ -75,17 +77,23 @@ def _received(g) -> dict:
 
 
 # The child imports the module the way a server start does, then reports
-# through the same _received the in-process tests use.
+# through the same _received the in-process tests use. It puts this checkout
+# first on sys.path itself rather than relying on `-c` to put the cwd there:
+# PYTHONSAFEPATH turns that off, and an inherited PYTHONPATH could then import
+# another tree, so the test would pass against the wrong code.
 _CHILD = (
-    inspect.getsource(_received)
+    f"import sys\nsys.path.insert(0, {str(REPO_ROOT)!r})\n"
+    + inspect.getsource(_received)
     + "\nimport json\nimport config.governance_config as g\n"
     + "print(json.dumps(_received(g)))\n"
 )
 
 
-def _import_fresh(tmp_path: Path, doc: dict) -> subprocess.CompletedProcess:
+def _import_fresh(tmp_path: Path, doc: dict | str) -> subprocess.CompletedProcess:
+    """Import the module in a new interpreter with the overlay set to ``doc``
+    (a dict is written as JSON, a str verbatim)."""
     path = tmp_path / "class-calibration.json"
-    path.write_text(json.dumps(doc))
+    path.write_text(doc if isinstance(doc, str) else json.dumps(doc))
     return subprocess.run(
         [sys.executable, "-c", _CHILD],
         cwd=REPO_ROOT,
@@ -171,9 +179,10 @@ def test_empty_non_object_section_is_named_too(apply_overlay, caplog):
     assert "section 'label_intervals' is a list" in warnings[0]
 
 
-def test_null_section_counts_as_absent(apply_overlay, caplog):
-    """A null section says "none here" in the only way JSON can; not a skip."""
-    received = apply_overlay({**_GOOD, "void_threshold": None})
+@pytest.mark.parametrize("empty", [None, {}], ids=["null", "empty-object"])
+def test_null_or_empty_section_is_silent(empty, apply_overlay, caplog):
+    """A null or empty section says "none here"; neither is a skip."""
+    received = apply_overlay({**_GOOD, "void_threshold": empty})
 
     assert received == {**_EXPECTED, "void_threshold": None}
     assert _warnings(caplog) == []
@@ -204,20 +213,95 @@ def test_overflowing_entry_is_skipped_with_a_warning_naming_it(
     assert "OverflowError" in warnings[0]
 
 
-@pytest.mark.parametrize("content,error", [
-    (None, "FileNotFoundError"),
-    ('{"label_intervals": {"resident-a": 1800}', "JSONDecodeError"),
-], ids=["missing", "truncated-json"])
-def test_unloadable_file_is_named(content, error, apply_overlay, caplog):
+# One malformed entry for each other error class the entry guard catches. All
+# four sections share that one guard, so narrowing it would bring the import
+# crash back for the commonest typos while every test above stayed green.
+_MALFORMED_ENTRIES = {
+    "null-interval": ("label_intervals", None, "TypeError"),
+    "unit-suffixed-interval": ("label_intervals", "30m", "ValueError"),
+    "list-threshold": ("void_threshold", [0.3], "TypeError"),
+    "zero-radius": ("delta_norm_max", 0, "ValueError"),
+    "short-operating-point": ("healthy_operating_point", [0.3, 0.7], "IndexError"),
+    "keyed-operating-point": ("healthy_operating_point", {"0": 0.3}, "KeyError"),
+}
+
+
+@pytest.mark.parametrize("case", list(_MALFORMED_ENTRIES))
+def test_each_entry_error_class_is_skipped_with_a_warning_naming_it(
+    case, apply_overlay, caplog,
+):
+    section, value, error = _MALFORMED_ENTRIES[case]
+    received = apply_overlay(
+        {**_GOOD, section: {"resident-bad": value, **_GOOD[section]}})
+
+    assert received == _EXPECTED
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1, warnings
+    assert f"{section} entry 'resident-bad'" in warnings[0]
+    assert error in warnings[0]
+
+
+def _leave_unloadable(path: Path, kind: str) -> None:
+    """Leave an overlay at ``path`` that cannot be loaded, the way ``kind`` says."""
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "unreadable":
+        path.write_text(json.dumps(_GOOD))
+        path.chmod(0)
+    elif kind == "truncated-json":
+        path.write_text(json.dumps(_GOOD)[:-1])
+    elif kind == "not-utf8":
+        # 0xFF never starts a UTF-8 sequence, and under a single-byte locale it
+        # decodes to a character no JSON document can start with, so the file
+        # fails to load whatever the locale's encoding.
+        path.write_bytes(b"\xff" + json.dumps(_GOOD).encode())
+    # "missing" leaves the path absent.
+
+
+# The error each kind is named with; None where it depends on the locale.
+_UNLOADABLE = {
+    "missing": "FileNotFoundError",
+    "directory": "IsADirectoryError",
+    "unreadable": "PermissionError",
+    "truncated-json": "JSONDecodeError",
+    "not-utf8": None,
+}
+
+
+@pytest.mark.parametrize("kind", list(_UNLOADABLE))
+def test_unloadable_file_is_named(kind, apply_overlay, caplog, tmp_path):
     """The variable was set, so an overlay was wanted. Applying none of it
-    leaves the same defaults as never setting it; the warning is the difference."""
-    received = apply_overlay(content)
+    leaves the same defaults as never setting it; the warning is the difference.
+    The kinds span the file-level catch: OSErrors, and ValueErrors other than
+    JSONDecodeError."""
+    if kind == "unreadable" and hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root can read a mode-000 file")
+    path = tmp_path / "class-calibration.json"
+    _leave_unloadable(path, kind)
+    try:
+        received = apply_overlay(None)
+    finally:
+        if kind == "unreadable":
+            path.chmod(0o600)
 
     assert received == dict.fromkeys(SECTIONS)
     warnings = _warnings(caplog)
     assert len(warnings) == 1, warnings
     assert "class-calibration.json could not be loaded" in warnings[0]
-    assert error in warnings[0]
+    if _UNLOADABLE[kind]:
+        assert _UNLOADABLE[kind] in warnings[0]
+
+
+def test_too_deeply_nested_file_imports_in_a_fresh_interpreter(tmp_path):
+    """Valid JSON nested past the decoder's recursion limit makes json.load
+    raise RecursionError, which is not a ValueError. It runs in a child so the
+    depth cannot disturb this interpreter."""
+    depth = 200_000
+    proc = _import_fresh(tmp_path, "[" * depth + "]" * depth)
+
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == dict.fromkeys(SECTIONS)
+    assert "could not be loaded (RecursionError" in proc.stderr
 
 
 @pytest.mark.parametrize("payload", ['["resident-a", 1800]', '"resident-a"', "3"],

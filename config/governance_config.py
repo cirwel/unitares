@@ -1413,13 +1413,16 @@ def _apply_class_calibration_overlay() -> None:
     Fail-soft, but not silent. This runs at import on the server's eager path,
     so a raise here stops the governance server from starting. Anything
     unusable is skipped with a WARNING naming it, and whatever remains still
-    applies: a missing, unreadable or non-object file skips the whole overlay,
-    a section that is not an object skips that section, and an entry that does
-    not coerce skips that entry. A skipped section leaves the same
-    user-agnostic defaults in place as an absent one, so the warning is the
-    only trace that tells them apart. With the variable unset no overlay was
-    asked for, and nothing is logged. A null section counts as absent, and
-    top-level keys outside this schema (a ``_comment``, say) are ignored.
+    applies: a file that cannot be opened or parsed as JSON, or whose top
+    level is not an object, skips the whole overlay; a section that is not an
+    object skips that section; an entry that does not coerce skips that entry.
+    A skipped section leaves the same user-agnostic defaults in place as an
+    absent one, so the warning is the only trace that tells them apart. With
+    the variable unset no overlay was asked for, and nothing is logged. A null
+    or empty section counts as absent, and top-level keys outside this schema
+    (a ``_comment``, say) are ignored. The one input this cannot skip is a
+    path that blocks when opened, such as a FIFO with no writer: the import
+    waits on it.
     """
     path = os.getenv("UNITARES_CLASS_CALIBRATION", "").strip()
     if not path:
@@ -1428,7 +1431,9 @@ def _apply_class_calibration_overlay() -> None:
         import json
         with open(os.path.expanduser(path)) as fh:
             data = json.load(fh)
-    except (OSError, ValueError) as e:
+    # RecursionError, not ValueError, is what json.load raises for valid JSON
+    # nested deeper than the decoder's recursion limit.
+    except (OSError, ValueError, RecursionError) as e:
         logger.warning(
             "class-calibration overlay %s could not be loaded (%s: %s); "
             "applying none of it", path, type(e).__name__, e)
