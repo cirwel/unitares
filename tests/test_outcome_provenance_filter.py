@@ -360,6 +360,125 @@ class TestCappingIsTheDefault:
         ], vouched
 
 
+class TestEveryWritePathIsAccountedFor:
+    """The enumeration the dialectic reviewer asked for (a36255d62a1310f3).
+
+    TestCappingIsTheDefault pins the property every path INHERITS. This pins the
+    set of paths itself, so adding a write path is a change someone has to look
+    at rather than one that lands quietly. The two together are what the
+    reviewer's condition asked for: no public entrypoint can exceed
+    tool_observed through caller-supplied detail.
+    """
+
+    @staticmethod
+    def _call_sites():
+        """Every module that calls the shared outcome write path, by AST -- not
+        by grep, so a call inside a string or comment cannot pad the list."""
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).parent.parent
+        found = set()
+        for f in sorted(root.glob("src/**/*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    fn = node.func
+                    name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+                    if name == "_record_outcome_event_inline":
+                        found.add(str(f.relative_to(root)))
+        return found
+
+    def test_the_write_path_has_exactly_these_callers(self):
+        assert self._call_sites() == {
+            # The public MCP entrypoint. Unvouched, and it pops the trust key
+            # so a caller cannot vouch for itself.
+            "src/mcp_handlers/observability/outcome_events.py",
+            # Vouched in-process emitters and operator-gated routes.
+            "src/mcp_handlers/updates/phases.py",
+            "src/mcp_handlers/dialectic/resolution.py",
+            "src/http_routes/substrate.py",
+            "src/http_routes/sentinel.py",
+        }, (
+            "a new outcome write path appeared. It is capped by default, so this "
+            "is not a vulnerability -- but confirm it should not be vouched, and "
+            "add it here deliberately."
+        )
+
+    def test_no_unvouched_caller_can_reach_the_top_two_grades(self):
+        """Ties the enumeration to the invariant: for every call site that does
+        NOT vouch itself, the grader is handed a ceiling."""
+        from src.outcome_corroboration import GRADE_ORDER, TOOL_OBSERVED
+
+        capped_rank = GRADE_ORDER.index(TOOL_OBSERVED)
+        # The two grades that assert a NON-AGENT observer saw this.
+        assert [g for g in GRADE_ORDER[capped_rank + 1:]] == [
+            "substrate_observed",
+            "externally_verified",
+        ]
+        assert TestCappingIsTheDefault._ceiling_seen(
+            {
+                "outcome_type": "task_completed",
+                "agent_id": "enumeration-check",
+                "detail": {"source": "sensor_sync", "evidence_source": "github"},
+                "verification_source": "external_signal",
+            }
+        ) == TOOL_OBSERVED
+
+
+class TestOperatorDecisionIsPinned:
+    """The operator decided (criterion: "best for federation") that capped rows
+    REMAIN eligible to train tactical calibration at exactly 0.65.
+
+    That decision rests on a factual claim about the gate's comparison
+    direction, which the author originally got backwards in the PR body. Pin the
+    fact so the recorded decision cannot be quietly invalidated by moving a
+    constant or flipping a `<` to `<=`.
+    """
+
+    def test_the_cap_lands_exactly_on_the_calibration_gate(self):
+        from src.mcp_handlers.observability.outcome_events import (
+            _MIN_TACTICAL_EVIDENCE_WEIGHT,
+        )
+        from src.outcome_corroboration import GRADE_WEIGHTS, TOOL_OBSERVED
+
+        assert GRADE_WEIGHTS[TOOL_OBSERVED] == _MIN_TACTICAL_EVIDENCE_WEIGHT
+
+    def test_a_capped_row_is_admitted_to_calibration_not_excluded(self):
+        """The actuation fact the decision was made against: the gate excludes
+        `evidence_weight < MIN`, so equality passes. A capped row still trains
+        calibration, and calibration_error reaches the drift/EISV path. If this
+        inverts, the operator's decision was made against a premise that no
+        longer holds and must be revisited, not silently inherited."""
+        from src.mcp_handlers.observability.outcome_events import (
+            _MIN_TACTICAL_EVIDENCE_WEIGHT,
+        )
+        from src.outcome_corroboration import GRADE_WEIGHTS, TOOL_OBSERVED
+
+        capped_weight = GRADE_WEIGHTS[TOOL_OBSERVED]
+        assert not (capped_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT), (
+            "a capped row is now EXCLUDED from calibration. That is a different "
+            "policy than the one recorded; re-open the operator decision."
+        )
+
+    def test_grades_below_the_cap_are_still_excluded(self):
+        """The gate must still do its original job."""
+        from src.mcp_handlers.observability.outcome_events import (
+            _MIN_TACTICAL_EVIDENCE_WEIGHT,
+        )
+        from src.outcome_corroboration import (
+            CLAIM_ONLY,
+            GRADE_WEIGHTS,
+            SELF_REPORT_WITH_REFS,
+        )
+
+        for grade in (CLAIM_ONLY, SELF_REPORT_WITH_REFS):
+            assert GRADE_WEIGHTS[grade] < _MIN_TACTICAL_EVIDENCE_WEIGHT, grade
+
+
 class TestCallerControlledEvidenceVocabulary:
     """Documents a caller-controlled path this PR does NOT close.
 
