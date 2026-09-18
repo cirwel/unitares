@@ -2449,6 +2449,51 @@ def check_grounding_stage_live(db_url: str) -> CheckResult:
                        f"{day} grounding_shadow events in 24h")
 
 
+def check_verification_floor_shadow_recorded(db_url: str) -> CheckResult:
+    """WARN if check-ins are flowing but the verification-floor shadow is not recorded.
+
+    ``GOVERNANCE_VERIFICATION_FLOOR_SHADOW`` defaults ON while the floor itself
+    defaults off, so a deployment that did not opt out is computing the signal on
+    every check-in. Between the Phase-2 wiring and #2169 none of it was stored,
+    and the failure was invisible: a shadow that records nothing looks exactly
+    like a shadow that found nothing.
+
+    This check exists so it cannot look like that again. ``auto_attest`` is
+    emitted once per check-in on the same pass, so it is the denominator that
+    says traffic existed. Traffic with no shadow rows is the "not recorded"
+    state, which is not a false-positive rate of zero.
+    """
+    name, mode = "verification_floor_shadow_recorded", "operator"
+    row = _psql_row(db_url, (
+        "SELECT "
+        "count(*) FILTER (WHERE event_type = 'verification_floor_shadow'), "
+        "count(*) FILTER (WHERE event_type = 'auto_attest') "
+        "FROM audit.events WHERE ts > now() - interval '7 days'"
+    ))
+    if row is None:
+        return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
+    shadow, checkins = int(row[0]), int(row[1])
+    if checkins == 0:
+        return CheckResult(name, mode, Status.SKIP,
+                           "no check-ins in 7d — nothing for the shadow to read")
+    if shadow == 0:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"0 verification_floor_shadow rows against {checkins} check-in(s) "
+            "in 7d — the shadow is default-on, so this reads NOT RECORDED, not "
+            "'no firings'",
+            detail="either the floor itself is enabled (in which case the "
+                   "applied signal is surfaced instead and this is expected), "
+                   "GOVERNANCE_VERIFICATION_FLOOR_SHADOW is false, "
+                   "GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD is 'off', or "
+                   "the sink detached — check before reading any rate from "
+                   "scripts/analysis/verification_floor_shadow_read.py",
+        )
+    return CheckResult(name, mode, Status.PASS,
+                       f"{shadow} verification_floor_shadow row(s) over "
+                       f"{checkins} check-in(s) in 7d")
+
+
 def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     """WARN if a non-authored Phi cold-start pause fires again after #1819.
 
@@ -3573,6 +3618,8 @@ def build_checks(
         Check("resident_checkin_stale", "operator", lambda: check_resident_checkin_stale(db_url)),
         Check("immortal_lease", "operator", lambda: check_immortal_lease(db_url)),
         Check("grounding_stage_live", "operator", lambda: check_grounding_stage_live(db_url)),
+        Check("verification_floor_shadow_recorded", "operator",
+              lambda: check_verification_floor_shadow_recorded(db_url)),
         Check("cold_start_pause_canary", "operator",
               lambda: check_cold_start_pause_canary(db_url)),
         Check("label_join_overlap", "operator", lambda: check_label_join_overlap(db_url)),

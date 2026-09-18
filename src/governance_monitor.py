@@ -258,6 +258,10 @@ class UNITARESMonitor:
         # state and omits the authoritative behavioral vector, risk/verdict
         # provenance, policy decision, and enforcement request).
         self._last_governance_result: Optional[Dict[str, Any]] = None
+        # Row for the verification-floor shadow sink, built mid-update (where the
+        # pre-floor verdict/risk pair still exists) and emitted once the decision
+        # is known. Rebuilt or cleared at the top of every update.
+        self._pending_verification_shadow_row: Optional[Dict[str, Any]] = None
         self._cached_outcome_history: Optional[list] = None  # Populated by Phase 5, used by process_update
 
         # Continuous self-validation: track previous verdict for trajectory comparison
@@ -1486,6 +1490,7 @@ class UNITARESMonitor:
         # shadow record.
         self._last_verification_signal = None
         self._last_verification_shadow = None
+        self._pending_verification_shadow_row = None
         if GovConfig.VERIFICATION_FLOOR_ENABLED:
             from governance_core.verification import score_harm_confession
             _vsig = score_harm_confession(agent_state.get('response_text', '') or '')
@@ -1494,10 +1499,13 @@ class UNITARESMonitor:
             )
             self._last_verification_signal = _vsig
         elif GovConfig.VERIFICATION_FLOOR_SHADOW:
-            # Shadow mode: same signal, zero verdict/risk effect. Recorded only
-            # when it WOULD fire, so stored check-ins accumulate the live
-            # false-positive/recall record the enable decision requires
-            # (verification-weighted-verdict-v0.md acceptance gate).
+            # Shadow mode: same signal, zero verdict/risk effect. The in-band
+            # result key is still surfaced only when the floor WOULD fire — a
+            # clean check-in should not grow a key that says nothing. The
+            # durable record is the other half and has the opposite rule: it
+            # writes the non-firings too, because the enable decision asks for a
+            # false-positive RATE and a numerator without a denominator cannot
+            # answer it (issue #2169; src/verification_floor_shadow.py).
             from governance_core.verification import score_harm_confession
             _vshadow = score_harm_confession(agent_state.get('response_text', '') or '')
             if _vshadow.score > 0.0:
@@ -1506,6 +1514,32 @@ class UNITARESMonitor:
                     f"verification floor SHADOW for {self.agent_id}: would raise "
                     f"to {_vshadow.verdict} (score {_vshadow.score:.2f}); not applied"
                 )
+            # Build the durable row here, where the pre-floor verdict/risk pair
+            # still exists, through the SAME pure combiner the enabled floor
+            # uses — so the recorded counterfactual is the real combination and
+            # not a reimplementation of it. Emitted after the decision is made.
+            try:
+                from src.verification_floor_shadow import (
+                    evaluate as _vshadow_eval,
+                    should_record as _vshadow_should_record,
+                )
+                _shadow_verdict_after, _shadow_risk_after = apply_verification_floor(
+                    unitares_verdict, risk_score, _vshadow.verdict, _vshadow.score,
+                )
+                if _vshadow_should_record(_vshadow.score > 0.0):
+                    self._pending_verification_shadow_row = _vshadow_eval(
+                        _vshadow,
+                        response_text=agent_state.get('response_text', '') or '',
+                        verdict_before=unitares_verdict,
+                        risk_before=risk_score,
+                        verdict_after=_shadow_verdict_after,
+                        risk_after=_shadow_risk_after,
+                        measurement_scope=(
+                            "simulation" if self._simulation_active else "live"
+                        ),
+                    )
+            except Exception as exc:  # optional measurement, mandatory path
+                logger.debug(f"verification floor shadow row skipped: {exc}")
 
         # Name the verdict's actual authority source separately from the EISV
         # vector source.  These are not interchangeable during cold start: the
@@ -1567,6 +1601,32 @@ class UNITARESMonitor:
                                  ))
         except Exception as exc:
             logger.debug(f"coherence gate shadow skipped: {exc}")
+
+        # Emit the verification-floor shadow row now that the decision exists:
+        # the verdict delta alone does not say whether enabling the floor would
+        # have cost anyone a pause, and pairing it with the action the
+        # deployment actually took does. `decision` is the pre-gap-suppression
+        # action here, matching what `log_auto_attest` records below, so the two
+        # are joinable. MUTATES NOTHING and fails open.
+        _vshadow_row = getattr(self, "_pending_verification_shadow_row", None)
+        if _vshadow_row is not None:
+            try:
+                from src.verification_floor_shadow import (
+                    attach_live_decision as _vshadow_attach,
+                    record as _vshadow_record,
+                )
+                _vshadow_record(
+                    audit_logger,
+                    getattr(self, "agent_id", "") or "unknown",
+                    _vshadow_attach(
+                        _vshadow_row,
+                        action=decision.get("action"),
+                        sub_action=decision.get("sub_action"),
+                        live_verdict=unitares_verdict,
+                    ),
+                )
+            except Exception as exc:
+                logger.debug(f"verification floor shadow record skipped: {exc}")
 
         # Pre-flag gap-suppression so calibration, audit, and history can record
         # the *original* verdict truthfully — the actual decision mutation
