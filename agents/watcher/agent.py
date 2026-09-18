@@ -1401,12 +1401,46 @@ def _classify_model_failure(exc: Exception) -> str:
     return "error"
 
 
+# A file larger than one window is scanned as several regions, each its own
+# model call. Each region used to clear the failure counter on success, so a
+# region that failed and a later region that succeeded left the counter at
+# zero: a file with an unscanned region read as a healthy scan. While a chunked
+# pass is running, regions report into this record instead, and the pass
+# clears the counter once, only if every region's model call was usable.
+_chunk_pass: dict | None = None
+
+
+def _run_chunked(detector: str, file_path: str, regions: list[str], one) -> list:
+    """Scan every region, then settle the failure counter for the whole file."""
+    global _chunk_pass
+    outer = _chunk_pass
+    _chunk_pass = {"detector": detector, "failed": 0, "succeeded": 0}
+    found: list = []
+    try:
+        for r in regions:
+            found.extend(one(r))
+        state = _chunk_pass
+    finally:
+        _chunk_pass = outer
+    if state["failed"]:
+        log(
+            f"{detector} {file_path}: {state['failed']} of {len(regions)} regions "
+            "had unusable model output; the file is not fully scanned",
+            "warning",
+        )
+    elif state["succeeded"]:
+        _clear_model_failures(detector)
+    return found
+
+
 def _record_model_failure(exc: Exception, detector: str = "scan") -> None:
     """Count consecutive model-call failures; escalate once at the threshold.
 
     Best-effort throughout — a detector that cannot report its own death must
     still not crash the scan that discovered it.
     """
+    if _chunk_pass is not None and _chunk_pass["detector"] == detector:
+        _chunk_pass["failed"] += 1
     failure_class = _classify_model_failure(exc)
     path = _model_failure_path(detector)
     try:
@@ -1434,7 +1468,14 @@ def _record_model_failure(exc: Exception, detector: str = "scan") -> None:
 
 
 def _clear_model_failures(detector: str = "scan") -> None:
-    """Reset the counter after a successful model call, for that detector only."""
+    """Reset the counter after a successful model call, for that detector only.
+
+    Inside a chunked pass this only notes the success; _run_chunked decides
+    once every region has reported.
+    """
+    if _chunk_pass is not None and _chunk_pass["detector"] == detector:
+        _chunk_pass["succeeded"] += 1
+        return
     path = _model_failure_path(detector)
     try:
         if path.exists():
@@ -2889,10 +2930,10 @@ def scan_file(
             regions = []
         if len(regions) > 1:
             log(f"scan {file_path}: {len(regions)} regions to cover the whole file")
-            found: list[Finding] = []
-            for r in regions:
-                found.extend(scan_file(file_path, region=r, persist=persist))
-            return found
+            return _run_chunked(
+                "scan", file_path, regions,
+                lambda r: scan_file(file_path, region=r, persist=persist),
+            )
         region = regions[0] if regions else None
 
 
@@ -3014,10 +3055,10 @@ def review_file(
             regions = []
         if len(regions) > 1:
             log(f"review {file_path}: {len(regions)} regions to cover the whole file")
-            found: list[Finding] = []
-            for r in regions:
-                found.extend(review_file(file_path, region=r, persist=persist))
-            return found
+            return _run_chunked(
+                "review", file_path, regions,
+                lambda r: review_file(file_path, region=r, persist=persist),
+            )
         region = regions[0] if regions else None
 
     log(f"review {file_path} region={region or 'head'}")

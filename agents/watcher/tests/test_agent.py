@@ -4885,3 +4885,67 @@ def test_the_prompt_actually_carries_the_canary_first(watcher_module):
     assert prompt.count(watcher_module.PROMPT_CANARY) >= 2, (
         "the prompt must both plant the token and ask for it back"
     )
+
+
+# --- Chunked files: one region's success must not erase another's failure ---
+
+
+def _two_region_file(watcher_module, tmp_path, monkeypatch, detector):
+    target = tmp_path / f"{detector}.py"
+    target.write_text("a = 1\nb = 2\nc = 3\nd = 4\n")
+    monkeypatch.setattr(watcher_module, "should_skip", lambda _p: (False, ""))
+    monkeypatch.setattr(watcher_module, "chunk_regions", lambda _p, *a, **k: ["1-2", "3-4"])
+    monkeypatch.setattr(watcher_module, "parse_findings", lambda *a, **k: [])
+    return target
+
+
+def _run(watcher_module, detector, target):
+    fn = watcher_module.scan_file if detector == "scan" else watcher_module.review_file
+    return fn(str(target), persist=False)
+
+
+@pytest.mark.parametrize("detector", ["scan", "review"])
+def test_failed_region_is_not_cleared_by_a_later_good_region(
+    watcher_module, tmp_path, monkeypatch, detector
+):
+    """Each region used to clear the counter on success, so region 1 failing
+    and region 2 succeeding left no trace: a file with an unscanned half read
+    as a healthy scan (review 4f1e72c1fe043fce, condition 2)."""
+    target = _two_region_file(watcher_module, tmp_path, monkeypatch, detector)
+    calls = {"n": 0}
+
+    def model(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("model down for region 1")
+        return {"text": '{"findings": []}', "model_used": "m", "tokens_used": 1}
+
+    monkeypatch.setattr(watcher_module, "call_model", model)
+
+    _run(watcher_module, detector, target)
+
+    assert calls["n"] == 2, "both regions must still be attempted"
+    path = watcher_module._model_failure_path(detector)
+    assert path.exists(), "region 1's failure was erased by region 2's success"
+    assert json.loads(path.read_text())["count"] == 1
+
+
+@pytest.mark.parametrize("detector", ["scan", "review"])
+def test_fully_usable_chunked_file_clears_the_counter(
+    watcher_module, tmp_path, monkeypatch, detector
+):
+    """The control: when every region is usable the counter clears, as a
+    single-window scan's success always has."""
+    target = _two_region_file(watcher_module, tmp_path, monkeypatch, detector)
+    watcher_module._record_model_failure(RuntimeError("earlier outage"), detector)
+    assert watcher_module._model_failure_path(detector).exists()
+    monkeypatch.setattr(
+        watcher_module,
+        "call_model",
+        lambda *a, **k: {"text": '{"findings": []}', "model_used": "m", "tokens_used": 1},
+    )
+
+    _run(watcher_module, detector, target)
+
+    assert not watcher_module._model_failure_path(detector).exists()
+    assert watcher_module._chunk_pass is None, "the chunked-pass record must not leak"
