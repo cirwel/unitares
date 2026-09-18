@@ -11,6 +11,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 try:
     import asyncpg
 except ImportError:
@@ -201,13 +203,23 @@ async def ensure_test_database_schema() -> None:
         await conn.close()
 
 
-# Tables to truncate for test isolation. Order respects FK constraints.
+# Tables to truncate for test isolation. Order respects FK constraints, and
+# the list must name every table CASCADE would reach. A table left off the
+# list still gets truncated -- CASCADE finds it -- but it is then locked in an
+# order Postgres derives at runtime rather than one this list declares, which
+# is how a TRUNCATE and a concurrent FK-checking DELETE can take the same two
+# tables in opposite orders. `test_truncate_tables_covers_cascade_reachable`
+# fails if a new foreign key adds a child that is not named here.
 TRUNCATE_TABLES = [
+    "coordination.session_resolution_sagas",
     "core.dialectic_messages",
     "core.dialectic_sessions",
     "core.agent_state",
     "core.agent_sessions",
     "core.agent_baselines",
+    "core.agent_behavioral_baselines",
+    "core.agent_process_bindings",
+    "core.substrate_claims",
     "core.session_bindings",
     "core.onboard_pins",
     "core.sessions",
@@ -225,6 +237,39 @@ TRUNCATE_TABLES = [
 
 TRUNCATE_SQL = f"TRUNCATE {', '.join(TRUNCATE_TABLES)} CASCADE"
 
+async def truncate_test_tables(conn, *, attempts: int = 3) -> None:
+    """Run the per-test TRUNCATE, retrying a deadlock and reporting its DETAIL.
+
+    Two reasons this is not a plain `conn.execute(TRUNCATE_SQL)`:
+
+    A deadlock is a *transient* condition by definition -- Postgres picks a
+    victim arbitrarily and the documented remedy is to retry. Failing a build
+    on one is reporting the coin flip, not a defect. This is test-harness
+    scope only: TRUNCATE is never issued by the server, so nothing in
+    production can reach this path, and a retry here cannot mask a product
+    bug.
+
+    The DETAIL line is the reason a deadlock is diagnosable at all -- it names
+    both processes and the statements they were holding. On 2026-09-17 a
+    deadlock took `tests/db/test_lineage_lifecycle_storage.py` down in CI and
+    the log was gone by the time anyone looked, leaving no way to tell which
+    statement was the other side. Printing it means the next one is
+    actionable even if it never reproduces locally.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            await conn.execute(TRUNCATE_SQL)
+            return
+        except Exception as exc:  # asyncpg.exceptions.DeadlockDetectedError
+            if type(exc).__name__ != "DeadlockDetectedError" or attempt == attempts:
+                raise
+            print(
+                f"[test-db] TRUNCATE deadlocked (attempt {attempt}/{attempts}); "
+                f"retrying. server detail: {getattr(exc, 'detail', None)!r}"
+            )
+            await asyncio.sleep(0.25 * attempt)
+
+
 CALIBRATION_RESET_SQL = """
     INSERT INTO core.calibration (id, data, version)
     VALUES (TRUE, '{}', 1)
@@ -241,3 +286,107 @@ def test_truncate_sql_includes_all_tables():
     """TRUNCATE_SQL should reference all tables in TRUNCATE_TABLES."""
     for table in TRUNCATE_TABLES:
         assert table in TRUNCATE_SQL, f"Missing {table} in TRUNCATE_SQL"
+
+
+@pytest.mark.asyncio
+async def test_truncate_tables_covers_cascade_reachable():
+    """Every table CASCADE would reach must be named in TRUNCATE_TABLES.
+
+    An unlisted child is still truncated, so nothing fails visibly -- but it
+    is locked in an order Postgres derives rather than one this list declares.
+    `core.agent_behavioral_baselines`, `core.agent_process_bindings` and
+    `core.substrate_claims` sat in that state and are the reason this check
+    exists. The point is to fail when a *new* foreign key adds another.
+    """
+    if not can_connect_to_test_db():
+        pytest.skip("governance_test database not available")
+
+    import asyncpg
+
+    conn = await asyncpg.connect(TEST_DB_URL)
+    try:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT conrelid::regclass::text AS child
+              FROM pg_constraint
+             WHERE contype = 'f'
+               AND confrelid::regclass::text = ANY($1::text[])
+            """,
+            TRUNCATE_TABLES,
+        )
+    finally:
+        await conn.close()
+
+    listed = set(TRUNCATE_TABLES)
+    missing = sorted(r["child"] for r in rows if r["child"] not in listed)
+    assert not missing, (
+        "foreign-key children reachable by TRUNCATE ... CASCADE but not named "
+        f"in TRUNCATE_TABLES: {missing}. Add them (children before parents) so "
+        "the lock order stays declared rather than derived."
+    )
+
+
+@pytest.mark.asyncio
+async def test_truncate_retries_a_deadlock_then_succeeds():
+    """The retry must actually fire, not just exist."""
+
+    class _Deadlock(Exception):
+        __name__ = "DeadlockDetectedError"
+        detail = "Process 1 waits for AccessExclusiveLock; Process 2 waits ..."
+
+    _Deadlock.__name__ = "DeadlockDetectedError"
+
+    class _Conn:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, sql):
+            self.calls += 1
+            if self.calls == 1:
+                raise _Deadlock()
+            return "TRUNCATE"
+
+    conn = _Conn()
+    await truncate_test_tables(conn, attempts=3)
+    assert conn.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_truncate_gives_up_after_the_last_attempt():
+    """A persistent deadlock must still fail, not loop or pass silently."""
+
+    class _Deadlock(Exception):
+        detail = None
+
+    _Deadlock.__name__ = "DeadlockDetectedError"
+
+    class _Conn:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, sql):
+            self.calls += 1
+            raise _Deadlock()
+
+    conn = _Conn()
+    with pytest.raises(_Deadlock):
+        await truncate_test_tables(conn, attempts=2)
+    assert conn.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_truncate_does_not_retry_other_errors():
+    """Only a deadlock is transient; everything else must surface at once."""
+
+    class _Conn:
+        def __init__(self):
+            self.calls = 0
+
+        async def execute(self, sql):
+            self.calls += 1
+            raise RuntimeError("undefined_table")
+
+    conn = _Conn()
+    with pytest.raises(RuntimeError):
+        await truncate_test_tables(conn, attempts=3)
+    assert conn.calls == 1
