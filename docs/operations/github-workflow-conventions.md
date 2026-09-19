@@ -115,7 +115,13 @@ the test run one.
   real review from an author's own. A record whose reviewer is the PR's own
   author is not a review.
 - Bot PRs (dependabot) get no exemption: the incident that motivated "no
-  mechanical exemption" was a dependency bump.
+  mechanical exemption" was a dependency bump. Nobody has to remember them
+  either: `review_gate.py sweep` (scheduled every 30 min on the operator's
+  host) reviews, one per run, any ready PR from the owner's account or
+  dependabot that has no record for its current diff and has been quiet
+  for 15 minutes. Drafts are left to their owner's `ship.sh`; outside
+  contributors' PRs get a human first. A lock in the git common dir keeps
+  the sweep and a `ship.sh` review from running the same diff twice.
 
 `ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
 every change** — runtime, docs, or tests:

@@ -255,3 +255,39 @@ def test_reviewer_input_survives_a_non_utf8_file_name(repo):
     _git(repo, "commit", "-q", "-m", "odd name")
     _git(repo, "config", "core.quotePath", "false")
     assert "bad-" in rg.diff_text("master", "HEAD")
+
+
+def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
+    return {"number": n, "isDraft": draft, "author": {"login": login},
+            "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
+
+
+def test_sweep_takes_ready_owner_and_dependabot_prs_only():
+    from datetime import datetime, timezone
+    now = datetime(2026, 9, 19, 1, 0, tzinfo=timezone.utc).timestamp()
+    prs = [
+        _pr(1),                                        # owner, ready, quiet: yes
+        _pr(2, login="app/dependabot"),                # dependabot: yes
+        _pr(3, draft=True),                            # draft: owner's ship.sh reviews it
+        _pr(4, login="stranger"),                      # outside author: a human first
+        _pr(5, updated="2026-09-19T00:55:00Z"),        # pushed 5 min ago: not yet
+    ]
+    got = [p["number"] for p in rg.sweep_candidates(prs, "cirwel", now, 15 * 60)]
+    assert got == [1, 2]
+
+
+def test_review_lock_is_exclusive_and_releases(repo):
+    with rg.review_lock("k" * 64) as first:
+        assert first.held
+        with rg.review_lock("k" * 64) as second:
+            assert not second.held and second.holder_alive()
+    with rg.review_lock("k" * 64) as again:
+        assert again.held
+
+
+def test_a_lock_left_by_a_dead_process_is_taken_over(repo):
+    lock = rg.review_lock("k" * 64)
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    lock.path.write_text("999999")  # no such pid
+    with rg.review_lock("k" * 64) as got:
+        assert got.held

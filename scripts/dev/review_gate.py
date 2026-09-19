@@ -13,6 +13,7 @@ test-cache.sh made the test run one.
                    a human, another model) as the record for this diff
     dispose        post dispositions for a FINDINGS record, clearing it
     key            print the diff key for HEAD
+    sweep          review one ready PR with no record for its diff (scheduled)
     ci             (workflow only) set the `review` commit status on a PR head
 
 The diff key
@@ -344,6 +345,49 @@ def _resolve(args) -> tuple[int, str, str, str]:
     return info["number"], repo_slug(), key, info["headRefName"]
 
 
+class review_lock:
+    """One review per diff on this machine, across every worktree.
+
+    Lives in the git common dir, so ship.sh's background review in an agent's
+    worktree and the scheduled sweep see the same lock. A lock whose pid is
+    gone is stale and taken over.
+    """
+
+    def __init__(self, key: str):
+        common = Path(git("rev-parse", "--git-common-dir").strip()).resolve()
+        self.path = common / "review-gate" / f"{key}.lock"
+        self.held = False
+
+    def holder_alive(self) -> bool:
+        try:
+            os.kill(int(self.path.read_text().strip()), 0)
+            return True
+        except (FileNotFoundError, ValueError, ProcessLookupError):
+            return False
+        except PermissionError:
+            return True
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                if self.holder_alive():
+                    return self
+                self.path.unlink(missing_ok=True)
+                continue
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            self.held = True
+            break
+        return self
+
+    def __exit__(self, *exc):
+        if self.held:
+            self.path.unlink(missing_ok=True)
+
+
 def cmd_review(args) -> int:
     pr, repo, key, branch = _resolve(args)
     reviewer = args.reviewer or default_reviewer(branch)
@@ -356,6 +400,14 @@ def cmd_review(args) -> int:
         print(f"[review] already recorded for this diff: {desc}\n{existing.url}")
         return 0 if state == "success" else 1
 
+    with review_lock(key) as lock:
+        if not lock.held:
+            print("[review] a review of this diff is already running on this machine")
+            return 0
+        return _review_locked(args, pr, key, reviewer)
+
+
+def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     out_dir = Path(CACHE_DIR) / key
     out_dir.mkdir(parents=True, exist_ok=True)
     diff_path = (out_dir / "diff.txt").resolve()
@@ -419,6 +471,69 @@ def cmd_dispose(args) -> int:
     return 0
 
 
+BOT_AUTHORS = {"app/dependabot", "dependabot", "dependabot[bot]"}
+
+
+def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> list[dict]:
+    """Open PRs the sweep may review, oldest-updated first.
+
+    - Drafts are skipped: a draft is "still working, hands off", and its owner's
+      ship.sh already reviews each push.
+    - Only the owner's account and dependabot: a stranger's PR gets a human
+      first, not a model running over its code on this machine.
+    - Nothing updated in the last `quiet_s`: the pusher's own review may be
+      about to start, and the lock only sees reviews already running.
+    """
+    from datetime import datetime
+
+    out = []
+    for p in prs:
+        login = (p.get("author") or {}).get("login", "")
+        if p.get("isDraft"):
+            continue
+        if login.lower() != owner.lower() and login not in BOT_AUTHORS:
+            continue
+        updated = datetime.fromisoformat(p["updatedAt"].replace("Z", "+00:00")).timestamp()
+        if now - updated < quiet_s:
+            continue
+        out.append(p)
+    return sorted(out, key=lambda p: p["updatedAt"])
+
+
+def cmd_sweep(args) -> int:
+    """Review at most ONE PR per run: bounded cost, and launchd never overlaps
+    a job with itself. Runs THIS script (the caller's trusted checkout) with
+    its cwd in `--worktree`, detached at the PR head — the PR's own copy of
+    this script is never executed."""
+    repo = repo_slug()
+    prs = gh_json("pr", "list", "--state", "open", "--limit", "100", "--json",
+                  "number,isDraft,author,headRefOid,headRefName,baseRefName,updatedAt")
+    for p in sweep_candidates(prs, repo.split("/")[0], time.time(), args.quiet_minutes * 60):
+        n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
+        git("fetch", "--quiet", "--no-tags", "origin",
+            f"+refs/heads/{base}:refs/remotes/origin/{base}",
+            f"+refs/pull/{n}/head:refs/review-gate/pr-{n}")
+        if git("rev-parse", f"refs/review-gate/pr-{n}").strip() != head:
+            continue  # pushed since the listing; next run
+        key = diff_key(f"origin/{base}", head)
+        if latest_matching(pr_comments(repo, n), key) is not None:
+            continue
+        if review_lock(key).holder_alive():
+            continue
+        print(f"[sweep] PR #{n} ({p['headRefName']}) has no review for {key[:12]}")
+        if args.dry_run:
+            continue
+        wt = Path(args.worktree).expanduser()
+        if wt.exists():
+            _run(["git", "-C", str(wt), "checkout", "--quiet", "--detach", head])
+        else:
+            git("worktree", "add", "--quiet", "--detach", str(wt), head)
+        return subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                               "--pr", str(n), "review"], cwd=wt).returncode
+    print("[sweep] nothing to review")
+    return 0
+
+
 def cmd_key(args) -> int:
     print(diff_key(args.base or DEFAULT_BASE, "HEAD"))
     return 0
@@ -477,6 +592,12 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("key", help="print the diff key for HEAD")
 
+    sw = sub.add_parser("sweep", help="review one ready PR that has no record (scheduled)")
+    sw.add_argument("--worktree", required=True,
+                    help="worktree to check PR heads out into (created if missing)")
+    sw.add_argument("--quiet-minutes", type=int, default=15)
+    sw.add_argument("--dry-run", action="store_true")
+
     c = sub.add_parser("ci", help="workflow: set the review status on a PR head")
     c.add_argument("--repo", required=True)
     c.add_argument("--post-status", action="store_true")
@@ -485,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
     return {"review": cmd_review, "record": cmd_record, "dispose": cmd_dispose,
-            "key": cmd_key, "ci": cmd_ci}[args.cmd](args)
+            "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
 
 
 if __name__ == "__main__":
