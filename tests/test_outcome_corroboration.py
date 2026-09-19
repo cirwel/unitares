@@ -1,7 +1,9 @@
 from src.outcome_corroboration import (
     NO_CEILING,
+    SERVER_SET_TOOL_TRIGGERS,
     assess_outcome_corroboration,
     enrich_detail_with_corroboration,
+    tool_observation_triggers,
 )
 
 
@@ -386,3 +388,68 @@ def test_top_level_provenance_argument_still_short_circuits():
     assert assess_outcome_corroboration(
         "trajectory_validated", {"source": "trajectory_self_validation"}, "server_observation"
     ).grade == "substrate_observed"
+
+
+class TestToolObservationTriggerOrigin:
+    """The 0.65 tier is the calibration admission threshold, so WHICH trigger
+    fired is a governance fact, not a detail. These pin the two properties the
+    provenance-split diagnostic reads:
+    ``scripts/diagnostics/outcome_evidence_provenance_split.py``.
+    """
+
+    def test_trigger_enumeration_agrees_with_the_grading_verdict(self):
+        """The enumerator is the boolean predicate's only implementation, so a
+        future trigger added to one cannot go missing from the other."""
+        cases = [
+            {},
+            {"summary": "did the thing"},
+            {"phase5_emitter": True},
+            {"kind": "test", "exit_code": 0},
+            {"tool": "pytest", "returncode": 1},
+            {"source": "recent_tool_results"},
+            {"tool_results": [{"ok": True}]},
+            {"captured_output": "..."},
+            {"phase5_emitter": True, "kind": "command", "exit_code": 0},
+        ]
+        for detail in cases:
+            fired = bool(tool_observation_triggers(detail))
+            graded = assess_outcome_corroboration(
+                "task_completed", detail, "agent_reported_tool_result"
+            ).grade
+            assert fired is (graded == "tool_observed"), detail
+
+    def test_only_phase5_emitter_is_server_set(self):
+        """Every other trigger is caller-authored vocabulary: an agent that
+        DESCRIBES a tool call reaches the same grade as one the server watched.
+        If a trigger becomes server-set, it belongs in this set — and if a new
+        caller-authored one is added, this test says so out loud."""
+        assert SERVER_SET_TOOL_TRIGGERS == {"phase5_emitter"}
+
+        caller_authored = [
+            {"kind": "test", "exit_code": 0},
+            {"tool": "pytest", "exit_code": 0},
+            {"source": "tool_result"},
+            {"command_results": ["ok"]},
+            {"observed_command": "pytest -q"},
+        ]
+        for detail in caller_authored:
+            triggers = tool_observation_triggers(detail)
+            assert triggers, detail
+            assert not (triggers & SERVER_SET_TOOL_TRIGGERS), detail
+            assert (
+                assess_outcome_corroboration(
+                    "task_completed", detail, "agent_reported_tool_result"
+                ).evidence_weight
+                == 0.65
+            ), detail
+
+    def test_a_clamped_row_can_sit_at_0_65_with_no_trigger_at_all(self):
+        """The diagnostic's ``no_trigger_clamped`` bucket is a real state, not a
+        parse failure: substrate evidence capped to the provenance ceiling lands
+        at tool_observed without any tool trigger firing."""
+        detail = {"source": "server_observation", "verified": True}
+        assessment = assess_outcome_corroboration(
+            "task_completed", detail, "agent_reported_tool_result"
+        )
+        assert assessment.grade == "tool_observed"
+        assert tool_observation_triggers(detail) == set()

@@ -323,21 +323,48 @@ def _has_substrate_evidence(detail: Mapping[str, Any], verification_source: str 
     return False
 
 
-def _has_tool_observation(detail: Mapping[str, Any]) -> bool:
+#: The single TOOL_OBSERVED trigger the SERVER sets. ``phase5_emitter`` is
+#: written by the phase-5 emitter itself (``src/mcp_handlers/updates/phases.py``)
+#: and is stripped from caller-supplied detail on the public path, so a caller
+#: cannot spell it. Every other trigger below is caller-authored vocabulary: an
+#: agent that DESCRIBES a tool call in the right shape reaches the same grade as
+#: one the server watched make it.
+#:
+#: This asymmetry is recorded, not resolved. 0.65 is also the calibration
+#: admission threshold (``_MIN_TACTICAL_EVIDENCE_WEIGHT``), so the distinction
+#: decides whether a row trains the tactical channel. Narrowing the set is an
+#: operator call that wants the distribution first --
+#: ``scripts/diagnostics/outcome_evidence_provenance_split.py`` reports it.
+SERVER_SET_TOOL_TRIGGERS = frozenset({"phase5_emitter"})
+
+
+def tool_observation_triggers(detail: Mapping[str, Any]) -> set[str]:
+    """Names of the evidence triggers in ``detail`` that reach TOOL_OBSERVED.
+
+    Returns every trigger that fires, not just the first, so a reader can tell
+    a server-observed row from one whose only evidence is the caller's own
+    description of a tool call. ``_has_tool_observation`` is the boolean view;
+    the grading verdict is unchanged either way.
+    """
+    triggers: set[str] = set()
     if _truthy(detail.get("phase5_emitter")):
-        return True
+        triggers.add("phase5_emitter")
     source = _source_text(detail)
     if any(marker in source for marker in _TRUSTED_TOOL_SOURCES):
-        return True
+        triggers.add("trusted_tool_source")
     kind = str(detail.get("kind") or "").lower()
     if kind in {"test", "command", "lint", "build", "file_op", "tool_call"} and "exit_code" in detail:
-        return True
+        triggers.add("kind_with_exit_code")
     if detail.get("tool") and ("exit_code" in detail or "returncode" in detail):
-        return True
+        triggers.add("tool_with_return_code")
     for key in ("tool_results", "command_results", "observed_command", "captured_output"):
         if _nonempty(detail.get(key)):
-            return True
-    return False
+            triggers.add(f"payload:{key}")
+    return triggers
+
+
+def _has_tool_observation(detail: Mapping[str, Any]) -> bool:
+    return bool(tool_observation_triggers(detail))
 
 
 def _verified_fields_from_contexts(
