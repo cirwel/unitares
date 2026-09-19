@@ -6,6 +6,7 @@ returns, which is what the verdict path consumes -- a predicate that is correct
 but unapplied would pass the former and fail these.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -61,6 +62,45 @@ class _Backend(ToolUsageMixin):
                 return False
 
         return _Ctx()
+
+
+
+class _RecordingConn:
+    """Captures what the shared write path actually hands the database."""
+
+    DETAIL_ARG_INDEX = 13  # agent..is_bad (5) + eisv_* (8) -> detail is $15
+
+    def __init__(self):
+        self.calls = []
+
+    async def fetchval(self, query, *args):
+        self.calls.append((query, args))
+        return "outcome-id"
+
+    def stored_detail(self, call=0):
+        return json.loads(self.calls[call][1][self.DETAIL_ARG_INDEX])
+
+
+class _RecordingAcquire:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+class _WritePathHarness(ToolUsageMixin):
+    """The real ToolUsageMixin over a recording connection, so a test can read
+    the row the mixin would have written rather than simulating it."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        return _RecordingAcquire(self.conn)
 
 
 def _run(coro):
@@ -343,34 +383,83 @@ class TestCappingIsTheDefault:
         ) == "tool_observed"
 
     def test_public_handler_strips_a_caller_supplied_trust_key(self):
-        """A caller must not be able to vouch for ITSELF. The invariant above is
-        behavioural; this guards the one line that keeps the key from reaching
-        it through the decorated MCP tool."""
-        import inspect
+        """A caller must not be able to vouch for ITSELF.
+
+        This asserted on `inspect.getsource` until an external review pointed
+        out what source-text coverage permits: leave the pop in a dead branch,
+        or re-add the flag after it, and the assertion stays green while caller
+        trust is accepted. It now runs the public tool and reads the ceiling
+        the grader was actually handed.
+        """
+        from unittest.mock import patch
         from src.mcp_handlers.observability import outcome_events as oe
 
-        src = inspect.getsource(oe.handle_outcome_event)
-        code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
-        assert "_gate_args.pop(_TRUSTED_INGESTION_KEY, None)" in code
+        seen = {}
+
+        async def _spy(arguments):
+            seen["args"] = dict(arguments)
+            return {"success": True, "outcome_id": "x"}
+
+        forged = {
+            "outcome_type": "task_completed",
+            "agent_id": "test-agent-selfvouch",
+            "verification_source": "server_observation",
+            "detail": {"source": "sensor_sync", "verified": True},
+            "_trusted_ingestion": True,
+        }
+        with patch.object(oe, "_record_outcome_event_inline", _spy):
+            _run(oe.handle_outcome_event(dict(forged)))
+
+        # The assertion is on what the handler FORWARDS, because that is the
+        # only place the pop is observable. Asserting the resulting ceiling
+        # cannot work: the handler also forces verification_source down to
+        # agent_reported_tool_result, so trusted and untrusted resolve to the
+        # same "tool_observed" and the removed pop stays invisible. Two
+        # independent controls, and this one pins the control it names.
+        assert "_trusted_ingestion" not in seen.get("args", {}), seen
+        # The other control, asserted here so removing EITHER is visible.
+        assert seen["args"].get("verification_source") == "agent_reported_tool_result"
 
     def test_trusted_call_sites_are_the_expected_four(self):
-        """A new `_trusted_ingestion=True` is a trust grant and should be a
-        deliberate, reviewable act -- not something that accretes."""
+        """A new trust grant should be a deliberate, reviewable act -- not
+        something that accretes.
+
+        This matched two exact source SPELLINGS until an external review
+        pointed out that `args[_TRUSTED_INGESTION_KEY] = internal`, or any
+        helper, evades both while granting the same trust. It now finds every
+        module that so much as names the key, by AST, in either form: the
+        string literal or the constant.
+        """
+        import ast
         import pathlib as _pl
 
         root = _pl.Path(__file__).parent.parent
-        vouched = sorted(
-            str(f.relative_to(root))
-            for f in root.glob("src/**/*.py")
-            if '"_trusted_ingestion": True' in f.read_text()
-            or 'args["_trusted_ingestion"] = True' in f.read_text()
-        )
-        assert vouched == [
+        key = "_trusted_ingestion"
+        const = "_TRUSTED_INGESTION_KEY"
+        vouched = set()
+        for f in sorted(root.glob("src/**/*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and node.value == key:
+                    vouched.add(str(f.relative_to(root)))
+                if isinstance(node, (ast.Name, ast.Attribute)) and (
+                    getattr(node, "id", None) or getattr(node, "attr", None)
+                ) == const:
+                    vouched.add(str(f.relative_to(root)))
+
+        assert vouched == {
+            # Where the key is DEFINED and where it is stripped off the public
+            # path -- the boundary itself, not a grant.
+            "src/mcp_handlers/observability/outcome_events.py",
+            # The four grants.
             "src/http_routes/sentinel.py",
             "src/http_routes/substrate.py",
             "src/mcp_handlers/dialectic/resolution.py",
             "src/mcp_handlers/updates/phases.py",
-        ], vouched
+        }, vouched
 
 
 class TestEveryWritePathIsAccountedFor:
@@ -448,19 +537,18 @@ class TestEveryWritePathIsAccountedFor:
         import ast
         import pathlib as _pl
 
-        root = _pl.Path(__file__).parent.parent
-        callers = set()
-        for f in sorted(root.glob("src/**/*.py")):
-            try:
-                tree = ast.parse(f.read_text())
-            except (SyntaxError, UnicodeDecodeError):
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and getattr(
-                    node.func, "attr", None
-                ) == "record_outcome_event":
-                    callers.add(str(f.relative_to(root)))
+        # Matching `ast.Call` on `node.func.attr` missed a whole shape:
+        # `from ...tool_usage import record_outcome_event as _write` then
+        # `_write(...)` is an ast.Name call and was invisible. That is the same
+        # evasion already closed for the recorder below, and an external review
+        # caught it still open here. _referencing_modules sees any reference.
+        callers = TestEveryWritePathIsAccountedFor._referencing_modules(
+            "record_outcome_event"
+        )
 
+        # The defining module is absent by construction: _referencing_modules
+        # matches imports and references, not a `def`, so `tool_usage.py` --
+        # which declares the method and never calls it -- does not appear.
         assert callers == {
             "src/mcp_handlers/observability/outcome_events.py",
             # FOUR direct writers here bypass _record_outcome_event_inline
@@ -476,34 +564,70 @@ class TestEveryWritePathIsAccountedFor:
         ceiling, so a row capped at tool_observed/0.65 was STORED as
         substrate_observed/0.85 and the tool response disagreed with the
         database -- in the direction that flattered the claim.
+
+        This test was TAUTOLOGICAL until an external review read it: it wrote
+        `stored_detail = dict(response_detail)` and asserted they matched,
+        never calling `db.record_outcome_event` at all. The headline test for
+        the headline fix did not touch the code it named, and reverting the
+        mixin left it green -- the same class of defect this PR already
+        committed twice. It now drives the real mixin over a recording
+        connection and reads the row.
         """
         from src.outcome_corroboration import (
             TOOL_OBSERVED,
-            ceiling_for_verification_source,
             enrich_detail_with_corroboration,
         )
 
-        detail = {"verified": True, "source": "sensor_sync"}
-        vs = "agent_reported_tool_result"
+        # Detail whose free text grades externally_verified when ungated, so
+        # the two paths give DIFFERENT answers and the assertion can fail.
+        detail = {"pr": 123, "verified": True, "source": "github"}
+        vs = "external_signal"
 
         response_detail = enrich_detail_with_corroboration(
             dict(detail), outcome_type="task_completed",
             verification_source=vs, ceiling=TOOL_OBSERVED,
         )
-        # What the mixin now does with that already-graded detail.
-        stored_detail = dict(response_detail)
-
         assert response_detail["corroboration_grade"] == "tool_observed"
-        assert stored_detail["corroboration_grade"] == response_detail["corroboration_grade"]
-        assert stored_detail["evidence_weight"] == response_detail["evidence_weight"]
 
-        # And an UNgraded detail reaching the mixin is capped by provenance,
-        # which is what the four direct phases.py writers now get.
-        fresh = enrich_detail_with_corroboration(
-            dict(detail), outcome_type="task_completed",
-            verification_source=vs, ceiling=ceiling_for_verification_source(vs),
-        )
-        assert fresh["corroboration_grade"] == "tool_observed"
+        conn = _RecordingConn()
+        _run(_WritePathHarness(conn).record_outcome_event(
+            agent_id="agent-persist",
+            outcome_type="task_completed",
+            is_bad=False,
+            detail=dict(response_detail),
+            verification_source=vs,
+            corroboration_applied=True,
+        ))
+        stored = conn.stored_detail()
+
+        # Drop the `corroboration_applied` skip and the mixin re-grades this
+        # under ceiling_for_verification_source("external_signal") ==
+        # externally_verified, storing 1.00 against a 0.65 response.
+        assert stored["corroboration_grade"] == response_detail["corroboration_grade"]
+        assert stored["evidence_weight"] == response_detail["evidence_weight"]
+        assert stored["evidence_weight"] == 0.65
+
+    def test_an_ungraded_detail_reaching_the_mixin_is_capped_by_provenance(self):
+        """What the four direct phases.py writers now get.
+
+        Honest about its own strength: with the grader itself default-deny,
+        deleting the mixin's explicit `ceiling=` argument leaves this green,
+        because the omitted argument resolves to the same provenance default.
+        It pins the OUTCOME, and the redundancy is deliberate -- the explicit
+        ceiling is belt over braces, not the only control.
+        """
+        conn = _RecordingConn()
+        _run(_WritePathHarness(conn).record_outcome_event(
+            agent_id="agent-direct",
+            outcome_type="task_completed",
+            is_bad=False,
+            detail={"verified": True, "source": "sensor_sync"},
+            verification_source="agent_reported_tool_result",
+        ))
+        stored = conn.stored_detail()
+
+        assert stored["corroboration_grade"] == "tool_observed"
+        assert stored["evidence_weight"] == 0.65
 
     def test_a_caller_cannot_supply_its_own_grade(self):
         """A forged grade in `detail` is neutralised twice over, and NEITHER
