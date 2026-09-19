@@ -255,3 +255,61 @@ def test_reviewer_input_survives_a_non_utf8_file_name(repo):
     _git(repo, "commit", "-q", "-m", "odd name")
     _git(repo, "config", "core.quotePath", "false")
     assert "bad-" in rg.diff_text("master", "HEAD")
+
+
+def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
+    return {"number": n, "isDraft": draft, "author": {"login": login},
+            "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
+
+
+def test_sweep_takes_ready_owner_and_dependabot_prs_only():
+    from datetime import datetime, timezone
+    now = datetime(2026, 9, 19, 1, 0, tzinfo=timezone.utc).timestamp()
+    prs = [
+        _pr(1),                                        # owner, ready, quiet: yes
+        _pr(2, login="app/dependabot"),                # dependabot: yes
+        _pr(3, draft=True),                            # draft: owner's ship.sh reviews it
+        _pr(4, login="stranger"),                      # outside author: a human first
+        _pr(5, updated="2026-09-19T00:55:00Z"),        # pushed 5 min ago: not yet
+    ]
+    got = [p["number"] for p in rg.sweep_candidates(prs, "cirwel", now, 15 * 60)]
+    assert got == [1, 2]
+
+
+def test_review_lock_is_exclusive_and_releases(repo):
+    with rg.review_lock("k" * 64) as first:
+        assert first.held
+        with rg.review_lock("k" * 64) as second:
+            assert not second.held and second.holder_alive()
+    with rg.review_lock("k" * 64) as again:
+        assert again.held
+
+
+def test_a_lock_is_released_when_its_holder_dies(repo):
+    # Codex on #2319: the pid-file lock let two processes both "take over".
+    # A flock is released by the kernel when the holder exits, even by kill.
+    lock = rg.review_lock("k" * 64)
+    lock.path.parent.mkdir(parents=True, exist_ok=True)
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import fcntl,os,sys,time;fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR);"
+         "fcntl.flock(fd,fcntl.LOCK_EX);print('held',flush=True);time.sleep(60)",
+         str(lock.path)], stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline().strip() == "held"
+    with rg.review_lock("k" * 64) as got:
+        assert not got.held and got.holder_alive()
+    holder.kill()
+    holder.wait()
+    with rg.review_lock("k" * 64) as got:
+        assert got.held
+
+
+def test_failed_runs_counts_only_failed_records_for_the_key():
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FAILED", 0, False, "codex")),
+        _comment(rg.Record(k, "FAILED", 0, False, "codex")),
+        _comment(rg.Record("x" * 64, "FAILED", 0, False, "codex")),
+        _comment(rg.Record(k, "FAILED", 0, False, "codex"), association="NONE"),
+    ]
+    assert rg.failed_runs(comments, k) == 2
