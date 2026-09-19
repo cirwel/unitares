@@ -59,6 +59,7 @@ FACILITATION_NEEDED = "dialectic_facilitation_needed"
 WRITE_REFUSED = "dialectic_write_refused"
 WRITE_OVERLAP = "dialectic_write_overlap"
 SWEEP_CYCLE = "dialectic_sweep_cycle"
+REVIEWER_ABSTAINED = "dialectic_reviewer_abstained"
 
 # The three guarded writes the sweeper can have refused. Shared with the
 # sweeper's own `details` entries so the event payload and the returned summary
@@ -251,6 +252,93 @@ async def emit_write_refused(
         logger.warning(
             "%s audit emit failed: session=%s attempted=%s source=%s err=%s",
             WRITE_REFUSED, session_id, attempted, source, exc,
+        )
+
+
+async def emit_reviewer_abstained(
+    *,
+    session_id: str,
+    reviewer_agent_id: Optional[str] = None,
+    paused_agent_id: Optional[str] = None,
+    phase: Optional[str] = None,
+    reviewer_backend: Optional[dict] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """Record that a reviewer reached the session and could not form a judgment.
+
+    A reviewer that cannot judge must not file a verdict: doing so claims the
+    session's single reviewer slot and records a BINDING rejection whose
+    reasoning is empty, which blocks the paused agent, tells it nothing it can
+    act on, and locks out a reviewer that could judge. That happened live on
+    2026-09-19 (session 99ff6f25a310d23e, PR #2316) when the selected backend
+    was unavailable and the free local fallback returned prose.
+
+    WHY THIS EXISTS
+    ---------------
+    Abstaining silently fixes the wrong half. An abstention that reaches only
+    the reviewer's stdout leaves `dialectic(action='get')` showing an open slot,
+    which is indistinguishable from *no reviewer was ever spawned* and from *the
+    reviewer crashed before reaching the model*. Those are three different
+    findings and the liveness sweep later collapses all of them into
+    `phase=failed`, losing the cause.
+
+    ⛔That is exactly the state this module's own `emit_write_refused` was
+    written to escape: measurement-authority state 3 (*not recorded*) reported
+    with the same sentence as state 4 (recorded, genuinely absent). A positive
+    abstention event establishes that a reviewer ran, reached its model, and
+    came back without a judgment -- a fact about the BACKEND, not about the
+    proposal under review.
+
+    ⛔**This event never claims the reviewer slot and never advances the phase.**
+    It is a note that an attempt happened. `reviewer_agent_id` is whoever made
+    the attempt, which is emphatically NOT an assignment: recording it as one
+    would reintroduce the lock-out this exists to prevent.
+
+    Deliberately does NOT carry the model's unparseable output. It is untrusted
+    text of unbounded size on a path that must stay cheap, and the backend
+    identity in `reviewer_backend` is what a reader needs to act -- whether the
+    selected host answered, or a fallback did.
+
+    Fail-soft: the caller has already declined to file a verdict by the time
+    this runs, so a failure here costs observability, never correctness. It must
+    never convert an abstention into a filed verdict.
+
+    Args:
+        session_id: the session the reviewer was working.
+        reviewer_agent_id: the agent that attempted the review, if bound.
+        paused_agent_id: the session's paused agent; populates the indexed
+            `agent_id` column, matching how the emitters above attribute.
+        phase: the phase the session was in when the attempt was abandoned.
+        reviewer_backend: the provenance stamp for the backend that answered
+            (host, model, whether a fallback fired).
+        reason: short machine-readable cause, e.g. ``no_parseable_verdict``.
+    """
+    try:
+        from src.audit_db import append_audit_event_async
+
+        await append_audit_event_async({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": REVIEWER_ABSTAINED,
+            "agent_id": paused_agent_id,
+            # Top-level session_id populates the indexed audit.events column;
+            # duplicated in details for payload self-containment, as above.
+            "session_id": session_id,
+            "details": {
+                "session_id": session_id,
+                "reviewer_agent_id": reviewer_agent_id,
+                "paused_agent_id": paused_agent_id,
+                "phase": phase,
+                "reviewer_backend": reviewer_backend,
+                "reason": reason,
+                # Stated in the payload so a reader never has to infer it from
+                # the absence of a later assignment event.
+                "slot_claimed": False,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "%s audit emit failed: session=%s reviewer=%s reason=%s err=%s",
+            REVIEWER_ABSTAINED, session_id, reviewer_agent_id, reason, exc,
         )
 
 
