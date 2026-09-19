@@ -314,6 +314,36 @@ def build_continuation_prompt(
     )
 
 
+#: One repair attempt, then abstain. A weaker local model routinely forms a
+#: perfectly good judgment and then fails the JSON envelope; a single re-ask
+#: separates that formatting slip from a model that genuinely cannot judge, and
+#: only the second deserves an abstention. More attempts would just be waiting:
+#: the paused agent is blocked throughout and this reviewer holds no slot while
+#: it retries. Raised from zero on 2026-09-19 review: one-shot abstention
+#: treated a transient parse failure as proof that no judgment could be formed.
+_VERDICT_REPAIR_ATTEMPTS = 1
+
+
+def build_repair_prompt(thesis: Thesis, unparseable: str) -> str:
+    """Re-ask for the judgment already made, in the shape the protocol needs.
+
+    Deliberately NOT a fresh review: re-running the original prompt would
+    invite a different verdict and turn a formatting retry into quiet
+    reviewer-shopping. The model's own unusable reply is quoted back so it can
+    restate the same position as JSON.
+    """
+    return (
+        build_review_prompt(thesis)
+        + "\n\n---\nYOUR PREVIOUS REPLY COULD NOT BE PARSED. It is quoted below.\n"
+        "Do NOT reconsider the thesis and do NOT change your position — restate "
+        "the SAME judgment you already reached, as STRICT JSON and nothing "
+        "else, with no prose before or after it and no markdown fence:\n"
+        '{"agrees": true | false, "root_cause": "...", '
+        '"proposed_conditions": ["..."], "reasoning": "..."}\n\n'
+        f"YOUR UNPARSEABLE REPLY:\n{unparseable[:4000]}"
+    )
+
+
 def parse_reviewer_verdict(model_text: str) -> Verdict:
     """Derive a Verdict from raw model output. Pure.
 
@@ -649,6 +679,16 @@ def _verdict_with_ratified_conditions(
     if not verdict.agrees or verdict.proposed_conditions:
         return verdict
 
+    # Unreachable-by-construction, so state it as a check rather than trust it.
+    # The early return above excludes `not verdict.agrees`, and every parse
+    # failure yields agrees=False, so a verdict reaching here has judged. That
+    # invariant is implicit and would break silently if the parser or the guard
+    # above changed — and breaking it would DROP A REAL OBJECTION, the exact
+    # failure class this module now exists to prevent. Fail loudly instead.
+    assert verdict.judgment_formed, (
+        "a verdict with no judgment reached the approval-downgrade path; "
+        "the early return above should have made this impossible"
+    )
     inherited = paused_response.get("proposed_conditions") or previous_verdict.proposed_conditions
     if isinstance(inherited, str):
         inherited = [inherited] if inherited.strip() else []
@@ -672,9 +712,11 @@ def _verdict_with_ratified_conditions(
         ).strip(),
         degraded=True,
         # The model DID judge here — it approved, just without naming terms.
-        # That objection is real and must still be filed, so this path stays
-        # judgment_formed=True and never abstains.
-        judgment_formed=verdict.judgment_formed,
+        # That objection is real and must still be filed, so this path never
+        # abstains. A literal True, not verdict.judgment_formed: this branch
+        # DERIVES a protocol objection, so the judgment is formed here whatever
+        # the input carried. The assert above is what keeps that honest.
+        judgment_formed=True,
     )
 
 
@@ -807,8 +849,27 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
     reviewer_text = await obtain_reviewer_text(build_review_prompt(thesis))
-    provenance = reviewer_backend_provenance()
     verdict = parse_reviewer_verdict(reviewer_text)
+    for _ in range(_VERDICT_REPAIR_ATTEMPTS):
+        if verdict.judgment_formed:
+            break
+        logger.warning(
+            "Dialectic reviewer got no parseable judgment on session %s; "
+            "re-asking once for the same verdict in the required shape before "
+            "abstaining.",
+            thesis.session_id,
+        )
+        try:
+            reviewer_text = await obtain_reviewer_text(
+                build_repair_prompt(thesis, reviewer_text)
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed repair just abstains
+            logger.warning("Dialectic reviewer repair attempt failed: %r", exc)
+            break
+        verdict = parse_reviewer_verdict(reviewer_text)
+    # Read provenance AFTER the last attempt, so it names the backend that
+    # actually produced the verdict being filed rather than the first one tried.
+    provenance = reviewer_backend_provenance()
 
     # ABSTAIN rather than file a non-judgment.
     #

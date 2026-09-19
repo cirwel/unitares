@@ -93,9 +93,15 @@ def test_payload_is_json_serializable():
 # --------------------------------------------------------------------------- #
 # The submission actually carries it
 # --------------------------------------------------------------------------- #
-def _run_reviewer_capturing_calls(provenance, verdict_text):
-    """Drive run() far enough to capture the antithesis submission."""
+def _run_reviewer_capturing_calls(provenance, verdict_text, *, prompts=None):
+    """Drive run() far enough to capture the antithesis submission.
+
+    ``verdict_text`` may be a single reply (returned for every call) or a list
+    of replies served in order, which is how the one repair attempt is
+    exercised. Pass ``prompts`` to capture the prompts run() actually sent.
+    """
     calls = []
+    replies = list(verdict_text) if isinstance(verdict_text, list) else None
 
     class FakeClient:
         agent_uuid = "reviewer-uuid"
@@ -123,7 +129,11 @@ def _run_reviewer_capturing_calls(provenance, verdict_text):
 
     async def fake_obtain(prompt):
         r._record_reviewer_provenance(provenance)
-        return verdict_text
+        if prompts is not None:
+            prompts.append(prompt)
+        if replies is None:
+            return verdict_text
+        return replies.pop(0) if replies else ""
 
     # unitares_sdk is imported lazily inside run(); stub it so the test needs
     # no SDK install and no network.
@@ -212,3 +222,45 @@ def test_submission_does_not_touch_signature():
     )
     for _, args in calls:
         assert "signature" not in args
+
+
+# ----------------- one repair attempt before abstaining (Q5) ---------------- #
+def test_a_formatting_slip_is_repaired_rather_than_abstained_on():
+    """A model that judged but botched the envelope must not cost a review.
+
+    Raised by independent review on 2026-09-19: abstaining on a single
+    unparseable reply treats a transient formatting failure as proof that no
+    judgment could be formed. It is not.
+    """
+    prompts: list[str] = []
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE,
+        [
+            "Sure! Here is my review: the conditions look shallow.",  # no JSON
+            '{"agrees": false, "root_cause": "shallow", "reasoning": "no"}',
+        ],
+        prompts=prompts,
+    )
+    antithesis = [args for name, args in calls if args.get("action") == "antithesis"]
+    assert antithesis, "the repaired verdict was thrown away"
+    synthesis = [args for name, args in calls if args.get("action") == "synthesis"]
+    assert synthesis and synthesis[0]["agrees"] is False
+    assert synthesis[0]["root_cause"] == "shallow"
+
+    # The repair must RE-ASK for the same judgment, not invite a fresh one —
+    # re-running the original prompt would be quiet reviewer-shopping.
+    assert len(prompts) == 2
+    assert "COULD NOT BE PARSED" in prompts[1]
+    assert "do NOT change your position" in prompts[1]
+
+
+def test_abstention_survives_a_failed_repair_and_is_bounded_to_one():
+    """Still abstains when the repair also fails — and re-asks exactly once."""
+    prompts: list[str] = []
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE, ["prose", "still prose"], prompts=prompts
+    )
+    assert calls == [], f"filed anyway: {[a.get('action') for _, a in calls]}"
+    assert len(prompts) == 2, (
+        f"expected exactly one repair attempt, got {len(prompts) - 1}"
+    )
