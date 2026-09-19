@@ -134,6 +134,31 @@ governance tools and OFFLINE hooks, which is a coherent posture: reads and
 manual `sync_state` calls still work through the MCP connector, and only the
 automatic lifecycle is absent.
 
+## The review gate cannot run from a cloud session
+
+A third gap, in the same family and worth knowing before shipping cloud-session
+work: `scripts/dev/review.sh` cannot satisfy the `review` status check from a
+cloud container.
+
+- `review_gate.py` reads the PR and posts the record with `gh pr view` and
+  `gh pr comment`. Cloud sessions have no `gh` — GitHub access is the MCP
+  server instead — so every subcommand, `record` included, fails at
+  `FileNotFoundError: 'gh'`.
+- The reviewer is heterogeneous by construction: `default_reviewer` picks
+  `codex` for any branch not named `codex/*`. There is no `codex` CLI in the
+  container either.
+
+Self-reviewing is not the workaround, and the gate already refuses it —
+`cmd_record` rejects a record whose reviewer name matches the branch prefix,
+and the module docstring says to treat an author's record as no review. So a PR
+pushed from a cloud session stays `review`-pending until someone runs
+`./scripts/dev/review.sh` from a machine that has `gh` and the reviewing CLI,
+or records a human or council review there with
+`./scripts/dev/review.sh record <file> --reviewer-name <who>`.
+
+The record is keyed on the diff, so it can be produced at any later point
+without re-pushing.
+
 ## What this does not cover
 
 The audit establishes that the hooks run and fail open in a residentless
