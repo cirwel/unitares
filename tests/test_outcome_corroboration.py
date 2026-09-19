@@ -118,14 +118,18 @@ def test_enrich_detail_adds_additive_metadata():
     assert detail["claim_risk"] == "high"
 
 
-def test_caller_substrate_vocabulary_reaches_substrate_observed_ungated():
-    """Pins the hole the ceiling exists to close.
+def test_caller_substrate_vocabulary_alone_no_longer_earns_substrate():
+    """The asymmetry is closed at the GRADER, not just at the boundary.
 
-    _has_substrate_evidence matches _TRUSTED_SUBSTRATE_MARKERS against
-    _source_text with NO verified-marker requirement -- unlike
-    _has_external_evidence, which requires both. `source` is not among the keys
-    outcome_events._strip_provenance_claims removes, so a bare agent claim
-    reached 0.85, above the 0.65 calibration gate.
+    _has_substrate_evidence used to match _TRUSTED_SUBSTRATE_MARKERS against
+    _source_text with NO verified-marker requirement, while
+    _has_external_evidence required both. Since `source` is not among the keys
+    outcome_events._strip_provenance_claims removes, a bare agent claim reached
+    0.85 -- above the 0.65 calibration gate -- on an assertion alone.
+
+    The handler ceiling caps that at the public boundary. This asserts the
+    weaker premise is gone outright, so a future surface that never learns
+    about the ceiling still cannot buy substrate authority with a string.
     """
     assessment = assess_outcome_corroboration(
         "task_completed",
@@ -133,14 +137,46 @@ def test_caller_substrate_vocabulary_reaches_substrate_observed_ungated():
         "agent_reported_tool_result",
     )
 
-    assert assessment.grade == "substrate_observed"
-    assert assessment.evidence_weight == 0.85
+    assert assessment.grade == "claim_only"
+    assert assessment.evidence_weight == 0.10
+
+
+def test_substrate_and_external_are_now_gated_symmetrically():
+    """Both paths require a verified marker AND a trusted source string."""
+    marker_only = assess_outcome_corroboration(
+        "task_completed", {"substrate_verified": True}, "agent_reported_tool_result"
+    )
+    source_only = assess_outcome_corroboration(
+        "task_completed", {"source": "sensor_sync"}, "agent_reported_tool_result"
+    )
+    both = assess_outcome_corroboration(
+        "task_completed",
+        {"source": "sensor_sync", "substrate_verified": True},
+        "agent_reported_tool_result",
+    )
+
+    assert marker_only.grade != "substrate_observed"
+    assert source_only.grade != "substrate_observed"
+    assert both.grade == "substrate_observed"
+
+
+def test_server_controlled_provenance_still_short_circuits():
+    """Tightening the free-text path must not disarm real server ingestion,
+    which reaches its grade through verification_source, not through detail."""
+    assert assess_outcome_corroboration(
+        "trajectory_validated",
+        {"source": "trajectory_self_validation"},
+        "server_observation",
+    ).grade == "substrate_observed"
+    assert assess_outcome_corroboration(
+        "task_completed", {"pr": 1}, "external_signal"
+    ).grade == "externally_verified"
 
 
 def test_ceiling_caps_caller_claimed_substrate():
     assessment = assess_outcome_corroboration(
         "task_completed",
-        {"source": "sensor_sync", "summary": "did the thing"},
+        {"source": "sensor_sync", "substrate_verified": True, "summary": "did it"},
         "agent_reported_tool_result",
         ceiling="tool_observed",
     )
@@ -200,7 +236,7 @@ def test_ceiling_unset_or_unrecognised_is_a_noop():
 
 def test_enrich_threads_the_ceiling_into_persisted_metadata():
     out = enrich_detail_with_corroboration(
-        {"source": "sensor_sync"},
+        {"source": "sensor_sync", "substrate_verified": True},
         outcome_type="task_completed",
         verification_source="agent_reported_tool_result",
         ceiling="tool_observed",
@@ -242,7 +278,7 @@ def test_capping_never_raises_a_verification_flag_it_did_not_earn():
     """Capping TO tool_observed must not assert a tool observation."""
     capped = assess_outcome_corroboration(
         "task_completed",
-        {"source": "sensor_sync", "test_command": "pytest -q"},
+        {"source": "sensor_sync", "substrate_verified": True, "test_command": "pytest -q"},
         "agent_reported_tool_result",
         ceiling="tool_observed",
     )
@@ -266,7 +302,11 @@ def test_stored_self_attested_row_regrades_to_the_capped_value():
     row's caller-supplied detail text can still claim."""
     from src.outcome_corroboration import ceiling_for_verification_source
 
-    stored_detail = {"source": "sensor_sync", "summary": "did the thing"}
+    stored_detail = {
+        "source": "sensor_sync",
+        "substrate_verified": True,
+        "summary": "did the thing",
+    }
     source = "agent_reported_tool_result"
 
     uncapped = assess_outcome_corroboration("task_completed", stored_detail, source)

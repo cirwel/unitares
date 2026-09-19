@@ -296,7 +296,9 @@ def _has_substrate_evidence(detail: Mapping[str, Any], verification_source: str 
         return True
     for context in _nested_contexts(detail):
         source = _source_text(context)
-        if any(marker in source for marker in _TRUSTED_SUBSTRATE_MARKERS):
+        if _has_verified_marker(context) and any(
+            marker in source for marker in _TRUSTED_SUBSTRATE_MARKERS
+        ):
             return True
     return False
 
