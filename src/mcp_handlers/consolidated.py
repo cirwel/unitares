@@ -133,7 +133,7 @@ def _observe_operator_refusal(
                     "action": "declare_lineage",
                     "call": (
                         "onboard(force_new=true, parent_agent_id=<prior UUID>, "
-                        "spawn_reason='new_session')"
+                        "spawn_reason='explicit')"
                     ),
                     "when": "A finished predecessor explicitly handed this work to you.",
                 },

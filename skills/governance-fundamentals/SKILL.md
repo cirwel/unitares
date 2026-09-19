@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-09-18"
+last_verified: "2026-09-19"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
@@ -221,7 +221,7 @@ The system tracks whether your stated confidence matches evidence. Over time thi
 
 When the numbers look surprising, do not guess first. Use:
 
-- `identity()` to verify who the runtime thinks you are
+- `identity(client_session_id=...)` to verify who the runtime thinks you are, trusting it only when `identity_assurance.caller_proven` is true (with no arguments it can resolve to a neighbour)
 - `health_check()` to verify the server and knowledge graph are healthy
 - `check_working_state()` for the current interpreted state, risk provenance,
   and compatibility thresholds
