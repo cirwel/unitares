@@ -29,7 +29,7 @@ while keeping their own models, tools, and runtimes. They interoperate with
 each other over their own transports or A2A; UNITARES is the record behind
 them, not the transport between them.
 
-The goal is simple: agent work should remain attributable, reviewable, and
+Agent work should remain attributable, reviewable, and
 recoverable even when the process that started it is gone.
 
 ## What UNITARES gives you
