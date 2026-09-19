@@ -221,6 +221,13 @@ class Verdict:
     # True when we could not extract a real model judgment and fell back to a
     # conservative default. A fallback verdict must DISAGREE — never rubber-stamp.
     degraded: bool = False
+    # False ONLY when no judgment was formed at all (the model returned nothing
+    # we could parse). This is NOT the same as `degraded`: a model that judged
+    # and was then conservatively downgraded — approving without naming the
+    # terms it ratifies — is degraded but HAS judged, and its objection is real
+    # and must still be filed. A verdict with judgment_formed=False is not a
+    # verdict; see run(), which abstains on it rather than filing it.
+    judgment_formed: bool = True
 
 
 def build_review_prompt(thesis: Thesis) -> str:
@@ -324,6 +331,7 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
             reasoning="Reviewer model returned no parseable verdict; defaulting to "
             "disagreement (no independent approval without a real judgment).",
             degraded=True,
+            judgment_formed=False,
         )
     try:
         obj = json.loads(match.group(0))
@@ -335,6 +343,7 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
             reasoning="Reviewer model emitted malformed JSON; defaulting to "
             "disagreement.",
             degraded=True,
+            judgment_formed=False,
         )
 
     agrees = _coerce_bool(obj.get("agrees"))
@@ -349,6 +358,7 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
         proposed_conditions=conditions,
         reasoning=str(obj.get("reasoning", "")).strip(),
         degraded=False,
+        judgment_formed=True,
     )
 
 
@@ -650,6 +660,7 @@ def _verdict_with_ratified_conditions(
             proposed_conditions=inherited,
             reasoning=verdict.reasoning,
             degraded=verdict.degraded,
+            judgment_formed=verdict.judgment_formed,
         )
     return Verdict(
         agrees=False,
@@ -660,6 +671,10 @@ def _verdict_with_ratified_conditions(
             + " Approval omitted the conditions being ratified; retaining the objection."
         ).strip(),
         degraded=True,
+        # The model DID judge here — it approved, just without naming terms.
+        # That objection is real and must still be filed, so this path stays
+        # judgment_formed=True and never abstains.
+        judgment_formed=verdict.judgment_formed,
     )
 
 
@@ -754,6 +769,18 @@ async def continue_after_disagreement(
         next_verdict = _verdict_with_ratified_conditions(
             parse_reviewer_verdict(model_text), paused_response, current_verdict
         )
+        if not next_verdict.judgment_formed:
+            # Same rule as the initial verdict. Filing this would burn a
+            # synthesis round and overwrite a REASONED standing rejection with
+            # an empty one — the paused agent would lose the objection it was
+            # answering. Preserve it, exactly as the timeout and model-failure
+            # branches above already do.
+            logger.warning(
+                "Dialectic continuation produced no parseable judgment; "
+                "preserving the standing rejection rather than filing a "
+                "non-verdict over it"
+            )
+            return current_verdict
         result = await client.call_tool(
             "dialectic",
             {
@@ -782,6 +809,39 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     reviewer_text = await obtain_reviewer_text(build_review_prompt(thesis))
     provenance = reviewer_backend_provenance()
     verdict = parse_reviewer_verdict(reviewer_text)
+
+    # ABSTAIN rather than file a non-judgment.
+    #
+    # A reviewer that could not form a judgment has not reviewed anything.
+    # Filing here would claim the open reviewer slot and record a BINDING
+    # rejection whose reasoning is empty: it blocks the paused agent, tells it
+    # nothing it can act on, is indistinguishable on the record from a reasoned
+    # rejection, and — because the slot is now taken — locks out a reviewer that
+    # COULD judge. Fail-closed must mean "no approval", never "silent
+    # rejection"; those are different verdicts and only one of them is honest
+    # about what happened.
+    #
+    # This is the posture the IN-PROCESS synthetic reviewer already takes
+    # ("the fully-degraded case ... the session stays open rather than
+    # fabricating one", _synthetic_review_approves in
+    # src/mcp_handlers/dialectic/handlers.py). The orchestrated path simply
+    # never had it.
+    #
+    # Live instance, 2026-09-19, session 99ff6f25a310d23e on PR #2316: the
+    # codex backend was unavailable, the fallback gemma4 returned no parseable
+    # verdict, and the PR acquired a reasonless standing rejection — while an
+    # independent reviewer holding a reproduced counterexample was refused the
+    # slot four minutes later. The operator had asked for a non-evasive review
+    # and got a blocking non-answer.
+    if not verdict.judgment_formed:
+        logger.warning(
+            "Dialectic reviewer ABSTAINING on session %s: %s produced no "
+            "parseable judgment. No verdict filed; the reviewer slot is left "
+            "OPEN for a reviewer that can judge.",
+            thesis.session_id,
+            _reviewer_audit_text(provenance),
+        )
+        return verdict
 
     client = GovernanceClient(governance_url)
     await client.connect()
@@ -896,6 +956,17 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 — a reviewer crash must be loud, not silent
         print(f"FATAL: reviewer failed: {exc!r}", flush=True)
         return 1
+    if not verdict.judgment_formed:
+        # Distinct from 0 (reviewed) and from 1 (crashed): the reviewer ran,
+        # reached the model, and could not form a judgment. "The producer ran
+        # and found nothing" and "the producer never ran" are different
+        # findings and must not share an exit code.
+        print(
+            "reviewer ABSTAINED: no parseable judgment; no verdict filed and "
+            "the reviewer slot was left OPEN",
+            flush=True,
+        )
+        return 3
     print(f"reviewer done: agrees={verdict.agrees} degraded={verdict.degraded}", flush=True)
     return 0
 

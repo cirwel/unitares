@@ -152,20 +152,57 @@ def test_antithesis_submission_carries_reviewer_backend():
     assert stored["model_used"] == "served-002"
 
 
+DEGRADED_PROVENANCE = {
+    "backend": "ollama",
+    "host_id": "ollama:local",
+    "models_used": ["gemma4:latest"],
+    "fallback_from": "codex:host-adapter",
+}
+
+
 def test_antithesis_provenance_survives_a_degraded_fallback():
-    degraded_provenance = {
-        "backend": "ollama",
-        "host_id": "ollama:local",
-        "models_used": ["gemma4:latest"],
-        "fallback_from": "codex:host-adapter",
-    }
+    """A fallback backend that STILL judges must record that it was a fallback.
+
+    This is the half of the original contract that survives the abstention
+    rule: the verdict is real, so it is filed, and the record has to show it
+    came from the free local model rather than the selected host — replaying 14
+    real theses put those 36-50% apart.
+
+    ``degraded`` is False here on purpose. It describes the VERDICT (could we
+    extract a judgment), not the BACKEND (which host answered). A fallback that
+    produced a parseable judgment is an intact verdict from a weaker model, and
+    ``fallback_from`` is what says so.
+    """
     calls = _run_reviewer_capturing_calls(
-        degraded_provenance, "not json at all"  # forces a degraded verdict
+        DEGRADED_PROVENANCE, '{"agrees": false, "root_cause": "shallow", "reasoning": "no"}'
     )
     antithesis = [args for name, args in calls if args.get("action") == "antithesis"]
+    assert antithesis, "a fallback backend that judged must still file its verdict"
     stored = antithesis[0]["observed_metrics"]["reviewer_backend"]
     assert stored["fallback_from"] == "codex:host-adapter"
-    assert stored["degraded"] is True
+    assert stored["degraded"] is False
+
+
+def test_no_parseable_judgment_files_nothing_at_all():
+    """THE LIVE INCIDENT, pinned: 2026-09-19, session 99ff6f25a310d23e, PR #2316.
+
+    codex was unavailable, the fallback gemma4 returned nothing parseable, and
+    the old code filed that non-answer as a BINDING rejection with empty
+    reasoning — claiming the reviewer slot, blocking the paused agent, and
+    locking out an independent reviewer that arrived four minutes later holding
+    a reproduced counterexample.
+
+    A reviewer that could not judge has not reviewed. It must file NOTHING, so
+    the slot stays open for one that can. Fail-closed means "no approval", not
+    "silent rejection".
+    """
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE, "not json at all"  # exactly what gemma4 returned
+    )
+    assert calls == [], (
+        "a reviewer with no judgment filed something anyway: "
+        f"{[args.get('action') for _, args in calls]}"
+    )
 
 
 def test_submission_does_not_touch_signature():
