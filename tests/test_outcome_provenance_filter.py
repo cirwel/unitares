@@ -492,6 +492,36 @@ class TestEveryWritePathIsAccountedFor:
         )
         assert fresh["corroboration_grade"] == "tool_observed"
 
+    def test_a_caller_cannot_supply_its_own_grade(self):
+        """The shared write path SKIPS re-grading a detail that already carries a
+        grade -- that is what stops the cap being undone at persistence. It also
+        makes the grader's own output fields caller-forgeable unless they are
+        stripped: a caller supplying corroboration_grade="externally_verified"
+        would otherwise have it persisted verbatim.
+
+        Found by the author while preparing this diff for review, before it
+        shipped. The public path's enrich() overwrote these fields, so this is
+        defence in depth rather than a live hole being closed.
+        """
+        from src.mcp_handlers.observability.outcome_events import (
+            _strip_provenance_claims,
+        )
+
+        forged = {
+            "corroboration_grade": "externally_verified",
+            "evidence_weight": 1.0,
+            "claim_risk": "low",
+            "verified_fields": ["pr", "commit"],
+            "summary": "trust me",
+            "nested": {"corroboration_reasons": ["fabricated"], "keep": 1},
+        }
+        clean = _strip_provenance_claims(forged)
+
+        assert clean == {"summary": "trust me", "nested": {"keep": 1}}
+        # And the skip condition the mixin uses is therefore unreachable from a
+        # caller on the public path.
+        assert not clean.get("corroboration_grade")
+
     def test_grader_is_default_deny(self):
         """Omission and explicit None must both cap; only the sentinel lifts.
 

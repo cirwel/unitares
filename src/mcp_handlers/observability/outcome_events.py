@@ -716,7 +716,24 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     return response
 
 
-_PROVENANCE_CLAIM_KEYS = frozenset({"verification_source", "phase5_emitter"})
+_PROVENANCE_CLAIM_KEYS = frozenset({
+    "verification_source",
+    "phase5_emitter",
+    # The grader's OWN output. The shared write path skips re-grading a detail
+    # that already carries a grade (so the cap is not undone at persistence),
+    # which makes these caller-forgeable unless stripped: a caller supplying
+    # corroboration_grade="externally_verified" would otherwise have it
+    # persisted verbatim. Introduced by the fix for that re-grading defect and
+    # caught before it shipped; the public path's enrich() overwrote them, so
+    # this is defence in depth rather than a live hole.
+    "corroboration_grade",
+    "evidence_weight",
+    "claim_risk",
+    "claimed_fields",
+    "verified_fields",
+    "unverified_fields",
+    "corroboration_reasons",
+})
 
 #: Internal, never caller-settable. Its ABSENCE means untrusted, so a write
 #: path that forgets everything is capped rather than uncapped -- the inversion
