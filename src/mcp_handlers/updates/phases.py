@@ -2338,6 +2338,10 @@ async def _post_update_phase5_evidence(ctx: UpdateContext) -> None:
                 if evidence_mode == "shadow":
                     detail["shadow_write"] = True
                 await _record_outcome_event_inline({
+                    # In-process emitter: vouched, but its ceiling still comes
+                    # from the provenance below, so these agent-attested rows
+                    # stay capped exactly as the public path's do.
+                    "_trusted_ingestion": True,
                     "outcome_type": outcome_type,
                     "is_bad": is_bad,
                     "prediction_id": _prediction_id_for_phase5_evidence(ctx, evidence),
