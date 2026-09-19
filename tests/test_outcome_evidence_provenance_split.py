@@ -115,23 +115,23 @@ async def test_eligibility_tracks_the_real_gate_not_a_proxy_field():
     """
     pool = _FakePool([
         # Eligible, and in the tactical lane.
-        _row("a1", {"corroboration_grade": "tool_observed", "kind": "test",
-                    "exit_code": 0, "reported_confidence": 0.8},
+        _row("a1", {"corroboration_grade": "tool_observed", "evidence_weight": 0.65,
+                    "kind": "test", "exit_code": 0, "reported_confidence": 0.8},
              outcome_type="test_passed"),
         # Excluded -> not eligible at all, despite a confidence.
-        _row("a2", {"corroboration_grade": "tool_observed", "kind": "test",
-                    "exit_code": 0, "reported_confidence": 0.8,
+        _row("a2", {"corroboration_grade": "tool_observed", "evidence_weight": 0.65,
+                    "kind": "test", "exit_code": 0, "reported_confidence": 0.8,
                     "calibration_excluded": True,
                     "calibration_exclusion_reasons": ["shadow_write"]},
              outcome_type="test_passed"),
         # No reported confidence -> nothing to calibrate against.
-        _row("a3", {"corroboration_grade": "tool_observed", "kind": "test",
-                    "exit_code": 0},
+        _row("a3", {"corroboration_grade": "tool_observed", "evidence_weight": 0.65,
+                    "kind": "test", "exit_code": 0},
              outcome_type="test_passed"),
         # Eligible for the GENERAL channel but not the tactical lane: this is
         # the row the old proxy dropped.
-        _row("a4", {"corroboration_grade": "tool_observed", "kind": "command",
-                    "exit_code": 0, "reported_confidence": 0.6},
+        _row("a4", {"corroboration_grade": "tool_observed", "evidence_weight": 0.65,
+                    "kind": "command", "exit_code": 0, "reported_confidence": 0.6},
              outcome_type="drawing_completed"),
     ])
 
@@ -143,6 +143,27 @@ async def test_eligibility_tracks_the_real_gate_not_a_proxy_field():
     assert caller["tactical_channel"] == 1
     assert caller["distinct_agents"] == 4
     assert snapshot["calibration_exclusion_census"] == {"shadow_write": 1}
+    assert snapshot["tool_observed_rows_without_a_weight"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_graded_row_with_no_weight_is_its_own_state_not_a_failed_gate():
+    """Grade and weight are written by the same as_metadata(), so a row with
+    one and not the other is a shape this script has not seen. Letting it sink
+    into "not eligible" would be the four-state confusion the repo's
+    measurement rule forbids, committed by the instrument itself."""
+    pool = _FakePool([
+        _row("a1", {"corroboration_grade": "tool_observed", "kind": "test",
+                    "exit_code": 0, "reported_confidence": 0.8},
+             outcome_type="test_passed"),
+    ])
+
+    snapshot = await collect(pool, None)
+
+    assert snapshot["tool_observed_rows_without_a_weight"] == 1
+    assert snapshot["tool_observed_buckets"][BUCKET_CALLER_AUTHORED]["rows"] == 1
+    assert snapshot["tool_observed_buckets"][BUCKET_CALLER_AUTHORED]["calibration_eligible"] == 0
+    assert "not a failed gate" in render(snapshot)
 
 
 @pytest.mark.asyncio

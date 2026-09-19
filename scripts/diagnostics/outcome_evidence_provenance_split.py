@@ -40,6 +40,12 @@ WHAT A NUMBER HERE DOES NOT ESTABLISH
 - **Caller-authored does not mean false.** Most agents describing a tool call
   really did run it. The split measures what the server can *check*, not who
   lied.
+- **``calibration_eligible`` is "met the gate", not "did train".** The
+  recorder's condition also includes ``persistence_status == "created"``, and
+  that is not a field on the row: an idempotent re-submission that returned an
+  existing row did not train again, and nothing stored distinguishes it. The
+  count is an upper bound on training events, exact as a count of rows that
+  met the other three conditions.
 
 Usage:
     python3 scripts/diagnostics/outcome_evidence_provenance_split.py
@@ -69,6 +75,7 @@ from src.grounding.outcome_anchors import EXCLUSION_REASONS_KEY
 from src.mcp_handlers.observability.outcome_events import HARD_EXOGENOUS_TYPES
 from src.outcome_corroboration import (
     GRADE_ORDER,
+    GRADE_WEIGHTS,
     SERVER_SET_TOOL_TRIGGERS,
     TOOL_OBSERVED,
     tool_observation_triggers,
@@ -88,6 +95,11 @@ BUCKET_BOTH = "both"
 #: (gpt-5.6-terra, 2026-09-19) pointed out that nothing persisted establishes
 #: it, because only the FINAL grade is stored, never the pre-clamp one.
 BUCKET_NO_TRIGGER = "no_trigger_recomputed"
+
+#: The write-time weight floor calibration trains above
+#: (``_MIN_TACTICAL_EVIDENCE_WEIGHT`` in the recorder, defined as the
+#: TOOL_OBSERVED weight).
+_TACTICAL_WEIGHT_FLOOR = GRADE_WEIGHTS[TOOL_OBSERVED]
 
 BUCKET_ORDER = (
     BUCKET_SERVER_SET,
@@ -149,6 +161,7 @@ async def collect(pool, since: Optional[datetime]) -> dict:
 
     total = len(rows)
     ungraded = 0
+    weight_missing = 0
     grade_histogram: Counter[str] = Counter()
     buckets: dict[str, dict] = {name: _new_bucket_stat() for name in BUCKET_ORDER}
     trigger_census: Counter[str] = Counter()
@@ -180,9 +193,23 @@ async def collect(pool, since: Optional[datetime]) -> dict:
         # NOT part of that gate: an earlier version of this script used it and
         # undercounted the general channel, which an external review caught
         # (gpt-5.6-terra, 2026-09-19).
+        # Every condition is tested against the row, none assumed. The weight
+        # test is redundant given the grade filter above -- tool_observed IS
+        # 0.65, the threshold -- but the confirmation pass of the external
+        # review was right that leaning on that coupling is an unstated
+        # assumption in a script whose whole job is not to make them.
+        # A graded row always carries evidence_weight -- both come from the
+        # same as_metadata() -- so one without it is a shape this script has
+        # not seen, NOT a row that failed the gate. Count it as its own state
+        # rather than letting it sink silently into "not eligible", which is
+        # the four-state rule applied to the instrument itself.
+        raw_weight = detail.get("evidence_weight")
+        if raw_weight is None:
+            weight_missing += 1
         eligible = (
             detail.get("reported_confidence") is not None
             and not detail.get("calibration_excluded")
+            and float(raw_weight or 0.0) >= _TACTICAL_WEIGHT_FLOOR
         )
         if eligible:
             stat["calibration_eligible"] += 1
@@ -201,6 +228,7 @@ async def collect(pool, since: Optional[datetime]) -> dict:
         },
         "rows_total": total,
         "rows_ungraded": ungraded,
+        "tool_observed_rows_without_a_weight": weight_missing,
         "grade_histogram": {g: grade_histogram.get(g, 0) for g in GRADE_ORDER},
         "tool_observed_buckets": {
             name: {
@@ -231,6 +259,12 @@ def render(snapshot: dict) -> str:
         f"rows ungraded: {snapshot['rows_ungraded']}"
         "   <- written before the grader; NOT a weak grade"
     )
+    if snapshot["tool_observed_rows_without_a_weight"]:
+        lines.append(
+            f"rows graded {TOOL_OBSERVED} but carrying no evidence_weight: "
+            f"{snapshot['tool_observed_rows_without_a_weight']}"
+            "   <- unexpected shape, not a failed gate"
+        )
     lines.append("")
     lines.append("grade histogram (graded rows only)")
     for grade in GRADE_ORDER:
@@ -244,8 +278,10 @@ def render(snapshot: dict) -> str:
             f"  {name:<22} {stat['rows']:>6} {stat['calibration_eligible']:>9}"
             f" {stat['tactical_channel']:>9} {stat['distinct_agents']:>8}"
         )
-    lines.append("  eligible = trains the general calibration channel: a reported")
-    lines.append("             confidence and not calibration_excluded")
+    lines.append("  eligible = met the write-time calibration gate: a reported")
+    lines.append("             confidence, weight >= the floor, not excluded.")
+    lines.append("             NOT 'did train' -- see the docstring on")
+    lines.append("             persistence_status, which the row does not carry.")
     lines.append("  tactical = of those, the ones whose outcome_type is in")
     lines.append("             HARD_EXOGENOUS_TYPES, the narrower tactical lane")
     lines.append("")
