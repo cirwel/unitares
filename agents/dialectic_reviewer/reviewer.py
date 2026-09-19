@@ -866,7 +866,37 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         except Exception as exc:  # noqa: BLE001 — a failed repair just abstains
             logger.warning("Dialectic reviewer repair attempt failed: %r", exc)
             break
-        verdict = parse_reviewer_verdict(reviewer_text)
+        repaired = parse_reviewer_verdict(reviewer_text)
+        # A REPAIR MAY CONFIRM AN OBJECTION. IT MAY NEVER MANUFACTURE AN
+        # APPROVAL.
+        #
+        # build_repair_prompt asks the model not to change its position, but
+        # asking is not enforcing, and the reply being restated was UNPARSEABLE
+        # by construction -- so there is no way to check the position held. A
+        # first reply that rejected the thesis in prose, followed by a
+        # parseable `agrees: true`, would file an approval that no one can
+        # verify was ever the model's judgment, and an approval can resolve the
+        # session and release the paused agent.
+        #
+        # Approval is the one direction that must never rest on an
+        # unverifiable restatement, which is the same rule
+        # parse_reviewer_verdict already applies to a failed parse: "a reviewer
+        # that cannot form a judgment must not silently approve". Keep the
+        # original non-judgment and abstain; the slot stays open for a reviewer
+        # that can judge. The cost is a genuine approval that merely botched
+        # its format, and that is the correct direction to lose one.
+        #
+        # Found by independent review of this PR (codex, 2026-09-19): the
+        # docstring claimed a property only the prompt provided.
+        if repaired.judgment_formed and repaired.agrees:
+            logger.warning(
+                "Dialectic reviewer repair returned an APPROVAL on session %s; "
+                "discarding it and abstaining. The reply it restates was "
+                "unparseable, so the position cannot be confirmed unchanged.",
+                thesis.session_id,
+            )
+            break
+        verdict = repaired
     # Read provenance AFTER the last attempt, so it names the backend that
     # actually produced the verdict being filed rather than the first one tried.
     provenance = reviewer_backend_provenance()

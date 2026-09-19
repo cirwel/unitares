@@ -264,3 +264,47 @@ def test_abstention_survives_a_failed_repair_and_is_bounded_to_one():
     assert len(prompts) == 2, (
         f"expected exactly one repair attempt, got {len(prompts) - 1}"
     )
+
+
+def test_a_repair_may_not_flip_a_rejection_into_an_approval():
+    """The repair prompt ASKS for the same position; it cannot enforce it.
+
+    Found by independent review of this PR (codex, 2026-09-19). The reply being
+    restated is unparseable by construction, so a first reply that rejected in
+    prose followed by a parseable ``agrees: true`` would file an approval no one
+    can verify was ever the model's judgment — and an approval can resolve the
+    session and release the paused agent.
+
+    Approval is the one direction that must never rest on an unverifiable
+    restatement, so this abstains instead. Losing a genuine approval that merely
+    botched its format is the correct direction to fail.
+    """
+    prompts: list[str] = []
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE,
+        [
+            "I reject this: the conditions are shallow and miss the root cause.",
+            '{"agrees": true, "root_cause": "fine", '
+            '"proposed_conditions": ["ship it"], "reasoning": "looks ok"}',
+        ],
+        prompts=prompts,
+    )
+    assert calls == [], (
+        "a repair manufactured an approval: "
+        f"{[args.get('action') for _, args in calls]}"
+    )
+    assert len(prompts) == 2, "the repair attempt did not run"
+
+
+def test_a_repair_that_restates_an_objection_is_still_accepted():
+    """The safe direction must keep working — this is not a ban on repairs."""
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE,
+        [
+            "I reject this, the root cause is shallow.",
+            '{"agrees": false, "root_cause": "shallow", "reasoning": "no"}',
+        ],
+    )
+    synthesis = [args for name, args in calls if args.get("action") == "synthesis"]
+    assert synthesis and synthesis[0]["agrees"] is False
+    assert synthesis[0]["root_cause"] == "shallow"
