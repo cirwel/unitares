@@ -285,9 +285,31 @@ def test_review_lock_is_exclusive_and_releases(repo):
         assert again.held
 
 
-def test_a_lock_left_by_a_dead_process_is_taken_over(repo):
+def test_a_lock_is_released_when_its_holder_dies(repo):
+    # Codex on #2319: the pid-file lock let two processes both "take over".
+    # A flock is released by the kernel when the holder exits, even by kill.
     lock = rg.review_lock("k" * 64)
     lock.path.parent.mkdir(parents=True, exist_ok=True)
-    lock.path.write_text("999999")  # no such pid
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import fcntl,os,sys,time;fd=os.open(sys.argv[1],os.O_CREAT|os.O_RDWR);"
+         "fcntl.flock(fd,fcntl.LOCK_EX);print('held',flush=True);time.sleep(60)",
+         str(lock.path)], stdout=subprocess.PIPE, text=True)
+    assert holder.stdout.readline().strip() == "held"
+    with rg.review_lock("k" * 64) as got:
+        assert not got.held and got.holder_alive()
+    holder.kill()
+    holder.wait()
     with rg.review_lock("k" * 64) as got:
         assert got.held
+
+
+def test_failed_runs_counts_only_failed_records_for_the_key():
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "FAILED", 0, False, "codex")),
+        _comment(rg.Record(k, "FAILED", 0, False, "codex")),
+        _comment(rg.Record("x" * 64, "FAILED", 0, False, "codex")),
+        _comment(rg.Record(k, "FAILED", 0, False, "codex"), association="NONE"),
+    ]
+    assert rg.failed_runs(comments, k) == 2

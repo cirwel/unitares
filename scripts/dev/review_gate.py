@@ -61,6 +61,7 @@ required path (AGENTS.md, execution-cost policy).
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -349,43 +350,47 @@ class review_lock:
     """One review per diff on this machine, across every worktree.
 
     Lives in the git common dir, so ship.sh's background review in an agent's
-    worktree and the scheduled sweep see the same lock. A lock whose pid is
-    gone is stale and taken over.
+    worktree and the scheduled sweep see the same lock. A kernel flock, not a
+    pid file: the OS releases it when the holder exits or dies, so there is no
+    stale state to judge and no window where two processes both "take over".
+    The file itself is never deleted.
     """
 
     def __init__(self, key: str):
         common = Path(git("rev-parse", "--git-common-dir").strip()).resolve()
         self.path = common / "review-gate" / f"{key}.lock"
         self.held = False
+        self._fd = None
+
+    def _try(self) -> int | None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            os.close(fd)
+            return None
 
     def holder_alive(self) -> bool:
-        try:
-            os.kill(int(self.path.read_text().strip()), 0)
+        if self.held:
             return True
-        except (FileNotFoundError, ValueError, ProcessLookupError):
-            return False
-        except PermissionError:
+        fd = self._try()
+        if fd is None:
             return True
+        os.close(fd)  # closing releases the probe's lock
+        return False
 
     def __enter__(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(2):
-            try:
-                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                if self.holder_alive():
-                    return self
-                self.path.unlink(missing_ok=True)
-                continue
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
-            self.held = True
-            break
+        self._fd = self._try()
+        self.held = self._fd is not None
         return self
 
     def __exit__(self, *exc):
-        if self.held:
-            self.path.unlink(missing_ok=True)
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+            self.held = False
 
 
 def cmd_review(args) -> int:
@@ -472,6 +477,17 @@ def cmd_dispose(args) -> int:
 
 
 BOT_AUTHORS = {"app/dependabot", "dependabot", "dependabot[bot]"}
+SWEEP_MAX_FAILED = 3  # a FAILED review is retried, but not forever
+
+
+def failed_runs(comments: list[dict], key: str) -> int:
+    n = 0
+    for c in comments:
+        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            continue
+        rec = parse_record(c.get("body", ""))
+        n += bool(rec and rec.key == key and rec.verdict == "FAILED")
+    return n
 
 
 def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> list[dict]:
@@ -516,8 +532,11 @@ def cmd_sweep(args) -> int:
         if git("rev-parse", f"refs/review-gate/pr-{n}").strip() != head:
             continue  # pushed since the listing; next run
         key = diff_key(f"origin/{base}", head)
-        if latest_matching(pr_comments(repo, n), key) is not None:
-            continue
+        comments = pr_comments(repo, n)
+        rec = latest_matching(comments, key)
+        if rec is not None and not (rec.verdict == "FAILED"
+                                    and failed_runs(comments, key) < SWEEP_MAX_FAILED):
+            continue  # reviewed — or failed often enough that a human should look
         if review_lock(key).holder_alive():
             continue
         print(f"[sweep] PR #{n} ({p['headRefName']}) has no review for {key[:12]}")
