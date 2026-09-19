@@ -206,7 +206,7 @@ def _continuity_token_resume_rejected(
             "reason": "continuity_token_resume_retired",
             "action": (
                 "Call start_session(force_new=true, parent_agent_id=<prior UUID>, "
-                "spawn_reason='new_session') instead of resuming by token."
+                "spawn_reason='explicit') instead of resuming by token."
             ),
             "preserved_path": (
                 "Same-live-process PATH 0 remains available as "
