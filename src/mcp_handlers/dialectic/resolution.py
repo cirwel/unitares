@@ -229,6 +229,10 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
             if isinstance(c, dict) and c.get("status") == "applied"
         )
         await _record_outcome_event_inline({
+            # In-process emitter, computed server-side from session protocol
+            # state -- vouched so its server-observed provenance is honoured,
+            # up to what that provenance itself asserts.
+            "_trusted_ingestion": True,
             "agent_id": agent_id,
             "outcome_type": "dialectic_resolved",
             "is_bad": False,
