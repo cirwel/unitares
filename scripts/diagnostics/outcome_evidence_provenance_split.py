@@ -40,12 +40,12 @@ WHAT A NUMBER HERE DOES NOT ESTABLISH
 - **Caller-authored does not mean false.** Most agents describing a tool call
   really did run it. The split measures what the server can *check*, not who
   lied.
-- **``calibration_eligible`` is "met the gate", not "did train".** The
-  recorder's condition also includes ``persistence_status == "created"``, and
-  that is not a field on the row: an idempotent re-submission that returned an
-  existing row did not train again, and nothing stored distinguishes it. The
-  count is an upper bound on training events, exact as a count of rows that
-  met the other three conditions.
+- **``calibration_eligible`` counts the three OBSERVABLE conditions, not the
+  gate.** The recorder's condition has four parts, and ``persistence_status ==
+  "created"`` is not a field on the row: an idempotent re-submission that
+  returned an existing row did not train again, and nothing stored
+  distinguishes it. So the count is an upper bound on training events, and
+  exact only as what it literally is — rows meeting the other three.
 
 Usage:
     python3 scripts/diagnostics/outcome_evidence_provenance_split.py
@@ -119,6 +119,23 @@ def _as_detail(raw: Any) -> dict:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+def _as_weight(raw: Any) -> float | None:
+    """A stored evidence_weight as a float, or None if it is not a number.
+
+    Deliberately not ``float(raw or 0.0)``. A read-only diagnostic must not
+    abort a whole collection on one malformed row, and ``float("banana")``
+    raises; ``bool`` is excluded because ``float(True)`` is 1.0, which would
+    clear the 0.65 floor on a value that is not a weight at all. Both were
+    raised by the external review's last pass (gpt-5.6-terra, 2026-09-19).
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _bucket_for(triggers: set[str]) -> str:
@@ -203,13 +220,14 @@ async def collect(pool, since: Optional[datetime]) -> dict:
         # not seen, NOT a row that failed the gate. Count it as its own state
         # rather than letting it sink silently into "not eligible", which is
         # the four-state rule applied to the instrument itself.
-        raw_weight = detail.get("evidence_weight")
-        if raw_weight is None:
+        weight = _as_weight(detail.get("evidence_weight"))
+        if weight is None:
             weight_missing += 1
         eligible = (
-            detail.get("reported_confidence") is not None
+            weight is not None
+            and weight >= _TACTICAL_WEIGHT_FLOOR
+            and detail.get("reported_confidence") is not None
             and not detail.get("calibration_excluded")
-            and float(raw_weight or 0.0) >= _TACTICAL_WEIGHT_FLOOR
         )
         if eligible:
             stat["calibration_eligible"] += 1
@@ -228,7 +246,7 @@ async def collect(pool, since: Optional[datetime]) -> dict:
         },
         "rows_total": total,
         "rows_ungraded": ungraded,
-        "tool_observed_rows_without_a_weight": weight_missing,
+        "tool_observed_rows_without_a_usable_weight": weight_missing,
         "grade_histogram": {g: grade_histogram.get(g, 0) for g in GRADE_ORDER},
         "tool_observed_buckets": {
             name: {
@@ -259,10 +277,10 @@ def render(snapshot: dict) -> str:
         f"rows ungraded: {snapshot['rows_ungraded']}"
         "   <- written before the grader; NOT a weak grade"
     )
-    if snapshot["tool_observed_rows_without_a_weight"]:
+    if snapshot["tool_observed_rows_without_a_usable_weight"]:
         lines.append(
-            f"rows graded {TOOL_OBSERVED} but carrying no evidence_weight: "
-            f"{snapshot['tool_observed_rows_without_a_weight']}"
+            f"rows graded {TOOL_OBSERVED} with no usable evidence_weight: "
+            f"{snapshot['tool_observed_rows_without_a_usable_weight']}"
             "   <- unexpected shape, not a failed gate"
         )
     lines.append("")
@@ -278,10 +296,11 @@ def render(snapshot: dict) -> str:
             f"  {name:<22} {stat['rows']:>6} {stat['calibration_eligible']:>9}"
             f" {stat['tactical_channel']:>9} {stat['distinct_agents']:>8}"
         )
-    lines.append("  eligible = met the write-time calibration gate: a reported")
-    lines.append("             confidence, weight >= the floor, not excluded.")
-    lines.append("             NOT 'did train' -- see the docstring on")
-    lines.append("             persistence_status, which the row does not carry.")
+    lines.append("  eligible = met the THREE OBSERVABLE conditions of the")
+    lines.append("             calibration gate: weight >= the floor, a reported")
+    lines.append("             confidence, not excluded. The gate's fourth,")
+    lines.append("             persistence_status == 'created', is not a field on")
+    lines.append("             the row, so this is an upper bound on training.")
     lines.append("  tactical = of those, the ones whose outcome_type is in")
     lines.append("             HARD_EXOGENOUS_TYPES, the narrower tactical lane")
     lines.append("")

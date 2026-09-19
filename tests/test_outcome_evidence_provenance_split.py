@@ -143,26 +143,43 @@ async def test_eligibility_tracks_the_real_gate_not_a_proxy_field():
     assert caller["tactical_channel"] == 1
     assert caller["distinct_agents"] == 4
     assert snapshot["calibration_exclusion_census"] == {"shadow_write": 1}
-    assert snapshot["tool_observed_rows_without_a_weight"] == 0
+    assert snapshot["tool_observed_rows_without_a_usable_weight"] == 0
 
 
 @pytest.mark.asyncio
-async def test_a_graded_row_with_no_weight_is_its_own_state_not_a_failed_gate():
+async def test_a_graded_row_with_no_usable_weight_is_its_own_state():
     """Grade and weight are written by the same as_metadata(), so a row with
     one and not the other is a shape this script has not seen. Letting it sink
     into "not eligible" would be the four-state confusion the repo's
-    measurement rule forbids, committed by the instrument itself."""
+    measurement rule forbids, committed by the instrument itself.
+
+    A malformed weight counts the same way, and must not abort the run: a
+    read-only diagnostic that dies on one bad row reports nothing about the
+    other twelve thousand. `True` is excluded on purpose -- float(True) is
+    1.0, which would clear the 0.65 floor on a value that is not a weight.
+    """
     pool = _FakePool([
         _row("a1", {"corroboration_grade": "tool_observed", "kind": "test",
                     "exit_code": 0, "reported_confidence": 0.8},
+             outcome_type="test_passed"),
+        _row("a2", {"corroboration_grade": "tool_observed", "evidence_weight": "banana",
+                    "kind": "test", "exit_code": 0, "reported_confidence": 0.8},
+             outcome_type="test_passed"),
+        _row("a3", {"corroboration_grade": "tool_observed", "evidence_weight": True,
+                    "kind": "test", "exit_code": 0, "reported_confidence": 0.8},
+             outcome_type="test_passed"),
+        # A weight stored as a numeric STRING is usable, not missing.
+        _row("a4", {"corroboration_grade": "tool_observed", "evidence_weight": "0.65",
+                    "kind": "test", "exit_code": 0, "reported_confidence": 0.8},
              outcome_type="test_passed"),
     ])
 
     snapshot = await collect(pool, None)
 
-    assert snapshot["tool_observed_rows_without_a_weight"] == 1
-    assert snapshot["tool_observed_buckets"][BUCKET_CALLER_AUTHORED]["rows"] == 1
-    assert snapshot["tool_observed_buckets"][BUCKET_CALLER_AUTHORED]["calibration_eligible"] == 0
+    assert snapshot["tool_observed_rows_without_a_usable_weight"] == 3
+    caller = snapshot["tool_observed_buckets"][BUCKET_CALLER_AUTHORED]
+    assert caller["rows"] == 4
+    assert caller["calibration_eligible"] == 1   # only the "0.65" string row
     assert "not a failed gate" in render(snapshot)
 
 
