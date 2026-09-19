@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.11.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.12.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. The server advertises the same
@@ -104,7 +104,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.11.0` is the negotiated interface release. Compatible additions
+- `version: 1.12.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -144,7 +144,15 @@ The two identifiers serve different jobs:
   `describe_tool(tool_name="knowledge", action="search")`.
   `search_knowledge_graph` also records its clarified filter description, so
   three input digests and the surface digest move. This release follows 1.10.0's
-  `list_tools` wire correction).
+  `list_tools` wire correction; 1.12.0, 2026-09-19: `dialectic` declares
+  `judgment_formed` on `antithesis` and `synthesis`. Unlike 1.10.0 and 1.11.0,
+  which advertised parameters the handler already read, this is new behavior: a
+  reviewer that could not form a judgment passes `judgment_formed: false`, and
+  the server records an abstention and leaves the reviewer slot open rather than
+  filing a binding rejection with no reasoning behind it. The default is true,
+  so omitting it is the prior behavior exactly and no existing caller changes;
+  nothing is removed or renamed, and one input digest and the surface digest
+  move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
