@@ -58,6 +58,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 from collections import Counter
@@ -127,15 +128,21 @@ def _as_weight(raw: Any) -> float | None:
     Deliberately not ``float(raw or 0.0)``. A read-only diagnostic must not
     abort a whole collection on one malformed row, and ``float("banana")``
     raises; ``bool`` is excluded because ``float(True)`` is 1.0, which would
-    clear the 0.65 floor on a value that is not a weight at all. Both were
-    raised by the external review's last pass (gpt-5.6-terra, 2026-09-19).
+    clear the 0.65 floor on a value that is not a weight at all. Non-finite
+    values are excluded for the same reason and were the last thing this
+    helper still let through: ``float("inf") >= 0.65`` is True, so an "inf"
+    weight would have counted as eligible, and ``float("nan")`` would have
+    counted as a USABLE weight while failing every comparison -- neither is a
+    weight. All three were raised by the external review (gpt-5.6-terra,
+    2026-09-19), the last one on its final verdict pass.
     """
     if raw is None or isinstance(raw, bool):
         return None
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
         return None
+    return value if math.isfinite(value) else None
 
 
 def _bucket_for(triggers: set[str]) -> str:

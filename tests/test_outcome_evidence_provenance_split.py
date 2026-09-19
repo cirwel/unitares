@@ -172,13 +172,23 @@ async def test_a_graded_row_with_no_usable_weight_is_its_own_state():
         _row("a4", {"corroboration_grade": "tool_observed", "evidence_weight": "0.65",
                     "kind": "test", "exit_code": 0, "reported_confidence": 0.8},
              outcome_type="test_passed"),
+        # Non-finite floats parse but are not weights. "inf" is the dangerous
+        # one -- float("inf") >= 0.65 is True, so it would have counted as
+        # ELIGIBLE. "nan" fails every comparison but would have counted as a
+        # usable weight, which is a different wrong answer, not a safe one.
+        _row("a5", {"corroboration_grade": "tool_observed", "evidence_weight": "inf",
+                    "kind": "test", "exit_code": 0, "reported_confidence": 0.8},
+             outcome_type="test_passed"),
+        _row("a6", {"corroboration_grade": "tool_observed", "evidence_weight": float("nan"),
+                    "kind": "test", "exit_code": 0, "reported_confidence": 0.8},
+             outcome_type="test_passed"),
     ])
 
     snapshot = await collect(pool, None)
 
-    assert snapshot["tool_observed_rows_without_a_usable_weight"] == 3
+    assert snapshot["tool_observed_rows_without_a_usable_weight"] == 5
     caller = snapshot["tool_observed_buckets"][BUCKET_CALLER_AUTHORED]
-    assert caller["rows"] == 4
+    assert caller["rows"] == 6
     assert caller["calibration_eligible"] == 1   # only the "0.65" string row
     assert "not a failed gate" in render(snapshot)
 
