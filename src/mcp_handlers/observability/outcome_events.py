@@ -28,6 +28,7 @@ from src.grounding.outcome_anchors import (
 from src.outcome_corroboration import (
     GRADE_WEIGHTS,
     TOOL_OBSERVED,
+    ceiling_for_verification_source,
     enrich_detail_with_corroboration,
 )
 logger = get_logger(__name__)
@@ -425,10 +426,31 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # (Phase-5 evidence loop, dialectic resolution) pass their own value
     # explicitly. Default here is the v1 schema default for safety.
     verification_source = arguments.get("verification_source") or "agent_reported_tool_result"
+    # TRUST IS OPT-IN, CAPPING IS THE DEFAULT.
+    #
+    # An unvouched caller is capped at TOOL_OBSERVED whatever it claims -- not
+    # merely when it claims to be an agent. That is deliberate: deriving the cap
+    # from `verification_source` alone would re-expose the grader the moment a
+    # future public handler forgot the source downgrade, since the schema lets a
+    # caller ASK for external_signal.
+    #
+    # A vouched in-process or operator-gated caller still does not get a blanket
+    # pass: its ceiling comes from the provenance it recorded, so a trusted site
+    # that emits agent-attested rows (the Phase-5 evidence loop does) keeps those
+    # rows capped while its server-observed rows are held to what
+    # `server_observation` itself asserts -- substrate_observed, not the top of
+    # the scale. Vouching the transport is not vouching the text it carries.
+    trusted_ingestion = bool(arguments.pop(_TRUSTED_INGESTION_KEY, False))
+    corroboration_ceiling = (
+        ceiling_for_verification_source(verification_source)
+        if trusted_ingestion
+        else TOOL_OBSERVED
+    )
     detail = enrich_detail_with_corroboration(
         detail,
         outcome_type=outcome_type,
         verification_source=verification_source,
+        ceiling=corroboration_ceiling,
     )
 
     evidence_weight = float(detail.get("evidence_weight") or 0.0)
@@ -566,6 +588,10 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
             )
     else:
         outcome_id = await db.record_outcome_event(
+            # Declared, not inferred from the payload: this recorder already
+            # graded `detail` under an explicit ceiling, so the shared write
+            # path must preserve that verdict rather than re-derive it.
+            corroboration_applied=True,
             agent_id=agent_id,
             outcome_type=outcome_type,
             is_bad=is_bad,
@@ -696,7 +722,40 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     return response
 
 
-_PROVENANCE_CLAIM_KEYS = frozenset({"verification_source", "phase5_emitter"})
+_PROVENANCE_CLAIM_KEYS = frozenset({
+    "verification_source",
+    "phase5_emitter",
+    # The grader's OWN output, stripped as defence in depth. Two live controls
+    # already neutralise a forged grade and neither depends on this set: the
+    # public path re-grades through enrich(), which OVERWRITES all seven keys,
+    # and the shared write path decides whether to re-grade from the
+    # `corroboration_applied` PARAMETER, never from anything in `detail`.
+    #
+    # This comment previously said the write path "skips re-grading a detail
+    # that already carries a grade". That was true of the first attempt at the
+    # persistence fix and is no longer true of the code -- presence-checking a
+    # caller-shaped field was itself the authorization bypass, which is why it
+    # became a parameter. An external review of this PR (gpt-5.6-terra,
+    # 2026-09-19) caught the stale wording still describing the defect as
+    # though it were the contract.
+    #
+    # What stripping still buys: a future caller that passes
+    # corroboration_applied=True with caller-shaped detail would persist those
+    # keys verbatim, and this keeps the public path from being that caller.
+    "corroboration_grade",
+    "evidence_weight",
+    "claim_risk",
+    "claimed_fields",
+    "verified_fields",
+    "unverified_fields",
+    "corroboration_reasons",
+})
+
+#: Internal, never caller-settable. Its ABSENCE means untrusted, so a write
+#: path that forgets everything is capped rather than uncapped -- the inversion
+#: the 2026-09-18 dialectic review (a36255d62a1310f3) required. The public MCP
+#: path pops it off the caller's arguments below.
+_TRUSTED_INGESTION_KEY = "_trusted_ingestion"
 
 
 def _strip_provenance_claims(value):
@@ -826,6 +885,16 @@ async def handle_outcome_event(arguments: Dict[str, Any]) -> Sequence[TextConten
     # it means restructuring the grader's trust model, not sanitizing input.
     if _gate_args.get("detail"):
         _gate_args["detail"] = _strip_provenance_claims(_gate_args["detail"])
+    # Stripping the explicit keys does not reach the grader's FREE-TEXT source
+    # vocabulary: _source_text also reads source / evidence_source /
+    # evidence_kind / observed_by / captured_by / epistemic_class, none of them
+    # stripped, and _has_substrate_evidence matches those against
+    # _TRUSTED_SUBSTRATE_MARKERS with no verified-marker requirement -- so
+    # detail={"source": "sensor_sync"} still reached SUBSTRATE_OBSERVED (0.85).
+    # The grade is capped in _record_outcome_event_inline, which now caps by
+    # default; this path only has to make sure the caller cannot vouch for
+    # ITSELF by supplying the internal trust key.
+    _gate_args.pop(_TRUSTED_INGESTION_KEY, None)
     if _claimed_source and _claimed_source != "agent_reported_tool_result":
         logger.info(
             "outcome_event: downgraded caller-claimed verification_source=%r to "

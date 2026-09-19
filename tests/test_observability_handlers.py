@@ -2638,23 +2638,33 @@ class TestHandleOutcomeEvidence:
 
     @pytest.mark.asyncio
     async def test_field_verification_shows_unverified_and_verified_claims(self):
+        evidence_block = {
+            "pr": 124,
+            "commit_sha": "def",
+            "evidence": [{
+                "source": "github",
+                "verified": True,
+                "pr": 124,
+                "commit_sha": "def",
+            }],
+        }
         rows = [
             self._row(
                 outcome_id="untrusted-pr",
                 detail={"pr": 123, "commit_sha": "abc"},
             ),
+            # Same evidence block, agent-attested provenance (the _row default).
+            # Both the "verified" marker and the "github" source are values the
+            # submitting agent wrote itself.
+            self._row(
+                outcome_id="self-labelled-pr",
+                detail=dict(evidence_block),
+            ),
+            # Same block again, but recorded with server-controlled provenance.
             self._row(
                 outcome_id="verified-pr",
-                detail={
-                    "pr": 124,
-                    "commit_sha": "def",
-                    "evidence": [{
-                        "source": "github",
-                        "verified": True,
-                        "pr": 124,
-                        "commit_sha": "def",
-                    }],
-                },
+                verification_source="external_signal",
+                detail=dict(evidence_block),
             ),
         ]
         db = _FakeOutcomeEvidenceDB(rows)
@@ -2670,6 +2680,13 @@ class TestHandleOutcomeEvidence:
         by_id = {event["outcome_id"]: event for event in data["events"]}
         assert set(by_id["untrusted-pr"]["claim_fields"]["unverified"]) == {"commit", "pr"}
         assert by_id["untrusted-pr"]["claim_fields"]["verified"] == []
+        # An agent-attested row cannot verify its OWN claims by writing a
+        # verified marker and a trusted source string into its detail. This
+        # assertion inverted when the audit began applying the recorded
+        # provenance ceiling; before that, an agent could self-label here.
+        assert by_id["self-labelled-pr"]["claim_fields"]["verified"] == []
+        assert set(by_id["self-labelled-pr"]["claim_fields"]["unverified"]) == {"commit", "pr"}
+        # Server-controlled provenance still verifies the same claims.
         assert set(by_id["verified-pr"]["claim_fields"]["verified"]) == {"commit", "pr"}
         assert by_id["verified-pr"]["claim_fields"]["unverified"] == []
 
