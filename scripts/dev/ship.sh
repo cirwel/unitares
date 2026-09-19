@@ -25,6 +25,10 @@
 #   ./scripts/dev/ship.sh --classify          # just print "runtime" or "other"
 #   ./scripts/dev/ship.sh --plan "commit message"
 #
+# Every PR push also starts ./scripts/dev/review.sh in the background, which
+# posts the review record the `review` status check reads. SHIP_NO_REVIEW=1
+# skips it (the check then stays pending until someone runs the review).
+#
 # Requirements: staged changes (git add already done) unless --stage-all is
 # used, gh CLI authed.
 
@@ -439,6 +443,13 @@ case "$DELIVERY" in
         git commit -m "$COMMIT_MESSAGE"
         git push -u origin "$BRANCH"
         create_or_show_pr "$DELIVERY"
+        # The review is part of shipping, like the push: it starts on every PR
+        # push and posts the record the `review` check reads. Keyed on the
+        # diff, so a push that changes nothing reviewable is a no-op.
+        if [[ "${SHIP_NO_REVIEW:-0}" != "1" ]]; then
+            ./scripts/dev/review.sh --background || \
+                echo "[ship] review did not start; run ./scripts/dev/review.sh before marking ready"
+        fi
         ;;
     *)
         echo "internal error: unknown delivery path $DELIVERY" >&2
