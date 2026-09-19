@@ -1,4 +1,5 @@
 from src.outcome_corroboration import (
+    NO_CEILING,
     assess_outcome_corroboration,
     enrich_detail_with_corroboration,
 )
@@ -76,11 +77,31 @@ def test_pr_commit_refs_are_untrusted_until_verified():
             ],
         },
         "agent_reported_tool_result",
+        ceiling=NO_CEILING,
     )
 
+    # Detector behaviour, with the cap explicitly lifted: a verified marker plus
+    # a trusted source promotes the refs.
     assert verified.grade == "externally_verified"
     assert set(verified.verified_fields) == {"commit", "pr"}
     assert verified.unverified_fields == []
+
+    # But this row is AGENT-attested, and the marker and source are both values
+    # the agent wrote. Under the default it cannot self-promote. This assertion
+    # is new: the case above previously ran uncapped and read as blessing it.
+    capped = assess_outcome_corroboration(
+        "task_completed",
+        {
+            "pr": 661,
+            "commit_sha": "abc123",
+            "evidence": [
+                {"source": "github", "verified": True, "pr": 661, "commit_sha": "abc123"}
+            ],
+        },
+        "agent_reported_tool_result",
+    )
+    assert capped.grade == "tool_observed"
+    assert capped.verified_fields == []
 
 
 def test_bare_verified_flag_without_source_does_not_upgrade_refs():
@@ -144,15 +165,17 @@ def test_caller_substrate_vocabulary_alone_no_longer_earns_substrate():
 def test_substrate_and_external_are_now_gated_symmetrically():
     """Both paths require a verified marker AND a trusted source string."""
     marker_only = assess_outcome_corroboration(
-        "task_completed", {"substrate_verified": True}, "agent_reported_tool_result"
+        "task_completed", {"substrate_verified": True},
+        "agent_reported_tool_result", ceiling=NO_CEILING,
     )
     source_only = assess_outcome_corroboration(
-        "task_completed", {"source": "sensor_sync"}, "agent_reported_tool_result"
+        "task_completed", {"source": "sensor_sync"},
+        "agent_reported_tool_result", ceiling=NO_CEILING,
     )
     both = assess_outcome_corroboration(
         "task_completed",
         {"source": "sensor_sync", "substrate_verified": True},
-        "agent_reported_tool_result",
+        "agent_reported_tool_result", ceiling=NO_CEILING,
     )
 
     assert marker_only.grade != "substrate_observed"
@@ -193,6 +216,7 @@ def test_ceiling_caps_caller_claimed_external_verification():
         "task_completed",
         {"evidence": [{"source": "ci", "ci_verified": True, "pr": 42}]},
         "agent_reported_tool_result",
+        ceiling=NO_CEILING,
     )
     assert uncapped.grade == "externally_verified"
     assert uncapped.evidence_weight == 1.00
@@ -290,11 +314,15 @@ def test_ceiling_for_verification_source_caps_only_self_attested_rows():
     from src.outcome_corroboration import ceiling_for_verification_source
 
     assert ceiling_for_verification_source("agent_reported_tool_result") == "tool_observed"
-    # Server-controlled provenance keeps the full range.
-    assert ceiling_for_verification_source("external_signal") is None
-    assert ceiling_for_verification_source("server_observation") is None
-    # Unknown/NULL provenance is deliberately not capped -- see the docstring.
-    assert ceiling_for_verification_source(None) is None
+    # Server-controlled provenance keeps the full range, via an EXPLICIT
+    # sentinel rather than None -- omission and "trusted" must not be spelled
+    # the same way, because omission is what a new call site does.
+    assert ceiling_for_verification_source("external_signal") == NO_CEILING
+    assert ceiling_for_verification_source("server_observation") == NO_CEILING
+    # Unknown/NULL provenance now CAPS. It previously returned None (uncapped),
+    # which let pre-column rows re-grade to 0.85 on the audit surface built to
+    # expose self-labelled rows. Unknown is not evidence of verification.
+    assert ceiling_for_verification_source(None) == "tool_observed"
 
 
 def test_stored_self_attested_row_regrades_to_the_capped_value():
@@ -309,7 +337,9 @@ def test_stored_self_attested_row_regrades_to_the_capped_value():
     }
     source = "agent_reported_tool_result"
 
-    uncapped = assess_outcome_corroboration("task_completed", stored_detail, source)
+    uncapped = assess_outcome_corroboration(
+        "task_completed", stored_detail, source, ceiling=NO_CEILING
+    )
     regraded = assess_outcome_corroboration(
         "task_completed",
         stored_detail,

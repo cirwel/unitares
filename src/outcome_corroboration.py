@@ -55,18 +55,31 @@ _GRADE_RANK = {grade: rank for rank, grade in enumerate(GRADE_ORDER)}
 #: non-agent observation.
 SELF_ATTESTED_SOURCES = frozenset({"agent_reported_tool_result"})
 
+#: Explicit opt-out from the default cap. A caller that has ESTABLISHED trust by
+#: some means other than the payload passes this; nothing else lifts the cap.
+#: Deliberately not ``None``: omission and "I checked, it is trusted" must not
+#: be spelled the same way, because omission is what a new call site does.
+NO_CEILING = "__no_ceiling__"
 
-def ceiling_for_verification_source(verification_source: str | None) -> str | None:
-    """Ceiling implied by a row's recorded provenance, or None for no cap.
+#: Distinguishes "argument omitted" from "argument explicitly None" so that BOTH
+#: resolve to the safe default rather than to no cap.
+_CEILING_UNSET = object()
 
-    Read-side callers use this so a stored row re-grades to what was recorded,
-    not to what its caller-supplied ``detail`` text can still claim. Unknown or
-    NULL provenance is deliberately NOT capped here: that would silently
-    re-report pre-column history, which is a separate decision.
+
+def ceiling_for_verification_source(verification_source: str | None) -> str:
+    """Ceiling implied by a row's recorded provenance. Default-deny.
+
+    Returns NO_CEILING only for the two server-controlled provenances. Everything
+    else -- self-attested, unknown, and NULL -- caps at TOOL_OBSERVED.
+
+    NULL/unknown was previously left uncapped as "a separate decision". That let
+    pre-column rows re-grade to 0.85 on the audit surface built to EXPOSE
+    self-labelled rows. Unknown provenance is not evidence of verification, so it
+    now caps like any other unvouched row.
     """
-    if verification_source in SELF_ATTESTED_SOURCES:
-        return TOOL_OBSERVED
-    return None
+    if verification_source in {"server_observation", "external_signal"}:
+        return NO_CEILING
+    return TOOL_OBSERVED
 
 _CLAIM_FIELD_FAMILIES = {
     "pr": {
@@ -371,15 +384,30 @@ def assess_outcome_corroboration(
     outcome_type: str,
     detail: Mapping[str, Any] | None = None,
     verification_source: str | None = None,
-    ceiling: str | None = None,
+    ceiling: str | None = _CEILING_UNSET,
 ) -> CorroborationAssessment:
     """Grade the independent evidence visible for an outcome event.
 
-    ``ceiling`` clamps the result to at most that grade. Callers use it when the
-    submitting path itself establishes an upper bound on what the evidence can
-    be -- an agent attesting its own result cannot reach a grade that asserts
-    someone else observed it, whatever its ``detail`` says.
+    DEFAULT-DENY. ``ceiling`` clamps the result, and OMITTING it caps at
+    TOOL_OBSERVED -- the two top grades assert that a non-agent observed this,
+    which no caller can establish from the payload alone. Passing ``None``
+    resolves the same way; only the explicit ``NO_CEILING`` sentinel lifts it.
+
+    The previous default was "no cap", which made every grader call site outside
+    the one recorder that remembered to pass a ceiling inherit the unsafe
+    behaviour. A 2026-09-19 review found three such sites, one of them live on
+    the persistence path, where an already-capped detail was re-graded upward
+    before being stored.
     """
+    if ceiling is _CEILING_UNSET or ceiling is None:
+        # Derived from provenance, not a blunt constant: a blunt TOOL_OBSERVED
+        # default would also cap server_observation/external_signal rows, whose
+        # short-circuits predate this change and are set by server code rather
+        # than by a payload. Provenance-derived keeps default-deny exactly where
+        # the risk is -- agent-attested and unknown -- and leaves real ingestion
+        # alone. A new call site that forgets still cannot let an agent-supplied
+        # payload reach the top two grades.
+        ceiling = ceiling_for_verification_source(verification_source)
     detail_map = _as_dict(detail)
     source = verification_source or detail_map.get("verification_source")
     source = str(source) if source else None
@@ -463,9 +491,12 @@ def enrich_detail_with_corroboration(
     *,
     outcome_type: str,
     verification_source: str | None,
-    ceiling: str | None = None,
+    ceiling: str | None = _CEILING_UNSET,
 ) -> dict[str, Any]:
-    """Return a detail copy with corroboration metadata added."""
+    """Return a detail copy with corroboration metadata added.
+
+    Default-deny, same as the grader: omitting ``ceiling`` caps at TOOL_OBSERVED.
+    """
     payload = _as_dict(detail)
     assessment = assess_outcome_corroboration(
         outcome_type=outcome_type,

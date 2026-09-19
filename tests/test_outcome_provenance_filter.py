@@ -317,7 +317,7 @@ class TestCappingIsTheDefault:
                 verification_source="server_observation",
                 _trusted_ingestion=True,
             )
-        ) is None
+        ) == "__no_ceiling__"
 
     def test_vouched_caller_does_not_get_a_blanket_pass(self):
         """A vouched site that emits AGENT-attested rows -- the Phase-5 evidence
@@ -391,6 +391,134 @@ class TestEveryWritePathIsAccountedFor:
                     if name == "_record_outcome_event_inline":
                         found.add(str(f.relative_to(root)))
         return found
+
+    @staticmethod
+    def _referencing_modules(target):
+        """Modules that reference `target` AT ALL -- not just call it by name.
+
+        The call-only version of this was evadable: `from ... import X as _rec`
+        then `await _rec(args)` produced zero detections, so the enumeration
+        could pass while an unlisted write path existed. Checking ImportFrom
+        names (which catches any asname) plus every Name/Attribute reference
+        closes both that and the pass-as-value shape.
+        """
+        import ast
+        import pathlib as _pl
+
+        root = _pl.Path(__file__).parent.parent
+        found = set()
+        for f in sorted(root.glob("src/**/*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and any(
+                    a.name == target for a in node.names
+                ):
+                    found.add(str(f.relative_to(root)))
+                if isinstance(node, (ast.Name, ast.Attribute)) and (
+                    getattr(node, "id", None) or getattr(node, "attr", None)
+                ) == target:
+                    found.add(str(f.relative_to(root)))
+        return found
+
+    def test_the_real_write_chokepoint_is_pinned(self):
+        """db.record_outcome_event is the shared path every outcome row takes.
+
+        The enumeration below pins _record_outcome_event_inline, which is NOT
+        that chokepoint: a 2026-09-19 review found four phases.py callers that
+        reach the database directly, bypassing the recorder and its cap, while
+        this suite stayed green. Behavioural coverage of the wrong function
+        proves nothing, so pin the right one too.
+        """
+        import ast
+        import pathlib as _pl
+
+        root = _pl.Path(__file__).parent.parent
+        callers = set()
+        for f in sorted(root.glob("src/**/*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and getattr(
+                    node.func, "attr", None
+                ) == "record_outcome_event":
+                    callers.add(str(f.relative_to(root)))
+
+        assert callers == {
+            "src/mcp_handlers/observability/outcome_events.py",
+            # FOUR direct writers here bypass _record_outcome_event_inline
+            # entirely. The enumeration below never saw them, which is why the
+            # cap had to move into the shared write path itself.
+            "src/mcp_handlers/updates/phases.py",
+        }, callers
+
+    def test_persistence_does_not_regrade_an_already_graded_detail(self):
+        """The cap must not be undone between the recorder and the row.
+
+        Reported defect: the db mixin re-graded the recorder's output with no
+        ceiling, so a row capped at tool_observed/0.65 was STORED as
+        substrate_observed/0.85 and the tool response disagreed with the
+        database -- in the direction that flattered the claim.
+        """
+        from src.outcome_corroboration import (
+            TOOL_OBSERVED,
+            ceiling_for_verification_source,
+            enrich_detail_with_corroboration,
+        )
+
+        detail = {"verified": True, "source": "sensor_sync"}
+        vs = "agent_reported_tool_result"
+
+        response_detail = enrich_detail_with_corroboration(
+            dict(detail), outcome_type="task_completed",
+            verification_source=vs, ceiling=TOOL_OBSERVED,
+        )
+        # What the mixin now does with that already-graded detail.
+        stored_detail = dict(response_detail)
+
+        assert response_detail["corroboration_grade"] == "tool_observed"
+        assert stored_detail["corroboration_grade"] == response_detail["corroboration_grade"]
+        assert stored_detail["evidence_weight"] == response_detail["evidence_weight"]
+
+        # And an UNgraded detail reaching the mixin is capped by provenance,
+        # which is what the four direct phases.py writers now get.
+        fresh = enrich_detail_with_corroboration(
+            dict(detail), outcome_type="task_completed",
+            verification_source=vs, ceiling=ceiling_for_verification_source(vs),
+        )
+        assert fresh["corroboration_grade"] == "tool_observed"
+
+    def test_grader_is_default_deny(self):
+        """Omission and explicit None must both cap; only the sentinel lifts.
+
+        The earlier design inverted the default in the RECORDER while
+        assess_outcome_corroboration(ceiling=None) still meant "no cap", so every
+        grader call site that forgot inherited the unsafe behaviour. Three did.
+        """
+        from src.outcome_corroboration import (
+            NO_CEILING,
+            assess_outcome_corroboration,
+            ceiling_for_verification_source,
+        )
+
+        detail = {"verified": True, "source": "sensor_sync"}
+        vs = "agent_reported_tool_result"
+
+        assert assess_outcome_corroboration("task_completed", detail, vs).grade == "tool_observed"
+        assert assess_outcome_corroboration(
+            "task_completed", detail, vs, ceiling=None
+        ).grade == "tool_observed"
+        assert assess_outcome_corroboration(
+            "task_completed", detail, vs, ceiling=NO_CEILING
+        ).grade == "substrate_observed"
+
+        # Unknown/NULL provenance is not evidence of verification.
+        assert ceiling_for_verification_source(None) == "tool_observed"
+        assert ceiling_for_verification_source("server_observation") == NO_CEILING
 
     def test_the_write_path_has_exactly_these_callers(self):
         assert self._call_sites() == {
