@@ -31,9 +31,12 @@ WHAT A NUMBER HERE DOES NOT ESTABLISH
   the row as stored. If the detail was reshaped after grading, or the trigger
   vocabulary changed since the row was written, the recomputed trigger can
   differ from the one that actually fired. It is a reconstruction.
-- **``no_trigger`` is a real bucket, not an error.** A row can hold
-  ``tool_observed`` because a *higher* computed grade was clamped down to the
-  provenance ceiling. Those rows are at 0.65 by capping, not by tool evidence.
+- **``no_trigger_recomputed`` names a state, not a cause.** A row can hold
+  ``tool_observed`` with no recomputed trigger because a *higher* grade was
+  clamped down to the provenance ceiling, OR because the trigger it had at
+  write time is not one the current vocabulary recognises. Only the final
+  grade is persisted, never the pre-clamp one, so this script cannot tell the
+  two apart and does not claim to.
 - **Caller-authored does not mean false.** Most agents describing a tool call
   really did run it. The split measures what the server can *check*, not who
   lied.
@@ -63,6 +66,7 @@ sys.path.insert(
 
 from src.db import close_db, get_db
 from src.grounding.outcome_anchors import EXCLUSION_REASONS_KEY
+from src.mcp_handlers.observability.outcome_events import HARD_EXOGENOUS_TYPES
 from src.outcome_corroboration import (
     GRADE_ORDER,
     SERVER_SET_TOOL_TRIGGERS,
@@ -75,7 +79,15 @@ from src.outcome_corroboration import (
 BUCKET_SERVER_SET = "server_set_only"
 BUCKET_CALLER_AUTHORED = "caller_authored_only"
 BUCKET_BOTH = "both"
-BUCKET_NO_TRIGGER = "no_trigger_clamped"
+#: Deliberately NOT named for a cause. A tool_observed row with no recomputed
+#: trigger has at least two possible histories and this script can tell them
+#: apart in neither direction: the grade may have been CLAMPED down from a
+#: higher one to the provenance ceiling, or the row may have had a trigger at
+#: write time that the current vocabulary no longer recognises. An earlier
+#: name, ``no_trigger_clamped``, asserted the first; an external review
+#: (gpt-5.6-terra, 2026-09-19) pointed out that nothing persisted establishes
+#: it, because only the FINAL grade is stored, never the pre-clamp one.
+BUCKET_NO_TRIGGER = "no_trigger_recomputed"
 
 BUCKET_ORDER = (
     BUCKET_SERVER_SET,
@@ -108,7 +120,12 @@ def _bucket_for(triggers: set[str]) -> str:
 
 
 def _new_bucket_stat() -> dict:
-    return {"rows": 0, "calibration_admitted": 0, "distinct_agents": set()}
+    return {
+        "rows": 0,
+        "calibration_eligible": 0,
+        "tactical_channel": 0,
+        "distinct_agents": set(),
+    }
 
 
 async def collect(pool, since: Optional[datetime]) -> dict:
@@ -122,7 +139,7 @@ async def collect(pool, since: Optional[datetime]) -> dict:
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"""
-            SELECT ts, agent_id, detail
+            SELECT ts, agent_id, outcome_type, detail
             FROM audit.outcome_events
             {where}
             ORDER BY ts
@@ -155,11 +172,24 @@ async def collect(pool, since: Optional[datetime]) -> dict:
         stat["rows"] += 1
         stat["distinct_agents"].add(row["agent_id"])
 
-        # The actuating cut: a row only reaches tactical calibration if it was
-        # not excluded AND classified as a hard exogenous signal. Reporting the
-        # 0.65 population without this would overstate what actually trains.
-        if detail.get("hard_exogenous_signal") and not detail.get("calibration_excluded"):
-            stat["calibration_admitted"] += 1
+        # THE ACTUATING CUT, read off the real gate rather than a proxy.
+        # `_record_outcome_event_inline` trains calibration when the row was
+        # created, carries a reported confidence, clears the evidence-weight
+        # threshold (true for every row in this loop, which is already
+        # filtered to 0.65) and is not excluded. `hard_exogenous_signal` is
+        # NOT part of that gate: an earlier version of this script used it and
+        # undercounted the general channel, which an external review caught
+        # (gpt-5.6-terra, 2026-09-19).
+        eligible = (
+            detail.get("reported_confidence") is not None
+            and not detail.get("calibration_excluded")
+        )
+        if eligible:
+            stat["calibration_eligible"] += 1
+            # The narrower TACTICAL channel keys on the outcome TYPE, not on
+            # the nulled-out hard_exogenous_signal field.
+            if row["outcome_type"] in HARD_EXOGENOUS_TYPES:
+                stat["tactical_channel"] += 1
         for reason in detail.get(EXCLUSION_REASONS_KEY) or []:
             exclusion_census[str(reason)] += 1
 
@@ -175,7 +205,8 @@ async def collect(pool, since: Optional[datetime]) -> dict:
         "tool_observed_buckets": {
             name: {
                 "rows": stat["rows"],
-                "calibration_admitted": stat["calibration_admitted"],
+                "calibration_eligible": stat["calibration_eligible"],
+                "tactical_channel": stat["tactical_channel"],
                 "distinct_agents": len(stat["distinct_agents"]),
             }
             for name, stat in buckets.items()
@@ -206,15 +237,17 @@ def render(snapshot: dict) -> str:
         lines.append(f"  {grade:<24} {snapshot['grade_histogram'].get(grade, 0)}")
     lines.append("")
     lines.append(f"how the {TOOL_OBSERVED} (0.65) rows got there")
-    lines.append("  bucket                   rows   admitted   agents")
+    lines.append("  bucket                   rows  eligible  tactical   agents")
     for name in BUCKET_ORDER:
         stat = snapshot["tool_observed_buckets"][name]
         lines.append(
-            f"  {name:<22} {stat['rows']:>6} {stat['calibration_admitted']:>10}"
-            f" {stat['distinct_agents']:>8}"
+            f"  {name:<22} {stat['rows']:>6} {stat['calibration_eligible']:>9}"
+            f" {stat['tactical_channel']:>9} {stat['distinct_agents']:>8}"
         )
-    lines.append("  (admitted = reached tactical calibration: hard_exogenous_signal")
-    lines.append("   set and not calibration_excluded)")
+    lines.append("  eligible = trains the general calibration channel: a reported")
+    lines.append("             confidence and not calibration_excluded")
+    lines.append("  tactical = of those, the ones whose outcome_type is in")
+    lines.append("             HARD_EXOGENOUS_TYPES, the narrower tactical lane")
     lines.append("")
     lines.append("trigger census (a row may fire several)")
     for trigger, count in snapshot["trigger_census"].items():

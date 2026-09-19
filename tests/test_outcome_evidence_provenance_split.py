@@ -51,12 +51,23 @@ class _FakePool:
         return _FakeAcquire(self._conn)
 
 
-def _row(agent_id, detail, *, day=1):
+def _row(agent_id, detail, *, day=1, outcome_type="task_completed"):
     return {
         "ts": datetime(2026, 9, day, tzinfo=timezone.utc),
         "agent_id": agent_id,
+        "outcome_type": outcome_type,
         "detail": detail,
     }
+
+
+def test_the_no_trigger_bucket_is_named_for_a_state_not_a_cause():
+    """Only the FINAL grade is persisted, so a tool_observed row with no
+    recomputed trigger could have been clamped down OR could have carried a
+    trigger the current vocabulary no longer recognises. The bucket name must
+    not pick one; an external review caught the earlier `no_trigger_clamped`
+    asserting a history the data cannot establish."""
+    assert BUCKET_NO_TRIGGER == "no_trigger_recomputed"
+    assert "clamped" not in BUCKET_NO_TRIGGER
 
 
 def test_bucket_separates_server_set_from_caller_authored():
@@ -91,38 +102,46 @@ async def test_ungraded_rows_are_counted_apart_from_weak_grades():
 
 
 @pytest.mark.asyncio
-async def test_admitted_count_tracks_the_actuating_cut_not_the_grade():
-    """Sitting at 0.65 is not the same as training calibration: a row still has
-    to be a hard exogenous signal and not excluded. Reporting the tier alone
-    would overstate what reaches the tactical channel."""
+async def test_eligibility_tracks_the_real_gate_not_a_proxy_field():
+    """Sitting at 0.65 is not the same as training calibration, and
+    `hard_exogenous_signal` is not the gate.
+
+    The gate in `_record_outcome_event_inline` is: created, a reported
+    confidence, weight over the threshold, and not excluded. Only THEN does
+    `outcome_type in HARD_EXOGENOUS_TYPES` select the narrower tactical lane.
+    An earlier version of this script keyed eligibility on the
+    `hard_exogenous_signal` field and undercounted the general channel; an
+    external review (gpt-5.6-terra, 2026-09-19) caught it.
+    """
     pool = _FakePool([
-        _row("a1", {
-            "corroboration_grade": "tool_observed",
-            "kind": "test",
-            "exit_code": 0,
-            "hard_exogenous_signal": "test_result",
-        }),
-        _row("a2", {
-            "corroboration_grade": "tool_observed",
-            "kind": "test",
-            "exit_code": 0,
-            "hard_exogenous_signal": "test_result",
-            "calibration_excluded": True,
-            "calibration_exclusion_reasons": ["shadow_write"],
-        }),
-        _row("a3", {
-            "corroboration_grade": "tool_observed",
-            "kind": "test",
-            "exit_code": 0,
-        }),
+        # Eligible, and in the tactical lane.
+        _row("a1", {"corroboration_grade": "tool_observed", "kind": "test",
+                    "exit_code": 0, "reported_confidence": 0.8},
+             outcome_type="test_passed"),
+        # Excluded -> not eligible at all, despite a confidence.
+        _row("a2", {"corroboration_grade": "tool_observed", "kind": "test",
+                    "exit_code": 0, "reported_confidence": 0.8,
+                    "calibration_excluded": True,
+                    "calibration_exclusion_reasons": ["shadow_write"]},
+             outcome_type="test_passed"),
+        # No reported confidence -> nothing to calibrate against.
+        _row("a3", {"corroboration_grade": "tool_observed", "kind": "test",
+                    "exit_code": 0},
+             outcome_type="test_passed"),
+        # Eligible for the GENERAL channel but not the tactical lane: this is
+        # the row the old proxy dropped.
+        _row("a4", {"corroboration_grade": "tool_observed", "kind": "command",
+                    "exit_code": 0, "reported_confidence": 0.6},
+             outcome_type="drawing_completed"),
     ])
 
     snapshot = await collect(pool, None)
     caller = snapshot["tool_observed_buckets"][BUCKET_CALLER_AUTHORED]
 
-    assert caller["rows"] == 3
-    assert caller["calibration_admitted"] == 1
-    assert caller["distinct_agents"] == 3
+    assert caller["rows"] == 4
+    assert caller["calibration_eligible"] == 2
+    assert caller["tactical_channel"] == 1
+    assert caller["distinct_agents"] == 4
     assert snapshot["calibration_exclusion_census"] == {"shadow_write": 1}
 
 
