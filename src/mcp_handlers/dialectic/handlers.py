@@ -28,7 +28,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
-from .events import emit_reviewer_reassigned
+from .events import emit_reviewer_abstained, emit_reviewer_reassigned
 from .responses import (
     default_cooldown_steps,
     default_escalate_steps,
@@ -2326,6 +2326,17 @@ async def _run_synthetic_review(
     antithesis = await generate_antithesis(thesis, agent_state)
     if not antithesis:
         logger.info("[DIALECTIC] Synthetic reviewer produced no antithesis")
+        # Already the right DECISION — it declines to fabricate a verdict. What
+        # was missing is any trace of it: a caller reading the session saw an
+        # untouched thesis, identical to one no reviewer ever looked at. Record
+        # the attempt on the same stream as every other abstention.
+        await emit_reviewer_abstained(
+            session_id=session.session_id,
+            reviewer_agent_id=SYNTHETIC_REVIEWER_ID,
+            paused_agent_id=session.paused_agent_id,
+            phase=session.phase.value,
+            reason="synthetic_reviewer_no_antithesis",
+        )
         return None
 
     now = datetime.now(timezone.utc).isoformat()
@@ -2368,6 +2379,18 @@ async def _run_synthetic_review(
         # Antithesis landed but synthesis failed: leave the session at SYNTHESIS
         # for the paused agent/operator to finish. Better than no antithesis.
         logger.warning("[DIALECTIC] Synthetic antithesis recorded but synthesis failed")
+        # The antithesis DID land, so this abstention is narrower than the one
+        # above: a real objection is on the record and only the synthesis half
+        # is missing. Recorded so "the reviewer stopped here" is a readable
+        # fact rather than something inferred from a gap in the transcript.
+        await emit_reviewer_abstained(
+            session_id=session.session_id,
+            reviewer_agent_id=SYNTHETIC_REVIEWER_ID,
+            paused_agent_id=session.paused_agent_id,
+            phase=session.phase.value,
+            reviewer_backend=_synthetic_reviewer_provenance(antithesis),
+            reason="synthetic_reviewer_no_synthesis",
+        )
         return {
             "antithesis": antithesis,
             "synthesis": None,
@@ -2821,6 +2844,52 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     recovery=session_not_found_recovery(),
                 )]
 
+        # ── A NON-JUDGMENT IS NOT A VERDICT ──────────────────────────────────
+        # Refused HERE, before the takeover and first-responder branches below,
+        # because those are what claim the slot. A reviewer that could not form
+        # a judgment has not reviewed anything, and filing on its behalf records
+        # a BINDING rejection with empty reasoning that blocks the paused agent
+        # and locks out a reviewer that could judge (live: session
+        # 99ff6f25a310d23e, 2026-09-19).
+        #
+        # ⛔This is a SERVER invariant on purpose. The orchestrated reviewer also
+        # abstains client-side, and that stays as defense in depth -- but a
+        # client-side check only binds the one client that has it. Three reviewer
+        # implementations submit here (orchestrated, in-process synthetic, and
+        # any agent filing an outside consult); the trust boundary is the only
+        # place the property holds for all of them and for the next one written.
+        if not coerce_bool(arguments.get("judgment_formed"), default=True):
+            await emit_reviewer_abstained(
+                session_id=session_id,
+                reviewer_agent_id=agent_id,
+                paused_agent_id=session.paused_agent_id,
+                phase=session.phase.value,
+                reviewer_backend=_merge_caller_reviewer_provenance(
+                    arguments.get("observed_metrics"),
+                    arguments.get("reviewer_provenance"),
+                ).get("reviewer_backend"),
+                reason=arguments.get("reasoning") or "no_judgment_formed",
+            )
+            # Deliberately success, not an error. The caller did the right
+            # thing; an error would read as "your submission was malformed" and
+            # invites a retry that files the non-verdict anyway.
+            return success_response({
+                "abstained": True,
+                "session_id": session_id,
+                "reviewer_slot_claimed": False,
+                "phase": session.phase.value,
+                "message": (
+                    "Recorded an abstention: no judgment was formed, so no "
+                    "verdict was filed and the reviewer slot remains OPEN."
+                ),
+                "next_step": (
+                    "A reviewer that can judge may still claim this session. "
+                    "The abstention is on the audit stream as "
+                    "dialectic_reviewer_abstained; it is not a rejection and "
+                    "does not count as a review round."
+                ),
+            })
+
         original_reviewer_id = session.reviewer_agent_id
         reviewer_takeover = None
 
@@ -3089,6 +3158,38 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     ),
                 )]
     
+            # ── A NON-JUDGMENT IS NOT A VERDICT (synthesis side) ─────────────
+            # The reconsideration rounds re-ask the model, so they can also come
+            # back unparseable. Filing that would burn a synthesis round against
+            # max_synthesis_rounds AND overwrite a REASONED standing objection
+            # with an empty one -- destroying the very thing the paused agent is
+            # in the middle of answering. Abstain: the standing verdict stands
+            # untouched and the round is not spent.
+            if not coerce_bool(arguments.get("judgment_formed"), default=True):
+                await emit_reviewer_abstained(
+                    session_id=session_id,
+                    reviewer_agent_id=agent_id,
+                    paused_agent_id=session.paused_agent_id,
+                    phase=session.phase.value,
+                    reviewer_backend=_merge_caller_reviewer_provenance(
+                        arguments.get("observed_metrics"),
+                        arguments.get("reviewer_provenance"),
+                    ).get("reviewer_backend"),
+                    reason=arguments.get("reasoning") or "no_judgment_formed",
+                )
+                return success_response({
+                    "abstained": True,
+                    "session_id": session_id,
+                    "phase": session.phase.value,
+                    "synthesis_round": getattr(session, "synthesis_round", None),
+                    "round_consumed": False,
+                    "message": (
+                        "Recorded an abstention: no judgment was formed, so no "
+                        "synthesis was filed. Any standing verdict is unchanged "
+                        "and no synthesis round was consumed."
+                    ),
+                })
+
             # Coerce agrees to bool (MCP tools may send "true"/"false" strings)
             raw_agrees = arguments.get('agrees', False)
             if isinstance(raw_agrees, str):
