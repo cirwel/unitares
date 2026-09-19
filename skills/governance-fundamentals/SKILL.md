@@ -35,7 +35,7 @@ source_digests:
   unitares/governance_core/coherence.py: "ef819003ee72b388"
   unitares/governance_core/parameters.py: "84bf47ca540bbc49"
   unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
-  unitares/src/governance_monitor.py: "0666d2703aaa3129"
+  unitares/src/governance_monitor.py: "12ebc67e070927c8"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/governance_glossary.py: "251e06209e038a13"
   unitares/src/behavioral_state.py: "e214a51c1d7763c7"
@@ -60,7 +60,7 @@ source_digests:
 
 ## What UNITARES Is
 
-UNITARES provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists. The thermodynamic / ODE model remains useful as a research lens and telemetry; do not present it as cold-start authority or live verdict authority.
+UNITARES provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists. The dynamical-systems (ODE) model remains useful as a research lens and telemetry; do not present it as cold-start authority or live verdict authority.
 
 ## EISV State Vector
 
