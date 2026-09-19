@@ -586,6 +586,10 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
             )
     else:
         outcome_id = await db.record_outcome_event(
+            # Declared, not inferred from the payload: this recorder already
+            # graded `detail` under an explicit ceiling, so the shared write
+            # path must preserve that verdict rather than re-derive it.
+            corroboration_applied=True,
             agent_id=agent_id,
             outcome_type=outcome_type,
             is_bad=is_bad,

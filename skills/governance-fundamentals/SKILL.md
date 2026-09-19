@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-09-18"
+last_verified: "2026-09-19"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
@@ -53,7 +53,7 @@ source_digests:
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
-  unitares/src/mcp_handlers/observability/outcome_events.py: "4c80b9315508b02d"
+  unitares/src/mcp_handlers/observability/outcome_events.py: "0258e5921ecb7623"
 ---
 
 # Governance Fundamentals

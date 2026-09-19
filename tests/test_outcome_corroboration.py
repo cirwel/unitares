@@ -349,3 +349,40 @@ def test_stored_self_attested_row_regrades_to_the_capped_value():
 
     assert uncapped.grade == "substrate_observed"   # what the audit used to report
     assert regraded.grade == "tool_observed"        # what was actually persisted
+
+
+def test_nested_external_signal_needs_a_verified_marker():
+    """Closes the last asymmetry, found by an external review (Codex).
+
+    _has_external_evidence short-circuited on a NESTED verification_source with
+    no verified marker, while _has_substrate_evidence directly below it required
+    one. A nested verification_source is caller-authored dict content like any
+    other key, so that was the same asymmetry this change set out to remove,
+    still live one branch lower.
+    """
+    bare = assess_outcome_corroboration(
+        "task_completed",
+        {"evidence": [{"verification_source": "external_signal"}]},
+        "agent_reported_tool_result",
+        ceiling=NO_CEILING,
+    )
+    marked = assess_outcome_corroboration(
+        "task_completed",
+        {"evidence": [{"verification_source": "external_signal", "verified": True}]},
+        "agent_reported_tool_result",
+        ceiling=NO_CEILING,
+    )
+
+    assert bare.grade == "claim_only"
+    assert marked.grade == "externally_verified"
+
+
+def test_top_level_provenance_argument_still_short_circuits():
+    """The ARGUMENT is set by server code, not by a payload, so it keeps its
+    short-circuit. Only the nested caller-authored copy lost it."""
+    assert assess_outcome_corroboration(
+        "task_completed", {"pr": 1}, "external_signal"
+    ).grade == "externally_verified"
+    assert assess_outcome_corroboration(
+        "trajectory_validated", {"source": "trajectory_self_validation"}, "server_observation"
+    ).grade == "substrate_observed"

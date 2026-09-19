@@ -73,6 +73,7 @@ class ToolUsageMixin:
         eisv_regime: Optional[str] = None,
         detail: Optional[Dict[str, Any]] = None,
         verification_source: Optional[str] = None,
+        corroboration_applied: bool = False,
     ) -> Optional[str]:
         """Insert one outcome event. Returns outcome_id UUID string or None on failure.
 
@@ -130,8 +131,15 @@ class ToolUsageMixin:
         # default-deny, a second ungated pass would DOWNGRADE legitimate
         # server-observed rows. Preserving the upstream verdict is what keeps
         # both directions correct.
-        if isinstance(detail, dict) and detail.get("corroboration_grade"):
-            corroborated_detail = dict(detail)
+        # The already-graded signal is a PARAMETER, never a field inside the
+        # caller's detail. Keying it on detail["corroboration_grade"] made the
+        # grader's own verdict forgeable by anyone reaching this shared boundary
+        # -- presence-checking a caller-shaped field is an authorization bypass,
+        # not a cache check. Stripping those keys on the public path narrows the
+        # blast radius but cannot fix a shared boundary, because every other
+        # caller of this method is also "the caller".
+        if corroboration_applied:
+            corroborated_detail = dict(detail or {})
         else:
             corroborated_detail = enrich_detail_with_corroboration(
                 detail,

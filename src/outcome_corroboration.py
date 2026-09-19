@@ -53,8 +53,6 @@ _GRADE_RANK = {grade: rank for rank, grade in enumerate(GRADE_ORDER)}
 #: Such a row can never be graded above TOOL_OBSERVED -- at write time or when
 #: an audit surface re-grades it later -- because the two top grades assert a
 #: non-agent observation.
-SELF_ATTESTED_SOURCES = frozenset({"agent_reported_tool_result"})
-
 #: Explicit opt-out from the default cap. A caller that has ESTABLISHED trust by
 #: some means other than the payload passes this; nothing else lifts the cap.
 #: Deliberately not ``None``: omission and "I checked, it is trusted" must not
@@ -299,7 +297,16 @@ def _has_external_evidence(detail: Mapping[str, Any], verification_source: str |
         source = _source_text(context)
         if _has_verified_marker(context) and any(s in source for s in _TRUSTED_EXTERNAL_SOURCES):
             return True
-        if context.get("verification_source") == "external_signal":
+        # A nested verification_source is caller-authored dict content like any
+        # other key here. It previously short-circuited with NO verified marker,
+        # which left this detector asymmetric with _has_substrate_evidence below
+        # -- the very asymmetry this change set out to remove, still live one
+        # branch lower. The top-level `verification_source` ARGUMENT keeps its
+        # short-circuit above: that one is set by server code, not by a payload.
+        if (
+            context.get("verification_source") == "external_signal"
+            and _has_verified_marker(context)
+        ):
             return True
     return False
 
