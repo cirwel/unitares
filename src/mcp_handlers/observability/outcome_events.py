@@ -437,7 +437,9 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     # A vouched in-process or operator-gated caller still does not get a blanket
     # pass: its ceiling comes from the provenance it recorded, so a trusted site
     # that emits agent-attested rows (the Phase-5 evidence loop does) keeps those
-    # rows capped while its server-observed rows stay uncapped.
+    # rows capped while its server-observed rows are held to what
+    # `server_observation` itself asserts -- substrate_observed, not the top of
+    # the scale. Vouching the transport is not vouching the text it carries.
     trusted_ingestion = bool(arguments.pop(_TRUSTED_INGESTION_KEY, False))
     corroboration_ceiling = (
         ceiling_for_verification_source(verification_source)
@@ -723,13 +725,23 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
 _PROVENANCE_CLAIM_KEYS = frozenset({
     "verification_source",
     "phase5_emitter",
-    # The grader's OWN output. The shared write path skips re-grading a detail
-    # that already carries a grade (so the cap is not undone at persistence),
-    # which makes these caller-forgeable unless stripped: a caller supplying
-    # corroboration_grade="externally_verified" would otherwise have it
-    # persisted verbatim. Introduced by the fix for that re-grading defect and
-    # caught before it shipped; the public path's enrich() overwrote them, so
-    # this is defence in depth rather than a live hole.
+    # The grader's OWN output, stripped as defence in depth. Two live controls
+    # already neutralise a forged grade and neither depends on this set: the
+    # public path re-grades through enrich(), which OVERWRITES all seven keys,
+    # and the shared write path decides whether to re-grade from the
+    # `corroboration_applied` PARAMETER, never from anything in `detail`.
+    #
+    # This comment previously said the write path "skips re-grading a detail
+    # that already carries a grade". That was true of the first attempt at the
+    # persistence fix and is no longer true of the code -- presence-checking a
+    # caller-shaped field was itself the authorization bypass, which is why it
+    # became a parameter. An external review of this PR (gpt-5.6-terra,
+    # 2026-09-19) caught the stale wording still describing the defect as
+    # though it were the contract.
+    #
+    # What stripping still buys: a future caller that passes
+    # corroboration_applied=True with caller-shaped detail would persist those
+    # keys verbatim, and this keeps the public path from being that caller.
     "corroboration_grade",
     "evidence_weight",
     "claim_risk",

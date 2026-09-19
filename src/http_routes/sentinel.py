@@ -1042,8 +1042,10 @@ async def http_sentinel_adjudicate(request):
         args["detail"]["adjudicated_via"] = "dashboard"
 
         from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
-        # Operator-gated route: vouched ingestion, so server-controlled
-        # provenance keeps the grader's full range.
+        # Operator-gated route: vouched ingestion, so the ceiling comes
+        # from the recorded provenance rather than the flat agent cap. Vouched
+        # is not unlimited -- the provenance still bounds what the payload can
+        # claim.
         args["_trusted_ingestion"] = True
         await _record_outcome_event_inline(args)
         return JSONResponse({

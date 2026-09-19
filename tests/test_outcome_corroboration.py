@@ -316,11 +316,19 @@ def test_ceiling_for_verification_source_caps_only_self_attested_rows():
     from src.outcome_corroboration import ceiling_for_verification_source
 
     assert ceiling_for_verification_source("agent_reported_tool_result") == "tool_observed"
-    # Server-controlled provenance keeps the full range, via an EXPLICIT
-    # sentinel rather than None -- omission and "trusted" must not be spelled
-    # the same way, because omission is what a new call site does.
-    assert ceiling_for_verification_source("external_signal") == NO_CEILING
-    assert ceiling_for_verification_source("server_observation") == NO_CEILING
+    # A vouched provenance lifts the cap only as far as its OWN claim reaches.
+    # These returned NO_CEILING until an external review pointed out that
+    # vouching the transport also stopped clamping the payload it carried.
+    assert ceiling_for_verification_source("external_signal") == "externally_verified"
+    assert ceiling_for_verification_source("server_observation") == "substrate_observed"
+    # NO_CEILING remains the explicit opt-out a CALLER can pass -- omission and
+    # "trusted" must not be spelled the same way -- it is just no longer what
+    # provenance alone hands out.
+    assert NO_CEILING not in {
+        ceiling_for_verification_source(s)
+        for s in (None, "", "external_signal", "server_observation",
+                  "agent_reported_tool_result")
+    }
     # Unknown/NULL provenance now CAPS. It previously returned None (uncapped),
     # which let pre-column rows re-grade to 0.85 on the audit surface built to
     # expose self-labelled rows. Unknown is not evidence of verification.
@@ -453,3 +461,59 @@ class TestToolObservationTriggerOrigin:
         )
         assert assessment.grade == "tool_observed"
         assert tool_observation_triggers(detail) == set()
+
+
+class TestVouchedProvenanceIsNotAWarrantForItsPayload:
+    """Both findings from the external review of this PR's own diff
+    (gpt-5.6-terra via the Codex host adapter, 2026-09-19). Each was
+    reproduced against the pre-fix code before being fixed.
+    """
+
+    def test_an_unrecognised_ceiling_falls_back_instead_of_failing_open(self):
+        """The clamp is guarded by ``ceiling in _GRADE_RANK``, so an
+        unrecognised ceiling used to disable it SILENTLY. The nastiest spelling
+        is the constant's own NAME: TOOL_OBSERVED == "tool_observed", so
+        ``ceiling="TOOL_OBSERVED"`` looks right, reads right, and graded 0.85.
+        Default-deny that fails open on a typo is not default-deny.
+        """
+        detail = {"source": "sensor_sync", "verified": True}
+        for bogus in ("", "typo", "TOOL_OBSERVED", "none", "0.65"):
+            assessment = assess_outcome_corroboration(
+                "task_completed", detail, "agent_reported_tool_result", ceiling=bogus
+            )
+            assert assessment.grade == "tool_observed", bogus
+            assert any("unrecognised ceiling" in r for r in assessment.reasons), bogus
+
+        # The fallback is the PROVENANCE default, not a fixed constant, so a
+        # typo on a vouched row degrades to what that row is entitled to
+        # rather than all the way down.
+        vouched = assess_outcome_corroboration(
+            "trajectory_validated",
+            {"source": "trajectory_self_validation"},
+            "server_observation",
+            ceiling="typo",
+        )
+        assert vouched.grade == "substrate_observed"
+
+    def test_a_server_observation_row_cannot_be_talked_up_to_externally_verified(self):
+        """Vouching the TRANSPORT is not vouching the TEXT it carries. A
+        caller-authored nested marker reached 1.00 on a server_observation row,
+        because NO_CEILING stopped the clamp entirely instead of holding the
+        row to what its own provenance asserts.
+        """
+        payload = {"evidence": [{"verification_source": "external_signal", "verified": True}]}
+
+        assert assess_outcome_corroboration(
+            "task_completed", payload, "server_observation"
+        ).grade == "substrate_observed"
+
+        # Still reachable for a row whose own provenance says external.
+        assert assess_outcome_corroboration(
+            "task_completed", payload, "external_signal"
+        ).grade == "externally_verified"
+
+        # And an explicit NO_CEILING from a caller that has established trust
+        # by other means is unchanged -- the opt-out still exists.
+        assert assess_outcome_corroboration(
+            "task_completed", payload, "server_observation", ceiling=NO_CEILING
+        ).grade == "externally_verified"

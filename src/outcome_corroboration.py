@@ -64,20 +64,39 @@ NO_CEILING = "__no_ceiling__"
 _CEILING_UNSET = object()
 
 
+#: What each recorded provenance is ENTITLED to assert, not merely whether it
+#: is trusted. A vouched provenance lifts the cap only as far as its own claim
+#: reaches: ``server_observation`` means the server watched this, which is
+#: SUBSTRATE_OBSERVED -- it is not a warrant for the payload to call itself
+#: externally verified. Anything absent from this map caps at TOOL_OBSERVED.
+_PROVENANCE_CEILINGS = {
+    "external_signal": EXTERNALLY_VERIFIED,
+    "server_observation": SUBSTRATE_OBSERVED,
+}
+
+
 def ceiling_for_verification_source(verification_source: str | None) -> str:
     """Ceiling implied by a row's recorded provenance. Default-deny.
 
-    Returns NO_CEILING only for the two server-controlled provenances. Everything
-    else -- self-attested, unknown, and NULL -- caps at TOOL_OBSERVED.
+    Self-attested, unknown and NULL provenance cap at TOOL_OBSERVED. The two
+    server-controlled provenances cap at what they themselves assert, which is
+    the strongest grade their own label supports -- not at no ceiling.
+
+    This returned NO_CEILING for both server provenances until an external
+    review of PR #2316 (gpt-5.6-terra, 2026-09-19) pointed out what that let
+    through: a ``server_observation`` row whose CALLER-supplied detail nests
+    ``{"verification_source": "external_signal", "verified": true}`` graded
+    1.00, because vouching the provenance also stopped clamping the payload.
+    Verified before the change and after: 1.00 -> 0.85. A vouched transport is
+    not a warrant for the text it carries, which is this module's whole thesis
+    applied one level up.
 
     NULL/unknown was previously left uncapped as "a separate decision". That let
     pre-column rows re-grade to 0.85 on the audit surface built to EXPOSE
     self-labelled rows. Unknown provenance is not evidence of verification, so it
-    now caps like any other unvouched row.
+    caps like any other unvouched row.
     """
-    if verification_source in {"server_observation", "external_signal"}:
-        return NO_CEILING
-    return TOOL_OBSERVED
+    return _PROVENANCE_CEILINGS.get(verification_source or "", TOOL_OBSERVED)
 
 _CLAIM_FIELD_FAMILIES = {
     "pr": {
@@ -433,6 +452,7 @@ def assess_outcome_corroboration(
     the persistence path, where an already-capped detail was re-graded upward
     before being stored.
     """
+    unrecognised_ceiling: str | None = None
     if ceiling is _CEILING_UNSET or ceiling is None:
         # Derived from provenance, not a blunt constant: a blunt TOOL_OBSERVED
         # default would also cap server_observation/external_signal rows, whose
@@ -441,6 +461,18 @@ def assess_outcome_corroboration(
         # the risk is -- agent-attested and unknown -- and leaves real ingestion
         # alone. A new call site that forgets still cannot let an agent-supplied
         # payload reach the top two grades.
+        ceiling = ceiling_for_verification_source(verification_source)
+    elif ceiling != NO_CEILING and ceiling not in _GRADE_RANK:
+        # A ceiling this function does not recognise used to disable the clamp
+        # SILENTLY, because the clamp below is guarded by `ceiling in
+        # _GRADE_RANK`. Default-deny that fails open on a typo is not
+        # default-deny: `ceiling="TOOL_OBSERVED"` -- the constant's NAME rather
+        # than its lowercase value -- graded 0.85. Found by an external review
+        # of PR #2316 (gpt-5.6-terra, 2026-09-19) and reproduced before the fix.
+        # Fall back to the provenance default and SAY SO in the reasons, rather
+        # than raising: a grading call is on the write path, and a caller's
+        # typo should downgrade the claim, never drop the row.
+        unrecognised_ceiling = str(ceiling)
         ceiling = ceiling_for_verification_source(verification_source)
     detail_map = _as_dict(detail)
     source = verification_source or detail_map.get("verification_source")
@@ -500,6 +532,12 @@ def assess_outcome_corroboration(
             trust_context_markers=False,
         )
         unverified = claimed - verified
+
+    if unrecognised_ceiling is not None:
+        reasons.append(
+            f"ignored unrecognised ceiling {unrecognised_ceiling!r}; "
+            f"fell back to the provenance default {ceiling}"
+        )
 
     if source is None:
         reasons.append("verification_source unset; treated conservatively")

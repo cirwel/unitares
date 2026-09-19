@@ -307,17 +307,30 @@ class TestCappingIsTheDefault:
         inherits -- pass nothing, get capped."""
         assert self._ceiling_seen(self._base()) == "tool_observed"
 
-    def test_vouched_server_observation_keeps_the_full_range(self):
+    def test_vouched_provenance_keeps_the_range_its_own_label_asserts(self):
         """The inversion must not silently disarm legitimate ingestion: the
         operator-gated routes and in-process emitters still reach substrate and
-        external grades."""
+        external grades.
+
+        The ceiling is what the provenance ITSELF claims, not no ceiling. A
+        vouched ``server_observation`` row can still be graded
+        substrate_observed on its own evidence; what it can no longer do is let
+        caller-authored payload text carry it to externally_verified. External
+        review of this PR, 2026-09-19.
+        """
         assert self._ceiling_seen(
             self._base(
                 outcome_type="trajectory_validated",
                 verification_source="server_observation",
                 _trusted_ingestion=True,
             )
-        ) == "__no_ceiling__"
+        ) == "substrate_observed"
+        assert self._ceiling_seen(
+            self._base(
+                verification_source="external_signal",
+                _trusted_ingestion=True,
+            )
+        ) == "externally_verified"
 
     def test_vouched_caller_does_not_get_a_blanket_pass(self):
         """A vouched site that emits AGENT-attested rows -- the Phase-5 evidence
@@ -493,19 +506,21 @@ class TestEveryWritePathIsAccountedFor:
         assert fresh["corroboration_grade"] == "tool_observed"
 
     def test_a_caller_cannot_supply_its_own_grade(self):
-        """The shared write path SKIPS re-grading a detail that already carries a
-        grade -- that is what stops the cap being undone at persistence. It also
-        makes the grader's own output fields caller-forgeable unless they are
-        stripped: a caller supplying corroboration_grade="externally_verified"
-        would otherwise have it persisted verbatim.
+        """A forged grade in `detail` is neutralised twice over, and NEITHER
+        control reads the payload to decide.
 
-        Found by the author while preparing this diff for review, before it
-        shipped. The public path's enrich() overwrote these fields, so this is
-        defence in depth rather than a live hole being closed.
+        The docstring here used to say the write path "skips re-grading a
+        detail that already carries a grade". That described the FIRST attempt
+        at the persistence fix, where presence-checking a caller-shaped field
+        was itself the authorization bypass; it became a parameter for exactly
+        that reason. An external review of this PR (gpt-5.6-terra, 2026-09-19)
+        found the same stale wording still in the source comment, so the
+        assertions below now pin the real invariant rather than the old one.
         """
         from src.mcp_handlers.observability.outcome_events import (
             _strip_provenance_claims,
         )
+        from src.outcome_corroboration import enrich_detail_with_corroboration
 
         forged = {
             "corroboration_grade": "externally_verified",
@@ -515,12 +530,20 @@ class TestEveryWritePathIsAccountedFor:
             "summary": "trust me",
             "nested": {"corroboration_reasons": ["fabricated"], "keep": 1},
         }
-        clean = _strip_provenance_claims(forged)
 
+        # Control 1 (public path only): the keys never reach the recorder.
+        clean = _strip_provenance_claims(forged)
         assert clean == {"summary": "trust me", "nested": {"keep": 1}}
-        # And the skip condition the mixin uses is therefore unreachable from a
-        # caller on the public path.
-        assert not clean.get("corroboration_grade")
+
+        # Control 2 (every path): re-grading OVERWRITES a forged grade, so the
+        # forgery does not survive even when it is not stripped first.
+        regraded = enrich_detail_with_corroboration(
+            dict(forged),
+            outcome_type="task_completed",
+            verification_source="agent_reported_tool_result",
+        )
+        assert regraded["corroboration_grade"] == "claim_only"
+        assert regraded["evidence_weight"] == 0.10
 
     def test_grader_is_default_deny(self):
         """Omission and explicit None must both cap; only the sentinel lifts.
@@ -548,7 +571,8 @@ class TestEveryWritePathIsAccountedFor:
 
         # Unknown/NULL provenance is not evidence of verification.
         assert ceiling_for_verification_source(None) == "tool_observed"
-        assert ceiling_for_verification_source("server_observation") == NO_CEILING
+        # A vouched provenance caps at its OWN claim, not at nothing.
+        assert ceiling_for_verification_source("server_observation") == "substrate_observed"
 
     def test_the_write_path_has_exactly_these_callers(self):
         assert self._call_sites() == {
