@@ -38,6 +38,9 @@ or [User Manual](../manual/README.md).
 - [`resident-roster.md`](resident-roster.md) — configured resident set.
 - [`cloud-deploy-runbook.md`](cloud-deploy-runbook.md) — hosting the governance
   stack off the primary machine: exposure, off-site backups, cutover.
+- [`cloud-session-plugin.md`](cloud-session-plugin.md) — why the governance
+  plugin is absent in Claude Code cloud sessions, a hook-by-hook audit of what
+  survives a residentless container, and the setup-script wiring.
 - [`redis-retirement-soak-runbook.md`](redis-retirement-soak-runbook.md) —
   staged Redis mirror-retirement checks and rollback gates.
 - [`lease-plane-operator-runbook.md`](lease-plane-operator-runbook.md) — Elixir
