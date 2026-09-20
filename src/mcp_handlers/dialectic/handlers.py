@@ -2938,6 +2938,19 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 except Exception as e:
                     return [error_response(f"Reviewer takeover failed during persistence: {e}")]
 
+        # The paused agent may answer an assigned reviewer's objection during
+        # synthesis, but it cannot become the reviewer merely by declaring an
+        # abstention. Preserve the same self-review boundary as the normal
+        # submit_antithesis path before recording any abstention event.
+        if (
+            not judgment_formed
+            and session.reviewer_agent_id is None
+            and agent_id == session.paused_agent_id
+        ):
+            return [error_response(
+                "Requestor cannot review their own session (use reviewer_mode='self' for self-review)",
+            )]
+
         # First-responder eligibility: if no reviewer assigned, validate the
         # submitter before the protocol auto-assigns them as reviewer.
         # Without this, any agent could claim the reviewer slot with no checks.

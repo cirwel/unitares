@@ -1,5 +1,5 @@
 from typing import ClassVar, List, Literal, Mapping, Optional, Tuple, Union
-from pydantic import Field, model_validator
+from pydantic import Field, StrictBool, model_validator
 from .mixins import AgentIdentityMixin
 
 class RequestDialecticReviewParams(AgentIdentityMixin):
@@ -96,7 +96,7 @@ class SubmitAntithesisParams(AgentIdentityMixin):
         default=None,
         description="Why reviewer ownership is being taken over for this antithesis submission"
     )
-    judgment_formed: Union[bool, str, None] = Field(
+    judgment_formed: Union[StrictBool, str, None] = Field(
         default=True,
         description=(
             "False declares that no judgment was reached -- the model returned "
@@ -137,7 +137,7 @@ class SubmitSynthesisParams(AgentIdentityMixin):
         ),
     )
     
-    judgment_formed: Union[bool, str, None] = Field(
+    judgment_formed: Union[StrictBool, str, None] = Field(
         default=True,
         description=(
             "False declares that no judgment was reached on this round -- the "
@@ -243,7 +243,7 @@ class DialecticParams(AgentIdentityMixin):
     concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis)")
     take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
-    judgment_formed: Union[bool, str, None] = Field(
+    judgment_formed: Union[StrictBool, str, None] = Field(
         True,
         description=(
             "Set false (action=antithesis/synthesis) to declare that NO judgment "
