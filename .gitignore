@@ -229,6 +229,7 @@ config/generated-*.json
 
 # Test cache (tree-hash pytest results)
 .test-cache/
+.review-cache/
 
 # Git worktrees
 .worktrees/
