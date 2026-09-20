@@ -2106,6 +2106,22 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
 # handle_llm_assisted_dialectic so transcripts/calibration treat both the same.
 SYNTHETIC_REVIEWER_ID = "llm-synthetic-reviewer"
 
+
+def _judgment_was_formed(value: Any) -> bool:
+    """Resolve the abstention flag with a fail-closed raw-handler contract.
+
+    The schema validator already maps unknown strings to ``False``, but these
+    handlers are also called directly by tests and by compatibility paths that
+    can bypass schema validation.  Only an omitted/``None`` value preserves the
+    backwards-compatible default of ``True``; a malformed supplied value must
+    not silently file a verdict.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "on"}
+    return bool(value)
+
 # Reviewer/model provenance persisted with a verdict, riding the namespaced
 # observed_metrics["reviewer_backend"] key the orchestrated reviewer already
 # writes (agents/dialectic_reviewer/reviewer.py:_provenance_for_message — see
@@ -2858,7 +2874,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
         # implementations submit here (orchestrated, in-process synthetic, and
         # any agent filing an outside consult); the trust boundary is the only
         # place the property holds for all of them and for the next one written.
-        if not coerce_bool(arguments.get("judgment_formed"), default=True):
+        if not _judgment_was_formed(arguments.get("judgment_formed")):
             await emit_reviewer_abstained(
                 session_id=session_id,
                 reviewer_agent_id=agent_id,
@@ -3165,7 +3181,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
             # with an empty one -- destroying the very thing the paused agent is
             # in the middle of answering. Abstain: the standing verdict stands
             # untouched and the round is not spent.
-            if not coerce_bool(arguments.get("judgment_formed"), default=True):
+            if not _judgment_was_formed(arguments.get("judgment_formed")):
                 await emit_reviewer_abstained(
                     session_id=session_id,
                     reviewer_agent_id=agent_id,
