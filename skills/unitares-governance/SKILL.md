@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for the UNITARES governance framework. Use this
   as the entrypoint when you need the overall model and route into the split
   governance skills.
-last_verified: "2026-09-19"
+last_verified: "2026-09-20"
 freshness_days: 35
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -33,11 +33,11 @@ source_files:
   - unitares/skills/discord-bridge/SKILL.md
   - unitares/skills/unitares-dashboard/SKILL.md
 source_digests:
-  unitares/src/mcp_handlers/core.py: "451b8f3d9dd2ce80"
-  unitares/src/mcp_handlers/identity/handlers.py: "c5bd71f4ab659d05"
+  unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
+  unitares/src/mcp_handlers/identity/handlers.py: "478215b83413f0ef"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f2f61da6afb477a9"
-  unitares/src/mcp_handlers/middleware/identity_step.py: "d6dacf96434c8fba"
+  unitares/src/mcp_handlers/middleware/identity_step.py: "f50ccc2629ef7832"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
   unitares/src/tool_modes.py: "0f922d11fa4ac843"
   unitares/src/mcp_handlers/identity/session.py: "cc60f281b7fc3276"
@@ -46,12 +46,12 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
-  unitares/skills/governance-lifecycle/SKILL.md: "f00494a4f2ba3daf"
-  unitares/skills/governance-fundamentals/SKILL.md: "e7c90dfa491b3590"
-  unitares/skills/knowledge-graph/SKILL.md: "3638f64f4d5a2aeb"
-  unitares/skills/dialectic-reasoning/SKILL.md: "65bd327df5abab5c"
+  unitares/skills/governance-lifecycle/SKILL.md: "c05c743449a6c100"
+  unitares/skills/governance-fundamentals/SKILL.md: "aff9a780b6957313"
+  unitares/skills/knowledge-graph/SKILL.md: "eff53add72cc4e9b"
+  unitares/skills/dialectic-reasoning/SKILL.md: "d03618a0c22078ad"
   unitares/skills/discord-bridge/SKILL.md: "7ce6a8f491281f46"
-  unitares/skills/unitares-dashboard/SKILL.md: "b15f49e6b6e30109"
+  unitares/skills/unitares-dashboard/SKILL.md: "3a5856134afcad64"
 ---
 
 # UNITARES Governance

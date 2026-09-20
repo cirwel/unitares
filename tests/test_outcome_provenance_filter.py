@@ -6,6 +6,7 @@ returns, which is what the verdict path consumes -- a predicate that is correct
 but unapplied would pass the former and fail these.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -61,6 +62,45 @@ class _Backend(ToolUsageMixin):
                 return False
 
         return _Ctx()
+
+
+
+class _RecordingConn:
+    """Captures what the shared write path actually hands the database."""
+
+    DETAIL_ARG_INDEX = 13  # agent..is_bad (5) + eisv_* (8) -> detail is $15
+
+    def __init__(self):
+        self.calls = []
+
+    async def fetchval(self, query, *args):
+        self.calls.append((query, args))
+        return "outcome-id"
+
+    def stored_detail(self, call=0):
+        return json.loads(self.calls[call][1][self.DETAIL_ARG_INDEX])
+
+
+class _RecordingAcquire:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *_exc):
+        return False
+
+
+class _WritePathHarness(ToolUsageMixin):
+    """The real ToolUsageMixin over a recording connection, so a test can read
+    the row the mixin would have written rather than simulating it."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def acquire(self):
+        return _RecordingAcquire(self.conn)
 
 
 def _run(coro):
@@ -242,6 +282,507 @@ class TestServerDerivedProvenance:
         assert '= "agent_reported_tool_result"' not in inline.replace(
             'or "agent_reported_tool_result"', ""
         )
+
+
+class TestCappingIsTheDefault:
+    """The 2026-09-18 dialectic review (a36255d62a1310f3) rejected an OPT-IN
+    ceiling: a future public write path that forgot to pass it would inherit
+    the full grade range silently. Trust is now opt-in and capping is the
+    default, so a path that forgets anything is capped rather than uncapped.
+
+    These are behavioural. The earlier versions asserted on `inspect.getsource`
+    substrings and all passed with the cap deleted outright.
+    """
+
+    @staticmethod
+    def _ceiling_seen(args):
+        """Run the real write path far enough to capture the grader call."""
+        from unittest.mock import patch
+        from src.mcp_handlers.observability import outcome_events as oe
+
+        class _Stop(Exception):
+            pass
+
+        seen = {}
+
+        def _spy(detail, *, outcome_type, verification_source, ceiling=None):
+            seen["ceiling"] = ceiling
+            raise _Stop()
+
+        with patch.object(oe, "enrich_detail_with_corroboration", _spy):
+            try:
+                _run(oe._record_outcome_event_inline(dict(args)))
+            except _Stop:
+                pass
+        return seen.get("ceiling", "NEVER_CALLED")
+
+    def _base(self, **kw):
+        args = {
+            "outcome_type": "task_completed",
+            "agent_id": "test-agent-ceiling",
+            "detail": {"source": "sensor_sync"},
+        }
+        args.update(kw)
+        return args
+
+    def test_unvouched_write_is_capped(self):
+        assert self._ceiling_seen(
+            self._base(verification_source="agent_reported_tool_result")
+        ) == "tool_observed"
+
+    def test_unvouched_write_is_capped_even_claiming_server_provenance(self):
+        """The invariant that makes a forgotten path safe: an unvouched caller
+        is capped by what it IS, not by what it claims. Deriving the cap from
+        verification_source alone would re-expose the grader the moment a new
+        handler forgot the source downgrade -- the schema lets a caller ask for
+        external_signal."""
+        for claimed in ("external_signal", "server_observation"):
+            assert self._ceiling_seen(
+                self._base(verification_source=claimed)
+            ) == "tool_observed", claimed
+
+    def test_write_path_with_no_provenance_at_all_is_capped(self):
+        """Safe by omission: the enumeration condition in practice. Rather than
+        listing today's public entrypoints, this pins the property EVERY path
+        inherits -- pass nothing, get capped."""
+        assert self._ceiling_seen(self._base()) == "tool_observed"
+
+    def test_vouched_provenance_keeps_the_range_its_own_label_asserts(self):
+        """The inversion must not silently disarm legitimate ingestion: the
+        operator-gated routes and in-process emitters still reach substrate and
+        external grades.
+
+        The ceiling is what the provenance ITSELF claims, not no ceiling. A
+        vouched ``server_observation`` row can still be graded
+        substrate_observed on its own evidence; what it can no longer do is let
+        caller-authored payload text carry it to externally_verified. External
+        review of this PR, 2026-09-19.
+        """
+        assert self._ceiling_seen(
+            self._base(
+                outcome_type="trajectory_validated",
+                verification_source="server_observation",
+                _trusted_ingestion=True,
+            )
+        ) == "substrate_observed"
+        assert self._ceiling_seen(
+            self._base(
+                verification_source="external_signal",
+                _trusted_ingestion=True,
+            )
+        ) == "externally_verified"
+
+    def test_vouched_caller_does_not_get_a_blanket_pass(self):
+        """A vouched site that emits AGENT-attested rows -- the Phase-5 evidence
+        loop does exactly this -- keeps those rows capped."""
+        assert self._ceiling_seen(
+            self._base(
+                verification_source="agent_reported_tool_result",
+                _trusted_ingestion=True,
+            )
+        ) == "tool_observed"
+
+    def test_public_handler_strips_a_caller_supplied_trust_key(self):
+        """A caller must not be able to vouch for ITSELF.
+
+        This asserted on `inspect.getsource` until an external review pointed
+        out what source-text coverage permits: leave the pop in a dead branch,
+        or re-add the flag after it, and the assertion stays green while caller
+        trust is accepted. It now runs the public tool and reads the ceiling
+        the grader was actually handed.
+        """
+        from unittest.mock import patch
+        from src.mcp_handlers.observability import outcome_events as oe
+
+        seen = {}
+
+        async def _spy(arguments):
+            seen["args"] = dict(arguments)
+            return {"success": True, "outcome_id": "x"}
+
+        forged = {
+            "outcome_type": "task_completed",
+            "agent_id": "test-agent-selfvouch",
+            "verification_source": "server_observation",
+            "detail": {"source": "sensor_sync", "verified": True},
+            "_trusted_ingestion": True,
+        }
+        with patch.object(oe, "_record_outcome_event_inline", _spy):
+            _run(oe.handle_outcome_event(dict(forged)))
+
+        # The assertion is on what the handler FORWARDS, because that is the
+        # only place the pop is observable. Asserting the resulting ceiling
+        # cannot work: the handler also forces verification_source down to
+        # agent_reported_tool_result, so trusted and untrusted resolve to the
+        # same "tool_observed" and the removed pop stays invisible. Two
+        # independent controls, and this one pins the control it names.
+        assert "_trusted_ingestion" not in seen.get("args", {}), seen
+        # The other control, asserted here so removing EITHER is visible.
+        assert seen["args"].get("verification_source") == "agent_reported_tool_result"
+
+    def test_trusted_call_sites_are_the_expected_four(self):
+        """A new trust grant should be a deliberate, reviewable act -- not
+        something that accretes.
+
+        This matched two exact source SPELLINGS until an external review
+        pointed out that `args[_TRUSTED_INGESTION_KEY] = internal`, or any
+        helper, evades both while granting the same trust. It now finds every
+        module that so much as names the key, by AST, in either form: the
+        string literal or the constant.
+        """
+        import ast
+        import pathlib as _pl
+
+        root = _pl.Path(__file__).parent.parent
+        key = "_trusted_ingestion"
+        const = "_TRUSTED_INGESTION_KEY"
+        vouched = set()
+        for f in sorted(root.glob("src/**/*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and node.value == key:
+                    vouched.add(str(f.relative_to(root)))
+                if isinstance(node, (ast.Name, ast.Attribute)) and (
+                    getattr(node, "id", None) or getattr(node, "attr", None)
+                ) == const:
+                    vouched.add(str(f.relative_to(root)))
+
+        assert vouched == {
+            # Where the key is DEFINED and where it is stripped off the public
+            # path -- the boundary itself, not a grant.
+            "src/mcp_handlers/observability/outcome_events.py",
+            # The four grants.
+            "src/http_routes/sentinel.py",
+            "src/http_routes/substrate.py",
+            "src/mcp_handlers/dialectic/resolution.py",
+            "src/mcp_handlers/updates/phases.py",
+        }, vouched
+
+
+class TestEveryWritePathIsAccountedFor:
+    """The enumeration the dialectic reviewer asked for (a36255d62a1310f3).
+
+    TestCappingIsTheDefault pins the property every path INHERITS. This pins the
+    set of paths itself, so adding a write path is a change someone has to look
+    at rather than one that lands quietly. The two together are what the
+    reviewer's condition asked for: no public entrypoint can exceed
+    tool_observed through caller-supplied detail.
+    """
+
+    @staticmethod
+    def _call_sites():
+        """Every module that calls the shared outcome write path, by AST -- not
+        by grep, so a call inside a string or comment cannot pad the list."""
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).parent.parent
+        found = set()
+        for f in sorted(root.glob("src/**/*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    fn = node.func
+                    name = getattr(fn, "id", None) or getattr(fn, "attr", None)
+                    if name == "_record_outcome_event_inline":
+                        found.add(str(f.relative_to(root)))
+        return found
+
+    @staticmethod
+    def _referencing_modules(target):
+        """Modules that reference `target` AT ALL -- not just call it by name.
+
+        The call-only version of this was evadable: `from ... import X as _rec`
+        then `await _rec(args)` produced zero detections, so the enumeration
+        could pass while an unlisted write path existed. Checking ImportFrom
+        names (which catches any asname) plus every Name/Attribute reference
+        closes both that and the pass-as-value shape.
+        """
+        import ast
+        import pathlib as _pl
+
+        root = _pl.Path(__file__).parent.parent
+        found = set()
+        for f in sorted(root.glob("src/**/*.py")):
+            try:
+                tree = ast.parse(f.read_text())
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and any(
+                    a.name == target for a in node.names
+                ):
+                    found.add(str(f.relative_to(root)))
+                if isinstance(node, (ast.Name, ast.Attribute)) and (
+                    getattr(node, "id", None) or getattr(node, "attr", None)
+                ) == target:
+                    found.add(str(f.relative_to(root)))
+        return found
+
+    def test_the_real_write_chokepoint_is_pinned(self):
+        """db.record_outcome_event is the shared path every outcome row takes.
+
+        The enumeration below pins _record_outcome_event_inline, which is NOT
+        that chokepoint: a 2026-09-19 review found four phases.py callers that
+        reach the database directly, bypassing the recorder and its cap, while
+        this suite stayed green. Behavioural coverage of the wrong function
+        proves nothing, so pin the right one too.
+        """
+        import ast
+        import pathlib as _pl
+
+        # Matching `ast.Call` on `node.func.attr` missed a whole shape:
+        # `from ...tool_usage import record_outcome_event as _write` then
+        # `_write(...)` is an ast.Name call and was invisible. That is the same
+        # evasion already closed for the recorder below, and an external review
+        # caught it still open here. _referencing_modules sees any reference.
+        callers = TestEveryWritePathIsAccountedFor._referencing_modules(
+            "record_outcome_event"
+        )
+
+        # The defining module is absent by construction: _referencing_modules
+        # matches imports and references, not a `def`, so `tool_usage.py` --
+        # which declares the method and never calls it -- does not appear.
+        assert callers == {
+            "src/mcp_handlers/observability/outcome_events.py",
+            # FOUR direct writers here bypass _record_outcome_event_inline
+            # entirely. The enumeration below never saw them, which is why the
+            # cap had to move into the shared write path itself.
+            "src/mcp_handlers/updates/phases.py",
+        }, callers
+
+    def test_persistence_does_not_regrade_an_already_graded_detail(self):
+        """The cap must not be undone between the recorder and the row.
+
+        Reported defect: the db mixin re-graded the recorder's output with no
+        ceiling, so a row capped at tool_observed/0.65 was STORED as
+        substrate_observed/0.85 and the tool response disagreed with the
+        database -- in the direction that flattered the claim.
+
+        This test was TAUTOLOGICAL until an external review read it: it wrote
+        `stored_detail = dict(response_detail)` and asserted they matched,
+        never calling `db.record_outcome_event` at all. The headline test for
+        the headline fix did not touch the code it named, and reverting the
+        mixin left it green -- the same class of defect this PR already
+        committed twice. It now drives the real mixin over a recording
+        connection and reads the row.
+        """
+        from src.outcome_corroboration import (
+            TOOL_OBSERVED,
+            enrich_detail_with_corroboration,
+        )
+
+        # Detail whose free text grades externally_verified when ungated, so
+        # the two paths give DIFFERENT answers and the assertion can fail.
+        detail = {"pr": 123, "verified": True, "source": "github"}
+        vs = "external_signal"
+
+        response_detail = enrich_detail_with_corroboration(
+            dict(detail), outcome_type="task_completed",
+            verification_source=vs, ceiling=TOOL_OBSERVED,
+        )
+        assert response_detail["corroboration_grade"] == "tool_observed"
+
+        conn = _RecordingConn()
+        _run(_WritePathHarness(conn).record_outcome_event(
+            agent_id="agent-persist",
+            outcome_type="task_completed",
+            is_bad=False,
+            detail=dict(response_detail),
+            verification_source=vs,
+            corroboration_applied=True,
+        ))
+        stored = conn.stored_detail()
+
+        # Drop the `corroboration_applied` skip and the mixin re-grades this
+        # under ceiling_for_verification_source("external_signal") ==
+        # externally_verified, storing 1.00 against a 0.65 response.
+        assert stored["corroboration_grade"] == response_detail["corroboration_grade"]
+        assert stored["evidence_weight"] == response_detail["evidence_weight"]
+        assert stored["evidence_weight"] == 0.65
+
+    def test_an_ungraded_detail_reaching_the_mixin_is_capped_by_provenance(self):
+        """What the four direct phases.py writers now get.
+
+        Honest about its own strength: with the grader itself default-deny,
+        deleting the mixin's explicit `ceiling=` argument leaves this green,
+        because the omitted argument resolves to the same provenance default.
+        It pins the OUTCOME, and the redundancy is deliberate -- the explicit
+        ceiling is belt over braces, not the only control.
+        """
+        conn = _RecordingConn()
+        _run(_WritePathHarness(conn).record_outcome_event(
+            agent_id="agent-direct",
+            outcome_type="task_completed",
+            is_bad=False,
+            detail={"verified": True, "source": "sensor_sync"},
+            verification_source="agent_reported_tool_result",
+        ))
+        stored = conn.stored_detail()
+
+        assert stored["corroboration_grade"] == "tool_observed"
+        assert stored["evidence_weight"] == 0.65
+
+    def test_a_caller_cannot_supply_its_own_grade(self):
+        """A forged grade in `detail` is neutralised twice over, and NEITHER
+        control reads the payload to decide.
+
+        The docstring here used to say the write path "skips re-grading a
+        detail that already carries a grade". That described the FIRST attempt
+        at the persistence fix, where presence-checking a caller-shaped field
+        was itself the authorization bypass; it became a parameter for exactly
+        that reason. An external review of this PR (gpt-5.6-terra, 2026-09-19)
+        found the same stale wording still in the source comment, so the
+        assertions below now pin the real invariant rather than the old one.
+        """
+        from src.mcp_handlers.observability.outcome_events import (
+            _strip_provenance_claims,
+        )
+        from src.outcome_corroboration import enrich_detail_with_corroboration
+
+        forged = {
+            "corroboration_grade": "externally_verified",
+            "evidence_weight": 1.0,
+            "claim_risk": "low",
+            "verified_fields": ["pr", "commit"],
+            "summary": "trust me",
+            "nested": {"corroboration_reasons": ["fabricated"], "keep": 1},
+        }
+
+        # Control 1 (public path only): the keys never reach the recorder.
+        clean = _strip_provenance_claims(forged)
+        assert clean == {"summary": "trust me", "nested": {"keep": 1}}
+
+        # Control 2 (every path): re-grading OVERWRITES a forged grade, so the
+        # forgery does not survive even when it is not stripped first.
+        regraded = enrich_detail_with_corroboration(
+            dict(forged),
+            outcome_type="task_completed",
+            verification_source="agent_reported_tool_result",
+        )
+        assert regraded["corroboration_grade"] == "claim_only"
+        assert regraded["evidence_weight"] == 0.10
+
+    def test_grader_is_default_deny(self):
+        """Omission and explicit None must both cap; only the sentinel lifts.
+
+        The earlier design inverted the default in the RECORDER while
+        assess_outcome_corroboration(ceiling=None) still meant "no cap", so every
+        grader call site that forgot inherited the unsafe behaviour. Three did.
+        """
+        from src.outcome_corroboration import (
+            NO_CEILING,
+            assess_outcome_corroboration,
+            ceiling_for_verification_source,
+        )
+
+        detail = {"verified": True, "source": "sensor_sync"}
+        vs = "agent_reported_tool_result"
+
+        assert assess_outcome_corroboration("task_completed", detail, vs).grade == "tool_observed"
+        assert assess_outcome_corroboration(
+            "task_completed", detail, vs, ceiling=None
+        ).grade == "tool_observed"
+        assert assess_outcome_corroboration(
+            "task_completed", detail, vs, ceiling=NO_CEILING
+        ).grade == "substrate_observed"
+
+        # Unknown/NULL provenance is not evidence of verification.
+        assert ceiling_for_verification_source(None) == "tool_observed"
+        # A vouched provenance caps at its OWN claim, not at nothing.
+        assert ceiling_for_verification_source("server_observation") == "substrate_observed"
+
+    def test_the_write_path_has_exactly_these_callers(self):
+        assert self._call_sites() == {
+            # The public MCP entrypoint. Unvouched, and it pops the trust key
+            # so a caller cannot vouch for itself.
+            "src/mcp_handlers/observability/outcome_events.py",
+            # Vouched in-process emitters and operator-gated routes.
+            "src/mcp_handlers/updates/phases.py",
+            "src/mcp_handlers/dialectic/resolution.py",
+            "src/http_routes/substrate.py",
+            "src/http_routes/sentinel.py",
+        }, (
+            "a new outcome write path appeared. It is capped by default, so this "
+            "is not a vulnerability -- but confirm it should not be vouched, and "
+            "add it here deliberately."
+        )
+
+    def test_no_unvouched_caller_can_reach_the_top_two_grades(self):
+        """Ties the enumeration to the invariant: for every call site that does
+        NOT vouch itself, the grader is handed a ceiling."""
+        from src.outcome_corroboration import GRADE_ORDER, TOOL_OBSERVED
+
+        capped_rank = GRADE_ORDER.index(TOOL_OBSERVED)
+        # The two grades that assert a NON-AGENT observer saw this.
+        assert [g for g in GRADE_ORDER[capped_rank + 1:]] == [
+            "substrate_observed",
+            "externally_verified",
+        ]
+        assert TestCappingIsTheDefault._ceiling_seen(
+            {
+                "outcome_type": "task_completed",
+                "agent_id": "enumeration-check",
+                "detail": {"source": "sensor_sync", "evidence_source": "github"},
+                "verification_source": "external_signal",
+            }
+        ) == TOOL_OBSERVED
+
+
+class TestOperatorDecisionIsPinned:
+    """The operator decided (criterion: "best for federation") that capped rows
+    REMAIN eligible to train tactical calibration at exactly 0.65.
+
+    That decision rests on a factual claim about the gate's comparison
+    direction, which the author originally got backwards in the PR body. Pin the
+    fact so the recorded decision cannot be quietly invalidated by moving a
+    constant or flipping a `<` to `<=`.
+    """
+
+    def test_the_cap_lands_exactly_on_the_calibration_gate(self):
+        from src.mcp_handlers.observability.outcome_events import (
+            _MIN_TACTICAL_EVIDENCE_WEIGHT,
+        )
+        from src.outcome_corroboration import GRADE_WEIGHTS, TOOL_OBSERVED
+
+        assert GRADE_WEIGHTS[TOOL_OBSERVED] == _MIN_TACTICAL_EVIDENCE_WEIGHT
+
+    def test_a_capped_row_is_admitted_to_calibration_not_excluded(self):
+        """The actuation fact the decision was made against: the gate excludes
+        `evidence_weight < MIN`, so equality passes. A capped row still trains
+        calibration, and calibration_error reaches the drift/EISV path. If this
+        inverts, the operator's decision was made against a premise that no
+        longer holds and must be revisited, not silently inherited."""
+        from src.mcp_handlers.observability.outcome_events import (
+            _MIN_TACTICAL_EVIDENCE_WEIGHT,
+        )
+        from src.outcome_corroboration import GRADE_WEIGHTS, TOOL_OBSERVED
+
+        capped_weight = GRADE_WEIGHTS[TOOL_OBSERVED]
+        assert not (capped_weight < _MIN_TACTICAL_EVIDENCE_WEIGHT), (
+            "a capped row is now EXCLUDED from calibration. That is a different "
+            "policy than the one recorded; re-open the operator decision."
+        )
+
+    def test_grades_below_the_cap_are_still_excluded(self):
+        """The gate must still do its original job."""
+        from src.mcp_handlers.observability.outcome_events import (
+            _MIN_TACTICAL_EVIDENCE_WEIGHT,
+        )
+        from src.outcome_corroboration import (
+            CLAIM_ONLY,
+            GRADE_WEIGHTS,
+            SELF_REPORT_WITH_REFS,
+        )
+
+        for grade in (CLAIM_ONLY, SELF_REPORT_WITH_REFS):
+            assert GRADE_WEIGHTS[grade] < _MIN_TACTICAL_EVIDENCE_WEIGHT, grade
 
 
 class TestCallerControlledEvidenceVocabulary:

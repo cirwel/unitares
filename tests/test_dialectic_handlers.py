@@ -2698,6 +2698,33 @@ class TestAbstentionIsNotAVerdict:
         assert session.reviewer_agent_id is None
 
     @pytest.mark.asyncio
+    async def test_an_unrecognized_flag_fails_toward_abstention(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent, mock_pg_update_reviewer,
+    ):
+        """Raw handler callers must not bypass the schema's fail-closed parse."""
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, mock_pg_update_reviewer, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "reasoning": "unrecognized_flag",
+                "judgment_formed": "maybe",
+                "api_key": "key456",
+            })
+
+        assert parse_result(result)["abstained"] is True
+        assert session.reviewer_agent_id is None
+
+    @pytest.mark.asyncio
     async def test_synthesis_abstention_preserves_the_standing_verdict(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_context_agent,

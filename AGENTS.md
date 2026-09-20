@@ -26,11 +26,11 @@ check-ins.
 - `/dialectic` — structured review
 - `/closeout` — final workspace hygiene check; reports dirty files, Git delivery state (local vs pushed/merged), and repo-rooted processes; can stash/stop when cleanup is requested
 
-Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` only when there is meaningful agent state to report (typically at most once per assistant turn) → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
+Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid ONLY when handing off from an exited predecessor>, spawn_reason="explicit")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` only when there is meaningful agent state to report (typically at most once per assistant turn) → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
 
 ### Local continuity cache
 
-`.unitares/session.json` is Codex's authoritative local workspace state (not Claude's memory system). It holds `uuid`, `client_session_id`, `session_resolution_source`, and optional short-lived proof material for in-process calls. Helper: `scripts/client/session_cache.py`. On every new session or after a restart, call `onboard(force_new=true)`. Add `parent_agent_id=<saved uuid>, spawn_reason="new_session"` only when this is a real handoff from a finished predecessor, not merely because the cache exists.
+`.unitares/session.json` is Codex's authoritative local workspace state (not Claude's memory system). It holds `uuid`, `client_session_id`, `session_resolution_source`, and optional short-lived proof material for in-process calls. Helper: `scripts/client/session_cache.py`. On every new session or after a restart, call `onboard(force_new=true)`. Add `parent_agent_id=<saved uuid>, spawn_reason="explicit"` only when this is a real handoff from a finished predecessor, not merely because the cache exists.
 
 If `session_resolution_source` falls back to a weak source, rerun `/governance-start` or diagnose explicitly; do not repair it with bare UUID resume.
 
@@ -214,6 +214,7 @@ This section protects against wasted parallel work across agents, not just mista
 - If you change a function's behavior or signature, update its tests in the same commit
 - If you do a mechanical refactor (renames, import changes), update affected test mocks before committing
 - The pre-push hook will block pushes with test failures
+- **Review is a gate like tests:** every PR needs a review record for its current diff before it is marked ready — the `review` status check reads it. `ship.sh` starts `./scripts/dev/review.sh --background` on every PR push (a heterogeneous model: Codex reviews Claude's branches, Claude reviews Codex's); run `./scripts/dev/review.sh` yourself after pushing any other way. Fix findings and push (the new diff is re-reviewed), or rebut them with `./scripts/dev/review.sh dispose <file>`. A council or human review counts too: `./scripts/dev/review.sh record <file> --reviewer-name <who>`. Keyed on the diff, so a base merge that does not touch your files keeps the record.
 
 ## Architecture Patterns
 
@@ -246,7 +247,7 @@ Codex and Claude share one delivery contract so concurrent sessions stay predict
 - **Never babysit the queue.** Do not poll a PR on a timer, and do not hand-merge the base into your own branch to clear `behind` — that races GitHub's own updater and burns a CI cycle per redundant update. `docs/operations/github-workflow-conventions.md` §4 is explicit: *do not write or run an update-branch babysitter for this repo.* Drafts are the single exception the native updater cannot cover, because a draft cannot take `--auto`; `.github/workflows/draft-base-refresh.yml` covers exactly that gap and nothing else. If your PR is green and behind, say so once and stop — a scheduled re-check that has produced no new information is the thing to cancel, not to re-arm.
 - **Delivery requests authorize delivery:** when a maintainer asks to ship, finish, deliver, open a PR, or otherwise complete a delivery workflow, the working agent may assume branch -> commit -> push -> draft PR is in scope and should not ask for a second confirmation just to push or open the draft PR.
 - **Mark-ready and merge are separate deliberate acts:** a draft PR means "visible, not claiming merged." Marking ready is the owning agent's declaration (next bullet); merging is the maintainer's. Either happens only after CI is green and no collision with an in-flight branch (see the single-writer-surface rules above).
-- **Readiness is agent-declared, never operator-inferred:** the agent that owns a PR marks it ready itself, once its validation actually passed (CI green, review round joined). Until then, draft means "still working — hands off," even when the diff looks finished. Nobody marks another agent's PR ready on its behalf: a draft whose owner went silent is a question for the owner (KG channel), or an explicit operator override stated in a PR comment — not a silent green button. Ordering the agent knows about ("merge after #N") goes in the PR body so in-order merging acts on declared state. Merging remains the maintainer's act.
+- **Readiness is agent-declared, never operator-inferred:** the agent that owns a PR marks it ready itself, once its validation actually passed (CI green, including the `review` check). Until then, draft means "still working — hands off," even when the diff looks finished. Nobody marks another agent's PR ready on its behalf: a draft whose owner went silent is a question for the owner (KG channel), or an explicit operator override stated in a PR comment — not a silent green button. Ordering the agent knows about ("merge after #N") goes in the PR body so in-order merging acts on declared state. Merging remains the maintainer's act.
 
 ## Substrate Tax: anyio-asyncio Coupling
 
@@ -278,8 +279,11 @@ Operational rules:
    can fragment under co-residency — check `session_source`/`tier` in the
    onboard response to confirm you bound as expected.
 3. To continue prior work in a fresh process, mint fresh and declare the cause:
-   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="new_session")`.
-   Use this only for a real handoff from a finished predecessor.
+   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`.
+   Use this only for a real handoff from a finished predecessor. `explicit` is
+   the reason that records intentional succession; `new_session` is the legacy
+   descriptive reason and does not, by itself, establish that the inheritance
+   was deliberate.
 4. Short dispatched subagents usually should not onboard. If one needs its own
    identity, use `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`,
    and land at least one real `sync_state()` before exit.
