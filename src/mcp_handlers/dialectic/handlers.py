@@ -2123,7 +2123,7 @@ def _judgment_was_formed(value: Any) -> bool:
     if value is None:
         return True
     if isinstance(value, str):
-        return value.strip().lower() in {"true", "1", "yes", "on"}
+        return value.strip().lower() in {"true", "1", "yes"}
     if isinstance(value, bool):
         return value
     return False

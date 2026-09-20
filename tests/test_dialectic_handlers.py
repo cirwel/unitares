@@ -2717,7 +2717,7 @@ class TestAbstentionIsNotAVerdict:
                 "session_id": session.session_id,
                 "agent_id": "agent-reviewer",
                 "reasoning": "unrecognized_flag",
-                "judgment_formed": "maybe",
+                "judgment_formed": "on",
                 "api_key": "key456",
             })
 
