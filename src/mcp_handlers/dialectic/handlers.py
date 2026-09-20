@@ -2958,6 +2958,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
         # reviewed anything, and filing on its behalf records a binding
         # rejection with empty reasoning.
         if not judgment_formed:
+            reviewer_slot_open = session.reviewer_agent_id is None
             await emit_reviewer_abstained(
                 session_id=session_id,
                 reviewer_agent_id=agent_id,
@@ -2973,14 +2974,24 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 "abstained": True,
                 "session_id": session_id,
                 "reviewer_slot_claimed": False,
+                "reviewer_slot_open": reviewer_slot_open,
                 "phase": session.phase.value,
                 "message": (
-                    "Recorded an abstention: no judgment was formed, so no "
-                    "verdict was filed and the reviewer slot remains OPEN."
+                    "Recorded an abstention: no judgment was formed, so no verdict "
+                    + (
+                        "was filed and the reviewer slot remains OPEN."
+                        if reviewer_slot_open
+                        else "was filed; the existing reviewer assignment remains unchanged."
+                    )
                 ),
                 "next_step": (
-                    "A reviewer that can judge may still claim this session. "
-                    "The abstention is on the audit stream as "
+                    (
+                        "A reviewer that can judge may still claim this session."
+                        if reviewer_slot_open
+                        else "The assigned reviewer or an authenticated operator must "
+                        "reassign this session before another reviewer can claim it."
+                    )
+                    + " The abstention is on the audit stream as "
                     "dialectic_reviewer_abstained; it is not a rejection and "
                     "does not count as a review round."
                 ),

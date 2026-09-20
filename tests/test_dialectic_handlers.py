@@ -2749,6 +2749,32 @@ class TestAbstentionIsNotAVerdict:
         assert session.reviewer_agent_id == "agent-reviewer"
 
     @pytest.mark.asyncio
+    async def test_assigned_reviewer_abstention_does_not_claim_open_slot(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id="agent-reviewer", phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["abstained"] is True
+        assert data["reviewer_slot_open"] is False
+        assert session.reviewer_agent_id == "agent-reviewer"
+        assert "assignment remains unchanged" in data["message"]
+
+    @pytest.mark.asyncio
     async def test_paused_agent_abstention_is_not_attributed_to_reviewer(
         self, mock_server, mock_context_agent,
     ):
