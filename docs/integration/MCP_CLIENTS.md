@@ -190,7 +190,7 @@ indefinitely, and that outage is not self-announcing, because the gateway's
 
 ## Agent Identity
 
-For a fresh process, call `start_session(force_new=true)`. If the process is continuing prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`.
+For a fresh process, call `start_session(force_new=true)`. If the process is continuing prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="explicit")`.
 
 Use raw `onboard(...)` instead when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift

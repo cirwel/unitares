@@ -101,7 +101,7 @@ UUID is an identity anchor, not sufficient proof that the current execution cont
 Standard agent workflow:
 
 1. Fresh process: `start_session(force_new=true)` — save the returned `agent_uuid` / `client_session_id`
-2. Fresh process inheriting prior work: `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`
+2. Fresh process inheriting prior work: `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="explicit")`
 3. Same live owner / proof-owned rebind: `identity(agent_uuid=..., continuity_token=..., resume=true)`
 4. `sync_state()` for work logging
 5. `check_working_state()` for read-only state
@@ -230,7 +230,7 @@ Symptom:
 Fix:
 
 - rerun `start_session(force_new=true)` (raw implementation: `onboard(...)`)
-- if the process is continuing prior work, include `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`
+- if the process is continuing prior work, include `parent_agent_id=<prior uuid>` and `spawn_reason="explicit"`
 - avoid bare `identity(agent_uuid=..., resume=true)`; use a matching `continuity_token` only for same-owner rebinding
 
 ### Start script exits unexpectedly

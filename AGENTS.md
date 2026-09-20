@@ -26,11 +26,11 @@ check-ins.
 - `/dialectic` — structured review
 - `/closeout` — final workspace hygiene check; reports dirty files, Git delivery state (local vs pushed/merged), and repo-rooted processes; can stash/stop when cleanup is requested
 
-Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="new_session")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` only when there is meaningful agent state to report (typically at most once per assistant turn) → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
+Raw tool flow when slash commands are unavailable: `start_session(force_new=true, parent_agent_id=<prior uuid if continuing>, spawn_reason="explicit")` → save `agent_uuid` + `client_session_id` → `sync_state(response_text, complexity, client_session_id=...)` only when there is meaningful agent state to report (typically at most once per assistant turn) → `check_working_state()` for read-only checks → `health_check()` only if system health is suspect. Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and `get_governance_metrics(...)`.
 
 ### Local continuity cache
 
-`.unitares/session.json` is Codex's authoritative local workspace state (not Claude's memory system). It holds `uuid`, `client_session_id`, `session_resolution_source`, and optional short-lived proof material for in-process calls. Helper: `scripts/client/session_cache.py`. On every new session or after a restart, call `onboard(force_new=true)`. Add `parent_agent_id=<saved uuid>, spawn_reason="new_session"` only when this is a real handoff from a finished predecessor, not merely because the cache exists.
+`.unitares/session.json` is Codex's authoritative local workspace state (not Claude's memory system). It holds `uuid`, `client_session_id`, `session_resolution_source`, and optional short-lived proof material for in-process calls. Helper: `scripts/client/session_cache.py`. On every new session or after a restart, call `onboard(force_new=true)`. Add `parent_agent_id=<saved uuid>, spawn_reason="explicit"` only when this is a real handoff from a finished predecessor, not merely because the cache exists.
 
 If `session_resolution_source` falls back to a weak source, rerun `/governance-start` or diagnose explicitly; do not repair it with bare UUID resume.
 
@@ -279,8 +279,11 @@ Operational rules:
    can fragment under co-residency — check `session_source`/`tier` in the
    onboard response to confirm you bound as expected.
 3. To continue prior work in a fresh process, mint fresh and declare the cause:
-   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="new_session")`.
-   Use this only for a real handoff from a finished predecessor.
+   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`.
+   Use this only for a real handoff from a finished predecessor. `explicit` is
+   the reason that records intentional succession; `new_session` is the legacy
+   descriptive reason and does not, by itself, establish that the inheritance
+   was deliberate.
 4. Short dispatched subagents usually should not onboard. If one needs its own
    identity, use `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`,
    and land at least one real `sync_state()` before exit.
