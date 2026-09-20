@@ -190,7 +190,7 @@ indefinitely, and that outage is not self-announcing, because the gateway's
 
 ## Agent Identity
 
-For a fresh process, call `start_session(force_new=true)`. If the process is continuing prior work, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="explicit")`.
+For a fresh process, call `start_session(force_new=true)`. If the process is taking over from a predecessor that has **exited**, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="explicit")`. Sharing a workspace with a still-running agent is co-location, not lineage: a succession claim naming a live parent is rejected (`lineage_coincidental_rejected`) and cleared.
 
 Use raw `onboard(...)` instead when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift

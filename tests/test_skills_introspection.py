@@ -172,3 +172,24 @@ def test_handler_returns_stale_flag_per_skill():
     for skill in payload["skills"]:
         assert "stale" in skill, f"skill {skill['name']} missing stale flag"
         assert isinstance(skill["stale"], bool)
+
+
+def test_compute_stale_reads_in_utc_like_the_stamper():
+    """`last_verified` is stamped in UTC, so staleness must be read in UTC.
+
+    `scripts/client/_check_freshness.py` writes today's UTC date. Reading it
+    back with a local `date.today()` gave a skill stamped just after 00:00
+    UTC a negative age on any host behind UTC, widening the declared
+    freshness window by a day. Both ends now agree.
+    """
+    from datetime import datetime, timezone
+
+    from src.mcp_handlers.introspection.skills import _compute_stale
+
+    today_utc = datetime.now(timezone.utc).date()
+    assert _compute_stale(today_utc.isoformat(), 7) is False
+
+    from datetime import timedelta
+
+    assert _compute_stale((today_utc - timedelta(days=8)).isoformat(), 7) is True
+    assert _compute_stale((today_utc - timedelta(days=7)).isoformat(), 7) is False
