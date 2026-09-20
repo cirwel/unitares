@@ -101,8 +101,9 @@ class SubmitAntithesisParams(AgentIdentityMixin):
         description=(
             "False declares that no judgment was reached -- the model returned "
             "nothing that could be parsed as a verdict. The server then records "
-            "an abstention and leaves the reviewer slot OPEN instead of filing a "
-            "binding rejection nobody can act on. Default True: a caller that "
+            "an abstention and leaves the reviewer slot unclaimed (or preserves "
+            "the existing assignment) instead of filing a binding rejection "
+            "nobody can act on. Default True: a caller that "
             "omits it is stating it judged. This is NOT the same as disagreeing, "
             "and NOT the same as reviewer_provenance.degraded, which describes "
             "the backend rather than whether a judgment exists."
@@ -248,8 +249,9 @@ class DialecticParams(AgentIdentityMixin):
         description=(
             "Set false (action=antithesis/synthesis) to declare that NO judgment "
             "was reached -- the model returned nothing parseable as a verdict. "
-            "The server records an abstention and leaves the reviewer slot OPEN "
-            "instead of filing a binding rejection nobody can act on. Omitting "
+            "The server records an abstention without claiming or changing the "
+            "reviewer slot, instead of filing a binding rejection nobody can act "
+            "on. Omitting "
             "it means you judged. Not the same as disagreeing, and not the same "
             "as reviewer_provenance.degraded, which describes the backend."
         ),

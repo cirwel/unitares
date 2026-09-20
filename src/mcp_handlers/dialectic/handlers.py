@@ -2978,7 +2978,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
         # rejection with empty reasoning.
         if not judgment_formed:
             reviewer_slot_open = session.reviewer_agent_id is None
-            await emit_reviewer_abstained(
+            abstention_recorded = await emit_reviewer_abstained(
                 session_id=session_id,
                 reviewer_agent_id=agent_id,
                 paused_agent_id=session.paused_agent_id,
@@ -2989,6 +2989,11 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 ).get("reviewer_backend"),
                 reason="no_judgment_formed",
             )
+            if abstention_recorded is False:
+                return [error_response(
+                    "Could not record the abstention audit event; no abstention was acknowledged",
+                    error_code="ABSTENTION_AUDIT_WRITE_FAILED",
+                )]
             return success_response({
                 "abstained": True,
                 "session_id": session_id,
@@ -3222,7 +3227,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
             # untouched and the round is not spent.
             if not _judgment_was_formed(arguments.get("judgment_formed")):
                 if agent_id == session.paused_agent_id:
-                    await emit_participant_abstained(
+                    abstention_recorded = await emit_participant_abstained(
                         session_id=session_id,
                         participant_agent_id=agent_id,
                         paused_agent_id=session.paused_agent_id,
@@ -3230,7 +3235,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         reason="no_judgment_formed",
                     )
                 else:
-                    await emit_reviewer_abstained(
+                    abstention_recorded = await emit_reviewer_abstained(
                         session_id=session_id,
                         reviewer_agent_id=agent_id,
                         paused_agent_id=session.paused_agent_id,
@@ -3241,6 +3246,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         ).get("reviewer_backend"),
                         reason="no_judgment_formed",
                     )
+                if abstention_recorded is False:
+                    return [error_response(
+                        "Could not record the abstention audit event; no abstention was acknowledged",
+                        error_code="ABSTENTION_AUDIT_WRITE_FAILED",
+                    )]
                 return success_response({
                     "abstained": True,
                     "session_id": session_id,

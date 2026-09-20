@@ -264,7 +264,7 @@ async def emit_reviewer_abstained(
     phase: Optional[str] = None,
     reviewer_backend: Optional[dict] = None,
     reason: Optional[str] = None,
-) -> None:
+) -> bool:
     """Record that a reviewer or governed caller declared no judgment.
 
     A reviewer that cannot judge must not file a verdict: doing so claims the
@@ -318,7 +318,7 @@ async def emit_reviewer_abstained(
     try:
         from src.audit_db import append_audit_event_async
 
-        await append_audit_event_async({
+        persisted = await append_audit_event_async({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": REVIEWER_ABSTAINED,
             "agent_id": paused_agent_id,
@@ -337,11 +337,13 @@ async def emit_reviewer_abstained(
                 "slot_claimed": False,
             },
         })
+        return persisted is not False
     except Exception as exc:
         logger.warning(
             "%s audit emit failed: session=%s reviewer=%s reason=%s err=%s",
             REVIEWER_ABSTAINED, session_id, reviewer_agent_id, reason, exc,
         )
+        return False
 
 
 async def emit_participant_abstained(
@@ -351,12 +353,12 @@ async def emit_participant_abstained(
     paused_agent_id: Optional[str] = None,
     phase: Optional[str] = None,
     reason: Optional[str] = None,
-) -> None:
+) -> bool:
     """Record a participant declaration without counting it as a review attempt."""
     try:
         from src.audit_db import append_audit_event_async
 
-        await append_audit_event_async({
+        persisted = await append_audit_event_async({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": PARTICIPANT_ABSTAINED,
             "agent_id": paused_agent_id,
@@ -370,11 +372,13 @@ async def emit_participant_abstained(
                 "slot_claimed": False,
             },
         })
+        return persisted is not False
     except Exception as exc:
         logger.warning(
             "%s audit emit failed: session=%s participant=%s reason=%s err=%s",
             PARTICIPANT_ABSTAINED, session_id, participant_agent_id, reason, exc,
         )
+        return False
 
 
 async def emit_sweep_cycle(

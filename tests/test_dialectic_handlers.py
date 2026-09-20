@@ -2777,6 +2777,32 @@ class TestAbstentionIsNotAVerdict:
         assert session.reviewer_agent_id is None
 
     @pytest.mark.asyncio
+    async def test_abstention_requires_a_persisted_audit_event(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained",
+                   new_callable=AsyncMock, return_value=False) as emit:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "ABSTENTION_AUDIT_WRITE_FAILED"
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_abstention_still_enforces_reviewer_ownership(
         self, mock_server, mock_context_agent,
     ):
