@@ -2412,6 +2412,7 @@ async def _run_synthetic_review(
             phase=session.phase.value,
             reviewer_backend=_synthetic_reviewer_provenance(antithesis),
             reason="synthetic_reviewer_no_synthesis",
+            slot_claimed=True,
         )
         return {
             "antithesis": antithesis,

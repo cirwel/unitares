@@ -930,8 +930,8 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     if not verdict.judgment_formed:
         logger.warning(
             "Dialectic reviewer ABSTAINING on session %s: %s produced no "
-            "parseable judgment. The server will record the abstention and "
-            "leave the reviewer slot OPEN for a reviewer that can judge.",
+            "parseable judgment. The server will record the abstention without "
+            "assuming anything about reviewer-slot ownership.",
             thesis.session_id,
             _reviewer_audit_text(provenance),
         )
@@ -968,13 +968,24 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         )
         if not verdict.judgment_formed:
             if isinstance(antithesis_result, dict):
-                verdict.reviewer_slot_open = antithesis_result.get(
-                    "reviewer_slot_open", True
-                )
+                if antithesis_result.get("abstained") is True:
+                    slot_state = antithesis_result.get("reviewer_slot_open")
+                    verdict.reviewer_slot_open = (
+                        slot_state if isinstance(slot_state, bool) else None
+                    )
+                else:
+                    # A legacy/partial server may ignore judgment_formed and
+                    # file a normal verdict. Do not report a fabricated open
+                    # slot when the server did not acknowledge abstention.
+                    verdict.reviewer_slot_open = None
             slot_state = (
                 "the reviewer slot remains OPEN"
-                if verdict.reviewer_slot_open is not False
-                else "the existing reviewer assignment remains unchanged"
+                if verdict.reviewer_slot_open is True
+                else (
+                    "the existing reviewer assignment remains unchanged"
+                    if verdict.reviewer_slot_open is False
+                    else "the server did not provide a reliable reviewer-slot state"
+                )
             )
             logger.warning(
                 "Dialectic reviewer abstention recorded for session %s; %s",

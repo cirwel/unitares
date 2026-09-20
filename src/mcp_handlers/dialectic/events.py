@@ -264,6 +264,7 @@ async def emit_reviewer_abstained(
     phase: Optional[str] = None,
     reviewer_backend: Optional[dict] = None,
     reason: Optional[str] = None,
+    slot_claimed: bool = False,
 ) -> bool:
     """Record that a reviewer or governed caller declared no judgment.
 
@@ -334,7 +335,7 @@ async def emit_reviewer_abstained(
                 "reason": reason,
                 # Stated in the payload so a reader never has to infer it from
                 # the absence of a later assignment event.
-                "slot_claimed": False,
+                "slot_claimed": slot_claimed,
             },
         })
         return persisted is not False
