@@ -2124,7 +2124,9 @@ def _judgment_was_formed(value: Any) -> bool:
         return True
     if isinstance(value, str):
         return value.strip().lower() in {"true", "1", "yes", "on"}
-    return bool(value)
+    if isinstance(value, bool):
+        return value
+    return False
 
 # Reviewer/model provenance persisted with a verdict, riding the namespaced
 # observed_metrics["reviewer_backend"] key the orchestrated reviewer already

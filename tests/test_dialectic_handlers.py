@@ -2725,6 +2725,32 @@ class TestAbstentionIsNotAVerdict:
         assert session.reviewer_agent_id is None
 
     @pytest.mark.asyncio
+    async def test_non_boolean_malformed_flag_fails_toward_abstention(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent, mock_pg_update_reviewer,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, mock_pg_update_reviewer, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "reasoning": "malformed_flag",
+                "judgment_formed": 1,
+                "api_key": "key456",
+            })
+
+        assert parse_result(result)["abstained"] is True
+        assert session.reviewer_agent_id is None
+
+    @pytest.mark.asyncio
     async def test_abstention_still_enforces_reviewer_ownership(
         self, mock_server, mock_context_agent,
     ):
