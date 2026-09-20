@@ -1086,8 +1086,12 @@ def main() -> int:
             "reviewer ABSTAINED: no parseable judgment; no verdict filed; "
             + (
                 "the reviewer slot remains OPEN"
-                if verdict.reviewer_slot_open is not False
-                else "the existing reviewer assignment remains unchanged"
+                if verdict.reviewer_slot_open is True
+                else (
+                    "the existing reviewer assignment remains unchanged"
+                    if verdict.reviewer_slot_open is False
+                    else "the server did not provide a reliable reviewer-slot state"
+                )
             ),
             flush=True,
         )

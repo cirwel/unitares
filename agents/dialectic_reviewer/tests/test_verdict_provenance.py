@@ -93,7 +93,7 @@ def test_payload_is_json_serializable():
 # --------------------------------------------------------------------------- #
 # The submission actually carries it
 # --------------------------------------------------------------------------- #
-def _run_reviewer_capturing_calls(provenance, verdict_text, *, prompts=None):
+def _run_reviewer_capturing_calls(provenance, verdict_text, *, prompts=None, responses=None):
     """Drive run() far enough to capture the antithesis submission.
 
     ``verdict_text`` may be a single reply (returned for every call) or a list
@@ -120,7 +120,12 @@ def _run_reviewer_capturing_calls(provenance, verdict_text, *, prompts=None):
 
         async def call_tool(self, name, args):
             calls.append((name, args))
-            return {"success": True}
+            response = {"success": True}
+            if args.get("action") == "antithesis" and args.get("judgment_formed") is False:
+                response.update({"abstained": True, "reviewer_slot_open": True})
+            if responses is not None:
+                responses.append(response)
+            return response
 
         async def checkin(self, **kw):
             return {"success": True}
@@ -206,12 +211,14 @@ def test_no_parseable_judgment_records_an_abstention_only():
     abstention, so the slot stays open for one that can. Fail-closed means "no
     approval", not "silent rejection".
     """
+    responses = []
     calls = _run_reviewer_capturing_calls(
-        DEGRADED_PROVENANCE, "not json at all"  # exactly what gemma4 returned
+        DEGRADED_PROVENANCE, "not json at all", responses=responses  # exactly what gemma4 returned
     )
     antithesis = [args for _, args in calls if args.get("action") == "antithesis"]
     assert len(antithesis) == 1
     assert antithesis[0]["judgment_formed"] is False
+    assert responses == [{"success": True, "abstained": True, "reviewer_slot_open": True}]
     assert not any(args.get("action") == "synthesis" for _, args in calls)
 
 
