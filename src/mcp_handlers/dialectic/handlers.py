@@ -2860,51 +2860,7 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     recovery=session_not_found_recovery(),
                 )]
 
-        # ── A NON-JUDGMENT IS NOT A VERDICT ──────────────────────────────────
-        # Refused HERE, before the takeover and first-responder branches below,
-        # because those are what claim the slot. A reviewer that could not form
-        # a judgment has not reviewed anything, and filing on its behalf records
-        # a BINDING rejection with empty reasoning that blocks the paused agent
-        # and locks out a reviewer that could judge (live: session
-        # 99ff6f25a310d23e, 2026-09-19).
-        #
-        # ⛔This is a SERVER invariant on purpose. The orchestrated reviewer also
-        # abstains client-side, and that stays as defense in depth -- but a
-        # client-side check only binds the one client that has it. Three reviewer
-        # implementations submit here (orchestrated, in-process synthetic, and
-        # any agent filing an outside consult); the trust boundary is the only
-        # place the property holds for all of them and for the next one written.
-        if not _judgment_was_formed(arguments.get("judgment_formed")):
-            await emit_reviewer_abstained(
-                session_id=session_id,
-                reviewer_agent_id=agent_id,
-                paused_agent_id=session.paused_agent_id,
-                phase=session.phase.value,
-                reviewer_backend=_merge_caller_reviewer_provenance(
-                    arguments.get("observed_metrics"),
-                    arguments.get("reviewer_provenance"),
-                ).get("reviewer_backend"),
-                reason=arguments.get("reasoning") or "no_judgment_formed",
-            )
-            # Deliberately success, not an error. The caller did the right
-            # thing; an error would read as "your submission was malformed" and
-            # invites a retry that files the non-verdict anyway.
-            return success_response({
-                "abstained": True,
-                "session_id": session_id,
-                "reviewer_slot_claimed": False,
-                "phase": session.phase.value,
-                "message": (
-                    "Recorded an abstention: no judgment was formed, so no "
-                    "verdict was filed and the reviewer slot remains OPEN."
-                ),
-                "next_step": (
-                    "A reviewer that can judge may still claim this session. "
-                    "The abstention is on the audit stream as "
-                    "dialectic_reviewer_abstained; it is not a rejection and "
-                    "does not count as a review round."
-                ),
-            })
+        judgment_formed = _judgment_was_formed(arguments.get("judgment_formed"))
 
         original_reviewer_id = session.reviewer_agent_id
         reviewer_takeover = None
@@ -2957,16 +2913,17 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             if validation_error:
                 return validation_error
 
-            try:
-                reviewer_takeover = await _apply_reviewer_reassignment(
-                    session_id,
-                    session,
-                    agent_id,
-                    reason=takeover_reason,
-                    strict_persistence=True,
-                )
-            except Exception as e:
-                return [error_response(f"Reviewer takeover failed during persistence: {e}")]
+            if judgment_formed:
+                try:
+                    reviewer_takeover = await _apply_reviewer_reassignment(
+                        session_id,
+                        session,
+                        agent_id,
+                        reason=takeover_reason,
+                        strict_persistence=True,
+                    )
+                except Exception as e:
+                    return [error_response(f"Reviewer takeover failed during persistence: {e}")]
 
         # First-responder eligibility: if no reviewer assigned, validate the
         # submitter before the protocol auto-assigns them as reviewer.
@@ -2986,6 +2943,41 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     )]
             except Exception as e:
                 logger.warning(f"First-responder eligibility check failed (proceeding): {e}")
+
+        # ── A NON-JUDGMENT IS NOT A VERDICT ──────────────────────────────────
+        # Run the normal ownership and eligibility gates first, but return
+        # before session.submit_antithesis so no abstention can claim a slot or
+        # advance the phase. A reviewer that could not form a judgment has not
+        # reviewed anything, and filing on its behalf records a binding
+        # rejection with empty reasoning.
+        if not judgment_formed:
+            await emit_reviewer_abstained(
+                session_id=session_id,
+                reviewer_agent_id=agent_id,
+                paused_agent_id=session.paused_agent_id,
+                phase=session.phase.value,
+                reviewer_backend=_merge_caller_reviewer_provenance(
+                    arguments.get("observed_metrics"),
+                    arguments.get("reviewer_provenance"),
+                ).get("reviewer_backend"),
+                reason="no_judgment_formed",
+            )
+            return success_response({
+                "abstained": True,
+                "session_id": session_id,
+                "reviewer_slot_claimed": False,
+                "phase": session.phase.value,
+                "message": (
+                    "Recorded an abstention: no judgment was formed, so no "
+                    "verdict was filed and the reviewer slot remains OPEN."
+                ),
+                "next_step": (
+                    "A reviewer that can judge may still claim this session. "
+                    "The abstention is on the audit stream as "
+                    "dialectic_reviewer_abstained; it is not a rejection and "
+                    "does not count as a review round."
+                ),
+            })
 
         # Create antithesis message. An explicit reviewer_provenance argument
         # (e.g. an external Codex/other-model consult being filed as a governed
@@ -3184,14 +3176,16 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
             if not _judgment_was_formed(arguments.get("judgment_formed")):
                 await emit_reviewer_abstained(
                     session_id=session_id,
-                    reviewer_agent_id=agent_id,
+                    reviewer_agent_id=(
+                        agent_id if agent_id == session.reviewer_agent_id else None
+                    ),
                     paused_agent_id=session.paused_agent_id,
                     phase=session.phase.value,
                     reviewer_backend=_merge_caller_reviewer_provenance(
                         arguments.get("observed_metrics"),
                         arguments.get("reviewer_provenance"),
                     ).get("reviewer_backend"),
-                    reason=arguments.get("reasoning") or "no_judgment_formed",
+                    reason="no_judgment_formed",
                 )
                 return success_response({
                     "abstained": True,
