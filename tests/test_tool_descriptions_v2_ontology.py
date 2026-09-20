@@ -124,6 +124,31 @@ def test_served_onboard_description_warns_against_auto_injection():
     assert "Part C" in desc, "served onboard description must cite Part C as the source of the invariant"
 
 
+def test_checked_in_json_identity_description_never_teaches_a_bare_read():
+    """The same rule, against the file rather than the merged dict.
+
+    `_load_descriptions()` overlays `_IDENTITY_DESCRIPTION_OVERRIDES` on top of
+    `tool_descriptions.json`, so a test that reads TOOL_DESCRIPTIONS cannot see
+    what the JSON says. The file ships as packaged data and is a teaching
+    surface in its own right, so it went on telling readers to call
+    `identity()` with no parameters while the served text said the opposite.
+    """
+    import json
+    from pathlib import Path
+
+    import src.tool_descriptions as td
+
+    raw = json.loads(Path(td._DESCRIPTIONS_FILE).read_text(encoding="utf-8"))
+    desc = raw["identity"]
+    assert "identity() anytime" not in desc, (
+        "checked-in identity description must not teach an argument-less call as a read"
+    )
+    assert "Check identity (no parameters)" not in desc, (
+        "checked-in identity description must not offer a no-parameter example"
+    )
+    assert "client_session_id" in desc
+
+
 def test_served_identity_description_never_teaches_a_bare_read():
     """The served description must not tell a client that bare identity() reads.
 
