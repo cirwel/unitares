@@ -250,7 +250,7 @@ When something feels wrong, do the checks in this order:
 
 1. Run `./scripts/diagnostics/check_health.sh`
 2. If HTTP is up, call `health_check()`
-3. If an agent identity looks wrong, call `identity(client_session_id=...)` with that agent's session id (a bare call mints a fresh identity instead of reading one)
+3. If an agent identity looks wrong, read it with `agent(action="get", agent_id=...)` — never with that agent's `client_session_id`, which is its possession proof and would bind you as it; a bare `identity()` is no better, since it mints a fresh identity instead of reading one
 4. If the issue is governance-state related, call `check_working_state()` (raw implementation: `get_governance_metrics(...)`)
 5. Only after that inspect logs or restart services
 
