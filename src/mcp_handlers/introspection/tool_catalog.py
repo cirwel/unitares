@@ -278,12 +278,12 @@ TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
 COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
     "process_agent_update": {
         "basic": "process_agent_update(complexity=0.5)  # identity auto-injected",
-        "with_response": "process_agent_update(response_text=\"Fixed bug\", complexity=0.3, confidence=0.9)",
+        "with_response": "process_agent_update(response_text=\"Fixed bug\", complexity=0.3)",
         "task_type": "process_agent_update(complexity=0.7, task_type=\"divergent\")"
     },
     "start_session": {
         "fresh": "start_session(force_new=true)",
-        "lineage": "start_session(force_new=true, parent_agent_id=\"...\", spawn_reason=\"new_session\")",
+        "lineage": "start_session(force_new=true, parent_agent_id=\"<EXITED predecessor>\", spawn_reason=\"explicit\")  # only for a real handoff; a live parent is rejected",
     },
     "sync_state": {
         "basic": "sync_state(response_text=\"Fixed bug\", complexity=0.3, confidence=0.9)",
@@ -349,7 +349,7 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "with_history": "get_governance_metrics(include_history=true)"
     },
     "identity": {
-        "check_identity": "identity()  # Shows current bound identity",
+        "check_identity": "identity(client_session_id=\"<your client_session_id>\")  # Reports on YOUR binding; with no proof argument the call is gated to a fresh mint",
         "name_yourself": "identity(name=\"my_agent\")  # Set your display name"
     },
     "list_agents": {
@@ -388,7 +388,7 @@ def getting_started_path() -> List[Dict[str, Any]]:
             "call": "start_session(force_new=true)",
             "canonical_tool": "onboard",
             "implementation_tool": "onboard",
-            "why": "Mint a fresh process identity. If continuing prior work, include parent_agent_id and spawn_reason='new_session'.",
+            "why": "Mint a fresh process identity. Only if a finished predecessor handed you its work, include parent_agent_id and spawn_reason='explicit'.",
         },
         {
             "step": 2,

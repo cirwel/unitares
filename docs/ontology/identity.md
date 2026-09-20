@@ -18,7 +18,7 @@ the full ontology:
 2. **Same running process:** pass `client_session_id` on check-ins and writes.
    Client adapters should do this automatically.
 3. **Continuing prior work in a fresh process:** call
-   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="new_session")`
+   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`
    only when there is a real handoff from a finished predecessor.
 4. **Short dispatched subagent:** do not mint a separate identity unless it is
    separately governed. If it does onboard, declare

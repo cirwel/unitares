@@ -15,11 +15,13 @@ Do not verify by bare UUID resume. If you need to test ownership of a cached
 UUID, use an advanced proof-owned rebind only when a matching current in-process
 token is available. Do not use legacy cache files as token sources.
 
-If no proof-owned UUID rebind is available, call `identity()` to inspect current
-binding. Use `/governance-start` to create a fresh process identity. Add
+If no proof-owned UUID rebind is available, call
+`identity(client_session_id="<your client_session_id>")` to inspect current
+binding. With no proof argument the call is gated to a fresh mint and reports
+on an identity it just created. Use `/governance-start` to create a fresh process identity. Add
 `parent_agent_id` only for a real handoff from a finished predecessor.
 
-Call `identity()` first when continuity or binding is unclear.
+Call `identity(client_session_id="<your client_session_id>")` first when continuity or binding is unclear.
 
 Then call `get_governance_metrics` for the current agent using the same continuity data.
 

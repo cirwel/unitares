@@ -428,3 +428,178 @@ async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
         "paused-uuid",
         "reviewer-uuid",
     ]
+
+
+# ------------------- abstention: a non-judgment is not a verdict ------------- #
+def test_parse_records_whether_a_judgment_was_actually_formed():
+    """`degraded` and `judgment_formed` are different questions.
+
+    Both parse failures below produce a conservative DISAGREE, which is right —
+    but they produced it without judging anything, and run() must be able to
+    tell that apart from a model that considered the thesis and rejected it.
+    """
+    import agents.dialectic_reviewer.reviewer as r
+
+    nothing = r.parse_reviewer_verdict("the model said some prose and stopped")
+    assert nothing.agrees is False
+    assert nothing.degraded is True
+    assert nothing.judgment_formed is False
+
+    malformed = r.parse_reviewer_verdict('{"agrees": false, "root_cause": ')
+    assert malformed.judgment_formed is False
+
+    real = r.parse_reviewer_verdict(
+        '{"agrees": false, "root_cause": "shallow", "reasoning": "no"}'
+    )
+    assert real.agrees is False
+    assert real.degraded is False
+    assert real.judgment_formed is True
+
+
+def test_a_downgraded_approval_is_still_a_judgment_and_must_be_filed():
+    """The one degraded path that must NOT abstain.
+
+    A model that approved but named no terms HAS judged; the protocol refuses
+    that shape and we retain the objection. That objection is real and the
+    paused agent can act on it, so it keeps judgment_formed=True and still
+    reaches the record. Conflating it with "the model said nothing" would
+    silently drop a genuine review.
+    """
+    import agents.dialectic_reviewer.reviewer as r
+
+    approved_without_terms = r.Verdict(
+        agrees=True, root_cause="rc", proposed_conditions=[], reasoning="looks fine"
+    )
+    result = r._verdict_with_ratified_conditions(
+        approved_without_terms,
+        paused_response={},                     # no terms offered
+        previous_verdict=r.Verdict(
+            agrees=False, root_cause="", proposed_conditions=[], reasoning=""
+        ),
+    )
+    assert result.agrees is False
+    assert result.degraded is True
+    assert result.judgment_formed is True, "a real judgment must still be filed"
+
+
+@pytest.mark.asyncio
+async def test_continuation_does_not_file_a_non_judgment_over_a_standing_rejection(
+    monkeypatch,
+):
+    """Round 2 goes unparseable: the reasoned rejection must survive intact.
+
+    Filing here would burn a synthesis round AND replace a rejection the paused
+    agent was mid-way through answering with an empty one.
+    """
+    import sys
+    import types
+
+    import agents.dialectic_reviewer.reviewer as r
+    from src.dialectic_protocol import DialecticMessage, DialecticSession
+
+    outputs = iter(
+        [
+            '{"agrees": false, "root_cause": "shallow", '
+            '"proposed_conditions": ["supply evidence"], "reasoning": "missing"}',
+            "the local model fell over and emitted prose",  # no judgment
+        ]
+    )
+
+    async def fake_obtain(prompt):
+        return next(outputs)
+
+    monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "1")
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_POLL_S", "0.01")
+
+    calls: list[tuple[str, dict]] = []
+    session = DialecticSession(paused_agent_id="paused-uuid")
+    session.session_id = "sess-nojudge"
+    assert session.submit_thesis(
+        DialecticMessage(
+            phase="thesis",
+            agent_id="paused-uuid",
+            timestamp="2026-09-19T00:00:00+00:00",
+            root_cause="claimed",
+            proposed_conditions=["initial"],
+            reasoning="initial claim",
+        )
+    )["success"] is True
+
+    class FakeClient:
+        def __init__(self, url):
+            self.agent_uuid = "reviewer-uuid"
+            self.paused_response_submitted = False
+
+        async def connect(self):
+            return None
+
+        async def onboard(self, **kw):
+            return None
+
+        async def call_tool(self, name, args, **kw):
+            calls.append((name, args))
+            if args.get("action") == "antithesis":
+                return session.submit_antithesis(
+                    DialecticMessage(
+                        phase="antithesis",
+                        agent_id=self.agent_uuid,
+                        timestamp="2026-09-19T00:01:00+00:00",
+                        reasoning=args["reasoning"],
+                    )
+                )
+            if args.get("action") == "synthesis":
+                return session.submit_synthesis(
+                    DialecticMessage(
+                        phase="synthesis",
+                        agent_id=self.agent_uuid,
+                        timestamp="2026-09-19T00:02:00+00:00",
+                        agrees=args["agrees"],
+                        root_cause=args.get("root_cause"),
+                        proposed_conditions=args.get("proposed_conditions"),
+                        reasoning=args.get("reasoning"),
+                    )
+                )
+            if args.get("action") == "get":
+                if not self.paused_response_submitted:
+                    session.submit_synthesis(
+                        DialecticMessage(
+                            phase="synthesis",
+                            agent_id="paused-uuid",
+                            timestamp="2026-09-19T00:03:00+00:00",
+                            agrees=True,
+                            root_cause="verified",
+                            proposed_conditions=["ship the evidence"],
+                            reasoning="here is the missing evidence",
+                        )
+                    )
+                    self.paused_response_submitted = True
+                return {"success": True, **session.to_dict()}
+            raise AssertionError(f"unexpected action: {args}")
+
+        async def checkin(self, response_text, complexity=0.3, confidence=0.7, **kw):
+            return None
+
+        async def disconnect(self):
+            return None
+
+    fake_mod = types.ModuleType("unitares_sdk.client")
+    fake_mod.GovernanceClient = FakeClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "unitares_sdk", types.ModuleType("unitares_sdk"))
+    monkeypatch.setitem(sys.modules, "unitares_sdk.client", fake_mod)
+
+    verdict = await r.run(
+        Thesis(session_id="sess-nojudge", root_cause="claimed", proposed_conditions=["initial"]),
+        governance_url="http://localhost:8767",
+        parent_agent_id="paused-uuid",
+    )
+
+    syntheses = [a for n, a in calls if n == "dialectic" and a["action"] == "synthesis"]
+    assert len(syntheses) == 1, (
+        "the unparseable round 2 was filed anyway: "
+        f"{[s.get('reasoning') for s in syntheses]}"
+    )
+    # The round-1 rejection is what stands, with its reasoning intact.
+    assert verdict.agrees is False
+    assert verdict.root_cause == "shallow"
+    assert verdict.proposed_conditions == ["supply evidence"]
