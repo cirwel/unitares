@@ -14,7 +14,7 @@ schemas belong to `list_tools()` / `describe_tool()` and
 2. **Same running process:** pass `client_session_id` on later check-ins and
    writes.
 3. **Real handoff from a finished predecessor:** start fresh and declare
-   `parent_agent_id=<prior uuid>, spawn_reason="new_session"`.
+   `parent_agent_id=<prior uuid>, spawn_reason="explicit"`.
 4. Call `sync_state(...)` after meaningful work.
 5. Call `record_result(...)` when a bounded external outcome exists.
 6. Use `check_working_state()` for a read-only state check.

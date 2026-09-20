@@ -72,7 +72,7 @@ async def handle_set_thresholds(arguments: Dict[str, Any]) -> Sequence[TextConte
             recovery={
                 "action": "Ensure your session is bound to this agent",
                 "related_tools": ["identity"],
-                "workflow": "Identity auto-binds on first tool call. Use identity() to check binding."
+                "workflow": "Pass client_session_id on this call to bind as yourself. identity(client_session_id=...) reports the binding; a bare identity() mints a new agent instead of reading yours."
             }
         )]
 

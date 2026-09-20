@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -121,6 +121,11 @@ def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
     Conservative — uses date arithmetic, not git log against source_files.
     git-log staleness is a future enhancement; the date check covers the
     common case (skill not touched in N days).
+
+    UTC, because `scripts/client/_check_freshness.py` stamps `last_verified`
+    in UTC. Reading it back with a local `date.today()` made a skill stamped
+    after 00:00 UTC report a negative age on any host behind UTC, quietly
+    widening the freshness window by a day.
     """
     if not last_verified:
         return False
@@ -130,7 +135,7 @@ def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
         return False
     if not isinstance(freshness_days, (int, float)):
         return False
-    age = (date.today() - verified).days
+    age = (datetime.now(timezone.utc).date() - verified).days
     return age > int(freshness_days)
 
 

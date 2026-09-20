@@ -257,8 +257,11 @@ Operational rules:
    can fragment under co-residency — check `session_source`/`tier` in the
    onboard response to confirm you bound as expected.
 3. To continue prior work in a fresh process, mint fresh and declare the cause:
-   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="new_session")`.
-   Use this only for a real handoff from a finished predecessor.
+   `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`.
+   Use this only for a real handoff from a finished predecessor. `explicit` is
+   the reason that records intentional succession; `new_session` is the legacy
+   descriptive reason and does not, by itself, establish that the inheritance
+   was deliberate.
 4. Short dispatched subagents usually should not onboard. If one needs its own
    identity, use `spawn_reason="subagent"`, set `parent_agent_id=<driver_uuid>`,
    and land at least one real `sync_state()` before exit.

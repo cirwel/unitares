@@ -143,7 +143,7 @@ def unbound_metrics_payload() -> dict:
                 "identity and no state for unbound callers. Mint a fresh "
                 "process identity with start_session(force_new=true); to continue "
                 "a finished predecessor's work add "
-                "parent_agent_id=<prior_uuid>, spawn_reason='new_session'. "
+                "parent_agent_id=<prior_uuid>, spawn_reason='explicit'. "
                 "Avoid bare identity()/start_session() — without force_new or a "
                 "proof (client_session_id / continuity_token) they can mint "
                 "an orphan identity."
