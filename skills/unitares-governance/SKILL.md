@@ -49,7 +49,7 @@ source_digests:
   unitares/skills/governance-lifecycle/SKILL.md: "51cb9ac6296f98f8"
   unitares/skills/governance-fundamentals/SKILL.md: "aff9a780b6957313"
   unitares/skills/knowledge-graph/SKILL.md: "eff53add72cc4e9b"
-  unitares/skills/dialectic-reasoning/SKILL.md: "efef061104548b8d"
+  unitares/skills/dialectic-reasoning/SKILL.md: "01401b25f18621f3"
   unitares/skills/discord-bridge/SKILL.md: "7ce6a8f491281f46"
   unitares/skills/unitares-dashboard/SKILL.md: "3a5856134afcad64"
 ---

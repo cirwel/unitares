@@ -927,12 +927,11 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     if not verdict.judgment_formed:
         logger.warning(
             "Dialectic reviewer ABSTAINING on session %s: %s produced no "
-            "parseable judgment. No verdict filed; the reviewer slot is left "
-            "OPEN for a reviewer that can judge.",
+            "parseable judgment. The server will record the abstention and "
+            "leave the reviewer slot OPEN for a reviewer that can judge.",
             thesis.session_id,
             _reviewer_audit_text(provenance),
         )
-        return verdict
 
     client = GovernanceClient(governance_url)
     await client.connect()
@@ -953,6 +952,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 "action": "antithesis",
                 "session_id": thesis.session_id,
                 "reasoning": verdict.reasoning,
+                "judgment_formed": verdict.judgment_formed,
                 # Attribution rides the antithesis because it is the reviewer's
                 # own first message and is always written; the synthesis row
                 # joins to it by session_id. See _provenance_for_message.
@@ -963,6 +963,8 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 },
             },
         )
+        if not verdict.judgment_formed:
+            return verdict
         # Submit the model-derived verdict — agrees may be False (the whole point).
         #
         # No `reasoning` here, deliberately. The argument was made once, in the

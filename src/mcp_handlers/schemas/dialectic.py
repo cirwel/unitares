@@ -117,7 +117,7 @@ class SubmitAntithesisParams(AgentIdentityMixin):
             # Mirror the coercion above, but note the DEFAULT is inverted: an
             # unrecognised string here means "not a judgment", so a garbled
             # value fails toward abstention rather than toward filing one.
-            self.judgment_formed = self.judgment_formed.lower() in ('true', '1', 'yes')
+            self.judgment_formed = self.judgment_formed.strip().lower() in ('true', '1', 'yes')
         return self
 
 class SubmitSynthesisParams(AgentIdentityMixin):
@@ -152,7 +152,7 @@ class SubmitSynthesisParams(AgentIdentityMixin):
         if isinstance(self.agrees, str):
             self.agrees = self.agrees.lower() in ('true', '1', 'yes')
         if isinstance(self.judgment_formed, str):
-            self.judgment_formed = self.judgment_formed.lower() in ('true', '1', 'yes')
+            self.judgment_formed = self.judgment_formed.strip().lower() in ('true', '1', 'yes')
         return self
 
 class LlmAssistedDialecticParams(AgentIdentityMixin):
@@ -244,7 +244,7 @@ class DialecticParams(AgentIdentityMixin):
     take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
     judgment_formed: Union[bool, str, None] = Field(
-        None,
+        True,
         description=(
             "Set false (action=antithesis/synthesis) to declare that NO judgment "
             "was reached -- the model returned nothing parseable as a verdict. "

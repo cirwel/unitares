@@ -193,7 +193,7 @@ def test_antithesis_provenance_survives_a_degraded_fallback():
     assert stored["degraded"] is False
 
 
-def test_no_parseable_judgment_files_nothing_at_all():
+def test_no_parseable_judgment_records_an_abstention_only():
     """THE LIVE INCIDENT, pinned: 2026-09-19, session 99ff6f25a310d23e, PR #2316.
 
     codex was unavailable, the fallback gemma4 returned nothing parseable, and
@@ -202,17 +202,17 @@ def test_no_parseable_judgment_files_nothing_at_all():
     locking out an independent reviewer that arrived four minutes later holding
     a reproduced counterexample.
 
-    A reviewer that could not judge has not reviewed. It must file NOTHING, so
-    the slot stays open for one that can. Fail-closed means "no approval", not
-    "silent rejection".
+    A reviewer that could not judge has not reviewed. It records only an
+    abstention, so the slot stays open for one that can. Fail-closed means "no
+    approval", not "silent rejection".
     """
     calls = _run_reviewer_capturing_calls(
         DEGRADED_PROVENANCE, "not json at all"  # exactly what gemma4 returned
     )
-    assert calls == [], (
-        "a reviewer with no judgment filed something anyway: "
-        f"{[args.get('action') for _, args in calls]}"
-    )
+    antithesis = [args for _, args in calls if args.get("action") == "antithesis"]
+    assert len(antithesis) == 1
+    assert antithesis[0]["judgment_formed"] is False
+    assert not any(args.get("action") == "synthesis" for _, args in calls)
 
 
 def test_submission_does_not_touch_signature():
@@ -260,7 +260,9 @@ def test_abstention_survives_a_failed_repair_and_is_bounded_to_one():
     calls = _run_reviewer_capturing_calls(
         DEGRADED_PROVENANCE, ["prose", "still prose"], prompts=prompts
     )
-    assert calls == [], f"filed anyway: {[a.get('action') for _, a in calls]}"
+    antithesis = [args for name, args in calls if args.get("action") == "antithesis"]
+    assert antithesis and antithesis[0]["judgment_formed"] is False
+    assert not any(args.get("action") == "synthesis" for _, args in calls)
     assert len(prompts) == 2, (
         f"expected exactly one repair attempt, got {len(prompts) - 1}"
     )
@@ -289,10 +291,9 @@ def test_a_repair_may_not_flip_a_rejection_into_an_approval():
         ],
         prompts=prompts,
     )
-    assert calls == [], (
-        "a repair manufactured an approval: "
-        f"{[args.get('action') for _, args in calls]}"
-    )
+    antithesis = [args for name, args in calls if args.get("action") == "antithesis"]
+    assert antithesis and antithesis[0]["judgment_formed"] is False
+    assert not any(args.get("action") == "synthesis" for _, args in calls)
     assert len(prompts) == 2, "the repair attempt did not run"
 
 
