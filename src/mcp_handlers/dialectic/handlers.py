@@ -28,7 +28,11 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
-from .events import emit_reviewer_abstained, emit_reviewer_reassigned
+from .events import (
+    emit_participant_abstained,
+    emit_reviewer_abstained,
+    emit_reviewer_reassigned,
+)
 from .responses import (
     default_cooldown_steps,
     default_escalate_steps,
@@ -3202,19 +3206,26 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
             # in the middle of answering. Abstain: the standing verdict stands
             # untouched and the round is not spent.
             if not _judgment_was_formed(arguments.get("judgment_formed")):
-                await emit_reviewer_abstained(
-                    session_id=session_id,
-                    reviewer_agent_id=(
-                        agent_id if agent_id == session.reviewer_agent_id else None
-                    ),
-                    paused_agent_id=session.paused_agent_id,
-                    phase=session.phase.value,
-                    reviewer_backend=_merge_caller_reviewer_provenance(
-                        arguments.get("observed_metrics"),
-                        arguments.get("reviewer_provenance"),
-                    ).get("reviewer_backend"),
-                    reason="no_judgment_formed",
-                )
+                if agent_id == session.paused_agent_id:
+                    await emit_participant_abstained(
+                        session_id=session_id,
+                        participant_agent_id=agent_id,
+                        paused_agent_id=session.paused_agent_id,
+                        phase=session.phase.value,
+                        reason="no_judgment_formed",
+                    )
+                else:
+                    await emit_reviewer_abstained(
+                        session_id=session_id,
+                        reviewer_agent_id=agent_id,
+                        paused_agent_id=session.paused_agent_id,
+                        phase=session.phase.value,
+                        reviewer_backend=_merge_caller_reviewer_provenance(
+                            arguments.get("observed_metrics"),
+                            arguments.get("reviewer_provenance"),
+                        ).get("reviewer_backend"),
+                        reason="no_judgment_formed",
+                    )
                 return success_response({
                     "abstained": True,
                     "session_id": session_id,

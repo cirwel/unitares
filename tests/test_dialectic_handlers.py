@@ -2789,7 +2789,7 @@ class TestAbstentionIsNotAVerdict:
         ACTIVE_SESSIONS[session.session_id] = session
 
         with mock_context_agent, \
-             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+             patch(f"{DIALECTIC}.emit_participant_abstained", new_callable=AsyncMock) as emit:
             result = await handle_submit_synthesis({
                 "session_id": session.session_id,
                 "agent_id": "agent-paused",
@@ -2798,7 +2798,7 @@ class TestAbstentionIsNotAVerdict:
             })
 
         assert parse_result(result)["abstained"] is True
-        assert emit.await_args.kwargs["reviewer_agent_id"] is None
+        assert emit.await_args.kwargs["participant_agent_id"] == "agent-paused"
 
     @pytest.mark.asyncio
     async def test_antithesis_abstention_respects_phase_guard(

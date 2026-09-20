@@ -60,6 +60,7 @@ WRITE_REFUSED = "dialectic_write_refused"
 WRITE_OVERLAP = "dialectic_write_overlap"
 SWEEP_CYCLE = "dialectic_sweep_cycle"
 REVIEWER_ABSTAINED = "dialectic_reviewer_abstained"
+PARTICIPANT_ABSTAINED = "dialectic_participant_abstained"
 
 # The three guarded writes the sweeper can have refused. Shared with the
 # sweeper's own `details` entries so the event payload and the returned summary
@@ -264,7 +265,7 @@ async def emit_reviewer_abstained(
     reviewer_backend: Optional[dict] = None,
     reason: Optional[str] = None,
 ) -> None:
-    """Record that a reviewer reached the session and could not form a judgment.
+    """Record that a reviewer or governed caller declared no judgment.
 
     A reviewer that cannot judge must not file a verdict: doing so claims the
     session's single reviewer slot and records a BINDING rejection whose
@@ -286,8 +287,9 @@ async def emit_reviewer_abstained(
     written to escape: measurement-authority state 3 (*not recorded*) reported
     with the same sentence as state 4 (recorded, genuinely absent). A positive
     abstention event establishes that a reviewer ran, reached its model, and
-    came back without a judgment -- a fact about the BACKEND, not about the
-    proposal under review.
+    came back without a judgment. A caller-supplied flag alone does not prove
+    model invocation; when `reviewer_backend` is absent this event records only
+    the caller's declaration.
 
     ⛔**This event never claims the reviewer slot and never advances the phase.**
     It is a note that an attempt happened. `reviewer_agent_id` is whoever made
@@ -309,7 +311,7 @@ async def emit_reviewer_abstained(
         paused_agent_id: the session's paused agent; populates the indexed
             `agent_id` column, matching how the emitters above attribute.
         phase: the phase the session was in when the attempt was abandoned.
-        reviewer_backend: the provenance stamp for the backend that answered
+        reviewer_backend: optional provenance for the backend that answered
             (host, model, whether a fallback fired).
         reason: short machine-readable cause, e.g. ``no_parseable_verdict``.
     """
@@ -339,6 +341,39 @@ async def emit_reviewer_abstained(
         logger.warning(
             "%s audit emit failed: session=%s reviewer=%s reason=%s err=%s",
             REVIEWER_ABSTAINED, session_id, reviewer_agent_id, reason, exc,
+        )
+
+
+async def emit_participant_abstained(
+    *,
+    session_id: str,
+    participant_agent_id: Optional[str] = None,
+    paused_agent_id: Optional[str] = None,
+    phase: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> None:
+    """Record a participant declaration without counting it as a review attempt."""
+    try:
+        from src.audit_db import append_audit_event_async
+
+        await append_audit_event_async({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": PARTICIPANT_ABSTAINED,
+            "agent_id": paused_agent_id,
+            "session_id": session_id,
+            "details": {
+                "session_id": session_id,
+                "participant_agent_id": participant_agent_id,
+                "paused_agent_id": paused_agent_id,
+                "phase": phase,
+                "reason": reason,
+                "slot_claimed": False,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "%s audit emit failed: session=%s participant=%s reason=%s err=%s",
+            PARTICIPANT_ABSTAINED, session_id, participant_agent_id, reason, exc,
         )
 
 
