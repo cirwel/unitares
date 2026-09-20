@@ -148,6 +148,14 @@ def test_checked_in_json_identity_description_never_teaches_a_bare_read():
     )
     assert "client_session_id" in desc
 
+    # `onboard` is overridden in Python too, so its checked-in copy drifts the
+    # same way and is just as invisible to a TOOL_DESCRIPTIONS assertion. Its
+    # cross-reference claimed identity "does not mint", which is the opposite
+    # of what a bare call does.
+    assert "does not mint" not in raw["onboard"], (
+        "checked-in onboard description must not claim identity() does not mint"
+    )
+
 
 def test_served_identity_description_never_teaches_a_bare_read():
     """The served description must not tell a client that bare identity() reads.

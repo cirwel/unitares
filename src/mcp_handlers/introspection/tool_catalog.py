@@ -283,7 +283,7 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
     },
     "start_session": {
         "fresh": "start_session(force_new=true)",
-        "lineage": "start_session(force_new=true, parent_agent_id=\"...\", spawn_reason=\"explicit\")",
+        "lineage": "start_session(force_new=true, parent_agent_id=\"<EXITED predecessor>\", spawn_reason=\"explicit\")  # only for a real handoff; a live parent is rejected",
     },
     "sync_state": {
         "basic": "sync_state(response_text=\"Fixed bug\", complexity=0.3, confidence=0.9)",

@@ -1012,7 +1012,8 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                             )
                             + " Nothing was written. Re-onboard with "
                             "start_session(force_new=true, parent_agent_id="
-                            "<your prior uuid>, spawn_reason=\"explicit\") "
+                            "<your prior uuid, which must have exited>, "
+                            "spawn_reason=\"explicit\") "
                             "or retry with a valid continuity_token."
                         )
                     return success_response(strict_identity_refusal_payload(
