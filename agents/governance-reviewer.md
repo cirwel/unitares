@@ -20,7 +20,7 @@ You have a persistent agent memory (`.claude/agent-memory/governance-reviewer/` 
    - **V (Valence)**: large imbalance means E/I mismatch rather than a healthy centered state
 3. Check risk, verdict, and attribution using runtime thresholds. Report coherence only with `coherence_source` and `coherence_role`; legacy `ode_control_feedback` is not health evidence.
 4. Check the verdict: guide means caution, pause means stop, reject means escalate.
-5. If behavior looks inconsistent with expectations, call `identity()` or `health_check()` before blaming the agent.
+5. If behavior looks inconsistent with expectations, call `identity(client_session_id=...)` for the agent under review, or `health_check()`, before blaming the agent. Never call `identity()` bare: with no proof argument it mints a fresh identity rather than reading one, which is both a wrong answer and a spurious record.
 
 Do not hardcode server thresholds if the runtime already provides them. Prefer live tool output over static cutoff lore.
 

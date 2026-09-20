@@ -124,6 +124,29 @@ def test_served_onboard_description_warns_against_auto_injection():
     assert "Part C" in desc, "served onboard description must cite Part C as the source of the invariant"
 
 
+def test_served_identity_description_never_teaches_a_bare_read():
+    """The served description must not tell a client that bare identity() reads.
+
+    `handle_identity_adapter` gates a call with no proof signal to
+    `force_new=true` (#156, 2026-04-25), so an argument-less `identity()`
+    mints and persists a new agent and then reports on *that* one. A
+    description that calls it a way to see your current binding sends every
+    client down a path the server closed. This is the check that was missing
+    when the description carried both the warning and the contradiction at
+    once.
+    """
+    desc = _served()["identity"]
+    assert "Use identity() with no arguments" not in desc, (
+        "served identity description must not teach an argument-less call as a read"
+    )
+    assert "identity(client_session_id=" in desc, (
+        "served identity description must name the argument that makes the answer yours"
+    )
+    assert "mints" in desc or "fresh mint" in desc, (
+        "served identity description must say what an argument-less call does instead"
+    )
+
+
 def test_served_identity_description_warns_against_auto_injection():
     desc = _served()["identity"]
     assert "ANTI-PATTERN" in desc, "served identity description must flag the auto-injection anti-pattern"

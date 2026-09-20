@@ -23,7 +23,7 @@ Connect to a running UNITARES governance server, preserve continuity cleanly, an
 If you are not using commands directly, the equivalent raw tool flow is:
 
 1. First run or fresh process: `start_session(force_new=true)` and save `agent_uuid` / `client_session_id`
-2. Fresh process continuing prior work: `start_session(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="new_session")`
+2. Fresh process continuing prior work: `start_session(force_new=true, parent_agent_id=<saved uuid>, spawn_reason="explicit")` — only for a real handoff from a finished predecessor
 3. `sync_state()` once per assistant turn, and after meaningful work
 4. Same live owner / proof-owned rebind only: `identity(agent_uuid=..., continuity_token=..., resume=true)`
 5. `check_working_state()` for read-only state checks
