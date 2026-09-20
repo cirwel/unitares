@@ -2775,6 +2775,59 @@ class TestAbstentionIsNotAVerdict:
         assert emit.await_args.kwargs["reviewer_agent_id"] is None
 
     @pytest.mark.asyncio
+    async def test_antithesis_abstention_respects_phase_guard(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.THESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "phase thesis" in data["error"]
+        emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_synthesis_abstention_respects_phase_guard(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_synthesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(
+            phase=DialecticPhase.THESIS,
+            reviewer_id="agent-reviewer",
+        )
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "phase thesis" in data["error"]
+        emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_synthesis_abstention_preserves_the_standing_verdict(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_context_agent,

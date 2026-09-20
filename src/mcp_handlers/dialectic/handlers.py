@@ -2862,6 +2862,13 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
 
         judgment_formed = _judgment_was_formed(arguments.get("judgment_formed"))
 
+        if not judgment_formed and session.phase != DialecticPhase.ANTITHESIS:
+            return success_response({
+                "success": False,
+                "session_id": session_id,
+                "error": f"Cannot submit antithesis in phase {session.phase.value}",
+            })
+
         original_reviewer_id = session.reviewer_agent_id
         reviewer_takeover = None
 
@@ -3165,7 +3172,17 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         "may submit synthesis."
                     ),
                 )]
-    
+
+            if (
+                not _judgment_was_formed(arguments.get("judgment_formed"))
+                and session.phase != DialecticPhase.SYNTHESIS
+            ):
+                return success_response({
+                    "success": False,
+                    "session_id": session_id,
+                    "error": f"Cannot submit synthesis in phase {session.phase.value}",
+                })
+
             # ── A NON-JUDGMENT IS NOT A VERDICT (synthesis side) ─────────────
             # The reconsideration rounds re-ask the model, so they can also come
             # back unparseable. Filing that would burn a synthesis round against
