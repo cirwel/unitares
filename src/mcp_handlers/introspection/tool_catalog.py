@@ -349,7 +349,7 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "with_history": "get_governance_metrics(include_history=true)"
     },
     "identity": {
-        "check_identity": "identity()  # Shows current bound identity",
+        "check_identity": "identity(client_session_id=\"<your client_session_id>\")  # Reports on YOUR binding; with no proof argument the call is gated to a fresh mint",
         "name_yourself": "identity(name=\"my_agent\")  # Set your display name"
     },
     "list_agents": {

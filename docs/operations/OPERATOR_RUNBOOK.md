@@ -105,7 +105,7 @@ Standard agent workflow:
 3. Same live owner / proof-owned rebind: `identity(agent_uuid=..., continuity_token=..., resume=true)`
 4. `sync_state()` for work logging
 5. `check_working_state()` for read-only state
-6. `identity()` to confirm current binding
+6. `identity(client_session_id=...)` to confirm current binding — with no proof argument the call is gated to a fresh mint and confirms nothing
 
 Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
 `get_governance_metrics(...)`. Use them for older clients or when inspecting
@@ -250,7 +250,7 @@ When something feels wrong, do the checks in this order:
 
 1. Run `./scripts/diagnostics/check_health.sh`
 2. If HTTP is up, call `health_check()`
-3. If an agent identity looks wrong, call `identity()`
+3. If an agent identity looks wrong, call `identity(client_session_id=...)` with that agent's session id (a bare call mints a fresh identity instead of reading one)
 4. If the issue is governance-state related, call `check_working_state()` (raw implementation: `get_governance_metrics(...)`)
 5. Only after that inspect logs or restart services
 
