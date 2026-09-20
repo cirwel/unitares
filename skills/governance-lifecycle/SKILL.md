@@ -229,7 +229,7 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 - UUID is an identity anchor, not proof that the current process owns that identity
 - Session binding can happen via transport session, `client_session_id`, or short-lived continuity token
 - Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. Your identity is unchanged; retry from a client that sends its own session identifier.
-- When continuity seems unclear, call `identity(client_session_id="<your client_session_id>")`. Do not call it with no arguments: with no session proof the lookup can fall through to `pinned_onboard_session`, a pin keyed on the User-Agent that whichever caller last onboarded owns, so it can return a neighbour's identity. A hook that caches the answer then persists the wrong binding.
+- When continuity seems unclear, call `identity(client_session_id="<your client_session_id>")`. Do not call it with no arguments: a call carrying no proof signal at all is gated to a fresh mint (`[FRESH_INSTANCE]`, S13), so it answers with a newly created identity rather than reporting on yours, and leaves a spurious record behind. The gate is what keeps the unauthenticated read off the User-Agent pin path; passing your own `client_session_id` is what makes the answer about you.
 - Trust the answer only when `identity_assurance.caller_proven` is true; a `weak` tier with `proof_origin: "server_inferred"` means the server guessed.
 - Inspect:
   - `identity_status`

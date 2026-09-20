@@ -222,7 +222,7 @@ The system tracks whether your stated confidence matches evidence. Over time thi
 
 When the numbers look surprising, do not guess first. Use:
 
-- `identity(client_session_id=...)` to verify who the runtime thinks you are, trusting it only when `identity_assurance.caller_proven` is true (with no arguments it can resolve to a neighbour)
+- `identity(client_session_id=...)` to verify who the runtime thinks you are, trusting it only when `identity_assurance.caller_proven` is true (with no arguments it mints a fresh identity instead of answering about yours)
 - `health_check()` to verify the server and knowledge graph are healthy
 - `check_working_state()` for the current interpreted state, risk provenance,
   and compatibility thresholds
