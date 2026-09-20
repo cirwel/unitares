@@ -191,7 +191,8 @@ actually happens.
   as a clean one is worse than no row at all.
 - **If no judgment was reached, do not file one.** When the consult returned
   nothing you could read as a verdict, pass `judgment_formed: false` instead.
-  The server records an abstention and leaves the reviewer slot OPEN; it does
+  The server records an abstention without claiming or changing reviewer-slot
+  ownership; the slot is OPEN only when no reviewer was already assigned. It does
   not file a rejection. `degraded` describes the BACKEND, `judgment_formed`
   says whether a verdict exists at all, and the two are not interchangeable —
   a model that judged and then failed its output format is degraded but HAS

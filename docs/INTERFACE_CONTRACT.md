@@ -148,8 +148,9 @@ The two identifiers serve different jobs:
   `judgment_formed` on `antithesis` and `synthesis`. Unlike 1.10.0 and 1.11.0,
   which advertised parameters the handler already read, this is new behavior: a
   reviewer that could not form a judgment passes `judgment_formed: false`, and
-  the server records an abstention and leaves the reviewer slot open rather than
-  filing a binding rejection with no reasoning behind it. The default is true,
+  the server records an abstention without claiming or changing reviewer-slot
+  ownership rather than filing a binding rejection with no reasoning behind it.
+  The slot is open only when no reviewer was already assigned. The default is true,
   so omitting it is the prior behavior exactly and no existing caller changes;
   nothing is removed or renamed, and one input digest and the surface digest
   move).
