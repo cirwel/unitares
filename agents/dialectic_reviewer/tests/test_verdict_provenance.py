@@ -93,9 +93,15 @@ def test_payload_is_json_serializable():
 # --------------------------------------------------------------------------- #
 # The submission actually carries it
 # --------------------------------------------------------------------------- #
-def _run_reviewer_capturing_calls(provenance, verdict_text):
-    """Drive run() far enough to capture the antithesis submission."""
+def _run_reviewer_capturing_calls(provenance, verdict_text, *, prompts=None):
+    """Drive run() far enough to capture the antithesis submission.
+
+    ``verdict_text`` may be a single reply (returned for every call) or a list
+    of replies served in order, which is how the one repair attempt is
+    exercised. Pass ``prompts`` to capture the prompts run() actually sent.
+    """
     calls = []
+    replies = list(verdict_text) if isinstance(verdict_text, list) else None
 
     class FakeClient:
         agent_uuid = "reviewer-uuid"
@@ -123,7 +129,11 @@ def _run_reviewer_capturing_calls(provenance, verdict_text):
 
     async def fake_obtain(prompt):
         r._record_reviewer_provenance(provenance)
-        return verdict_text
+        if prompts is not None:
+            prompts.append(prompt)
+        if replies is None:
+            return verdict_text
+        return replies.pop(0) if replies else ""
 
     # unitares_sdk is imported lazily inside run(); stub it so the test needs
     # no SDK install and no network.
@@ -152,20 +162,57 @@ def test_antithesis_submission_carries_reviewer_backend():
     assert stored["model_used"] == "served-002"
 
 
+DEGRADED_PROVENANCE = {
+    "backend": "ollama",
+    "host_id": "ollama:local",
+    "models_used": ["gemma4:latest"],
+    "fallback_from": "codex:host-adapter",
+}
+
+
 def test_antithesis_provenance_survives_a_degraded_fallback():
-    degraded_provenance = {
-        "backend": "ollama",
-        "host_id": "ollama:local",
-        "models_used": ["gemma4:latest"],
-        "fallback_from": "codex:host-adapter",
-    }
+    """A fallback backend that STILL judges must record that it was a fallback.
+
+    This is the half of the original contract that survives the abstention
+    rule: the verdict is real, so it is filed, and the record has to show it
+    came from the free local model rather than the selected host — replaying 14
+    real theses put those 36-50% apart.
+
+    ``degraded`` is False here on purpose. It describes the VERDICT (could we
+    extract a judgment), not the BACKEND (which host answered). A fallback that
+    produced a parseable judgment is an intact verdict from a weaker model, and
+    ``fallback_from`` is what says so.
+    """
     calls = _run_reviewer_capturing_calls(
-        degraded_provenance, "not json at all"  # forces a degraded verdict
+        DEGRADED_PROVENANCE, '{"agrees": false, "root_cause": "shallow", "reasoning": "no"}'
     )
     antithesis = [args for name, args in calls if args.get("action") == "antithesis"]
+    assert antithesis, "a fallback backend that judged must still file its verdict"
     stored = antithesis[0]["observed_metrics"]["reviewer_backend"]
     assert stored["fallback_from"] == "codex:host-adapter"
-    assert stored["degraded"] is True
+    assert stored["degraded"] is False
+
+
+def test_no_parseable_judgment_files_nothing_at_all():
+    """THE LIVE INCIDENT, pinned: 2026-09-19, session 99ff6f25a310d23e, PR #2316.
+
+    codex was unavailable, the fallback gemma4 returned nothing parseable, and
+    the old code filed that non-answer as a BINDING rejection with empty
+    reasoning — claiming the reviewer slot, blocking the paused agent, and
+    locking out an independent reviewer that arrived four minutes later holding
+    a reproduced counterexample.
+
+    A reviewer that could not judge has not reviewed. It must file NOTHING, so
+    the slot stays open for one that can. Fail-closed means "no approval", not
+    "silent rejection".
+    """
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE, "not json at all"  # exactly what gemma4 returned
+    )
+    assert calls == [], (
+        "a reviewer with no judgment filed something anyway: "
+        f"{[args.get('action') for _, args in calls]}"
+    )
 
 
 def test_submission_does_not_touch_signature():
@@ -175,3 +222,89 @@ def test_submission_does_not_touch_signature():
     )
     for _, args in calls:
         assert "signature" not in args
+
+
+# ----------------- one repair attempt before abstaining (Q5) ---------------- #
+def test_a_formatting_slip_is_repaired_rather_than_abstained_on():
+    """A model that judged but botched the envelope must not cost a review.
+
+    Raised by independent review on 2026-09-19: abstaining on a single
+    unparseable reply treats a transient formatting failure as proof that no
+    judgment could be formed. It is not.
+    """
+    prompts: list[str] = []
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE,
+        [
+            "Sure! Here is my review: the conditions look shallow.",  # no JSON
+            '{"agrees": false, "root_cause": "shallow", "reasoning": "no"}',
+        ],
+        prompts=prompts,
+    )
+    antithesis = [args for name, args in calls if args.get("action") == "antithesis"]
+    assert antithesis, "the repaired verdict was thrown away"
+    synthesis = [args for name, args in calls if args.get("action") == "synthesis"]
+    assert synthesis and synthesis[0]["agrees"] is False
+    assert synthesis[0]["root_cause"] == "shallow"
+
+    # The repair must RE-ASK for the same judgment, not invite a fresh one —
+    # re-running the original prompt would be quiet reviewer-shopping.
+    assert len(prompts) == 2
+    assert "COULD NOT BE PARSED" in prompts[1]
+    assert "do NOT change your position" in prompts[1]
+
+
+def test_abstention_survives_a_failed_repair_and_is_bounded_to_one():
+    """Still abstains when the repair also fails — and re-asks exactly once."""
+    prompts: list[str] = []
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE, ["prose", "still prose"], prompts=prompts
+    )
+    assert calls == [], f"filed anyway: {[a.get('action') for _, a in calls]}"
+    assert len(prompts) == 2, (
+        f"expected exactly one repair attempt, got {len(prompts) - 1}"
+    )
+
+
+def test_a_repair_may_not_flip_a_rejection_into_an_approval():
+    """The repair prompt ASKS for the same position; it cannot enforce it.
+
+    Found by independent review of this PR (codex, 2026-09-19). The reply being
+    restated is unparseable by construction, so a first reply that rejected in
+    prose followed by a parseable ``agrees: true`` would file an approval no one
+    can verify was ever the model's judgment — and an approval can resolve the
+    session and release the paused agent.
+
+    Approval is the one direction that must never rest on an unverifiable
+    restatement, so this abstains instead. Losing a genuine approval that merely
+    botched its format is the correct direction to fail.
+    """
+    prompts: list[str] = []
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE,
+        [
+            "I reject this: the conditions are shallow and miss the root cause.",
+            '{"agrees": true, "root_cause": "fine", '
+            '"proposed_conditions": ["ship it"], "reasoning": "looks ok"}',
+        ],
+        prompts=prompts,
+    )
+    assert calls == [], (
+        "a repair manufactured an approval: "
+        f"{[args.get('action') for _, args in calls]}"
+    )
+    assert len(prompts) == 2, "the repair attempt did not run"
+
+
+def test_a_repair_that_restates_an_objection_is_still_accepted():
+    """The safe direction must keep working — this is not a ban on repairs."""
+    calls = _run_reviewer_capturing_calls(
+        DEGRADED_PROVENANCE,
+        [
+            "I reject this, the root cause is shallow.",
+            '{"agrees": false, "root_cause": "shallow", "reasoning": "no"}',
+        ],
+    )
+    synthesis = [args for name, args in calls if args.get("action") == "synthesis"]
+    assert synthesis and synthesis[0]["agrees"] is False
+    assert synthesis[0]["root_cause"] == "shallow"

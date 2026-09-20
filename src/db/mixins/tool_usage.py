@@ -73,6 +73,7 @@ class ToolUsageMixin:
         eisv_regime: Optional[str] = None,
         detail: Optional[Dict[str, Any]] = None,
         verification_source: Optional[str] = None,
+        corroboration_applied: bool = False,
     ) -> Optional[str]:
         """Insert one outcome event. Returns outcome_id UUID string or None on failure.
 
@@ -82,7 +83,10 @@ class ToolUsageMixin:
         the CHECK constraint rejects other strings. Optional for backwards
         compatibility with pre-Phase-1 callers; future migration will require it.
         """
-        from src.outcome_corroboration import enrich_detail_with_corroboration
+        from src.outcome_corroboration import (
+            ceiling_for_verification_source,
+            enrich_detail_with_corroboration,
+        )
         from config.governance_config import GovernanceConfig
 
         # --- EISV outcome-snapshot bridge (Stage-0 population bridge; roadmap §4a / Appendix B) ---
@@ -111,11 +115,38 @@ class ToolUsageMixin:
                 detail = dict(detail or {})
                 detail["eisv_snapshot_source"] = "outcome_bridge"
 
-        corroborated_detail = enrich_detail_with_corroboration(
-            detail,
-            outcome_type=outcome_type,
-            verification_source=verification_source,
-        )
+        # THIS IS THE SHARED WRITE PATH -- every outcome row is serialised from
+        # `corroborated_detail` below, including the four phases.py callers that
+        # never touch _record_outcome_event_inline. The cap has to hold HERE, not
+        # only in the recorder.
+        #
+        # Do not re-grade detail that was already graded upstream. A 2026-09-19
+        # review found this re-grading it without a ceiling: a row the recorder
+        # capped at tool_observed/0.65 was stored as substrate_observed/0.85,
+        # because the free-text vocabulary the cap compensates for survives in
+        # the detail. The tool response and the persisted row then disagreed,
+        # in the direction that flattered the claim.
+        #
+        # Re-grading is also no longer merely redundant: now that the grader is
+        # default-deny, a second ungated pass would DOWNGRADE legitimate
+        # server-observed rows. Preserving the upstream verdict is what keeps
+        # both directions correct.
+        # The already-graded signal is a PARAMETER, never a field inside the
+        # caller's detail. Keying it on detail["corroboration_grade"] made the
+        # grader's own verdict forgeable by anyone reaching this shared boundary
+        # -- presence-checking a caller-shaped field is an authorization bypass,
+        # not a cache check. Stripping those keys on the public path narrows the
+        # blast radius but cannot fix a shared boundary, because every other
+        # caller of this method is also "the caller".
+        if corroboration_applied:
+            corroborated_detail = dict(detail or {})
+        else:
+            corroborated_detail = enrich_detail_with_corroboration(
+                detail,
+                outcome_type=outcome_type,
+                verification_source=verification_source,
+                ceiling=ceiling_for_verification_source(verification_source),
+            )
         async with self.acquire() as conn:
             def _detail_json(*, legacy_verification_source: bool = False) -> str:
                 payload = dict(corroborated_detail)

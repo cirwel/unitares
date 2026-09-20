@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for the UNITARES governance framework. Use this
   as the entrypoint when you need the overall model and route into the split
   governance skills.
-last_verified: "2026-09-19"
+last_verified: "2026-09-20"
 freshness_days: 35
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -46,12 +46,12 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "6463bc8ed3919816"
-  unitares/skills/governance-lifecycle/SKILL.md: "d4a7aa08e5634510"
-  unitares/skills/governance-fundamentals/SKILL.md: "c510bff8d842e29d"
+  unitares/skills/governance-lifecycle/SKILL.md: "88ab5138305b4303"
+  unitares/skills/governance-fundamentals/SKILL.md: "d3accd334c587144"
   unitares/skills/knowledge-graph/SKILL.md: "8f07a5fcfeaaa472"
   unitares/skills/dialectic-reasoning/SKILL.md: "8c491dd6b6a3036c"
   unitares/skills/discord-bridge/SKILL.md: "7ce6a8f491281f46"
-  unitares/skills/unitares-dashboard/SKILL.md: "b15f49e6b6e30109"
+  unitares/skills/unitares-dashboard/SKILL.md: "3a5856134afcad64"
 ---
 
 # UNITARES Governance

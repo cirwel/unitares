@@ -1229,7 +1229,10 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
     from datetime import datetime, timezone
 
     from src.db import get_db
-    from src.outcome_corroboration import assess_outcome_corroboration
+    from src.outcome_corroboration import (
+        assess_outcome_corroboration,
+        ceiling_for_verification_source,
+    )
 
     diagnostic = str(
         arguments.get("diagnostic") or arguments.get("mode") or "claim_only_task_completed"
@@ -1347,10 +1350,17 @@ async def handle_outcome_evidence(arguments: Dict[str, Any]) -> Sequence[TextCon
         this in SQL would fork the grading rules into a second implementation."""
         detail = _row_detail(row["detail"])
         verification_source = row["verification_source"] or detail.get("verification_source")
+        # Re-grading from raw detail reproduces the WRITE-side rules, so it must
+        # reproduce the write-side ceiling too. Without it a row persisted as
+        # tool_observed/0.65 was reported here as substrate_observed/0.85,
+        # because the grader's free-text vocabulary (source, evidence_source,
+        # observed_by, ...) survives in the stored detail -- so the audit built
+        # to SURFACE self-labelled rows was the one place still believing them.
         metadata = assess_outcome_corroboration(
             outcome_type=row["outcome_type"],
             detail=detail,
             verification_source=verification_source,
+            ceiling=ceiling_for_verification_source(verification_source),
         ).as_metadata()
         return detail, metadata, verification_source
 
