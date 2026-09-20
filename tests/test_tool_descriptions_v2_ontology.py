@@ -124,6 +124,62 @@ def test_served_onboard_description_warns_against_auto_injection():
     assert "Part C" in desc, "served onboard description must cite Part C as the source of the invariant"
 
 
+def test_checked_in_json_identity_description_never_teaches_a_bare_read():
+    """The same rule, against the file rather than the merged dict.
+
+    `_load_descriptions()` overlays `_IDENTITY_DESCRIPTION_OVERRIDES` on top of
+    `tool_descriptions.json`, so a test that reads TOOL_DESCRIPTIONS cannot see
+    what the JSON says. The file ships as packaged data and is a teaching
+    surface in its own right, so it went on telling readers to call
+    `identity()` with no parameters while the served text said the opposite.
+    """
+    import json
+    from pathlib import Path
+
+    import src.tool_descriptions as td
+
+    raw = json.loads(Path(td._DESCRIPTIONS_FILE).read_text(encoding="utf-8"))
+    desc = raw["identity"]
+    assert "identity() anytime" not in desc, (
+        "checked-in identity description must not teach an argument-less call as a read"
+    )
+    assert "Check identity (no parameters)" not in desc, (
+        "checked-in identity description must not offer a no-parameter example"
+    )
+    assert "client_session_id" in desc
+
+    # `onboard` is overridden in Python too, so its checked-in copy drifts the
+    # same way and is just as invisible to a TOOL_DESCRIPTIONS assertion. Its
+    # cross-reference claimed identity "does not mint", which is the opposite
+    # of what a bare call does.
+    assert "does not mint" not in raw["onboard"], (
+        "checked-in onboard description must not claim identity() does not mint"
+    )
+
+
+def test_served_identity_description_never_teaches_a_bare_read():
+    """The served description must not tell a client that bare identity() reads.
+
+    `handle_identity_adapter` gates a call with no proof signal to
+    `force_new=true` (#156, 2026-04-25), so an argument-less `identity()`
+    mints and persists a new agent and then reports on *that* one. A
+    description that calls it a way to see your current binding sends every
+    client down a path the server closed. This is the check that was missing
+    when the description carried both the warning and the contradiction at
+    once.
+    """
+    desc = _served()["identity"]
+    assert "Use identity() with no arguments" not in desc, (
+        "served identity description must not teach an argument-less call as a read"
+    )
+    assert "identity(client_session_id=" in desc, (
+        "served identity description must name the argument that makes the answer yours"
+    )
+    assert "mints" in desc or "fresh mint" in desc, (
+        "served identity description must say what an argument-less call does instead"
+    )
+
+
 def test_served_identity_description_warns_against_auto_injection():
     desc = _served()["identity"]
     assert "ANTI-PATTERN" in desc, "served identity description must flag the auto-injection anti-pattern"

@@ -46,7 +46,7 @@ _DEFAULT_REFUSAL_SAFE_OPTIONS = (
     },
     {
         "action": "declare_lineage",
-        "call": "onboard(force_new=true, parent_agent_id=<prior UUID>, spawn_reason='new_session')",
+        "call": "onboard(force_new=true, parent_agent_id=<prior UUID>, spawn_reason='explicit')",
         "when": "A finished predecessor explicitly handed this work to you.",
     },
     {

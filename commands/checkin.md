@@ -10,7 +10,7 @@ Use the shared helper in this repo:
 
 If the newest entry contains `parent_agent_id`, treat it as local lineage context for attribution, not proof that the current process owns that UUID.
 
-If current binding is unclear, call `identity()` first to inspect the active binding.
+If current binding is unclear, call `identity(client_session_id="<your client_session_id>")` first to inspect the active binding. A call carrying no proof argument is gated to a fresh mint, so it reports on a newly created identity instead of yours.
 
 If you must test a cached UUID, use an advanced proof-owned rebind only when a
 matching current in-process `continuity_token` is available. Do not use legacy

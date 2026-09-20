@@ -67,8 +67,8 @@ is the merge gate.
 - A draft PR means "visible, not claiming merged." **Merging** is the
   operator's deliberate action. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
-  actually passed — CI green, review round joined, no collision with an
-  in-flight branch.
+  actually passed — CI green (the `review` check included: see "Review
+  gate" below), no collision with an in-flight branch.
 - **Readiness is agent-declared, never operator-inferred.** The operator
   pressing merge in order cannot verify content and should not have to
   guess doneness: a PR still in draft is "still working — hands off," even
@@ -85,6 +85,43 @@ is the merge gate.
   still revising is the trigger shape of the post-merge orphan-push
   incidents — the human gate authorizes; the evidence lives with CI,
   reviews, and the merge-loss guards.
+
+**Review gate.** "Review round joined" used to be prose: some PRs carried a
+review in the body, some in a comment, most in neither, and nothing could tell
+which. It is now a command and a status check, the way `test-cache.sh` made
+the test run one.
+
+- `./scripts/dev/review.sh` reviews the PR diff for `HEAD` with the *other*
+  model (Codex reviews `claude/*` and everything else, Claude reviews
+  `codex/*`), read-only, on a 30-minute budget, and posts a **review record**
+  comment. `ship.sh` starts it in the background on every PR push; run it by
+  hand after pushing any other way.
+- The `review` commit status (`.github/workflows/review-gate.yml`) is green
+  when the latest record for the PR's **current diff** is `CLEAN`, or
+  `FINDINGS(n)` with dispositions. Undisposed findings or no record leave it
+  pending; a reviewer that crashed or ran out of time records `FAILED`,
+  never clean.
+- Findings: fix and push (the new diff is reviewed), or post rebuttals with
+  `./scripts/dev/review.sh dispose <file>` — never drop one silently.
+- Any review can be the record: a council, a human, another model —
+  `./scripts/dev/review.sh record <file> --reviewer-name <who>`, where the file
+  ends with `VERDICT: CLEAN` or `VERDICT: FINDINGS(n)`. The gate needs no model
+  and no paid key; CI only reads comments.
+- The record is keyed on the diff (path + blob of every changed file against
+  the merge base), not the commit, so a base merge that leaves the PR's files
+  alone — including `draft-base-refresh.yml`'s — keeps it.
+- The gate proves a review was recorded, not that it was honest: every agent
+  posts through the same GitHub account, so a comment cannot distinguish a
+  real review from an author's own. A record whose reviewer is the PR's own
+  author is not a review.
+- Bot PRs (dependabot) get no exemption: the incident that motivated "no
+  mechanical exemption" was a dependency bump. Nobody has to remember them
+  either: `review_gate.py sweep` (scheduled every 30 min on the operator's
+  host) reviews, one per run, any ready PR from the owner's account or
+  dependabot that has no record for its current diff and has been quiet
+  for 15 minutes. Drafts are left to their owner's `ship.sh`; outside
+  contributors' PRs get a human first. A lock in the git common dir keeps
+  the sweep and a `ship.sh` review from running the same diff twice.
 
 `ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
 every change** — runtime, docs, or tests:

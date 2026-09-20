@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-19"
+last_verified: "2026-09-20"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
@@ -23,7 +23,7 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "da5ccf416050aa67"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "a0e94cb9d29d161d"
   unitares/src/mcp_handlers/dialectic/auth.py: "e6bcc28d7e2a4260"
   unitares/src/mcp_handlers/dialectic/session.py: "eb5ed22eb5684038"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
@@ -201,7 +201,7 @@ actually happens.
 - **Never backfill.** File only a review this session actually performed;
   filing past passes after the fact fabricates governed history.
 
-If identity or session continuity looks suspect, verify with `identity()` before
+If identity or session continuity looks suspect, verify with `identity(client_session_id=...)` before
 assuming the thesis belongs to the agent you think it does. An independent
 reviewer also receives server-captured pause evidence separately from the paused
 agent's narrative. Treat its measurement, policy, and enforcement provenance as
