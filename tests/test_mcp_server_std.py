@@ -1472,6 +1472,51 @@ class TestListToolsHandler:
     """Tests for the MCP list_tools handler."""
 
     @pytest.mark.asyncio
+    async def test_http_proxy_fetches_full_catalog_before_local_filtering(
+        self, monkeypatch
+    ):
+        """A full stdio proxy must not inherit a progressive backend default."""
+        import src.mcp_server_std as stdio
+        import src.tool_modes as tool_modes
+
+        monkeypatch.setattr(stdio, "STDIO_PROXY_HTTP_URL", "http://stub.invalid")
+        monkeypatch.setattr(tool_modes, "TOOL_MODE", "full")
+        requested_urls = []
+        payload = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "health_check",
+                        "description": "Health",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ]
+        }
+
+        class _StubHTTPResponse:
+            def read(self):
+                return json.dumps(payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def _urlopen(request, **kwargs):
+            requested_urls.append(request.full_url)
+            return _StubHTTPResponse()
+
+        monkeypatch.setattr("urllib.request.urlopen", _urlopen)
+
+        tools = await stdio._proxy_http_list_tools()
+
+        assert requested_urls == ["http://stub.invalid/v1/tools?mode=full"]
+        assert [tool.name for tool in tools] == ["health_check"]
+
+    @pytest.mark.asyncio
     async def test_local_tools_returned_no_proxy(self):
         """When no proxy is configured, should return local tool definitions."""
         from src.mcp_server_std import list_tools
