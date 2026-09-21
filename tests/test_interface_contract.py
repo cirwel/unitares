@@ -59,6 +59,34 @@ def test_capability_schema_hashes_match_public_definitions():
         )
 
 
+@pytest.mark.parametrize(
+    ("hidden_name", "also_hidden"),
+    [
+        ("health_check", set()),
+        ("onboard", {"start_session"}),
+    ],
+)
+def test_hidden_schema_backed_tools_and_their_aliases_stay_out_of_every_catalog(
+    monkeypatch,
+    hidden_name,
+    also_hidden,
+):
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+
+    monkeypatch.setattr(_TOOL_DEFINITIONS[hidden_name], "hidden", True)
+
+    direct = {tool.name for tool in get_public_tool_definitions("full")}
+    gateway = {
+        tool.name
+        for tool in get_public_tool_definitions("full", include_unmounted=True)
+    }
+
+    assert hidden_name not in direct
+    assert hidden_name not in gateway
+    assert also_hidden.isdisjoint(direct)
+    assert also_hidden.isdisjoint(gateway)
+
+
 def test_federation_contract_names_live_negotiation_and_lifecycle_envelope():
     contract = build_interface_contract()
     federation = contract["federation"]

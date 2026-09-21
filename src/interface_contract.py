@@ -238,15 +238,20 @@ def get_public_tool_definitions(
     public: dict[str, Tool] = {}
 
     for tool in definitions:
-        if tool.name not in registered:
+        if tool.name not in registered or is_tool_hidden(tool.name):
             continue
         if (
             include_unmounted and mode == "full"
         ) or should_include_tool(tool.name, mode=mode, client_type=client_type):
             public[tool.name] = tool
 
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
     alias_names = workflow_alias_names_for_mode(mode)
     for alias_name in alias_names:
+        implementation, _ = resolve_tool_alias(alias_name)
+        if is_tool_hidden(alias_name) or is_tool_hidden(implementation):
+            continue
         try:
             public[alias_name] = build_alias_tool_definition(
                 alias_name,
@@ -261,8 +266,6 @@ def get_public_tool_definitions(
             # remain the same live set.
             if not include_unmounted:
                 continue
-            from src.mcp_handlers.tool_stability import resolve_tool_alias
-
             _, alias_info = resolve_tool_alias(alias_name)
             public[alias_name] = Tool(
                 name=alias_name,

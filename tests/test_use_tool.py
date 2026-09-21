@@ -542,6 +542,30 @@ async def test_use_tool_rejects_late_registered_hidden_capability(monkeypatch):
         _TOOL_DEFINITIONS.pop(tool_name, None)
 
 
+@pytest.mark.asyncio
+async def test_schema_backed_hidden_capability_is_not_listed_described_or_invoked(
+    monkeypatch,
+):
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+    from src.mcp_handlers.introspection.tool_introspection import (
+        handle_describe_tool,
+        handle_list_tools,
+    )
+
+    monkeypatch.setattr(_TOOL_DEFINITIONS["health_check"], "hidden", True)
+
+    listed = _payload(await handle_list_tools({"lite": True}))
+    described = _payload(await handle_describe_tool({"tool_name": "health_check"}))
+    invoked = _payload(await handle_use_tool({
+        "tool_name": "health_check",
+        "arguments": {},
+    }))
+
+    assert "health_check" not in {tool["name"] for tool in listed["tools"]}
+    assert described["success"] is False
+    assert invoked["error_code"] == "TOOL_NOT_FOUND"
+
+
 def test_use_tool_is_directly_advertised_but_hidden_targets_are_not():
     from src.interface_contract import get_public_tool_definitions
 
