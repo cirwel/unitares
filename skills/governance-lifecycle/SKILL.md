@@ -55,7 +55,7 @@ source_digests:
   unitares/src/tool_modes.py: "5049da9bfd3037e9"
   unitares/src/tool_mode_listing.py: "9949074d92d20b22"
   unitares/src/mcp_handlers/introspection/tool_introspection.py: "6b0a7cc8cb796be7"
-  unitares/src/schema_brief.py: "45f4dd23df9559fa"
+  unitares/src/schema_brief.py: "401bbce563c30439"
 ---
 
 # Agent Lifecycle

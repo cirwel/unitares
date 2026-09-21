@@ -48,7 +48,7 @@ source_digests:
   unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/schema_brief.py: "45f4dd23df9559fa"
+  unitares/src/schema_brief.py: "401bbce563c30439"
   unitares/skills/governance-lifecycle/SKILL.md: "4eb1a81007c168b6"
   unitares/skills/governance-fundamentals/SKILL.md: "aff9a780b6957313"
   unitares/skills/knowledge-graph/SKILL.md: "eff53add72cc4e9b"
