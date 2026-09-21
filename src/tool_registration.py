@@ -517,16 +517,18 @@ async def _invoke_mcp_nested_tool(
         # ``use_tool`` itself is not session-injected. An explicit outer CSID
         # is therefore caller input and behaves exactly as if it had appeared
         # on a directly named target.
-        outer_session = outer_arguments.get("client_session_id")
-        if outer_session and not nested.get("client_session_id"):
-            nested["client_session_id"] = outer_session
+        if (
+            "client_session_id" not in nested
+            and "client_session_id" in outer_arguments
+        ):
+            nested["client_session_id"] = outer_arguments.get("client_session_id")
 
         # Reproduce create_typed_wrapper's per-target policy. Targets outside
         # this set resolve the caller-proven MCP session from transport context;
         # copying it into arguments would downgrade it to server_inferred.
         if (
             TOOLS_NEEDING_SESSION_INJECTION.matches(tool_name)
-            and not nested.get("client_session_id")
+            and "client_session_id" not in nested
         ):
             session_id = _session_id_from_ctx(None)
             if session_id:

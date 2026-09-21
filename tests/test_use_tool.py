@@ -87,6 +87,31 @@ async def test_use_tool_preserves_explicit_nested_session(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("session_id", [None, ""])
+async def test_use_tool_preserves_explicit_empty_nested_session(
+    monkeypatch, session_id
+):
+    calls = []
+
+    async def fake_dispatch(name, arguments):
+        calls.append((name, arguments))
+        return [TextContent(type="text", text=json.dumps({"success": True}))]
+
+    monkeypatch.setattr("src.mcp_handlers.dispatch_tool", fake_dispatch)
+    monkeypatch.setattr(
+        "src.services.tool_usage_recorder.record_tool_usage", lambda **_: None
+    )
+
+    await handle_use_tool({
+        "tool_name": "health_check",
+        "arguments": {"client_session_id": session_id},
+        "client_session_id": "outer",
+    })
+
+    assert calls == [("health_check", {"client_session_id": session_id})]
+
+
+@pytest.mark.asyncio
 async def test_use_tool_reenters_mcp_wrapper_for_routing_and_telemetry(monkeypatch):
     dispatch_calls = []
     proxy_calls = []
@@ -210,6 +235,31 @@ async def test_mcp_nested_target_applies_target_specific_session_injection(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("session_id", [None, ""])
+async def test_mcp_nested_target_preserves_explicit_empty_session(
+    monkeypatch, session_id
+):
+    from src import tool_registration
+
+    observed = []
+
+    async def fake_wrapper(**arguments):
+        observed.append((dict(arguments), get_csid_transport_injected()))
+        return {"success": True}
+
+    monkeypatch.setattr(tool_registration, "get_tool_wrapper", lambda _name: fake_wrapper)
+    monkeypatch.setattr(tool_registration, "_session_id_from_ctx", lambda _ctx: "mcp-session")
+
+    await tool_registration._invoke_mcp_nested_tool(
+        "identity",
+        {"client_session_id": session_id},
+        outer_arguments={"client_session_id": "outer"},
+    )
+
+    assert observed == [({"client_session_id": session_id}, False)]
+
+
+@pytest.mark.asyncio
 async def test_rest_nested_target_rebinds_explicit_session_and_restores_outer(monkeypatch):
     from src.http_routes import access
     from src.services import http_tool_service
@@ -277,6 +327,75 @@ async def test_rest_nested_target_rebinds_explicit_session_and_restores_outer(mo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("session_id", [None, ""])
+async def test_rest_nested_target_preserves_explicit_empty_session(
+    monkeypatch, session_id
+):
+    from src.http_routes import access
+    from src.services import http_tool_service
+
+    seen = []
+
+    async def fake_resolve(name, arguments, signals):
+        seen.append((name, dict(arguments), get_context_client_session_id()))
+
+    async def fake_execute(name, arguments):
+        seen.append((name, dict(arguments), get_context_client_session_id()))
+        return {"success": True}
+
+    monkeypatch.setattr(access, "_resolve_http_bound_agent", fake_resolve)
+    monkeypatch.setattr(http_tool_service, "execute_http_tool", fake_execute)
+
+    context_token = set_session_context(
+        session_key="outer", client_session_id="outer", agent_id="outer-agent"
+    )
+    signals_token = set_session_signals(SessionSignals(transport="rest"))
+    csid_token = set_csid_transport_injected(True)
+    try:
+        await http_tool_service.execute_nested_http_tool(
+            "health_check", {"client_session_id": session_id}
+        )
+        assert get_context_client_session_id() == "outer"
+        assert get_context_agent_id() == "outer-agent"
+        assert get_csid_transport_injected() is True
+    finally:
+        reset_csid_transport_injected(csid_token)
+        reset_session_signals(signals_token)
+        reset_session_context(context_token)
+
+    assert seen == [
+        ("health_check", {"client_session_id": session_id}, session_id),
+        ("health_check", {"client_session_id": session_id}, session_id),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rest_nested_target_restores_outer_context_after_exception(monkeypatch):
+    from src.services import http_tool_service
+
+    async def fake_execute(name, arguments):
+        raise RuntimeError("target failed")
+
+    monkeypatch.setattr(http_tool_service, "execute_http_tool", fake_execute)
+
+    context_token = set_session_context(
+        session_key="outer", client_session_id="outer", agent_id="outer-agent"
+    )
+    csid_token = set_csid_transport_injected(True)
+    try:
+        with pytest.raises(RuntimeError, match="target failed"):
+            await http_tool_service.execute_nested_http_tool(
+                "health_check", {"client_session_id": "nested"}
+            )
+        assert get_context_client_session_id() == "outer"
+        assert get_context_agent_id() == "outer-agent"
+        assert get_csid_transport_injected() is True
+    finally:
+        reset_csid_transport_injected(csid_token)
+        reset_session_context(context_token)
+
+
+@pytest.mark.asyncio
 async def test_stdio_gateway_reenters_call_boundary_with_request_side_actor(monkeypatch):
     import src.mcp_handlers as handlers
     from src import mcp_server_std as stdio
@@ -319,6 +438,34 @@ async def test_use_tool_refuses_invalid_targets_and_arguments(arguments, error_c
     payload = _payload(await handle_use_tool(arguments))
     assert payload["success"] is False
     assert payload["error_code"] == error_code
+
+
+@pytest.mark.asyncio
+async def test_use_tool_accepts_late_registered_public_capability(monkeypatch):
+    from src import mcp_handlers
+
+    calls = []
+
+    async def late_handler(arguments):
+        return [TextContent(type="text", text=json.dumps({"success": True}))]
+
+    async def fake_dispatch(name, arguments):
+        calls.append((name, arguments))
+        return await late_handler(arguments)
+
+    monkeypatch.setitem(mcp_handlers.TOOL_HANDLERS, "late_plugin_tool", late_handler)
+    monkeypatch.setattr(mcp_handlers, "dispatch_tool", fake_dispatch)
+    monkeypatch.setattr(
+        "src.services.tool_usage_recorder.record_tool_usage", lambda **_: None
+    )
+
+    result = await handle_use_tool({
+        "tool_name": "late_plugin_tool",
+        "arguments": {"value": 7},
+    })
+
+    assert _payload(result) == {"success": True}
+    assert calls == [("late_plugin_tool", {"value": 7})]
 
 
 def test_use_tool_is_directly_advertised_but_hidden_targets_are_not():

@@ -109,8 +109,12 @@ async def execute_nested_http_tool(
     )
 
     nested = dict(arguments or {})
-    explicit_session = bool(nested.get("client_session_id"))
-    session_id = nested.get("client_session_id") or get_context_client_session_id()
+    explicit_session = "client_session_id" in nested
+    session_id = (
+        nested.get("client_session_id")
+        if explicit_session
+        else get_context_client_session_id()
+    )
     if session_id and not explicit_session:
         nested["client_session_id"] = session_id
 

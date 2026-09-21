@@ -142,6 +142,13 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
 
         _tool_call_history[loop_key].append(now)
 
+    # ``use_tool`` is a transport gateway, not the capability being consumed.
+    # Its nested dispatch re-enters this middleware for the final target, so
+    # charging the gateway here would count every omitted capability twice and
+    # would rate-limit read-only targets that are exempt when named directly.
+    if name == "use_tool":
+        return name, arguments, ctx
+
     # General rate limiting (skip for read-only tools and pre-onboard reads)
     if _READ_ONLY_TOOLS.matches(name, arguments) or _is_pre_onboard_read_call(name, arguments):
         return name, arguments, ctx
