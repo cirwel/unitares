@@ -28,8 +28,13 @@ def _run_setup(
     ),
     tool_status: int = 400,
     tool_body: str = "Missing 'name' field",
-    mcp_status: int = 405,
-    mcp_body: str = "method not allowed",
+    mcp_status: int = 200,
+    mcp_body: str = (
+        'event: message\n'
+        'data: {"jsonrpc":"2.0","id":"unitares-cloud-preflight",'
+        '"result":{"protocolVersion":"2025-03-26","capabilities":{},'
+        '"serverInfo":{"name":"UNITARES","version":"test"}}}'
+    ),
     health_exit: int = 0,
     tool_exit: int = 0,
     mcp_exit: int = 0,
@@ -314,7 +319,7 @@ def test_runtime_preflight_rejects_mcp_host_gate(tmp_path: Path) -> None:
     assert "https://gov.example.test/mcp/" in commands
     assert "external Host (421)" in proc.stdout
     assert "UNITARES_MCP_ALLOWED_HOSTS" in proc.stdout
-    assert "MCP Host/Origin gates accepted" not in proc.stdout
+    assert "MCP initialize succeeded" not in proc.stdout
 
 
 def test_runtime_preflight_rejects_mcp_origin_gate(tmp_path: Path) -> None:
@@ -329,6 +334,21 @@ def test_runtime_preflight_rejects_mcp_origin_gate(tmp_path: Path) -> None:
     assert "Origin: https://gov.example.test" in commands
     assert "rejected Origin https://gov.example.test (403)" in proc.stdout
     assert "UNITARES_MCP_ALLOWED_ORIGINS" in proc.stdout
+
+
+def test_runtime_preflight_rejects_generic_mcp_200(tmp_path: Path) -> None:
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        mcp_status=200,
+        mcp_body="<html>generic proxy page</html>",
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 1
+    assert "without a valid UNITARES MCP" in proc.stdout
+    assert "proxy or WAF may be misrouting" in proc.stdout
+    assert "MCP initialize succeeded" not in proc.stdout
 
 
 def test_runtime_preflight_rejects_loopback_bypass_as_authentication_proof(
