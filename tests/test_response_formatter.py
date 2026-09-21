@@ -30,6 +30,7 @@ from src.mcp_handlers.response_formatter import (
 # Sample response data for testing
 # ============================================================================
 
+
 def _sample_response():
     return {
         "agent_id": "test-agent-123",
@@ -51,17 +52,15 @@ def _sample_response():
             "coherence": 0.92,
             "coherence_source": "legacy_tanh_v",
             "coherence_role": "ode_control_feedback",
-            "risk_score": 0.08,           # smoothed (gating)
-            "latest_risk_score": 0.42,    # raw last observation (spike)
+            "risk_score": 0.08,  # smoothed (gating)
+            "latest_risk_score": 0.42,  # raw last observation (spike)
             "phi": 1.23,
             "verdict": "approve",
             "lambda1": 0.9,
             "health_status": "healthy",
             "health_message": "All good",
         },
-        "trajectory_identity": {
-            "trust_tier": {"name": "established"}
-        },
+        "trajectory_identity": {"trust_tier": {"name": "established"}},
         "history": {"decision_history": []},
         # Context fields that may be stripped
         "eisv_labels": {"E": "energy"},
@@ -103,8 +102,8 @@ def _sample_response():
 # _format_minimal
 # ============================================================================
 
-class TestFormatMinimal:
 
+class TestFormatMinimal:
     def test_basic_fields(self):
         data = _sample_response()
         result = _format_minimal(data, using_default_mode=False, saved_trust_tier=None)
@@ -153,7 +152,9 @@ class TestFormatMinimal:
 
     def test_trust_tier_included(self):
         data = _sample_response()
-        result = _format_minimal(data, using_default_mode=False, saved_trust_tier="established")
+        result = _format_minimal(
+            data, using_default_mode=False, saved_trust_tier="established"
+        )
         assert result["trust_tier"] == "established"
 
     def test_no_trust_tier_when_none(self):
@@ -203,8 +204,8 @@ class TestFormatMinimal:
 # _format_compact
 # ============================================================================
 
-class TestFormatCompact:
 
+class TestFormatCompact:
     def test_basic_structure(self):
         data = _sample_response()
         result = _format_compact(data, using_default_mode=False, saved_trust_tier=None)
@@ -261,7 +262,9 @@ class TestFormatCompact:
     def test_trust_tier_included(self):
         # #428: compact mode wraps trust_tier with meaning + criteria inline.
         data = _sample_response()
-        result = _format_compact(data, using_default_mode=False, saved_trust_tier="established")
+        result = _format_compact(
+            data, using_default_mode=False, saved_trust_tier="established"
+        )
         tt = result["trust_tier"]
         assert isinstance(tt, dict)
         assert tt["name"] == "established"
@@ -330,16 +333,26 @@ class TestFormatCompact:
 # _strip_context
 # ============================================================================
 
-class TestStripContext:
 
+class TestStripContext:
     def test_strips_eisv_labels(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "eisv_labels" not in data
 
     def test_strips_learning_context_for_established(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "learning_context" not in data
         assert "onboarding" not in data
         assert "welcome" not in data
@@ -354,25 +367,51 @@ class TestStripContext:
         onboarding bloat.
         """
         data = _sample_response()
-        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "relevant_discoveries" in data
 
     def test_strips_enrichment_bloat_for_established(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         for key in [
-            "convergence_guidance", "calibration_feedback", "trajectory_identity",
-            "drift_forecast", "saturation_diagnostics", "perturbation",
-            "actionable_feedback", "state", "cirs_void_alert",
-            "cirs_state_announce", "outcome_event", "temporal_context",
-            "identity_reminder", "unitares_v41", "pending_dialectic",
-            "llm_coaching", "recovery_coaching",
+            "convergence_guidance",
+            "calibration_feedback",
+            "trajectory_identity",
+            "drift_forecast",
+            "saturation_diagnostics",
+            "perturbation",
+            "actionable_feedback",
+            "state",
+            "cirs_void_alert",
+            "cirs_state_announce",
+            "outcome_event",
+            "temporal_context",
+            "identity_reminder",
+            "unitares_v41",
+            "pending_dialectic",
+            "llm_coaching",
+            "recovery_coaching",
         ]:
             assert key not in data, f"{key} should be stripped for established agents"
 
     def test_preserves_enrichment_for_new_agent(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=True, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=True,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "learning_context" in data
         assert "onboarding" in data
         assert "convergence_guidance" in data
@@ -385,7 +424,12 @@ class TestStripContext:
         data["_mirror_kg_results"] = [{"summary": "result"}]
         data["_mirror_question"] = "question"
         data["_mirror_reflection"] = "reflect"
-        _strip_context(data, is_new_agent=True, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=True,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "_mirror_signals" not in data
         assert "_mirror_kg_results" not in data
         assert "_mirror_question" not in data
@@ -395,39 +439,74 @@ class TestStripContext:
 
     def test_strips_empty_advisories(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=True, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=True,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "advisories" not in data
 
     def test_preserves_nonempty_advisories(self):
         data = _sample_response()
         data["advisories"] = [{"msg": "important"}]
-        _strip_context(data, is_new_agent=True, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=True,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "advisories" in data
 
     def test_strips_api_key_hint_for_established(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "api_key_hint" not in data
         assert "_onboarding" not in data
 
     def test_preserves_api_key_hint_when_generated(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=False, key_was_generated=True, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=True,
+            api_key_auto_retrieved=False,
+        )
         assert "api_key_hint" in data
 
     def test_preserves_api_key_hint_when_auto_retrieved(self):
         data = _sample_response()
-        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=True)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=False,
+            api_key_auto_retrieved=True,
+        )
         assert "api_key_hint" in data
 
     def test_modifies_in_place(self):
         data = {"eisv_labels": True}
-        _strip_context(data, is_new_agent=True, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=True,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         assert "eisv_labels" not in data
 
     def test_handles_missing_keys_gracefully(self):
         data = {}
-        _strip_context(data, is_new_agent=False, key_was_generated=False, api_key_auto_retrieved=False)
+        _strip_context(
+            data,
+            is_new_agent=False,
+            key_was_generated=False,
+            api_key_auto_retrieved=False,
+        )
         # Should not raise
 
 
@@ -435,8 +514,8 @@ class TestStripContext:
 # format_response routing
 # ============================================================================
 
-class TestFormatResponse:
 
+class TestFormatResponse:
     def test_full_mode_returns_as_is(self):
         data = _sample_response()
         original_keys = set(data.keys())
@@ -508,9 +587,33 @@ class TestFormatResponse:
         result = format_response(data, {"response_mode": "auto"})
         assert result["_mode"] == "compact"
 
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            lambda data: data["decision"].update(margin="critical"),
+            lambda data: data.update(
+                identity_assurance={"tier": "weak", "caller_proven": False}
+            ),
+            lambda data: data.update(
+                enforcement={"requested": True, "requested_action": "pause"}
+            ),
+            lambda data: data.update(
+                recovery_hint="Call self_recovery(action='review')."
+            ),
+            lambda data: data.update(warnings=["Caller action required"]),
+        ),
+    )
+    def test_auto_mode_expands_for_actionable_non_verdict_signals(self, mutation):
+        data = _sample_response()
+        mutation(data)
+        result = format_response(data, {"response_mode": "auto"})
+        assert result["_mode"] == "mirror"
+
     def test_env_var_override(self):
         data = _sample_response()
-        with patch.dict(os.environ, {"UNITARES_PROCESS_UPDATE_RESPONSE_MODE": "compact"}):
+        with patch.dict(
+            os.environ, {"UNITARES_PROCESS_UPDATE_RESPONSE_MODE": "compact"}
+        ):
             result = format_response(data, {})  # No per-call mode
             assert result["_mode"] == "compact"
 
@@ -539,7 +642,9 @@ class TestFormatResponse:
 
     def test_per_call_overrides_env_var(self):
         data = _sample_response()
-        with patch.dict(os.environ, {"UNITARES_PROCESS_UPDATE_RESPONSE_MODE": "compact"}):
+        with patch.dict(
+            os.environ, {"UNITARES_PROCESS_UPDATE_RESPONSE_MODE": "compact"}
+        ):
             result = format_response(data, {"response_mode": "minimal"})
             assert result["_mode"] == "minimal"
 
@@ -597,8 +702,8 @@ class TestFormatResponse:
 # _format_mirror
 # ============================================================================
 
-class TestFormatMirror:
 
+class TestFormatMirror:
     def test_basic_output_shape(self):
         data = _sample_response()
         result = _format_mirror(data, saved_trust_tier=None)
@@ -633,8 +738,9 @@ class TestFormatMirror:
         data["decision"]["nearest_edge"] = "risk"
         data["metrics"]["risk_score"] = 0.72
         result = _format_mirror(data, saved_trust_tier=None)
-        assert not any("steady state" in s.lower() for s in result["mirror"]), \
+        assert not any("steady state" in s.lower() for s in result["mirror"]), (
             "PAUSE verdict must not collapse to the steady-state fallback"
+        )
         signal = next(s for s in result["mirror"] if "PAUSE" in s)
         assert "72%" in signal
         assert "critical" in signal
@@ -645,12 +751,14 @@ class TestFormatMirror:
         data = _sample_response()
         data["_mirror_signals"] = []
         data["relevant_discoveries"] = []
-        data["decision"].update({
-            "action": "proceed",
-            "sub_action": "guide",
-            "margin": "tight",
-            "nearest_edge": "risk",
-        })
+        data["decision"].update(
+            {
+                "action": "proceed",
+                "sub_action": "guide",
+                "margin": "tight",
+                "nearest_edge": "risk",
+            }
+        )
         data["metrics"]["risk_score"] = 0.69
         data["metrics"]["verdict"] = "caution"
         data["policy_evaluation"] = {
@@ -703,13 +811,17 @@ class TestFormatMirror:
         # aggregated across all agents. Previously the string was "Your
         # confidence tends to be inverted ..." which misled fresh agents
         # into thinking they had accumulated history.
-        assert any("fleet" in s.lower() for s in result["mirror"]), \
+        assert any("fleet" in s.lower() for s in result["mirror"]), (
             "INVERTED calibration signal must be labeled fleet-wide"
-        assert not any("accuracy" in s.lower() for s in result["mirror"]), \
+        )
+        assert not any("accuracy" in s.lower() for s in result["mirror"]), (
             "Mirror must not call strategic trajectory-health bins accuracy"
+        )
         assert any("trajectory health" in s.lower() for s in result["mirror"])
 
-    def test_calibration_insight_normal_labels_strategic_bins_as_trajectory_health(self):
+    def test_calibration_insight_normal_labels_strategic_bins_as_trajectory_health(
+        self,
+    ):
         data = _sample_response()
         data["learning_context"] = {
             "calibration": {
@@ -738,8 +850,9 @@ class TestFormatMirror:
         # Same scope concern as the inverted case — the 20 decisions are
         # fleet-wide, not per-agent. Label must match the dashboard, which
         # renders the same singleton under a "Fleet-wide" header.
-        assert "fleet" in signal.lower(), \
+        assert "fleet" in signal.lower(), (
             "Calibration trajectory-health signal must be labeled fleet-wide"
+        )
 
     def test_fleet_calibration_suppressed_when_healthy(self):
         # At steady-high fleet health the line is a constant dashboard stat with
@@ -755,8 +868,9 @@ class TestFormatMirror:
             }
         }
         result = _format_mirror(data, saved_trust_tier=None)
-        assert not any("fleet calibration" in s.lower() for s in result["mirror"]), \
+        assert not any("fleet calibration" in s.lower() for s in result["mirror"]), (
             "Healthy fleet calibration must be suppressed (no non-sequitur dashboard stat)"
+        )
 
     def test_complexity_divergence_signal_is_neutral_not_interrogation(self):
         data = _sample_response()
@@ -769,7 +883,10 @@ class TestFormatMirror:
         }
         result = _format_mirror(data, saved_trust_tier=None)
         # Recorded observation, not a demand to justify "difficulty".
-        assert any("you reported 0.80" in s and "surface estimate" in s for s in result["mirror"])
+        assert any(
+            "you reported 0.80" in s and "surface estimate" in s
+            for s in result["mirror"]
+        )
         assert not any(
             "what's driving" in s.lower() or "sense of difficulty" in s.lower()
             for s in result["mirror"]
@@ -850,7 +967,11 @@ class TestFormatMirror:
     def test_kg_results_surfaced(self):
         data = _sample_response()
         data["_mirror_kg_results"] = [
-            {"summary": "Coherence issue found", "agent_id": "AlvaNoto", "relevance": 0.42}
+            {
+                "summary": "Coherence issue found",
+                "agent_id": "AlvaNoto",
+                "relevance": 0.42,
+            }
         ]
         result = _format_mirror(data, saved_trust_tier=None)
         assert "relevant_prior_work" in result
@@ -981,7 +1102,9 @@ class TestFormatMirror:
 
     def test_identity_notifications_surfaced(self):
         data = _sample_response()
-        data["_identity_notifications"] = [{"message": "Identity accessed from new session"}]
+        data["_identity_notifications"] = [
+            {"message": "Identity accessed from new session"}
+        ]
         result = _format_mirror(data, saved_trust_tier=None)
         assert "identity_notifications" in result
 
@@ -1035,11 +1158,18 @@ class TestFormatMirror:
     def test_existing_discoveries_merged_into_prior_work(self):
         data = _sample_response()
         data["relevant_discoveries"] = [
-            {"summary": "Inverted U curve in calibration", "agent_id": "Alva_Noto", "score": 0.85}
+            {
+                "summary": "Inverted U curve in calibration",
+                "agent_id": "Alva_Noto",
+                "score": 0.85,
+            }
         ]
         result = _format_mirror(data, saved_trust_tier=None)
         assert "relevant_prior_work" in result
-        assert result["relevant_prior_work"][0]["summary"] == "Inverted U curve in calibration"
+        assert (
+            result["relevant_prior_work"][0]["summary"]
+            == "Inverted U curve in calibration"
+        )
 
     def test_calibration_feedback_fallback_when_no_continuity(self):
         """calibration_feedback is used when continuity data is absent."""
@@ -1086,7 +1216,6 @@ class TestFormatMirror:
 
 
 class TestFormatResponseMirror:
-
     def test_explicit_mirror_mode(self):
         data = _sample_response()
         result = format_response(data, {"response_mode": "mirror"})
@@ -1116,12 +1245,19 @@ class TestFormatResponseMirror:
 # Phase 0: mirror_signal.emit instrumentation (mirror-effectiveness-measurement-v0)
 # ============================================================================
 
+
 class TestEmitMirrorSignalRecords:
     """_emit_mirror_signal_records: shadow-emit signal records, tag surfaced."""
 
     def _records(self):
-        return [{"signal_type": "autopilot_complexity", "metric": "complexity_variance",
-                 "value": 0.0, "threshold": 0.005}]
+        return [
+            {
+                "signal_type": "autopilot_complexity",
+                "metric": "complexity_variance",
+                "value": 0.0,
+                "threshold": 0.005,
+            }
+        ]
 
     def test_surfaced_true_under_mirror(self):
         data = _sample_response()
@@ -1184,6 +1320,7 @@ class TestEmitMirrorSignalRecords:
 # Task 2: prediction_id + warnings pass-through (spec §6 + §2)
 # ============================================================================
 
+
 def _policy_enforcement_fields():
     return {
         "policy_evaluation": {
@@ -1209,6 +1346,7 @@ class TestFormatStandardAgentSummary:
     def _call_format_standard(self, response_data):
         """Call _format_standard with the real local modules."""
         from src.mcp_handlers.response_formatter import _format_standard
+
         return _format_standard(response_data, task_type="general")
 
     def test_prediction_id_passes_through(self):
@@ -1329,6 +1467,7 @@ class TestFormatStandardAgentSummary:
 class TestFormatMirrorPreservesPredictionId:
     def test_prediction_id_passes_through(self):
         from src.mcp_handlers.response_formatter import _format_mirror
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
@@ -1339,6 +1478,7 @@ class TestFormatMirrorPreservesPredictionId:
 
     def test_warnings_passes_through(self):
         from src.mcp_handlers.response_formatter import _format_mirror
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
@@ -1349,6 +1489,7 @@ class TestFormatMirrorPreservesPredictionId:
 
     def test_policy_and_enforcement_pass_through(self):
         from src.mcp_handlers.response_formatter import _format_mirror
+
         response_data = {
             "decision": {"action": "pause"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
@@ -1360,6 +1501,7 @@ class TestFormatMirrorPreservesPredictionId:
 
     def test_no_prediction_id_when_absent(self):
         from src.mcp_handlers.response_formatter import _format_mirror
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
@@ -1371,32 +1513,41 @@ class TestFormatMirrorPreservesPredictionId:
 class TestFormatCompactPreservesPredictionId:
     def test_prediction_id_passes_through(self):
         from src.mcp_handlers.response_formatter import _format_compact
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
             "prediction_id": "abc-123",
         }
-        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_compact(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert result.get("prediction_id") == "abc-123"
 
     def test_warnings_passes_through(self):
         from src.mcp_handlers.response_formatter import _format_compact
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
             "warnings": ["compact-warning"],
         }
-        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_compact(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert result.get("warnings") == ["compact-warning"]
 
     def test_policy_and_enforcement_are_summarized(self):
         from src.mcp_handlers.response_formatter import _format_compact
+
         response_data = {
             "decision": {"action": "pause"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
             **_policy_enforcement_fields(),
         }
-        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_compact(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert result["policy_evaluation"]["policy_name"] == "monitor_decision"
         assert result["policy_evaluation"]["action"] == "pause"
         assert result["policy_evaluation"]["_detail_level"] == "summary"
@@ -1407,6 +1558,7 @@ class TestFormatCompactPreservesPredictionId:
 
     def test_routine_policy_and_advisory_enforcement_are_omitted(self):
         from src.mcp_handlers.response_formatter import _format_compact
+
         response_data = {
             "decision": {"action": "proceed", "sub_action": "approve"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
@@ -1437,11 +1589,14 @@ class TestFormatCompactPreservesPredictionId:
 
     def test_no_prediction_id_when_absent(self):
         from src.mcp_handlers.response_formatter import _format_compact
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
         }
-        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_compact(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert "prediction_id" not in result
 
     def test_gate_diagnostics_are_bounded_without_mutating_source(self):
@@ -1449,6 +1604,7 @@ class TestFormatCompactPreservesPredictionId:
         # keeps the actionable maturity facts once and omits the duplicated
         # enforcement gate instead of serializing either full audit record.
         from src.mcp_handlers.response_formatter import _format_compact
+
         gate = {
             "schema": "eisv.cold-start-confirmation.v1",
             "outcome": "ineligible",
@@ -1456,7 +1612,11 @@ class TestFormatCompactPreservesPredictionId:
             "note": "x" * 5_000,
             "original_decision": {"reason": "x" * 5_000},
         }
-        epistemic = {"schema": "x.v1", "epistemic_class": "agent_report", "note": "x" * 5_000}
+        epistemic = {
+            "schema": "x.v1",
+            "epistemic_class": "agent_report",
+            "note": "x" * 5_000,
+        }
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
@@ -1478,7 +1638,9 @@ class TestFormatCompactPreservesPredictionId:
                 "epistemic_gate": epistemic,
             },
         }
-        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_compact(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert result["policy_evaluation"]["maturity_gate"] == {
             "schema": "eisv.cold-start-confirmation.v1",
             "measurement_phase": "cold_start",
@@ -1496,10 +1658,13 @@ class TestFormatCompactPreservesPredictionId:
         assert len(str(result)) < 3_000
         # Copy-on-read: the persisted source still carries the full audit gate.
         assert response_data["enforcement"]["maturity_gate"] == gate
-        assert response_data["policy_evaluation"]["maturity_gate"]["note"] == "x" * 5_000
+        assert (
+            response_data["policy_evaluation"]["maturity_gate"]["note"] == "x" * 5_000
+        )
 
     def test_enforcement_gate_is_omitted_even_when_it_differs(self):
         from src.mcp_handlers.response_formatter import _format_compact
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
@@ -1512,7 +1677,9 @@ class TestFormatCompactPreservesPredictionId:
                 "maturity_gate": {"outcome": "shadow_confirmed"},
             },
         }
-        result = _format_compact(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_compact(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert result["policy_evaluation"]["maturity_gate"] == {"outcome": "ineligible"}
         assert "maturity_gate" not in result["enforcement"]
         assert "response_mode='full'" in result["enforcement"]["_full_available"]
@@ -1556,12 +1723,15 @@ class TestFormatMinimalStripsPredictionIdButPreservesWarnings:
         # Spec §6: minimal mode is bandwidth-constrained; prediction_id is a correlation
         # handle with no correctness value, so it is stripped intentionally.
         from src.mcp_handlers.response_formatter import _format_minimal
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
             "prediction_id": "abc-123",
         }
-        result = _format_minimal(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_minimal(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert "prediction_id" not in result
 
     def test_minimal_preserves_warnings(self):
@@ -1569,21 +1739,27 @@ class TestFormatMinimalStripsPredictionIdButPreservesWarnings:
         # Dropping them in minimal mode silently hides pipeline failures from bandwidth-
         # constrained clients — so warnings must survive regardless of verbosity mode.
         from src.mcp_handlers.response_formatter import _format_minimal
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
             "warnings": ["evidence record failed for tool=pytest"],
         }
-        result = _format_minimal(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_minimal(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert result.get("warnings") == ["evidence record failed for tool=pytest"]
 
     def test_minimal_no_warnings_key_when_absent(self):
         from src.mcp_handlers.response_formatter import _format_minimal
+
         response_data = {
             "decision": {"action": "proceed"},
             "metrics": {"E": 0.5, "I": 0.5, "S": 0.3, "V": 0.0, "phi": 0.7},
         }
-        result = _format_minimal(response_data, using_default_mode=False, saved_trust_tier=None)
+        result = _format_minimal(
+            response_data, using_default_mode=False, saved_trust_tier=None
+        )
         assert "warnings" not in result
 
 
@@ -1591,7 +1767,10 @@ class TestUpdateResponseServiceMergesWarnings:
     def test_ctx_warnings_appear_in_response_data(self):
         # build_process_update_response_data should merge ctx.warnings (de-duped)
         # into response_data["warnings"].
-        from src.services.update_response_service import build_process_update_response_data
+        from src.services.update_response_service import (
+            build_process_update_response_data,
+        )
+
         result = build_process_update_response_data(
             result={},
             agent_id="test-agent",
@@ -1602,7 +1781,10 @@ class TestUpdateResponseServiceMergesWarnings:
         assert sorted(result.get("warnings", [])) == ["w1", "w2"]
 
     def test_no_warnings_key_when_ctx_warnings_empty(self):
-        from src.services.update_response_service import build_process_update_response_data
+        from src.services.update_response_service import (
+            build_process_update_response_data,
+        )
+
         result = build_process_update_response_data(
             result={},
             agent_id="test-agent",
@@ -1613,7 +1795,10 @@ class TestUpdateResponseServiceMergesWarnings:
         assert "warnings" not in result
 
     def test_no_warnings_key_when_ctx_warnings_not_provided(self):
-        from src.services.update_response_service import build_process_update_response_data
+        from src.services.update_response_service import (
+            build_process_update_response_data,
+        )
+
         result = build_process_update_response_data(
             result={},
             agent_id="test-agent",
@@ -1623,7 +1808,10 @@ class TestUpdateResponseServiceMergesWarnings:
         assert "warnings" not in result
 
     def test_warnings_order_preserved_after_dedup(self):
-        from src.services.update_response_service import build_process_update_response_data
+        from src.services.update_response_service import (
+            build_process_update_response_data,
+        )
+
         result = build_process_update_response_data(
             result={},
             agent_id="test-agent",

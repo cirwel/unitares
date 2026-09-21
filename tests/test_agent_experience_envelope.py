@@ -57,9 +57,14 @@ def test_experience_flag_inventory():
     already sets the precedent.
     """
     expected = {
-        "start_session", "sync_state", "check_working_state",
-        "search_shared_memory", "store_finding", "update_finding",
-        "record_result", "request_review",
+        "start_session",
+        "sync_state",
+        "check_working_state",
+        "search_shared_memory",
+        "store_finding",
+        "update_finding",
+        "record_result",
+        "request_review",
     }
     from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 
@@ -68,8 +73,16 @@ def test_experience_flag_inventory():
 
 
 def test_canonical_names_are_not_experience_aliases():
-    for name in ("onboard", "process_agent_update", "get_governance_metrics",
-                 "knowledge", "outcome_event", "dialectic", "status", "checkin"):
+    for name in (
+        "onboard",
+        "process_agent_update",
+        "get_governance_metrics",
+        "knowledge",
+        "outcome_event",
+        "dialectic",
+        "status",
+        "checkin",
+    ):
         assert not is_experience_alias(name), name
 
 
@@ -81,9 +94,7 @@ def test_canonical_names_are_not_experience_aliases():
 @pytest.mark.asyncio
 async def test_canonical_invocation_passes_through_byte_identical():
     raw = _result({"success": True, "agent_uuid": "u-1"})
-    out = await apply_experience_envelope(
-        "onboard", {}, _ctx("onboard"), raw
-    )
+    out = await apply_experience_envelope("onboard", {}, _ctx("onboard"), raw)
     assert out is raw  # same object, not just equal
 
 
@@ -101,9 +112,7 @@ async def test_legacy_alias_passes_through():
 @pytest.mark.asyncio
 async def test_experience_alias_gets_envelope():
     raw = _result({"success": True, "agent_uuid": "u-1", "client_session_id": "s-1"})
-    out = await apply_experience_envelope(
-        "onboard", {}, _ctx("start_session"), raw
-    )
+    out = await apply_experience_envelope("onboard", {}, _ctx("start_session"), raw)
     data = _parse(out)
     assert data["tool"] == "start_session"
     assert data["agent_uuid"] == "u-1"
@@ -116,9 +125,11 @@ async def test_experience_alias_gets_envelope():
 async def test_error_payload_passes_through():
     """Error responses keep the raw contract (typed refusals, recovery
     blocks) - the envelope only reshapes successes."""
-    for payload in ({"success": False, "error": "nope"},
-                    {"error": "boom"},
-                    {"success": False, "status": "identity_required"}):
+    for payload in (
+        {"success": False, "error": "nope"},
+        {"error": "boom"},
+        {"success": False, "status": "identity_required"},
+    ):
         raw = _result(payload)
         out = await apply_experience_envelope(
             "outcome_event", {}, _ctx("record_result"), raw
@@ -184,7 +195,14 @@ async def test_a_refusal_names_the_tool_the_caller_invoked():
     d = json.loads(out[0].text)
     assert d["tool"] == "sync_state"
     # Nothing else may be reshaped on the way through.
-    for field in ("status", "hint", "next_step", "safe_options", "do_not", "rollout_flag"):
+    for field in (
+        "status",
+        "hint",
+        "next_step",
+        "safe_options",
+        "do_not",
+        "rollout_flag",
+    ):
         assert field in d, field
 
 
@@ -213,9 +231,7 @@ async def test_every_refusal_status_passes_through():
         raw = success_response(
             strict_identity_refusal_payload("onboard", status=status)
         )
-        out = await apply_experience_envelope(
-            "onboard", {}, _ctx("start_session"), raw
-        )
+        out = await apply_experience_envelope("onboard", {}, _ctx("start_session"), raw)
         d = json.loads(out[0].text)
         assert d["status"] == status
         assert d["rollout_flag"] == "STRICT_IDENTITY_REQUIRED", status
@@ -239,12 +255,13 @@ async def test_an_ordinary_success_is_still_enveloped():
 
 @pytest.mark.asyncio
 async def test_malformed_result_passes_through():
-    for raw in ([TextContent(type="text", text="not json")],
-                [TextContent(type="text", text="[1, 2]")],
-                [], None):
-        out = await apply_experience_envelope(
-            "onboard", {}, _ctx("start_session"), raw
-        )
+    for raw in (
+        [TextContent(type="text", text="not json")],
+        [TextContent(type="text", text="[1, 2]")],
+        [],
+        None,
+    ):
+        out = await apply_experience_envelope("onboard", {}, _ctx("start_session"), raw)
         assert out is raw
 
 
@@ -258,9 +275,7 @@ async def test_builder_failure_returns_raw(monkeypatch):
 
     monkeypatch.setattr(es, "build_experience_envelope", _boom)
     raw = _result({"success": True})
-    out = await apply_experience_envelope(
-        "onboard", {}, _ctx("start_session"), raw
-    )
+    out = await apply_experience_envelope("onboard", {}, _ctx("start_session"), raw)
     assert out is raw
 
 
@@ -420,7 +435,11 @@ def test_every_recovery_hint_names_a_callable_tool():
         "severe": ({"verdict": {"value": "pause"}}, 0.75),
         "risky": ({"verdict": {"value": "proceed"}}, 0.55),
         "margin_near_edge": (
-            {"verdict": {"value": "guide"}, "margin": "tight", "decision": {"action": "proceed"}},
+            {
+                "verdict": {"value": "guide"},
+                "margin": "tight",
+                "decision": {"action": "proceed"},
+            },
             0.10,
         ),
         "advisory_verdict": (
@@ -573,16 +592,7 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
     assert "cold-start prior" in env["verdict_caveat"]
     assert "metrics.verdict.evidence" in env["verdict_caveat"]
     assert env["state_summary"]["verdict_provisional"] is True
-    assert env["legacy_diagnostics"] == {
-        "source": "legacy_tanh_v",
-        "role": "ode_control_feedback",
-        "health_evidence": False,
-        "interpretation": (
-            "Compatibility ODE controller feedback; diagnostic context, "
-            "not a behavioral health score."
-        ),
-        "coherence": 0.49,
-    }
+    assert "legacy_diagnostics" not in env
     # state_summary.coherence carries the same "not health-rated" badge inline
     # (matching check_working_state's lite presentation of the same legacy
     # field) instead of a bare float a reader has to cross-reference against
@@ -755,7 +765,9 @@ def test_metrics_envelope_maps_existing_friendly_fields():
         "V": 0.0,
         "risk_score": 0.1,
     }
-    env = build_experience_envelope("check_working_state", "get_governance_metrics", payload)
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload
+    )
     assert env["next_action"]["tool"] == "sync_state"
     assert "sync_state(" in env["next_action"]["example"]
     assert "check_working_state" in env["next_action"]["note"]
@@ -785,7 +797,9 @@ def test_metrics_envelope_translates_state_summary_coaching():
         "status": "uninitialized",
         "E": 0.5,
     }
-    env = build_experience_envelope("check_working_state", "get_governance_metrics", payload)
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload
+    )
     assert "sync_state" in env["state_summary"]["next_action"]
     assert "process_agent_update" not in env["state_summary"]["next_action"]
     assert env["state_summary"]["E"] == 0.5
@@ -808,19 +822,21 @@ def test_metrics_envelope_full_escape_hatch_preserves_raw_payload():
 def test_search_envelope_counts_and_suggests():
     payload = {
         "success": True,
-        "results": [{
-            "id": "d1",
-            "summary": "prior art",
-            "type": "observation",
-            "status": "open",
-            "severity": "medium",
-            "tags": ["response-ux"],
-            "created_at": "2026-08-22T00:00:00+00:00",
-            "updated_at": "2026-08-23T00:00:00+00:00",
-            "has_details": True,
-            "details_preview": "Bounded preview",
-            "has_more_details": True,
-        }],
+        "results": [
+            {
+                "id": "d1",
+                "summary": "prior art",
+                "type": "observation",
+                "status": "open",
+                "severity": "medium",
+                "tags": ["response-ux"],
+                "created_at": "2026-08-22T00:00:00+00:00",
+                "updated_at": "2026-08-23T00:00:00+00:00",
+                "has_details": True,
+                "details_preview": "Bounded preview",
+                "has_more_details": True,
+            }
+        ],
         "total_count": 1,
         "discovery_retrieval_options": {
             "current_tier": "digest",
@@ -894,12 +910,14 @@ def test_compact_search_does_not_claim_details_it_omits():
 def test_compact_search_suppresses_details_before_serialization():
     payload = {
         "success": True,
-        "results": [{
-            "id": "d1",
-            "summary": "prior art",
-            "details_preview": "bounded preview",
-            "has_details": True,
-        }],
+        "results": [
+            {
+                "id": "d1",
+                "summary": "prior art",
+                "details_preview": "bounded preview",
+                "has_details": True,
+            }
+        ],
         "total_count": 1,
         "discovery_retrieval_options": {
             "current_tier": "digest",
@@ -947,6 +965,108 @@ def test_full_sync_state_reports_large_response_and_reduction_mode():
 
     assert env["_response_size"]["size_class"] in {"medium", "large"}
     assert "response_mode='compact'" in env["_response_size"]["reduce_with"]
+
+
+def test_routine_sync_state_omits_duplicate_raw_payload_and_stays_bounded():
+    source = {
+        "success": True,
+        "status": "healthy",
+        "health_status": "healthy",
+        "decision": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "reason": "Low risk (25.3%) - healthy operating range",
+            "margin": "settling",
+            "nearest_edge": None,
+        },
+        "metrics": {
+            "E": 0.72,
+            "I": 0.79,
+            "S": 0.21,
+            "V": -0.02,
+            "coherence": 0.49,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+            "risk_score": 0.25,
+            "risk_score_latest": 0.25,
+            "phi": 0.17,
+            "verdict": {
+                "value": "safe",
+                "meaning": "Behavioral assessment: low risk. Provisional.",
+                "evidence": {
+                    "grade": "provisional",
+                    "basis": "ode_fallback",
+                },
+            },
+            "health_status": "healthy",
+        },
+        "policy_evaluation": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "guidance": "45% margin to PAUSE threshold",
+            "inputs": {"verdict": "safe", "risk_score": 0.25},
+        },
+    }
+
+    formatted = format_response(deepcopy(source), {"response_mode": "auto"})
+    assert formatted["_mode"] == "compact"
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": "auto"},
+    )
+
+    assert "raw_governance" not in env
+    assert env["raw_governance_available"] is True
+    assert "response_options" not in env
+    assert "legacy_diagnostics" not in env
+    assert "_response_size" not in env
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 2_500
+
+
+def test_actionable_auto_sync_state_is_bounded_but_self_sufficient():
+    source = {
+        "success": True,
+        "status": "critical",
+        "health_status": "critical",
+        "decision": {
+            "action": "pause",
+            "sub_action": "reject",
+            "reason": "Risk crossed the pause threshold.",
+            "margin": "critical",
+            "nearest_edge": "risk_pause",
+            "require_human": True,
+        },
+        "metrics": {
+            "coherence": 0.31,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+            "risk_score": 0.82,
+            "risk_score_latest": 0.88,
+            "verdict": "high-risk",
+            "health_status": "critical",
+        },
+        "recovery_hint": "Call self_recovery(action='review', reflection='...').",
+    }
+
+    formatted = format_response(deepcopy(source), {"response_mode": "auto"})
+    assert formatted["_mode"] == "mirror"
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": "auto"},
+    )
+
+    assert "raw_governance" not in env
+    assert env["action_summary"]["action"] == "pause"
+    assert env["state_summary"]["nearest_edge"] == "risk_pause"
+    assert "stop this line of work" in env["next_action"]
+    assert "self_recovery(action='review'" in env["recovery_hint"]
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 4_000
 
 
 @pytest.mark.parametrize(
@@ -1029,7 +1149,8 @@ def test_agent_summary_modes_stay_small_with_large_audit_gates(
 
     wire_bytes = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
     assert wire_bytes < wire_limit
-    assert env["_response_size"]["size_class"] in {"small", "medium"}
+    assert "raw_governance" not in env
+    assert env["raw_governance_available"] is True
     assert "policy_evaluation" not in formatted
     assert "enforcement" not in formatted
     assert "response_mode='full'" in formatted["_raw_available"]
@@ -1070,6 +1191,57 @@ def test_search_envelope_compact_mode_keeps_memory_suggestions():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
+def test_search_lean_projection_bounds_historical_summaries_and_total_wire():
+    payload = {
+        "success": True,
+        "count": 5,
+        "discoveries": [
+            {
+                "id": f"d{i}",
+                "summary": ("qualification-preserving context 🌱 " * 180)
+                + "under cold-start conditions only",
+                "type": "experiment",
+                "status": "open",
+                "tags": [f"tag-{n}" for n in range(9)],
+                "similarity": 0.9 - (i * 0.01),
+                "rrf_score": 0.7,
+                "fusion_score": 0.8,
+                "details_preview": "bounded detail preview",
+                "has_details": True,
+            }
+            for i in range(5)
+        ],
+        "discovery_retrieval_options": {
+            "current_tier": "digest",
+            "open_one": "knowledge(action='details', discovery_id='...')",
+            "all_inline": "include_details=true",
+        },
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory",
+        "knowledge",
+        payload,
+        {"response_mode": "lean"},
+    )
+
+    suggestions = env["memory_suggestions"]
+    assert len(suggestions) <= 3
+    assert env["state_summary"]["result_set_truncated"] is True
+    first = suggestions[0]
+    assert first["preview_truncated"] is True
+    assert len(first["summary"]) <= 240
+    assert first["tags"] == [f"tag-{n}" for n in range(5)]
+    assert first["tags_truncated"] is True
+    assert first["relevance"] == pytest.approx(0.8)
+    assert first["relevance_basis"] == "fusion"
+    assert "rrf_score" not in first
+    assert "fusion_score" not in first
+    assert "similarity" not in first
+    assert "_response_size" not in env
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+
+
 def test_metrics_envelope_full_mode_keeps_memory_suggestions():
     """Knowledge-search dedup does not suppress an explicit check-in recall
     opt-in, even when the check-in also requests the full governance payload."""
@@ -1105,7 +1277,10 @@ def test_search_envelope_promotes_low_confidence():
     assert env["low_confidence"] is True
     assert env["confidence_note"] == "Semantic-only matches; verify before use."
     assert env["state_summary"]["low_confidence"] is True
-    assert env["state_summary"]["confidence_note"] == "Semantic-only matches; verify before use."
+    assert (
+        env["state_summary"]["confidence_note"]
+        == "Semantic-only matches; verify before use."
+    )
     assert env["memory_suggestions"][0]["summary"] == "semantic lead"
 
 
@@ -1248,8 +1423,7 @@ def test_request_review_envelope_preserves_saved_brief_next_call():
         "phase": "thesis",
         "whose_move": "YOURS — your thesis is owed; the saved brief can be reused",
         "next_call": (
-            "dialectic(action='thesis', session_id='sess-42', "
-            "use_brief_as_thesis=true)"
+            "dialectic(action='thesis', session_id='sess-42', use_brief_as_thesis=true)"
         ),
     }
     env = build_experience_envelope("request_review", "dialectic", payload)
@@ -1526,7 +1700,9 @@ def test_record_result_envelope_reports_a_registry_binding_plainly():
     assert env["next_action"].startswith("Outcome recorded - continue")
 
 
-@pytest.mark.parametrize("risk,band", [(0.44, "low"), (0.46, "elevated"), (0.71, "high")])
+@pytest.mark.parametrize(
+    "risk,band", [(0.44, "low"), (0.46, "elevated"), (0.71, "high")]
+)
 def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
     envelope = build_experience_envelope(
         "check_working_state", "get_governance_metrics", {"risk_score": risk}

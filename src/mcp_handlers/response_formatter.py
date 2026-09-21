@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from src.logging_utils import get_logger
 from src.monitor_result import DIVERGENCE_LINE_THRESHOLD
+
 logger = get_logger(__name__)
 
 # Margin enum values worth surfacing in mirror mode. `compute_margin`
@@ -31,7 +32,9 @@ _STEADY_VERDICTS = frozenset({"proceed", "continue", "safe"})
 _ACTION_VERDICTS = frozenset({"pause", "reject"})
 _ACTIONABLE_POLICY_VERDICTS = frozenset({"caution", "high-risk"})
 _KNOWN_POLICY_VERDICTS = _STEADY_VERDICTS | _ACTIONABLE_POLICY_VERDICTS
-_SUPPORTED_RESPONSE_MODES = frozenset({"compact", "full", "mirror", "minimal", "standard"})
+_SUPPORTED_RESPONSE_MODES = frozenset(
+    {"compact", "full", "mirror", "minimal", "standard"}
+)
 _COMPACT_TEXT_LIMIT = 240
 _RESPONSE_MODE_ALIASES = {
     "lite": "compact",
@@ -39,6 +42,7 @@ _RESPONSE_MODE_ALIASES = {
     "interpreted": "standard",
 }
 _ACTIONABLE_HEALTH_STATUSES = frozenset({"at_risk", "critical"})
+_ACTIONABLE_IDENTITY_TIERS = frozenset({"weak", "degraded", "refused"})
 
 
 def normalize_discovery_list(value: Any) -> list:
@@ -68,7 +72,9 @@ def _policy_inputs(response_data: dict) -> dict:
     return inputs if isinstance(inputs, dict) else {}
 
 
-def _agent_facing_verdict_raw(response_data: dict, decision: dict, metrics: dict) -> str:
+def _agent_facing_verdict_raw(
+    response_data: dict, decision: dict, metrics: dict
+) -> str:
     """Choose the verdict vocabulary for agent-facing summary surfaces.
 
     `decision.action` answers "may the agent continue?" while
@@ -222,7 +228,9 @@ def _compact_policy_evaluation(value: Any) -> Optional[dict]:
         result["suppression"] = suppression
 
     result["_detail_level"] = "summary"
-    result["_full_available"] = "Use response_mode='full' for complete policy diagnostics."
+    result["_full_available"] = (
+        "Use response_mode='full' for complete policy diagnostics."
+    )
     return result
 
 
@@ -247,7 +255,9 @@ def _compact_enforcement(value: Any) -> Optional[dict]:
         ),
     )
     result["_detail_level"] = "summary"
-    result["_full_available"] = "Use response_mode='full' for complete enforcement diagnostics."
+    result["_full_available"] = (
+        "Use response_mode='full' for complete enforcement diagnostics."
+    )
     return result
 
 
@@ -311,8 +321,16 @@ def _auto_response_mode(response_data: dict) -> str:
     payloads that are already actionable: pause/reject, guide/caution/high-risk,
     or an explicitly at-risk/critical health status.
     """
-    metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
-    decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
+    metrics = (
+        response_data.get("metrics", {})
+        if isinstance(response_data.get("metrics"), dict)
+        else {}
+    )
+    decision = (
+        response_data.get("decision", {})
+        if isinstance(response_data.get("decision"), dict)
+        else {}
+    )
     health_status = (
         response_data.get("health_status")
         or metrics.get("health_status")
@@ -325,6 +343,32 @@ def _auto_response_mode(response_data: dict) -> str:
     policy_inputs = _policy_inputs(response_data)
     policy_verdict = policy_inputs.get("verdict")
     metrics_verdict = metrics.get("verdict")
+    if isinstance(policy_verdict, dict):
+        policy_verdict = (
+            policy_verdict.get("value")
+            or policy_verdict.get("verdict")
+            or policy_verdict.get("action")
+        )
+    if isinstance(metrics_verdict, dict):
+        metrics_verdict = (
+            metrics_verdict.get("value")
+            or metrics_verdict.get("verdict")
+            or metrics_verdict.get("action")
+        )
+    margin = decision.get("margin") or policy_inputs.get("margin")
+    identity_assurance = response_data.get("identity_assurance")
+    identity_assurance = (
+        identity_assurance if isinstance(identity_assurance, dict) else {}
+    )
+    identity_tier = str(identity_assurance.get("tier") or "").lower()
+    identity_degraded = bool(
+        identity_tier in _ACTIONABLE_IDENTITY_TIERS
+        or identity_assurance.get("caller_proven") is False
+    )
+    warnings = response_data.get("warnings")
+    warnings_present = (
+        bool(warnings) if isinstance(warnings, (list, tuple, dict, str)) else False
+    )
 
     if (
         health_status in _ACTIONABLE_HEALTH_STATUSES
@@ -333,6 +377,12 @@ def _auto_response_mode(response_data: dict) -> str:
         or metrics_verdict in _ACTIONABLE_POLICY_VERDICTS
         or policy.get("sub_action") == "guide"
         or decision.get("sub_action") == "guide"
+        or decision.get("require_human") is True
+        or margin in {"warning", "critical"}
+        or identity_degraded
+        or _compact_enforcement_is_actionable(response_data.get("enforcement"))
+        or bool(response_data.get("recovery_hint"))
+        or warnings_present
     ):
         return "mirror"
     return "compact"
@@ -345,7 +395,9 @@ def _resolve_response_mode(raw_mode: Any, response_data: dict) -> str:
         return _auto_response_mode(response_data)
     if mode in _SUPPORTED_RESPONSE_MODES:
         return mode
-    logger.debug("Unknown process_agent_update response_mode=%r; using compact", raw_mode)
+    logger.debug(
+        "Unknown process_agent_update response_mode=%r; using compact", raw_mode
+    )
     return "compact"
 
 
@@ -366,10 +418,15 @@ def _emit_mirror_signal_records(
     records = response_data.pop("_mirror_signal_records", None)
     if not records:
         return
-    if os.getenv("UNITARES_MIRROR_SIGNAL_EMIT", "1").strip().lower() in ("0", "false", "no"):
+    if os.getenv("UNITARES_MIRROR_SIGNAL_EMIT", "1").strip().lower() in (
+        "0",
+        "false",
+        "no",
+    ):
         return
     try:
         from src.audit_log import get_audit_log
+
         get_audit_log().log_mirror_signal_emit(
             agent_id=response_data.get("agent_id"),
             session_id=session_id,
@@ -426,7 +483,7 @@ def format_response(
     """
     # Check agent preferences
     agent_verbosity_pref = None
-    if meta and hasattr(meta, 'preferences') and meta.preferences:
+    if meta and hasattr(meta, "preferences") and meta.preferences:
         agent_verbosity_pref = meta.preferences.get("verbosity")
 
     # Preserve trust_tier across filtering. Save the full upstream dict (not
@@ -444,9 +501,9 @@ def format_response(
 
     # Priority: per-call > agent pref > env var > auto
     raw_response_mode = (
-        arguments.get("response_mode") or
-        agent_verbosity_pref or
-        os.getenv("UNITARES_PROCESS_UPDATE_RESPONSE_MODE", "auto")
+        arguments.get("response_mode")
+        or agent_verbosity_pref
+        or os.getenv("UNITARES_PROCESS_UPDATE_RESPONSE_MODE", "auto")
     )
     response_mode = _resolve_response_mode(raw_response_mode, response_data)
 
@@ -486,21 +543,28 @@ def format_response(
 
     # MINIMAL MODE: Bare essentials
     elif response_mode == "minimal":
-        response_data = _format_minimal(response_data, using_default_mode, saved_trust_tier)
+        response_data = _format_minimal(
+            response_data, using_default_mode, saved_trust_tier
+        )
 
     # COMPACT MODE: Brief metrics + decision
     elif response_mode == "compact":
-        response_data = _format_compact(response_data, using_default_mode, saved_trust_tier)
+        response_data = _format_compact(
+            response_data, using_default_mode, saved_trust_tier
+        )
 
     # Filtered check-in responses still expose bare E/I/S/V values. Keep one
     # compact in-band contract so schema-only clients can interpret every
     # dimension without paying for the full eisv_labels object.
     from src.governance_glossary import EISV_INLINE_SUMMARY
+
     response_data["eisv_contract"] = EISV_INLINE_SUMMARY
 
     # Strip optional context for minimal/compact/mirror (reduce noise for established agents)
     if response_mode in ("minimal", "compact", "mirror"):
-        _strip_context(response_data, is_new_agent, key_was_generated, api_key_auto_retrieved)
+        _strip_context(
+            response_data, is_new_agent, key_was_generated, api_key_auto_retrieved
+        )
 
     # Re-attach the review nudge (#1685): the mode builders return fresh dicts,
     # so the key promoted above does not survive them on its own.
@@ -509,13 +573,24 @@ def format_response(
 
     return response_data
 
-def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any = None) -> dict:
+
+def _format_standard(
+    response_data: dict, task_type: str, saved_trust_tier: Any = None
+) -> dict:
     """Build a bounded interpreted summary for agents."""
     from src.governance_state import GovernanceState
     from governance_core import State, Theta, DEFAULT_THETA
 
-    metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
-    decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
+    metrics = (
+        response_data.get("metrics", {})
+        if isinstance(response_data.get("metrics"), dict)
+        else {}
+    )
+    decision = (
+        response_data.get("decision", {})
+        if isinstance(response_data.get("decision"), dict)
+        else {}
+    )
 
     E = float(metrics.get("E", 0.7))
     I = float(metrics.get("I", 0.8))
@@ -528,7 +603,9 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
     temp_state.unitaires_state = State(E=E, I=I, S=S, V=V)
     temp_state.unitaires_theta = Theta(C1=DEFAULT_THETA.C1, eta1=DEFAULT_THETA.eta1)
     temp_state.coherence = coherence
-    temp_state.decision_history = response_data.get("history", {}).get("decision_history", [])
+    temp_state.decision_history = response_data.get("history", {}).get(
+        "decision_history", []
+    )
 
     interpreted = temp_state.interpret_state(risk_score=risk_score, task_type=task_type)
     from src.governance_glossary import (
@@ -570,8 +647,12 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         "nearest_edge": decision.get("nearest_edge"),
         "state": interpreted,
         "metrics": {
-            "E": E, "I": I, "S": S, "V": V,
-            "coherence": coherence, "risk_score": risk_score,
+            "E": E,
+            "I": I,
+            "S": S,
+            "V": V,
+            "coherence": coherence,
+            "risk_score": risk_score,
             "risk_score_latest": metrics.get("latest_risk_score"),
             "phi": metrics.get("phi"),
             "coherence_source": metrics.get("coherence_source"),
@@ -601,6 +682,7 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         result["state_glossary"] = state_glossary
     if saved_trust_tier:
         from src.governance_glossary import explain_trust_tier
+
         result["trust_tier"] = explain_trust_tier(saved_trust_tier)
     if "input_glossary" in response_data:
         result["input_glossary"] = response_data["input_glossary"]
@@ -640,17 +722,31 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         result["enforcement"] = enforcement_summary
     return result
 
-def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None) -> dict:
+
+def _format_mirror(
+    response_data: dict, saved_trust_tier: Any, meta: Any = None
+) -> dict:
     """Build mirror response: a lens on the full data, not a filter that hides it."""
-    decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
-    metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
+    decision = (
+        response_data.get("decision", {})
+        if isinstance(response_data.get("decision"), dict)
+        else {}
+    )
+    metrics = (
+        response_data.get("metrics", {})
+        if isinstance(response_data.get("metrics"), dict)
+        else {}
+    )
 
     # #428: wrap the verdict with meaning + next_action at the response
     # surface. Internal consumers read decision["action"] / metrics["verdict"]
     # as bare strings; only the agent-facing payload key is wrapped.
     from src.governance_glossary import explain_verdict
+
     verdict_raw = _agent_facing_verdict_raw(response_data, decision, metrics)
-    verdict = explain_verdict(verdict_raw, evidence_source=metrics.get("primary_eisv_source"))
+    verdict = explain_verdict(
+        verdict_raw, evidence_source=metrics.get("primary_eisv_source")
+    )
 
     # Collect mirror signals from enrichment-produced data
     mirror_signals = list(response_data.get("_mirror_signals", []))
@@ -681,7 +777,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                     "(high conf -> lower trajectory health across the fleet)",
                 )
             elif cal.get("total_decisions", 0) >= 10:
-                trajectory_health = cal.get("trajectory_health", cal.get("overall_accuracy", 0))
+                trajectory_health = cal.get(
+                    "trajectory_health", cal.get("overall_accuracy", 0)
+                )
                 high_conf_health = cal.get(
                     "high_confidence_trajectory_health",
                     cal.get("high_confidence_accuracy", "?"),
@@ -709,7 +807,10 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                 # (2) "degrading" asserts a trend, but nothing here measures one —
                 # it is a single threshold comparison against 0.95. Name the level,
                 # let `insight` speak for the calibration, and claim no trend.
-                if isinstance(trajectory_health, (int, float)) and trajectory_health < 0.95:
+                if (
+                    isinstance(trajectory_health, (int, float))
+                    and trajectory_health < 0.95
+                ):
                     mirror_signals.append(
                         f"Fleet trajectory health {trajectory_health:.0%} over "
                         f"{cal['total_decisions']} fleet-wide decisions "
@@ -718,7 +819,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
                     )
 
     # 3. Complexity divergence — suppress on first few check-ins (no baseline)
-    update_count = getattr(meta, 'total_updates', 999) if meta else 999
+    update_count = getattr(meta, "total_updates", 999) if meta else 999
     if update_count <= 3:
         pass  # Not enough history for meaningful complexity comparison
     else:
@@ -757,7 +858,10 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
             cal_feedback = response_data.get("calibration_feedback", {})
             if isinstance(cal_feedback, dict):
                 complexity_info = cal_feedback.get("complexity", {})
-                if isinstance(complexity_info, dict) and complexity_info.get("discrepancy", 0) > 0.3:
+                if (
+                    isinstance(complexity_info, dict)
+                    and complexity_info.get("discrepancy", 0) > 0.3
+                ):
                     reported = complexity_info.get("reported", 0)
                     derived = complexity_info.get("derived", 0)
                     mirror_signals.append(
@@ -776,7 +880,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         if isinstance(restorative_reason, str) and restorative_reason:
             mirror_signals.append(f"Pace: {restorative_reason}")
         elif restorative_reasons:
-            mirror_signals.append(f"Pace: {'; '.join(str(r) for r in restorative_reasons[:2])}")
+            mirror_signals.append(
+                f"Pace: {'; '.join(str(r) for r in restorative_reasons[:2])}"
+            )
 
     # 4b. Verdict edge — a non-steady verdict must never collapse to the
     # "No actionable signals — steady state" fallback below. The mirror is
@@ -798,7 +904,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         margin_val = policy_inputs.get("margin", decision.get("margin"))
         edge = policy_inputs.get("nearest_edge", decision.get("nearest_edge"))
         if isinstance(margin_val, str) and margin_val in _ACTIONABLE_MARGINS:
-            facts.append(f"{margin_val} margin" + (f" at the {edge} edge" if edge else ""))
+            facts.append(
+                f"{margin_val} margin" + (f" at the {edge} edge" if edge else "")
+            )
         elif edge:
             facts.append(f"nearest edge: {edge}")
         detail = f" ({', '.join(facts)})" if facts else ""
@@ -845,7 +953,9 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         "success": True,
         "verdict": verdict,
         "_mode": "mirror",
-        "mirror": mirror_signals if mirror_signals else ["No actionable signals — steady state"],
+        "mirror": mirror_signals
+        if mirror_signals
+        else ["No actionable signals — steady state"],
     }
 
     # Proprioceptive numbers: phi is the primary basin discriminator
@@ -881,9 +991,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     # path is retained for legacy/hand-built payloads that pass a raw distance.
     margin = decision.get("margin")
     if margin is not None:
-        actionable = (
-            (isinstance(margin, str) and margin in _ACTIONABLE_MARGINS)
-            or (isinstance(margin, (int, float)) and margin < 0.1)
+        actionable = (isinstance(margin, str) and margin in _ACTIONABLE_MARGINS) or (
+            isinstance(margin, (int, float)) and margin < 0.1
         )
         if actionable:
             result["margin"] = margin
@@ -892,6 +1001,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     if saved_trust_tier:
         # #428: wrap with glossary so agent sees tier scale + meaning inline.
         from src.governance_glossary import explain_trust_tier
+
         result["trust_tier"] = explain_trust_tier(saved_trust_tier)
     if "thread_context" in response_data:
         result["thread_context"] = response_data["thread_context"]
@@ -923,10 +1033,20 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     return result
 
 
-def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_tier: Any) -> dict:
+def _format_minimal(
+    response_data: dict, using_default_mode: bool, saved_trust_tier: Any
+) -> dict:
     """Build minimal response: action + verdict provenance + EISV + margin."""
-    decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
-    metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
+    decision = (
+        response_data.get("decision", {})
+        if isinstance(response_data.get("decision"), dict)
+        else {}
+    )
+    metrics = (
+        response_data.get("metrics", {})
+        if isinstance(response_data.get("metrics"), dict)
+        else {}
+    )
 
     result = {
         "action": decision.get("action", "continue"),
@@ -965,12 +1085,16 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
     if nearest_edge:
         result["nearest_edge"] = nearest_edge
     if using_default_mode:
-        result["_tip"] = "Legacy minimal mode is bare; prefer response_mode='compact' for routine check-ins."
+        result["_tip"] = (
+            "Legacy minimal mode is bare; prefer response_mode='compact' for routine check-ins."
+        )
     if saved_trust_tier:
         # Minimal mode is intentionally terse — emit the name string only.
         # Agents wanting tier-scale + meaning should use mirror/compact.
         result["trust_tier"] = (
-            saved_trust_tier.get("name") if isinstance(saved_trust_tier, dict) else saved_trust_tier
+            saved_trust_tier.get("name")
+            if isinstance(saved_trust_tier, dict)
+            else saved_trust_tier
         )
     if "thread_context" in response_data:
         result["thread_context"] = response_data["thread_context"]
@@ -983,10 +1107,21 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
 
     return result
 
-def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_tier: Any) -> dict:
+
+def _format_compact(
+    response_data: dict, using_default_mode: bool, saved_trust_tier: Any
+) -> dict:
     """Build compact response: brief metrics + decision summary."""
-    metrics = response_data.get("metrics", {}) if isinstance(response_data.get("metrics"), dict) else {}
-    decision = response_data.get("decision", {}) if isinstance(response_data.get("decision"), dict) else {}
+    metrics = (
+        response_data.get("metrics", {})
+        if isinstance(response_data.get("metrics"), dict)
+        else {}
+    )
+    decision = (
+        response_data.get("decision", {})
+        if isinstance(response_data.get("decision"), dict)
+        else {}
+    )
 
     # `metrics.risk_score` is the smoothed gating value (mean of last 10
     # observations) — the same number `make_decision` reasoned over.
@@ -999,6 +1134,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     # The bare metrics["verdict"] is preserved for internal readers; this is
     # a new dict consumed only by the agent-facing payload.
     from src.governance_glossary import explain_verdict
+
     compact_metrics = {
         "E": metrics.get("E"),
         "I": metrics.get("I"),
@@ -1033,7 +1169,11 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "nearest_edge": decision.get("nearest_edge"),
     }
 
-    health_status = response_data.get("health_status") or compact_metrics.get("health_status") or response_data.get("status")
+    health_status = (
+        response_data.get("health_status")
+        or compact_metrics.get("health_status")
+        or response_data.get("status")
+    )
     coherence = compact_metrics.get("coherence")
     coherence_role = compact_metrics.get("coherence_role")
     coherence_label = (
@@ -1065,9 +1205,12 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
     if saved_trust_tier:
         # #428: glossary at point-of-use — tier scale + meaning inline.
         from src.governance_glossary import explain_trust_tier
+
         result["trust_tier"] = explain_trust_tier(saved_trust_tier)
     if using_default_mode:
-        result["_tip"] = "Routine mode is compact. Use response_mode='mirror' for diagnostics or 'full' for raw payload."
+        result["_tip"] = (
+            "Routine mode is compact. Use response_mode='mirror' for diagnostics or 'full' for raw payload."
+        )
     if "thread_context" in response_data:
         result["thread_context"] = response_data["thread_context"]
     if "identity_assurance" in response_data:
@@ -1113,7 +1256,13 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
 
     return result
 
-def _strip_context(response_data: dict, is_new_agent: bool, key_was_generated: bool, api_key_auto_retrieved: bool):
+
+def _strip_context(
+    response_data: dict,
+    is_new_agent: bool,
+    key_was_generated: bool,
+    api_key_auto_retrieved: bool,
+):
     """Strip optional context fields for minimal/compact/mirror modes (in-place)."""
     # Unconditional strips (always noise in filtered modes)
     response_data.pop("eisv_labels", None)
