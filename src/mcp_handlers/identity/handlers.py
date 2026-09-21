@@ -1934,7 +1934,7 @@ def _build_tool_mode_info(verbose: bool):
                 "tip": (
                     "One complete tool catalog is available. No mode selection "
                     "is needed; legacy GOVERNANCE_TOOL_MODE settings are ignored. "
-                    "Use list_tools() for categories and describe_tool() for "
+                    "Use list_tools(lite=false) for categories and describe_tool() for "
                     "full parameters or an individual router action."
                 ),
             }

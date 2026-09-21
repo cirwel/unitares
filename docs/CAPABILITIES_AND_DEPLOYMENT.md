@@ -46,7 +46,7 @@ see the [interface contract](INTERFACE_CONTRACT.md) for the authoritative mappin
 The complete mounted public catalog remains advertised. `list_tools(category=...)`
 filters by topic and `list_tools(essential_only=true)` selects the essential
 browsing subset; `describe_tool` supplies full parameter details after
-abbreviated discovery descriptions.
+the compact name index or rich catalog view.
 
 ## Choose a deployment profile
 

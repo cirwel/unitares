@@ -656,11 +656,11 @@ def test_intuitive_alias_findings_have_catalog_metadata():
 
     listed = {
         tool["name"]: tool
-        for tool in json.loads(asyncio.run(handle_list_tools({"lite": True}))[0].text)["tools"]
+        for tool in json.loads(asyncio.run(handle_list_tools({"lite": False}))[0].text)["tools"]
     }
     for name in ("store_finding", "update_finding"):
         assert name in listed, name
-        assert not listed[name]["hint"].startswith("Tool: "), listed[name]["hint"]
-        assert "knowledge" in listed[name]["hint"], listed[name]["hint"]
+        assert not listed[name]["description"].startswith("Tool: "), listed[name]["description"]
+        assert "knowledge" in listed[name]["description"], listed[name]["description"]
         assert listed[name]["category"] == "knowledge", name
         assert TOOL_RELATIONSHIPS[name]["category"] == "knowledge", name
