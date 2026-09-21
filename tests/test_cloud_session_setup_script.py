@@ -135,6 +135,16 @@ def test_unknown_argument_fails_instead_of_skipping_verification(
     assert "curl " not in commands
 
 
+def test_setup_network_steps_fit_inside_cloud_setup_budget() -> None:
+    script = SCRIPT.read_text()
+
+    assert "PLUGIN_COMMAND_TIMEOUT_SECONDS=120" in script
+    assert "PLUGIN_INSPECTION_TIMEOUT_SECONDS=15" in script
+    assert "timeout 180" not in script
+    assert script.count('timeout "${PLUGIN_COMMAND_TIMEOUT_SECONDS}"') == 3
+    assert script.count('timeout "${PLUGIN_INSPECTION_TIMEOUT_SECONDS}"') == 2
+
+
 def test_runtime_preflight_does_not_enable_plugin_in_current_session(
     tmp_path: Path,
 ) -> None:

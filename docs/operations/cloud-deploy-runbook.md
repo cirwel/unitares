@@ -64,6 +64,10 @@ both believing they are canonical.
      not set `UNITARES_REST_STRICT=0`. This is load-bearing behind a loopback
      tunnel, where the local trusted-network branch would otherwise bypass
      `UNITARES_HTTP_API_TOKEN`.
+   - `UNITARES_MCP_ALLOWED_HOSTS` — include the tunnel's public hostname exactly
+     as it arrives in the HTTP `Host` header, without a scheme (for example,
+     `localhost,127.0.0.1,governance.example.com`). Otherwise `/health/ready`
+     can pass while the MCP transport rejects the tunnel with 421.
    - `UNITARES_MCP_BEARER_TOKEN` — the singular client credential used by the
      lease plane for governance REST calls. Set it to one exact member of the
      plural `UNITARES_MCP_BEARER_TOKENS` allowlist above.

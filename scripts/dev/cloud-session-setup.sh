@@ -29,6 +29,10 @@ set -uo pipefail
 MARKETPLACE_SOURCE="${UNITARES_PLUGIN_SOURCE:-cirwel/unitares-governance-plugin}"
 MARKETPLACE_NAME="unitares-governance"
 PLUGIN_ID="unitares-governance@${MARKETPLACE_NAME}"
+# Two sequential network steps must fit inside Claude Cloud's roughly five-minute
+# setup-script ceiling, with margin left for inspection and preflight probes.
+PLUGIN_COMMAND_TIMEOUT_SECONDS=120
+PLUGIN_INSPECTION_TIMEOUT_SECONDS=15
 
 log() { printf '[unitares-setup] %s\n' "$*"; }
 
@@ -64,17 +68,19 @@ command -v claude >/dev/null 2>&1 || finish "claude CLI not on PATH — skipping
 # --- install / inspect ---------------------------------------------------
 
 if [ "${runtime_preflight}" -eq 0 ]; then
-  if claude plugin marketplace list 2>/dev/null | grep -q "${MARKETPLACE_NAME}"; then
+  if timeout "${PLUGIN_INSPECTION_TIMEOUT_SECONDS}" claude plugin marketplace list 2>/dev/null \
+      | grep -q "${MARKETPLACE_NAME}"; then
     log "marketplace ${MARKETPLACE_NAME} already registered"
   else
     log "adding marketplace ${MARKETPLACE_SOURCE}"
-    if ! timeout 180 claude plugin marketplace add "${MARKETPLACE_SOURCE}" 2>&1 | sed 's/^/  /'; then
+    if ! timeout "${PLUGIN_COMMAND_TIMEOUT_SECONDS}" claude plugin marketplace add "${MARKETPLACE_SOURCE}" 2>&1 | sed 's/^/  /'; then
       finish "marketplace add failed — continuing without governance hooks."
     fi
   fi
 fi
 
-plugin_json=$(claude plugin list --json 2>/dev/null) || plugin_json=""
+plugin_json=$(timeout "${PLUGIN_INSPECTION_TIMEOUT_SECONDS}" claude plugin list --json 2>/dev/null) \
+  || plugin_json=""
 plugin_state=$(printf '%s' "${plugin_json}" | python3 -c '
 import json
 import sys
@@ -101,7 +107,7 @@ case "${plugin_state}" in
       finish "plugin ${PLUGIN_ID} is disabled; enable it during setup and start a new cloud session before verifying hooks."
     fi
     log "enabling ${PLUGIN_ID}"
-    if ! timeout 180 claude plugin enable "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
+    if ! timeout "${PLUGIN_COMMAND_TIMEOUT_SECONDS}" claude plugin enable "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
       finish "plugin enable failed — continuing without governance hooks."
     fi
     ;;
@@ -110,7 +116,7 @@ case "${plugin_state}" in
       finish "plugin ${PLUGIN_ID} is missing; install it during setup and start a new cloud session before verifying hooks."
     fi
     log "installing ${PLUGIN_ID}"
-    if ! timeout 180 claude plugin install "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
+    if ! timeout "${PLUGIN_COMMAND_TIMEOUT_SECONDS}" claude plugin install "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
       finish "plugin install failed — continuing without governance hooks."
     fi
     ;;
