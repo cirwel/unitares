@@ -131,14 +131,23 @@ setup=$(git show origin/master:scripts/dev/cloud-session-setup.sh) || exit 1
 bash -s <<<"${setup}" || true
 ```
 
-The remote check makes accidental reuse fail closed before any checkout code
-runs as root. Reading the script from canonical `origin/master` also prevents a
-task branch from replacing the setup payload. A missing canonical script fails
-provisioning instead of creating an empty cached environment. The final
-`|| true` applies only after those trust checks: a transient plugin-install
-failure leaves the UNITARES session without hooks rather than blocking it.
-Marketplace registration and plugin installation each have a 120-second cap,
-so both sequential network steps still leave margin inside the platform's
+The remote check fails closed before any checkout code runs as root **while the
+environment cache is being built**. It cannot police later reuse: cached
+sessions skip setup entirely, retaining the installed plugin and every
+environment credential. The dedicated-environment requirement in step 1 is
+therefore the security boundary; this check is only a provisioning defense. If
+the environment is ever attached to another repository, retire or rebuild it
+and rotate its credentials.
+
+Reading the script from canonical `origin/master` prevents a task branch from
+replacing the setup payload. A missing canonical script fails provisioning
+instead of creating an empty cached environment. The final `|| true` applies
+only after those trust checks: a transient plugin-install failure leaves the
+UNITARES session without hooks rather than blocking it. The setup exports
+`CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` because GitHub `owner/repo` marketplace
+sources otherwise clone over SSH, but hosted containers have no operator SSH
+key. Marketplace registration and plugin installation each have a 120-second
+cap, so both sequential network steps still leave margin inside the platform's
 roughly five-minute setup-script limit. Fresh install measured at 3.4s; re-runs
 short-circuit. If installation fails, change the setup field to force a cache
 rebuild or wait for cache expiry.

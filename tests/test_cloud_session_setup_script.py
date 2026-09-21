@@ -42,6 +42,7 @@ def _run_setup(
         fake_bin / "claude",
         """
 printf '%s\\n' "$*" >> "$FAKE_COMMAND_LOG"
+printf 'prefer_https=%s\\n' "${CLAUDE_CODE_PLUGIN_PREFER_HTTPS:-}" >> "$FAKE_COMMAND_LOG"
 case "$*" in
   "plugin marketplace list") printf '%s\\n' 'unitares-governance' ;;
   "plugin list --json") printf '%s\\n' "$FAKE_PLUGIN_JSON" ;;
@@ -119,6 +120,18 @@ def test_enabled_plugin_is_left_alone(tmp_path: Path) -> None:
     assert proc.returncode == 0
     assert f"plugin enable {PLUGIN_ID}" not in commands
     assert f"plugin install {PLUGIN_ID}" not in commands
+
+
+def test_marketplace_commands_force_https_for_github_shorthand(tmp_path: Path) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={"CLAUDE_CODE_PLUGIN_PREFER_HTTPS": "0"},
+    )
+
+    assert proc.returncode == 0
+    assert "prefer_https=1" in commands
+    assert "prefer_https=0" not in commands
 
 
 def test_unknown_argument_fails_instead_of_skipping_verification(
