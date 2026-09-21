@@ -83,7 +83,14 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # discovery exposes it too; search_knowledge_graph also records its clarified
 # filter description. This compatible addition follows the 1.10.0
 # list_tools wire correction.
-INTERFACE_CONTRACT_VERSION = "1.11.0"
+# 1.12.0 (2026-09-19): dialectic declares judgment_formed on antithesis and
+# synthesis. Unlike 1.10.0 and 1.11.0, which advertised parameters the handler
+# already read, this one is NEW behavior: set false, the server records an
+# abstention and refuses to file the verdict instead of consuming the session's
+# reviewer slot. Omitting it is the prior behavior exactly -- the default is
+# true, so no existing caller changes and nothing is removed or renamed. Only
+# dialectic's input_schema_sha256 and the surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.12.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

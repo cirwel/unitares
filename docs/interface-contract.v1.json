@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "transports": [
@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "db16792a22cb3244a3b992f62742a66751c162a1bb2add992a26960f97a38e2e",
+  "surface_sha256": "2195b435a9d24769646fccdb8537b0af11ce76097c070e35e42bcbd93418fe81",
   "capabilities": [
     {
       "name": "start_session",
@@ -476,7 +476,7 @@
       "name": "dialectic",
       "implementation": "dialectic",
       "kind": "canonical_tool",
-      "input_schema_sha256": "5ee717bd38e51a3bde8ecbcd0a23fe818e5633efb372d07077fefcf507014171",
+      "input_schema_sha256": "08bdccce0425853e265e5b76b4c40d29861733fcc0b88701c41ec66eec13cbc3",
       "transport_names": {
         "mcp_streamable_http": "dialectic",
         "rest_v1_tools": "dialectic",
