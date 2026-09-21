@@ -10,13 +10,12 @@
 # .claude/ file. A cloud-environment setup script is the remaining route, and
 # it keeps the wiring out of the tracked tree entirely.
 #
-# Wire it as the setup script of the cloud environment (claude.ai -> cloud
-# environments). It runs after the repository is cloned:
-#
-#     bash scripts/dev/cloud-session-setup.sh
-#
-# Idempotent, and never fails the session: a broken install leaves a session
-# without governance hooks, which is the state it would have had anyway.
+# docs/operations/cloud-session-plugin.md gives the setup-field wrapper. It
+# verifies a dedicated environment's canonical remote and reads this payload
+# from origin/master before executing it; do not run a checkout-relative copy
+# from a shared environment. Once invoked, this script is idempotent and keeps
+# every internal exit successful: a broken install leaves a session without
+# governance hooks, which is the state it would have had anyway.
 #
 # This script does NOT set UNITARES_* variables. A setup script's exports die
 # with its shell and never reach the agent process, so the operator declares
@@ -91,6 +90,13 @@ esac
 
 SERVER_URL="${UNITARES_SERVER_URL:-}"
 preflight_ok=1
+auth_probe_deferred=0
+proxy_auth_value=$(printf '%s' "${UNITARES_CLOUD_PROXY_AUTH:-0}" \
+  | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+case "${proxy_auth_value}" in
+  1|true|on|yes) proxy_auth_configured=1 ;;
+  *) proxy_auth_configured=0 ;;
+esac
 
 # Capture the response body and status separately. curl can return non-zero
 # after receiving HTTP headers (for example, when a response times out), so do
@@ -138,78 +144,94 @@ else
       ;;
   esac
 
-  # Probe both routes used by the plugin hooks. The health route proves basic
-  # reachability. The deliberately invalid REST request proves the bearer and
-  # DNS-rebinding gates without invoking a tool or changing server state. Its
-  # distinctive validation error prevents a proxy's generic 400 from looking
-  # like a usable UNITARES endpoint.
-  HEALTH_URL="${BASE_URL}/health"
-  probe_url "${HEALTH_URL}"
-  if [ "${PROBE_CURL_RC}" -ne 0 ]; then
-    preflight_ok=0
-    if [ "${PROBE_CODE}" = "000" ]; then
-      log "WARN ${HEALTH_URL} unreachable (curl ${PROBE_CURL_RC}). If the domain" \
-          "is not on the environment's network allowlist the egress proxy refuses it."
-    else
-      log "WARN ${HEALTH_URL} transfer failed after HTTP ${PROBE_CODE}" \
-          "(curl ${PROBE_CURL_RC}); the session-start hook may be OFFLINE."
-    fi
+  if [ "${proxy_auth_configured}" -eq 1 ] \
+      && [ -z "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+    # Environment API credentials and their host reachability are available
+    # only after Claude Code starts, never to setup-script requests. Defer the
+    # whole network preflight instead of manufacturing OFFLINE warnings here.
+    auth_probe_deferred=1
+    log "note hook network/authentication probes deferred; setup requests do not"
+    log "     receive the environment API credential. Verify from a running hook."
   else
-    case "${PROBE_CODE}" in
-      200) log "server health route usable (200)" ;;
-      *)
-        preflight_ok=0
-        log "WARN ${HEALTH_URL} returned ${PROBE_CODE}; the session-start hook may be OFFLINE."
-        ;;
-    esac
-  fi
-
-  TOOLS_URL="${BASE_URL}/v1/tools/call"
-  probe_url -H 'Content-Type: application/json' --data '{}' "${TOOLS_URL}"
-  code="${PROBE_CODE}"
-  if [ "${PROBE_CURL_RC}" -ne 0 ]; then
-    preflight_ok=0
-    if [ "${code}" = "000" ]; then
-      log "WARN ${TOOLS_URL} unreachable (curl ${PROBE_CURL_RC}). If the domain" \
-          "is not on the environment's network allowlist the egress proxy refuses it."
+    # Probe both routes used by the plugin hooks. The health route proves basic
+    # reachability. The deliberately invalid REST request proves the bearer and
+    # DNS-rebinding gates without invoking a tool or changing server state. Its
+    # distinctive validation error prevents a proxy's generic 400 from looking
+    # like a usable UNITARES endpoint.
+    HEALTH_URL="${BASE_URL}/health"
+    probe_url "${HEALTH_URL}"
+    if [ "${PROBE_CURL_RC}" -ne 0 ]; then
+      preflight_ok=0
+      if [ "${PROBE_CODE}" = "000" ]; then
+        log "WARN ${HEALTH_URL} unreachable (curl ${PROBE_CURL_RC}). If the domain" \
+            "is not on the environment's network allowlist the egress proxy refuses it."
+      else
+        log "WARN ${HEALTH_URL} transfer failed after HTTP ${PROBE_CODE}" \
+            "(curl ${PROBE_CURL_RC}); the session-start hook may be OFFLINE."
+      fi
     else
-      log "WARN ${TOOLS_URL} transfer failed after HTTP ${code}" \
-          "(curl ${PROBE_CURL_RC}); hooks may be OFFLINE."
-    fi
-  else
-    case "${code}" in
-      400)
-        if [[ "${PROBE_BODY}" == *"Missing 'name' field"* ]]; then
-          log "server tool route usable (authenticated validation response)"
-        else
+      case "${PROBE_CODE}" in
+        200) log "server health route usable (200)" ;;
+        *)
           preflight_ok=0
-          log "WARN ${TOOLS_URL} returned an unrecognized 400; hooks may be OFFLINE."
-        fi
-        ;;
-      401)
-        preflight_ok=0
-        if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
-          log "WARN ${TOOLS_URL} rejected the configured bearer (401); hooks are OFFLINE."
-        else
-          log "WARN ${TOOLS_URL} requires a bearer (401); set UNITARES_HTTP_API_TOKEN."
-        fi
-        ;;
-      421)
-        preflight_ok=0
-        log "WARN ${TOOLS_URL} rejected its external Host (421); add the hostname" \
-            "to UNITARES_MCP_ALLOWED_HOSTS on the server."
-        ;;
-      *)
-        preflight_ok=0
-        log "WARN ${TOOLS_URL} returned ${code}; hooks may be OFFLINE."
-        ;;
-    esac
+          log "WARN ${HEALTH_URL} returned ${PROBE_CODE}; the session-start hook may be OFFLINE."
+          ;;
+      esac
+    fi
+
+    TOOLS_URL="${BASE_URL}/v1/tools/call"
+    probe_url -H 'Content-Type: application/json' --data '{}' "${TOOLS_URL}"
+    code="${PROBE_CODE}"
+    if [ "${PROBE_CURL_RC}" -ne 0 ]; then
+      preflight_ok=0
+      if [ "${code}" = "000" ]; then
+        log "WARN ${TOOLS_URL} unreachable (curl ${PROBE_CURL_RC}). If the domain" \
+            "is not on the environment's network allowlist the egress proxy refuses it."
+      else
+        log "WARN ${TOOLS_URL} transfer failed after HTTP ${code}" \
+            "(curl ${PROBE_CURL_RC}); hooks may be OFFLINE."
+      fi
+    else
+      case "${code}" in
+        400)
+          if [[ "${PROBE_BODY}" == *"Missing 'name' field"* ]]; then
+            log "server tool route usable (authenticated validation response)"
+          else
+            preflight_ok=0
+            log "WARN ${TOOLS_URL} returned an unrecognized 400; hooks may be OFFLINE."
+          fi
+          ;;
+        401)
+          preflight_ok=0
+          if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+            log "WARN ${TOOLS_URL} rejected the configured bearer (401); hooks are OFFLINE."
+          else
+            log "WARN ${TOOLS_URL} requires a bearer (401); set UNITARES_HTTP_API_TOKEN."
+          fi
+          ;;
+        421)
+          preflight_ok=0
+          log "WARN ${TOOLS_URL} rejected its external Host (421); add the hostname" \
+              "to UNITARES_MCP_ALLOWED_HOSTS on the server."
+          ;;
+        *)
+          preflight_ok=0
+          log "WARN ${TOOLS_URL} returned ${code}; hooks may be OFFLINE."
+          ;;
+      esac
+    fi
   fi
 fi
 
 if [ -z "${UNITARES_HTTP_API_TOKEN:-}" ]; then
-  log "WARN UNITARES_HTTP_API_TOKEN unset — REST hooks need another accepted"
-  log "     authentication path or they receive 401. Attribution is session-bound."
+  if [ "${proxy_auth_configured}" -eq 1 ]; then
+    log "note UNITARES_HTTP_API_TOKEN intentionally unset; the environment proxy"
+    log "     supplies hook authentication after launch. Attribution is session-bound."
+  else
+    preflight_ok=0
+    log "WARN UNITARES_HTTP_API_TOKEN unset — REST hooks need another accepted"
+    log "     authentication path or they receive 401. Attribution is session-bound."
+  fi
 fi
 
 # The lease plane is a loopback service on the operator's machine. Absent here,
@@ -231,7 +253,11 @@ case "${lease_required}" in
 esac
 
 if [ "${preflight_ok}" -eq 1 ]; then
-  log "done"
+  if [ "${auth_probe_deferred}" -eq 1 ]; then
+    log "done — hook authentication verification deferred until session start."
+  else
+    log "done"
+  fi
 else
   log "done with warnings — governance hooks are not fully usable."
 fi

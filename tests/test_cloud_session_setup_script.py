@@ -175,6 +175,25 @@ def test_missing_bearer_warning_names_authentication_not_attribution(
     assert "writes to the server will not be attributable" not in proc.stdout
 
 
+def test_proxy_bearer_defers_auth_probe_until_after_setup(tmp_path: Path) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={
+            "UNITARES_HTTP_API_TOKEN": "",
+            "UNITARES_CLOUD_PROXY_AUTH": "1",
+        },
+    )
+
+    assert proc.returncode == 0
+    assert "network/authentication probes deferred" in proc.stdout
+    assert "environment proxy" in proc.stdout
+    assert "verification deferred until session start" in proc.stdout
+    assert "https://gov.example.test/health" not in commands
+    assert "https://gov.example.test/v1/tools/call" not in commands
+    assert "done with warnings" not in proc.stdout
+
+
 def test_server_url_with_mcp_suffix_is_rejected_as_hook_incompatible(
     tmp_path: Path,
 ) -> None:
