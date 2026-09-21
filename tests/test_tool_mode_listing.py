@@ -66,6 +66,22 @@ def test_filter_keeps_order_and_drops_unadvertised():
     ]
 
 
+@pytest.mark.parametrize("mode", ["progressive", "full"])
+def test_empty_public_catalog_never_fails_open_to_mounted_hidden_tools(
+    monkeypatch,
+    mode,
+):
+    monkeypatch.setattr(
+        "src.interface_contract.get_public_tool_definitions",
+        lambda _mode: [],
+    )
+
+    mounted = [SimpleNamespace(name="hidden_internal_tool")]
+
+    assert advertised_tool_names(mode) == set()
+    assert filter_listed_tools(mounted, mode) == []
+
+
 @pytest.mark.asyncio
 async def test_subclass_filters_list_tools_only(monkeypatch):
     """The override touches list_tools; the base class's tools stay put."""

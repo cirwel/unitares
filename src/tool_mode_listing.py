@@ -36,13 +36,6 @@ def advertised_tool_names(mode: Optional[str] = None) -> Optional[set[str]]:
 
     surface_mode = "progressive" if resolved == "progressive" else "full"
     names = {tool.name for tool in get_public_tool_definitions(surface_mode)}
-    if not names:
-        logger.warning(
-            "%s tool advertisement resolved empty; listing the full "
-            "registered surface instead",
-            surface_mode,
-        )
-        return None
     return names
 
 
