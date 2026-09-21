@@ -137,8 +137,11 @@ task branch from replacing the setup payload. A missing canonical script fails
 provisioning instead of creating an empty cached environment. The final
 `|| true` applies only after those trust checks: a transient plugin-install
 failure leaves the UNITARES session without hooks rather than blocking it.
-Fresh install measured at 3.4s; re-runs short-circuit. If installation fails,
-change the setup field to force a cache rebuild or wait for cache expiry.
+Marketplace registration and plugin installation each have a 120-second cap,
+so both sequential network steps still leave margin inside the platform's
+roughly five-minute setup-script limit. Fresh install measured at 3.4s; re-runs
+short-circuit. If installation fails, change the setup field to force a cache
+rebuild or wait for cache expiry.
 
 **3. Configure hook authentication and environment variables.** A setup script's
 exports die with its shell and never reach the agent process, so these must be
