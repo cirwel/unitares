@@ -33,7 +33,7 @@ def _run_setup(
         'event: message\n'
         'data: {"jsonrpc":"2.0","id":"unitares-cloud-preflight",'
         '"result":{"protocolVersion":"2025-03-26","capabilities":{},'
-        '"serverInfo":{"name":"UNITARES","version":"test"}}}'
+        '"serverInfo":{"name":"governance-monitor-v1","version":"test"}}}'
     ),
     health_exit: int = 0,
     tool_exit: int = 0,
@@ -349,6 +349,26 @@ def test_runtime_preflight_rejects_generic_mcp_200(tmp_path: Path) -> None:
     assert "without a valid UNITARES MCP" in proc.stdout
     assert "proxy or WAF may be misrouting" in proc.stdout
     assert "MCP initialize succeeded" not in proc.stdout
+
+
+def test_runtime_preflight_rejects_a_different_mcp_server(tmp_path: Path) -> None:
+    other_mcp = (
+        'event: message\n'
+        'data: {"jsonrpc":"2.0","id":"unitares-cloud-preflight",'
+        '"result":{"protocolVersion":"2025-03-26","capabilities":{},'
+        '"serverInfo":{"name":"some-other-mcp","version":"test"}}}'
+    )
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        mcp_status=200,
+        mcp_body=other_mcp,
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 1
+    assert "without a valid UNITARES MCP" in proc.stdout
+    assert "UNITARES MCP initialize succeeded" not in proc.stdout
 
 
 def test_runtime_preflight_rejects_loopback_bypass_as_authentication_proof(

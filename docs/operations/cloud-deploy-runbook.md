@@ -68,11 +68,14 @@ both believing they are canonical.
      as it arrives in the HTTP `Host` header, without a scheme (for example,
      `localhost,127.0.0.1,governance.example.com`). Otherwise `/health/ready`
      can pass while the MCP transport rejects the tunnel with 421.
-   - `UNITARES_MCP_ALLOWED_ORIGINS` — include each browser MCP client's exact
-     origin, including `https://` and excluding a trailing slash (for example,
+   - `UNITARES_MCP_ALLOWED_ORIGINS` / `UNITARES_HTTP_CORS_EXTRA_ORIGINS` — put
+     each browser MCP client's exact origin in **both** lists, including
+     `https://` and excluding a trailing slash (for example,
      `http://localhost:8767,http://127.0.0.1:8767,https://governance.example.com`).
-     Otherwise the MCP transport rejects an authenticated browser request with
-     403 even when its `Host` is allowed.
+     The first list configures MCP transport Origin validation; the second
+     configures the outer HTTP CORS preflight. Omitting either blocks the
+     browser before it can use MCP. The cloud runtime verifier is not a browser
+     and does not prove this CORS configuration.
    - `UNITARES_DASHBOARD_RP_ID` / `UNITARES_DASHBOARD_ORIGIN` — set these to the
      public dashboard hostname and exact HTTPS origin (for example,
      `governance.example.com` and `https://governance.example.com`). Passkey

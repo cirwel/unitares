@@ -187,6 +187,10 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
         "${UNITARES_MCP_ALLOWED_ORIGINS:-http://localhost:8767,http://127.0.0.1:8767}"
     ) in compose
     assert (
+        "UNITARES_HTTP_CORS_EXTRA_ORIGINS: "
+        "${UNITARES_HTTP_CORS_EXTRA_ORIGINS:-}"
+    ) in compose
+    assert (
         "UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-gov.cirwel.org}"
     ) in compose
     assert "UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}" in compose
