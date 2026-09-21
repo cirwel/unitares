@@ -46,11 +46,13 @@ TOOLS_NEEDING_SESSION_INJECTION = call_set(
 )
 ```
 
-**Step 4: Verify discovery.** No mode-set edit is needed. Every registered tool
-and primary workflow alias is advertised on all transports. Keep its schema,
-ToolMeta record, and handler consistent; the interface and registry tests catch
-missing definitions. Category and tier are browsing metadata, not visibility
-gates.
+**Step 4: Verify discovery.** Every registered tool and primary workflow alias
+belongs to the complete catalog and stays dispatchable. Add a tool to
+`PROGRESSIVE_MODE_TOOLS` only when its schema must appear in the small initial
+listing; otherwise clients reach it through `list_tools` → `describe_tool` →
+`use_tool`. Keep its schema, ToolMeta record, and handler consistent; the
+interface and registry tests catch missing definitions. Category and tier are
+browsing metadata, not authorization gates.
 
 ---
 
@@ -80,9 +82,10 @@ gates.
 `auto_register_all_tools` in `src/tool_registration.py` (called from `mcp_server.py`):
 1. Reads all tool definitions from `tool_schemas.py`
 2. **Filters to only tools in `_TOOL_DEFINITIONS`** (tools with `register=True`)
-3. **Exposes the complete catalog** — legacy `GOVERNANCE_TOOL_MODE` settings
-   affect neither registration nor discovery. The listing wrapper compacts
-   schema annotations only.
+3. **Registers the complete catalog** — legacy `GOVERNANCE_TOOL_MODE` settings
+   affect neither registration nor discovery. The listing wrapper applies the
+   progressive/full advertisement selection and compacts schema annotations;
+   it never removes the underlying dispatch path.
 4. Creates FastMCP wrappers for each tool
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator

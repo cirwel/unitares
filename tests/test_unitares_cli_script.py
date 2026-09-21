@@ -236,8 +236,8 @@ def test_health_reports_status_and_version(cli_env):
 
 def test_tools_lists_core_governance_tools(cli_env):
     result = _run(cli_env, "tools")
-    assert "Tools:" in result.stdout
-    # The current server exposes the complete catalog, with no mode selector.
+    assert "Tools: 13/51" in result.stdout
+    # The CLI reports the directly advertised progressive entry surface.
     assert " mode)" not in result.stdout
     for name in (
         "start_session",
@@ -247,15 +247,15 @@ def test_tools_lists_core_governance_tools(cli_env):
         "check_working_state",
         "search_shared_memory",
         "store_finding",
-        "update_finding",
         "request_review",
         "consult",
-        "admin",
-        "agent",
-        "observe",
         "list_tools",
+        "describe_tool",
+        "use_tool",
+        "self_recovery",
     ):
         assert name in result.stdout, name
+    assert "admin" not in result.stdout
 
 
 def test_onboard_persists_session_and_continuity_token(cli_env, tmp_path):
@@ -1106,7 +1106,7 @@ def test_agent_argument_errors(stub_env):
         assert expect in result.stderr
 
 
-@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full"])
+@pytest.mark.parametrize("mode", ["progressive"])
 def test_ci_probe_sees_complete_live_mcp_catalog(mcp_test_server, mode):
     probe = (REPO_ROOT / "scripts/ci/check_mcp_tool_surface.py").read_text()
     result = subprocess.run(

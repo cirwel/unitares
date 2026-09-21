@@ -83,7 +83,7 @@ a prototype or a system?
 
 | | |
 |---|---|
-| **42 tools** on the wire | one complete catalog, every name advertised on every transport (legacy `GOVERNANCE_TOOL_MODE` settings are accepted and ignored); 8 of them are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
+| **43 registered tools** | one complete catalog remains negotiable and callable on every transport; the default initial listing is progressive and omitted names run through `use_tool` after discovery (`UNITARES_TOOL_ADVERTISEMENT=full` restores every schema up front; legacy `GOVERNANCE_TOOL_MODE` is ignored). 8 tools are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
 | **13,614 test functions** | across 776 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
 | **67 database migrations** | slot-and-name drift is gated by the repo doctor |
 | **524 Python modules** | `src/`, `governance_core/`, and the reference residents |

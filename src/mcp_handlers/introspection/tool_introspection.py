@@ -140,12 +140,12 @@ def _format_lite_parameter(
     return f"{field_name}: {field_type}"
 
 def _not_advertised_summary(tools_list, mode: str) -> dict:
-    """Explain registration/catalog discrepancies without suggesting a mode."""
+    """Explain capabilities omitted from the initial advertisement."""
     names = sorted(t["name"] for t in tools_list if not t.get("advertised", True))
     return {
-        "count": len(names), "tools": names, "mode": "full",
-        "reason": "Registered names without a public schema in this catalog snapshot",
-        "note": "Discovery is complete by default. Use health_check and describe_tool to inspect a catalog discrepancy; mode settings do not hide capabilities.",
+        "count": len(names), "tools": names, "mode": mode,
+        "reason": "Public capabilities omitted from the initial progressive tools/list advertisement",
+        "note": "Discover with list_tools, inspect with describe_tool, and invoke with use_tool; set UNITARES_TOOL_ADVERTISEMENT=full to advertise every schema up front.",
     }
 
 
@@ -216,7 +216,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         include_advanced (bool): If false, exclude Tier 3 (advanced) tools (default: true)
         tier (str): Filter by tier: "essential", "common", "advanced", or "all" (default: "all")
         category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
-        lite (bool): If true, return the compact federation handshake: one name-only record per advertised tool, the interface contract and continuation hints (default: true)
+        lite (bool): If true, return the compact federation handshake: one name-only record per public capability, the interface contract and continuation hints (default: true)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
     """
     
@@ -257,16 +257,18 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         get_public_tool_definitions,
     )
     from src.tool_modes import TOOL_MODE, TOOL_TIERS
-    interface_contract = get_interface_contract_summary(TOOL_MODE)
+    interface_contract = get_interface_contract_summary()
 
-    # Orientation and all transports share the same complete catalog, and the
-    # definitions tools/list serves are also where each advertised name's
-    # description comes from (_orientation_description).
+    # list_tools is the complete capability index even when the initial MCP
+    # advertisement is progressive.  Keep a second set so the rich view can
+    # say which names a schema-driven client received directly.
     try:
-        public_definitions = list(get_public_tool_definitions(TOOL_MODE))
+        public_definitions = list(get_public_tool_definitions("full"))
+        directly_advertised = list(get_public_tool_definitions(TOOL_MODE))
     except Exception:
         public_definitions = []
-    advertised_names = {tool.name for tool in public_definitions} or None
+        directly_advertised = []
+    advertised_names = {tool.name for tool in directly_advertised} or None
     # An unavailable/empty schema catalog fails open to registration.
     wire_descriptions = {
         tool.name: tool.description or "" for tool in public_definitions
@@ -421,7 +423,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         usage_data = await get_usage_data()
         tools_list = order_tools_by_usage(tools_list, usage_data)
     
-    # LITE MODE: the complete advertised name index used by federation
+    # LITE MODE: the complete public capability-name index used by federation
     # negotiation, without repeating per-tool metadata or onboarding prose.
     # ``interface_contract.federation.negotiation.capabilities_path`` is
     # ``tools[*].name``, so every advertised name remains present. Rich
@@ -430,7 +432,6 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         lite_tools = [
             {"name": t["name"]}
             for t in tools_list
-            if advertised_names is None or t.get("advertised", True)
         ]
         # Sort by workflow order (onboard first) or usage if progressive enabled
         if progressive and usage_data:
@@ -456,7 +457,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "total_available": len(tools_list),
             "shown": len(lite_tools),
             "more": "list_tools(lite=false) for descriptions, categories, tiers, workflows, and relationships",
-            "tip": "describe_tool(tool_name=...) for parameter details and examples",
+            "tip": "describe_tool(tool_name=...) for parameters; use_tool(tool_name=..., arguments={...}) when the capability is absent from the initial tools/list",
+            "advertisement": {
+                "mode": TOOL_MODE,
+                "direct_count": len(advertised_names or lite_tools),
+                "full_mode_env": "UNITARES_TOOL_ADVERTISEMENT=full",
+            },
         }
         
         # Add progressive metadata if enabled
@@ -699,6 +705,99 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             tools_info["sections"] = progressive_sections
     
     return success_response(tools_info)
+
+
+@mcp_tool("use_tool", timeout=450.0, requires_identity="pre_onboard")
+async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Invoke a public capability omitted from progressive advertisement."""
+    target = str(arguments.get("tool_name") or "").strip()
+    if not target:
+        return [error_response(
+            "tool_name is required",
+            error_code="TOOL_NAME_REQUIRED",
+            recovery={"action": "Call list_tools(lite=true) for capability names"},
+        )]
+    if target == "use_tool":
+        return [error_response(
+            "use_tool cannot invoke itself",
+            error_code="RECURSIVE_TOOL_INVOCATION",
+            recovery={"action": "Name the final target capability directly"},
+        )]
+
+    nested = arguments.get("arguments")
+    if nested is None:
+        nested = {}
+    if not isinstance(nested, dict):
+        return [error_response(
+            "arguments must be a JSON object",
+            error_code="INVALID_TOOL_ARGUMENTS",
+            recovery={"action": f"Call describe_tool(tool_name={target!r})"},
+        )]
+    nested = dict(nested)
+    client_session_id = arguments.get("client_session_id")
+    if client_session_id and not nested.get("client_session_id"):
+        nested["client_session_id"] = client_session_id
+
+    from src.interface_contract import get_public_tool_definitions
+
+    public_names = {tool.name for tool in get_public_tool_definitions("full")}
+    if target not in public_names:
+        return [error_response(
+            f"Unknown public capability: {target}",
+            error_code="TOOL_NOT_FOUND",
+            recovery={
+                "action": "Call list_tools(lite=true) and use an exact returned name",
+                "related_tools": ["list_tools", "describe_tool"],
+            },
+        )]
+
+    # Nested dispatch deliberately runs the target's complete middleware
+    # pipeline.  Record the target as well as the outer use_tool call so
+    # progressive advertisement does not collapse capability telemetry into a
+    # single gateway bucket.
+    from src.mcp_handlers import dispatch_tool
+    from src.services.tool_usage_recorder import (
+        build_tool_usage_payload,
+        classify_tool_result,
+        record_tool_usage,
+        resolve_audit_agent_id,
+        resolve_minted_agent_id,
+    )
+
+    usage_payload = build_tool_usage_payload(target, nested)
+    started = _time.monotonic()
+    result = await dispatch_tool(target, nested)
+    latency_ms = int((_time.monotonic() - started) * 1000)
+    if result is None:
+        record_tool_usage(
+            tool_name=target,
+            agent_id=resolve_audit_agent_id(None),
+            success=False,
+            error_type="unknown_tool",
+            latency_ms=latency_ms,
+            session_id=nested.get("client_session_id"),
+            payload=usage_payload,
+            audit_only=True,
+        )
+        return [error_response(
+            f"Capability did not dispatch: {target}",
+            error_code="TOOL_NOT_FOUND",
+        )]
+
+    success, error_type = classify_tool_result(result)
+    actor = resolve_audit_agent_id(None)
+    actor = resolve_minted_agent_id(target, actor, result)
+    record_tool_usage(
+        tool_name=target,
+        agent_id=actor,
+        success=success,
+        error_type=error_type,
+        latency_ms=latency_ms,
+        session_id=nested.get("client_session_id"),
+        payload=usage_payload,
+        audit_only=True,
+    )
+    return result
 
 @mcp_tool("describe_tool", timeout=10.0, requires_identity="pre_onboard")
 async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:

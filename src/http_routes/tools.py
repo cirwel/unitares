@@ -123,7 +123,8 @@ async def http_list_tools(request):
     """List all tools in OpenAI-compatible format
 
     Query params:
-        mode: Legacy compatibility parameter; every value returns the complete catalog.
+        mode: ``progressive`` (default) or ``full``. Legacy values retain the
+            process default so old configuration cannot select a stale profile.
     """
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     try:
@@ -131,8 +132,12 @@ async def http_list_tools(request):
             return access._http_unauthorized()
         from src.tool_modes import TOOL_MODE
 
-        # Retain old query inputs for independently upgraded clients.
-        query_mode = request.query_params.get("mode", TOOL_MODE)
+        requested_mode = str(request.query_params.get("mode", TOOL_MODE)).lower()
+        query_mode = (
+            requested_mode
+            if requested_mode in {"progressive", "full"}
+            else TOOL_MODE
+        )
 
         filtered_tools = get_public_tool_definitions(query_mode)
         all_tools = get_public_tool_definitions("full")
@@ -169,10 +174,15 @@ async def http_list_tools(request):
         return JSONResponse({
             "tools": openai_tools,
             "count": len(openai_tools),
-            "mode": "full",
+            "mode": query_mode,
             "total_available": len(all_tools),
-            "interface_contract": get_interface_contract_summary(query_mode),
-            "note": "Complete tool catalog. Legacy mode parameters are ignored."
+            "interface_contract": get_interface_contract_summary(),
+            "note": (
+                "Progressive advertisement; discover the complete catalog with "
+                "list_tools and invoke omitted names through use_tool."
+                if query_mode == "progressive"
+                else "Complete tool catalog advertised up front."
+            ),
         })
     except Exception as e:
         logger.error(f"Error listing tools: {e}", exc_info=True)

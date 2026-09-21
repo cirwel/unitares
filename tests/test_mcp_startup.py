@@ -50,7 +50,7 @@ def test_server_registers_list_tools():
 
 
 def test_server_advertises_the_default_profile_and_still_dispatches_the_rest():
-    """The default listing is the standard profile; registration is unfiltered.
+    """The default listing is progressive; registration is unfiltered.
 
     A mode filters tools/list only. If these two ever converge, an unadvertised
     capability has become an uncallable one.
@@ -58,31 +58,23 @@ def test_server_advertises_the_default_profile_and_still_dispatches_the_rest():
     import asyncio
 
     from src import mcp_server
-    from src.tool_modes import STANDARD_MODE_TOOLS, TOOL_MODE
+    from src.tool_modes import PROGRESSIVE_MODE_TOOLS, TOOL_MODE
 
-    assert TOOL_MODE == "full"
+    assert TOOL_MODE == "progressive"
     listed = {tool.name for tool in asyncio.run(mcp_server.mcp.list_tools())}
     registered = set(mcp_server.mcp._tool_manager._tools)
-    assert STANDARD_MODE_TOOLS <= listed
+    assert listed == PROGRESSIVE_MODE_TOOLS
     assert listed <= registered
-    for name in ("observe", "list_tools", "onboard"):
-        assert name in listed, f"{name} must be discoverable"
+    for name in ("list_tools", "describe_tool", "use_tool"):
+        assert name in listed, f"{name} must be directly discoverable"
         assert name in registered, f"{name} must still dispatch by name"
-    # self_recovery moved into the default profile: the server names it to
-    # paused agents (mcp_handlers/updates/phases.py, support/agent_auth.py),
-    # so a schema-driven client has to be able to see it.
     assert "self_recovery" in listed
     assert "self_recovery" in registered
-    # dialectic followed on 2026-09-08, for the same reason one step on:
-    # request_review pins action="request", so without the router the six
-    # actions that FINISH a review were unreachable -- and the server tells the
-    # agent to call them anyway (dialectic/handlers.py:1385 and the shared
-    # envelope middleware). See
-    # tests/test_lite_wire_surface.py::test_standard_can_finish_the_review_it_can_start.
-    assert "dialectic" in listed
+    # Omitted targets remain mounted and are callable through use_tool.
+    assert "dialectic" not in listed
     assert "dialectic" in registered
-    # Ordinary detail/diagnostic hints must be usable by schema-driven clients.
-    assert {"knowledge", "describe_tool", "health_check"} <= listed
+    assert "health_check" not in listed
+    assert "health_check" in registered
 
 
 def test_server_carries_instructions_naming_the_unadvertised_surface():
@@ -94,7 +86,8 @@ def test_server_carries_instructions_naming_the_unadvertised_surface():
     assert instructions, "the server must ship an instructions string"
     assert instructions == build_server_instructions()
     assert "start_session" in instructions
-    assert "complete catalog" in instructions
+    assert "complete compact capability-name index" in instructions
+    assert "use_tool" in instructions
 
 
 if __name__ == "__main__":  # pragma: no cover

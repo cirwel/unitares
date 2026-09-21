@@ -64,6 +64,11 @@ EXCEPTIONS: dict[str, str] = {
         "so the canonical tool keeps its own; tests/test_mcp_schema_parity.py holds "
         "every overridden value to what that alias's dispatch path accepts"
     ),
+    "src/tool_modes.py::PROGRESSIVE_MODE_TOOLS": (
+        f"{GUARDED_REGISTRY}: keyed by the exact public names intentionally exposed "
+        "in the initial tools/list; tests/test_tool_modes.py and "
+        "tests/test_tool_mode_listing.py hold it to the mounted roster and gateway"
+    ),
     # --- keyed on the invoked name by design ------------------------------
     "src/mcp_handlers/middleware/envelope_step.py::_COMPACT_READ_ALIASES": (
         "the experience envelope is chosen by the friendly name the caller used; "

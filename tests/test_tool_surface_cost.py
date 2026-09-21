@@ -31,6 +31,15 @@ def test_default_measurement_matches_the_sdk_list_result(monkeypatch):
     assert measured.total_bytes > sum(tool.total_bytes for tool in measured.tools)
 
 
+def test_progressive_profile_is_measurable_and_smaller_than_full():
+    progressive = cost.measure_profile("progressive")
+    full = cost.measure_profile("full")
+
+    assert progressive.available and full.available
+    assert progressive.tool_count == 13
+    assert progressive.total_bytes < full.total_bytes
+
+
 def test_source_catalog_and_final_listing_measure_the_same_bytes():
     """The /mcp/ registrar advertises the catalog schema verbatim (F12).
 

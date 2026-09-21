@@ -206,6 +206,9 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("list_inference_hosts", None),
     ("list_process_bindings", None),
     ("list_tools", None),
+    # The gateway itself performs no target effect; nested dispatch re-runs
+    # stakes classification for the selected capability and action.
+    ("use_tool", None),
     ("mark_response_complete", None),
     ("onboard", None),
     ("outcome_correlation", None),
