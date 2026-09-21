@@ -4,6 +4,7 @@ Tool introspection handlers (list_tools, describe_tool).
 Extracted from admin.py for maintainability.
 """
 
+import json
 from typing import Dict, Any, List, Sequence
 from mcp.types import TextContent
 from src.mcp_compat import get_tool_input_schema
@@ -751,10 +752,32 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             },
         )]
 
-    # Nested dispatch deliberately runs the target's complete middleware
-    # pipeline.  Record the target as well as the outer use_tool call so
-    # progressive advertisement does not collapse capability telemetry into a
-    # single gateway bucket.
+    # Re-enter the caller's transport path. This is load-bearing for configured
+    # Wave 3a targets on MCP, REST direct-handler/normalization semantics, and
+    # each transport's existing target telemetry policy. A direct handler call
+    # (principally tests and embedders) uses the stdio-shaped local fallback.
+    from src.mcp_handlers.context import get_tool_dispatch_surface
+
+    surface = get_tool_dispatch_surface()
+    if surface == "mcp":
+        from src.tool_registration import get_tool_wrapper
+
+        wrapped = await get_tool_wrapper(target)(**nested)
+        if isinstance(wrapped, (list, tuple)):
+            return wrapped
+        return [TextContent(type="text", text=json.dumps(wrapped, default=str))]
+
+    if surface == "rest":
+        from src.services.http_tool_service import execute_http_tool
+
+        http_result = await execute_http_tool(target, nested)
+        if isinstance(http_result, (list, tuple)):
+            return http_result
+        return [TextContent(type="text", text=json.dumps(http_result, default=str))]
+
+    # Local stdio/direct execution has no transport wrapper to re-enter here,
+    # so run the common dispatcher and emit the same full target telemetry that
+    # the stdio transport records for a directly named call.
     from src.mcp_handlers import dispatch_tool
     from src.services.tool_usage_recorder import (
         build_tool_usage_payload,
@@ -766,7 +789,19 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
 
     usage_payload = build_tool_usage_payload(target, nested)
     started = _time.monotonic()
-    result = await dispatch_tool(target, nested)
+    try:
+        result = await dispatch_tool(target, nested)
+    except Exception as exc:
+        record_tool_usage(
+            tool_name=target,
+            agent_id=resolve_dispatch_bound_agent_id(nested),
+            success=False,
+            error_type=type(exc).__name__,
+            latency_ms=int((_time.monotonic() - started) * 1000),
+            session_id=nested.get("client_session_id"),
+            payload=usage_payload,
+        )
+        raise
     latency_ms = int((_time.monotonic() - started) * 1000)
     if result is None:
         record_tool_usage(
@@ -777,7 +812,6 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             latency_ms=latency_ms,
             session_id=nested.get("client_session_id"),
             payload=usage_payload,
-            audit_only=True,
         )
         return [error_response(
             f"Capability did not dispatch: {target}",
@@ -795,7 +829,6 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         latency_ms=latency_ms,
         session_id=nested.get("client_session_id"),
         payload=usage_payload,
-        audit_only=True,
     )
     return result
 

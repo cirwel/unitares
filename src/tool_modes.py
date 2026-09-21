@@ -20,8 +20,9 @@ from src.tool_meta import (  # noqa: F401 -- compatibility re-exports
 )
 
 # The compact starting surface.  Every omitted public capability stays reachable
-# through use_tool, whose nested dispatch runs the target's normal identity,
-# validation, stakes, authorization, timeout and response middleware.
+# through use_tool, whose nested dispatch re-enters the target transport path
+# and runs its normal identity, validation, authorization, timeout, response,
+# routing, and telemetry behavior.
 PROGRESSIVE_MODE_TOOLS: Set[str] = {
     "start_session",
     "identity",
@@ -96,9 +97,10 @@ def build_server_instructions(mode: str = None) -> str:
         "a capability omitted from the initial listing: call "
         "list_tools(lite=true) for its exact name, "
         "describe_tool(tool_name=..., action=...) for its parameters, then "
-        "use_tool(tool_name=..., arguments={...}). use_tool re-runs the "
-        "target's normal identity, validation, authorization and timeout "
-        "middleware. Operators can set UNITARES_TOOL_ADVERTISEMENT=full to "
+        "use_tool(tool_name=..., arguments={...}). use_tool re-enters the "
+        "target's transport path, including its normal routing, identity, "
+        "validation, authorization and timeout behavior. Operators can set "
+        "UNITARES_TOOL_ADVERTISEMENT=full to "
         "advertise every schema up front; legacy GOVERNANCE_TOOL_MODE settings "
         "remain ignored."
         if resolved == "progressive"

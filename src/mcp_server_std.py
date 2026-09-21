@@ -525,7 +525,16 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
     usage_payload = build_tool_usage_payload(name, arguments)
     try:
         from src.mcp_handlers import dispatch_tool
-        result = await dispatch_tool(name, arguments)
+        from src.mcp_handlers.context import (
+            reset_tool_dispatch_surface,
+            set_tool_dispatch_surface,
+        )
+
+        surface_token = set_tool_dispatch_surface("stdio")
+        try:
+            result = await dispatch_tool(name, arguments)
+        finally:
+            reset_tool_dispatch_surface(surface_token)
         latency_ms = int((time.monotonic() - t0) * 1000)
         if result is not None:
             success, error_type = classify_tool_result(result)

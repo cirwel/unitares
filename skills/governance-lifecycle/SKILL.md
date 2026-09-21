@@ -277,8 +277,9 @@ interface version, surface hash, and a name-only record for every complete
 capability; `describe_tool(tool_name=..., action=...)` returns its parameters;
 `use_tool(tool_name=..., arguments={...})` invokes a capability omitted from
 the initial listing through its normal identity, validation, authorization,
-stakes, and timeout gates. Here `lite` controls response detail, not capability
-reachability. Use `list_tools(lite=false, category=...)` to browse rich metadata.
+routing, timeout, response, and telemetry paths. Here `lite` controls response
+detail, not capability reachability. Use
+`list_tools(lite=false, category=...)` to browse rich metadata.
 Operators that require every schema up front can set
 `UNITARES_TOOL_ADVERTISEMENT=full`. Legacy `GOVERNANCE_TOOL_MODE` settings are
 ignored. Prefer primary workflow names; raw implementations remain callable

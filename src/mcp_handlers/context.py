@@ -92,6 +92,31 @@ _transport_client_hint: ContextVar[Optional[str]] = ContextVar('transport_client
 _mcp_session_id: ContextVar[Optional[str]] = ContextVar('mcp_session_id', default=None)
 _session_resolution_source: ContextVar[Optional[str]] = ContextVar('session_resolution_source', default=None)
 
+# Transport execution surface for nested public-tool gateways. SessionSignals
+# describes the connection (and may say ``uds`` for either REST or MCP), while
+# this value describes the dispatcher currently executing the handler. Keeping
+# those concepts separate lets ``use_tool`` re-enter the same transport path as
+# a direct target call instead of bypassing REST normalization, MCP Wave 3a
+# routing, or stdio telemetry.
+_tool_dispatch_surface: ContextVar[Optional[str]] = ContextVar(
+    'tool_dispatch_surface', default=None
+)
+
+
+def set_tool_dispatch_surface(surface: str) -> object:
+    """Mark the transport dispatcher currently executing a tool handler."""
+    return _tool_dispatch_surface.set(surface)
+
+
+def get_tool_dispatch_surface() -> Optional[str]:
+    """Return ``mcp``, ``rest`` or ``stdio`` for the active dispatcher."""
+    return _tool_dispatch_surface.get()
+
+
+def reset_tool_dispatch_surface(token: object) -> None:
+    """Restore the previous dispatcher surface after a nested-safe call."""
+    _tool_dispatch_surface.reset(token)
+
 def set_session_context(
     session_key: Optional[str] = None,
     client_session_id: Optional[str] = None,
