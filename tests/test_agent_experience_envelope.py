@@ -1215,6 +1215,26 @@ def test_search_lean_projection_bounds_historical_summaries_and_total_wire():
     assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
 
 
+def test_search_projection_budget_drops_oversized_single_result():
+    payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "title": "legacy-title-" + "x" * 10_000,
+                "summary": "short summary",
+                "tags": ["tag-" + "x" * 10_000],
+            }
+        ],
+        "total_count": 1,
+    }
+
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+
+    assert env["projection_truncated"] is True
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+
+
 def test_metrics_envelope_full_mode_keeps_memory_suggestions():
     """Knowledge-search dedup does not suppress an explicit check-in recall
     opt-in, even when the check-in also requests the full governance payload."""

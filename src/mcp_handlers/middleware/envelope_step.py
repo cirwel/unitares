@@ -956,10 +956,33 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     suggestions = envelope.get("memory_suggestions")
     while (
         isinstance(suggestions, list)
-        and len(suggestions) > 1
+        and suggestions
         and wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES
     ):
-        suggestions.pop()
+        if len(suggestions) > 1:
+            suggestions.pop()
+            continue
+
+        # A single result can still carry unbounded historical fields (for
+        # example, a legacy title or tag). Reduce the last surviving digest to
+        # its stable handle and short preview before dropping it entirely.
+        item = suggestions[0]
+        if isinstance(item, dict):
+            compact = {}
+            discovery_id = item.get("discovery_id")
+            if discovery_id is not None:
+                compact["discovery_id"] = str(discovery_id)[:128]
+            summary = item.get("summary")
+            if isinstance(summary, str) and summary:
+                compact["summary"] = summary[:96].rstrip() + (
+                    "…" if len(summary) > 96 else ""
+                )
+            suggestions[0] = compact
+        else:
+            suggestions[0] = {"summary": str(item)[:96]}
+
+        if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+            suggestions.pop()
 
     state = envelope.get("state_summary")
     if isinstance(state, dict) and isinstance(suggestions, list):
