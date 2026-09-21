@@ -102,6 +102,7 @@ esac
 SERVER_URL="${UNITARES_SERVER_URL:-}"
 preflight_ok=1
 auth_probe_deferred=0
+auth_posture="unknown"
 proxy_auth_value=$(printf '%s' "${UNITARES_CLOUD_PROXY_AUTH:-0}" \
   | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 case "${proxy_auth_value}" in
@@ -218,7 +219,37 @@ else:
       fi
     else
       case "${PROBE_CODE}" in
-        200) log "server health route usable (200)" ;;
+        200)
+          log "server health route usable (200)"
+          auth_posture=$(printf '%s' "${PROBE_BODY}" | python3 -c '
+import json
+import sys
+
+auth = json.load(sys.stdin).get("auth", {})
+if auth.get("rest_strict") is True and auth.get("mcp_bearer_required") is True:
+    print("strict")
+elif "rest_strict" in auth and "mcp_bearer_required" in auth:
+    print("not_strict")
+else:
+    print("unknown")
+' 2>/dev/null) || auth_posture="unknown"
+          case "${auth_posture}" in
+            strict)
+              log "server reports strict REST bearer enforcement"
+              ;;
+            not_strict)
+              preflight_ok=0
+              log "WARN server does not require strict REST bearer auth; a loopback"
+              log "     tunnel can bypass UNITARES_HTTP_API_TOKEN. Configure"
+              log "     UNITARES_MCP_BEARER_TOKENS and leave UNITARES_REST_STRICT enabled."
+              ;;
+            *)
+              preflight_ok=0
+              log "WARN server health does not report strict bearer posture; upgrade"
+              log "     it before treating a tool-route response as authentication proof."
+              ;;
+          esac
+          ;;
         *)
           preflight_ok=0
           log "WARN ${HEALTH_URL} returned ${PROBE_CODE}; the session-start hook may be OFFLINE."
@@ -242,7 +273,11 @@ else:
       case "${code}" in
         400)
           if [[ "${PROBE_BODY}" == *"Missing 'name' field"* ]]; then
-            log "server tool route usable (authenticated validation response)"
+            if [ "${auth_posture}" = "strict" ]; then
+              log "server tool route usable (authenticated validation response)"
+            else
+              log "server tool route usable, but credential acceptance is UNVERIFIED"
+            fi
           else
             preflight_ok=0
             log "WARN ${TOOLS_URL} returned an unrecognized 400; hooks may be OFFLINE."

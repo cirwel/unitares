@@ -59,8 +59,13 @@ both believing they are canonical.
    - `UNITARES_LEASE_ATTESTATION_ISSUER` / `_AUDIENCE` — stable,
      deployment-specific identifiers; never reuse across independent
      deployments.
-   - `UNITARES_HTTP_API_TOKEN` and (if external outcome producers post in)
-     `UNITARES_OPERATOR_TOKENS`.
+   - `UNITARES_MCP_BEARER_TOKENS` — a unique bearer used by every remote MCP
+     and REST client. A non-empty allowlist makes REST strict by default; do
+     not set `UNITARES_REST_STRICT=0`. This is load-bearing behind a loopback
+     tunnel, where the local trusted-network branch would otherwise bypass
+     `UNITARES_HTTP_API_TOKEN`.
+   - `UNITARES_HTTP_API_TOKEN` for local dashboard/telemetry clients and (if
+     external outcome producers post in) `UNITARES_OPERATOR_TOKENS`.
 4. `docker compose up -d --build` and wait for health checks.
 5. Verify: `curl -fsS http://127.0.0.1:8767/v1/tools` returns 200, then an
    MCP client `onboard()` round-trip through the tunnel (next section).

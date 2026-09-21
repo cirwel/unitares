@@ -148,7 +148,7 @@ declared as environment variables, not exported in the script:
 | --- | --- | --- |
 | `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be HTTPS on implicit port 443 (or explicit `:443`) |
 | `UNITARES_CLOUD_PROXY_AUTH` | `1` when an environment API credential supplies `Authorization` | Nonsecret signal that setup cannot test the credential injected only after Claude launches |
-| `UNITARES_HTTP_API_TOKEN` | hook bearer credential, only when proxy credentials are unavailable | Environment-visible fallback that authenticates REST hook calls; server-side session binding controls attribution |
+| `UNITARES_HTTP_API_TOKEN` | hosted bearer credential, only when proxy credentials are unavailable | Environment-visible fallback header; its value must be accepted by the server's strict bearer allowlist |
 | `UNITARES_FILE_LEASES_ENABLED` | `0` | No lease plane in-container; avoid the otherwise harmless connection-refused probe |
 | `UNITARES_FILE_LEASES_REQUIRED` | `0` | Required leases override `ENABLED=0` and block edits when the lease plane is absent |
 
@@ -161,6 +161,13 @@ after Claude Code starts, so setup cannot test it and deliberately ends with an
 `session-start` checks the public health route, while `post-stop` suppresses
 network/authentication failures.
 
+The public server must configure the same credential in
+`UNITARES_MCP_BEARER_TOKENS` and must not override `UNITARES_REST_STRICT=0`.
+That hosted posture disables the trusted-network bypass, including when a
+Cloudflare tunnel forwards requests to server loopback. The health response
+advertises both booleans; runtime verification refuses to claim authentication
+unless `rest_strict` and `mcp_bearer_required` are both true.
+
 As the first action after Claude starts, run the canonical payload in runtime
 verification mode:
 
@@ -170,7 +177,8 @@ git show origin/master:scripts/dev/cloud-session-setup.sh \
 ```
 
 This repeats the harmless health request and invalid tool request after the
-proxy credential is available. Do not rely on automatic onboarding/check-ins
+proxy credential is available, and checks the server's reported auth posture.
+Do not rely on automatic onboarding/check-ins
 unless it reports `server tool route usable (authenticated validation
 response)` and ends with `done`; a wrong credential produces a `401` warning.
 

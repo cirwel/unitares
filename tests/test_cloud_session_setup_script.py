@@ -23,6 +23,9 @@ def _run_setup(
     *,
     plugin_enabled: bool,
     health_status: int = 200,
+    health_body: str = (
+        '{"auth":{"rest_strict":true,"mcp_bearer_required":true}}'
+    ),
     tool_status: int = 400,
     tool_body: str = "Missing 'name' field",
     health_exit: int = 0,
@@ -57,7 +60,7 @@ for arg in "$@"; do
 done
 case "$url" in
   */health)
-    printf '%s\\n%s' 'healthy' "$FAKE_HEALTH_STATUS"
+    printf '%s\\n%s' "$FAKE_HEALTH_BODY" "$FAKE_HEALTH_STATUS"
     exit "$FAKE_HEALTH_EXIT"
     ;;
   */v1/tools/call)
@@ -77,6 +80,7 @@ esac
         "FAKE_COMMAND_LOG": str(command_log),
         "FAKE_PLUGIN_JSON": plugin_json,
         "FAKE_HEALTH_STATUS": str(health_status),
+        "FAKE_HEALTH_BODY": health_body,
         "FAKE_TOOL_STATUS": str(tool_status),
         "FAKE_TOOL_BODY": tool_body,
         "FAKE_HEALTH_EXIT": str(health_exit),
@@ -231,6 +235,29 @@ def test_runtime_preflight_rejects_bad_proxy_bearer(tmp_path: Path) -> None:
     assert proc.returncode == 0
     assert "requires a bearer (401)" in proc.stdout
     assert "server tool route usable" not in proc.stdout
+    assert "done with warnings" in proc.stdout
+
+
+def test_runtime_preflight_rejects_loopback_bypass_as_authentication_proof(
+    tmp_path: Path,
+) -> None:
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        health_body=(
+            '{"auth":{"rest_strict":false,"mcp_bearer_required":false}}'
+        ),
+        extra_env={
+            "UNITARES_HTTP_API_TOKEN": "",
+            "UNITARES_CLOUD_PROXY_AUTH": "1",
+        },
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 0
+    assert "does not require strict REST bearer auth" in proc.stdout
+    assert "credential acceptance is UNVERIFIED" in proc.stdout
+    assert "authenticated validation response" not in proc.stdout
     assert "done with warnings" in proc.stdout
 
 
