@@ -88,7 +88,28 @@ def get_tools_for_mode(mode: str = "full") -> Set[str]:
 
 def build_server_instructions(mode: str = None) -> str:
     """Registry-free orientation, safe during server initialization."""
-    return """UNITARES: a self-hosted federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. Many independent agent runtimes share one operator-controlled server and authority domain; the kernel provides their shared accountability record and does not replicate state across independent servers.
+    requested = str(mode or TOOL_MODE).strip().lower()
+    resolved = requested if requested in _VALID_ADVERTISEMENT_MODES else TOOL_MODE
+    advertisement_guidance = (
+        "The initial progressive tools/list is intentionally small. It exposes "
+        "the core workflow plus list_tools, describe_tool and use_tool. To use "
+        "a capability omitted from the initial listing: call "
+        "list_tools(lite=true) for its exact name, "
+        "describe_tool(tool_name=..., action=...) for its parameters, then "
+        "use_tool(tool_name=..., arguments={...}). use_tool re-runs the "
+        "target's normal identity, validation, authorization and timeout "
+        "middleware. Operators can set UNITARES_TOOL_ADVERTISEMENT=full to "
+        "advertise every schema up front; legacy GOVERNANCE_TOOL_MODE settings "
+        "remain ignored."
+        if resolved == "progressive"
+        else
+        "This deployment advertises the complete tools/list schema catalog up "
+        "front because UNITARES_TOOL_ADVERTISEMENT=full. list_tools and "
+        "describe_tool still provide compact and one-tool discovery views; "
+        "use_tool remains available but is not needed to reach an omitted "
+        "schema. Legacy GOVERNANCE_TOOL_MODE settings remain ignored."
+    )
+    return f"""UNITARES: a self-hosted federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. Many independent agent runtimes share one operator-controlled server and authority domain; the kernel provides their shared accountability record and does not replicate state across independent servers.
 
 Fresh processes get fresh identities; real lineage records inherited work, not authority or cross-process sameness. Bind once with start_session(force_new=true) and keep the returned client_session_id; pass it on every later call so writes are attributable. sync_state submits a work report for state derivation and returns the state estimate, a policy action, and a named reason; the original report text is not retained as durable history. record_result grades a check-in against a real outcome — without outcomes the estimate is self-report. check_working_state reads the verdict without writing.
 
@@ -96,7 +117,7 @@ search_shared_memory reads the cross-agent knowledge graph and store_finding / u
 
 Reconstruct prior work from retained shared-memory records, review records, export history, and authorized outcome-evidence reads; clients assemble across their different retention and authorization boundaries, and there is no single reconstruction tool. Core workflow and advanced capabilities are reading paths, not tool filters. Behavioral state estimation, policy/recovery, inference, diagnostics, calibration, and administration remain available. Durable operations require configured storage; consult needs configured inference and completed peer review needs a reviewer. Advertising a tool does not establish dependency readiness.
 
-The initial progressive tools/list is intentionally small. It exposes the core workflow plus list_tools, describe_tool and use_tool. To use a capability omitted from the initial listing: call list_tools(lite=true) for its exact name, describe_tool(tool_name=..., action=...) for its parameters, then use_tool(tool_name=..., arguments={...}). use_tool re-runs the target's normal identity, validation, authorization, stakes and timeout gates. Operators can set UNITARES_TOOL_ADVERTISEMENT=full to advertise every schema up front; legacy GOVERNANCE_TOOL_MODE settings remain ignored.
+{advertisement_guidance}
 
 Prefer the workflow names above; their raw implementations remain available through full advertisement or use_tool for compatibility and specialized callers. list_tools(lite=true) returns the complete compact capability-name index; list_tools(lite=false) groups rich metadata by category and tier. Parameter descriptions are abridged to their first sentence; describe_tool(tool_name=..., action=...) returns full details and the parameters one router action takes."""
 

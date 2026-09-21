@@ -29,8 +29,8 @@ async def test_use_tool_dispatches_an_omitted_public_capability(monkeypatch):
         lambda **kwargs: audit_rows.append(kwargs),
     )
     monkeypatch.setattr(
-        "src.services.tool_usage_recorder.resolve_audit_agent_id",
-        lambda _value: "agent-1",
+        "src.services.tool_usage_recorder.resolve_dispatch_bound_agent_id",
+        lambda _arguments: "00000000-0000-0000-0000-000000000001",
     )
 
     result = await handle_use_tool({
@@ -45,6 +45,7 @@ async def test_use_tool_dispatches_an_omitted_public_capability(monkeypatch):
         {"include_dependencies": False, "client_session_id": "session-1"},
     )]
     assert audit_rows[0]["tool_name"] == "health_check"
+    assert audit_rows[0]["agent_id"] == "00000000-0000-0000-0000-000000000001"
     assert audit_rows[0]["success"] is True
     assert audit_rows[0]["session_id"] == "session-1"
     assert audit_rows[0]["audit_only"] is True
@@ -53,6 +54,7 @@ async def test_use_tool_dispatches_an_omitted_public_capability(monkeypatch):
 @pytest.mark.asyncio
 async def test_use_tool_preserves_explicit_nested_session(monkeypatch):
     calls = []
+    audit_rows = []
 
     async def fake_dispatch(name, arguments):
         calls.append((name, arguments))
@@ -60,10 +62,16 @@ async def test_use_tool_preserves_explicit_nested_session(monkeypatch):
 
     monkeypatch.setattr("src.mcp_handlers.dispatch_tool", fake_dispatch)
     monkeypatch.setattr(
-        "src.services.tool_usage_recorder.record_tool_usage", lambda **_kwargs: None
+        "src.services.tool_usage_recorder.record_tool_usage",
+        lambda **kwargs: audit_rows.append(kwargs),
     )
     monkeypatch.setattr(
-        "src.services.tool_usage_recorder.resolve_audit_agent_id", lambda _value: None
+        "src.services.tool_usage_recorder.resolve_dispatch_bound_agent_id",
+        lambda arguments: (
+            "00000000-0000-0000-0000-000000000002"
+            if arguments.get("client_session_id") == "nested"
+            else None
+        ),
     )
 
     await handle_use_tool({
@@ -73,6 +81,8 @@ async def test_use_tool_preserves_explicit_nested_session(monkeypatch):
     })
 
     assert calls[0][1]["client_session_id"] == "nested"
+    assert audit_rows[0]["agent_id"] == "00000000-0000-0000-0000-000000000002"
+    assert audit_rows[0]["session_id"] == "nested"
 
 
 @pytest.mark.asyncio
@@ -99,4 +109,3 @@ def test_use_tool_is_directly_advertised_but_hidden_targets_are_not():
     assert "use_tool" in progressive
     assert "health_check" not in progressive
     assert "health_check" in full
-

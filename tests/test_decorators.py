@@ -68,6 +68,24 @@ class TestMcpToolDecorator:
     def test_unknown_tool_default_timeout(self):
         assert get_tool_timeout("nonexistent_tool") == 30.0
 
+    @pytest.mark.asyncio
+    async def test_none_timeout_delegates_timeout_enforcement(self):
+        @mcp_tool("test_delegated_timeout", timeout=None, register=False)
+        async def handle_test_delegated_timeout(arguments):
+            await asyncio.sleep(0.01)
+            return [arguments]
+
+        assert await handle_test_delegated_timeout({"ok": True}) == [{"ok": True}]
+
+    @pytest.mark.asyncio
+    async def test_none_timeout_does_not_relabel_inner_timeout(self):
+        @mcp_tool("test_inner_timeout", timeout=None, register=False)
+        async def handle_test_inner_timeout(_arguments):
+            raise asyncio.TimeoutError("inner timeout")
+
+        with pytest.raises(asyncio.TimeoutError, match="inner timeout"):
+            await handle_test_inner_timeout({})
+
     def test_custom_description(self):
         @mcp_tool("test_desc_tool", description="A custom description")
         async def handle_test_desc_tool(arguments):

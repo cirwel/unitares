@@ -163,7 +163,7 @@ class ToolEdge:
     schema: str | None = None
     identity: str = "required"
     stakes: str = "baseline"
-    timeout: float = 30.0
+    timeout: float | None = 30.0
     deprecated: bool = False
     hidden: bool = False
     superseded_by: str | None = None
@@ -1321,7 +1321,8 @@ def render(
         schema = f"`{doc_site(tool.schema)}`" if tool.schema else "—"
         lines.append(
             f"| `{tool.name}` | `{doc_site(tool.handler)}` | {schema} | "
-            f"{tool.timeout:g}s | {_flags(tool)} |"
+            f"{f'{tool.timeout:g}s' if tool.timeout is not None else 'target-defined'} | "
+            f"{_flags(tool)} |"
         )
 
     lines += [

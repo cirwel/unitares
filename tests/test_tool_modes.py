@@ -345,15 +345,24 @@ class TestServerInstructions:
                 assert name in text, f"{name} missing from {mode} instructions"
 
     def test_instructions_explain_progressive_discovery(self):
-        for mode in ("minimal", "standard", "lite", "full"):
-            text = build_server_instructions(mode)
-            assert text == build_server_instructions()
-            assert "initial progressive tools/list" in text
-            assert "use_tool" in text
-            assert "UNITARES_TOOL_ADVERTISEMENT=full" in text
-            assert "settings remain ignored" in text
-            assert "authorization" in text
-            assert "Not listed here" not in text
+        text = build_server_instructions("progressive")
+        assert "initial progressive tools/list" in text
+        assert "use_tool" in text
+        assert "UNITARES_TOOL_ADVERTISEMENT=full" in text
+        assert "settings remain ignored" in text
+        assert "authorization" in text
+        assert "stakes" not in text
+        assert "Not listed here" not in text
+
+    def test_full_instructions_match_full_advertisement(self):
+        text = build_server_instructions("full")
+        assert "complete tools/list schema catalog up front" in text
+        assert "initial progressive tools/list" not in text
+        assert "use_tool remains available" in text
+
+    def test_legacy_instruction_modes_follow_process_default(self):
+        for mode in ("minimal", "standard", "lite", "operator_readonly"):
+            assert build_server_instructions(mode) == build_server_instructions()
 
     def test_no_empty_clause_on_any_known_mode(self):
         """A profile with nothing to disclose must not emit a dangling list."""

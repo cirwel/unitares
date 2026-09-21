@@ -81,7 +81,7 @@ primary workflow aliases, remains in the complete catalog. By default MCP,
 REST, and stdio advertise a small workflow surface plus `list_tools`,
 `describe_tool`, and `use_tool`; schema-driven clients discover an omitted name,
 inspect it, then invoke it through `use_tool`. The gateway runs the target's
-normal identity, validation, authorization, stakes, timeout, response, and
+normal identity, validation, authorization, timeout, response, and
 telemetry paths. `UNITARES_TOOL_ADVERTISEMENT=full` advertises every schema up
 front. Legacy `GOVERNANCE_TOOL_MODE` values are ignored. Existing action
 authorization and identity gates remain in force.
