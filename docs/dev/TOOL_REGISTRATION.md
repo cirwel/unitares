@@ -403,17 +403,15 @@ across unrelated changes. The final-listing tests check keep/strip/keep
 behavior independently of catalog policy. Dropping titles preserves
 validation but changes schema fingerprints.
 
-`src/schema_brief.py::apply_null_default_mode` similarly removes
-`default: null` annotations by default. In JSON Schema, `default` does not
-participate in validation: omission from `required` still makes a parameter
-optional, and its nullable type still controls whether an explicit null is
-accepted. Non-null defaults remain advertised because they tell a caller what
-the server supplies. As with titles, the registrar retains null defaults and
-the final listing applies the policy to a copied Tool object, leaving wrapper
-and handler validation untouched.
+`src/schema_brief.py::apply_null_default_mode` can remove `default: null`
+annotations only when an operator explicitly sets
+`UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip`. In JSON Schema, `default` does not
+participate in validation, but it is caller-visible omission/default metadata,
+so the default policy keeps it. As with titles, the registrar retains null
+defaults and the final listing applies the optional trim to a copied Tool
+object, leaving wrapper and handler validation untouched.
 
-`UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep` restores null defaults in the current
-listing. The structural walk does not enter caller data under `default`,
+The structural walk does not enter caller data under `default`,
 `const`, `enum` or examples, or arbitrary extension metadata, so a payload or
 plugin annotation containing a key named `default` is preserved. Parity tests
 cover every description, title and null-default mode.
@@ -426,11 +424,11 @@ annotation (404 total):
 |---|---:|---:|---:|
 | 50 tools, complete catalog | 145,384 B | 139,324 B | 6,060 B (4.2%) |
 
-The default surface has already taken that saving, so its `--boilerplate`
-column reads zero. To reproduce the retained baseline and the 6,060 B delta:
+The default surface preserves the metadata. To reproduce the optional 6,060 B
+trim:
 
 ```bash
-UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep \
+UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip \
   python3 scripts/diagnostics/tool_surface_cost.py --mode full --boilerplate
 ```
 
