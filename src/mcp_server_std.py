@@ -185,7 +185,12 @@ async def _proxy_http_list_tools() -> list[Tool]:
     import urllib.request
 
     base = _normalize_http_proxy_base(STDIO_PROXY_HTTP_URL)
-    url = f"{base}/v1/tools"
+    # Always fetch the complete backend catalog, then apply this stdio
+    # process's advertisement mode below.  The proxy and backend can be
+    # configured independently; asking for the backend default would make a
+    # locally configured ``full`` proxy unable to restore schemas omitted by
+    # a progressive backend.
+    url = f"{base}/v1/tools?mode=full"
 
     headers = {"Accept": "application/json", "X-Session-ID": f"stdio:{os.getpid()}"}
     if STDIO_PROXY_HTTP_BEARER_TOKEN:
