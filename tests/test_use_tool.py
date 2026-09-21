@@ -167,6 +167,38 @@ async def test_use_tool_reenters_mcp_wrapper_for_routing_and_telemetry(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_mcp_gateway_records_only_the_delegated_target(monkeypatch):
+    from src import tool_registration
+
+    audit_rows = []
+
+    async def fake_dispatch(name, arguments):
+        if name == "use_tool":
+            return await handle_use_tool(arguments)
+        assert name == "health_check"
+        return [TextContent(type="text", text=json.dumps({"success": True}))]
+
+    monkeypatch.setattr(tool_registration, "dispatch_tool", fake_dispatch)
+    monkeypatch.setattr(
+        tool_registration,
+        "record_tool_usage",
+        lambda **kwargs: audit_rows.append(kwargs),
+    )
+    monkeypatch.setattr(tool_registration, "_wave3a_get_route", lambda _name: None)
+    tool_registration._tool_wrappers_cache.clear()
+    try:
+        result = await tool_registration.get_tool_wrapper("use_tool")(
+            tool_name="health_check",
+            arguments={},
+        )
+    finally:
+        tool_registration._tool_wrappers_cache.clear()
+
+    assert result == {"success": True}
+    assert [row["tool_name"] for row in audit_rows] == ["health_check"]
+
+
+@pytest.mark.asyncio
 async def test_use_tool_reenters_rest_executor(monkeypatch):
     calls = []
 
@@ -186,6 +218,68 @@ async def test_use_tool_reenters_rest_executor(monkeypatch):
 
     assert _payload(result) == {"healthy": True}
     assert calls == [("health_check", {})]
+
+
+@pytest.mark.asyncio
+async def test_rest_gateway_records_only_the_delegated_target(monkeypatch):
+    from src.services import http_tool_service
+
+    audit_rows = []
+
+    async def fake_fallback(name, arguments):
+        assert name == "use_tool"
+        return await handle_use_tool(arguments)
+
+    monkeypatch.setattr(
+        http_tool_service,
+        "execute_http_dispatch_fallback",
+        fake_fallback,
+    )
+    monkeypatch.setattr(
+        http_tool_service,
+        "record_tool_usage",
+        lambda **kwargs: audit_rows.append(kwargs),
+    )
+    monkeypatch.setattr(http_tool_service, "wave3a_get_route", lambda _name: None)
+
+    result = await http_tool_service.execute_http_tool(
+        "use_tool",
+        {"tool_name": "health_check", "arguments": {}},
+    )
+
+    assert result is not None
+    assert [row["tool_name"] for row in audit_rows] == ["health_check"]
+
+
+@pytest.mark.asyncio
+async def test_rejected_rest_gateway_still_records_the_outer_call(monkeypatch):
+    from src.services import http_tool_service
+
+    audit_rows = []
+
+    async def fake_fallback(name, arguments):
+        assert name == "use_tool"
+        return await handle_use_tool(arguments)
+
+    monkeypatch.setattr(
+        http_tool_service,
+        "execute_http_dispatch_fallback",
+        fake_fallback,
+    )
+    monkeypatch.setattr(
+        http_tool_service,
+        "record_tool_usage",
+        lambda **kwargs: audit_rows.append(kwargs),
+    )
+    monkeypatch.setattr(http_tool_service, "wave3a_get_route", lambda _name: None)
+
+    result = await http_tool_service.execute_http_tool(
+        "use_tool",
+        {"tool_name": "use_tool", "arguments": {}},
+    )
+
+    assert _payload(result)["error_code"] == "RECURSIVE_TOOL_INVOCATION"
+    assert [row["tool_name"] for row in audit_rows] == ["use_tool"]
 
 
 @pytest.mark.asyncio
@@ -471,7 +565,8 @@ async def test_stdio_gateway_reenters_call_boundary_with_request_side_actor(monk
     })
 
     assert _payload(result) == {"success": True}
-    target_row = next(row for row in audit_rows if row["tool_name"] == "health_check")
+    assert [row["tool_name"] for row in audit_rows] == ["health_check"]
+    target_row = audit_rows[0]
     assert target_row["agent_id"] is None
     assert target_row["session_id"] == "stdio-session"
 

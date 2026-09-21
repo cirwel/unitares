@@ -338,6 +338,7 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     agent_id = arguments.get("agent_id") if isinstance(arguments, dict) else None
     session_id = arguments.get("client_session_id") if isinstance(arguments, dict) else None
     t0 = time.monotonic()
+    nested_delegated = False
     # #1387 action discriminator. Built HERE, alongside the latency clock and
     # BEFORE any dispatch, because the pipeline mutates `arguments` in place:
     # `params_step.resolve_alias` writes the alias's implied action into the
@@ -400,7 +401,12 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             set_nested_tool_invoker,
         )
 
-        invoker_token = set_nested_tool_invoker(execute_nested_http_tool)
+        async def _nested_invoker(target_name, target_arguments):
+            nonlocal nested_delegated
+            nested_delegated = True
+            return await execute_nested_http_tool(target_name, target_arguments)
+
+        invoker_token = set_nested_tool_invoker(_nested_invoker)
         if handler is not None:
             try:
                 result = await handler(arguments)
@@ -408,11 +414,12 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
                 reset_nested_tool_invoker(invoker_token)
             latency_ms = int((time.monotonic() - t0) * 1000)
             success, error_type = classify_tool_result(result)
-            record_tool_usage(tool_name=tool_name,
-                              agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
-                              success=success, error_type=error_type,
-                              latency_ms=latency_ms, session_id=session_id,
-                              payload=usage_payload)
+            if not nested_delegated:
+                record_tool_usage(tool_name=tool_name,
+                                  agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
+                                  success=success, error_type=error_type,
+                                  latency_ms=latency_ms, session_id=session_id,
+                                  payload=usage_payload)
             return _normalize_direct_http_result(result)
         try:
             result = await execute_http_dispatch_fallback(tool_name, arguments)
@@ -420,16 +427,18 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             reset_nested_tool_invoker(invoker_token)
         latency_ms = int((time.monotonic() - t0) * 1000)
         success, error_type = classify_tool_result(result)
-        record_tool_usage(tool_name=tool_name,
-                          agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
-                          success=success, error_type=error_type,
-                          latency_ms=latency_ms, session_id=session_id,
-                          payload=usage_payload)
+        if not nested_delegated:
+            record_tool_usage(tool_name=tool_name,
+                              agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
+                              success=success, error_type=error_type,
+                              latency_ms=latency_ms, session_id=session_id,
+                              payload=usage_payload)
         return result
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
-        record_tool_usage(tool_name=tool_name, agent_id=agent_id,
-                          success=False, error_type=type(e).__name__,
-                          latency_ms=latency_ms, session_id=session_id,
-                          payload=usage_payload)
+        if not nested_delegated:
+            record_tool_usage(tool_name=tool_name, agent_id=agent_id,
+                              success=False, error_type=type(e).__name__,
+                              latency_ms=latency_ms, session_id=session_id,
+                              payload=usage_payload)
         raise

@@ -287,6 +287,7 @@ def get_tool_wrapper(tool_name: str):
             usage_payload = {}
             session_id = None
             dispatch_metadata_sanitized = False
+            nested_delegated = False
 
             def _record(success, error_type=None, result=None):
                 """Fire-and-forget audit row.
@@ -401,6 +402,8 @@ def get_tool_wrapper(tool_name: str):
                 )
 
                 async def _nested_invoker(target_name, target_arguments):
+                    nonlocal nested_delegated
+                    nested_delegated = True
                     return await _invoke_mcp_nested_tool(
                         target_name,
                         target_arguments,
@@ -415,8 +418,9 @@ def get_tool_wrapper(tool_name: str):
 
                 # Record successful call metrics
                 duration = time.time() - start_time
-                TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="success").inc()
-                TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
+                if not nested_delegated:
+                    TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="success").inc()
+                    TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
 
                 if result is None:
                     TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="not_found").inc()
@@ -429,7 +433,8 @@ def get_tool_wrapper(tool_name: str):
                 # see _identity_refusal_status). A refused call is now
                 # countable instead of auditing as a succeeding anonymous one.
                 success, error_type = classify_tool_result(result)
-                _record(success, error_type=error_type, result=result)
+                if not nested_delegated:
+                    _record(success, error_type=error_type, result=result)
 
                 # Extract structured payload from TextContent response
                 # Many MCP clients enforce outputSchema and require structured output.
@@ -452,14 +457,16 @@ def get_tool_wrapper(tool_name: str):
             except Exception as e:
                 # Record error metrics
                 duration = time.time() - start_time
-                TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="error").inc()
-                TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
+                if not nested_delegated:
+                    TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="error").inc()
+                    TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
 
                 # Log error for visibility
                 # Note: @mcp_tool decorator on handlers also catches exceptions,
                 # but dispatch_tool may raise before reaching handler (e.g., rate limit)
                 logger.error(f"Error in tool wrapper {tool_name}: {e}", exc_info=True)
-                _record(False, error_type=type(e).__name__)
+                if not nested_delegated:
+                    _record(False, error_type=type(e).__name__)
                 return {"success": False, "error": str(e), "error_type": type(e).__name__}
 
         wrapper.__name__ = tool_name

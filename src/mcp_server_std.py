@@ -541,6 +541,7 @@ async def _call_local_tool(
     # an alias's implied action; building afterwards would misreport every
     # aliased call as action_source="explicit".
     usage_payload = build_tool_usage_payload(name, arguments)
+    nested_delegated = False
     try:
         from src.mcp_handlers import dispatch_tool
         from src.mcp_handlers.context import (
@@ -549,6 +550,8 @@ async def _call_local_tool(
         )
 
         async def _nested_invoker(target_name, target_arguments):
+            nonlocal nested_delegated
+            nested_delegated = True
             nested = dict(target_arguments or {})
             if (
                 "client_session_id" not in nested
@@ -569,11 +572,12 @@ async def _call_local_tool(
         latency_ms = int((time.monotonic() - t0) * 1000)
         if result is not None:
             success, error_type = classify_tool_result(result)
-            record_tool_usage(tool_name=name,
-                              agent_id=resolve_minted_agent_id(name, agent_id, result),
-                              success=success,
-                              error_type=error_type, latency_ms=latency_ms,
-                              session_id=session_id, payload=usage_payload)
+            if not nested_delegated:
+                record_tool_usage(tool_name=name,
+                                  agent_id=resolve_minted_agent_id(name, agent_id, result),
+                                  success=success,
+                                  error_type=error_type, latency_ms=latency_ms,
+                                  session_id=session_id, payload=usage_payload)
             return result
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
                           error_type="unknown_tool", latency_ms=latency_ms,
@@ -584,10 +588,11 @@ async def _call_local_tool(
         # failure returned an error to the caller and left audit.tool_usage
         # silent, so a broken deploy looked like "no traffic" rather than
         # "every call failed".
-        record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
-                          error_type="handler_registry_unavailable",
-                          latency_ms=int((time.monotonic() - t0) * 1000),
-                          session_id=session_id, payload=usage_payload)
+        if not nested_delegated:
+            record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
+                              error_type="handler_registry_unavailable",
+                              latency_ms=int((time.monotonic() - t0) * 1000),
+                              session_id=session_id, payload=usage_payload)
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Handler registry not available for tool '{name}'"}, indent=2))]
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -597,9 +602,10 @@ async def _call_local_tool(
             f"Error executing tool '{name}': {str(e)}",
             recovery={"action": "Check tool parameters and try again"}
         )
-        record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
-                          error_type="execution_error", latency_ms=latency_ms,
-                          session_id=session_id, payload=usage_payload)
+        if not nested_delegated:
+            record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
+                              error_type="execution_error", latency_ms=latency_ms,
+                              session_id=session_id, payload=usage_payload)
         return [sanitized_error]
 
 
