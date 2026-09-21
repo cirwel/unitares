@@ -81,7 +81,7 @@ that posture deliberately: `pre-edit` then fails closed when leases are absent.
 | `pre-governance-call` | PreToolUse on governance tools | Silent no-op | 0.12s |
 | `post-checkin` | PostToolUse on check-ins | Silent no-op | 0.04s |
 | `post-identity` | PostToolUse on onboarding | Silent no-op | 0.07s |
-| `pre-push` | PreToolUse Bash | Inert — `merged_pr_guard.py` fails open when `gh` is absent, and it is | 0.06s |
+| `pre-push` | PreToolUse Bash | Queries PR state through the proxy-authenticated `gh`; still fails open if lookup fails | 0.06s |
 | `post-stop` | Stop | Attempts a check-in, gives up | 0.37s |
 | `session-end` | SessionEnd | Local cleanup only | 0.13s |
 
@@ -102,7 +102,9 @@ Two things that could have blocked portability and do not:
 What is lost while OFFLINE is therefore exactly the network-dependent
 behavior — auto-onboard, the per-turn substrate check-in, KG recall, file
 leases — and nothing else. Hook presence alone still buys the SessionStart
-skill pointers and the merged-PR push guard (the latter only where `gh` exists).
+skill pointers and the merged-PR push guard. Anthropic-hosted cloud images
+include `gh`; a self-hosted environment depends on the tools in its runner
+image.
 
 ## Wiring
 
@@ -110,12 +112,17 @@ skill pointers and the merged-PR push guard (the latter only where `gh` exists).
 environments). It runs after the repository is cloned:
 
 ```bash
-bash scripts/dev/cloud-session-setup.sh
+if [ -f scripts/dev/cloud-session-setup.sh ]; then
+  bash scripts/dev/cloud-session-setup.sh || true
+fi
 ```
 
-Fresh install measured at 3.4s; re-runs short-circuit. The script never fails
-the session — a failed install leaves the session in the state it would have
-had anyway.
+The existence guard matters when an environment is reused for a repository
+that does not carry this path. The trailing `|| true` follows the cloud setup
+contract that non-critical commands must exit zero. Once invoked, the script
+also makes every internal exit successful, so a failed install leaves the
+session in the state it would have had anyway. Fresh install measured at 3.4s;
+re-runs short-circuit.
 
 **2. Set environment variables** on the same environment. A setup script's
 exports die with its shell and never reach the agent process, so these must be
@@ -137,27 +144,29 @@ governance tools and OFFLINE hooks, which is a coherent posture: reads and
 manual `sync_state` calls still work through the MCP connector, and only the
 automatic lifecycle is absent.
 
-## The review gate cannot run from a cloud session
+## Review records work; the automatic Codex reviewer does not
 
 A third gap, in the same family and worth knowing before shipping cloud-session
-work: `scripts/dev/review.sh` cannot satisfy the `review` status check from a
-cloud container.
+work: the hosted image can read and update the PR, but it does not include every
+heterogeneous reviewer CLI.
 
-- `review_gate.py` reads the PR and posts the record with `gh pr view` and
-  `gh pr comment`. Cloud sessions have no `gh` — GitHub access is the MCP
-  server instead — so every subcommand, `record` included, fails at
-  `FileNotFoundError: 'gh'`.
+- Anthropic-hosted images include proxy-authenticated `gh`, so `gh pr view`,
+  `gh pr comment`, `review.sh record`, and the merged-PR push guard work for
+  repositories attached to the session. The proxy supports the PR operations
+  these paths use, although it restricts unrelated GraphQL operations.
 - The reviewer is heterogeneous by construction: `default_reviewer` picks
-  `codex` for any branch not named `codex/*`. There is no `codex` CLI in the
-  container either.
+  `codex` for any branch not named `codex/*`. The standard hosted image does
+  not include the Codex CLI, so `review.sh review` cannot generate that
+  automatic review there.
 
 Self-reviewing is not the workaround, and the gate already refuses it —
 `cmd_record` rejects a record whose reviewer name matches the branch prefix,
-and the module docstring says to treat an author's record as no review. So a PR
-pushed from a cloud session stays `review`-pending until someone runs
-`./scripts/dev/review.sh` from a machine that has `gh` and the reviewing CLI,
-or records a human or council review there with
-`./scripts/dev/review.sh record <file> --reviewer-name <who>`.
+and the module docstring says to treat an author's record as no review. A PR
+that needs the Codex reviewer therefore stays `review`-pending until an
+external reviewer produces the artifact. The cloud session can post a human or
+council artifact itself with
+`./scripts/dev/review.sh record <file> --reviewer-name <who>`, or another
+machine with the reviewer CLI can run `./scripts/dev/review.sh review`.
 
 The record is keyed on the diff, so it can be produced at any later point
 without re-pushing.
