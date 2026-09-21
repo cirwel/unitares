@@ -11,9 +11,10 @@
 # it keeps the wiring out of the tracked tree entirely.
 #
 # docs/operations/cloud-session-plugin.md gives the setup-field wrapper. It
-# verifies a dedicated environment's canonical remote and reads this payload
-# from origin/master before executing it; do not run a checkout-relative copy
-# from a shared environment. Setup mode is idempotent and keeps every internal
+# verifies a dedicated environment's canonical remote while its cache is built
+# and reads this payload from origin/master before executing it. Cached sessions
+# skip setup entirely, so do not attach the environment to another repository.
+# Setup mode is idempotent and keeps every internal
 # exit successful: a broken install leaves a session without governance hooks,
 # which is the state it would have had anyway. Runtime diagnostics are read-only
 # and fail when plugin configuration or endpoint/authentication checks fail;
@@ -33,6 +34,9 @@ PLUGIN_ID="unitares-governance@${MARKETPLACE_NAME}"
 # setup-script ceiling, with margin left for inspection and preflight probes.
 PLUGIN_COMMAND_TIMEOUT_SECONDS=120
 PLUGIN_INSPECTION_TIMEOUT_SECONDS=15
+# Claude clones GitHub owner/repo shorthand over SSH by default. Hosted cloud
+# containers have HTTPS GitHub access but no operator SSH key.
+export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1
 
 log() { printf '[unitares-setup] %s\n' "$*"; }
 
