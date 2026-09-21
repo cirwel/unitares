@@ -146,7 +146,7 @@ declared as environment variables, not exported in the script:
 
 | Variable | Value | Why |
 | --- | --- | --- |
-| `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be https on an allowlisted host |
+| `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be HTTPS on implicit port 443 (or explicit `:443`) |
 | `UNITARES_CLOUD_PROXY_AUTH` | `1` when an environment API credential supplies `Authorization` | Nonsecret signal that setup cannot test the credential injected only after Claude launches |
 | `UNITARES_HTTP_API_TOKEN` | hook bearer credential, only when proxy credentials are unavailable | Environment-visible fallback that authenticates REST hook calls; server-side session binding controls attribution |
 | `UNITARES_FILE_LEASES_ENABLED` | `0` | No lease plane in-container; avoid the otherwise harmless connection-refused probe |
@@ -156,8 +156,23 @@ On Pro and Max, store the bearer as an environment **API credential** scoped to
 the governance hostname, using an `Authorization: Bearer` header. Omit
 `UNITARES_HTTP_API_TOKEN` and set the nonsecret
 `UNITARES_CLOUD_PROXY_AUTH=1`. The agent proxy injects that credential only
-after Claude Code starts, so setup deliberately defers the authenticated tool
-probe; the first running hook is the real verification.
+after Claude Code starts, so setup cannot test it and deliberately ends with an
+`UNVERIFIED` warning. The hooks fail open and are not an authentication test:
+`session-start` checks the public health route, while `post-stop` suppresses
+network/authentication failures.
+
+As the first action after Claude starts, run the canonical payload in runtime
+verification mode:
+
+```bash
+git show origin/master:scripts/dev/cloud-session-setup.sh \
+  | bash -s -- --verify-runtime
+```
+
+This repeats the harmless health request and invalid tool request after the
+proxy credential is available. Do not rely on automatic onboarding/check-ins
+unless it reports `server tool route usable (authenticated validation
+response)` and ends with `done`; a wrong credential produces a `401` warning.
 
 Team and Enterprise do not currently expose environment API credentials. If a
 bearer environment variable is unavoidable, use only this private dedicated
