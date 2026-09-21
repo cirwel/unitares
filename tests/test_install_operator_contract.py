@@ -189,6 +189,7 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "http://127.0.0.1:8767/v1/tools -o /dev/null" not in compose
     assert 'System.get_env("UNITARES_MCP_BEARER_TOKEN")' in lease_application
     assert 'System.get_env("UNITARES_HTTP_API_TOKEN")' in lease_application
+    assert "String.trim(value) != \"\"" in lease_application
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 

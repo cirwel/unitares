@@ -91,6 +91,31 @@ class TestHealthEndpoint:
         assert auth["enabled"] is True
         assert auth["rest_strict"] is True
         assert auth["mcp_bearer_required"] is True
+        assert auth["header"] == "Authorization: Bearer <token>"
+
+    @pytest.mark.asyncio
+    async def test_health_does_not_advertise_unaccepted_local_bearer(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+        monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+        monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "local-only-token")
+        request = MagicMock()
+        request.state._http_api_server_ready_fn = lambda: True
+        request.state._http_api_server_start_time = time.time()
+        request.state._http_api_server_version = "test"
+        request.state._http_api_server_build_sha = "test-sha"
+        request.state._http_api_has_streamable_http = True
+
+        no_pool = type("NoPool", (), {"_pool": None})()
+        with patch("src.db.get_db", return_value=no_pool):
+            response = await http_health(request)
+        auth = json.loads(response.body)["auth"]
+
+        assert auth["enabled"] is True
+        assert auth["rest_strict"] is True
+        assert auth["mcp_bearer_required"] is False
+        assert auth["header"] is None
 
 
 # ============================================================================
