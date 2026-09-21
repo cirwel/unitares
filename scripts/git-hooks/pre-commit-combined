@@ -65,7 +65,7 @@ if [ -n "$NEW_MARKDOWN_FILES" ]; then
            [[ "$file" == "AGENTS.md" ]] || \
            [[ "$file" == "CHANGELOG.md" ]] || \
            [[ "$file" == "START_HERE.md" ]] || \
-           [[ "$file" == "CODEX_START.md" ]] || \
+           [[ "$file" == "docs/guides/CODEX_START.md" ]] || \
            [[ "$file" == "docs/CHANGELOG.md" ]] || \
            [[ "$file" == "docs/README.md" ]] || \
            [[ "$file" == "docs/QUICK_REFERENCE.md" ]] || \

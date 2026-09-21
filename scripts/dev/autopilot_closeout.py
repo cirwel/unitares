@@ -39,7 +39,7 @@ DOC_ONLY_SUFFIXES = (".md", ".rst", ".txt", ".adoc")
 DOC_ONLY_FILES = {
     "AGENTS.md",
     "CLAUDE.md",
-    "CODEX_START.md",
+    "docs/guides/CODEX_START.md",
     "README.md",
 }
 WATCHER_TOTAL_RE = re.compile(r"Total unresolved:\s+(\d+)")

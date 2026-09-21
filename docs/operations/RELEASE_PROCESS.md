@@ -237,7 +237,7 @@ are a model of it, never the thing itself.
 
 The SDK has its own version series in `agents/sdk/pyproject.toml`.
 
-1. Confirm the intended server range in [COMPATIBILITY.md](../../COMPATIBILITY.md).
+1. Confirm the intended server range in [COMPATIBILITY.md](../COMPATIBILITY.md).
 2. Run `pytest agents/sdk/tests -q` and build both wheel and source distribution.
 3. Confirm the `pypi` GitHub environment and PyPI trusted publisher are
    registered for repository `cirwel/unitares`, workflow `publish-sdk.yml`, and

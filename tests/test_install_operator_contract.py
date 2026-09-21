@@ -310,7 +310,7 @@ def test_operator_surfaces_do_not_demote_redis_to_optional_cache() -> None:
 def _advertised_sdk_versions() -> dict[str, str]:
     """Every SDK version this repository advertises to the public, by surface."""
     surfaces = {
-        "COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
+        "docs/COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
         "docs/public-site/index.md": r"pip install unitares-sdk==([\d.]+)",
     }
     found = {}
@@ -345,7 +345,7 @@ def test_public_sdk_install_commands_agree() -> None:
 
 
 def test_published_sdk_and_rest_envelope_are_current() -> None:
-    compatibility = _read("COMPATIBILITY.md")
+    compatibility = _read("docs/COMPATIBILITY.md")
     manual = _read("docs/manual/03-running-the-server.md")
     assert "pip install unitares-sdk==" in compatibility
     assert "Until its first PyPI release" not in compatibility

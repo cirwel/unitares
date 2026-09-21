@@ -13,7 +13,7 @@ If GitHub PVR is unavailable to you (e.g., you don't have an account), open a pu
 UNITARES is a runtime governance MCP server for AI-agent fleets. In-scope vulnerabilities include:
 
 - Authentication / identity bypasses in the MCP handlers, the gateway (port 8768), the lease plane (port 8788), or the dashboard
-- Bearer-token handling, session-cache leakage, or cross-agent identity confusion (see [`docs/ontology/identity.md`](docs/ontology/identity.md) for the identity model)
+- Bearer-token handling, session-cache leakage, or cross-agent identity confusion (see [`docs/ontology/identity.md`](../docs/ontology/identity.md) for the identity model)
 - Injection / RCE through MCP tool inputs, audit-log entries, or knowledge-graph writes
 - Escaping the **governed-effect execute plane** (port 8788) — committing a host effect (`agent_spawn` / `file_write` / commit) without passing the strong-tier identity gate, the per-effect governance veto, the bearer token, or lease custody (see the section below; off by default)
 - SQL injection, AGE injection, or other database-layer issues
@@ -63,4 +63,4 @@ window.
 
 ## Production deployment note
 
-UNITARES has been running continuously in production since November 2025 — but on a **single-operator fleet**. The threat model has been "internal fleet hygiene + honest agent identity," not "hostile external clients." Multi-tenant or public-facing deployment will benefit from harder auth posture than the current defaults (bearer tokens, loopback binding, schema-isolated Postgres). See [`docs/integration/MCP_CLIENTS.md`](docs/integration/MCP_CLIENTS.md) and [`docs/operations/OPERATOR_RUNBOOK.md`](docs/operations/OPERATOR_RUNBOOK.md).
+UNITARES has been running continuously in production since November 2025 — but on a **single-operator fleet**. The threat model has been "internal fleet hygiene + honest agent identity," not "hostile external clients." Multi-tenant or public-facing deployment will benefit from harder auth posture than the current defaults (bearer tokens, loopback binding, schema-isolated Postgres). See [`docs/integration/MCP_CLIENTS.md`](../docs/integration/MCP_CLIENTS.md) and [`docs/operations/OPERATOR_RUNBOOK.md`](../docs/operations/OPERATOR_RUNBOOK.md).

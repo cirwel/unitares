@@ -13,7 +13,7 @@ best-effort; there is no response-time or uptime SLA.
 
 Only the current `master` branch and latest tagged server release receive fixes.
 The exact security-support boundary is in [SECURITY.md](SECURITY.md); component
-and client versions are mapped in [COMPATIBILITY.md](COMPATIBILITY.md).
+and client versions are mapped in [COMPATIBILITY.md](../docs/COMPATIBILITY.md).
 
 ## What best-effort means
 

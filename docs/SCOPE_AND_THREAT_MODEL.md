@@ -215,4 +215,4 @@ binding, per-class payload ceilings, and content-hash reversibility. The honest
 residual: those gates have had the same ad-hoc-rather-than-sustained adversarial
 testing as the rest of the system, and a compromised strong-tier proposer credential
 would convert to host execution — so the credential boundary is load-bearing. The
-security-reporting contract for this surface lives in [`SECURITY.md`](../SECURITY.md).
+security-reporting contract for this surface lives in [`SECURITY.md`](../.github/SECURITY.md).
