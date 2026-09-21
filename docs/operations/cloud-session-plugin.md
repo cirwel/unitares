@@ -124,7 +124,7 @@ declared as environment variables, not exported in the script:
 | Variable | Value | Why |
 | --- | --- | --- |
 | `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be https on an allowlisted host |
-| `UNITARES_HTTP_API_TOKEN` | client bearer token | Without it writes are unattributable |
+| `UNITARES_HTTP_API_TOKEN` | hook bearer credential | Authenticates REST hook calls; server-side session binding controls attribution |
 | `UNITARES_FILE_LEASES_ENABLED` | `0` | No lease plane in-container; avoid the otherwise harmless connection-refused probe |
 | `UNITARES_FILE_LEASES_REQUIRED` | `0` | Required leases override `ENABLED=0` and block edits when the lease plane is absent |
 

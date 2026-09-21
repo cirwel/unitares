@@ -142,7 +142,7 @@ def test_tool_probe_rejects_generic_proxy_400(tmp_path: Path) -> None:
     assert "done with warnings" in proc.stdout
 
 
-def test_probe_keeps_received_status_when_curl_exits_nonzero(tmp_path: Path) -> None:
+def test_probe_reports_received_status_but_fails_on_curl_error(tmp_path: Path) -> None:
     proc, _ = _run_setup(
         tmp_path,
         plugin_enabled=True,
@@ -151,10 +151,28 @@ def test_probe_keeps_received_status_when_curl_exits_nonzero(tmp_path: Path) -> 
     )
 
     assert proc.returncode == 0
-    assert "server health route usable (200)" in proc.stdout
-    assert "server tool route usable" in proc.stdout
-    assert "unreachable" not in proc.stdout
-    assert "done with warnings" not in proc.stdout
+    assert "transfer failed after HTTP 200 (curl 28)" in proc.stdout
+    assert "transfer failed after HTTP 400 (curl 28)" in proc.stdout
+    assert "server health route usable" not in proc.stdout
+    assert "server tool route usable" not in proc.stdout
+    assert "done with warnings" in proc.stdout
+
+
+def test_missing_bearer_warning_names_authentication_not_attribution(
+    tmp_path: Path,
+) -> None:
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        tool_status=401,
+        extra_env={"UNITARES_HTTP_API_TOKEN": ""},
+    )
+
+    assert proc.returncode == 0
+    assert "REST hooks need another accepted" in proc.stdout
+    assert "authentication path or they receive 401" in proc.stdout
+    assert "Attribution is session-bound" in proc.stdout
+    assert "writes to the server will not be attributable" not in proc.stdout
 
 
 def test_server_url_with_mcp_suffix_is_rejected_as_hook_incompatible(

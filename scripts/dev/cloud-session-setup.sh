@@ -100,8 +100,10 @@ probe_url() {
   if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
     response=$(printf 'Authorization: Bearer %s\n' "${UNITARES_HTTP_API_TOKEN}" \
       | curl -sS --max-time 3 -H @- "$@" -w '\n%{http_code}' 2>/dev/null)
+    PROBE_CURL_RC=$?
   else
     response=$(curl -sS --max-time 3 "$@" -w '\n%{http_code}' 2>/dev/null)
+    PROBE_CURL_RC=$?
   fi
   case "${response}" in
     *$'\n'[0-9][0-9][0-9])
@@ -143,61 +145,71 @@ else
   # like a usable UNITARES endpoint.
   HEALTH_URL="${BASE_URL}/health"
   probe_url "${HEALTH_URL}"
-  case "${PROBE_CODE}" in
-    200) log "server health route usable (200)" ;;
-    000)
-      preflight_ok=0
-      log "WARN ${HEALTH_URL} unreachable. If the domain is not on" \
-          "the environment's network allowlist the egress proxy refuses it;" \
-          "add it there, or accept OFFLINE governance for this session."
-      ;;
-    *)
-      preflight_ok=0
-      log "WARN ${HEALTH_URL} returned ${PROBE_CODE}; the session-start hook may be OFFLINE."
-      ;;
-  esac
+  if [ "${PROBE_CURL_RC}" -ne 0 ]; then
+    preflight_ok=0
+    if [ "${PROBE_CODE}" = "000" ]; then
+      log "WARN ${HEALTH_URL} unreachable (curl ${PROBE_CURL_RC}). If the domain" \
+          "is not on the environment's network allowlist the egress proxy refuses it."
+    else
+      log "WARN ${HEALTH_URL} transfer failed after HTTP ${PROBE_CODE}" \
+          "(curl ${PROBE_CURL_RC}); the session-start hook may be OFFLINE."
+    fi
+  else
+    case "${PROBE_CODE}" in
+      200) log "server health route usable (200)" ;;
+      *)
+        preflight_ok=0
+        log "WARN ${HEALTH_URL} returned ${PROBE_CODE}; the session-start hook may be OFFLINE."
+        ;;
+    esac
+  fi
 
   TOOLS_URL="${BASE_URL}/v1/tools/call"
   probe_url -H 'Content-Type: application/json' --data '{}' "${TOOLS_URL}"
   code="${PROBE_CODE}"
-  case "${code}" in
-    400)
-      if [[ "${PROBE_BODY}" == *"Missing 'name' field"* ]]; then
-        log "server tool route usable (authenticated validation response)"
-      else
+  if [ "${PROBE_CURL_RC}" -ne 0 ]; then
+    preflight_ok=0
+    if [ "${code}" = "000" ]; then
+      log "WARN ${TOOLS_URL} unreachable (curl ${PROBE_CURL_RC}). If the domain" \
+          "is not on the environment's network allowlist the egress proxy refuses it."
+    else
+      log "WARN ${TOOLS_URL} transfer failed after HTTP ${code}" \
+          "(curl ${PROBE_CURL_RC}); hooks may be OFFLINE."
+    fi
+  else
+    case "${code}" in
+      400)
+        if [[ "${PROBE_BODY}" == *"Missing 'name' field"* ]]; then
+          log "server tool route usable (authenticated validation response)"
+        else
+          preflight_ok=0
+          log "WARN ${TOOLS_URL} returned an unrecognized 400; hooks may be OFFLINE."
+        fi
+        ;;
+      401)
         preflight_ok=0
-        log "WARN ${TOOLS_URL} returned an unrecognized 400; hooks may be OFFLINE."
-      fi
-      ;;
-    401)
-      preflight_ok=0
-      if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
-        log "WARN ${TOOLS_URL} rejected the configured bearer (401); hooks are OFFLINE."
-      else
-        log "WARN ${TOOLS_URL} requires a bearer (401); set UNITARES_HTTP_API_TOKEN."
-      fi
-      ;;
-    421)
-      preflight_ok=0
-      log "WARN ${TOOLS_URL} rejected its external Host (421); add the hostname" \
-          "to UNITARES_MCP_ALLOWED_HOSTS on the server."
-      ;;
-    000)
-      preflight_ok=0
-      log "WARN ${TOOLS_URL} unreachable. If the domain is not on" \
-          "the environment's network allowlist the egress proxy refuses it;" \
-          "add it there, or accept OFFLINE governance for this session."
-      ;;
-    *)
-      preflight_ok=0
-      log "WARN ${TOOLS_URL} returned ${code}; hooks may be OFFLINE."
-      ;;
-  esac
+        if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+          log "WARN ${TOOLS_URL} rejected the configured bearer (401); hooks are OFFLINE."
+        else
+          log "WARN ${TOOLS_URL} requires a bearer (401); set UNITARES_HTTP_API_TOKEN."
+        fi
+        ;;
+      421)
+        preflight_ok=0
+        log "WARN ${TOOLS_URL} rejected its external Host (421); add the hostname" \
+            "to UNITARES_MCP_ALLOWED_HOSTS on the server."
+        ;;
+      *)
+        preflight_ok=0
+        log "WARN ${TOOLS_URL} returned ${code}; hooks may be OFFLINE."
+        ;;
+    esac
+  fi
 fi
 
 if [ -z "${UNITARES_HTTP_API_TOKEN:-}" ]; then
-  log "WARN UNITARES_HTTP_API_TOKEN unset — writes to the server will not be"
-  log "     attributable even if the server is reachable."
+  log "WARN UNITARES_HTTP_API_TOKEN unset — REST hooks need another accepted"
+  log "     authentication path or they receive 401. Attribution is session-bound."
 fi
 
 # The lease plane is a loopback service on the operator's machine. Absent here,
