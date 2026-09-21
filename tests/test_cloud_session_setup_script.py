@@ -464,6 +464,20 @@ def test_proxy_mode_rejects_nonstandard_https_port_before_deferred_probe(
     assert "done with warnings" in proc.stdout
 
 
+def test_explicit_default_https_port_is_omitted_from_origin(tmp_path: Path) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={"UNITARES_SERVER_URL": "https://gov.example.test:443"},
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 0
+    assert "Origin: https://gov.example.test" in commands
+    assert "Origin: https://gov.example.test:443" not in commands
+    assert "UNITARES MCP initialize succeeded" in proc.stdout
+
+
 def test_required_leases_warn_that_edits_will_block(tmp_path: Path) -> None:
     proc, _ = _run_setup(
         tmp_path,
