@@ -134,7 +134,7 @@ edits that changed no edge.
 | `set_thresholds` | `src/mcp_handlers/admin/config.py handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py handle_simulate_update` | `src/mcp_handlers/schemas/core.py SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py handle_skills` | `src/mcp_handlers/schemas/skills.py SkillsParams` | 10s | identity=pre_onboard |
-| `use_tool` | `src/mcp_handlers/introspection/tool_introspection.py handle_use_tool` | `src/mcp_handlers/schemas/admin.py UseToolParams` | 450s | identity=pre_onboard |
+| `use_tool` | `src/mcp_handlers/introspection/tool_introspection.py handle_use_tool` | `src/mcp_handlers/schemas/admin.py UseToolParams` | target-defined | identity=pre_onboard |
 | `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing

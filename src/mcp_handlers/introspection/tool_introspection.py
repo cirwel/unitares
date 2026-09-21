@@ -707,7 +707,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     return success_response(tools_info)
 
 
-@mcp_tool("use_tool", timeout=450.0, requires_identity="pre_onboard")
+@mcp_tool("use_tool", timeout=None, requires_identity="pre_onboard")
 async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Invoke a public capability omitted from progressive advertisement."""
     target = str(arguments.get("tool_name") or "").strip()
@@ -760,7 +760,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         build_tool_usage_payload,
         classify_tool_result,
         record_tool_usage,
-        resolve_audit_agent_id,
+        resolve_dispatch_bound_agent_id,
         resolve_minted_agent_id,
     )
 
@@ -771,7 +771,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     if result is None:
         record_tool_usage(
             tool_name=target,
-            agent_id=resolve_audit_agent_id(None),
+            agent_id=resolve_dispatch_bound_agent_id(nested),
             success=False,
             error_type="unknown_tool",
             latency_ms=latency_ms,
@@ -785,7 +785,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         )]
 
     success, error_type = classify_tool_result(result)
-    actor = resolve_audit_agent_id(None)
+    actor = resolve_dispatch_bound_agent_id(nested)
     actor = resolve_minted_agent_id(target, actor, result)
     record_tool_usage(
         tool_name=target,
