@@ -15,8 +15,9 @@
 # from origin/master before executing it; do not run a checkout-relative copy
 # from a shared environment. Setup mode is idempotent and keeps every internal
 # exit successful: a broken install leaves a session without governance hooks,
-# which is the state it would have had anyway. Runtime verification is read-only
-# and exits non-zero whenever it cannot prove the installed hooks are usable.
+# which is the state it would have had anyway. Runtime diagnostics are read-only
+# and fail when plugin configuration or endpoint/authentication checks fail;
+# they cannot prove that this Claude process loaded the configured hooks.
 #
 # This script does NOT set UNITARES_* variables. A setup script's exports die
 # with its shell and never reach the agent process, so the operator declares
