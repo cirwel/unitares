@@ -1,6 +1,6 @@
 # Governance Plugin in Claude Code Cloud Sessions
 
-**Status:** Runbook (v0, 2026-09-19)
+**Status:** Runbook (v0, 2026-09-21)
 **Audience:** Operators running `unitares` work in Claude Code cloud sessions
 (claude.ai/code, the mobile Code tab, `claude --cloud`, routines) who expect the
 same governance lifecycle they get locally.
@@ -42,7 +42,8 @@ The MCP tools work in a cloud session because a remote MCP connector is proxied
 server-side through Anthropic's infrastructure; the traffic never leaves the
 sandbox. Hook scripts are different: they make outbound HTTP *from* the
 sandbox, through the session's egress proxy, which refuses any domain outside
-the environment's network allowlist:
+the environment's network allowlist unless an environment API credential
+explicitly covers that host:
 
 ```
 $ curl https://example.com
@@ -55,11 +56,13 @@ Both `http://` and `https://` are intercepted, and a raw TCP connection to a
 non-standard port (8767, 8788) does not complete. So a governance server
 reachable from a cloud session must be:
 
-- served over 443 at a hostname added to the cloud environment's network
-  allowlist, **not** a bare `host:8767`, and
+- served over 443 at a hostname covered by an environment API credential or
+  added to the cloud environment's network allowlist, **not** a bare
+  `host:8767`, and
 - addressed with an `https://` `UNITARES_SERVER_URL`.
 
-Without that, hooks install and run but every network path reports OFFLINE.
+Without one of those reachability paths, hooks install and run but every
+network path reports OFFLINE.
 
 ## Hook audit — residentless cloud container
 
@@ -108,41 +111,68 @@ image.
 
 ## Wiring
 
-**1. Set the setup script** on the cloud environment (claude.ai → cloud
-environments). It runs after the repository is cloned:
+**1. Create a private environment dedicated to `cirwel/unitares`.** Do not
+reuse it for another repository or make it organization-shared. Setup runs as
+root, environment variables are readable by every session that uses the
+environment, and the first successful setup is cached for later sessions.
+Keeping this environment repo-specific is therefore a security boundary, not
+just an organization preference.
+
+**2. Set the setup script** on that environment (claude.ai → cloud
+environments). Configure it only after this file has landed on `master`:
 
 ```bash
-if [ -f scripts/dev/cloud-session-setup.sh ]; then
-  bash scripts/dev/cloud-session-setup.sh || true
+origin=$(git remote get-url origin 2>/dev/null || true)
+if [ "${origin%.git}" != "https://github.com/cirwel/unitares" ]; then
+  echo "This environment is reserved for cirwel/unitares; refusing setup." >&2
+  exit 1
 fi
+setup=$(git show origin/master:scripts/dev/cloud-session-setup.sh) || exit 1
+bash -s <<<"${setup}" || true
 ```
 
-The existence guard matters when an environment is reused for a repository
-that does not carry this path. The trailing `|| true` follows the cloud setup
-contract that non-critical commands must exit zero. Once invoked, the script
-also makes every internal exit successful, so a failed install leaves the
-session in the state it would have had anyway. Fresh install measured at 3.4s;
-re-runs short-circuit.
+The remote check makes accidental reuse fail closed before any checkout code
+runs as root. Reading the script from canonical `origin/master` also prevents a
+task branch from replacing the setup payload. A missing canonical script fails
+provisioning instead of creating an empty cached environment. The final
+`|| true` applies only after those trust checks: a transient plugin-install
+failure leaves the UNITARES session without hooks rather than blocking it.
+Fresh install measured at 3.4s; re-runs short-circuit. If installation fails,
+change the setup field to force a cache rebuild or wait for cache expiry.
 
-**2. Set environment variables** on the same environment. A setup script's
+**3. Configure hook authentication and environment variables.** A setup script's
 exports die with its shell and never reach the agent process, so these must be
 declared as environment variables, not exported in the script:
 
 | Variable | Value | Why |
 | --- | --- | --- |
 | `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be https on an allowlisted host |
-| `UNITARES_HTTP_API_TOKEN` | hook bearer credential | Authenticates REST hook calls; server-side session binding controls attribution |
+| `UNITARES_CLOUD_PROXY_AUTH` | `1` when an environment API credential supplies `Authorization` | Nonsecret signal that setup cannot test the credential injected only after Claude launches |
+| `UNITARES_HTTP_API_TOKEN` | hook bearer credential, only when proxy credentials are unavailable | Environment-visible fallback that authenticates REST hook calls; server-side session binding controls attribution |
 | `UNITARES_FILE_LEASES_ENABLED` | `0` | No lease plane in-container; avoid the otherwise harmless connection-refused probe |
 | `UNITARES_FILE_LEASES_REQUIRED` | `0` | Required leases override `ENABLED=0` and block edits when the lease plane is absent |
 
-**3. Add the server's hostname to the environment's network allowlist.** Steps
-1 and 2 are wasted without it — this is the step that actually decides whether
-governance is ONLINE.
+On Pro and Max, store the bearer as an environment **API credential** scoped to
+the governance hostname, using an `Authorization: Bearer` header. Omit
+`UNITARES_HTTP_API_TOKEN` and set the nonsecret
+`UNITARES_CLOUD_PROXY_AUTH=1`. The agent proxy injects that credential only
+after Claude Code starts, so setup deliberately defers the authenticated tool
+probe; the first running hook is the real verification.
 
-Leaving step 3 undone is a legitimate choice. A cloud session then runs with
-governance tools and OFFLINE hooks, which is a coherent posture: reads and
-manual `sync_state` calls still work through the MCP connector, and only the
-automatic lifecycle is absent.
+Team and Enterprise do not currently expose environment API credentials. If a
+bearer environment variable is unavoidable, use only this private dedicated
+environment and a narrowly scoped, revocable token. Never place that durable
+secret in a shared environment.
+
+**4. Make the server hostname reachable.** An environment API credential's
+Allowed websites entry also grants network reachability to that host. When
+using `UNITARES_HTTP_API_TOKEN` instead, add the hostname to the environment's
+network allowlist. One of these paths is what lets governance become ONLINE.
+
+Leaving both reachability paths undone is a legitimate choice. A cloud session
+then runs with governance tools and OFFLINE hooks, which is a coherent posture:
+reads and manual `sync_state` calls still work through the MCP connector, and
+only the automatic lifecycle is absent.
 
 ## Review records work; the automatic Codex reviewer does not
 
