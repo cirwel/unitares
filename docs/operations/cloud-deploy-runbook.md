@@ -67,8 +67,10 @@ both believing they are canonical.
    - `UNITARES_MCP_BEARER_TOKEN` — the singular client credential used by the
      lease plane for governance REST calls. Set it to one exact member of the
      plural `UNITARES_MCP_BEARER_TOKENS` allowlist above.
-   - `UNITARES_HTTP_API_TOKEN` for local dashboard/telemetry clients and (if
-     external outcome producers post in) `UNITARES_OPERATOR_TOKENS`.
+   - Local dashboard users authenticate with a dashboard session. Strict REST
+     ignores `UNITARES_HTTP_API_TOKEN`, even on loopback; non-browser telemetry
+     and REST clients must send a member of `UNITARES_MCP_BEARER_TOKENS`.
+     Configure `UNITARES_OPERATOR_TOKENS` if external outcome producers post in.
 4. `docker compose up -d --build` and wait for health checks.
 5. Verify: `curl -fsS http://127.0.0.1:8767/health/ready` returns 200, then an
    MCP client `onboard()` round-trip through the tunnel (next section).

@@ -190,6 +190,9 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert 'System.get_env("UNITARES_MCP_BEARER_TOKEN")' in lease_application
     assert 'System.get_env("UNITARES_HTTP_API_TOKEN")' in lease_application
     assert "String.trim(value) != \"\"" in lease_application
+    assert "Application.delete_env(:lease_plane, :governance_api_token)" in lease_application
+    cloud_runbook = _read("docs/operations/cloud-session-plugin.md")
+    assert "does **not** prove automatic hooks are active" in cloud_runbook
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 
