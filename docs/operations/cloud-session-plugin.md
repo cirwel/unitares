@@ -184,12 +184,17 @@ As the first action after Claude starts, run the canonical payload in runtime
 verification mode:
 
 ```bash
-git show origin/master:scripts/dev/cloud-session-setup.sh \
-  | bash -s -- --verify-runtime
+unitares_runtime_setup="$(
+  git show origin/master:scripts/dev/cloud-session-setup.sh
+)" &&
+  test -n "$unitares_runtime_setup" &&
+  bash -s -- --verify-runtime <<<"$unitares_runtime_setup"
 ```
 
 This repeats the harmless health request and invalid tool request after the
 proxy credential is available, and checks the server's reported auth posture.
+Extraction failure or an empty payload stops the command before Bash can report
+a false-successful no-op.
 It is an endpoint/authentication diagnostic only: `claude plugin list` reports
 configured state, not whether this Claude process loaded the hooks. A zero exit
 therefore does **not** prove automatic hooks are active. The command never

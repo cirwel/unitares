@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -208,6 +210,10 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "http://127.0.0.1:8767/v1/tools -o /dev/null" not in compose
     cloud_runbook = _read("docs/operations/cloud-session-plugin.md")
     assert "does **not** prove automatic hooks are active" in cloud_runbook
+    assert "git show origin/master:scripts/dev/cloud-session-setup.sh \\\n  | bash -s -- --verify-runtime" not in cloud_runbook
+    assert 'unitares_runtime_setup="$(' in cloud_runbook
+    assert 'test -n "$unitares_runtime_setup" &&' in cloud_runbook
+    assert 'bash -s -- --verify-runtime <<<"$unitares_runtime_setup"' in cloud_runbook
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 
@@ -217,6 +223,36 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "scripts/demo/coordination_demo.py" in makefile
     assert "run: make coordination-demo" in workflow
     assert "elixir/lease_plane/**" in workflow
+
+
+def test_cloud_runtime_verifier_fails_when_payload_extraction_fails(
+    tmp_path: Path,
+) -> None:
+    runbook = _read("docs/operations/cloud-session-plugin.md")
+    command_match = re.search(
+        r"run the canonical payload in runtime\nverification mode:\n\n"
+        r"```bash\n(?P<command>.*?)\n```",
+        runbook,
+        re.DOTALL,
+    )
+    assert command_match is not None
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text("#!/bin/sh\nexit 23\n")
+    fake_git.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+
+    completed = subprocess.run(
+        ["bash", "-c", command_match.group("command")],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=False,
+    )
+
+    assert completed.returncode == 23
 
 
 def test_advanced_bare_metal_path_uses_one_schema_bootstrap() -> None:
