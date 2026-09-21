@@ -334,6 +334,7 @@ async def test_rest_gateway_charges_a_direct_handler_target(monkeypatch):
     from src.services import http_tool_service
 
     executed = []
+    audit_rows = []
     limiter = MagicMock()
     limiter.check_rate_limit.return_value = (False, "limited")
     limiter.get_stats.return_value = {}
@@ -347,6 +348,11 @@ async def test_rest_gateway_charges_a_direct_handler_target(monkeypatch):
 
     monkeypatch.setattr(access, "_resolve_http_bound_agent", fake_resolve)
     monkeypatch.setattr(http_tool_service, "execute_http_tool", fake_execute)
+    monkeypatch.setattr(
+        http_tool_service,
+        "record_tool_usage",
+        lambda **kwargs: audit_rows.append(kwargs),
+    )
     monkeypatch.setattr(
         "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
         lambda: limiter,
@@ -364,6 +370,11 @@ async def test_rest_gateway_charges_a_direct_handler_target(monkeypatch):
     assert _payload(result)["success"] is False
     limiter.check_rate_limit.assert_called_once_with("agent-1")
     assert executed == []
+    assert len(audit_rows) == 1
+    assert audit_rows[0]["tool_name"] == "process_agent_update"
+    assert audit_rows[0]["agent_id"] == "agent-1"
+    assert audit_rows[0]["success"] is False
+    assert audit_rows[0]["error_type"] == "validation_error"
 
 
 @pytest.mark.asyncio
@@ -550,6 +561,32 @@ async def test_use_tool_accepts_late_registered_public_capability(monkeypatch):
         )
         assert _payload(result) == {"success": True}
         assert calls == [(tool_name, {"value": 7})]
+    finally:
+        mcp_handlers.TOOL_HANDLERS.pop(tool_name, None)
+        _TOOL_DEFINITIONS.pop(tool_name, None)
+
+
+@pytest.mark.asyncio
+async def test_late_deprecated_public_capability_remains_in_complete_index():
+    from src import mcp_handlers
+    from src.interface_contract import get_interface_contract_summary
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, mcp_tool
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    tool_name = "late_deprecated_plugin_tool"
+
+    @mcp_tool(tool_name, deprecated=True, requires_identity="pre_onboard")
+    async def deprecated_handler(arguments):
+        return [TextContent(type="text", text=json.dumps({"success": True}))]
+
+    try:
+        listed = _payload(await handle_list_tools({"lite": True}))
+        listed_names = {tool["name"] for tool in listed["tools"]}
+        contract = get_interface_contract_summary()
+
+        assert tool_name in listed_names
+        assert listed["interface_contract"] == contract
+        assert contract["capability_count"] == len(listed_names)
     finally:
         mcp_handlers.TOOL_HANDLERS.pop(tool_name, None)
         _TOOL_DEFINITIONS.pop(tool_name, None)

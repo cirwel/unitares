@@ -295,6 +295,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     wire_descriptions = {
         tool.name: tool.description or "" for tool in public_definitions
     }
+    public_names = set(wire_descriptions) or None
 
     # Deprecated tools - hidden from list_tools by default.
     # Two independent sources, and both are needed:
@@ -307,14 +308,18 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     #     removed (2026-08-29).
     from ..tool_stability import list_all_aliases
     from ..decorators import _TOOL_DEFINITIONS
-    _deprecated = (
-        set(list_all_aliases().keys())
-        | {n for n, td in _TOOL_DEFINITIONS.items() if td.deprecated}
-    ) - set(AGENT_WORKFLOW_ALIASES)
-    # ...but never hide a name this deployment actually advertises. Orientation
-    # describes the callable surface; a tool on the wire that list_tools omits
-    # is the WIRE_NAME_NOT_IN_ORIENTATION defect, and it is worse than listing a
-    # deprecated tool, which the entry marks as deprecated anyway.
+    deprecated_aliases = (
+        set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
+    )
+    deprecated_handlers = {
+        name for name, definition in _TOOL_DEFINITIONS.items()
+        if definition.deprecated
+    }
+    _deprecated = deprecated_aliases | deprecated_handlers
+    # ...but never hide a name this deployment exposes in its complete public
+    # catalog. list_tools is the negotiation index even when tools/list starts
+    # with the progressive subset; omitting a public deprecated plugin here
+    # makes the contract and gateway name a capability discovery cannot find.
     #
     # This exemption was introduced because leave_note carried
     # deprecated=True/superseded_by="knowledge" while still sitting in
@@ -323,16 +328,17 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # operator has since settled that contradiction the other way -- leave_note
     # is not deprecated and no longer carries the flag -- so the exemption is
     # no longer load-bearing for any tool shipping today. It stays as the
-    # general rule: whatever this deployment advertises, orientation lists.
+    # general rule: whatever this deployment exposes publicly, orientation
+    # lists.
     #
-    # In the degraded path (advertised surface unavailable) fall back to the
+    # In the degraded path (public surface unavailable) fall back to the
     # pre-2026-08-29 rule exactly -- alias keys only -- so an unavailable
     # advertised set can never hide a tool that the decorator flag alone
     # would suppress.
-    DEPRECATED_TOOLS = (
-        set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
-        if advertised_names is None
-        else _deprecated - advertised_names
+    DEPRECATED_TOOLS = deprecated_aliases | (
+        set()
+        if public_names is None
+        else deprecated_handlers - public_names
     )
 
     tool_relationships = tool_catalog.TOOL_RELATIONSHIPS

@@ -142,6 +142,7 @@ async def execute_nested_http_tool(
             from src.mcp_handlers.context import get_context_agent_id
             from src.mcp_handlers.middleware import DispatchContext, check_rate_limit
 
+            rate_started = time.monotonic()
             rate_result = await check_rate_limit(
                 tool_name,
                 nested,
@@ -151,6 +152,16 @@ async def execute_nested_http_tool(
                 ),
             )
             if isinstance(rate_result, list):
+                success, error_type = classify_tool_result(rate_result)
+                record_tool_usage(
+                    tool_name=tool_name,
+                    agent_id=nested.get("agent_id") or get_context_agent_id(),
+                    success=success,
+                    error_type=error_type,
+                    latency_ms=int((time.monotonic() - rate_started) * 1000),
+                    session_id=nested.get("client_session_id"),
+                    payload=build_tool_usage_payload(tool_name, nested),
+                )
                 return rate_result
         return await execute_http_tool(tool_name, nested)
     finally:
