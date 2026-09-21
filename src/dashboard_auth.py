@@ -25,8 +25,16 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-DASHBOARD_RP_ID = "gov.cirwel.org"
-DASHBOARD_EXPECTED_ORIGIN = "https://gov.cirwel.org"
+def _dashboard_webauthn_config() -> tuple[str, str]:
+    """Read hosted WebAuthn overrides, deriving an HTTPS origin from the RP id."""
+    rp_id = os.getenv("UNITARES_DASHBOARD_RP_ID", "").strip() or "gov.cirwel.org"
+    expected_origin = (
+        os.getenv("UNITARES_DASHBOARD_ORIGIN", "").strip() or f"https://{rp_id}"
+    )
+    return rp_id, expected_origin
+
+
+DASHBOARD_RP_ID, DASHBOARD_EXPECTED_ORIGIN = _dashboard_webauthn_config()
 DASHBOARD_RP_NAME = "UNITARES Governance"
 
 SESSION_COOKIE = "__Host-unitares_session"

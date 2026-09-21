@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**170 flags.**
+**172 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -63,6 +63,8 @@ index; that one is the curated decision record.
 | `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py, src/mcp_handlers/knowledge/handlers.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `None (no reader fallback)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
 | `UNITARES_DASHBOARD_OPERATOR_LABEL` | `'operator'` | read by _operator_label() | src/dashboard_auth.py |
+| `UNITARES_DASHBOARD_ORIGIN` | `''` | Read hosted WebAuthn overrides, deriving an HTTPS origin from the RP id. | src/dashboard_auth.py |
+| `UNITARES_DASHBOARD_RP_ID` | `''` | Read hosted WebAuthn overrides, deriving an HTTPS origin from the RP id. | src/dashboard_auth.py |
 | `UNITARES_DIALECTIC_BEAM_RESOLUTION` | `'0'` | True iff the operator has flipped UNITARES_DIALECTIC_BEAM_RESOLUTION on. | src/mcp_handlers/dialectic/beam_resolve_client.py |
 | `UNITARES_DIALECTIC_CLAUDE_MODEL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run Claude safely and return exact provider-reported model provenance | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'420'` (agents/dialectic_reviewer/host_backends.py) | Run Claude safely and return exact provider-reported model provenance | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |

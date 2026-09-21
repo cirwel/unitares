@@ -68,12 +68,24 @@ both believing they are canonical.
      as it arrives in the HTTP `Host` header, without a scheme (for example,
      `localhost,127.0.0.1,governance.example.com`). Otherwise `/health/ready`
      can pass while the MCP transport rejects the tunnel with 421.
+   - `UNITARES_MCP_ALLOWED_ORIGINS` — include each browser MCP client's exact
+     origin, including `https://` and excluding a trailing slash (for example,
+     `http://localhost:8767,http://127.0.0.1:8767,https://governance.example.com`).
+     Otherwise the MCP transport rejects an authenticated browser request with
+     403 even when its `Host` is allowed.
+   - `UNITARES_DASHBOARD_RP_ID` / `UNITARES_DASHBOARD_ORIGIN` — set these to the
+     public dashboard hostname and exact HTTPS origin (for example,
+     `governance.example.com` and `https://governance.example.com`). Passkey
+     enrollment and sign-in are bound to this pair. If `_ORIGIN` is empty it
+     defaults to `https://` plus the RP id.
    - `UNITARES_MCP_BEARER_TOKEN` — the singular client credential used by the
      lease plane for governance REST calls. Set it to one exact member of the
      plural `UNITARES_MCP_BEARER_TOKENS` allowlist above.
-   - Local dashboard users authenticate with a dashboard session. Strict REST
-     ignores `UNITARES_HTTP_API_TOKEN`, even on loopback; non-browser telemetry
-     and REST clients must send a member of `UNITARES_MCP_BEARER_TOKENS`.
+   - Dashboard users authenticate with a passkey-backed dashboard session.
+     The RP id and origin above must match the browser-visible deployment.
+     Strict REST ignores `UNITARES_HTTP_API_TOKEN`, even on loopback;
+     non-browser telemetry and REST clients must send a member of
+     `UNITARES_MCP_BEARER_TOKENS`.
      Configure `UNITARES_OPERATOR_TOKENS` if external outcome producers post in.
 4. `docker compose up -d --build` and wait for health checks.
 5. Verify: `curl -fsS http://127.0.0.1:8767/health/ready` returns 200, then an
