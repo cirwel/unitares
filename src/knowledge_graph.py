@@ -337,7 +337,8 @@ def tag_provenance_source(
     side effect of implicit writes being indistinguishable from caller-
     intentional ones in the by_agent count.
 
-    Explicit writes (`explicit_store`, `explicit_answer`, `explicit_leave_note`)
+    Explicit writes (`explicit_store`, `explicit_answer`, `explicit_leave_note`,
+    `explicit_promotion`)
     are tagged the same way for symmetry — that way an absent provenance.source
     is unambiguously a legacy row.
     """
@@ -353,6 +354,7 @@ EXPLICIT_PROVENANCE_SOURCES = frozenset({
     "explicit_store",
     "explicit_answer",
     "explicit_leave_note",
+    "explicit_promotion",
 })
 
 
