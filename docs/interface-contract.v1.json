@@ -8,7 +8,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "2195b435a9d24769646fccdb8537b0af11ce76097c070e35e42bcbd93418fe81",
+  "surface_sha256": "b1ce71b0835910353d797771652beb367ff1a3831afd274531c4d86ca93b7789",
   "capabilities": [
     {
       "name": "start_session",
@@ -47,7 +47,7 @@
       "name": "search_shared_memory",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "ea3eddf1480ae29f6295371e9523ae7d45612bbde90b329fae743fcfc0e85706",
+      "input_schema_sha256": "c64de18be8cca588b1499fd6ca1d70c85354e8a33499ed474931d2a11647991e",
       "transport_names": {
         "mcp_streamable_http": "search_shared_memory",
         "rest_v1_tools": "search_shared_memory",
@@ -58,7 +58,7 @@
       "name": "store_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "baaeba497e4c5db35fb5ba726fa0b1fef4047c5082d6a44afb20ae47acc8b905",
+      "input_schema_sha256": "10e3ab5d260adefe283035bf0a855f9383825712fbda6346bed221b56dd70ef6",
       "transport_names": {
         "mcp_streamable_http": "store_finding",
         "rest_v1_tools": "store_finding",
@@ -69,7 +69,7 @@
       "name": "update_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "0495847851a78bf5da39daf54a2f1c7f5d2c133a706e8eea15b6a73654ddd5a9",
+      "input_schema_sha256": "facd0861958987ff41f43ef07a274645bede2ca2a403b758a6fa137152e6c692",
       "transport_names": {
         "mcp_streamable_http": "update_finding",
         "rest_v1_tools": "update_finding",
@@ -267,7 +267,7 @@
       "name": "search_knowledge_graph",
       "implementation": "search_knowledge_graph",
       "kind": "canonical_tool",
-      "input_schema_sha256": "6cdd10040fbbde7108c72ce8013f6460ae7ca177985247eb541b74209f4e5071",
+      "input_schema_sha256": "6e670d4685aa52bcbc6c0f8643f848aa544e0218874ce6cbe38fee91987c43cf",
       "transport_names": {
         "mcp_streamable_http": "search_knowledge_graph",
         "rest_v1_tools": "search_knowledge_graph",
@@ -377,7 +377,7 @@
       "name": "knowledge",
       "implementation": "knowledge",
       "kind": "canonical_tool",
-      "input_schema_sha256": "bf95153b835b85f34a17b06491e4d2b1ed7a2041d2652f991329c6a1bb090324",
+      "input_schema_sha256": "b9de7d00a0337eeb5ede6b2e8d6328235b63193727b69f621dc300cd808cc776",
       "transport_names": {
         "mcp_streamable_http": "knowledge",
         "rest_v1_tools": "knowledge",

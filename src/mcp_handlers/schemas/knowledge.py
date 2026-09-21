@@ -165,6 +165,13 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
             )
         },
     )
+    authority_mode: Optional[Literal["prefer_governed", "all"]] = Field(
+        default="prefer_governed",
+        description=(
+            "Authority policy: prefer_governed down-ranks imported memory in "
+            "close relevance contests; all preserves raw relevance order."
+        ),
+    )
     operator: Optional[Literal["AND", "OR"]] = Field(
         default=None,
         description=(
@@ -385,7 +392,7 @@ class KnowledgeParams(AgentIdentityMixin):
                 "response_mode", "tags", "status", "scope", "epoch_scope",
                 "exclude_agent_labels", "min_similarity", "operator",
                 "discovery_type", "severity", "include_provenance",
-                "agent_id_filter",
+                "agent_id_filter", "authority_mode",
         ),
         "get": (
                 "discovery_id", "include_details", "include_provenance",
@@ -418,11 +425,18 @@ class KnowledgeParams(AgentIdentityMixin):
         "supersede": (
                 "discovery_id", "supersedes_id", "resolution_notes",
         ),
+        "promote": (
+                "discovery_id", "evidence_ids", "summary", "details",
+                "content", "discovery_type", "severity", "tags",
+                "related_files", "confidence", "verification_basis",
+                "decision_standard", "task_label", "task_outcome",
+                "memory_context",
+        ),
         "audit": (
                 "scope", "top_n", "use_model", "comparison_key",
         ),
     }
-    action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "audit"] = Field(..., description="Operation to perform")
+    action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "promote", "audit"] = Field(..., description="Operation to perform")
     response_mode: Literal["full", "compact", "lean"] = Field(
         default="full",
         description=(
@@ -439,9 +453,9 @@ class KnowledgeParams(AgentIdentityMixin):
         },
     )
     query: Optional[str] = Field(None, description="Search query (for action=search)")
-    content: Optional[str] = Field(None, description="Extended content/details (for action=store or action=note)")
-    details: Optional[str] = Field(None, description="Extended details for discovery (for action=store). Alias: content")
-    summary: Optional[str] = Field(None, description="Discovery summary (for action=store)")
+    content: Optional[str] = Field(None, description="Extended content/details (for action=store, note, or promote)")
+    details: Optional[str] = Field(None, description="Extended details for discovery (for action=store or promote). Alias: content")
+    summary: Optional[str] = Field(None, description="Discovery summary (for action=store or promote)")
     discovery_type: Optional[str] = Field(
         None,
         description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".",
@@ -476,7 +490,7 @@ class KnowledgeParams(AgentIdentityMixin):
             "not independently verified or adjusted by governance metrics"
         ),
     )
-    discovery_id: Optional[str] = Field(None, description="Discovery ID (for action=get/details, update; the NEW discovery for action=supersede)")
+    discovery_id: Optional[str] = Field(None, description="Discovery ID (for get/details/update; the NEW discovery for supersede; the imported source for promote)")
     status: Optional[str] = Field(None, description="Status filter/update value (open, resolved, archived, superseded)")
     resolution_notes: Optional[str] = Field(None, description="Rationale to append when closing or updating a discovery")
     # Closure CLASS params. Without these declared here the unified tool's
@@ -527,6 +541,13 @@ class KnowledgeParams(AgentIdentityMixin):
         None,
         description="Force retrieval mode for action=search. 'semantic' and 'hybrid' fail honestly when unsupported by the active backend.",
     )
+    authority_mode: Optional[Literal["prefer_governed", "all"]] = Field(
+        None,
+        description=(
+            "Search authority policy. Default prefer_governed down-ranks imported "
+            "memory in close relevance contests; all preserves raw relevance order."
+        ),
+    )
     semantic: Union[bool, str, None] = Field(None, description="Legacy action=search toggle to force or skip semantic retrieval when supported")
     min_similarity: Union[float, str, None] = Field(None, description="Minimum cosine similarity for semantic retrieval modes")
     operator: Optional[Literal["AND", "OR"]] = Field(None, description="Boolean operator for multi-term FTS queries")
@@ -551,6 +572,18 @@ class KnowledgeParams(AgentIdentityMixin):
     topic: Optional[str] = Field(None, description="Synthesize just this one tag/topic (for action=synthesize). Omit to sweep the densest topics.")
     min_members: Optional[int] = Field(None, description="Minimum discoveries a topic needs before it is rolled up (for action=synthesize, default 3)")
     use_llm: Union[bool, str, None] = Field(None, description="Use the local LLM for the rollup narrative (for action=synthesize, default true; falls back to deterministic when unreachable)")
+    evidence_ids: Optional[List[str]] = Field(
+        None,
+        description="Native or already-governed KG discovery IDs that corroborate the imported source (action=promote)",
+    )
+    verification_basis: Optional[str] = Field(
+        None,
+        description="What was checked and observed before promotion (action=promote)",
+    )
+    decision_standard: Optional[str] = Field(
+        None,
+        description="The predeclared standard under which evidence was accepted (action=promote)",
+    )
     # S22 provenance - agent-knowable subset only. See StoreKnowledgeGraphParams
     # above for the dropped-field rationale.
     comparison_key: Optional[str] = Field(None, description="S22 H5 provenance: stable key for comparing the same bounded task across harnesses")
