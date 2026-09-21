@@ -204,30 +204,46 @@ def get_public_tool_definitions(
     mode: str = "full",
     *,
     client_type: str | None = None,
+    include_unmounted: bool = False,
 ) -> list[Tool]:
     """Return the exact advertised tool surface for a transport and mode.
 
-    Narrowed to the mounted table when a server has mounted one, so the
-    contract cannot promise a capability that dispatch would refuse. See
-    ``mounted_tool_names``.
+    Direct transport advertisement is narrowed to the mounted table when a
+    server has mounted one. ``include_unmounted`` instead returns the live,
+    visible handler catalog used by ``list_tools`` and ``use_tool``: those
+    handlers remain reachable through the gateway even when they registered
+    after the transport table mounted. See ``mounted_tool_names``.
     """
 
     # Importing the package settles every @mcp_tool decorator before the
-    # registry is read.  This is idempotent in long-running servers.
-    import src.mcp_handlers  # noqa: F401
+    # registry is read. This is idempotent in long-running servers. Refreshing
+    # also picks up entry-point plugins loaded after the package snapshot.
+    import src.mcp_handlers as handlers
 
-    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.decorators import (
+        get_tool_description,
+        get_tool_registry,
+        is_tool_hidden,
+    )
     from src.tool_modes import should_include_tool
     from src.tool_schemas import get_tool_definitions
 
+    if include_unmounted:
+        handlers.refresh_tool_handlers_from_registry()
     definitions = list(get_tool_definitions())
-    registered = set(get_tool_registry())
+    registered = (
+        set(handlers.TOOL_HANDLERS)
+        if include_unmounted
+        else set(get_tool_registry())
+    )
     public: dict[str, Tool] = {}
 
     for tool in definitions:
         if tool.name not in registered:
             continue
-        if should_include_tool(tool.name, mode=mode, client_type=client_type):
+        if (
+            include_unmounted and mode == "full"
+        ) or should_include_tool(tool.name, mode=mode, client_type=client_type):
             public[tool.name] = tool
 
     alias_names = workflow_alias_names_for_mode(mode)
@@ -239,10 +255,49 @@ def get_public_tool_definitions(
             )
         except KeyError:
             # Some introspection tests and embedded consumers deliberately
-            # install a partial schema catalog. Do not advertise an alias whose
-            # implementation schema is unavailable; the checked-in full
-            # contract still makes accidental production drift fail in CI.
-            continue
+            # install a partial schema catalog. Direct advertisement skips an
+            # alias whose implementation schema is unavailable. The gateway
+            # catalog still includes the dispatchable workflow name with an
+            # open fallback schema so its negotiated names and contract hash
+            # remain the same live set.
+            if not include_unmounted:
+                continue
+            from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+            _, alias_info = resolve_tool_alias(alias_name)
+            public[alias_name] = Tool(
+                name=alias_name,
+                description=(
+                    alias_info.migration_note if alias_info is not None else ""
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            )
+
+    # A late plugin can register a handler before its optional schema package
+    # is visible, and embedded hosts deliberately exercise partial catalogs.
+    # The gateway still accepts such public handlers, so negotiate an open
+    # schema instead of omitting their name. Hidden handlers remain internal.
+    if include_unmounted:
+        for tool_name in sorted(registered):
+            if tool_name in public or is_tool_hidden(tool_name):
+                continue
+            if mode != "full" and not should_include_tool(
+                tool_name, mode=mode, client_type=client_type
+            ):
+                continue
+            public[tool_name] = Tool(
+                name=tool_name,
+                description=get_tool_description(tool_name) or f"Tool: {tool_name}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            )
 
     # Workflow names are the product-facing path and belong at the top of
     # bounded CLI/discovery output. Preserve the canonical schema-catalog order
@@ -253,13 +308,17 @@ def get_public_tool_definitions(
         for tool in definitions
         if tool.name in public and tool.name not in alias_names
     )
+    ordered_names.extend(
+        name for name in sorted(public)
+        if name not in ordered_names
+    )
 
     # Never advertise what dispatch would refuse. Narrowing happens last so it
     # cannot reorder the surface, and only when a server has actually mounted a
     # table — see mounted_tool_names() for why this is not the same as the
     # registry, and for the measurement that motivated it.
     mounted = mounted_tool_names()
-    if mounted is not None:
+    if mounted is not None and not include_unmounted:
         ordered_names = [name for name in ordered_names if name in mounted]
 
     return [public[name] for name in ordered_names]
@@ -270,11 +329,26 @@ def _capability_record(tool: Tool) -> dict[str, Any]:
 
     implementation, alias = resolve_tool_alias(tool.name)
     input_schema = get_tool_input_schema(tool, {}) or {}
-    schema_bytes = json.dumps(
-        input_schema,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    try:
+        schema_bytes = json.dumps(
+            input_schema,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        # Embedded hosts can expose a dispatchable handler before its schema
+        # object has settled. Match the gateway's open-schema fallback rather
+        # than dropping the capability or failing the whole negotiation.
+        input_schema = {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": True,
+        }
+        schema_bytes = json.dumps(
+            input_schema,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     return {
         "name": tool.name,
         "implementation": implementation,
@@ -295,7 +369,7 @@ def build_interface_contract(mode: str = "full") -> dict[str, Any]:
 
     capabilities = [
         _capability_record(tool)
-        for tool in get_public_tool_definitions("full")
+        for tool in get_public_tool_definitions("full", include_unmounted=True)
     ]
     canonical = json.dumps(
         capabilities,

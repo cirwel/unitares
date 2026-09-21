@@ -539,7 +539,10 @@ async def _call_local_tool(
 
         async def _nested_invoker(target_name, target_arguments):
             nested = dict(target_arguments or {})
-            if session_id and not nested.get("client_session_id"):
+            if (
+                "client_session_id" not in nested
+                and "client_session_id" in arguments
+            ):
                 nested["client_session_id"] = session_id
             # Re-enter this exact module object's local boundary so target
             # activity tracking, JSONL/presence telemetry, and error handling

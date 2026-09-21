@@ -216,11 +216,16 @@ def _registered_public_tool_names() -> list[str]:
     the complete on-demand capability index; both ``list_tools`` and
     ``use_tool`` must consult the same refreshed snapshot.
     """
-    from src.mcp_handlers import TOOL_HANDLERS, refresh_tool_handlers_from_registry
-    from ..tool_stability import AGENT_WORKFLOW_ALIASES
+    from src.interface_contract import get_public_tool_definitions
+    from src.mcp_handlers import refresh_tool_handlers_from_registry
 
     refresh_tool_handlers_from_registry()
-    return sorted(set(TOOL_HANDLERS) | set(AGENT_WORKFLOW_ALIASES))
+    return [
+        tool.name
+        for tool in get_public_tool_definitions(
+            "full", include_unmounted=True
+        )
+    ]
 
 
 
@@ -278,7 +283,9 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # advertisement is progressive.  Keep a second set so the rich view can
     # say which names a schema-driven client received directly.
     try:
-        public_definitions = list(get_public_tool_definitions("full"))
+        public_definitions = list(
+            get_public_tool_definitions("full", include_unmounted=True)
+        )
         directly_advertised = list(get_public_tool_definitions(TOOL_MODE))
     except Exception:
         public_definitions = []
