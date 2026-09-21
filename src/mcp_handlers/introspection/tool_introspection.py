@@ -870,6 +870,17 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
         from ..tool_stability import get_tool_stability, resolve_tool_alias
         tool_name, alias_info = resolve_tool_alias(requested_tool_name)
+        from ..decorators import is_tool_hidden
+
+        if is_tool_hidden(requested_tool_name) or is_tool_hidden(tool_name):
+            return [error_response(
+                f"Unknown tool: {requested_tool_name}",
+                recovery={
+                    "action": "Call list_tools to see available tool names",
+                    "related_tools": ["list_tools"],
+                },
+                context={"tool_name": requested_tool_name},
+            )]
         stability = get_tool_stability(tool_name).value
 
         from src.tool_descriptions import TOOL_DESCRIPTIONS

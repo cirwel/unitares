@@ -321,15 +321,41 @@ class TestCheckRateLimit:
         ctx = _make_ctx()
         limiter = MagicMock()
         limiter.check_rate_limit.return_value = (False, "would reject")
+        arguments = {"tool_name": "health_check", "arguments": {}}
 
         with patch(
             "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
             return_value=limiter,
         ):
-            result = await check_rate_limit("use_tool", {}, ctx)
+            result = await check_rate_limit("use_tool", arguments, ctx)
 
-        assert result == ("use_tool", {}, ctx)
+        assert result == ("use_tool", arguments, ctx)
         limiter.check_rate_limit.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "arguments",
+        [
+            {},
+            {"tool_name": "use_tool", "arguments": {}},
+            {"tool_name": "health_check", "arguments": []},
+            {"tool_name": "not_a_public_tool", "arguments": {}},
+        ],
+    )
+    async def test_rejected_use_tool_calls_are_rate_limited(self, arguments):
+        """Gateway failures are charged because no nested target will be."""
+        ctx = _make_ctx()
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (True, None)
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            result = await check_rate_limit("use_tool", arguments, ctx)
+
+        assert result == ("use_tool", arguments, ctx)
+        limiter.check_rate_limit.assert_called_once_with("anonymous")
 
     @pytest.mark.asyncio
     async def test_loop_detection_for_expensive_reads(self):
