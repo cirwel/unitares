@@ -48,23 +48,52 @@ else
   fi
 fi
 
-if claude plugin list 2>/dev/null | grep -q "${PLUGIN_ID}"; then
-  log "plugin ${PLUGIN_ID} already installed"
-else
-  log "installing ${PLUGIN_ID}"
-  if ! timeout 180 claude plugin install "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
-    finish "plugin install failed — continuing without governance hooks."
-  fi
-fi
+plugin_json=$(claude plugin list --json 2>/dev/null) || plugin_json=""
+plugin_state=$(printf '%s' "${plugin_json}" | python3 -c '
+import json
+import sys
+
+target = sys.argv[1]
+for plugin in json.load(sys.stdin):
+    if plugin.get("id") == target:
+        print("enabled" if plugin.get("enabled") else "disabled")
+        break
+else:
+    print("missing")
+' "${PLUGIN_ID}" 2>/dev/null) || plugin_state="unknown"
+
+case "${plugin_state}" in
+  enabled)
+    log "plugin ${PLUGIN_ID} already installed and enabled"
+    ;;
+  disabled)
+    log "enabling ${PLUGIN_ID}"
+    if ! timeout 180 claude plugin enable "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
+      finish "plugin enable failed — continuing without governance hooks."
+    fi
+    ;;
+  missing)
+    log "installing ${PLUGIN_ID}"
+    if ! timeout 180 claude plugin install "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
+      finish "plugin install failed — continuing without governance hooks."
+    fi
+    ;;
+  *)
+    finish "could not inspect plugin state — continuing without governance hooks."
+    ;;
+esac
 
 # --- preflight -----------------------------------------------------------
 #
-# Reports only. Nothing here blocks: every hook in the bundle fails open, so an
-# unreachable server costs a degraded SessionStart banner, not a broken session.
+# Reports only. Nothing here blocks the setup script. Hooks fail open under the
+# documented cloud posture; UNITARES_FILE_LEASES_REQUIRED must be false because
+# that explicit fail-closed override takes precedence over disabling leases.
 
 SERVER_URL="${UNITARES_SERVER_URL:-}"
+preflight_ok=1
 
 if [ -z "${SERVER_URL}" ]; then
+  preflight_ok=0
   log "WARN UNITARES_SERVER_URL unset — hooks will target http://localhost:8767,"
   log "     which does not exist in a cloud container. Hooks run and report"
   log "     OFFLINE. Set it on the cloud environment to reach a real server."
@@ -75,15 +104,48 @@ else
     *) log "WARN not https:// — container egress is proxied; plain-HTTP and" \
            "non-standard ports do not leave the sandbox." ;;
   esac
-  # A blocked domain returns 403 from the egress proxy rather than hanging, so
-  # a 3s bound is generous.
-  code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "${SERVER_URL}/health" 2>/dev/null) || code=000
+  case "${SERVER_URL%/}" in
+    */mcp) MCP_URL="${SERVER_URL%/}/" ;;
+    *) MCP_URL="${SERVER_URL%/}/mcp/" ;;
+  esac
+  # Probe the route hooks actually use. /health does not exercise the MCP
+  # bearer or DNS-rebinding gates, so it can return 200 while every hook gets
+  # 401 or 421. A GET that reaches the MCP session layer returns 200 or 400.
+  if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+    code=$(printf 'Authorization: Bearer %s\n' "${UNITARES_HTTP_API_TOKEN}" \
+      | curl -sS -o /dev/null -w '%{http_code}' --max-time 3 \
+          -H 'Accept: application/json, text/event-stream' -H @- \
+          "${MCP_URL}" 2>/dev/null) || code=000
+  else
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 \
+      -H 'Accept: application/json, text/event-stream' \
+      "${MCP_URL}" 2>/dev/null) || code=000
+  fi
   case "${code}" in
-    200) log "server /health reachable (200)" ;;
-    000) log "WARN ${SERVER_URL}/health unreachable. If the domain is not on" \
-             "the environment's network allowlist the egress proxy refuses it;" \
-             "add it there, or accept OFFLINE governance for this session." ;;
-    *)   log "WARN ${SERVER_URL}/health returned ${code}" ;;
+    200|400) log "server MCP route usable (${code})" ;;
+    401)
+      preflight_ok=0
+      if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+        log "WARN ${MCP_URL} rejected the configured bearer (401); hooks are OFFLINE."
+      else
+        log "WARN ${MCP_URL} requires a bearer (401); set UNITARES_HTTP_API_TOKEN."
+      fi
+      ;;
+    421)
+      preflight_ok=0
+      log "WARN ${MCP_URL} rejected its external Host (421); add the hostname" \
+          "to UNITARES_MCP_ALLOWED_HOSTS on the server."
+      ;;
+    000)
+      preflight_ok=0
+      log "WARN ${MCP_URL} unreachable. If the domain is not on" \
+          "the environment's network allowlist the egress proxy refuses it;" \
+          "add it there, or accept OFFLINE governance for this session."
+      ;;
+    *)
+      preflight_ok=0
+      log "WARN ${MCP_URL} returned ${code}; hooks may be OFFLINE."
+      ;;
   esac
 fi
 
@@ -93,11 +155,26 @@ if [ -z "${UNITARES_HTTP_API_TOKEN:-}" ]; then
 fi
 
 # The lease plane is a loopback service on the operator's machine. Absent here,
-# the pre-edit hook fails open at connection-refused speed (~0.1s, measured),
-# so disabling it is tidiness rather than a fix.
-if [ "${UNITARES_FILE_LEASES_ENABLED:-1}" != "0" ]; then
-  log "note file leases enabled but no lease plane in-container; pre-edit fails open."
-fi
+# the pre-edit hook normally fails open at connection-refused speed. The
+# explicit REQUIRED policy is different: it overrides ENABLED=0 and blocks.
+lease_required=$(printf '%s' "${UNITARES_FILE_LEASES_REQUIRED:-0}" \
+  | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+case "${lease_required}" in
+  1|true|on|yes)
+    preflight_ok=0
+    log "WARN UNITARES_FILE_LEASES_REQUIRED is true; pre-edit will block without" \
+        "an in-container lease plane. Set it to 0 for the documented cloud posture."
+    ;;
+  *)
+    if [ "${UNITARES_FILE_LEASES_ENABLED:-1}" != "0" ]; then
+      log "note file leases enabled but no lease plane in-container; pre-edit fails open."
+    fi
+    ;;
+esac
 
-log "done"
+if [ "${preflight_ok}" -eq 1 ]; then
+  log "done"
+else
+  log "done with warnings — governance hooks are not fully usable."
+fi
 exit 0
