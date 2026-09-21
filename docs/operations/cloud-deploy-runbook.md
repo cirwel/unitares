@@ -64,10 +64,13 @@ both believing they are canonical.
      not set `UNITARES_REST_STRICT=0`. This is load-bearing behind a loopback
      tunnel, where the local trusted-network branch would otherwise bypass
      `UNITARES_HTTP_API_TOKEN`.
+   - `UNITARES_MCP_BEARER_TOKEN` — the singular client credential used by the
+     lease plane for governance REST calls. Set it to one exact member of the
+     plural `UNITARES_MCP_BEARER_TOKENS` allowlist above.
    - `UNITARES_HTTP_API_TOKEN` for local dashboard/telemetry clients and (if
      external outcome producers post in) `UNITARES_OPERATOR_TOKENS`.
 4. `docker compose up -d --build` and wait for health checks.
-5. Verify: `curl -fsS http://127.0.0.1:8767/v1/tools` returns 200, then an
+5. Verify: `curl -fsS http://127.0.0.1:8767/health/ready` returns 200, then an
    MCP client `onboard()` round-trip through the tunnel (next section).
 
 `scripts/ops/rotate-secrets.sh` documents the rotation path once the install

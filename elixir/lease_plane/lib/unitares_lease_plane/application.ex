@@ -112,7 +112,9 @@ defmodule UnitaresLeasePlane.Application do
         System.get_env("GOVERNANCE_URL") || "http://127.0.0.1:8767"
     )
 
-    if token = System.get_env("UNITARES_HTTP_API_TOKEN") do
+    if token =
+         System.get_env("UNITARES_MCP_BEARER_TOKEN") ||
+           System.get_env("UNITARES_HTTP_API_TOKEN") do
       Application.put_env(:lease_plane, :governance_api_token, token)
     end
 
