@@ -99,6 +99,19 @@ def test_webauthn_config_tracks_hosted_deployment(monkeypatch):
     )
 
 
+def test_enrollment_page_names_and_escapes_configured_rp(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_auth, "DASHBOARD_RP_ID", "governance.example.com<script>"
+    )
+
+    response = dashboard_auth._auth_page("enroll.html")
+    page = response.body.decode()
+
+    assert "governance.example.com&lt;script&gt;" in page
+    assert "<strong>gov.cirwel.org</strong>" not in page
+    assert "{{DASHBOARD_RP_ID}}" not in page
+
+
 def test_session_lifetimes_pin_sliding_and_hard_caps():
     assert dashboard_auth.SESSION_SLIDING_SECONDS == 30 * 24 * 60 * 60
     assert dashboard_auth.SESSION_HARD_SECONDS == 90 * 24 * 60 * 60

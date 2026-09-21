@@ -246,9 +246,10 @@ else:
   else
     # Probe both routes used by the plugin hooks. The health route proves basic
     # reachability. The deliberately invalid REST request proves the bearer and
-    # DNS-rebinding gates without invoking a tool or changing server state. Its
+    # strict REST posture without invoking a tool or changing server state. Its
     # distinctive validation error prevents a proxy's generic 400 from looking
-    # like a usable UNITARES endpoint.
+    # like a usable UNITARES endpoint. A separate HEAD request to /mcp/ proves
+    # that transport's Host and Origin gates, which do not protect REST routes.
     HEALTH_URL="${BASE_URL}/health"
     probe_url "${HEALTH_URL}"
     if [ "${PROBE_CURL_RC}" -ne 0 ]; then
@@ -342,6 +343,51 @@ else:
         *)
           preflight_ok=0
           log "WARN ${TOOLS_URL} returned ${code}; hooks may be OFFLINE."
+          ;;
+      esac
+    fi
+
+    SERVER_ORIGIN=$(python3 -c '
+import sys
+from urllib.parse import urlsplit
+
+parsed = urlsplit(sys.argv[1])
+host = parsed.hostname or ""
+if ":" in host:
+    host = f"[{host}]"
+port = f":{parsed.port}" if parsed.port else ""
+print(f"{parsed.scheme}://{host}{port}")
+' "${BASE_URL}" 2>/dev/null) || SERVER_ORIGIN="${BASE_URL}"
+    MCP_URL="${BASE_URL}/mcp/"
+    probe_url -I -H "Origin: ${SERVER_ORIGIN}" \
+      -H 'Accept: application/json, text/event-stream' "${MCP_URL}"
+    code="${PROBE_CODE}"
+    if [ "${PROBE_CURL_RC}" -ne 0 ]; then
+      preflight_ok=0
+      log "WARN ${MCP_URL} transport gate probe failed after HTTP ${code}" \
+          "(curl ${PROBE_CURL_RC}); MCP clients may be OFFLINE."
+    else
+      case "${code}" in
+        200|400|405)
+          log "server MCP Host/Origin gates accepted the deployment URL"
+          ;;
+        401)
+          preflight_ok=0
+          log "WARN ${MCP_URL} rejected the configured bearer (401); MCP clients are OFFLINE."
+          ;;
+        403)
+          preflight_ok=0
+          log "WARN ${MCP_URL} rejected Origin ${SERVER_ORIGIN} (403); add it to"
+          log "     UNITARES_MCP_ALLOWED_ORIGINS on the server."
+          ;;
+        421)
+          preflight_ok=0
+          log "WARN ${MCP_URL} rejected its external Host (421); add the hostname"
+          log "     to UNITARES_MCP_ALLOWED_HOSTS on the server."
+          ;;
+        *)
+          preflight_ok=0
+          log "WARN ${MCP_URL} returned ${code}; MCP clients may be OFFLINE."
           ;;
       esac
     fi

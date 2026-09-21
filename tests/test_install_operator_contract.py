@@ -193,6 +193,12 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert (
         "UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}"
     ) in compose
+    assert (
+        compose.count(
+            "UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}"
+        )
+        == 2
+    )
     assert "UNITARES_REST_STRICT:" in compose
     assert "http://127.0.0.1:8767/health/ready" in compose
     assert "http://127.0.0.1:8767/v1/tools -o /dev/null" not in compose
