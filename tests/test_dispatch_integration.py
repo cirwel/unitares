@@ -316,6 +316,22 @@ class TestCheckRateLimit:
         assert not _is_short_circuit(result)
 
     @pytest.mark.asyncio
+    async def test_use_tool_gateway_defers_rate_limit_to_nested_target(self):
+        """Gateway calls are not charged in addition to their target call."""
+        ctx = _make_ctx()
+        limiter = MagicMock()
+        limiter.check_rate_limit.return_value = (False, "would reject")
+
+        with patch(
+            "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+            return_value=limiter,
+        ):
+            result = await check_rate_limit("use_tool", {}, ctx)
+
+        assert result == ("use_tool", {}, ctx)
+        limiter.check_rate_limit.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_loop_detection_for_expensive_reads(self):
         """Loop detection triggers for list_agents after 20+ calls in 60 seconds."""
         ctx = _make_ctx()

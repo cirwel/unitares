@@ -207,6 +207,22 @@ def _orientation_description(
     return first_line(description) or f"Tool: {tool_name}"
 
 
+def _registered_public_tool_names() -> list[str]:
+    """Return the live public dispatch index used by discovery and gateway.
+
+    Entry-point plugins can register after the mounted MCP schema table was
+    built, and a partial mount can omit a schema while leaving its handler
+    callable. The decorator/handler registry is therefore the authority for
+    the complete on-demand capability index; both ``list_tools`` and
+    ``use_tool`` must consult the same refreshed snapshot.
+    """
+    from src.mcp_handlers import TOOL_HANDLERS, refresh_tool_handlers_from_registry
+    from ..tool_stability import AGENT_WORKFLOW_ALIASES
+
+    refresh_tool_handlers_from_registry()
+    return sorted(set(TOOL_HANDLERS) | set(AGENT_WORKFLOW_ALIASES))
+
+
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -226,10 +242,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # (notably in embedded/test hosts); synchronize the decorator registry
     # first so orientation never advertises a tool the dispatcher cannot yet
     # resolve. The normal server bootstrap performs the same idempotent step.
-    from src.mcp_handlers import TOOL_HANDLERS, refresh_tool_handlers_from_registry
-    refresh_tool_handlers_from_registry()
     from ..tool_stability import AGENT_WORKFLOW_ALIASES
-    registered_tool_names = sorted(set(TOOL_HANDLERS.keys()) | set(AGENT_WORKFLOW_ALIASES))
+    registered_tool_names = _registered_public_tool_names()
     
     # Parse filter parameters (handle string booleans from MCP transport)
     essential_only = coerce_bool(arguments.get("essential_only"), False)
@@ -736,9 +750,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         )]
     nested = dict(nested)
 
-    from src.interface_contract import get_public_tool_definitions
-
-    public_names = {tool.name for tool in get_public_tool_definitions("full")}
+    public_names = set(_registered_public_tool_names())
     if target not in public_names:
         return [error_response(
             f"Unknown public capability: {target}",
@@ -766,9 +778,11 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Direct handler calls (tests and embedders) have no transport callback.
     # Preserve their historical local fallback and propagate an explicit outer
     # session only here; real transports decide session provenance themselves.
-    client_session_id = arguments.get("client_session_id")
-    if client_session_id and not nested.get("client_session_id"):
-        nested["client_session_id"] = client_session_id
+    if (
+        "client_session_id" not in nested
+        and "client_session_id" in arguments
+    ):
+        nested["client_session_id"] = arguments.get("client_session_id")
     from src.mcp_handlers import dispatch_tool
     from src.services.tool_usage_recorder import (
         build_tool_usage_payload,
