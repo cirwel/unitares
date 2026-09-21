@@ -136,6 +136,8 @@ services:
       #   UNITARES_HTTP_API_TOKEN  — local dashboard/telemetry read auth
       #   UNITARES_MCP_BEARER_TOKENS — hosted /mcp + strict REST bearer allowlist
       #   UNITARES_MCP_ALLOWED_HOSTS — external Host values accepted by /mcp
+      #   UNITARES_MCP_ALLOWED_ORIGINS — browser origins accepted by /mcp
+      #   UNITARES_DASHBOARD_RP_ID / _ORIGIN — hosted passkey relying party
       #   UNITARES_REST_STRICT     — defaults on with MCP bearers; never disable
       #     for a deployment exposed through a loopback tunnel
       #   UNITARES_BUILD_SHA       — self-reported build sha for /health
@@ -145,6 +147,9 @@ services:
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
       UNITARES_MCP_BEARER_TOKENS: ${UNITARES_MCP_BEARER_TOKENS:-}
       UNITARES_MCP_ALLOWED_HOSTS: ${UNITARES_MCP_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      UNITARES_MCP_ALLOWED_ORIGINS: ${UNITARES_MCP_ALLOWED_ORIGINS:-http://localhost:8767,http://127.0.0.1:8767}
+      UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-gov.cirwel.org}
+      UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}
       UNITARES_REST_STRICT: ${UNITARES_REST_STRICT:-}
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.

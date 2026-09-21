@@ -81,6 +81,24 @@ def test_production_rp_and_origin_are_exact_host_pair():
     assert dashboard_auth.DASHBOARD_EXPECTED_ORIGIN == "https://gov.cirwel.org"
 
 
+def test_webauthn_config_tracks_hosted_deployment(monkeypatch):
+    monkeypatch.setenv("UNITARES_DASHBOARD_RP_ID", "governance.example.com")
+    monkeypatch.delenv("UNITARES_DASHBOARD_ORIGIN", raising=False)
+
+    assert dashboard_auth._dashboard_webauthn_config() == (
+        "governance.example.com",
+        "https://governance.example.com",
+    )
+
+    monkeypatch.setenv(
+        "UNITARES_DASHBOARD_ORIGIN", "https://governance.example.com:8443"
+    )
+    assert dashboard_auth._dashboard_webauthn_config() == (
+        "governance.example.com",
+        "https://governance.example.com:8443",
+    )
+
+
 def test_session_lifetimes_pin_sliding_and_hard_caps():
     assert dashboard_auth.SESSION_SLIDING_SECONDS == 30 * 24 * 60 * 60
     assert dashboard_auth.SESSION_HARD_SECONDS == 90 * 24 * 60 * 60
