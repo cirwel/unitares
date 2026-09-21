@@ -178,9 +178,12 @@ git show origin/master:scripts/dev/cloud-session-setup.sh \
 
 This repeats the harmless health request and invalid tool request after the
 proxy credential is available, and checks the server's reported auth posture.
-Do not rely on automatic onboarding/check-ins
-unless it reports `server tool route usable (authenticated validation
-response)` and ends with `done`; a wrong credential produces a `401` warning.
+It only verifies an already-enabled plugin; it never installs or enables one in
+the active process because Claude Code loads plugin hooks when a session starts.
+If it reports the plugin missing or disabled, repair the environment setup and
+start a new cloud session. Do not rely on automatic onboarding/check-ins unless
+the command exits zero, reports `server tool route usable (authenticated
+validation response)`, and ends with `done`; a wrong credential exits non-zero.
 
 Team and Enterprise do not currently expose environment API credentials. If a
 bearer environment variable is unavoidable, use only this private dedicated

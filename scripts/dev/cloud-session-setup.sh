@@ -13,9 +13,10 @@
 # docs/operations/cloud-session-plugin.md gives the setup-field wrapper. It
 # verifies a dedicated environment's canonical remote and reads this payload
 # from origin/master before executing it; do not run a checkout-relative copy
-# from a shared environment. Once invoked, this script is idempotent and keeps
-# every internal exit successful: a broken install leaves a session without
-# governance hooks, which is the state it would have had anyway.
+# from a shared environment. Setup mode is idempotent and keeps every internal
+# exit successful: a broken install leaves a session without governance hooks,
+# which is the state it would have had anyway. Runtime verification is read-only
+# and exits non-zero whenever it cannot prove the installed hooks are usable.
 #
 # This script does NOT set UNITARES_* variables. A setup script's exports die
 # with its shell and never reach the agent process, so the operator declares
@@ -30,11 +31,17 @@ PLUGIN_ID="unitares-governance@${MARKETPLACE_NAME}"
 
 log() { printf '[unitares-setup] %s\n' "$*"; }
 
-# Every exit path is success. A cloud session must start even when the plugin
-# does not.
-finish() { log "$1"; exit 0; }
-
 runtime_preflight=0
+# Setup failures remain non-blocking so a cloud session can still start.
+# Runtime verification is a gate and therefore reports failure to its caller.
+finish() {
+  log "$1"
+  if [ "${runtime_preflight}" -eq 1 ]; then
+    exit 1
+  fi
+  exit 0
+}
+
 case "${1:-}" in
   --verify-runtime)
     runtime_preflight=1
@@ -47,14 +54,16 @@ esac
 
 command -v claude >/dev/null 2>&1 || finish "claude CLI not on PATH — skipping plugin install."
 
-# --- install -------------------------------------------------------------
+# --- install / inspect ---------------------------------------------------
 
-if claude plugin marketplace list 2>/dev/null | grep -q "${MARKETPLACE_NAME}"; then
-  log "marketplace ${MARKETPLACE_NAME} already registered"
-else
-  log "adding marketplace ${MARKETPLACE_SOURCE}"
-  if ! timeout 180 claude plugin marketplace add "${MARKETPLACE_SOURCE}" 2>&1 | sed 's/^/  /'; then
-    finish "marketplace add failed — continuing without governance hooks."
+if [ "${runtime_preflight}" -eq 0 ]; then
+  if claude plugin marketplace list 2>/dev/null | grep -q "${MARKETPLACE_NAME}"; then
+    log "marketplace ${MARKETPLACE_NAME} already registered"
+  else
+    log "adding marketplace ${MARKETPLACE_SOURCE}"
+    if ! timeout 180 claude plugin marketplace add "${MARKETPLACE_SOURCE}" 2>&1 | sed 's/^/  /'; then
+      finish "marketplace add failed — continuing without governance hooks."
+    fi
   fi
 fi
 
@@ -77,12 +86,18 @@ case "${plugin_state}" in
     log "plugin ${PLUGIN_ID} already installed and enabled"
     ;;
   disabled)
+    if [ "${runtime_preflight}" -eq 1 ]; then
+      finish "plugin ${PLUGIN_ID} is disabled; enable it during setup and start a new cloud session before verifying hooks."
+    fi
     log "enabling ${PLUGIN_ID}"
     if ! timeout 180 claude plugin enable "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
       finish "plugin enable failed — continuing without governance hooks."
     fi
     ;;
   missing)
+    if [ "${runtime_preflight}" -eq 1 ]; then
+      finish "plugin ${PLUGIN_ID} is missing; install it during setup and start a new cloud session before verifying hooks."
+    fi
     log "installing ${PLUGIN_ID}"
     if ! timeout 180 claude plugin install "${PLUGIN_ID}" 2>&1 | sed 's/^/  /'; then
       finish "plugin install failed — continuing without governance hooks."
@@ -340,5 +355,8 @@ elif [ "${preflight_ok}" -eq 1 ]; then
   log "done"
 else
   log "done with warnings — governance hooks are not fully usable."
+  if [ "${runtime_preflight}" -eq 1 ]; then
+    exit 1
+  fi
 fi
 exit 0

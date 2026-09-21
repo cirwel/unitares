@@ -151,6 +151,9 @@ def test_tier_one_install_is_release_pinned_and_single_command() -> None:
 def test_operator_manual_keeps_coordination_validation_detail() -> None:
     manual = _read("docs/manual/02-install.md")
     compose = _read("docker-compose.yml")
+    lease_application = _read(
+        "elixir/lease_plane/lib/unitares_lease_plane/application.ex"
+    )
 
     assert "make coordination-demo" in manual
     assert "one-command install/start" in manual
@@ -178,7 +181,14 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "refusing replay" in manual
     assert "UNITARES_CONTINUITY_TOKEN_SECRET:" in compose
     assert "UNITARES_MCP_BEARER_TOKENS:" in compose
+    assert (
+        "UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}"
+    ) in compose
     assert "UNITARES_REST_STRICT:" in compose
+    assert "http://127.0.0.1:8767/health/ready" in compose
+    assert "http://127.0.0.1:8767/v1/tools -o /dev/null" not in compose
+    assert 'System.get_env("UNITARES_MCP_BEARER_TOKEN")' in lease_application
+    assert 'System.get_env("UNITARES_HTTP_API_TOKEN")' in lease_application
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 

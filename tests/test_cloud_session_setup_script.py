@@ -121,6 +121,21 @@ def test_enabled_plugin_is_left_alone(tmp_path: Path) -> None:
     assert f"plugin install {PLUGIN_ID}" not in commands
 
 
+def test_runtime_preflight_does_not_enable_plugin_in_current_session(
+    tmp_path: Path,
+) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=False,
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 1
+    assert f"plugin enable {PLUGIN_ID}" not in commands
+    assert "plugin marketplace add" not in commands
+    assert "start a new cloud session before verifying hooks" in proc.stdout
+
+
 def test_tool_probe_rejects_bad_bearer_even_when_health_is_green(
     tmp_path: Path,
 ) -> None:
@@ -232,7 +247,7 @@ def test_runtime_preflight_rejects_bad_proxy_bearer(tmp_path: Path) -> None:
         script_args=["--verify-runtime"],
     )
 
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     assert "requires a bearer (401)" in proc.stdout
     assert "server tool route usable" not in proc.stdout
     assert "done with warnings" in proc.stdout
@@ -254,7 +269,7 @@ def test_runtime_preflight_rejects_loopback_bypass_as_authentication_proof(
         script_args=["--verify-runtime"],
     )
 
-    assert proc.returncode == 0
+    assert proc.returncode == 1
     assert "does not require strict REST bearer auth" in proc.stdout
     assert "credential acceptance is UNVERIFIED" in proc.stdout
     assert "authenticated validation response" not in proc.stdout
