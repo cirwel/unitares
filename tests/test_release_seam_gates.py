@@ -497,7 +497,7 @@ SITE = "Python SDK {v}\n\n```bash\npython -m pip install unitares-sdk=={v}\n```\
 
 
 def _claims_repo(repo: Repo, advertised: str, tags: list[str], site: str | None = None) -> None:
-    repo.write("COMPATIBILITY.md", COMPAT.format(v=advertised))
+    repo.write("docs/COMPATIBILITY.md", COMPAT.format(v=advertised))
     repo.write("docs/public-site/index.md", SITE.format(v=site or advertised))
     repo.commit("docs: advertise the SDK", {})
     for tag in tags:

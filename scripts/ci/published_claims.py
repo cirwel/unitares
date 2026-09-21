@@ -3,7 +3,7 @@
 
 Every version guard in this repository binds a claim to something inside the
 repository: `version_manager.py` binds documentation to `VERSION`, and
-`test_install_operator_contract.py` used to bind `COMPATIBILITY.md` to the
+`test_install_operator_contract.py` used to bind `docs/COMPATIBILITY.md` to the
 version declared in `agents/sdk/pyproject.toml`.
 
 That is not the same property. On 2026-08-21, #1800 bumped the declared SDK
@@ -39,7 +39,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Surface -> pattern capturing the advertised version.
 SDK_SURFACES = {
-    "COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
+    "docs/COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
     "docs/public-site/index.md": r"pip install unitares-sdk==([\d.]+)",
 }
 SDK_TAG = re.compile(r"sdk-v(\d+\.\d+\.\d+)")

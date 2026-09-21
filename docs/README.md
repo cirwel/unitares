@@ -16,10 +16,10 @@ an analogy or proposal is not mistaken for a deployed contract.
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
 | **Reading research history** | [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) → [`ontology/README.md`](ontology/README.md) → [`proposals/README.md`](proposals/README.md) |
 
-Project-level status and participation live at the repository root:
-[roadmap](../ROADMAP.md), [compatibility](../COMPATIBILITY.md),
-[governance](../GOVERNANCE.md), [support](../SUPPORT.md), and
-[contributing](../CONTRIBUTING.md).
+Project-level status lives in `docs/`; participation and community policies live in `.github/`:
+[roadmap](ROADMAP.md), [compatibility](COMPATIBILITY.md),
+[governance](GOVERNANCE.md), [support](../.github/SUPPORT.md), and
+[contributing](../.github/CONTRIBUTING.md).
 
 ## Reader-facing documentation
 
@@ -55,6 +55,7 @@ Operating guidance for individual subsystems lives next to the code as Skills, n
 
 User- and integrator-facing how-tos. Thin by design — most architecture lives in `UNIFIED_ARCHITECTURE.md` and the repo README.
 
+- [`CODEX_START.md`](guides/CODEX_START.md) — human-facing Codex quickstart for direct repository work
 - [`START_HERE.md`](guides/START_HERE.md) — compatibility redirect to the current audience paths
 - [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — canonical symptom-and-recovery guide
 - [`CIRS_PROTOCOL.md`](guides/CIRS_PROTOCOL.md) — multi-agent coordination protocol (specialized; not a general architecture overview)

@@ -59,10 +59,10 @@ UNTRACKED_HASH_PATHS=(
     "VERSION"
     "AGENTS.md"
     "CLAUDE.md"
-    "CODEX_START.md"
+    "docs/guides/CODEX_START.md"
     "README.md"
-    "CONTRIBUTING.md"
-    "SECURITY.md"
+    ".github/CONTRIBUTING.md"
+    ".github/SECURITY.md"
     "Makefile"
     "Dockerfile"
     "docker-compose.yml"
@@ -96,10 +96,10 @@ untracked_patterns = [
     "VERSION",
     "AGENTS.md",
     "CLAUDE.md",
-    "CODEX_START.md",
+    "docs/guides/CODEX_START.md",
     "README.md",
-    "CONTRIBUTING.md",
-    "SECURITY.md",
+    ".github/CONTRIBUTING.md",
+    ".github/SECURITY.md",
     "Makefile",
     "Dockerfile",
     "docker-compose.yml",

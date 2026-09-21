@@ -276,7 +276,7 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 - Agent identity is bearer-token-based with intentional retention of the symmetric stack (asymmetric DPoP considered, shelved 2026-04-19 — see [`ontology/s1-continuity-token-retirement.md`](ontology/s1-continuity-token-retirement.md))
 - The dashboard reads PostgreSQL directly with the same auth model as MCP
 
-Multi-tenant or public-facing deployment will benefit from a harder auth posture than the current defaults. Vulnerability reports: [`SECURITY.md`](../SECURITY.md).
+Multi-tenant or public-facing deployment will benefit from a harder auth posture than the current defaults. Vulnerability reports: [`SECURITY.md`](../.github/SECURITY.md).
 
 ## Case Study: Lumen (Physical Sensor Agent)
 

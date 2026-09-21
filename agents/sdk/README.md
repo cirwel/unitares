@@ -19,7 +19,7 @@ pip install "unitares-sdk @ git+https://github.com/cirwel/unitares@v2.21.0#subdi
 ```
 
 Replace `@v2.21.0` with another server release tag only after checking the
-[compatibility map](https://github.com/cirwel/unitares/blob/master/COMPATIBILITY.md).
+[compatibility map](https://github.com/cirwel/unitares/blob/master/docs/COMPATIBILITY.md).
 Pin a commit SHA when reproducing a specific development build.
 
 Or from a checkout of the [unitares repo](https://github.com/cirwel/unitares):

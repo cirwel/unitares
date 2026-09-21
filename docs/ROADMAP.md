@@ -29,7 +29,7 @@ by releases and canonical documentation, not by this file.
 - **Multi-principal trust** is a separate claim with its own evidence path:
   whether identity, attestation, and enforcement survive a principal who does
   not share this authority. The cohort above does not establish it, and it does
-  not gate the cohort. See [`docs/SCOPE_AND_THREAT_MODEL.md`](docs/SCOPE_AND_THREAT_MODEL.md).
+  not gate the cohort. See [`docs/SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md).
 
 - **Two exports, for legibility rather than capability:** an audit-trail export
   in the shape of the IETF Agent Audit Trail draft, and standard trace emission
@@ -37,7 +37,7 @@ by releases and canonical documentation, not by this file.
   Both let an evaluator read the record without this server's own tooling;
   neither adds a mechanism or an efficacy claim. Recorded as gaps by the
   2026-09 claims audit
-  ([`docs/ontology/competitive-analysis-2026-09.md`](docs/ontology/competitive-analysis-2026-09.md)).
+  ([`docs/ontology/competitive-analysis-2026-09.md`](ontology/competitive-analysis-2026-09.md)).
 
 ## Next — reduce maintenance and integration friction
 
@@ -50,12 +50,12 @@ by releases and canonical documentation, not by this file.
   package, once the cohort protocol carries the clarification that submission
   owes it; run one harness side by side under the Relay path and the existing
   hook chain against the same server; and answer the execute-plane design read,
-  [`docs/proposals/execute-plane-design-read-v0.md`](docs/proposals/execute-plane-design-read-v0.md),
+  [`docs/proposals/execute-plane-design-read-v0.md`](proposals/execute-plane-design-read-v0.md),
   written 2026-09-17 against conditions pre-registered before its analysis. It
   decides nothing and asks one question back: whether row 3's three options are
   still the right three, given that the evidence supports a composition none of
   them expresses. All three follow from the 2026-09-17 decision in
-  [`docs/proposals/relay-substrate-relayering-v0.md`](docs/proposals/relay-substrate-relayering-v0.md)
+  [`docs/proposals/relay-substrate-relayering-v0.md`](proposals/relay-substrate-relayering-v0.md)
   and report at its 2026-11-03 renew-or-stop checkpoint. None carries an
   efficacy claim.
 

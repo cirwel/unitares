@@ -357,7 +357,7 @@ def test_absolute_url_ending_in_md_not_treated_as_path(tmp_path, monkeypatch, do
     d.mkdir()
     doc = d / "a.md"
     doc.write_text(
-        "See [map](https://github.com/cirwel/unitares/blob/master/COMPATIBILITY.md)\n"
+        "See [map](https://github.com/cirwel/unitares/blob/master/docs/COMPATIBILITY.md)\n"
         "and [http](http://example.com/x.md).\n"
     )
 

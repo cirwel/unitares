@@ -80,7 +80,7 @@ value or governance efficacy.
 | What are the threat model and blind spots? | [Scope and threat model](https://github.com/cirwel/unitares/blob/master/docs/SCOPE_AND_THREAT_MODEL.md) |
 | What evidence can be regenerated? | [Evaluation catalog](https://github.com/cirwel/unitares/blob/master/docs/EVALUATION_INDEX.md) |
 | How is the system operated and released? | [Operations docs](https://github.com/cirwel/unitares/tree/master/docs/operations) |
-| What remains on the roadmap? | [Roadmap](https://github.com/cirwel/unitares/blob/master/ROADMAP.md) |
+| What remains on the roadmap? | [Roadmap](https://github.com/cirwel/unitares/blob/master/docs/ROADMAP.md) |
 
 ## Evidence boundary
 

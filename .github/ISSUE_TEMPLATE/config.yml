@@ -7,5 +7,5 @@ contact_links:
     url: https://github.com/cirwel/unitares/discussions
     about: Ask for help or discuss an integration without filing a defect.
   - name: Support policy
-    url: https://github.com/cirwel/unitares/blob/master/SUPPORT.md
+    url: https://github.com/cirwel/unitares/blob/master/.github/SUPPORT.md
     about: Check supported versions, response expectations, and routing.

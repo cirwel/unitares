@@ -15,4 +15,4 @@ route without restating those claims.
 
 Do not run `DROP`, `TRUNCATE`, or `DELETE` against the governance database
 without a backup and deliberate operator intent. Report security issues through
-[`SECURITY.md`](../../SECURITY.md).
+[`SECURITY.md`](../../.github/SECURITY.md).

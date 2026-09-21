@@ -57,9 +57,9 @@ the observed resolution source. It assists the client; the server remains the
 source of truth. Do not treat every edit or tool call as a governance event.
 
 The machine-facing rules, Watcher commands, surface-claim procedure, tests, and
-delivery checks live in [`AGENTS.md`](AGENTS.md). Repository delivery uses a
+delivery checks live in [`AGENTS.md`](../../AGENTS.md). Repository delivery uses a
 draft PR and human merge gate; the full contract is
-[`docs/operations/github-workflow-conventions.md`](docs/operations/github-workflow-conventions.md).
+[`docs/operations/github-workflow-conventions.md`](../operations/github-workflow-conventions.md).
 
 For the installable client rather than direct repository work, use the
 [governance plugin](https://github.com/cirwel/unitares-governance-plugin).

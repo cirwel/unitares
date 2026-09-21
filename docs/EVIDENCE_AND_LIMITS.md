@@ -51,7 +51,7 @@ interim access and read-specific power.
 
 The validation the system does claim — reliability, faithfulness under
 intervention, and calibration — is scoped and partly built; the
-[roadmap](../ROADMAP.md) tracks it. The DOI identifies a
+[roadmap](ROADMAP.md) tracks it. The DOI identifies a
 [public preprint](https://doi.org/10.5281/zenodo.19647159), not peer-reviewed
 validation.
 
@@ -120,7 +120,7 @@ non-repudiation. Asymmetric or DPoP-style keys were considered and shelved on
 verified by an operator who does not already trust its issuer, which is the whole
 problem a federation exchange has to solve. Whether the remaining records suffice
 to exchange cross-operator attestations without centralizing raw telemetry is
-open on the **multi-principal trust** track in the [roadmap](../ROADMAP.md).
+open on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
 
 ## Identity binding and the lease plane
 
