@@ -112,9 +112,7 @@ defmodule UnitaresLeasePlane.Application do
         System.get_env("GOVERNANCE_URL") || "http://127.0.0.1:8767"
     )
 
-    if token = System.get_env("UNITARES_HTTP_API_TOKEN") do
-      Application.put_env(:lease_plane, :governance_api_token, token)
-    end
+    configure_governance_api_token()
 
     # Identity attribution is a separate gate from the shared service bearer.
     # Default off preserves existing deployments; quickstarts can enable
@@ -319,6 +317,27 @@ defmodule UnitaresLeasePlane.Application do
       pool_size: pool_size,
       name: UnitaresLeasePlane.DB
     ]
+  end
+
+  @doc false
+  def configure_governance_api_token do
+    token =
+      Enum.find(
+        [
+          System.get_env("UNITARES_MCP_BEARER_TOKEN"),
+          System.get_env("UNITARES_HTTP_API_TOKEN")
+        ],
+        fn
+          value when is_binary(value) -> String.trim(value) != ""
+          _ -> false
+        end
+      )
+
+    if token do
+      Application.put_env(:lease_plane, :governance_api_token, token)
+    else
+      Application.delete_env(:lease_plane, :governance_api_token)
+    end
   end
 
   @doc false
