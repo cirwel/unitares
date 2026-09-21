@@ -363,7 +363,10 @@ parsed = urlsplit(sys.argv[1])
 host = parsed.hostname or ""
 if ":" in host:
     host = f"[{host}]"
-port = f":{parsed.port}" if parsed.port else ""
+is_default_port = (parsed.scheme == "https" and parsed.port == 443) or (
+    parsed.scheme == "http" and parsed.port == 80
+)
+port = f":{parsed.port}" if parsed.port and not is_default_port else ""
 print(f"{parsed.scheme}://{host}{port}")
 ' "${BASE_URL}" 2>/dev/null) || SERVER_ORIGIN="${BASE_URL}"
     MCP_URL="${BASE_URL}/mcp/"
