@@ -158,7 +158,7 @@ declared as environment variables, not exported in the script:
 
 | Variable | Value | Why |
 | --- | --- | --- |
-| `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be HTTPS on implicit port 443 (or explicit `:443`) |
+| `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be HTTPS on implicit port 443 (or explicit `:443`), with no trailing slash because hooks append their paths verbatim |
 | `UNITARES_CLOUD_PROXY_AUTH` | `1` when an environment API credential supplies `Authorization` | Nonsecret signal that setup cannot test the credential injected only after Claude launches |
 | `UNITARES_HTTP_API_TOKEN` | hosted bearer credential, only when proxy credentials are unavailable | Environment-visible fallback header; its value must be accepted by the server's strict bearer allowlist |
 | `UNITARES_FILE_LEASES_ENABLED` | `0` | No lease plane in-container; avoid the otherwise harmless connection-refused probe |

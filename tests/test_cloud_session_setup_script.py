@@ -391,6 +391,24 @@ def test_server_url_with_mcp_suffix_is_rejected_as_hook_incompatible(
     assert "done with warnings" in proc.stdout
 
 
+def test_server_url_with_trailing_slash_is_rejected_as_hook_incompatible(
+    tmp_path: Path,
+) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={"UNITARES_SERVER_URL": "https://gov.example.test/"},
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 1
+    assert "must not end with '/'" in proc.stdout
+    assert "append" in proc.stdout
+    assert "https://gov.example.test//health" not in commands
+    assert "https://gov.example.test/health" not in commands
+    assert "probes skipped for an invalid or unsafe server URL" in proc.stdout
+
+
 def test_plain_http_never_sends_bearer_during_preflight(tmp_path: Path) -> None:
     proc, commands = _run_setup(
         tmp_path,
