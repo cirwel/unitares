@@ -76,6 +76,15 @@ from src.knowledge_graph import (
     VALID_RESPONSE_TYPES, VALID_DISCOVERY_STATUSES,
     VALID_SEVERITIES as _SHARED_VALID_SEVERITIES,
 )
+from src.knowledge_authority import (
+    GOVERNED_CLAIM,
+    IMPORTED_CONTEXT,
+    PROMOTION_SCHEMA,
+    PROMOTION_TAG,
+    assess_authority,
+    has_imported_memory_marker,
+    rank_by_authority,
+)
 from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN, MAX_DETAILS_LEN
 from config.governance_config import config
 from src.logging_utils import get_logger
@@ -155,6 +164,7 @@ _LEAN_DISCOVERY_FIELDS = (
     "superseded",
     "superseded_by",
     "staleness_warning",
+    "authority",
 )
 
 
@@ -1591,6 +1601,7 @@ class _KnowledgeSearchRequest:
     status: Any
     include_archived: bool
     include_cold: bool
+    authority_mode: str
     # Set when the caller over-asked and the limit was clamped down — surfaced
     # in the response so truncation is distinguishable from "that was all".
     limit_clamped_from: Optional[int] = None
@@ -1634,6 +1645,7 @@ class _KnowledgeSearchState:
     graph_expand_on: bool = False
     use_semantic: bool = False
     hybrid_path: bool = False
+    authority_reranked: bool = False
 
 
 def _optional_flag(value: Any) -> Optional[bool]:
@@ -1691,6 +1703,12 @@ def _parse_knowledge_search_request(
     if search_mode not in {"auto", "fts", "semantic", "hybrid"}:
         raise _SearchParameterError(
             f"Invalid search_mode {search_mode!r}; expected one of: auto, fts, semantic, hybrid"
+        )
+
+    authority_mode = str(arguments.get("authority_mode") or "prefer_governed").lower()
+    if authority_mode not in {"prefer_governed", "all"}:
+        raise _SearchParameterError(
+            f"Invalid authority_mode {authority_mode!r}; expected 'prefer_governed' or 'all'"
         )
 
     query_effective = arguments.get("query") or arguments.get("text")
@@ -1792,6 +1810,7 @@ def _parse_knowledge_search_request(
         status=status,
         include_archived=arguments.get("include_archived", False),
         include_cold=arguments.get("include_cold", False),
+        authority_mode=authority_mode,
     )
 
 
@@ -2090,6 +2109,41 @@ def _tag_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
     return {"tags": request.tags} if request.tags else {}
 
 
+def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
+    """Prefer governed knowledge unless the caller explicitly asks for raw order.
+
+    A source-tag query is already an explicit request to inspect the imported
+    lane, so applying its default penalty there would only distort that lane's
+    own relevance order.
+    """
+    if request.authority_mode == "all":
+        return False
+    return not has_imported_memory_marker(request.tags)
+
+
+def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
+    if state.rerank_scores:
+        return state.rerank_scores
+    if state.rrf_scores:
+        return state.rrf_scores
+    if state.semantic_scores:
+        return state.semantic_scores
+    return {}
+
+
+def _rank_search_documents(
+    state: _KnowledgeSearchState,
+    documents: list[Any],
+) -> list[Any]:
+    ranked, changed = rank_by_authority(
+        documents,
+        relevance_scores=_authority_score_map(state),
+        enabled=_authority_ranking_enabled(state.request),
+    )
+    state.authority_reranked = state.authority_reranked or changed
+    return ranked
+
+
 def _candidate_status_visible(
     document: Any, request: _KnowledgeSearchRequest
 ) -> bool:
@@ -2115,7 +2169,7 @@ async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
                 break
 
     if not (state.rerank_on and filtered):
-        state.results = filtered[: request.limit]
+        state.results = _rank_search_documents(state, filtered)[: request.limit]
         return
 
     try:
@@ -2125,19 +2179,24 @@ async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
         reranked = await _rerank(
             str(request.query_text),
             pairs,
-            top_k=request.limit,
+            top_k=len(filtered),
             max_rerank_size=state.rerank_pool_size,
         )
         state.rerank_scores = dict(reranked)
         by_id = {document.id: document for document in filtered}
-        state.results = [by_id[discovery_id] for discovery_id, _ in reranked if discovery_id in by_id]
+        reranked_documents = [
+            by_id[discovery_id]
+            for discovery_id, _ in reranked
+            if discovery_id in by_id
+        ]
+        state.results = _rank_search_documents(state, reranked_documents)[: request.limit]
         state.search_mode = f"{state.search_mode}_reranked" if state.search_mode else "reranked"
     except Exception as exc:
         logger.warning(
             "[KG_SEARCH] reranker failed; keeping first-stage order: %s",
             exc,
         )
-        state.results = filtered[: request.limit]
+        state.results = _rank_search_documents(state, filtered)[: request.limit]
 
 
 async def _run_text_search(state: _KnowledgeSearchState) -> None:
@@ -2324,6 +2383,7 @@ def _serialize_search_discoveries(
             display_name = display.get("display_name", document.agent_id)
 
         item = {"by": display_name, "summary": document.summary}
+        item["authority"] = assess_authority(document).to_dict()
         session_at_write = (provenance or {}).get("writer_session_id_at_write")
         if session_at_write:
             item["session_id_at_write"] = session_at_write
@@ -2418,6 +2478,24 @@ def _attach_search_diagnostics(
             "No exact matches found. Retried with individual terms (OR operator)."
         )
         response["fallback_terms"] = str(state.request.query_text).split()[:3] if state.request.query_text else []
+
+    authority_counts: dict[str, int] = {}
+    for document in state.results:
+        tier = assess_authority(document).tier
+        authority_counts[tier] = authority_counts.get(tier, 0) + 1
+    if authority_counts and (
+        IMPORTED_CONTEXT in authority_counts or GOVERNED_CLAIM in authority_counts
+    ):
+        response["authority_policy"] = {
+            "mode": state.request.authority_mode,
+            "reranked": state.authority_reranked,
+            "result_tiers": authority_counts,
+            "note": (
+                "Authority affects close ranking contests; it is provenance-aware "
+                "retrieval, not a truth verdict. Filter by source tags or pass "
+                "authority_mode='all' to inspect raw relevance order."
+            ),
+        }
 
 
 def _empty_search_hints(request: _KnowledgeSearchRequest) -> list[str]:
@@ -2695,7 +2773,10 @@ async def _execute_knowledge_search(state: _KnowledgeSearchState) -> dict[str, A
         await _run_text_search(state)
     else:
         await _run_indexed_filter_search(state)
+        state.results = _rank_search_documents(state, state.results)[: state.request.limit]
     await _apply_semantic_fts_fallback(state)
+    if state.fallback_used:
+        state.results = _rank_search_documents(state, state.results)[: state.request.limit]
     record_ms(
         f"knowledge.search.{state.search_mode}",
         (time.perf_counter() - started_at) * 1000.0,
@@ -4399,6 +4480,200 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
             return [error_response(result.get("error", "Failed to create SUPERSEDES edge"))]
     except Exception as e:
         return [error_response(f"Failed to supersede discovery: {str(e)}")]
+
+
+@mcp_tool("promote_memory_claim", timeout=20.0, register=False)
+async def handle_promote_memory_claim(
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Promote one imported memory into a corroborated, governed KG claim.
+
+    Promotion creates a new discovery and leaves the source memory unchanged.
+    The new row receives a server-authored receipt binding the source, evidence
+    rows, promoter identity, verification basis, and decision standard.  A
+    normal store cannot forge that receipt because callers cannot supply
+    provenance directly.
+    """
+    from ..support.agent_auth import verify_agent_ownership
+    from ..utils import check_agent_can_operate
+
+    agent_id, error = require_registered_agent(arguments)
+    if error:
+        return [error]
+    blocked = check_agent_can_operate(agent_id)
+    if blocked:
+        return [blocked]
+    if not verify_agent_ownership(agent_id, arguments):
+        return [
+            error_response(
+                "Promotion requires a caller-owned registered identity.",
+                error_code="AUTH_REQUIRED",
+                error_category="auth_error",
+                recovery={
+                    "action": "Pass the client_session_id returned by start_session on this call.",
+                    "related_tools": ["start_session", "identity"],
+                },
+            )
+        ]
+
+    source_id = str(arguments.get("discovery_id") or "").strip()
+    summary = str(arguments.get("summary") or "").strip()
+    verification_basis = str(arguments.get("verification_basis") or "").strip()
+    decision_standard = str(arguments.get("decision_standard") or "").strip()
+    raw_evidence_ids = arguments.get("evidence_ids") or []
+    evidence_ids = list(dict.fromkeys(
+        str(value).strip() for value in raw_evidence_ids if str(value).strip()
+    ))
+
+    missing = [
+        name
+        for name, value in (
+            ("discovery_id", source_id),
+            ("summary", summary),
+            ("verification_basis", verification_basis),
+            ("decision_standard", decision_standard),
+        )
+        if not value
+    ]
+    if missing:
+        return [error_response(f"Promotion requires: {', '.join(missing)}")]
+    if not evidence_ids:
+        return [error_response("Promotion requires at least one evidence_ids entry")]
+    if source_id in evidence_ids:
+        return [error_response("The source memory cannot corroborate itself")]
+
+    try:
+        import asyncio
+
+        graph = await get_knowledge_graph()
+        source = await graph.get_discovery(source_id)
+        if source is None:
+            return [error_response(f"Source discovery '{source_id}' not found")]
+        source_authority = assess_authority(source)
+        if source_authority.tier != IMPORTED_CONTEXT:
+            return [
+                error_response(
+                    "Only imported memory context uses this promotion path; "
+                    f"source tier is {source_authority.tier!r}. Store or update "
+                    "native findings directly."
+                )
+            ]
+
+        fetched = await asyncio.gather(
+            *(graph.get_discovery(evidence_id) for evidence_id in evidence_ids),
+            return_exceptions=True,
+        )
+        evidence_rows = []
+        missing_evidence = []
+        for evidence_id, row in zip(evidence_ids, fetched):
+            if isinstance(row, Exception) or row is None:
+                missing_evidence.append(evidence_id)
+            else:
+                evidence_rows.append(row)
+        if missing_evidence:
+            return [
+                error_response(
+                    "Evidence discoveries not found: " + ", ".join(missing_evidence)
+                )
+            ]
+
+        imported_evidence = [
+            row.id
+            for row in evidence_rows
+            if assess_authority(row).tier == IMPORTED_CONTEXT
+        ]
+        if imported_evidence:
+            return [
+                error_response(
+                    "Imported memories cannot independently corroborate another "
+                    "memory. Promote or verify these evidence rows first: "
+                    + ", ".join(imported_evidence)
+                )
+            ]
+
+        discovery_type = _normalize_discovery_type(
+            arguments.get("discovery_type") or "insight"
+        )
+        if discovery_type not in VALID_DISCOVERY_TYPES:
+            return [
+                _invalid_enum_response(
+                    "discovery_type",
+                    discovery_type,
+                    VALID_DISCOVERY_TYPES,
+                )
+            ]
+        severity = _parse_store_severity(arguments)
+        details = str(arguments.get("details") or arguments.get("content") or "")
+        if len(summary) > MAX_SUMMARY_LEN:
+            return [
+                error_response(
+                    f"Promotion summary exceeds {MAX_SUMMARY_LEN} characters; "
+                    "state one bounded claim and put support in details."
+                )
+            ]
+        if len(details) > MAX_DETAILS_LEN:
+            return [
+                error_response(
+                    f"Promotion details exceed {MAX_DETAILS_LEN} characters"
+                )
+            ]
+
+        provenance, provenance_chain = await _capture_store_provenance(
+            arguments, agent_id
+        )
+        promoted_at = _utc_now_iso()
+        provenance["source"] = "explicit_promotion"
+        provenance["knowledge_authority"] = {
+            "schema": PROMOTION_SCHEMA,
+            "source_id": source_id,
+            "evidence_ids": evidence_ids,
+            "promoted_by": agent_id,
+            "promoted_at": promoted_at,
+            "verification_basis": verification_basis,
+            "decision_standard": decision_standard,
+        }
+        tags = normalize_tags([
+            *(arguments.get("tags") or []),
+            PROMOTION_TAG,
+            "promoted-from-memory",
+        ])
+        claim = DiscoveryNode(
+            id=_new_discovery_id(),
+            agent_id=agent_id,
+            type=discovery_type,
+            summary=summary,
+            details=details,
+            tags=tags,
+            severity=severity,
+            status="open",
+            related_to=[source_id, *evidence_ids],
+            references_files=arguments.get("related_files") or [],
+            provenance=provenance,
+            provenance_chain=provenance_chain,
+            confidence=_parse_store_confidence(arguments),
+        )
+        _annotate_knowledge_confidence_authority(claim)
+        await graph.add_discovery(claim)
+        await _broadcast_knowledge_write(claim, agent_id)
+
+        return success_response(
+            {
+                "message": "Imported memory promoted to a governed claim",
+                "discovery_id": claim.id,
+                "source_id": source_id,
+                "evidence_ids": evidence_ids,
+                "authority": assess_authority(claim).to_dict(),
+                "promotion_receipt": provenance["knowledge_authority"],
+                "discovery": claim.to_dict(include_details=False),
+                "note": (
+                    "Governed means the promotion transition is attributable and "
+                    "evidence-linked; it does not make the claim infallible."
+                ),
+            },
+            arguments=arguments,
+        )
+    except Exception as exc:
+        return [error_response(f"Failed to promote memory claim: {str(exc)}")]
 
 
 @mcp_tool("audit_knowledge_graph", timeout=60.0, register=False)

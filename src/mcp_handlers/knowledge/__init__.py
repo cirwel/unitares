@@ -11,6 +11,7 @@ from .handlers import (
     handle_leave_note,
     handle_cleanup_knowledge_graph,
     handle_get_lifecycle_stats,
+    handle_promote_memory_claim,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "handle_leave_note",
     "handle_cleanup_knowledge_graph",
     "handle_get_lifecycle_stats",
+    "handle_promote_memory_claim",
 ]
