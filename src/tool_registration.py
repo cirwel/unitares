@@ -395,7 +395,16 @@ def get_tool_wrapper(tool_name: str):
                     )
 
                 # Dispatch to existing handler (which has @mcp_tool timeout protection)
-                result = await dispatch_tool(tool_name, kwargs)
+                from src.mcp_handlers.context import (
+                    reset_tool_dispatch_surface,
+                    set_tool_dispatch_surface,
+                )
+
+                surface_token = set_tool_dispatch_surface("mcp")
+                try:
+                    result = await dispatch_tool(tool_name, kwargs)
+                finally:
+                    reset_tool_dispatch_surface(surface_token)
 
                 # Record successful call metrics
                 duration = time.time() - start_time
@@ -479,6 +488,7 @@ TOOLS_NEEDING_SESSION_INJECTION = call_set(
         "leave_note",
         "mark_response_complete",
         "dialectic",
+        "use_tool",
     },
 )
 

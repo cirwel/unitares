@@ -90,8 +90,10 @@ a prototype or a system?
 | **226 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
 | **7 companion repositories** | including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland; the main integrations are listed under [Ecosystem](../README.md#ecosystem) |
 
-Recounted 2026-09-09 against tracked files at `e017c45e`, each with the command
-that produced it. Test files: `git ls-files tests/` filtered to `test_*.py`;
+The registered-tool count was refreshed 2026-09-20 at `76a68c02` after adding
+`use_tool`; the remaining structural counts were recounted 2026-09-09 against
+tracked files at `e017c45e`, each with the command that produced it. Test files:
+`git ls-files tests/` filtered to `test_*.py`;
 test functions: an AST walk of those files for `def test_*`. Migrations:
 `git ls-files db/postgres/migrations/ | wc -l`. Python modules:
 `git ls-files src/ governance_core/ agents/ | grep -c '\.py$'`. Documents:

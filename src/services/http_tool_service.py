@@ -319,8 +319,17 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             # emitted the §4.2 fallback event; nothing to do here.
 
         handler = get_direct_http_tool_handler(tool_name)
+        from src.mcp_handlers.context import (
+            reset_tool_dispatch_surface,
+            set_tool_dispatch_surface,
+        )
+
+        surface_token = set_tool_dispatch_surface("rest")
         if handler is not None:
-            result = await handler(arguments)
+            try:
+                result = await handler(arguments)
+            finally:
+                reset_tool_dispatch_surface(surface_token)
             latency_ms = int((time.monotonic() - t0) * 1000)
             success, error_type = classify_tool_result(result)
             record_tool_usage(tool_name=tool_name,
@@ -329,7 +338,10 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
                               latency_ms=latency_ms, session_id=session_id,
                               payload=usage_payload)
             return _normalize_direct_http_result(result)
-        result = await execute_http_dispatch_fallback(tool_name, arguments)
+        try:
+            result = await execute_http_dispatch_fallback(tool_name, arguments)
+        finally:
+            reset_tool_dispatch_surface(surface_token)
         latency_ms = int((time.monotonic() - t0) * 1000)
         success, error_type = classify_tool_result(result)
         record_tool_usage(tool_name=tool_name,
