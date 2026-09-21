@@ -129,12 +129,17 @@ services:
       # surfaces. Empty default = unchanged behavior (default-deny stays on).
       #   UNITARES_OPERATOR_TOKENS — csv allowlist for X-Unitares-Operator
       #     (required by /v1/harness/outcome, the external outcome-producer path)
-      #   UNITARES_HTTP_API_TOKEN  — dashboard/telemetry read auth
+      #   UNITARES_HTTP_API_TOKEN  — local dashboard/telemetry read auth
+      #   UNITARES_MCP_BEARER_TOKENS — hosted /mcp + strict REST bearer allowlist
+      #   UNITARES_REST_STRICT     — defaults on with MCP bearers; never disable
+      #     for a deployment exposed through a loopback tunnel
       #   UNITARES_BUILD_SHA       — self-reported build sha for /health
       #     (the image carries no .git, so git rev-parse cannot answer inside
       #     the container; e.g. UNITARES_BUILD_SHA=$(git rev-parse --short HEAD))
       UNITARES_OPERATOR_TOKENS: ${UNITARES_OPERATOR_TOKENS:-}
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
+      UNITARES_MCP_BEARER_TOKENS: ${UNITARES_MCP_BEARER_TOKENS:-}
+      UNITARES_REST_STRICT: ${UNITARES_REST_STRICT:-}
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}

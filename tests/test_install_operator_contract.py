@@ -177,6 +177,8 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "UNITARES_LEASE_ATTESTATION_SIGNING_KEY:" in compose
     assert "refusing replay" in manual
     assert "UNITARES_CONTINUITY_TOKEN_SECRET:" in compose
+    assert "UNITARES_MCP_BEARER_TOKENS:" in compose
+    assert "UNITARES_REST_STRICT:" in compose
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 
