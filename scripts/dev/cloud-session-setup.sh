@@ -34,6 +34,17 @@ log() { printf '[unitares-setup] %s\n' "$*"; }
 # does not.
 finish() { log "$1"; exit 0; }
 
+runtime_preflight=0
+case "${1:-}" in
+  --verify-runtime)
+    runtime_preflight=1
+    shift
+    ;;
+  "") ;;
+  *) finish "unknown argument $1 — expected --verify-runtime." ;;
+esac
+[ "$#" -eq 0 ] || finish "unexpected extra arguments — expected --verify-runtime only."
+
 command -v claude >/dev/null 2>&1 || finish "claude CLI not on PATH — skipping plugin install."
 
 # --- install -------------------------------------------------------------
@@ -139,6 +150,35 @@ else
       ;;
   esac
   BASE_URL="${SERVER_URL%/}"
+  port_check=$(python3 -c '
+import sys
+from urllib.parse import urlsplit
+
+try:
+    parsed = urlsplit(sys.argv[1])
+    port = parsed.port
+except ValueError:
+    print("invalid")
+else:
+    if not parsed.hostname:
+        print("invalid")
+    elif port in (None, 443):
+        print("allowed")
+    else:
+        print(port)
+' "${SERVER_URL}" 2>/dev/null) || port_check="invalid"
+  case "${port_check}" in
+    allowed) ;;
+    invalid)
+      preflight_ok=0
+      log "WARN UNITARES_SERVER_URL is not a valid absolute server URL."
+      ;;
+    *)
+      preflight_ok=0
+      log "WARN UNITARES_SERVER_URL uses port ${port_check}; cloud hook egress" \
+          "requires HTTPS on port 443."
+      ;;
+  esac
   case "${BASE_URL}" in
     */mcp)
       preflight_ok=0
@@ -148,13 +188,17 @@ else
   esac
 
   if [ "${proxy_auth_configured}" -eq 1 ] \
-      && [ -z "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+      && [ -z "${UNITARES_HTTP_API_TOKEN:-}" ] \
+      && [ "${runtime_preflight}" -eq 0 ]; then
     # Environment API credentials and their host reachability are available
     # only after Claude Code starts, never to setup-script requests. Defer the
     # whole network preflight instead of manufacturing OFFLINE warnings here.
     auth_probe_deferred=1
-    log "note hook network/authentication probes deferred; setup requests do not"
-    log "     receive the environment API credential. Verify from a running hook."
+    preflight_ok=0
+    log "WARN hook network/authentication probes deferred; setup requests do not"
+    log "     receive the environment API credential. Hooks fail open, so they do"
+    log "     not verify it automatically. After launch run the canonical script"
+    log "     with --verify-runtime before relying on automatic governance."
   else
     # Probe both routes used by the plugin hooks. The health route proves basic
     # reachability. The deliberately invalid REST request proves the bearer and
@@ -255,12 +299,10 @@ case "${lease_required}" in
     ;;
 esac
 
-if [ "${preflight_ok}" -eq 1 ]; then
-  if [ "${auth_probe_deferred}" -eq 1 ]; then
-    log "done — hook authentication verification deferred until session start."
-  else
-    log "done"
-  fi
+if [ "${auth_probe_deferred}" -eq 1 ]; then
+  log "done with warnings — hook authentication remains UNVERIFIED after setup."
+elif [ "${preflight_ok}" -eq 1 ]; then
+  log "done"
 else
   log "done with warnings — governance hooks are not fully usable."
 fi

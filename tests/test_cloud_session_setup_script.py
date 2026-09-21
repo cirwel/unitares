@@ -28,6 +28,7 @@ def _run_setup(
     health_exit: int = 0,
     tool_exit: int = 0,
     extra_env: dict[str, str] | None = None,
+    script_args: list[str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -88,7 +89,7 @@ esac
     }
     env.update(extra_env or {})
     proc = subprocess.run(
-        ["bash", str(SCRIPT)],
+        ["bash", str(SCRIPT), *(script_args or [])],
         cwd=ROOT,
         env=env,
         text=True,
@@ -187,12 +188,50 @@ def test_proxy_bearer_defers_auth_probe_until_after_setup(tmp_path: Path) -> Non
     )
 
     assert proc.returncode == 0
-    assert "network/authentication probes deferred" in proc.stdout
+    assert "hook network/authentication probes deferred" in proc.stdout
     assert "environment proxy" in proc.stdout
-    assert "verification deferred until session start" in proc.stdout
+    assert "not verify it automatically" in proc.stdout
+    assert "with --verify-runtime" in proc.stdout
     assert "https://gov.example.test/health" not in commands
     assert "https://gov.example.test/v1/tools/call" not in commands
+    assert "hook authentication remains UNVERIFIED" in proc.stdout
+    assert "done with warnings" in proc.stdout
+
+
+def test_runtime_preflight_verifies_proxy_injected_bearer(tmp_path: Path) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={
+            "UNITARES_HTTP_API_TOKEN": "",
+            "UNITARES_CLOUD_PROXY_AUTH": "1",
+        },
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 0
+    assert "https://gov.example.test/health" in commands
+    assert "https://gov.example.test/v1/tools/call" in commands
+    assert "server tool route usable (authenticated validation response)" in proc.stdout
     assert "done with warnings" not in proc.stdout
+
+
+def test_runtime_preflight_rejects_bad_proxy_bearer(tmp_path: Path) -> None:
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        tool_status=401,
+        extra_env={
+            "UNITARES_HTTP_API_TOKEN": "",
+            "UNITARES_CLOUD_PROXY_AUTH": "1",
+        },
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 0
+    assert "requires a bearer (401)" in proc.stdout
+    assert "server tool route usable" not in proc.stdout
+    assert "done with warnings" in proc.stdout
 
 
 def test_server_url_with_mcp_suffix_is_rejected_as_hook_incompatible(
@@ -220,6 +259,26 @@ def test_plain_http_warning_lowers_final_preflight_verdict(tmp_path: Path) -> No
 
     assert proc.returncode == 0
     assert "WARN not https://" in proc.stdout
+    assert "done with warnings" in proc.stdout
+
+
+def test_proxy_mode_rejects_nonstandard_https_port_before_deferred_probe(
+    tmp_path: Path,
+) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={
+            "UNITARES_SERVER_URL": "https://gov.example.test:8767",
+            "UNITARES_HTTP_API_TOKEN": "",
+            "UNITARES_CLOUD_PROXY_AUTH": "1",
+        },
+    )
+
+    assert proc.returncode == 0
+    assert "uses port 8767" in proc.stdout
+    assert "requires HTTPS on port 443" in proc.stdout
+    assert "https://gov.example.test:8767/health" not in commands
     assert "done with warnings" in proc.stdout
 
 
