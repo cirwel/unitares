@@ -132,8 +132,11 @@ else
   log "UNITARES_SERVER_URL=${SERVER_URL}"
   case "${SERVER_URL}" in
     https://*) ;;
-    *) log "WARN not https:// — container egress is proxied; plain-HTTP and" \
-           "non-standard ports do not leave the sandbox." ;;
+    *)
+      preflight_ok=0
+      log "WARN not https:// — container egress is proxied; plain-HTTP and" \
+          "non-standard ports do not leave the sandbox."
+      ;;
   esac
   BASE_URL="${SERVER_URL%/}"
   case "${BASE_URL}" in
