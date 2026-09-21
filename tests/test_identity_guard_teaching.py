@@ -191,7 +191,7 @@ async def test_a_bound_caller_cannot_act_as_another_agent_in_a_dialectic(action)
     assert "Session mismatch" in result[0].text
 
 
-def test_session_injection_membership_is_the_decided_nine():
+def test_session_injection_membership_is_the_decided_eight():
     """Widening changes identity resolution, not only attribution (council, 2026-09-13).
 
     An injected client_session_id is read before mcp_session_id, is scoped by
@@ -202,7 +202,6 @@ def test_session_injection_membership_is_the_decided_nine():
     assert TOOLS_NEEDING_SESSION_INJECTION.tools == frozenset({
         "onboard", "identity", "process_agent_update", "get_governance_metrics",
         "search_knowledge_graph", "leave_note", "mark_response_complete", "dialectic",
-        "use_tool",
     })
     assert not TOOLS_NEEDING_SESSION_INJECTION.actions
 

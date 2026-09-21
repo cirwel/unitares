@@ -396,15 +396,22 @@ def get_tool_wrapper(tool_name: str):
 
                 # Dispatch to existing handler (which has @mcp_tool timeout protection)
                 from src.mcp_handlers.context import (
-                    reset_tool_dispatch_surface,
-                    set_tool_dispatch_surface,
+                    reset_nested_tool_invoker,
+                    set_nested_tool_invoker,
                 )
 
-                surface_token = set_tool_dispatch_surface("mcp")
+                async def _nested_invoker(target_name, target_arguments):
+                    return await _invoke_mcp_nested_tool(
+                        target_name,
+                        target_arguments,
+                        outer_arguments=kwargs,
+                    )
+
+                invoker_token = set_nested_tool_invoker(_nested_invoker)
                 try:
                     result = await dispatch_tool(tool_name, kwargs)
                 finally:
-                    reset_tool_dispatch_surface(surface_token)
+                    reset_nested_tool_invoker(invoker_token)
 
                 # Record successful call metrics
                 duration = time.time() - start_time
@@ -488,9 +495,46 @@ TOOLS_NEEDING_SESSION_INJECTION = call_set(
         "leave_note",
         "mark_response_complete",
         "dialectic",
-        "use_tool",
     },
 )
+
+
+async def _invoke_mcp_nested_tool(
+    tool_name: str,
+    arguments: Dict[str, object],
+    *,
+    outer_arguments: Dict[str, object],
+):
+    """Re-enter the MCP target wrapper with direct-call session semantics."""
+    from src.mcp_handlers.context import (
+        reset_csid_transport_injected,
+        set_csid_transport_injected,
+    )
+
+    nested = dict(arguments or {})
+    csid_token = set_csid_transport_injected(False)
+    try:
+        # ``use_tool`` itself is not session-injected. An explicit outer CSID
+        # is therefore caller input and behaves exactly as if it had appeared
+        # on a directly named target.
+        outer_session = outer_arguments.get("client_session_id")
+        if outer_session and not nested.get("client_session_id"):
+            nested["client_session_id"] = outer_session
+
+        # Reproduce create_typed_wrapper's per-target policy. Targets outside
+        # this set resolve the caller-proven MCP session from transport context;
+        # copying it into arguments would downgrade it to server_inferred.
+        if (
+            TOOLS_NEEDING_SESSION_INJECTION.matches(tool_name)
+            and not nested.get("client_session_id")
+        ):
+            session_id = _session_id_from_ctx(None)
+            if session_id:
+                nested["client_session_id"] = session_id
+                set_csid_transport_injected(True)
+        return await get_tool_wrapper(tool_name)(**nested)
+    finally:
+        reset_csid_transport_injected(csid_token)
 
 # FastMCP validates tool arguments before dispatch_tool sees them. For these
 # internal/provenance-heavy tools, UNITARES dispatch middleware is the source of

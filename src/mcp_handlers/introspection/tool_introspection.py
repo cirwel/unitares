@@ -735,9 +735,6 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             recovery={"action": f"Call describe_tool(tool_name={target!r})"},
         )]
     nested = dict(nested)
-    client_session_id = arguments.get("client_session_id")
-    if client_session_id and not nested.get("client_session_id"):
-        nested["client_session_id"] = client_session_id
 
     from src.interface_contract import get_public_tool_definitions
 
@@ -752,38 +749,31 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             },
         )]
 
-    # Re-enter the caller's transport path. This is load-bearing for configured
-    # Wave 3a targets on MCP, REST direct-handler/normalization semantics, and
-    # each transport's existing target telemetry policy. A direct handler call
-    # (principally tests and embedders) uses the stdio-shaped local fallback.
-    from src.mcp_handlers.context import get_tool_dispatch_surface
+    # The active transport owns re-entry. This preserves MCP session proof and
+    # Wave 3a routing, REST target-specific prebinding, and stdio activity plus
+    # telemetry behavior instead of approximating them in this handler.
+    from src.mcp_handlers.context import get_nested_tool_invoker
 
-    surface = get_tool_dispatch_surface()
-    if surface == "mcp":
-        from src.tool_registration import get_tool_wrapper
+    invoker = get_nested_tool_invoker()
+    if invoker is not None:
+        transport_result = await invoker(target, nested)
+        if isinstance(transport_result, (list, tuple)):
+            return transport_result
+        return [TextContent(
+            type="text", text=json.dumps(transport_result, default=str)
+        )]
 
-        wrapped = await get_tool_wrapper(target)(**nested)
-        if isinstance(wrapped, (list, tuple)):
-            return wrapped
-        return [TextContent(type="text", text=json.dumps(wrapped, default=str))]
-
-    if surface == "rest":
-        from src.services.http_tool_service import execute_http_tool
-
-        http_result = await execute_http_tool(target, nested)
-        if isinstance(http_result, (list, tuple)):
-            return http_result
-        return [TextContent(type="text", text=json.dumps(http_result, default=str))]
-
-    # Local stdio/direct execution has no transport wrapper to re-enter here,
-    # so run the common dispatcher and emit the same full target telemetry that
-    # the stdio transport records for a directly named call.
+    # Direct handler calls (tests and embedders) have no transport callback.
+    # Preserve their historical local fallback and propagate an explicit outer
+    # session only here; real transports decide session provenance themselves.
+    client_session_id = arguments.get("client_session_id")
+    if client_session_id and not nested.get("client_session_id"):
+        nested["client_session_id"] = client_session_id
     from src.mcp_handlers import dispatch_tool
     from src.services.tool_usage_recorder import (
         build_tool_usage_payload,
         classify_tool_result,
         record_tool_usage,
-        resolve_dispatch_bound_agent_id,
         resolve_minted_agent_id,
     )
 
@@ -794,7 +784,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     except Exception as exc:
         record_tool_usage(
             tool_name=target,
-            agent_id=resolve_dispatch_bound_agent_id(nested),
+            agent_id=nested.get("agent_id"),
             success=False,
             error_type=type(exc).__name__,
             latency_ms=int((_time.monotonic() - started) * 1000),
@@ -806,7 +796,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     if result is None:
         record_tool_usage(
             tool_name=target,
-            agent_id=resolve_dispatch_bound_agent_id(nested),
+            agent_id=nested.get("agent_id"),
             success=False,
             error_type="unknown_tool",
             latency_ms=latency_ms,
@@ -819,8 +809,7 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         )]
 
     success, error_type = classify_tool_result(result)
-    actor = resolve_dispatch_bound_agent_id(nested)
-    actor = resolve_minted_agent_id(target, actor, result)
+    actor = resolve_minted_agent_id(target, nested.get("agent_id"), result)
     record_tool_usage(
         tool_name=target,
         agent_id=actor,
