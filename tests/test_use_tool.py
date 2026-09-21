@@ -426,6 +426,37 @@ async def test_stdio_gateway_reenters_call_boundary_with_request_side_actor(monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("session_id", [None, ""])
+async def test_stdio_gateway_preserves_explicit_empty_target_session(
+    monkeypatch, session_id
+):
+    import src.mcp_handlers as handlers
+    from src import mcp_server_std as stdio
+
+    calls = []
+
+    async def fake_dispatch(name, arguments):
+        if name == "use_tool":
+            return await handle_use_tool(arguments)
+        calls.append((name, dict(arguments)))
+        return [TextContent(type="text", text=json.dumps({"success": True}))]
+
+    monkeypatch.setattr(handlers, "dispatch_tool", fake_dispatch)
+    monkeypatch.setattr(stdio, "record_tool_usage", lambda **_: None)
+    monkeypatch.setattr(stdio, "STDIO_PROXY_URL", None)
+    monkeypatch.setattr(stdio, "STDIO_PROXY_HTTP_URL", None)
+
+    result = await stdio.call_tool("use_tool", {
+        "tool_name": "health_check",
+        "arguments": {"client_session_id": session_id},
+        "client_session_id": "outer-session",
+    })
+
+    assert _payload(result) == {"success": True}
+    assert calls == [("health_check", {"client_session_id": session_id})]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("arguments", "error_code"),
     [
@@ -443,9 +474,15 @@ async def test_use_tool_refuses_invalid_targets_and_arguments(arguments, error_c
 @pytest.mark.asyncio
 async def test_use_tool_accepts_late_registered_public_capability(monkeypatch):
     from src import mcp_handlers
+    from src.interface_contract import get_interface_contract_summary
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, mcp_tool
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
 
     calls = []
+    tool_name = "late_plugin_tool"
+    before_contract = get_interface_contract_summary()
 
+    @mcp_tool(tool_name, requires_identity="pre_onboard")
     async def late_handler(arguments):
         return [TextContent(type="text", text=json.dumps({"success": True}))]
 
@@ -453,19 +490,56 @@ async def test_use_tool_accepts_late_registered_public_capability(monkeypatch):
         calls.append((name, arguments))
         return await late_handler(arguments)
 
-    monkeypatch.setitem(mcp_handlers.TOOL_HANDLERS, "late_plugin_tool", late_handler)
     monkeypatch.setattr(mcp_handlers, "dispatch_tool", fake_dispatch)
     monkeypatch.setattr(
         "src.services.tool_usage_recorder.record_tool_usage", lambda **_: None
     )
+    try:
+        listed = _payload(await handle_list_tools({"lite": True}))
+        listed_names = {tool["name"] for tool in listed["tools"]}
+        result = await handle_use_tool({
+            "tool_name": tool_name,
+            "arguments": {"value": 7},
+        })
 
-    result = await handle_use_tool({
-        "tool_name": "late_plugin_tool",
-        "arguments": {"value": 7},
-    })
+        assert tool_name in listed_names
+        assert listed["interface_contract"]["capability_count"] == len(listed_names)
+        assert (
+            listed["interface_contract"]["surface_sha256"]
+            != before_contract["surface_sha256"]
+        )
+        assert _payload(result) == {"success": True}
+        assert calls == [(tool_name, {"value": 7})]
+    finally:
+        mcp_handlers.TOOL_HANDLERS.pop(tool_name, None)
+        _TOOL_DEFINITIONS.pop(tool_name, None)
 
-    assert _payload(result) == {"success": True}
-    assert calls == [("late_plugin_tool", {"value": 7})]
+
+@pytest.mark.asyncio
+async def test_use_tool_rejects_late_registered_hidden_capability(monkeypatch):
+    from src import mcp_handlers
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS, mcp_tool
+    from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
+
+    tool_name = "late_hidden_plugin_tool"
+
+    @mcp_tool(tool_name, hidden=True, requires_identity="pre_onboard")
+    async def hidden_handler(arguments):
+        raise AssertionError("hidden handler must not be gateway-dispatchable")
+
+    try:
+        listed = _payload(await handle_list_tools({"lite": True}))
+        listed_names = {tool["name"] for tool in listed["tools"]}
+        result = _payload(await handle_use_tool({
+            "tool_name": tool_name,
+            "arguments": {},
+        }))
+
+        assert tool_name not in listed_names
+        assert result["error_code"] == "TOOL_NOT_FOUND"
+    finally:
+        mcp_handlers.TOOL_HANDLERS.pop(tool_name, None)
+        _TOOL_DEFINITIONS.pop(tool_name, None)
 
 
 def test_use_tool_is_directly_advertised_but_hidden_targets_are_not():
