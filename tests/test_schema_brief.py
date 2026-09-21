@@ -10,8 +10,8 @@ What these tests hold:
 
   1. The trim is real (the advertised catalog shrinks, and no advertised
      description runs past the budget unless a human authored it).
-  2. The trim is only a trim (no parameter, type, default or requiredness
-     moves, and ``describe_tool`` still serves every word).
+  2. The trim is only a trim (no parameter, type, non-null default or
+     requiredness moves, and ``describe_tool`` still serves every word).
   3. The escape hatch is exact (``full`` reproduces the pre-trim surface
      byte-for-byte).
 
@@ -39,12 +39,15 @@ from src.schema_brief import (
     BRIEF_BUDGET,
     BRIEF_KEY,
     DEFAULT_FIELD_DESCRIPTION_MODE,
+    DEFAULT_NULL_DEFAULT_MODE,
     DEFAULT_PROPERTY_TITLE_MODE,
     apply_field_description_mode,
+    apply_null_default_mode,
     apply_property_title_mode,
     brief_text,
     resolve_brief_budget,
     resolve_field_description_mode,
+    resolve_null_default_mode,
     resolve_property_title_mode,
 )
 from src.mcp_compat import get_tool_input_schema
@@ -293,6 +296,106 @@ def _title_nodes(node, path="$"):
     return found
 
 
+def _null_default_nodes(node, path="$"):
+    """Every schema-node path carrying ``default: null``."""
+    found = []
+    if isinstance(node, dict):
+        if "default" in node and node["default"] is None:
+            found.append(path)
+        for key, value in node.items():
+            if key in ("default", "const", "enum", "examples", "example"):
+                continue
+            if key in (
+                "properties",
+                "$defs",
+                "definitions",
+                "patternProperties",
+                "dependentSchemas",
+            ) and isinstance(value, dict):
+                for name, sub in value.items():
+                    found += _null_default_nodes(sub, f"{path}.{key}.{name}")
+                continue
+            found += _null_default_nodes(value, f"{path}.{key}")
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            found += _null_default_nodes(item, f"{path}[{index}]")
+    return found
+
+
+_TEST_SUBSCHEMA_MAPS = (
+    "properties",
+    "$defs",
+    "definitions",
+    "patternProperties",
+    "dependentSchemas",
+    "dependencies",
+)
+_TEST_SUBSCHEMA_VALUES = (
+    "additionalItems",
+    "additionalProperties",
+    "contains",
+    "contentSchema",
+    "else",
+    "if",
+    "items",
+    "not",
+    "propertyNames",
+    "then",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+)
+_TEST_SUBSCHEMA_LISTS = ("allOf", "anyOf", "oneOf", "prefixItems")
+
+
+def _schema_nodes(node, path="$"):
+    """Yield actual schema nodes, excluding defaults and extension data."""
+    if not isinstance(node, (dict, list)):
+        return
+    yield path, node
+    if isinstance(node, list):
+        for index, item in enumerate(node):
+            yield from _schema_nodes(item, f"{path}[{index}]")
+        return
+    for key in _TEST_SUBSCHEMA_MAPS:
+        value = node.get(key)
+        if isinstance(value, dict):
+            for name, subschema in value.items():
+                yield from _schema_nodes(subschema, f"{path}.{key}.{name}")
+    for key in _TEST_SUBSCHEMA_VALUES:
+        if key in node:
+            yield from _schema_nodes(node[key], f"{path}.{key}")
+    for key in _TEST_SUBSCHEMA_LISTS:
+        value = node.get(key)
+        if isinstance(value, list):
+            yield from _schema_nodes(value, f"{path}.{key}")
+
+
+def _allows_explicit_null(schema):
+    """Whether the local schema shape admits JSON null."""
+    if schema is True:
+        return True
+    if schema is False or not isinstance(schema, dict):
+        return False
+    declared_type = schema.get("type")
+    if declared_type == "null":
+        return True
+    if isinstance(declared_type, list) and "null" in declared_type:
+        return True
+    if "const" in schema:
+        return schema["const"] is None
+    if "enum" in schema:
+        return None in schema["enum"]
+    if "anyOf" in schema or "oneOf" in schema:
+        return any(
+            _allows_explicit_null(branch)
+            for keyword in ("anyOf", "oneOf")
+            for branch in schema.get(keyword, [])
+        )
+    if "allOf" in schema:
+        return all(_allows_explicit_null(branch) for branch in schema["allOf"])
+    return declared_type is None and "$ref" not in schema
+
+
 class TestPropertyTitles:
     """A Pydantic ``title`` is a titleized echo of the key. It is not content.
 
@@ -401,3 +504,131 @@ class TestPropertyTitles:
         # Measured 10.8% on 2026-09-08; assert a floor well under it so the
         # test fails on a regression, not on ordinary schema churn.
         assert stripped < kept * 0.95
+
+
+class TestNullDefaults:
+    """A null default annotates an optional field; it does not validate it."""
+
+    def test_no_advertised_schema_carries_a_null_default(self):
+        for tool_name, schema in _schemas("brief").items():
+            null_defaults = _null_default_nodes(schema)
+            assert not null_defaults, (
+                f"{tool_name} still advertises null defaults: {null_defaults[:3]}"
+            )
+
+    def test_keep_reproduces_the_pydantic_annotations_exactly(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "keep")
+        kept = _schemas("brief")
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "strip")
+        stripped = _schemas("brief")
+
+        assert any(_null_default_nodes(schema) for schema in kept.values())
+        assert json.dumps(kept, sort_keys=True) != json.dumps(stripped, sort_keys=True)
+        for name, schema in kept.items():
+            assert apply_null_default_mode(schema, "strip") == stripped[name], name
+
+    def test_non_null_defaults_and_validation_shape_survive(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "optional": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                },
+                "bounded": {"type": "integer", "minimum": 1, "default": 5},
+            },
+            "required": ["bounded"],
+        }
+        out = apply_null_default_mode(schema, "strip")
+
+        assert "default" not in out["properties"]["optional"]
+        assert out["properties"]["optional"]["anyOf"] == schema["properties"]["optional"]["anyOf"]
+        assert out["properties"]["bounded"] == schema["properties"]["bounded"]
+        assert out["required"] == schema["required"]
+
+    def test_every_catalog_null_default_is_optional_and_nullable(self, monkeypatch):
+        """Hold the premise that makes this annotation safely redundant."""
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "keep")
+        total = 0
+        for tool_name, schema in _schemas("brief").items():
+            every_default = {
+                path
+                for path, node in _schema_nodes(schema)
+                if isinstance(node, dict)
+                and "default" in node
+                and node["default"] is None
+            }
+            property_defaults = set()
+            for path, node in _schema_nodes(schema):
+                if not isinstance(node, dict):
+                    continue
+                required = set(node.get("required") or ())
+                for name, body in (node.get("properties") or {}).items():
+                    if not (
+                        isinstance(body, dict)
+                        and "default" in body
+                        and body["default"] is None
+                    ):
+                        continue
+                    field_path = f"{path}.properties.{name}"
+                    property_defaults.add(field_path)
+                    assert name not in required, f"{tool_name}:{field_path} is required"
+                    assert _allows_explicit_null(body), (
+                        f"{tool_name}:{field_path} defaults to null but rejects null"
+                    )
+            assert every_default == property_defaults, (
+                f"{tool_name} has a null default outside a property schema: "
+                f"{sorted(every_default - property_defaults)}"
+            )
+            total += len(every_default)
+        assert total > 0
+
+    def test_null_inside_caller_default_data_survives(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "payload": {
+                    "type": "object",
+                    "default": {"default": None, "value": None},
+                }
+            },
+        }
+        out = apply_null_default_mode(schema, "strip")
+        assert out["properties"]["payload"]["default"] == {
+            "default": None,
+            "value": None,
+        }
+
+    def test_null_inside_extension_metadata_survives(self):
+        schema = {
+            "type": "object",
+            "x-ui": {"default": None, "nested": {"default": None}},
+            "properties": {
+                "optional": {
+                    "anyOf": [{"type": "string"}, {"type": "null"}],
+                    "default": None,
+                    "x-ui": {"default": None},
+                }
+            },
+        }
+        out = apply_null_default_mode(schema, "strip")
+        assert out["x-ui"] == schema["x-ui"]
+        assert out["properties"]["optional"]["x-ui"] == {"default": None}
+        assert "default" not in out["properties"]["optional"]
+
+    def test_the_default_is_strip(self, monkeypatch):
+        monkeypatch.delenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", raising=False)
+        assert resolve_null_default_mode() == "strip"
+        assert DEFAULT_NULL_DEFAULT_MODE == "strip"
+
+    def test_an_unknown_mode_falls_back_to_the_default(self, monkeypatch, caplog):
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "terse")
+        assert resolve_null_default_mode() == "strip"
+        assert "terse" in caplog.text
+
+    def test_the_advertised_surface_actually_got_smaller(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "keep")
+        kept = len(json.dumps(_schemas("brief"), sort_keys=True))
+        monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "strip")
+        stripped = len(json.dumps(_schemas("brief"), sort_keys=True))
+        assert stripped < kept * 0.98

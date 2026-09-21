@@ -578,10 +578,10 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
 
     # Titles are kept here on purpose. The registered schema is what /mcp/
     # advertises (see _advertise_catalog_schema), and the listing applies the
-    # title policy on every tools/list (src/tool_mode_listing.py); stripping at
-    # registration would make UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep a
-    # no-op on this transport.
-    tools = get_tool_definitions(property_titles="keep")
+    # generated-annotation policy on every tools/list
+    # (src/tool_mode_listing.py); stripping at registration would make the
+    # title/null-default restore switches no-ops on this transport.
+    tools = get_tool_definitions(property_titles="keep", null_defaults="keep")
     registered_count = 0
     skipped_count = 0
     unadvertised_count = 0
@@ -694,7 +694,10 @@ def _register_common_aliases(mcp):
     # build_alias_tool_definition, property overrides included, in the
     # resolved field-description mode — so the schema advertised below is the
     # same object REST and stdio serve, with nothing re-applied on top.
-    definitions = get_tool_definitions(property_titles="keep")
+    definitions = get_tool_definitions(
+        property_titles="keep",
+        null_defaults="keep",
+    )
 
     # Every workflow alias is registered in every mode, for the same reason
     # every handler is: the mode filters tools/list, not dispatch. A lite-only
