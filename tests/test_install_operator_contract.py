@@ -214,6 +214,8 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert 'unitares_runtime_setup="$(' in cloud_runbook
     assert 'test -n "$unitares_runtime_setup" &&' in cloud_runbook
     assert 'bash -s -- --verify-runtime <<<"$unitares_runtime_setup"' in cloud_runbook
+    assert "./scripts/dev/review.sh review" not in cloud_runbook
+    assert "machine with the reviewer CLI can run `./scripts/dev/review.sh`." in cloud_runbook
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 
