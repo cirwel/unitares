@@ -48,9 +48,15 @@ case "${1:-}" in
     shift
     ;;
   "") ;;
-  *) finish "unknown argument $1 — expected --verify-runtime." ;;
+  *)
+    log "unknown argument $1 — expected --verify-runtime."
+    exit 2
+    ;;
 esac
-[ "$#" -eq 0 ] || finish "unexpected extra arguments — expected --verify-runtime only."
+if [ "$#" -ne 0 ]; then
+  log "unexpected extra arguments — expected --verify-runtime only."
+  exit 2
+fi
 
 command -v claude >/dev/null 2>&1 || finish "claude CLI not on PATH — skipping plugin install."
 
@@ -157,10 +163,12 @@ if [ -z "${SERVER_URL}" ]; then
   log "     OFFLINE. Set it on the cloud environment to reach a real server."
 else
   log "UNITARES_SERVER_URL=${SERVER_URL}"
+  network_probe_allowed=1
   case "${SERVER_URL}" in
     https://*) ;;
     *)
       preflight_ok=0
+      network_probe_allowed=0
       log "WARN not https:// — container egress is proxied; plain-HTTP and" \
           "non-standard ports do not leave the sandbox."
       ;;
@@ -187,10 +195,12 @@ else:
     allowed) ;;
     invalid)
       preflight_ok=0
+      network_probe_allowed=0
       log "WARN UNITARES_SERVER_URL is not a valid absolute server URL."
       ;;
     *)
       preflight_ok=0
+      network_probe_allowed=0
       log "WARN UNITARES_SERVER_URL uses port ${port_check}; cloud hook egress" \
           "requires HTTPS on port 443."
       ;;
@@ -198,12 +208,15 @@ else:
   case "${BASE_URL}" in
     */mcp)
       preflight_ok=0
+      network_probe_allowed=0
       log "WARN UNITARES_SERVER_URL must be the server base URL, without /mcp;" \
           "hooks append /health and /v1/tools/call themselves."
       ;;
   esac
 
-  if [ "${proxy_auth_configured}" -eq 1 ] \
+  if [ "${network_probe_allowed}" -eq 0 ]; then
+    log "WARN network/authentication probes skipped for an invalid or unsafe server URL."
+  elif [ "${proxy_auth_configured}" -eq 1 ] \
       && [ -z "${UNITARES_HTTP_API_TOKEN:-}" ] \
       && [ "${runtime_preflight}" -eq 0 ]; then
     # Environment API credentials and their host reachability are available

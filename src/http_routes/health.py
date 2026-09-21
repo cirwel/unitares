@@ -99,7 +99,7 @@ async def http_health(request):
             "mcp_bearer_required": mcp_bearer,
             "header": (
                 "Authorization: Bearer <token>"
-                if http_api_token or rest_strict
+                if mcp_bearer or (http_api_token and not rest_strict)
                 else None
             ),
         },

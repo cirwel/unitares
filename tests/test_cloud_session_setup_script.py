@@ -100,7 +100,7 @@ esac
         capture_output=True,
         check=False,
     )
-    return proc, command_log.read_text()
+    return proc, command_log.read_text() if command_log.exists() else ""
 
 
 def test_disabled_plugin_is_enabled_instead_of_treated_as_active(
@@ -119,6 +119,20 @@ def test_enabled_plugin_is_left_alone(tmp_path: Path) -> None:
     assert proc.returncode == 0
     assert f"plugin enable {PLUGIN_ID}" not in commands
     assert f"plugin install {PLUGIN_ID}" not in commands
+
+
+def test_unknown_argument_fails_instead_of_skipping_verification(
+    tmp_path: Path,
+) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        script_args=["--verify-runtim"],
+    )
+
+    assert proc.returncode == 2
+    assert "unknown argument --verify-runtim" in proc.stdout
+    assert "curl " not in commands
 
 
 def test_runtime_preflight_does_not_enable_plugin_in_current_session(
@@ -287,13 +301,14 @@ def test_server_url_with_mcp_suffix_is_rejected_as_hook_incompatible(
 
     assert proc.returncode == 0
     assert "must be the server base URL, without /mcp" in proc.stdout
-    assert "https://gov.example.test/mcp/health" in commands
-    assert "https://gov.example.test/mcp/v1/tools/call" in commands
+    assert "https://gov.example.test/mcp/health" not in commands
+    assert "https://gov.example.test/mcp/v1/tools/call" not in commands
+    assert "probes skipped for an invalid or unsafe server URL" in proc.stdout
     assert "done with warnings" in proc.stdout
 
 
-def test_plain_http_warning_lowers_final_preflight_verdict(tmp_path: Path) -> None:
-    proc, _ = _run_setup(
+def test_plain_http_never_sends_bearer_during_preflight(tmp_path: Path) -> None:
+    proc, commands = _run_setup(
         tmp_path,
         plugin_enabled=True,
         extra_env={"UNITARES_SERVER_URL": "http://gov.example.test"},
@@ -301,6 +316,9 @@ def test_plain_http_warning_lowers_final_preflight_verdict(tmp_path: Path) -> No
 
     assert proc.returncode == 0
     assert "WARN not https://" in proc.stdout
+    assert "probes skipped for an invalid or unsafe server URL" in proc.stdout
+    assert "http://gov.example.test/health" not in commands
+    assert "http://gov.example.test/v1/tools/call" not in commands
     assert "done with warnings" in proc.stdout
 
 
