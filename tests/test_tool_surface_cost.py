@@ -86,6 +86,31 @@ def test_json_discloses_surface_estimate_and_boilerplate(monkeypatch, capsys):
     assert payload["tokens_are_estimates"]
     assert "excludes JSON-RPC" in payload["serialization"]
     assert payload["boilerplate_savings"]["minimal"]["property_title"] == 0
+    assert payload["boilerplate_savings"]["minimal"]["null_default"] == 0
+
+
+def test_null_default_cut_preserves_validation_and_concrete_defaults():
+    schema = {
+        "type": "object",
+        "properties": {
+            "optional": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+            },
+            "bounded": {"type": "integer", "minimum": 1, "default": 5},
+            "payload": {"type": "object", "default": {"default": None}},
+        },
+        "required": ["bounded"],
+    }
+    transformed = cost._without_null_defaults(schema)
+
+    assert "default" not in transformed["properties"]["optional"]
+    assert transformed["properties"]["optional"]["anyOf"] == (
+        schema["properties"]["optional"]["anyOf"]
+    )
+    assert transformed["properties"]["bounded"] == schema["properties"]["bounded"]
+    assert transformed["properties"]["payload"]["default"] == {"default": None}
+    assert transformed["required"] == schema["required"]
 
 
 def test_hypothetical_null_cut_preserves_multi_type_unions():

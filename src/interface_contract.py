@@ -83,7 +83,13 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # discovery exposes it too; search_knowledge_graph also records its clarified
 # filter description. This compatible addition follows the 1.10.0
 # list_tools wire correction.
-INTERFACE_CONTRACT_VERSION = "1.11.0"
+# 1.12.0 (2026-09-20): advertised schemas omit `default: null` annotations by
+# default. JSON Schema does not use `default` for validation; requiredness,
+# nullable unions, concrete defaults, runtime defaults and dispatch are
+# unchanged. All input_schema_sha256 values move because every tool had at
+# least one such annotation. UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep restores
+# them for clients that consume the annotation.
+INTERFACE_CONTRACT_VERSION = "1.12.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

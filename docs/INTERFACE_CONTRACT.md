@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.11.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.12.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. The server advertises the same
@@ -26,8 +26,8 @@ registrar replaces it with the catalog schema after registration
 is unchanged: the wrapper's argument model still decides what the transport
 accepts, and the handler's Pydantic model enforces the advertised bounds.
 `tests/test_mcp_schema_parity.py` diffs the mounted listing against the
-catalog per tool and per property. The generated-title policy is the one step
-still applied per listing, so that it stays reversible.
+catalog per tool and per property. Generated-title and null-default policies
+are the steps still applied per listing, so that both stay reversible.
 `scripts/diagnostics/tool_surface_cost.py --surface mcp` measures the final
 local MCP listing and `--surface catalog` the source layer; the two agree, and
 a gap between them is a finding rather than an expected difference. Neither
@@ -104,7 +104,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.11.0` is the negotiated interface release. Compatible additions
+- `version: 1.12.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -144,17 +144,24 @@ The two identifiers serve different jobs:
   `describe_tool(tool_name="knowledge", action="search")`.
   `search_knowledge_graph` also records its clarified filter description, so
   three input digests and the surface digest move. This release follows 1.10.0's
-  `list_tools` wire correction).
+  `list_tools` wire correction; 1.12.0, 2026-09-20: advertised schemas omit
+  `default: null` annotations by default. JSON Schema treats `default` as an
+  annotation, so parameter names, types, requiredness, nullable unions,
+  concrete defaults, runtime defaults, validation and dispatch are unchanged.
+  Every input digest and the surface digest move; clients pinning them should
+  re-pin).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
 schema. In 1.5.0, clients pinning hashes should re-pin against the current
 catalog. `UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS=full` restores authored
 descriptions; `UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep` restores generated
-titles. Neither switch restores parameters removed in later releases or
-guarantees an older digest. The default title policy applies on each MCP
-listing as well as to the catalog. Titles are annotations, so that part
-preserves validation; schema fingerprints still change.
+titles; `UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep` restores null-default
+annotations. None of these switches restores parameters removed in later
+releases or guarantees an older digest. The default generated-annotation
+policies apply on each MCP listing as well as to the catalog. Titles and
+defaults are annotations, so stripping them preserves validation; schema
+fingerprints still change.
 
 The 14 fields removed from `search_shared_memory` are `closure_class`,
 `closure_evidence`, `confidence`, `dry_run`, `include_response_chain`,
