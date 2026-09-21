@@ -36,21 +36,21 @@ def _schema_digest(schema: dict) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _expected_lite() -> dict[str, dict]:
+def _expected(mode: str = "full") -> dict[str, dict]:
     return {
         tool.name: get_tool_input_schema(tool, {}) or {}
-        for tool in get_public_tool_definitions("lite")
+        for tool in get_public_tool_definitions(mode)
     }
 
 
-def test_checked_in_lite_contract_matches_runtime():
+def test_checked_in_contract_matches_runtime():
     artifact = Path("docs/interface-contract.v1.json")
-    assert json.loads(artifact.read_text()) == build_interface_contract("lite")
+    assert json.loads(artifact.read_text()) == build_interface_contract()
 
 
 def test_capability_schema_hashes_match_public_definitions():
-    contract = build_interface_contract("lite")
-    expected = _expected_lite()
+    contract = build_interface_contract()
+    expected = _expected("full")
 
     assert {item["name"] for item in contract["capabilities"]} == set(expected)
     for item in contract["capabilities"]:
@@ -59,8 +59,36 @@ def test_capability_schema_hashes_match_public_definitions():
         )
 
 
+@pytest.mark.parametrize(
+    ("hidden_name", "also_hidden"),
+    [
+        ("health_check", set()),
+        ("onboard", {"start_session"}),
+    ],
+)
+def test_hidden_schema_backed_tools_and_their_aliases_stay_out_of_every_catalog(
+    monkeypatch,
+    hidden_name,
+    also_hidden,
+):
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+
+    monkeypatch.setattr(_TOOL_DEFINITIONS[hidden_name], "hidden", True)
+
+    direct = {tool.name for tool in get_public_tool_definitions("full")}
+    gateway = {
+        tool.name
+        for tool in get_public_tool_definitions("full", include_unmounted=True)
+    }
+
+    assert hidden_name not in direct
+    assert hidden_name not in gateway
+    assert also_hidden.isdisjoint(direct)
+    assert also_hidden.isdisjoint(gateway)
+
+
 def test_federation_contract_names_live_negotiation_and_lifecycle_envelope():
-    contract = build_interface_contract("lite")
+    contract = build_interface_contract()
     federation = contract["federation"]
 
     assert contract["version"] == INTERFACE_CONTRACT_VERSION
@@ -88,23 +116,18 @@ def test_declared_mcp_support_matches_install_dependency():
 
 @pytest.mark.asyncio
 async def test_list_tools_is_the_live_federation_handshake(monkeypatch):
-    """list_tools(lite=true) reports the contract of the mode the server runs.
-
-    The checked-in artifact is the lite profile, so pin lite here; the process
-    default is minimal, whose handshake carries five capabilities and its own
-    surface hash.
-    """
+    """list_tools(lite=true) negotiates the complete capability contract."""
     from src.mcp_handlers.introspection.tool_introspection import handle_list_tools
 
-    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "progressive")
     result = await handle_list_tools({"lite": True})
     payload = json.loads(result[0].text)
 
-    assert payload["interface_contract"] == get_interface_contract_summary(
-        "lite"
-    )
+    assert payload["interface_contract"] == get_interface_contract_summary()
     names = {tool["name"] for tool in payload["tools"]}
+    assert names == set(_expected("full"))
     assert set(FEDERATION_LIFECYCLE_CAPABILITIES) <= names
+    assert payload["advertisement"]["mode"] == "progressive"
 
 
 @pytest.mark.parametrize(
@@ -149,8 +172,8 @@ def test_federation_lifecycle_aliases_emit_required_success_envelope(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full", "operator_readonly", "unknown"])
-async def test_rest_and_stdio_discovery_share_complete_names_and_schemas(
+@pytest.mark.parametrize("mode", ["progressive", "full"])
+async def test_rest_and_stdio_discovery_share_advertised_names_and_schemas(
     monkeypatch, mode,
 ):
     from src.http_routes.tools import http_list_tools
@@ -178,20 +201,18 @@ async def test_rest_and_stdio_discovery_share_complete_names_and_schemas(
         for tool in stdio_tools
     }
 
-    expected = _expected_lite()
+    expected = _expected(mode)
     assert response.status_code == 200
     assert rest == expected
-    assert rest_payload["mode"] == "full"
-    assert "ignored" in rest_payload["note"]
+    assert rest_payload["mode"] == mode
     assert stdio_surface == expected
-    assert rest_payload["interface_contract"] == get_interface_contract_summary(
-        "lite"
-    )
+    assert rest_payload["interface_contract"] == get_interface_contract_summary()
+    assert rest_payload["total_available"] == len(_expected("full"))
 
 
 @pytest.mark.asyncio
-async def test_streamable_mcp_advertises_the_lite_contract(monkeypatch):
-    """Under GOVERNANCE_TOOL_MODE=lite, tools/list on /mcp/ is the lite contract.
+async def test_streamable_mcp_advertises_the_progressive_surface(monkeypatch):
+    """The mount lists the progressive entry surface by default.
 
     The mount registers the whole surface and filters only its listing
     (src/tool_mode_listing.py), so the contract is checked against what
@@ -199,8 +220,8 @@ async def test_streamable_mcp_advertises_the_lite_contract(monkeypatch):
     """
     from src import mcp_server
 
-    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "lite")
-    expected = _expected_lite()
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "progressive")
+    expected = _expected("progressive")
     advertised = {tool.name: tool for tool in await mcp_server.mcp.list_tools()}
 
     assert set(advertised) == set(expected)
@@ -213,8 +234,24 @@ async def test_streamable_mcp_advertises_the_lite_contract(monkeypatch):
         )
 
 
-def test_streamable_mcp_registers_the_lite_contract_in_every_mode():
-    """A lite-contract name dispatches on /mcp/ whatever mode the server runs.
+@pytest.mark.asyncio
+async def test_streamable_mcp_full_mode_still_filters_hidden_handlers(monkeypatch):
+    from src import mcp_server
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
+    monkeypatch.setattr(_TOOL_DEFINITIONS["health_check"], "hidden", True)
+
+    advertised = {tool.name for tool in await mcp_server.mcp.list_tools()}
+
+    assert "health_check" not in advertised
+    assert advertised == {
+        tool.name for tool in get_public_tool_definitions("full")
+    }
+
+
+def test_streamable_mcp_registers_the_complete_contract_in_every_mode():
+    """Every complete-contract name dispatches whatever the listing mode.
 
     Registration is mode-independent; only the listing is filtered. So the
     contract's names are all present in the tool manager even though the
@@ -223,13 +260,13 @@ def test_streamable_mcp_registers_the_lite_contract_in_every_mode():
     from src import mcp_server
 
     registered = set(mcp_server.mcp._tool_manager._tools)
-    assert set(_expected_lite()) <= registered
+    assert set(_expected("full")) <= registered
 
 
 @pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full", "operator_readonly", "core", "unknown"])
 def test_legacy_mode_has_identical_federation_contract(mode):
     assert build_interface_contract(mode) == build_interface_contract()
-    assert get_public_tool_definitions(mode) == get_public_tool_definitions()
+    assert get_public_tool_definitions(mode) == get_public_tool_definitions("full")
 
 
 def test_complete_catalog_preserves_every_registered_capability(first_party_tool_surface):

@@ -308,6 +308,7 @@ class KnowledgeGraphPostgres:
         )
         explicit_sources = {
             "explicit_store", "explicit_answer", "explicit_leave_note",
+            "explicit_promotion",
         }
         by_agent_explicit: Dict[str, int] = {}
         by_agent_implicit: Dict[str, int] = {}

@@ -79,8 +79,11 @@ STAKES_LEVELS = ("baseline", "high")
 # with five writes, so it is classified per action below rather than covered by
 # one key that would gate its reads as boundary writes.
 _HIGH: frozenset[tuple[str, Optional[str]]] = frozenset({
-    # knowledge — destructive / override mutations (store/update are routine)
+    # knowledge — destructive / authority-raising / override mutations
+    # (store/update are routine). Promotion is append-only, but it raises an
+    # imported claim into the governed retrieval lane consumed by peers.
     ("knowledge", "cleanup"),
+    ("knowledge", "promote"),
     ("knowledge", "supersede"),
     # agent — mutate another agent's governance state / lifecycle
     ("agent", "update"),
@@ -206,6 +209,9 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("list_inference_hosts", None),
     ("list_process_bindings", None),
     ("list_tools", None),
+    # The gateway itself performs no target effect. Target calls retain their
+    # own table entries if/when a stakes gate consumes this classification.
+    ("use_tool", None),
     ("mark_response_complete", None),
     ("onboard", None),
     ("outcome_correlation", None),

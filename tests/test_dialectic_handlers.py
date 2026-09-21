@@ -2572,3 +2572,400 @@ class TestGetDialecticNextSteps:
         assert len(steps) == 3
         # Falls through to ESCALATE branch
         assert any("human" in s.lower() for s in steps)
+
+
+# ============================================================================
+# A non-judgment is not a verdict (server invariant)
+# ============================================================================
+
+class TestAbstentionIsNotAVerdict:
+    """The server must refuse a non-judgment BEFORE it consumes the slot.
+
+    Live failure this pins, 2026-09-19, session 99ff6f25a310d23e on PR #2316:
+    a reviewer whose backend returned nothing parseable filed its conservative
+    DISAGREE as a binding verdict. That claimed the session's single reviewer
+    slot, blocked the paused agent behind reasoning it could not act on, and
+    locked out a reviewer that arrived minutes later with a real counterexample.
+
+    The orchestrated reviewer now also abstains client-side, but that binds only
+    the client that has the check. This is the trust boundary, where the
+    property holds for every submitter — including the next one written.
+    """
+
+    @pytest.mark.asyncio
+    async def test_antithesis_with_no_judgment_does_not_claim_the_slot(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent, mock_pg_update_reviewer,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        # No reviewer yet: this is exactly the first-responder case where a
+        # filed non-verdict would auto-assign the submitter and shut the door.
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+        phase_before = session.phase
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, mock_pg_update_reviewer, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained",
+                   new_callable=AsyncMock) as emit:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "reasoning": "no_parseable_verdict",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["abstained"] is True
+        assert data["reviewer_slot_claimed"] is False
+
+        # The three things a filed non-verdict would have destroyed.
+        assert session.reviewer_agent_id is None, "the slot was claimed anyway"
+        assert session.phase == phase_before, "the phase advanced on a non-verdict"
+        assert not any(
+            getattr(m, "phase", None) == "antithesis" for m in (session.transcript or [])
+        ), "a non-judgment reached the transcript as a verdict"
+
+        emit.assert_awaited_once()
+        assert emit.await_args.kwargs["session_id"] == session.session_id
+
+    @pytest.mark.asyncio
+    async def test_omitting_the_flag_still_files_a_real_verdict(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent, mock_pg_update_reviewer,
+    ):
+        """Default True. A caller that says nothing is stating it judged.
+
+        The guard must not turn every existing submitter into an abstainer —
+        that would silently disarm the protocol rather than harden it.
+        """
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, mock_pg_update_reviewer:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "concerns": ["Risk too high"],
+                "reasoning": "Agent needs cooldown",
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data.get("abstained") is not True
+        assert session.phase == DialecticPhase.SYNTHESIS
+
+    @pytest.mark.asyncio
+    async def test_a_garbled_flag_fails_toward_abstention(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent, mock_pg_update_reviewer,
+    ):
+        """MCP callers send strings. "false" must not read as truthy.
+
+        A bare `bool("false")` is True, which would file the exact non-verdict
+        this guard exists to refuse — so the string path is pinned separately.
+        """
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, mock_pg_update_reviewer, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "reasoning": "no_parseable_verdict",
+                "judgment_formed": "false",
+                "api_key": "key456",
+            })
+
+        assert parse_result(result)["abstained"] is True
+        assert session.reviewer_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_an_unrecognized_flag_fails_toward_abstention(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent, mock_pg_update_reviewer,
+    ):
+        """Raw handler callers must not bypass the schema's fail-closed parse."""
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, mock_pg_update_reviewer, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "reasoning": "unrecognized_flag",
+                "judgment_formed": "on",
+                "api_key": "key456",
+            })
+
+        assert parse_result(result)["abstained"] is True
+        assert session.reviewer_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_non_boolean_malformed_flag_fails_toward_abstention(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent, mock_pg_update_reviewer,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, mock_pg_update_reviewer, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "reasoning": "malformed_flag",
+                "judgment_formed": 1,
+                "api_key": "key456",
+            })
+
+        assert parse_result(result)["abstained"] is True
+        assert session.reviewer_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_paused_agent_cannot_abstain_into_reviewer_slot(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": session.paused_agent_id,
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "cannot review their own session" in data["error"].lower()
+        emit.assert_not_awaited()
+        assert session.reviewer_agent_id is None
+
+    @pytest.mark.asyncio
+    async def test_abstention_requires_a_persisted_audit_event(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained",
+                   new_callable=AsyncMock, return_value=False) as emit:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "ABSTENTION_AUDIT_WRITE_FAILED"
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_abstention_still_enforces_reviewer_ownership(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id="agent-reviewer", phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        assert parse_result(result)["success"] is False
+        emit.assert_not_awaited()
+        assert session.reviewer_agent_id == "agent-reviewer"
+
+    @pytest.mark.asyncio
+    async def test_assigned_reviewer_abstention_does_not_claim_open_slot(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id="agent-reviewer", phase=DialecticPhase.ANTITHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock):
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["abstained"] is True
+        assert data["reviewer_slot_open"] is False
+        assert session.reviewer_agent_id == "agent-reviewer"
+        assert "assignment remains unchanged" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_paused_agent_abstention_is_not_attributed_to_reviewer(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_synthesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(
+            phase=DialecticPhase.SYNTHESIS,
+            reviewer_id="agent-reviewer",
+        )
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_participant_abstained", new_callable=AsyncMock) as emit:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        assert parse_result(result)["abstained"] is True
+        assert emit.await_args.kwargs["participant_agent_id"] == "agent-paused"
+
+    @pytest.mark.asyncio
+    async def test_antithesis_abstention_respects_phase_guard(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_antithesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.THESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "phase thesis" in data["error"]
+        emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_synthesis_abstention_respects_phase_guard(
+        self, mock_server, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_synthesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(
+            phase=DialecticPhase.THESIS,
+            reviewer_id="agent-reviewer",
+        )
+        ACTIVE_SESSIONS[session.session_id] = session
+
+        with mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained", new_callable=AsyncMock) as emit:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-paused",
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "phase thesis" in data["error"]
+        emit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_synthesis_abstention_preserves_the_standing_verdict(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """Filing here would burn a round AND overwrite a reasoned objection.
+
+        The paused agent is mid-way through answering that objection; replacing
+        it with an empty one destroys the thing being answered.
+        """
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_submit_synthesis, ACTIVE_SESSIONS,
+        )
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        ACTIVE_SESSIONS[session.session_id] = session
+        round_before = session.synthesis_round
+        transcript_before = len(session.transcript or [])
+
+        with mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent, \
+             patch(f"{DIALECTIC}.emit_reviewer_abstained",
+                   new_callable=AsyncMock) as emit:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": [],
+                "judgment_formed": False,
+                "api_key": "key456",
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["abstained"] is True
+        assert data["round_consumed"] is False
+        assert session.synthesis_round == round_before, "a round was spent"
+        assert len(session.transcript or []) == transcript_before
+        emit.assert_awaited_once()

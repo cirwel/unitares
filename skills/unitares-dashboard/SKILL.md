@@ -49,7 +49,7 @@ source_digests:
   unitares/src/http_routes/dashboard.py: "0fb5b075664dc0e6"
   unitares/src/http_routes/sentinel.py: "1271247f44ae0389"
   unitares/src/http_routes/telemetry.py: "a49c4c1b1c5fcaed"
-  unitares/src/dashboard_auth.py: "f2b1bbd42912995a"
+  unitares/src/dashboard_auth.py: "4bfd1bf01b1b6b03"
 ---
 
 # Adding a Section to the UNITARES Dashboard (redesign)

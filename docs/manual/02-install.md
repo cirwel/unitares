@@ -54,14 +54,16 @@ UNITARES_DEMO_PORT=18767 make demo
 UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 ```
 
-### Tool discovery (interface 1.6.0 and later)
+### Tool discovery (interface 1.13.0 and later)
 
-The current source advertises one complete catalog, including installed plugin
-tools. No mode selection is needed. Old `GOVERNANCE_TOOL_MODE` values are
-ignored; reconnect the MCP client after upgrading so it refreshes discovery.
-Use `list_tools(category=...)` to browse and `describe_tool(tool_name=...,
-action=...)` for the full parameters of one operation. Action authorization
-and identity gates are unchanged.
+The current source negotiates one complete catalog, including installed plugin
+tools, while advertising a small progressive surface initially. Use
+`list_tools(lite=true)` for every capability name, `describe_tool(tool_name=...,
+action=...)` for its parameters, and `use_tool(tool_name=..., arguments={...})`
+to invoke an omitted capability through its normal gates. Set
+`UNITARES_TOOL_ADVERTISEMENT=full` in `.env` to advertise every schema up front,
+then recreate the service and reconnect the client. Old `GOVERNANCE_TOOL_MODE`
+values are ignored. Action authorization and identity gates are unchanged.
 
 Earlier releases used `minimal`, `lite`, and `full` discovery profiles. The
 `standard` profile existed only on unreleased master between #2102 and #2137

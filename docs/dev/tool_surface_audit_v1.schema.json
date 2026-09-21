@@ -129,7 +129,12 @@
         "schema": { "type": ["string", "null"] },
         "identity": { "type": "string" },
         "stakes": { "type": "string" },
-        "timeout": { "type": "number", "minimum": 0 },
+        "timeout": {
+          "oneOf": [
+            { "type": "number", "minimum": 0 },
+            { "type": "null" }
+          ]
+        },
         "deprecated": { "type": "boolean" },
         "hidden": { "type": "boolean" },
         "superseded_by": { "type": ["string", "null"] },
@@ -200,6 +205,7 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
+            "progressive",
             "minimal",
             "lite",
             "operator_readonly",
@@ -207,6 +213,7 @@
             "full"
           ],
           "properties": {
+            "progressive": { "$ref": "#/$defs/mode" },
             "minimal": { "$ref": "#/$defs/mode" },
             "lite": { "$ref": "#/$defs/mode" },
             "operator_readonly": { "$ref": "#/$defs/mode" },

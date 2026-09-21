@@ -8,6 +8,7 @@ using a minimal test ASGI app that mirrors mcp_server.py endpoints.
 import json
 import pytest
 import sys
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from mcp.types import ImageContent, TextContent
@@ -22,6 +23,7 @@ from src.http_api import (
     _normalize_http_tool_name,
     _resolve_http_bound_agent,
 )
+from src.http_routes.health import http_health
 
 
 # ============================================================================
@@ -69,6 +71,81 @@ class TestHealthEndpoint:
         response = client.get("/health")
         data = response.json()
         assert data["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_health_reports_strict_bearer_posture(self, monkeypatch):
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-secret")
+        monkeypatch.delenv("UNITARES_REST_STRICT", raising=False)
+        request = MagicMock()
+        request.state._http_api_server_ready_fn = lambda: True
+        request.state._http_api_server_start_time = time.time()
+        request.state._http_api_server_version = "test"
+        request.state._http_api_server_build_sha = "test-sha"
+        request.state._http_api_has_streamable_http = True
+
+        no_pool = type("NoPool", (), {"_pool": None})()
+        with patch("src.db.get_db", return_value=no_pool):
+            response = await http_health(request)
+        auth = json.loads(response.body)["auth"]
+
+        assert auth["enabled"] is True
+        assert auth["rest_strict"] is True
+        assert auth["mcp_bearer_required"] is True
+        assert auth["header"] == "Authorization: Bearer <token>"
+        assert auth["rest_header"] == "Authorization: Bearer <token>"
+        assert auth["mcp_header"] == "Authorization: Bearer <token>"
+
+    @pytest.mark.asyncio
+    async def test_health_separates_decoupled_mcp_and_rest_auth(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "mcp-only-secret")
+        monkeypatch.setenv("UNITARES_REST_STRICT", "0")
+        monkeypatch.delenv("UNITARES_HTTP_API_TOKEN", raising=False)
+        request = MagicMock()
+        request.state._http_api_server_ready_fn = lambda: True
+        request.state._http_api_server_start_time = time.time()
+        request.state._http_api_server_version = "test"
+        request.state._http_api_server_build_sha = "test-sha"
+        request.state._http_api_has_streamable_http = True
+
+        no_pool = type("NoPool", (), {"_pool": None})()
+        with patch("src.db.get_db", return_value=no_pool):
+            response = await http_health(request)
+        auth = json.loads(response.body)["auth"]
+
+        assert auth["enabled"] is True
+        assert auth["rest_strict"] is False
+        assert auth["mcp_bearer_required"] is True
+        assert auth["header"] is None
+        assert auth["rest_header"] is None
+        assert auth["mcp_header"] == "Authorization: Bearer <token>"
+
+    @pytest.mark.asyncio
+    async def test_health_does_not_advertise_unaccepted_local_bearer(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+        monkeypatch.setenv("UNITARES_REST_STRICT", "1")
+        monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "local-only-token")
+        request = MagicMock()
+        request.state._http_api_server_ready_fn = lambda: True
+        request.state._http_api_server_start_time = time.time()
+        request.state._http_api_server_version = "test"
+        request.state._http_api_server_build_sha = "test-sha"
+        request.state._http_api_has_streamable_http = True
+
+        no_pool = type("NoPool", (), {"_pool": None})()
+        with patch("src.db.get_db", return_value=no_pool):
+            response = await http_health(request)
+        auth = json.loads(response.body)["auth"]
+
+        assert auth["enabled"] is True
+        assert auth["rest_strict"] is True
+        assert auth["mcp_bearer_required"] is False
+        assert auth["header"] is None
+        assert auth["rest_header"] is None
+        assert auth["mcp_header"] is None
 
 
 # ============================================================================

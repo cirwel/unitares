@@ -201,13 +201,10 @@ MIDDLEWARE_MARKER = "/middleware/"
 #: An entry that stops matching is also reported, so a fixed site cannot sit
 #: here forever pretending to be outstanding.
 #:
-#: Scoped to the one advertised catalog. `--mode` no longer selects a narrower
-#: surface, so every value reports the same findings against the same ledger;
-#: there is no second profile with its own reachability and its own ledger
-#: question any more.
-# The four profile-only dead ends from #2119 are resolved by the complete
-# catalog (interface 1.6.0). Keep scanning legacy alias hints and unmapped
-# actions; a wider catalog is not proof that every emitted hint is usable.
+#: Progressive advertisement remains connected to the complete catalog through
+#: ``use_tool``. The scan therefore treats a public complete-catalog name as
+#: reachable when that gateway is directly advertised, while continuing to
+#: report nonexistent names, legacy-only aliases, and unmapped actions.
 KNOWN_DEAD_ENDS: Dict[tuple, str] = {}
 
 
@@ -531,6 +528,10 @@ def _reachable_predicate(mode: str):
     from src.tool_modes import get_tools_for_mode
 
     advertised = get_tools_for_mode(mode)
+    if "use_tool" in advertised:
+        from src.tool_modes import advertised_tool_names_full
+
+        advertised |= advertised_tool_names_full()
     aliases = list_all_aliases()
 
     def resolve(name):
@@ -655,6 +656,10 @@ def find_dead_end_hints(mode: str) -> List[DeadEndHint]:
     validate_mode(mode)
     roster = set(get_tool_registry()) | set(list_all_aliases())
     advertised = get_tools_for_mode(mode)
+    if "use_tool" in advertised:
+        from src.tool_modes import advertised_tool_names_full
+
+        advertised |= advertised_tool_names_full()
 
     # Which advertised alias, if any, covers a call to (implementation, action).
     # An alias pins at most one action of its router, so the action is part of
@@ -784,11 +789,9 @@ def main() -> int:
         "--mode",
         default="full",
         help=(
-            "Legacy GOVERNANCE_TOOL_MODE / category label to scan under "
-            "(default: full). Kept so existing invocations keep working, but "
-            "since interface 1.6.0 every accepted value resolves to the one "
-            "complete catalog: this labels the output, it does not narrow "
-            "what is scanned"
+            "Advertisement or legacy profile label to scan under (default: "
+            "full). Progressive reachability includes complete-catalog names "
+            "available through the advertised use_tool gateway."
         ),
     )
     parser.add_argument(

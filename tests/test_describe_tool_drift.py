@@ -274,8 +274,7 @@ async def test_list_tools_lite_surfaces_workflow_aliases(monkeypatch):
     ):
         assert raw_tool not in names
 
-    assert data["getting_started_path"][0]["tool"] == "start_session"
-    assert data["getting_started_path"][1]["tool"] == "sync_state"
+    assert all(set(tool) == {"name"} for tool in data["tools"])
 
 
 @pytest.mark.asyncio
@@ -295,9 +294,17 @@ async def test_list_tools_filters_by_category(lite, monkeypatch):
     data = json.loads(result[0].text)
 
     assert data["tools"]
-    assert {tool["category"] for tool in data["tools"]} == {"dialectic"}
     assert all(tool["name"] != "health_check" for tool in data["tools"])
-    if not lite:
+    if lite:
+        from src.mcp_handlers.introspection.tool_catalog import TOOL_RELATIONSHIPS
+
+        assert all(set(tool) == {"name"} for tool in data["tools"])
+        assert {
+            TOOL_RELATIONSHIPS[tool["name"]]["category"]
+            for tool in data["tools"]
+        } == {"dialectic"}
+    else:
+        assert {tool["category"] for tool in data["tools"]} == {"dialectic"}
         assert data["filter_applied"]["category_filter"] == "dialectic"
 
 
@@ -571,29 +578,27 @@ async def test_describe_and_list_report_the_declared_stability():
     assert by_name["knowledge"]["stability"] == "stable"
     assert by_name["admin"]["stability"] == "beta"
     lite_listed = json.loads((await handle_list_tools({"lite": True}))[0].text)
-    assert all("stability" in t for t in lite_listed["tools"])
+    assert all(set(t) == {"name"} for t in lite_listed["tools"])
 
 
 # F2 of docs/operations/tool-surface-audit-2026-09-12.md: one description per
-# advertised name on every discovery surface. tools/list is the reference —
-# it is what a schema-driven MCP client reads — and list_tools, its lite hint
-# and describe_tool must open with the same first line.
+# advertised name on every rich discovery surface. tools/list is the reference
+# — it is what a schema-driven MCP client reads — and full list_tools plus
+# describe_tool must open with the same first line. Lite list_tools is names-only.
 
 
 def _wire_first_lines() -> dict[str, str]:
-    """{name: first line of the description tools/list serves}.
+    """{name: first line of the complete catalog description}.
 
-    Read the way handle_list_tools reads it (the deployment's public catalog
-    under the process TOOL_MODE), so both sides of every comparison below come
-    from the same call.
+    Rich list_tools and describe_tool browse the complete catalog even when the
+    initial tools/list advertisement is progressive.
     """
-    import src.tool_modes
     from src.interface_contract import get_public_tool_definitions
     from src.tool_schemas import first_line
 
     wire = {
         tool.name: first_line(tool.description)
-        for tool in get_public_tool_definitions(src.tool_modes.TOOL_MODE)
+        for tool in get_public_tool_definitions("full")
     }
     assert wire, "the public catalog is empty; nothing to compare"
     assert all(wire.values()), "an advertised tool has no description"
@@ -633,72 +638,6 @@ async def test_list_tools_describes_every_advertised_name_as_the_wire_does():
         f"{len(drifted)} advertised name(s) describe themselves differently on "
         f"list_tools and tools/list:\n{json.dumps(drifted, indent=2)}"
     )
-
-
-@pytest.mark.asyncio
-async def test_list_tools_lite_hint_is_the_wire_first_line_clipped_at_a_word():
-    """The compact ``hint`` is the wire's first line, clipped at a word boundary.
-
-    Asserted as properties rather than by re-running the clipper, which would
-    only restate the implementation. Every advertised first line exceeds the
-    budget, so the interesting content is the shape of the cut: measured
-    2026-09-12, 30 of 50 hints landed inside a word before the clipper was
-    made boundary-aware.
-    """
-    import json
-    from src.mcp_handlers.introspection.tool_introspection import (
-        LITE_HINT_BUDGET,
-        handle_list_tools,
-    )
-
-    wire = _wire_first_lines()
-    hints = {
-        tool["name"]: tool["hint"]
-        for tool in json.loads((await handle_list_tools({"lite": True}))[0].text)["tools"]
-    }
-    assert set(wire) <= set(hints)
-
-    problems = {}
-    for name, line in wire.items():
-        got = hints[name]
-        if len(line) <= LITE_HINT_BUDGET:
-            if got != line:
-                problems[name] = "short first line must be served whole"
-            continue
-        if not got.endswith("..."):
-            problems[name] = "a clipped hint must end with an ellipsis"
-            continue
-        body = got[: -len("...")]
-        if not line.startswith(body):
-            problems[name] = "hint is not a prefix of the wire's first line"
-        elif len(body) > LITE_HINT_BUDGET:
-            problems[name] = f"hint body is {len(body)} chars, over budget"
-        elif body and body[-1].isalnum() and line[len(body)].isalnum():
-            problems[name] = f"hint cuts mid-word: ...{body[-25:]!r}"
-    assert not problems, (
-        f"lite hint defects:\n{json.dumps(problems, indent=2)}"
-    )
-
-
-def test_lite_hint_keeps_a_long_unbroken_token_rather_than_a_stub():
-    """A first line that opens with one long token is clipped, not gutted.
-
-    The word-boundary rule is bounded for this reason: honouring a boundary at
-    character 4 would return four characters where the budget allows a hundred,
-    and a clipped identifier still carries more than that.
-    """
-    from src.mcp_handlers.introspection.tool_introspection import (
-        LITE_HINT_BUDGET,
-        lite_hint,
-    )
-
-    unbroken = "word " + "x" * 300
-    got = lite_hint(unbroken)
-    assert len(got) == LITE_HINT_BUDGET + len("..."), got
-    assert got.startswith("word xxx")
-
-    assert lite_hint("short enough") == "short enough"
-    assert lite_hint("a " * 80).endswith("...")
 
 
 @pytest.mark.asyncio

@@ -2,11 +2,10 @@
 primary agent-experience workflow tool, and each must resolve to a real tool.
 
 The primary task-verb names (start_session, sync_state, ...) are
-surfaced for in-band discovery across the catalog's lite `signatures`
-and full tool list. Those are hand-maintained strings; this guard pins
-them to the registry (`experience_alias_map`) so a future workflow rename
-or removal fails here instead of silently dropping a name from
-discovery while the registry still routes it.
+surfaced for in-band discovery across the lite name index and full tool
+list. This guard pins them to the registry (`experience_alias_map`) so a
+future workflow rename or removal fails here instead of silently dropping a
+name from discovery while the registry still routes it.
 """
 
 from __future__ import annotations
@@ -43,9 +42,9 @@ def _tool_names(obj, acc: set) -> set:
 
 def test_experience_aliases_discoverable_in_lite_catalog():
     primary_tools = set(experience_alias_map())
-    signatures = set(_catalog({"lite": True}).get("signatures", {}))
-    missing = primary_tools - signatures
-    assert not missing, f"primary workflow tools absent from lite signatures: {sorted(missing)}"
+    advertised = {tool["name"] for tool in _catalog({"lite": True})["tools"]}
+    missing = primary_tools - advertised
+    assert not missing, f"primary workflow tools absent from lite catalog: {sorted(missing)}"
 
 
 def test_experience_aliases_discoverable_in_full_catalog():

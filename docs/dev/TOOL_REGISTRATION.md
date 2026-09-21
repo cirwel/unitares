@@ -46,11 +46,13 @@ TOOLS_NEEDING_SESSION_INJECTION = call_set(
 )
 ```
 
-**Step 4: Verify discovery.** No mode-set edit is needed. Every registered tool
-and primary workflow alias is advertised on all transports. Keep its schema,
-ToolMeta record, and handler consistent; the interface and registry tests catch
-missing definitions. Category and tier are browsing metadata, not visibility
-gates.
+**Step 4: Verify discovery.** Every registered tool and primary workflow alias
+belongs to the complete catalog and stays dispatchable. Add a tool to
+`PROGRESSIVE_MODE_TOOLS` only when its schema must appear in the small initial
+listing; otherwise clients reach it through `list_tools` → `describe_tool` →
+`use_tool`. Keep its schema, ToolMeta record, and handler consistent; the
+interface and registry tests catch missing definitions. Category and tier are
+browsing metadata, not authorization gates.
 
 ---
 
@@ -80,9 +82,10 @@ gates.
 `auto_register_all_tools` in `src/tool_registration.py` (called from `mcp_server.py`):
 1. Reads all tool definitions from `tool_schemas.py`
 2. **Filters to only tools in `_TOOL_DEFINITIONS`** (tools with `register=True`)
-3. **Exposes the complete catalog** — legacy `GOVERNANCE_TOOL_MODE` settings
-   affect neither registration nor discovery. The listing wrapper compacts
-   schema annotations only.
+3. **Registers the complete catalog** — legacy `GOVERNANCE_TOOL_MODE` settings
+   affect neither registration nor discovery. The listing wrapper applies the
+   progressive/full advertisement selection and compacts schema annotations;
+   it never removes the underlying dispatch path.
 4. Creates FastMCP wrappers for each tool
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator
@@ -386,7 +389,7 @@ handler's Pydantic model enforces the advertised bounds. Source-catalog
 equality is therefore a wire check, pinned per tool and per property by
 `tests/test_mcp_schema_parity.py`.
 
-### Generated titles and validation
+### Generated annotations and validation
 
 `src/schema_brief.py::apply_property_title_mode` removes generated `title`
 annotations by default. Catalog construction applies it upstream; the `/mcp/`
@@ -402,6 +405,35 @@ current listing. It does not restore a historical payload or fingerprint
 across unrelated changes. The final-listing tests check keep/strip/keep
 behavior independently of catalog policy. Dropping titles preserves
 validation but changes schema fingerprints.
+
+`src/schema_brief.py::apply_null_default_mode` can remove `default: null`
+annotations only when an operator explicitly sets
+`UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip`. In JSON Schema, `default` does not
+participate in validation, but it is caller-visible omission/default metadata,
+so the default policy keeps it. As with titles, the registrar retains null
+defaults and the final listing applies the optional trim to a copied Tool
+object, leaving wrapper and handler validation untouched.
+
+The structural walk does not enter caller data under `default`,
+`const`, `enum` or examples, or arbitrary extension metadata, so a payload or
+plugin annotation containing a key named `default` is preserved. Parity tests
+cover every description, title and null-default mode.
+
+Measured 2026-09-20 as compact UTF-8 `ListToolsResult` JSON, with brief
+descriptions and titles stripped, all 50 tools had at least one null-default
+annotation (404 total):
+
+| `/mcp/` tools/list | Null defaults kept | Null defaults stripped | Saved by stripping |
+|---|---:|---:|---:|
+| 50 tools, complete catalog | 145,384 B | 139,324 B | 6,060 B (4.2%) |
+
+The default surface preserves the metadata. To reproduce the optional 6,060 B
+trim:
+
+```bash
+UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip \
+  python3 scripts/diagnostics/tool_surface_cost.py --mode full --boilerplate
+```
 
 With MCP 2.1.1 and brief descriptions, measured 2026-09-12 as compact UTF-8
 JSON `ListToolsResult` objects. There is one row because there is one surface:
@@ -426,8 +458,9 @@ The earlier #2115 numbers measured the catalog rather than the MCP listing.
 That distinction no longer exists, because the registrar now advertises the
 catalog itself, so the two surfaces measure the same bytes. `--boilerplate`
 applies the same recursive title transform to the explicitly selected layer.
-The null-union experiment remains diagnostic only: removing the `null`
-alternative changes validation and is not applied to the server.
+The null-union experiment remains diagnostic only: unlike removing a
+null-default annotation, removing the `null` type alternative changes
+validation and is not applied to the server.
 
 ## What a Profile Costs
 

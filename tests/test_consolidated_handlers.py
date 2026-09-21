@@ -476,7 +476,7 @@ class TestKnowledgeHandler:
         data = _parse_response(result)
         valid = sorted(data["recovery"]["valid_actions"])
         expected = sorted(["store", "search", "get", "list", "update",
-                           "details", "note", "cleanup", "synthesize", "stats", "supersede", "audit"])
+                           "details", "note", "cleanup", "synthesize", "stats", "supersede", "promote", "audit"])
         assert valid == expected
 
 

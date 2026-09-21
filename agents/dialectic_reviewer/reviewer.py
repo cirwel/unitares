@@ -228,6 +228,9 @@ class Verdict:
     # and must still be filed. A verdict with judgment_formed=False is not a
     # verdict; see run(), which abstains on it rather than filing it.
     judgment_formed: bool = True
+    # Filled from the server's abstention response so operators know whether
+    # this attempt found an actually open slot or an existing assignment.
+    reviewer_slot_open: bool | None = None
 
 
 def build_review_prompt(thesis: Thesis) -> str:
@@ -927,12 +930,11 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     if not verdict.judgment_formed:
         logger.warning(
             "Dialectic reviewer ABSTAINING on session %s: %s produced no "
-            "parseable judgment. No verdict filed; the reviewer slot is left "
-            "OPEN for a reviewer that can judge.",
+            "parseable judgment. The server will record the abstention without "
+            "assuming anything about reviewer-slot ownership.",
             thesis.session_id,
             _reviewer_audit_text(provenance),
         )
-        return verdict
 
     client = GovernanceClient(governance_url)
     await client.connect()
@@ -947,12 +949,13 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         # Claim the open reviewer slot as first-responder. The bare submit_*
         # handlers are register=False; the public MCP surface is the `dialectic`
         # umbrella tool (action='antithesis'/'synthesis'). (live-found 2026-06-23)
-        await client.call_tool(
+        antithesis_result = await client.call_tool(
             "dialectic",
             {
                 "action": "antithesis",
                 "session_id": thesis.session_id,
                 "reasoning": verdict.reasoning,
+                "judgment_formed": verdict.judgment_formed,
                 # Attribution rides the antithesis because it is the reviewer's
                 # own first message and is always written; the synthesis row
                 # joins to it by session_id. See _provenance_for_message.
@@ -963,6 +966,33 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 },
             },
         )
+        if not verdict.judgment_formed:
+            if isinstance(antithesis_result, dict):
+                if antithesis_result.get("abstained") is True:
+                    slot_state = antithesis_result.get("reviewer_slot_open")
+                    verdict.reviewer_slot_open = (
+                        slot_state if isinstance(slot_state, bool) else None
+                    )
+                else:
+                    # A legacy/partial server may ignore judgment_formed and
+                    # file a normal verdict. Do not report a fabricated open
+                    # slot when the server did not acknowledge abstention.
+                    verdict.reviewer_slot_open = None
+            slot_state = (
+                "the reviewer slot remains OPEN"
+                if verdict.reviewer_slot_open is True
+                else (
+                    "the existing reviewer assignment remains unchanged"
+                    if verdict.reviewer_slot_open is False
+                    else "the server did not provide a reliable reviewer-slot state"
+                )
+            )
+            logger.warning(
+                "Dialectic reviewer abstention recorded for session %s; %s",
+                thesis.session_id,
+                slot_state,
+            )
+            return verdict
         # Submit the model-derived verdict — agrees may be False (the whole point).
         #
         # No `reasoning` here, deliberately. The argument was made once, in the
@@ -1053,8 +1083,16 @@ def main() -> int:
         # and found nothing" and "the producer never ran" are different
         # findings and must not share an exit code.
         print(
-            "reviewer ABSTAINED: no parseable judgment; no verdict filed and "
-            "the reviewer slot was left OPEN",
+            "reviewer ABSTAINED: no parseable judgment; no verdict filed; "
+            + (
+                "the reviewer slot remains OPEN"
+                if verdict.reviewer_slot_open is True
+                else (
+                    "the existing reviewer assignment remains unchanged"
+                    if verdict.reviewer_slot_open is False
+                    else "the server did not provide a reliable reviewer-slot state"
+                )
+            ),
             flush=True,
         )
         return 3

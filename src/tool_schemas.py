@@ -17,9 +17,11 @@ from src.mcp_compat import get_tool_input_schema, set_tool_input_schema
 from src.schema_brief import (
     BRIEF_BUDGET,
     apply_field_description_mode,
+    apply_null_default_mode,
     apply_property_title_mode,
     resolve_brief_budget,
     resolve_field_description_mode,
+    resolve_null_default_mode,
     resolve_property_title_mode,
 )
 from src.tool_annotations import tool_annotations
@@ -193,9 +195,9 @@ def first_line(s: str | None) -> str:
     """The first non-empty line of a description, stripped.
 
     This is the description ``tools/list`` serves under the default short
-    verbosity, and since 2026-09-12 also the one ``list_tools`` and the compact
-    ``describe_tool`` view serve for an advertised name, so every discovery
-    surface derives its one-liner with the same rule.
+    verbosity, and since 2026-09-12 also the one full ``list_tools`` and the
+    compact ``describe_tool`` view serve for an advertised name. The lite
+    ``list_tools`` handshake is names-only.
     """
     if not s:
         return ""
@@ -265,6 +267,7 @@ def advertised_input_schema(
     *,
     field_descriptions: str = "full",
     budget: int = BRIEF_BUDGET,
+    null_defaults: str | None = None,
     property_titles: str | None = None,
 ) -> Any:
     """The input schema a caller is told about, for a tool or its alias's canonical tool.
@@ -289,12 +292,19 @@ def advertised_input_schema(
     the caller in title case explains anything, so describe_tool drops it on
     the same rule the wire does. Defaults to
     ``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES`` (``strip``).
+
+    ``null_defaults`` follows the same cross-surface rule. A generated
+    ``default: null`` is caller-visible omission/default metadata and remains
+    advertised unless ``UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip`` is set.
     """
     if tool_name in _HIDE_IDENTITY_PARAMS_TOOLS:
         schema = _hide_auto_injected_identity(schema)
     schema = apply_field_description_mode(schema, field_descriptions, budget=budget)
-    return apply_property_title_mode(
+    schema = apply_property_title_mode(
         schema, resolve_property_title_mode(property_titles)
+    )
+    return apply_null_default_mode(
+        schema, resolve_null_default_mode(null_defaults)
     )
 
 
@@ -302,6 +312,7 @@ def get_tool_definitions(
     verbosity: str | None = None,
     field_descriptions: str | None = None,
     property_titles: str | None = None,
+    null_defaults: str | None = None,
 ) -> list[Tool]:
     """Build the list of MCP Tool objects from Pydantic schemas + descriptions.
 
@@ -317,6 +328,10 @@ def get_tool_definitions(
     still present and lets ``src/tool_mode_listing.py`` apply the title policy
     on every listing, which is what keeps the operator switch reversible at
     list time on that transport too.
+
+    ``null_defaults`` governs generated ``default: null`` annotations. The
+    registrar likewise passes ``"keep"`` and leaves the per-listing policy to
+    ``src/tool_mode_listing.py`` so the operator switch remains reversible.
     """
     if verbosity is None:
         verbosity = os.getenv("UNITARES_TOOL_SCHEMA_VERBOSITY", "short").strip().lower()
@@ -402,6 +417,7 @@ def get_tool_definitions(
                 get_tool_input_schema(t),
                 field_descriptions=field_description_mode,
                 budget=brief_budget,
+                null_defaults=null_defaults,
                 property_titles=property_titles,
             ),
         )

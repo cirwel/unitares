@@ -31,6 +31,15 @@ def test_default_measurement_matches_the_sdk_list_result(monkeypatch):
     assert measured.total_bytes > sum(tool.total_bytes for tool in measured.tools)
 
 
+def test_progressive_profile_is_measurable_and_smaller_than_full():
+    progressive = cost.measure_profile("progressive")
+    full = cost.measure_profile("full")
+
+    assert progressive.available and full.available
+    assert progressive.tool_count == 13
+    assert progressive.total_bytes < full.total_bytes
+
+
 def test_source_catalog_and_final_listing_measure_the_same_bytes():
     """The /mcp/ registrar advertises the catalog schema verbatim (F12).
 
@@ -86,6 +95,31 @@ def test_json_discloses_surface_estimate_and_boilerplate(monkeypatch, capsys):
     assert payload["tokens_are_estimates"]
     assert "excludes JSON-RPC" in payload["serialization"]
     assert payload["boilerplate_savings"]["minimal"]["property_title"] == 0
+    assert payload["boilerplate_savings"]["minimal"]["null_default"] > 0
+
+
+def test_null_default_cut_preserves_validation_and_concrete_defaults():
+    schema = {
+        "type": "object",
+        "properties": {
+            "optional": {
+                "anyOf": [{"type": "string"}, {"type": "null"}],
+                "default": None,
+            },
+            "bounded": {"type": "integer", "minimum": 1, "default": 5},
+            "payload": {"type": "object", "default": {"default": None}},
+        },
+        "required": ["bounded"],
+    }
+    transformed = cost._without_null_defaults(schema)
+
+    assert "default" not in transformed["properties"]["optional"]
+    assert transformed["properties"]["optional"]["anyOf"] == (
+        schema["properties"]["optional"]["anyOf"]
+    )
+    assert transformed["properties"]["bounded"] == schema["properties"]["bounded"]
+    assert transformed["properties"]["payload"]["default"] == {"default": None}
+    assert transformed["required"] == schema["required"]
 
 
 def test_hypothetical_null_cut_preserves_multi_type_unions():

@@ -14,6 +14,19 @@ from starlette.responses import HTMLResponse, JSONResponse
 from src import dashboard_auth, http_api
 
 
+@pytest.fixture(autouse=True)
+def _stable_default_webauthn_config(monkeypatch):
+    """Keep this module deterministic when the host exports deployment flags."""
+    monkeypatch.delenv("UNITARES_DASHBOARD_RP_ID", raising=False)
+    monkeypatch.delenv("UNITARES_DASHBOARD_ORIGIN", raising=False)
+    monkeypatch.setattr(dashboard_auth, "DASHBOARD_RP_ID", "gov.cirwel.org")
+    monkeypatch.setattr(
+        dashboard_auth,
+        "DASHBOARD_EXPECTED_ORIGIN",
+        "https://gov.cirwel.org",
+    )
+
+
 class _Request:
     def __init__(
         self,
@@ -76,9 +89,42 @@ def _live_session(**overrides):
     return session
 
 
-def test_production_rp_and_origin_are_exact_host_pair():
-    assert dashboard_auth.DASHBOARD_RP_ID == "gov.cirwel.org"
-    assert dashboard_auth.DASHBOARD_EXPECTED_ORIGIN == "https://gov.cirwel.org"
+def test_default_rp_and_origin_are_exact_host_pair():
+    assert dashboard_auth._dashboard_webauthn_config() == (
+        "gov.cirwel.org",
+        "https://gov.cirwel.org",
+    )
+
+
+def test_webauthn_config_tracks_hosted_deployment(monkeypatch):
+    monkeypatch.setenv("UNITARES_DASHBOARD_RP_ID", "governance.example.com")
+    monkeypatch.delenv("UNITARES_DASHBOARD_ORIGIN", raising=False)
+
+    assert dashboard_auth._dashboard_webauthn_config() == (
+        "governance.example.com",
+        "https://governance.example.com",
+    )
+
+    monkeypatch.setenv(
+        "UNITARES_DASHBOARD_ORIGIN", "https://governance.example.com:8443"
+    )
+    assert dashboard_auth._dashboard_webauthn_config() == (
+        "governance.example.com",
+        "https://governance.example.com:8443",
+    )
+
+
+def test_enrollment_page_names_and_escapes_configured_rp(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_auth, "DASHBOARD_RP_ID", "governance.example.com<script>"
+    )
+
+    response = dashboard_auth._auth_page("enroll.html")
+    page = response.body.decode()
+
+    assert "governance.example.com&lt;script&gt;" in page
+    assert "<strong>gov.cirwel.org</strong>" not in page
+    assert "{{DASHBOARD_RP_ID}}" not in page
 
 
 def test_session_lifetimes_pin_sliding_and_hard_caps():
