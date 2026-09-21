@@ -132,6 +132,26 @@ async def execute_nested_http_tool(
         signals = get_session_signals()
         if signals is not None:
             await access._resolve_http_bound_agent(tool_name, nested, signals)
+        # Non-core targets re-enter the HTTP fallback dispatch pipeline, whose
+        # post-validation steps charge the target. Core REST targets use the
+        # direct-handler shortcut instead, so charge them here after target-
+        # specific prebinding. The outer use_tool call deliberately deferred
+        # its charge to this target and must not turn that shortcut into a
+        # zero-charge path.
+        if get_direct_http_tool_handler(tool_name) is not None:
+            from src.mcp_handlers.context import get_context_agent_id
+            from src.mcp_handlers.middleware import DispatchContext, check_rate_limit
+
+            rate_result = await check_rate_limit(
+                tool_name,
+                nested,
+                DispatchContext(
+                    bound_agent_id=get_context_agent_id(),
+                    client_session_id=session_id,
+                ),
+            )
+            if isinstance(rate_result, list):
+                return rate_result
         return await execute_http_tool(tool_name, nested)
     finally:
         reset_session_context(context_token)

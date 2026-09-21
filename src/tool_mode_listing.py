@@ -23,20 +23,24 @@ logger = get_logger(__name__)
 
 
 def advertised_tool_names(mode: Optional[str] = None) -> Optional[set[str]]:
-    """Names ``tools/list`` may show; ``None`` means the complete surface."""
+    """Visible names ``tools/list`` may show for this advertisement mode.
+
+    Full mode still needs a concrete allowlist: the mounted FastMCP table can
+    contain internal ``hidden=True`` handlers, which are dispatchable by the
+    server but must never become part of public discovery.
+    """
     from src import tool_modes
 
     resolved = (mode or tool_modes.TOOL_MODE or "full").lower()
-    if resolved != "progressive":
-        return None
-
     from src.interface_contract import get_public_tool_definitions
 
-    names = {tool.name for tool in get_public_tool_definitions("progressive")}
+    surface_mode = "progressive" if resolved == "progressive" else "full"
+    names = {tool.name for tool in get_public_tool_definitions(surface_mode)}
     if not names:
         logger.warning(
-            "progressive tool advertisement resolved empty; listing the full "
-            "registered surface instead"
+            "%s tool advertisement resolved empty; listing the full "
+            "registered surface instead",
+            surface_mode,
         )
         return None
     return names

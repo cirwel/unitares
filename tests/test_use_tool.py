@@ -327,6 +327,46 @@ async def test_rest_nested_target_rebinds_explicit_session_and_restores_outer(mo
 
 
 @pytest.mark.asyncio
+async def test_rest_gateway_charges_a_direct_handler_target(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from src.http_routes import access
+    from src.services import http_tool_service
+
+    executed = []
+    limiter = MagicMock()
+    limiter.check_rate_limit.return_value = (False, "limited")
+    limiter.get_stats.return_value = {}
+
+    async def fake_resolve(_name, _arguments, _signals):
+        return None
+
+    async def fake_execute(name, arguments):
+        executed.append((name, arguments))
+        return {"success": True}
+
+    monkeypatch.setattr(access, "_resolve_http_bound_agent", fake_resolve)
+    monkeypatch.setattr(http_tool_service, "execute_http_tool", fake_execute)
+    monkeypatch.setattr(
+        "src.mcp_handlers.middleware.rate_limit_step.get_rate_limiter",
+        lambda: limiter,
+    )
+
+    signals_token = set_session_signals(SessionSignals(transport="rest"))
+    try:
+        result = await http_tool_service.execute_nested_http_tool(
+            "process_agent_update",
+            {"agent_id": "agent-1", "response_text": "done"},
+        )
+    finally:
+        reset_session_signals(signals_token)
+
+    assert _payload(result)["success"] is False
+    limiter.check_rate_limit.assert_called_once_with("agent-1")
+    assert executed == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("session_id", [None, ""])
 async def test_rest_nested_target_preserves_explicit_empty_session(
     monkeypatch, session_id

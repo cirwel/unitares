@@ -26,16 +26,20 @@ from src.tool_modes import PROGRESSIVE_MODE_TOOLS
 pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
 
 
-def test_full_mode_is_unfiltered():
-    assert advertised_tool_names("full") is None
+def test_full_mode_allows_the_complete_public_surface():
+    from src.interface_contract import get_public_tool_definitions
+
+    assert advertised_tool_names("full") == {
+        tool.name for tool in get_public_tool_definitions("full")
+    }
 
 
 def test_legacy_minimal_is_unfiltered():
-    assert advertised_tool_names("minimal") is None
+    assert advertised_tool_names("minimal") == advertised_tool_names("full")
 
 
 def test_legacy_lite_is_unfiltered():
-    assert advertised_tool_names("lite") is None
+    assert advertised_tool_names("lite") == advertised_tool_names("full")
 
 
 def test_progressive_advertises_the_entry_surface():
@@ -47,7 +51,7 @@ def test_mode_is_read_at_call_time(monkeypatch):
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "progressive")
     assert advertised_tool_names() == PROGRESSIVE_MODE_TOOLS
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
-    assert advertised_tool_names() is None
+    assert advertised_tool_names() == advertised_tool_names("full")
 
 
 def test_filter_keeps_order_and_drops_unadvertised():

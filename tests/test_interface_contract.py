@@ -234,6 +234,22 @@ async def test_streamable_mcp_advertises_the_progressive_surface(monkeypatch):
         )
 
 
+@pytest.mark.asyncio
+async def test_streamable_mcp_full_mode_still_filters_hidden_handlers(monkeypatch):
+    from src import mcp_server
+    from src.mcp_handlers.decorators import _TOOL_DEFINITIONS
+
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
+    monkeypatch.setattr(_TOOL_DEFINITIONS["health_check"], "hidden", True)
+
+    advertised = {tool.name for tool in await mcp_server.mcp.list_tools()}
+
+    assert "health_check" not in advertised
+    assert advertised == {
+        tool.name for tool in get_public_tool_definitions("full")
+    }
+
+
 def test_streamable_mcp_registers_the_complete_contract_in_every_mode():
     """Every complete-contract name dispatches whatever the listing mode.
 
