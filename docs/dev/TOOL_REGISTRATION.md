@@ -386,7 +386,7 @@ handler's Pydantic model enforces the advertised bounds. Source-catalog
 equality is therefore a wire check, pinned per tool and per property by
 `tests/test_mcp_schema_parity.py`.
 
-### Generated titles and validation
+### Generated annotations and validation
 
 `src/schema_brief.py::apply_property_title_mode` removes generated `title`
 annotations by default. Catalog construction applies it upstream; the `/mcp/`
@@ -402,6 +402,29 @@ current listing. It does not restore a historical payload or fingerprint
 across unrelated changes. The final-listing tests check keep/strip/keep
 behavior independently of catalog policy. Dropping titles preserves
 validation but changes schema fingerprints.
+
+`src/schema_brief.py::apply_null_default_mode` similarly removes
+`default: null` annotations by default. In JSON Schema, `default` does not
+participate in validation: omission from `required` still makes a parameter
+optional, and its nullable type still controls whether an explicit null is
+accepted. Non-null defaults remain advertised because they tell a caller what
+the server supplies. As with titles, the registrar retains null defaults and
+the final listing applies the policy to a copied Tool object, leaving wrapper
+and handler validation untouched.
+
+`UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep` restores null defaults in the current
+listing. The structural walk does not enter caller data under `default`,
+`const`, `enum` or examples, so a payload default containing a key named
+`default` is preserved. Parity tests cover every description, title and
+null-default mode.
+
+Measured 2026-09-20 as compact UTF-8 `ListToolsResult` JSON, with brief
+descriptions and titles stripped, all 50 tools had at least one null-default
+annotation (404 total):
+
+| `/mcp/` tools/list | Null defaults kept | Null defaults stripped | Saved by stripping |
+|---|---:|---:|---:|
+| 50 tools, complete catalog | 145,384 B | 139,324 B | 6,060 B (4.2%) |
 
 With MCP 2.1.1 and brief descriptions, measured 2026-09-12 as compact UTF-8
 JSON `ListToolsResult` objects. There is one row because there is one surface:
@@ -426,8 +449,9 @@ The earlier #2115 numbers measured the catalog rather than the MCP listing.
 That distinction no longer exists, because the registrar now advertises the
 catalog itself, so the two surfaces measure the same bytes. `--boilerplate`
 applies the same recursive title transform to the explicitly selected layer.
-The null-union experiment remains diagnostic only: removing the `null`
-alternative changes validation and is not applied to the server.
+The null-union experiment remains diagnostic only: unlike removing a
+null-default annotation, removing the `null` type alternative changes
+validation and is not applied to the server.
 
 ## What a Profile Costs
 

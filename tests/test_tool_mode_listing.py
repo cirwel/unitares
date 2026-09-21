@@ -142,6 +142,30 @@ async def test_actual_listing_title_savings_preserve_validation_and_restore(monk
     assert restored == before, "listing must not mutate registration/validation schemas"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full"])
+async def test_actual_listing_null_default_savings_restore(monkeypatch, mode):
+    """Null-default annotations leave the final listing, not registration."""
+    import json
+    from src import mcp_server
+    from src.mcp_compat import get_tool_input_schema
+    from src.schema_brief import apply_null_default_mode
+
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", mode)
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "keep")
+    before = {t.name: get_tool_input_schema(t) for t in await mcp_server.mcp.list_tools()}
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "strip")
+    after = {t.name: get_tool_input_schema(t) for t in await mcp_server.mcp.list_tools()}
+    assert after == {
+        name: apply_null_default_mode(schema, "strip")
+        for name, schema in before.items()
+    }
+    assert len(json.dumps(after)) < len(json.dumps(before))
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "keep")
+    restored = {t.name: get_tool_input_schema(t) for t in await mcp_server.mcp.list_tools()}
+    assert restored == before, "listing must not mutate registration/validation schemas"
+
+
 def test_listing_preserves_a_parameter_named_title_and_title_in_caller_data(monkeypatch):
     from mcp.types import Tool
     from src.mcp_compat import get_tool_input_schema
@@ -155,4 +179,24 @@ def test_listing_preserves_a_parameter_named_title_and_title_in_caller_data(monk
     listed = apply_listed_schema_policy([tool])[0]
     assert get_tool_input_schema(listed)["properties"]["title"]["default"] == "hello"
     assert get_tool_input_schema(listed)["properties"]["data"]["default"] == {"title": "caller data"}
+    assert get_tool_input_schema(tool) == schema
+
+
+def test_listing_preserves_non_null_and_caller_data_defaults(monkeypatch):
+    from mcp.types import Tool
+    from src.mcp_compat import get_tool_input_schema
+
+    schema = {"type": "object", "properties": {
+        "optional": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None},
+        "limit": {"type": "integer", "default": 10},
+        "data": {"type": "object", "default": {"default": None}},
+    }}
+    tool = Tool(name="example", inputSchema=schema)
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "strip")
+    listed = apply_listed_schema_policy([tool])[0]
+    properties = get_tool_input_schema(listed)["properties"]
+    assert "default" not in properties["optional"]
+    assert properties["optional"]["anyOf"] == schema["properties"]["optional"]["anyOf"]
+    assert properties["limit"]["default"] == 10
+    assert properties["data"]["default"] == {"default": None}
     assert get_tool_input_schema(tool) == schema

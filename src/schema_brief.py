@@ -17,6 +17,13 @@ applies this same policy to the final MCP listing without mutating validation
 models. Measure that layer with ``tool_surface_cost.py --surface mcp``;
 ``--surface catalog`` measures the upstream definitions separately.
 
+Pydantic also repeats ``default: null`` on every optional field. JSON Schema
+treats ``default`` as an annotation rather than a validation rule, and a null
+default says no more than the field's absence from ``required`` plus its
+existing nullable type. Those null annotations are stripped by default and
+restorable with ``UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep``. Concrete defaults
+remain advertised.
+
 So this module trims the *advertised* text and leaves the authored text where
 it already lives. ``describe_tool(tool_name=..., action=...)`` reads the
 Pydantic models directly and still returns every word, which is the whole
@@ -82,8 +89,15 @@ DEFAULT_FIELD_DESCRIPTION_MODE = "brief"
 PROPERTY_TITLE_MODES = ("strip", "keep")
 DEFAULT_PROPERTY_TITLE_MODE = "strip"
 
+#: What the advertised schema does with generated ``default: null`` keywords.
+#:   strip — remove them (default); requiredness and null validation stay put
+#:   keep  — leave them, as Pydantic emits them
+NULL_DEFAULT_MODES = ("strip", "keep")
+DEFAULT_NULL_DEFAULT_MODE = "strip"
+
 _MODE_ENV = "UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS"
 _TITLE_ENV = "UNITARES_TOOL_SCHEMA_PROPERTY_TITLES"
+_NULL_DEFAULT_ENV = "UNITARES_TOOL_SCHEMA_NULL_DEFAULTS"
 _LEGACY_STRIP_ENV = "UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS"
 _BUDGET_ENV = "UNITARES_TOOL_SCHEMA_BRIEF_BUDGET"
 
@@ -152,6 +166,32 @@ def resolve_property_title_mode(mode: str | None = None) -> str:
             _TITLE_ENV, mode, PROPERTY_TITLE_MODES, DEFAULT_PROPERTY_TITLE_MODE,
         )
         return DEFAULT_PROPERTY_TITLE_MODE
+    return mode
+
+
+def resolve_null_default_mode(mode: str | None = None) -> str:
+    """Resolve what the advertised schema does with ``default: null``.
+
+    An explicit argument wins, then ``UNITARES_TOOL_SCHEMA_NULL_DEFAULTS``.
+    An unrecognized value falls back to the default and says so, rather than
+    quietly serving a surface the operator did not ask for.
+    """
+    if mode is None:
+        mode = os.getenv(_NULL_DEFAULT_ENV, "").strip().lower()
+    else:
+        mode = str(mode).strip().lower()
+
+    if not mode:
+        return DEFAULT_NULL_DEFAULT_MODE
+    if mode not in NULL_DEFAULT_MODES:
+        logger.warning(
+            "%s=%r is not one of %s; serving %r",
+            _NULL_DEFAULT_ENV,
+            mode,
+            NULL_DEFAULT_MODES,
+            DEFAULT_NULL_DEFAULT_MODE,
+        )
+        return DEFAULT_NULL_DEFAULT_MODE
     return mode
 
 
@@ -314,6 +354,47 @@ def apply_property_title_mode(
         return out
     if isinstance(node, list):
         return [apply_property_title_mode(x, mode) for x in node]
+    return node
+
+
+def apply_null_default_mode(
+    node: Any,
+    mode: str = DEFAULT_NULL_DEFAULT_MODE,
+) -> Any:
+    """Return a copy of a JSON Schema with null defaults in ``mode``.
+
+    ``default`` is an annotation in JSON Schema. Removing only a null default
+    changes neither requiredness (the ``required`` list owns that) nor whether
+    an explicit null validates (the field's type owns that). Non-null defaults
+    remain untouched because they tell a caller what the server will supply.
+
+    The walk is structural: a caller-data default such as
+    ``{"default": null}`` is copied as data rather than traversed as a schema.
+
+    ``mode="keep"`` returns ``node`` itself, matching
+    :func:`apply_property_title_mode`. Production passes an already-copied
+    schema, so the per-listing restore path cannot mutate the Pydantic model.
+    """
+    if mode == "keep":
+        return node
+    if isinstance(node, dict):
+        out: dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "default" and value is None:
+                continue
+            if key in _DATA_KEYWORDS:
+                out[key] = copy.deepcopy(value)
+                continue
+            if key in _SUBSCHEMA_MAPS and isinstance(value, dict):
+                out[key] = {
+                    name: apply_null_default_mode(sub, mode)
+                    for name, sub in value.items()
+                }
+                continue
+            out[key] = apply_null_default_mode(value, mode)
+        return out
+    if isinstance(node, list):
+        return [apply_null_default_mode(x, mode) for x in node]
     return node
 
 
