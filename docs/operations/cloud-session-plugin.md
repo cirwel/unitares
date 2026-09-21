@@ -64,15 +64,17 @@ Without that, hooks install and run but every network path reports OFFLINE.
 ## Hook audit — residentless cloud container
 
 All 13 hooks `hooks/claude-hooks.json` wires were executed in a cloud container
-with no governance server, no lease plane, and no resident roster. Every one
-exited 0. None blocked a tool call. None errored.
+with no governance server, no lease plane, no resident roster, and the default
+`UNITARES_FILE_LEASES_REQUIRED=0`. Every one exited 0. None blocked a tool call.
+None errored. Setting `UNITARES_FILE_LEASES_REQUIRED` to a truthy value changes
+that posture deliberately: `pre-edit` then fails closed when leases are absent.
 
 | Hook | Event | Verdict without a server | Cost |
 | --- | --- | --- | --- |
 | `session-start` | SessionStart | Degrades to an `OFFLINE` banner and still injects the skill pointers | 0.20s |
 | `watcher-context` | SessionStart, UserPromptSubmit | Inert — `UNITARES_WATCHER_ENABLED` defaults to `0` and the agent path defaults empty | ~0s |
 | `user-prompt-submit` | UserPromptSubmit | Silent no-op | 0.09s |
-| `pre-edit` | PreToolUse Edit/Write | Fails open; lease plane refused at loopback speed | 0.12s |
+| `pre-edit` | PreToolUse Edit/Write | Fails open at the default `UNITARES_FILE_LEASES_REQUIRED=0`; fail-closed when that override is truthy | 0.12s |
 | `post-edit` | PostToolUse | Silent no-op | 0.26s |
 | `post-edit-release` | PostToolUse, failures, denials | Silent no-op | 0.11s |
 | `post-edit-batch-release` | PostToolBatch | Silent no-op | 0.11s |
@@ -123,7 +125,8 @@ declared as environment variables, not exported in the script:
 | --- | --- | --- |
 | `UNITARES_SERVER_URL` | `https://<allowlisted-host>` | Loopback default is meaningless in a container; must be https on an allowlisted host |
 | `UNITARES_HTTP_API_TOKEN` | client bearer token | Without it writes are unattributable |
-| `UNITARES_FILE_LEASES_ENABLED` | `0` | No lease plane in-container; it already fails open, so this is tidiness |
+| `UNITARES_FILE_LEASES_ENABLED` | `0` | No lease plane in-container; avoid the otherwise harmless connection-refused probe |
+| `UNITARES_FILE_LEASES_REQUIRED` | `0` | Required leases override `ENABLED=0` and block edits when the lease plane is absent |
 
 **3. Add the server's hostname to the environment's network allowlist.** Steps
 1 and 2 are wasted without it — this is the step that actually decides whether
