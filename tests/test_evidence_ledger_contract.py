@@ -86,7 +86,7 @@ def test_ledger_separates_the_review_mechanism_from_its_benefit() -> None:
     row would overstate the second.
     """
     assert "Review binds on the reviewed agent | **Exercised path**" in NORMALIZED
-    assert "Benefit from review and coordination | **Untested**" in NORMALIZED
+    assert "Comparative benefit from review and coordination | **Untested**" in NORMALIZED
 
 
 def test_ledger_states_the_review_coverage_boundary() -> None:
@@ -97,8 +97,11 @@ def test_ledger_states_the_review_coverage_boundary() -> None:
     `reviewer_provenance`. A claim derived from these records without the
     boundary silently generalises past the channel it measured.
     """
-    assert "cover dialectic-mediated review" in NORMALIZED
-    assert "reviewer_provenance" in NORMALIZED
+    assert (
+        "Dialectic review, councils, external models, and ordinary repository review"
+        in NORMALIZED
+    )
+    assert "incomplete common instrumentation" in NORMALIZED
 
 
 def test_ledger_does_not_launder_a_parse_failure_as_a_verdict() -> None:
