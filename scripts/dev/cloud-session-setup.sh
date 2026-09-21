@@ -402,6 +402,7 @@ for candidate in candidates:
         and isinstance(result, dict)
         and result.get("protocolVersion")
         and isinstance(result.get("serverInfo"), dict)
+        and result["serverInfo"].get("name") == "governance-monitor-v1"
     ):
         print("valid")
         break
@@ -409,7 +410,7 @@ else:
     print("invalid")
 ' 2>/dev/null) || mcp_probe_result="invalid"
           if [ "${mcp_probe_result}" = "valid" ]; then
-            log "server MCP initialize succeeded through the Host/Origin gates"
+            log "UNITARES MCP initialize succeeded through the Host/Origin gates"
           else
             preflight_ok=0
             log "WARN ${MCP_URL} returned 200 without a valid UNITARES MCP"
