@@ -37,9 +37,11 @@ def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
     ]["full"]
     assert "uvicorn>=0.35.0,<1.0.0" in full
     assert any(requirement.startswith("starlette") for requirement in full)
+    assert "webauthn>=2.8.0,<4.0.0" in full
     for requirements_file in ("requirements-full.txt", "requirements-docker.txt"):
         assert "uvicorn>=0.35.0,<1.0.0" in _read(requirements_file)
         assert "cryptography>=41.0.0,<51.0.0" in _read(requirements_file)
+        assert "webauthn>=2.8.0,<4.0.0" in _read(requirements_file)
 
 
 def _requirement_name(requirement: str) -> str:
@@ -255,6 +257,17 @@ def test_cloud_runtime_verifier_fails_when_payload_extraction_fails(
     )
 
     assert completed.returncode == 23
+
+
+def test_cloud_deploy_runbook_bootstraps_the_first_passkey() -> None:
+    runbook = _read("docs/operations/cloud-deploy-runbook.md")
+
+    assert "`UNITARES_OPERATOR_TOKENS` — configure at least one" in runbook
+    assert "to bootstrap the first dashboard passkey" in runbook
+    assert "X-Unitares-Operator: ${UNITARES_BOOTSTRAP_OPERATOR_TOKEN}" in runbook
+    assert "https://governance.example.com/auth/enroll" in runbook
+    assert "https://governance.example.com/auth/signin?enroll=1" in runbook
+    assert "10-minute, single-use enrollment code" in runbook
 
 
 def test_advanced_bare_metal_path_uses_one_schema_bootstrap() -> None:

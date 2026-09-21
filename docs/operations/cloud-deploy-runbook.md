@@ -89,7 +89,10 @@ both believing they are canonical.
      Strict REST ignores `UNITARES_HTTP_API_TOKEN`, even on loopback;
      non-browser telemetry and REST clients must send a member of
      `UNITARES_MCP_BEARER_TOKENS`.
-     Configure `UNITARES_OPERATOR_TOKENS` if external outcome producers post in.
+   - `UNITARES_OPERATOR_TOKENS` — configure at least one unique, high-entropy
+     token to bootstrap the first dashboard passkey. The same operator
+     credential is required whenever an operator mints another one-time
+     enrollment code, and when external outcome producers post in.
 4. `docker compose up -d --build` and wait for health checks.
 5. Verify: `curl -fsS http://127.0.0.1:8767/health/ready` returns 200, then an
    MCP client `onboard()` round-trip through the tunnel (next section).
@@ -116,6 +119,29 @@ that, and make an outbound tunnel the only ingress — do not rebind ports to
 Either way the governance HTTP surface is now reachable from untrusted
 networks, which is why step 3 above is not optional: the dev-default signing
 key and bearer token are public knowledge (they are in this repository).
+
+### Bootstrap the first dashboard passkey
+
+After the tunnel is live, use one exact member of `UNITARES_OPERATOR_TOKENS`
+to mint the initial 10-minute, single-use enrollment code. Keep the token out
+of URLs and shell history; the placeholder below should come from a secret
+manager or a non-logged interactive shell:
+
+```bash
+read -rsp 'Bootstrap operator token: ' UNITARES_BOOTSTRAP_OPERATOR_TOKEN
+printf '\n'
+curl -fsS -X POST \
+  -H "X-Unitares-Operator: ${UNITARES_BOOTSTRAP_OPERATOR_TOKEN}" \
+  https://governance.example.com/auth/enroll
+unset UNITARES_BOOTSTRAP_OPERATOR_TOKEN
+```
+
+Open `https://governance.example.com/auth/signin?enroll=1`, type the returned
+code, and create the passkey before the code expires. The `enroll=1` query is
+only a nonsecret UI marker; the code itself is sent in a request header. Sign
+in with the new passkey before treating dashboard access as recovered. Keep an
+operator token configured if this deployment must mint additional enrollment
+codes or accept external operator writes.
 
 ## Off-site backups
 
