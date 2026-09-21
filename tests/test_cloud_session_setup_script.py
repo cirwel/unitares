@@ -211,6 +211,18 @@ def test_server_url_with_mcp_suffix_is_rejected_as_hook_incompatible(
     assert "done with warnings" in proc.stdout
 
 
+def test_plain_http_warning_lowers_final_preflight_verdict(tmp_path: Path) -> None:
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={"UNITARES_SERVER_URL": "http://gov.example.test"},
+    )
+
+    assert proc.returncode == 0
+    assert "WARN not https://" in proc.stdout
+    assert "done with warnings" in proc.stdout
+
+
 def test_required_leases_warn_that_edits_will_block(tmp_path: Path) -> None:
     proc, _ = _run_setup(
         tmp_path,
