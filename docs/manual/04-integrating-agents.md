@@ -54,9 +54,9 @@ its own identity, declare the dispatcher as parent with
 | Record an outcome | `record_result(...)` | `outcome_event` |
 | Request review | `request_review(...)` | `dialectic(action="request")` |
 
-The primary tools return a compact agent-facing envelope. State-changing tools
-preserve the raw payload under `raw_governance`; read aliases omit that repeated
-payload by default and expose a full-mode escape hatch. Interface contract
+The primary tools return a compact agent-facing envelope. Read aliases and
+bounded `sync_state` modes omit the repeated raw payload by default and expose
+a full-mode escape hatch; other state-changing tools retain it. Interface contract
 1.13.0 and later negotiates one complete catalog while initially advertising a
 small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
 `list_tools(lite=true)` reports every capability name and the contract version;
@@ -69,11 +69,10 @@ Each action still enforces its own authorization and identity requirements.
 For `sync_state`, read `action_summary` first. It keeps the policy action,
 one-line reason, risk score, and verdict maturity together; a cold-start result
 is labeled `verdict_confidence="provisional"` at that surface. If the response
-also contains `legacy_diagnostics`, treat that block as compatibility telemetry,
-not behavioral health evidence. `response_options` documents the routine,
-actionable, and complete modes in-band, while `_response_size` reports the
-approximate serialized size and suggests a smaller mode when the payload is
-large.
+contains `legacy_diagnostics`, treat that block as compatibility telemetry, not
+behavioral health evidence. Routine bounded responses omit repeated mode
+coaching and size receipts; `response_mode="full"` restores the canonical
+payload and its diagnostics.
 
 For routine `proceed` / `approve` check-ins, `compact` omits the duplicated
 `policy_evaluation` and advisory-only `enforcement` blocks. A guide, pause,

@@ -64,7 +64,7 @@ source_digests:
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). State-changing aliases preserve the full payload under `raw_governance`; read aliases default to a bounded lean/compact shape and explain how to request the full canonical payload. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases and bounded `sync_state` modes omit the repeated canonical payload and explain how to request it explicitly; other state-changing aliases preserve it under `raw_governance`. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
@@ -138,8 +138,9 @@ sync_state(
 )
 ~~~
 
-Use raw `process_agent_update(...)` when you need the raw handler payload;
-primary workflow responses preserve it under `raw_governance`.
+Use raw `process_agent_update(...)` when you need the raw handler payload, or
+call `sync_state(..., response_mode="full")` to retain it under
+`raw_governance` in the primary workflow response.
 
 ### When to Check In
 

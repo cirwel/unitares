@@ -6,7 +6,7 @@ search_shared_memory, store_finding, update_finding, record_result,
 request_review) get their response reshaped. Canonical tool names stay
 byte-identical, so no existing client contract changes.
 
-Envelope shape (friendly fields first, raw payload preserved):
+Envelope shape (friendly fields first, raw payload available on demand):
 
     {
       "success": ...,
@@ -28,8 +28,10 @@ Envelope shape (friendly fields first, raw payload preserved):
 Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
-are omitted. Default read aliases omit the repeated canonical payload and
-advertise an explicit full-response escape hatch; other aliases retain it.
+are omitted. Default read aliases and bounded ``sync_state`` modes omit the
+repeated canonical payload and advertise an explicit full-response escape
+hatch. Other state-changing aliases retain it, and
+``sync_state(response_mode="full")`` restores it explicitly.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -64,6 +66,10 @@ logger = get_logger(__name__)
 _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
+_MEMORY_SUMMARY_PREVIEW_CHARS = 240
+_MEMORY_TAG_LIMIT = 5
+_SYNC_ROUTINE_BUDGET_BYTES = 2_500
+_SEARCH_LEAN_BUDGET_BYTES = 3_000
 
 _ACTION_ALIASES = {
     "approve": ("proceed", None),
@@ -523,33 +529,66 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     suggestions = []
     for item in candidates[:_MEMORY_SUGGESTION_LIMIT]:
         if isinstance(item, dict):
-            suggestions.append(
-                _lift(
-                    item,
-                    "discovery_id",
-                    "id",
-                    "summary",
-                    "title",
-                    "type",
-                    "status",
-                    "tags",
-                    "staleness_warning",
-                    "similarity",
-                    # the mirror path scores its hits as `relevance`; without it
-                    # a suggestion arrives with no indication of match strength
-                    "relevance",
-                    # …and without the basis the caller cannot tell a cosine
-                    # from a cross-encoder from nothing at all. A suggestion
-                    # carrying `lexical_rank_only` has NO quality number by
-                    # design; that must reach the reader, not be inferred from
-                    # a missing key.
-                    "relevance_basis",
-                    "score",
-                    "rrf_score",
-                    "fusion_score",
-                )
-                or item
+            suggestion = _lift(
+                item,
+                "title",
+                "type",
+                "status",
+                "staleness_warning",
             )
+            discovery_id = item.get("discovery_id") or item.get("id")
+            if discovery_id is not None:
+                suggestion["discovery_id"] = discovery_id
+
+            summary = item.get("summary")
+            if isinstance(summary, str):
+                compact = " ".join(summary.split())
+                if len(compact) > _MEMORY_SUMMARY_PREVIEW_CHARS:
+                    cutoff = compact.rfind(" ", 0, _MEMORY_SUMMARY_PREVIEW_CHARS - 1)
+                    if cutoff < _MEMORY_SUMMARY_PREVIEW_CHARS // 2:
+                        cutoff = _MEMORY_SUMMARY_PREVIEW_CHARS - 1
+                    suggestion["summary"] = compact[:cutoff].rstrip() + "…"
+                    suggestion["preview_truncated"] = True
+                else:
+                    suggestion["summary"] = compact
+
+            tags = item.get("tags")
+            if isinstance(tags, list):
+                suggestion["tags"] = tags[:_MEMORY_TAG_LIMIT]
+                if len(tags) > _MEMORY_TAG_LIMIT:
+                    suggestion["tags_truncated"] = True
+
+            # Lean projections expose one score plus its basis. Score maps are
+            # useful in the canonical response but make a three-result digest
+            # surprisingly expensive and force callers to understand ranking
+            # internals merely to choose which record to open.
+            score_fields = (
+                ("relevance", "relevance"),
+                ("fusion_score", "fusion"),
+                ("rrf_score", "rrf"),
+                ("similarity", "semantic"),
+                ("score", "score"),
+            )
+            for field, default_basis in score_fields:
+                value = item.get(field)
+                if value is not None:
+                    suggestion["relevance"] = value
+                    suggestion["relevance_basis"] = (
+                        item.get("relevance_basis") or default_basis
+                    )
+                    break
+            if "relevance" not in suggestion and item.get("relevance_basis"):
+                suggestion["relevance_basis"] = item["relevance_basis"]
+
+            if any(
+                key in item for key in ("has_details", "details", "details_preview")
+            ):
+                suggestion["has_details"] = bool(
+                    item.get("has_details")
+                    or item.get("details")
+                    or item.get("details_preview")
+                )
+            suggestions.append(suggestion or {"summary": ""})
         else:
             suggestions.append({"summary": str(item)})
     return suggestions or None
@@ -675,12 +714,34 @@ def _as_bool(value: Any, *, default: bool) -> bool:
 def _raw_governance_policy(
     friendly_name: str,
     arguments: Optional[Dict[str, Any]],
+    payload: Optional[Dict[str, Any]] = None,
 ) -> tuple[bool, Optional[str]]:
     """Choose whether a friendly read alias should repeat its canonical payload.
 
     Canonical tools are unchanged. Read aliases default to their bounded
     experience envelope and retain an explicit full-response escape hatch.
     """
+    if friendly_name == "sync_state":
+        arguments = arguments or {}
+        payload = payload or {}
+        requested_mode = canonical_response_mode(
+            arguments.get("response_mode") or "auto"
+        )
+        resolved_mode = payload.get("_mode")
+
+        # Explicit full/verbose always wins. When auto has no resolved marker,
+        # retain the historical raw payload: formatter full mode deliberately
+        # has no `_mode`, and direct/helper callers may hand this layer a
+        # canonical response. Actual compact/mirror/standard/minimal payloads
+        # carry `_mode`, so routine calls can safely omit the duplicate.
+        include_raw = requested_mode == "full" or (
+            requested_mode == "auto" and resolved_mode is None
+        )
+        return include_raw, (
+            "Re-call sync_state(..., response_mode='full') for the complete "
+            "canonical diagnostics."
+        )
+
     if friendly_name not in _COMPACT_READ_ALIASES:
         return True, None
 
@@ -863,6 +924,49 @@ def _attach_response_size(
     envelope["_response_size"] = metadata
 
 
+def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
+    """Keep the friendly KG digest inside its declared wire budget.
+
+    Result summaries and tags are already bounded independently. This final
+    guard protects the *whole* response from additive metadata growth. It only
+    drops optional mode/retrieval coaching and then lower-ranked digests; the
+    result count and explicit expansion route remain visible.
+    """
+
+    def wire_bytes() -> int:
+        return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+
+    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+        return
+
+    envelope["projection_truncated"] = True
+    envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
+    envelope.pop("response_options", None)
+
+    retrieval = envelope.get("discovery_retrieval_options")
+    if isinstance(retrieval, dict):
+        keep = {
+            key: retrieval[key]
+            for key in ("current_tier", "open_one")
+            if retrieval.get(key) is not None
+        }
+        if keep:
+            envelope["discovery_retrieval_options"] = keep
+
+    suggestions = envelope.get("memory_suggestions")
+    while (
+        isinstance(suggestions, list)
+        and len(suggestions) > 1
+        and wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES
+    ):
+        suggestions.pop()
+
+    state = envelope.get("state_summary")
+    if isinstance(state, dict) and isinstance(suggestions, list):
+        state["results_shown_in_digest"] = len(suggestions)
+        state["result_set_truncated"] = True
+
+
 def build_experience_envelope(
     friendly_name: str,
     canonical_name: str,
@@ -892,7 +996,11 @@ def build_experience_envelope(
     if not (isinstance(prediction_id, str) and prediction_id):
         prediction_id = None
     coherence, risk = _coherence_and_risk(source_payload)
-    include_raw, raw_hint = _raw_governance_policy(friendly_name, arguments)
+    include_raw, raw_hint = _raw_governance_policy(
+        friendly_name,
+        arguments,
+        source_payload,
+    )
     retrieval_options = _effective_discovery_retrieval_options(
         friendly_name,
         source_payload,
@@ -906,7 +1014,14 @@ def build_experience_envelope(
             envelope["action_summary"] = summary
         legacy = _legacy_diagnostics(source_payload)
 
-    options = _response_options(friendly_name, source_payload, arguments)
+    bounded_sync = friendly_name == "sync_state" and not include_raw
+    sync_mode = source_payload.get("_mode") if bounded_sync else None
+    routine_sync = bounded_sync and sync_mode == "compact"
+    options = (
+        None
+        if bounded_sync
+        else _response_options(friendly_name, source_payload, arguments)
+    )
 
     next_action: Any = None
     state_summary: Optional[Dict[str, Any]] = None
@@ -1156,6 +1271,8 @@ def build_experience_envelope(
             len(candidates),
             _MEMORY_SUGGESTION_LIMIT,
         )
+        if len(candidates) > _MEMORY_SUGGESTION_LIMIT:
+            state_summary["result_set_truncated"] = True
 
     elif canonical_name == "outcome_event":
         state_summary = _lift(
@@ -1270,7 +1387,11 @@ def build_experience_envelope(
             summary["verdict_provisional"] = True
 
     # Keep compatibility and verbosity metadata after the operational answer.
-    if canonical_name in {"process_agent_update", "get_governance_metrics"} and legacy:
+    if (
+        canonical_name in {"process_agent_update", "get_governance_metrics"}
+        and legacy
+        and not routine_sync
+    ):
         envelope["legacy_diagnostics"] = legacy
     if options:
         envelope["response_options"] = options
@@ -1314,7 +1435,25 @@ def build_experience_envelope(
         envelope["raw_governance_available"] = True
         if raw_hint:
             envelope["raw_governance_hint"] = raw_hint
-    _attach_response_size(envelope, friendly_name)
+    bounded_search = friendly_name == "search_shared_memory" and not include_raw
+    if bounded_search:
+        _enforce_search_projection_budget(envelope)
+
+    # Routine sync responses should spend their budget on the decision, not on
+    # a size receipt about the decision. Keep the receipt when the projection
+    # itself misses its contract so the regression is visible in-band; other
+    # tools retain their existing always-on measurement behavior.
+    if bounded_sync:
+        measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+        budget = _SYNC_ROUTINE_BUDGET_BYTES if routine_sync else 4_000
+        if measured_bytes > budget:
+            _attach_response_size(envelope, friendly_name)
+    elif bounded_search:
+        measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+        if measured_bytes > _SEARCH_LEAN_BUDGET_BYTES:
+            _attach_response_size(envelope, friendly_name)
+    else:
+        _attach_response_size(envelope, friendly_name)
     return envelope
 
 

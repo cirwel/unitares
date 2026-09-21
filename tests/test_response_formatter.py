@@ -508,6 +508,28 @@ class TestFormatResponse:
         result = format_response(data, {"response_mode": "auto"})
         assert result["_mode"] == "compact"
 
+    @pytest.mark.parametrize(
+        "mutation",
+        (
+            lambda data: data["decision"].update(margin="critical"),
+            lambda data: data.update(
+                identity_assurance={"tier": "weak", "caller_proven": False}
+            ),
+            lambda data: data.update(
+                enforcement={"requested": True, "requested_action": "pause"}
+            ),
+            lambda data: data.update(
+                recovery_hint="Call self_recovery(action='review')."
+            ),
+            lambda data: data.update(warnings=["Caller action required"]),
+        ),
+    )
+    def test_auto_mode_expands_for_actionable_non_verdict_signals(self, mutation):
+        data = _sample_response()
+        mutation(data)
+        result = format_response(data, {"response_mode": "auto"})
+        assert result["_mode"] == "mirror"
+
     def test_env_var_override(self):
         data = _sample_response()
         with patch.dict(os.environ, {"UNITARES_PROCESS_UPDATE_RESPONSE_MODE": "compact"}):
