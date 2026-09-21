@@ -2037,15 +2037,12 @@ class TestListTools:
             assert data["success"] is True
             assert "tools" in data
             assert data["shown"] > 0
-            assert data["getting_started_path"][0]["tool"] == "start_session"
+            assert all(set(tool) == {"name"} for tool in data["tools"])
             names = [tool["name"] for tool in data["tools"]]
             assert names.index("consult") < names.index("call_model")
-            assert data["workflows"]["advisory_help"] == ["consult(brief='...')"]
-            assert "consult" in data["signatures"]
-            toolkit = data["essential_toolkit"]["preferred_consolidated_tools"]
-            assert "advisory answers" in toolkit["consult"]
-            assert "on-record judgment" in toolkit["request_review"]
-            assert "quick" not in toolkit["dialectic"]
+            assert "workflows" not in data
+            assert "signatures" not in data
+            assert "getting_started_path" not in data
 
     @pytest.mark.asyncio
     async def test_list_tools_full_mode(self, mock_mcp_server, patch_context_agent_id):
@@ -2392,8 +2389,8 @@ class TestListTools:
             assert data["success"] is True
 
     @pytest.mark.asyncio
-    async def test_list_tools_new_agent_first_time_hint(self, mock_mcp_server):
-        """Test new agent gets first_time hint covers lines 1522-1523."""
+    async def test_list_tools_lite_does_not_expand_for_new_agent(self, mock_mcp_server):
+        """An unbound caller receives the same bounded handshake, not onboarding prose."""
         mock_mcp_server.SERVER_VERSION = "test-1.0.0"
 
         with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
@@ -2418,8 +2415,8 @@ class TestListTools:
             result = await handle_list_tools({"lite": True})
 
             data = parse_result(result)
-            assert "first_time" in data
-            assert "hint" in data["first_time"]
+            assert "first_time" not in data
+            assert all(set(tool) == {"name"} for tool in data["tools"])
 
 
 # ============================================================================

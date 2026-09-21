@@ -282,6 +282,29 @@ def test_workflow_aliases_are_lite_visible():
 
 
 @pytest.mark.asyncio
+async def test_orientation_compact_view_is_name_only_and_under_four_kib():
+    """Lite is a bounded handshake, not a second copy of tool metadata."""
+    import json
+
+    from src.mcp_handlers.introspection import tool_introspection
+
+    raw = (await tool_introspection.handle_list_tools({"lite": True}))[0].text
+    payload = json.loads(raw)
+
+    assert len(raw.encode("utf-8")) <= 4096
+    assert payload["tools"]
+    assert all(set(tool) == {"name"} for tool in payload["tools"])
+    assert {
+        "categories_summary",
+        "essential_toolkit",
+        "getting_started_path",
+        "signatures",
+        "tier_summary",
+        "workflows",
+    }.isdisjoint(payload)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["minimal", "lite", "operator_readonly", "full"])
 async def test_orientation_compact_view_matches_the_wire(monkeypatch, mode):
     """list_tools' default view must equal what this deployment advertises.

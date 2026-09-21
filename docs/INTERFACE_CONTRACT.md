@@ -85,8 +85,12 @@ identity gates remain in force.
 
 The retained `mode` contract field always reports `full`. All legacy mode
 values produce the same surface hash. `list_tools(lite=true)` is the compact
-view of this complete catalog; `lite` controls response detail, not capability
-availability. Category and tier filters are optional browsing aids.
+name index of this complete catalog: each advertised capability appears once as
+`{"name": "..."}` beside the interface summary, without descriptions,
+categories, signatures, workflows, or relationship copies. `lite` controls
+response detail, not capability availability. Use `lite=false` to browse rich
+metadata; category and tier filters narrow either view, and `describe_tool`
+provides one capability's parameters on demand.
 
 Raw implementation names remain discoverable and callable so existing clients
 can upgrade independently. Prefer primary workflow names for normalized

@@ -195,9 +195,9 @@ def first_line(s: str | None) -> str:
     """The first non-empty line of a description, stripped.
 
     This is the description ``tools/list`` serves under the default short
-    verbosity, and since 2026-09-12 also the one ``list_tools`` and the compact
-    ``describe_tool`` view serve for an advertised name, so every discovery
-    surface derives its one-liner with the same rule.
+    verbosity, and since 2026-09-12 also the one full ``list_tools`` and the
+    compact ``describe_tool`` view serve for an advertised name. The lite
+    ``list_tools`` handshake is names-only.
     """
     if not s:
         return ""

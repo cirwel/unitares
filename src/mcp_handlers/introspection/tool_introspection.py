@@ -149,38 +149,6 @@ def _not_advertised_summary(tools_list, mode: str) -> dict:
     }
 
 
-LITE_HINT_BUDGET = 100
-
-
-def lite_hint(text: str, budget: int = LITE_HINT_BUDGET) -> str:
-    """The compact view's one-line ``hint``: ``text`` clipped to ``budget``.
-
-    Clipped at a word boundary rather than mid-word. Measured 2026-09-12,
-    after orientation began serving the wire's first line: 30 of 50 hints cut
-    inside a word ("...without running a cycle, writing anyth"), because the
-    authored first lines run 390 to 1098 characters and every one of the 50
-    exceeds this budget. The boundary costs a few characters and is never
-    worse to read.
-
-    A boundary is honoured only in the last 40% of the budget. A first line
-    whose opening is one unbroken token — a URL, a long identifier — would
-    otherwise collapse to a stub far shorter than the budget, and a clipped
-    token carries more than that.
-
-    This does NOT shorten the underlying text, which is the separate and
-    larger question: the authored first lines are written for a client reading
-    a full schema, and whether they should also be written to survive a
-    100-character cut is a content decision for the descriptions themselves.
-    """
-    if len(text) <= budget:
-        return text
-    clipped = text[:budget]
-    boundary = clipped.rfind(" ")
-    if boundary >= budget * 0.6:
-        clipped = clipped[:boundary]
-    return clipped.rstrip().rstrip(",;:") + "..."
-
-
 def _orientation_description(
     tool_name: str,
     wire_descriptions: Dict[str, str],
@@ -248,7 +216,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         include_advanced (bool): If false, exclude Tier 3 (advanced) tools (default: true)
         tier (str): Filter by tier: "essential", "common", "advanced", or "all" (default: "all")
         category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
-        lite (bool): If true, return the compact listing: truncated hints and a category summary in place of full descriptions, the relationship map and the tool map (default: true)
+        lite (bool): If true, return the compact federation handshake: one name-only record per advertised tool, the interface contract and continuation hints (default: true)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
     """
     
@@ -453,30 +421,16 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         usage_data = await get_usage_data()
         tools_list = order_tools_by_usage(tools_list, usage_data)
     
-    # Count tools by tier
-    # LITE MODE: every advertised tool that survived the filters above,
-    # compacted -- truncated hints, no relationship map or tool map.
+    # LITE MODE: the complete advertised name index used by federation
+    # negotiation, without repeating per-tool metadata or onboarding prose.
+    # ``interface_contract.federation.negotiation.capabilities_path`` is
+    # ``tools[*].name``, so every advertised name remains present. Rich
+    # browsing lives in lite=false and one-tool detail in describe_tool.
     if lite_mode:
-        # Import from single source of truth
         lite_tools = [
-            {
-                "name": t["name"],
-                "hint": lite_hint(t["description"]),
-                "tier": t.get("tier", "common"),  # essential/common/advanced
-                "op": t.get("op", "read"),  # read/write/admin
-                "stability": t.get("stability"),  # stable/beta/experimental
-                "category": t.get("category"),
-                "category_icon": t.get("category_icon"),
-                "category_name": t.get("category_name"),
-                "advertised": t.get("advertised", True),
-            }
+            {"name": t["name"]}
             for t in tools_list
-            # Compact controls detail, never capability availability.
-            if (
-                True
-                if advertised_names is None
-                else t.get("advertised", True)
-            )
+            if advertised_names is None or t.get("advertised", True)
         ]
         # Sort by workflow order (onboard first) or usage if progressive enabled
         if progressive and usage_data:
@@ -496,108 +450,14 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             ]
             lite_tools.sort(key=lambda x: order.index(x["name"]) if x["name"] in order else 99)
         
-        # Group by category for better organization
-        categories_in_lite = {}
-        category_metadata = {}
-        for tool in lite_tools:
-            cat = tool.get("category") or "other"
-            if cat not in categories_in_lite:
-                categories_in_lite[cat] = []
-                cat_name = tool.get("category_name")
-                if not cat_name:
-                    cat_name = cat.title() if cat and isinstance(cat, str) else "Other"
-                category_metadata[cat] = {
-                    "icon": tool.get("category_icon", "🔹"),
-                    "name": cat_name
-                }
-            categories_in_lite[cat].append(tool["name"])
-        
-        # Check if this might be a new agent (no bound identity)
-        is_new_agent = False
-        try:
-            from ..context import get_context_agent_id
-            bound_id = get_context_agent_id()  # Set by identity_v2 at dispatch entry
-            is_new_agent = not bound_id
-        except Exception:
-            pass
-        
-        # Count lite tools by tier
-        lite_tier_counts = {"essential": 0, "common": 0, "advanced": 0}
-        for t in lite_tools:
-            tier = t.get("tier", "common")
-            if tier in lite_tier_counts:
-                lite_tier_counts[tier] += 1
-
         response_data = {
             "tools": lite_tools,
             "interface_contract": interface_contract,
             "total_available": len(tools_list),
             "shown": len(lite_tools),
-            "not_advertised": _not_advertised_summary(tools_list, TOOL_MODE),
-            # Tier summary for quick understanding of tool importance
-            "tier_summary": {
-                "essential": {
-                    "count": lite_tier_counts["essential"],
-                    "note": "Core tools - use these for basic workflows"
-                },
-                "common": {
-                    "count": lite_tier_counts["common"],
-                    "note": "Standard tools - commonly used for specific tasks"
-                },
-                "advanced": {
-                    "count": lite_tier_counts["advanced"],
-                    "note": "Advanced tools - specialized functionality"
-                }
-            },
-            "categories_summary": {
-                cat: {
-                    "icon": category_metadata[cat]["icon"],
-                    "name": category_metadata[cat]["name"],
-                    "tools": tools
-                }
-                for cat, tools in categories_in_lite.items()
-            },
-            # Quick workflows (v2.5.0+) - progressive disclosure
-            "workflows": {
-                "new_agent": ["start_session(force_new=true)", "sync_state(response_text='...', complexity=0.5)", "agent(action='list')"],
-                "check_in": ["sync_state(response_text='...', complexity=0.5)"],
-                "save_insight": ["knowledge(action='note', content='...')", "OR knowledge(action='store', summary='...', tags=[...])"],
-                "find_info": ["search_shared_memory(query='...')", "OR knowledge(action='search', tags=[...])"],
-                "advisory_help": ["consult(brief='...')"],
-                "recover": ["request_review(issue_description='...')", "OR self_recovery(action='review', reflection='...')"],
-            },
-            # Common signatures (type hints at a glance)
-            "signatures": {
-                "start_session": "(force_new:bool=true, parent_agent_id?:str, spawn_reason?:str)",
-                "sync_state": "(response_text?:str, complexity?:float, confidence?:float, task_type?:str)",
-                "check_working_state": "(lite?:bool, include_state?:bool)",
-                "search_shared_memory": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
-                "store_finding": "(summary:str, details?:str, discovery_type?:str, tags?:list, severity?:str)",
-                "update_finding": "(discovery_id:str, status?:str, details?:str, resolution_notes?:str)",
-                "record_result": "(outcome_type:str, confidence?:float, prediction_id?:str, detail?:dict)",
-                "consult": "(brief:str, purpose?:str, effort?:str, privacy?:str, allow_degraded?:bool, response_mode?:'compact'|'full')",
-                "request_review": "(issue_description:str, reasoning?:str, use_brief_as_thesis?:bool — the brief is the thesis by default; false keeps the two-call flow)",
-                # Keyed by a name on the wire or a call shape against one;
-                # the legacy twin store_knowledge_graph sat here until
-                # 2026-09-12 and is not a name an MCP client can call.
-                "knowledge(action='store')": "(summary:str, tags?:list, severity?:str, details?:str)",
-                "search_knowledge_graph": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
-                "knowledge(action='search')": "(query?:str, tags?:list, limit?:int, include_details?:bool)",
-                "leave_note": "(summary:str, tags?:list)"
-            },
-            "more": "list_tools(lite=false) for all tools with full category details",
+            "more": "list_tools(lite=false) for descriptions, categories, tiers, workflows, and relationships",
             "tip": "describe_tool(tool_name=...) for parameter details and examples",
-            "quick_start": "Start fresh with start_session(force_new=true); pass client_session_id on later writes",
-            "getting_started_path": tool_catalog.getting_started_path(),
-            "essential_toolkit": tool_catalog.essential_toolkit(),
         }
-        
-        # Add first-time hint for new agents
-        if is_new_agent:
-            response_data["first_time"] = {
-                "hint": "First time here? Start with start_session(force_new=true) to create your identity.",
-                "next_step": "Call start_session(force_new=true), then pass its client_session_id on later writes."
-            }
         
         # Add progressive metadata if enabled
         if progressive:
@@ -666,7 +526,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # deployment's wire by construction, and a filter (tier, category)
     # narrows it the same way. Ordered by the presentation priority.
     #
-    # Until 2026-09-12 this was a hand-written dict beside the derived
+    # Until 2026-09-12 this was a hand-written dict beside the then-derived
     # `categories_summary` of the compact view. It predated the router
     # consolidation: 30 of its 47 names were dispatch-only twins (`list_agents`,
     # `store_knowledge_graph`, `get_server_info`, ...) that return Unknown tool
@@ -775,7 +635,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             ]
         },
         "options": {
-            "lite_mode": "Use list_tools(lite=true) for the compact listing (truncated hints and a category summary; no relationship map or tool map) - better for local/smaller models",
+            "lite_mode": "Use list_tools(lite=true) for the compact name index and interface handshake; use lite=false to browse metadata",
             "describe_tool": "Use describe_tool(tool_name, lite=true) for simplified schemas with fewer parameters"
         },
         # Visual tool relationship map (v2.5.0+). Names on the wire only, or
