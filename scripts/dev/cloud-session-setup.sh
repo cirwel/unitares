@@ -180,6 +180,14 @@ else
   log "UNITARES_SERVER_URL=${SERVER_URL}"
   network_probe_allowed=1
   case "${SERVER_URL}" in
+    */)
+      preflight_ok=0
+      network_probe_allowed=0
+      log "WARN UNITARES_SERVER_URL must not end with '/'; plugin hooks append"
+      log "     /health and /v1/tools/call to the configured value verbatim."
+      ;;
+  esac
+  case "${SERVER_URL}" in
     https://*) ;;
     *)
       preflight_ok=0
