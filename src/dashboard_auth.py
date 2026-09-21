@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import os
 import secrets
@@ -395,7 +396,10 @@ def _auth_page(name: str) -> Response:
     target = base / name
     if not target.is_file():
         return HTMLResponse("Dashboard authentication UI is not installed.", status_code=503)
-    return HTMLResponse(target.read_text(), headers={"Cache-Control": "no-store"})
+    content = target.read_text().replace(
+        "{{DASHBOARD_RP_ID}}", html.escape(DASHBOARD_RP_ID)
+    )
+    return HTMLResponse(content, headers={"Cache-Control": "no-store"})
 
 
 async def http_auth_signin(request):

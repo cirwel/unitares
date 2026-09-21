@@ -146,6 +146,9 @@ services:
       UNITARES_OPERATOR_TOKENS: ${UNITARES_OPERATOR_TOKENS:-}
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
       UNITARES_MCP_BEARER_TOKENS: ${UNITARES_MCP_BEARER_TOKENS:-}
+      # Singular client credential forwarded to orchestrated MCP reviewers.
+      # It must be one member of the plural server allowlist above.
+      UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}
       UNITARES_MCP_ALLOWED_HOSTS: ${UNITARES_MCP_ALLOWED_HOSTS:-localhost,127.0.0.1}
       UNITARES_MCP_ALLOWED_ORIGINS: ${UNITARES_MCP_ALLOWED_ORIGINS:-http://localhost:8767,http://127.0.0.1:8767}
       UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-gov.cirwel.org}

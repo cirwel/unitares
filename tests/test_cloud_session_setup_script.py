@@ -28,8 +28,11 @@ def _run_setup(
     ),
     tool_status: int = 400,
     tool_body: str = "Missing 'name' field",
+    mcp_status: int = 405,
+    mcp_body: str = "method not allowed",
     health_exit: int = 0,
     tool_exit: int = 0,
+    mcp_exit: int = 0,
     extra_env: dict[str, str] | None = None,
     script_args: list[str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
@@ -68,6 +71,10 @@ case "$url" in
     printf '%s\\n%s' "$FAKE_TOOL_BODY" "$FAKE_TOOL_STATUS"
     exit "$FAKE_TOOL_EXIT"
     ;;
+  */mcp/)
+    printf '%s\\n%s' "$FAKE_MCP_BODY" "$FAKE_MCP_STATUS"
+    exit "$FAKE_MCP_EXIT"
+    ;;
   *)
     printf '%s\\n%s' 'not found' '404'
     ;;
@@ -84,8 +91,11 @@ esac
         "FAKE_HEALTH_BODY": health_body,
         "FAKE_TOOL_STATUS": str(tool_status),
         "FAKE_TOOL_BODY": tool_body,
+        "FAKE_MCP_STATUS": str(mcp_status),
+        "FAKE_MCP_BODY": mcp_body,
         "FAKE_HEALTH_EXIT": str(health_exit),
         "FAKE_TOOL_EXIT": str(tool_exit),
+        "FAKE_MCP_EXIT": str(mcp_exit),
         "UNITARES_SERVER_URL": "https://gov.example.test",
         "UNITARES_HTTP_API_TOKEN": "test-token",
         "UNITARES_CLOUD_PROXY_AUTH": "0",
@@ -290,6 +300,35 @@ def test_runtime_preflight_rejects_bad_proxy_bearer(tmp_path: Path) -> None:
     assert "requires a bearer (401)" in proc.stdout
     assert "server tool route usable" not in proc.stdout
     assert "done with warnings" in proc.stdout
+
+
+def test_runtime_preflight_rejects_mcp_host_gate(tmp_path: Path) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        mcp_status=421,
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 1
+    assert "https://gov.example.test/mcp/" in commands
+    assert "external Host (421)" in proc.stdout
+    assert "UNITARES_MCP_ALLOWED_HOSTS" in proc.stdout
+    assert "MCP Host/Origin gates accepted" not in proc.stdout
+
+
+def test_runtime_preflight_rejects_mcp_origin_gate(tmp_path: Path) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        mcp_status=403,
+        script_args=["--verify-runtime"],
+    )
+
+    assert proc.returncode == 1
+    assert "Origin: https://gov.example.test" in commands
+    assert "rejected Origin https://gov.example.test (403)" in proc.stdout
+    assert "UNITARES_MCP_ALLOWED_ORIGINS" in proc.stdout
 
 
 def test_runtime_preflight_rejects_loopback_bypass_as_authentication_proof(
