@@ -1,14 +1,11 @@
-"""Versioned, transport-neutral contract for UNITARES tool discovery.
+"""Versioned, transport-neutral contract for UNITARES capabilities.
 
-The three public dispatch surfaces -- streamable HTTP MCP, REST
-``/v1/tools``, and local stdio -- must advertise the same callable names and
-source input schemas independently of legacy tool-mode settings. The ``/mcp/``
-registrar advertises these same schemas verbatim (``src/tool_registration.py``,
-``_advertise_catalog_schema``; before 2026-09-11 FastMCP's regeneration from
-the typed wrappers dropped bounds, defaults and ``$defs``), so the catalog
-fingerprints describe every transport's listing. Dispatch already resolves
-workflow aliases on every surface; this module makes discovery use that same
-contract.
+The complete catalog is negotiated through ``list_tools(lite=true)`` and is
+callable on every transport.  The default MCP/REST/stdio advertisement is a
+progressive subset; omitted names remain callable through ``use_tool`` after
+``describe_tool`` supplies their schema.  Operators may request the complete
+up-front listing.  The contract therefore fingerprints capabilities, not the
+size of one client's initial context.
 
 The contract describes tool reachability and the stable normalized lifecycle
 envelope used by product-facing workflow aliases.  It does not claim that a
@@ -90,7 +87,12 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # reviewer slot. Omitting it is the prior behavior exactly -- the default is
 # true, so no existing caller changes and nothing is removed or renamed. Only
 # dialectic's input_schema_sha256 and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.12.0"
+# 1.13.0 (2026-09-20): add use_tool and separate the complete negotiated
+# capability catalog from the default progressive transport advertisement.
+# Every full-catalog capability remains discoverable through list_tools,
+# inspectable through describe_tool and callable through use_tool; full schema
+# advertisement remains available with UNITARES_TOOL_ADVERTISEMENT=full.
+INTERFACE_CONTRACT_VERSION = "1.13.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
@@ -112,9 +114,12 @@ PUBLIC_TRANSPORTS = (
 
 
 def workflow_alias_names_for_mode(mode: str) -> tuple[str, ...]:
-    """Compatibility API: workflow aliases are public under every old mode."""
+    """Workflow aliases advertised directly in ``mode``."""
     from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
-    return tuple(AGENT_WORKFLOW_ALIASES)
+    from src.tool_modes import get_tools_for_mode
+
+    allowed = get_tools_for_mode(mode)
+    return tuple(name for name in AGENT_WORKFLOW_ALIASES if name in allowed)
 
 
 def build_alias_tool_definition(
@@ -282,11 +287,15 @@ def _capability_record(tool: Tool) -> dict[str, Any]:
 
 
 def build_interface_contract(mode: str = "full") -> dict[str, Any]:
-    """Build the deterministic machine-readable interface contract."""
+    """Build the complete deterministic capability contract.
+
+    ``mode`` is retained for callers from the pre-1.13 API.  Advertisement
+    mode never changes federation capability identity.
+    """
 
     capabilities = [
         _capability_record(tool)
-        for tool in get_public_tool_definitions(mode)
+        for tool in get_public_tool_definitions("full")
     ]
     canonical = json.dumps(
         capabilities,
@@ -298,6 +307,18 @@ def build_interface_contract(mode: str = "full") -> dict[str, Any]:
         "version": INTERFACE_CONTRACT_VERSION,
         "scope": "tool_surface_and_lifecycle_envelopes",
         "mode": "full",
+        "advertisement": {
+            "default_mode": "progressive",
+            "full_mode_env": {
+                "name": "UNITARES_TOOL_ADVERTISEMENT",
+                "value": "full",
+            },
+            "progressive_entrypoints": [
+                "list_tools",
+                "describe_tool",
+                "use_tool",
+            ],
+        },
         "transports": list(PUBLIC_TRANSPORTS),
         "surface_sha256": hashlib.sha256(canonical).hexdigest(),
         "capabilities": capabilities,
@@ -357,6 +378,7 @@ def get_interface_contract_summary(mode: str = "full") -> dict[str, Any]:
         "transports": contract["transports"],
         "scope": contract["scope"],
         "federation": contract["federation"],
+        "advertisement": contract["advertisement"],
     }
 
 

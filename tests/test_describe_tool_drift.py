@@ -588,19 +588,17 @@ async def test_describe_and_list_report_the_declared_stability():
 
 
 def _wire_first_lines() -> dict[str, str]:
-    """{name: first line of the description tools/list serves}.
+    """{name: first line of the complete catalog description}.
 
-    Read the way handle_list_tools reads it (the deployment's public catalog
-    under the process TOOL_MODE), so both sides of every comparison below come
-    from the same call.
+    Rich list_tools and describe_tool browse the complete catalog even when the
+    initial tools/list advertisement is progressive.
     """
-    import src.tool_modes
     from src.interface_contract import get_public_tool_definitions
     from src.tool_schemas import first_line
 
     wire = {
         tool.name: first_line(tool.description)
-        for tool in get_public_tool_definitions(src.tool_modes.TOOL_MODE)
+        for tool in get_public_tool_definitions("full")
     }
     assert wire, "the public catalog is empty; nothing to compare"
     assert all(wire.values()), "an advertised tool has no description"

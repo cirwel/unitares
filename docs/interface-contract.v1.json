@@ -1,14 +1,26 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.12.0",
+  "version": "1.13.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
+  "advertisement": {
+    "default_mode": "progressive",
+    "full_mode_env": {
+      "name": "UNITARES_TOOL_ADVERTISEMENT",
+      "value": "full"
+    },
+    "progressive_entrypoints": [
+      "list_tools",
+      "describe_tool",
+      "use_tool"
+    ]
+  },
   "transports": [
     "mcp_streamable_http",
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "2195b435a9d24769646fccdb8537b0af11ce76097c070e35e42bcbd93418fe81",
+  "surface_sha256": "255fe696e44bf468db7b57737cd82156004dfe24f71af4967b3c8e13dcadaa97",
   "capabilities": [
     {
       "name": "start_session",
@@ -250,6 +262,17 @@
         "mcp_streamable_http": "describe_tool",
         "rest_v1_tools": "describe_tool",
         "stdio": "describe_tool"
+      }
+    },
+    {
+      "name": "use_tool",
+      "implementation": "use_tool",
+      "kind": "canonical_tool",
+      "input_schema_sha256": "e96511c64b3781884b0b6ff35f771cf18f3d596d1bb2e0726239b81973b66325",
+      "transport_names": {
+        "mcp_streamable_http": "use_tool",
+        "rest_v1_tools": "use_tool",
+        "stdio": "use_tool"
       }
     },
     {

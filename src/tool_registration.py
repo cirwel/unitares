@@ -235,10 +235,10 @@ def _session_id_from_ctx(ctx: Context | None) -> str | None:
 
 # Cache tool wrappers to avoid recreating functions on every call
 # Max size: 100 tools (future-proofing for dynamic tool registration)
-# The advertised surface is the registered tools (src.tool_meta.WIRE_ORDER)
-# plus the workflow aliases (tool_stability.AGENT_WORKFLOW_ALIASES): 50 names
-# (42 + 8) at be117c2, 2026-09-11, so there is headroom. Recount from those
-# two tuples, not from this comment.
+# Every public capability is registered and stays directly dispatchable. The
+# listing layer may advertise only the progressive entry set; ``use_tool`` is
+# the callable gateway to the rest of this mounted table. The cache still needs
+# headroom for the complete registered surface, not just its initial listing.
 _MAX_TOOL_WRAPPER_CACHE_SIZE = 100
 _tool_wrappers_cache: Dict[str, callable] = {}
 

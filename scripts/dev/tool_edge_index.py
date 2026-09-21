@@ -128,6 +128,7 @@ AUDIT_SCHEMA = "unitares.tool-surface-audit.v1"
 DISPATCH_SCHEMA = "unitares.tool-dispatch-snapshot.v1"
 EXPOSURE_SCHEMA = "unitares.tool-exposure-snapshot.v1"
 DEPLOYABLE_MODES = (
+    "progressive",
     "minimal",
     "lite",
     "operator_readonly",
@@ -778,9 +779,9 @@ def build_exposure_snapshot(
         declared = set(get_tools_for_mode(mode))
         # Mirrors src/tool_mode_listing.py: every wire name (canonical tools and
         # workflow aliases alike) is registered in every mode, and tools/list
-        # advertises the mode's public surface. `full` advertises the whole
-        # catalog; a filtered mode advertises the same names REST and stdio
-        # list for it. (Until the 2026-09 surface cut this mirrored a
+        # advertises the mode's public surface. `full` and legacy labels
+        # advertise the whole catalog; progressive advertises the entry set
+        # REST and stdio list for it. (Until the 2026-09 surface cut this mirrored a
         # registration-time filter with aliases registered unconditionally.)
         if mode == "full":
             advertised = set(wire_names)

@@ -21,7 +21,7 @@ from src.tool_mode_listing import (
     filter_listed_tools,
     mode_filtered_server_class,
 )
-from src.tool_modes import LITE_MODE_TOOLS, MINIMAL_MODE_TOOLS
+from src.tool_modes import PROGRESSIVE_MODE_TOOLS
 
 pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
 
@@ -30,18 +30,22 @@ def test_full_mode_is_unfiltered():
     assert advertised_tool_names("full") is None
 
 
-def test_minimal_advertises_exactly_the_five():
+def test_legacy_minimal_is_unfiltered():
     assert advertised_tool_names("minimal") is None
 
 
-def test_lite_advertises_lite_mode_tools():
+def test_legacy_lite_is_unfiltered():
     assert advertised_tool_names("lite") is None
+
+
+def test_progressive_advertises_the_entry_surface():
+    assert advertised_tool_names("progressive") == PROGRESSIVE_MODE_TOOLS
 
 
 def test_mode_is_read_at_call_time(monkeypatch):
     """A process that changes the mode sees it on the next listing."""
-    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "minimal")
-    assert advertised_tool_names() is None
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "progressive")
+    assert advertised_tool_names() == PROGRESSIVE_MODE_TOOLS
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
     assert advertised_tool_names() is None
 
@@ -51,8 +55,8 @@ def test_filter_keeps_order_and_drops_unadvertised():
         SimpleNamespace(name=name)
         for name in ("knowledge", "sync_state", "list_tools", "start_session")
     ]
-    kept = [tool.name for tool in filter_listed_tools(tools, "minimal")]
-    assert kept == ["knowledge", "sync_state", "list_tools", "start_session"]
+    kept = [tool.name for tool in filter_listed_tools(tools, "progressive")]
+    assert kept == ["sync_state", "list_tools", "start_session"]
     assert [tool.name for tool in filter_listed_tools(tools, "full")] == [
         "knowledge", "sync_state", "list_tools", "start_session",
     ]
@@ -76,9 +80,9 @@ async def test_subclass_filters_list_tools_only(monkeypatch):
     assert server_class.__name__ == "ModeFilteredFakeServer"
     server = server_class()
 
-    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "minimal")
+    monkeypatch.setattr("src.tool_modes.TOOL_MODE", "progressive")
     assert [tool.name for tool in await server.list_tools()] == [
-        "start_session", "knowledge", "identity", "list_tools",
+        "start_session", "identity", "list_tools",
     ]
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
     assert len(await server.list_tools()) == 4
@@ -107,7 +111,7 @@ async def test_live_mount_lists_by_mode_and_registers_everything(monkeypatch):
     # that is neither a first-party handler nor an alias is foreign here.
     foreign = registered - set(get_tool_registry()) - set(list_all_aliases())
 
-    for mode in ("minimal", "standard", "lite", "full"):
+    for mode in ("progressive", "full"):
         monkeypatch.setattr("src.tool_modes.TOOL_MODE", mode)
         listed = {tool.name for tool in await mcp_server.mcp.list_tools()}
         expected = {tool.name for tool in get_public_tool_definitions(mode)}
@@ -117,12 +121,12 @@ async def test_live_mount_lists_by_mode_and_registers_everything(monkeypatch):
     assert {tool.name for tool in get_public_tool_definitions("full")} <= registered
     for name in ("knowledge", "self_recovery", "archive_orphan_agents",
                  "search_shared_memory", "request_review", "store_finding",
-                 "list_tools", "describe_tool", "onboard", "bind_session"):
+                 "list_tools", "describe_tool", "use_tool", "onboard", "bind_session"):
         assert name in registered, f"{name} must dispatch on /mcp/ in every mode"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full"])
+@pytest.mark.parametrize("mode", ["progressive", "full"])
 async def test_actual_listing_title_savings_preserve_validation_and_restore(monkeypatch, mode):
     """Test the final MCP definitions, after typed-wrapper regeneration."""
     import json
@@ -143,7 +147,7 @@ async def test_actual_listing_title_savings_preserve_validation_and_restore(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["minimal", "standard", "lite", "full"])
+@pytest.mark.parametrize("mode", ["progressive", "full"])
 async def test_actual_listing_null_default_savings_restore(monkeypatch, mode):
     """Null-default annotations leave the final listing, not registration."""
     import json

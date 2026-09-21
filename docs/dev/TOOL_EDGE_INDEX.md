@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**42 registered tools · 8 consolidated (52 actions) · 70 aliases.**
+**43 registered tools · 8 consolidated (52 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -47,11 +47,12 @@ removal authority.
 
 | Mode | Declared | Advertised | Declared only | Advertised only |
 |---|---:|---:|---|---|
-| `minimal` | 50 | 50 | — | — |
-| `lite` | 50 | 50 | — | — |
-| `operator_readonly` | 50 | 50 | — | — |
-| `operator_recovery` | 50 | 50 | — | — |
-| `full` | 50 | 50 | — | — |
+| `progressive` | 13 | 13 | — | — |
+| `minimal` | 51 | 51 | — | — |
+| `lite` | 51 | 51 | — | — |
+| `operator_readonly` | 51 | 51 | — | — |
+| `operator_recovery` | 51 | 51 | — | — |
+| `full` | 51 | 51 | — | — |
 
 ### Workflow alias views
 
@@ -133,6 +134,7 @@ edits that changed no edge.
 | `set_thresholds` | `src/mcp_handlers/admin/config.py handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py handle_simulate_update` | `src/mcp_handlers/schemas/core.py SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py handle_skills` | `src/mcp_handlers/schemas/skills.py SkillsParams` | 10s | identity=pre_onboard |
+| `use_tool` | `src/mcp_handlers/introspection/tool_introspection.py handle_use_tool` | `src/mcp_handlers/schemas/admin.py UseToolParams` | 450s | identity=pre_onboard |
 | `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing

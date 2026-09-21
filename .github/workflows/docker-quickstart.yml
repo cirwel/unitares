@@ -79,20 +79,20 @@ jobs:
       - name: Run the two-agent coordination proof
         run: make coordination-demo
 
-      - name: Verify complete MCP discovery and federation contract
-        run: docker compose exec -T governance-mcp python - --mode full < scripts/ci/check_mcp_tool_surface.py
+      - name: Verify progressive MCP discovery and complete federation contract
+        run: docker compose exec -T governance-mcp python - --mode progressive < scripts/ci/check_mcp_tool_surface.py
 
-      - name: Verify legacy lite configuration preserves the complete catalog
+      - name: Verify full MCP advertisement override
         run: |
-          printf 'GOVERNANCE_TOOL_MODE=lite\n' > .env
+          printf 'UNITARES_TOOL_ADVERTISEMENT=full\n' > .env
           docker compose up -d --build --wait --force-recreate governance-mcp
-          docker compose exec -T governance-mcp python - --mode lite < scripts/ci/check_mcp_tool_surface.py
+          docker compose exec -T governance-mcp python - --mode full < scripts/ci/check_mcp_tool_surface.py
 
-      - name: Verify legacy minimal configuration preserves the complete catalog
+      - name: Verify legacy mode does not replace the progressive default
         run: |
           printf 'GOVERNANCE_TOOL_MODE=minimal\n' > .env
           docker compose up -d --build --wait --force-recreate governance-mcp
-          docker compose exec -T governance-mcp python - --mode minimal < scripts/ci/check_mcp_tool_surface.py
+          docker compose exec -T governance-mcp python - --mode progressive < scripts/ci/check_mcp_tool_surface.py
 
       - name: Dump container logs on failure
         if: failure()

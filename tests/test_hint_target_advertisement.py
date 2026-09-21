@@ -88,6 +88,10 @@ class TestEmitterResolution:
         reachable = scanner._reachable_predicate("standard")
         assert reachable({"get_discovery_details"})
 
+    def test_progressive_gateway_reaches_complete_public_targets(self):
+        reachable = scanner._reachable_predicate("progressive")
+        assert reachable({"health_check"})
+
 
 class TestLedger:
     def test_every_entry_carries_a_reason(self):
@@ -409,7 +413,12 @@ def onboard():
     "from helper import shared as advice\n@mcp_tool('onboard')\ndef agent_entry():\n    return advice()\n",
     "import helper\ndef dispatch_step():\n    return helper.shared()\n",
 ])
-def test_agent_and_middleware_callers_cannot_be_hidden_by_operator_caller(handler_tree, caller):
+def test_agent_and_middleware_callers_cannot_be_hidden_by_operator_caller(
+    handler_tree, caller, monkeypatch
+):
+    monkeypatch.setattr(
+        "src.tool_modes.get_tools_for_mode", lambda mode: {"start_session"}
+    )
     handler_tree("helper.py", "def shared():\n    return {'hint': \"bind_session()\"}\n")
     handler_tree("operator.py", "@mcp_tool('operator_resume_agent')\ndef operator_entry():\n    return shared()\n")
     handler_tree("middleware/step.py" if "dispatch_step" in caller else "agent.py", caller)
@@ -452,7 +461,12 @@ def other():
     return shared()
 ''',
 ])
-def test_import_name_collisions_cannot_suppress_an_agent_hint(handler_tree, agent_source):
+def test_import_name_collisions_cannot_suppress_an_agent_hint(
+    handler_tree, agent_source, monkeypatch
+):
+    monkeypatch.setattr(
+        "src.tool_modes.get_tools_for_mode", lambda mode: {"start_session"}
+    )
     handler_tree("helper.py", "def shared():\n    return {'hint': 'bind_session()'}\n")
     handler_tree("operator.py", '''from helper import shared
 @mcp_tool("operator_resume_agent")

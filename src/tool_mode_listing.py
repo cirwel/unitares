@@ -1,7 +1,8 @@
-"""Complete MCP discovery with compact schema annotations.
+"""Progressive MCP discovery with compact schema annotations.
 
-Legacy class/function names are retained for embedded hosts. Mode arguments
-are ignored; registration determines reachability and discovery alike.
+Every public tool remains registered and dispatchable.  The listing alone is
+filtered, and the progressive surface carries ``use_tool`` so schema-driven
+clients can discover and invoke capabilities omitted from the initial list.
 """
 
 from __future__ import annotations
@@ -22,12 +23,23 @@ logger = get_logger(__name__)
 
 
 def advertised_tool_names(mode: Optional[str] = None) -> Optional[set[str]]:
-    """Compatibility API: the complete registered MCP catalog is unfiltered.
+    """Names ``tools/list`` may show; ``None`` means the complete surface."""
+    from src import tool_modes
 
-    Also preserves tools contributed by installed federation plugins; a static
-    first-party allowlist must never hide a dynamically registered capability.
-    """
-    return None
+    resolved = (mode or tool_modes.TOOL_MODE or "full").lower()
+    if resolved != "progressive":
+        return None
+
+    from src.interface_contract import get_public_tool_definitions
+
+    names = {tool.name for tool in get_public_tool_definitions("progressive")}
+    if not names:
+        logger.warning(
+            "progressive tool advertisement resolved empty; listing the full "
+            "registered surface instead"
+        )
+        return None
+    return names
 
 
 def filter_listed_tools(tools: Iterable[Any], mode: Optional[str] = None) -> list[Any]:

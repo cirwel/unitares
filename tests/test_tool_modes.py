@@ -16,6 +16,7 @@ sys.path.insert(0, str(project_root))
 
 from src.tool_modes import (
     TOOL_MODE,
+    PROGRESSIVE_MODE_TOOLS,
     MINIMAL_MODE_TOOLS,
     STANDARD_MODE_TOOLS,
     LITE_MODE_TOOLS,
@@ -71,13 +72,51 @@ class TestUnifiedCatalog:
         import importlib
         import src.tool_modes as module
 
+        monkeypatch.delenv("UNITARES_TOOL_ADVERTISEMENT", raising=False)
         if setting is None:
             monkeypatch.delenv("GOVERNANCE_TOOL_MODE", raising=False)
         else:
             monkeypatch.setenv("GOVERNANCE_TOOL_MODE", setting)
         importlib.reload(module)
+        assert module.TOOL_MODE == "progressive"
+        assert module.get_tools_for_mode(module.TOOL_MODE) == (
+            module.PROGRESSIVE_MODE_TOOLS & module.advertised_tool_names_full()
+        )
+
+    def test_new_environment_switches_between_progressive_and_full(self, monkeypatch):
+        import importlib
+        import src.tool_modes as module
+
+        monkeypatch.setenv("UNITARES_TOOL_ADVERTISEMENT", "full")
+        importlib.reload(module)
         assert module.TOOL_MODE == "full"
-        assert module.get_tools_for_mode() == module.advertised_tool_names_full()
+        assert module.get_tools_for_mode(module.TOOL_MODE) == module.advertised_tool_names_full()
+
+        monkeypatch.setenv("UNITARES_TOOL_ADVERTISEMENT", "progressive")
+        importlib.reload(module)
+        assert module.TOOL_MODE == "progressive"
+
+    def test_invalid_new_environment_fails_open_to_full(self, monkeypatch):
+        import importlib
+        import src.tool_modes as module
+
+        monkeypatch.setenv("UNITARES_TOOL_ADVERTISEMENT", "typo")
+        importlib.reload(module)
+        assert module.TOOL_MODE == "full"
+        monkeypatch.setenv("UNITARES_TOOL_ADVERTISEMENT", "progressive")
+        importlib.reload(module)
+
+    def test_progressive_surface_has_gateway_and_core_workflow(self):
+        assert get_tools_for_mode("progressive") == PROGRESSIVE_MODE_TOOLS
+        assert {
+            "start_session",
+            "sync_state",
+            "check_working_state",
+            "list_tools",
+            "describe_tool",
+            "use_tool",
+        } <= PROGRESSIVE_MODE_TOOLS
+        assert "admin" not in PROGRESSIVE_MODE_TOOLS
 
     def test_returns_independent_sets(self):
         first = get_tools_for_mode("minimal")
@@ -305,12 +344,14 @@ class TestServerInstructions:
             ):
                 assert name in text, f"{name} missing from {mode} instructions"
 
-    def test_instructions_explain_one_catalog(self):
+    def test_instructions_explain_progressive_discovery(self):
         for mode in ("minimal", "standard", "lite", "full"):
             text = build_server_instructions(mode)
             assert text == build_server_instructions()
-            assert "every registered-and-mounted public tool" in text
-            assert "settings are ignored" in text
+            assert "initial progressive tools/list" in text
+            assert "use_tool" in text
+            assert "UNITARES_TOOL_ADVERTISEMENT=full" in text
+            assert "settings remain ignored" in text
             assert "authorization" in text
             assert "Not listed here" not in text
 

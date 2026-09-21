@@ -84,13 +84,16 @@ main check-in loop. A new user message is not a reason to call
 These are the primary workflow tools; raw implementation tools such as
 `onboard(...)` and
 `process_agent_update(...)` remain available for compatibility. Interface contract
-1.6.0 and later exposes one complete catalog, including routers, diagnostics,
-and installed plugins. No tool mode is needed; old `GOVERNANCE_TOOL_MODE`
-settings are ignored. Use `list_tools` for the live contract and
-the complete capability-name index, `list_tools(lite=false)` for rich catalog
-metadata, and `describe_tool` for action parameters. Older servers may still
-advertise a restricted profile; inspect their actual catalog (see
-governance-lifecycle, *MCP Tools Reference*). The full raw
+1.13.0 and later keeps one complete negotiated catalog, including routers,
+diagnostics, and installed plugins, while advertising a small progressive
+starting surface by default. Use `list_tools(lite=true)` for the live contract
+and complete capability-name index, `list_tools(lite=false)` for rich metadata,
+`describe_tool` for action parameters, and `use_tool` to invoke a capability
+omitted from the initial listing through its normal middleware. Operators can
+set `UNITARES_TOOL_ADVERTISEMENT=full` to advertise every schema up front; old
+`GOVERNANCE_TOOL_MODE` settings are ignored. Older servers may still advertise
+a restricted profile; inspect their actual catalog (see governance-lifecycle,
+*MCP Tools Reference*). The full raw
 payload remains available under `raw_governance`; the read aliases
 `check_working_state` and `search_shared_memory` default compact and require
 their documented full-mode option to include it.
