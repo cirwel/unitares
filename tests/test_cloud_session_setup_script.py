@@ -246,6 +246,8 @@ def test_runtime_preflight_verifies_proxy_injected_bearer(tmp_path: Path) -> Non
     assert "https://gov.example.test/health" in commands
     assert "https://gov.example.test/v1/tools/call" in commands
     assert "server tool route usable (authenticated validation response)" in proc.stdout
+    assert "reports enabled; this does not prove hooks loaded" in proc.stdout
+    assert "hook activation is not verified by this command" in proc.stdout
     assert "done with warnings" not in proc.stdout
 
 

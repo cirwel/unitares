@@ -89,7 +89,11 @@ else:
 
 case "${plugin_state}" in
   enabled)
-    log "plugin ${PLUGIN_ID} already installed and enabled"
+    if [ "${runtime_preflight}" -eq 1 ]; then
+      log "plugin ${PLUGIN_ID} reports enabled; this does not prove hooks loaded in this session"
+    else
+      log "plugin ${PLUGIN_ID} already installed and enabled for the session launch"
+    fi
     ;;
   disabled)
     if [ "${runtime_preflight}" -eq 1 ]; then
@@ -365,7 +369,11 @@ esac
 if [ "${auth_probe_deferred}" -eq 1 ]; then
   log "done with warnings — hook authentication remains UNVERIFIED after setup."
 elif [ "${preflight_ok}" -eq 1 ]; then
-  log "done"
+  if [ "${runtime_preflight}" -eq 1 ]; then
+    log "runtime endpoint/authentication checks passed; hook activation is not verified by this command."
+  else
+    log "done"
+  fi
 else
   log "done with warnings — governance hooks are not fully usable."
   if [ "${runtime_preflight}" -eq 1 ]; then

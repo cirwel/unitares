@@ -126,6 +126,8 @@ defmodule UnitaresLeasePlane.Application do
 
     if token do
       Application.put_env(:lease_plane, :governance_api_token, token)
+    else
+      Application.delete_env(:lease_plane, :governance_api_token)
     end
 
     # Identity attribution is a separate gate from the shared service bearer.
