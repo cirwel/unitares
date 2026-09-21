@@ -22,7 +22,11 @@ def _run_setup(
     tmp_path: Path,
     *,
     plugin_enabled: bool,
-    curl_status: int = 400,
+    health_status: int = 200,
+    tool_status: int = 400,
+    tool_body: str = "Missing 'name' field",
+    health_exit: int = 0,
+    tool_exit: int = 0,
     extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     fake_bin = tmp_path / "bin"
@@ -45,7 +49,24 @@ esac
         fake_bin / "curl",
         """
 if [[ " $* " == *" -H @- "* ]]; then cat >/dev/null; fi
-printf '%s' "$FAKE_CURL_STATUS"
+printf 'curl %s\\n' "$*" >> "$FAKE_COMMAND_LOG"
+url=''
+for arg in "$@"; do
+  case "$arg" in http*) url="$arg" ;; esac
+done
+case "$url" in
+  */health)
+    printf '%s\\n%s' 'healthy' "$FAKE_HEALTH_STATUS"
+    exit "$FAKE_HEALTH_EXIT"
+    ;;
+  */v1/tools/call)
+    printf '%s\\n%s' "$FAKE_TOOL_BODY" "$FAKE_TOOL_STATUS"
+    exit "$FAKE_TOOL_EXIT"
+    ;;
+  *)
+    printf '%s\\n%s' 'not found' '404'
+    ;;
+esac
 """,
     )
 
@@ -54,7 +75,11 @@ printf '%s' "$FAKE_CURL_STATUS"
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
         "FAKE_COMMAND_LOG": str(command_log),
         "FAKE_PLUGIN_JSON": plugin_json,
-        "FAKE_CURL_STATUS": str(curl_status),
+        "FAKE_HEALTH_STATUS": str(health_status),
+        "FAKE_TOOL_STATUS": str(tool_status),
+        "FAKE_TOOL_BODY": tool_body,
+        "FAKE_HEALTH_EXIT": str(health_exit),
+        "FAKE_TOOL_EXIT": str(tool_exit),
         "UNITARES_SERVER_URL": "https://gov.example.test",
         "UNITARES_HTTP_API_TOKEN": "test-token",
         "UNITARES_FILE_LEASES_ENABLED": "0",
@@ -72,7 +97,9 @@ printf '%s' "$FAKE_CURL_STATUS"
     return proc, command_log.read_text()
 
 
-def test_disabled_plugin_is_enabled_instead_of_treated_as_active(tmp_path: Path) -> None:
+def test_disabled_plugin_is_enabled_instead_of_treated_as_active(
+    tmp_path: Path,
+) -> None:
     proc, commands = _run_setup(tmp_path, plugin_enabled=False)
 
     assert proc.returncode == 0
@@ -88,14 +115,61 @@ def test_enabled_plugin_is_left_alone(tmp_path: Path) -> None:
     assert f"plugin install {PLUGIN_ID}" not in commands
 
 
-def test_mcp_probe_rejects_bad_bearer_even_when_health_would_be_green(
+def test_tool_probe_rejects_bad_bearer_even_when_health_is_green(
     tmp_path: Path,
 ) -> None:
-    proc, _ = _run_setup(tmp_path, plugin_enabled=True, curl_status=401)
+    proc, commands = _run_setup(tmp_path, plugin_enabled=True, tool_status=401)
 
     assert proc.returncode == 0
     assert "rejected the configured bearer (401)" in proc.stdout
-    assert "server MCP route usable" not in proc.stdout
+    assert "server tool route usable" not in proc.stdout
+    assert "done with warnings" in proc.stdout
+    assert "https://gov.example.test/health" in commands
+    assert "https://gov.example.test/v1/tools/call" in commands
+
+
+def test_tool_probe_rejects_generic_proxy_400(tmp_path: Path) -> None:
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        tool_status=400,
+        tool_body="proxy rejected request",
+    )
+
+    assert proc.returncode == 0
+    assert "returned an unrecognized 400" in proc.stdout
+    assert "server tool route usable" not in proc.stdout
+    assert "done with warnings" in proc.stdout
+
+
+def test_probe_keeps_received_status_when_curl_exits_nonzero(tmp_path: Path) -> None:
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        health_exit=28,
+        tool_exit=28,
+    )
+
+    assert proc.returncode == 0
+    assert "server health route usable (200)" in proc.stdout
+    assert "server tool route usable" in proc.stdout
+    assert "unreachable" not in proc.stdout
+    assert "done with warnings" not in proc.stdout
+
+
+def test_server_url_with_mcp_suffix_is_rejected_as_hook_incompatible(
+    tmp_path: Path,
+) -> None:
+    proc, commands = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        extra_env={"UNITARES_SERVER_URL": "https://gov.example.test/mcp"},
+    )
+
+    assert proc.returncode == 0
+    assert "must be the server base URL, without /mcp" in proc.stdout
+    assert "https://gov.example.test/mcp/health" in commands
+    assert "https://gov.example.test/mcp/v1/tools/call" in commands
     assert "done with warnings" in proc.stdout
 
 
