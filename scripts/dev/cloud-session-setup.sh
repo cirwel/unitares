@@ -13,10 +13,14 @@
 # Wire it as the setup script of the cloud environment (claude.ai -> cloud
 # environments). It runs after the repository is cloned:
 #
-#     bash scripts/dev/cloud-session-setup.sh
+#     if [ -f scripts/dev/cloud-session-setup.sh ]; then
+#       bash scripts/dev/cloud-session-setup.sh || true
+#     fi
 #
-# Idempotent, and never fails the session: a broken install leaves a session
-# without governance hooks, which is the state it would have had anyway.
+# The outer guard handles environments reused for a repository without this
+# path. Once invoked, the script is idempotent and keeps every internal exit
+# successful: a broken install leaves a session without governance hooks,
+# which is the state it would have had anyway.
 #
 # This script does NOT set UNITARES_* variables. A setup script's exports die
 # with its shell and never reach the agent process, so the operator declares

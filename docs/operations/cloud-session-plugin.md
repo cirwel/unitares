@@ -1,6 +1,6 @@
 # Governance Plugin in Claude Code Cloud Sessions
 
-**Status:** Runbook (v0, 2026-09-19)
+**Status:** Runbook (v0, 2026-09-21)
 **Audience:** Operators running `unitares` work in Claude Code cloud sessions
 (claude.ai/code, the mobile Code tab, `claude --cloud`, routines) who expect the
 same governance lifecycle they get locally.
