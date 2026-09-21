@@ -427,7 +427,7 @@ def essential_toolkit() -> Dict[str, Any]:
     """Short orientation block for agents trying not to drown in the tool list."""
     return {
         "default_path": [item["tool"] for item in getting_started_path()],
-        "small_surface": "Use list_tools(essential_only=true) or list_tools(lite=true) before exploring the full registry.",
+        "small_surface": "Use list_tools(lite=true) for the name-only index, or add essential_only=true to narrow it to the core workflow.",
         "preferred_consolidated_tools": {
             "knowledge": "Use action='search'|'note'|'store' instead of older KG-specific tools.",
             "consult": "Use for advisory answers, critique, summaries, and generation; it is never an on-record verdict.",

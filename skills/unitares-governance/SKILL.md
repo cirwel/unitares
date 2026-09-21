@@ -18,6 +18,8 @@ source_files:
   # Added 2026-09-07 on re-verification: the claims about the default surface,
   # the token TTL, lineage reasons, and coherence provenance live here.
   - unitares/src/tool_modes.py
+  # Added 2026-09-21: the compact-vs-rich list_tools response split lives here.
+  - unitares/src/mcp_handlers/introspection/tool_introspection.py
   - unitares/src/mcp_handlers/identity/session.py
   - unitares/src/mcp_handlers/schemas/identity.py
   - unitares/src/identity/lineage_semantics.py
@@ -34,19 +36,20 @@ source_files:
   - unitares/skills/unitares-dashboard/SKILL.md
 source_digests:
   unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "478215b83413f0ef"
+  unitares/src/mcp_handlers/identity/handlers.py: "5d8d49c146ae8d8e"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f2f61da6afb477a9"
   unitares/src/mcp_handlers/middleware/identity_step.py: "f50ccc2629ef7832"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/tool_modes.py: "0f922d11fa4ac843"
+  unitares/src/tool_modes.py: "5049da9bfd3037e9"
+  unitares/src/mcp_handlers/introspection/tool_introspection.py: "6b0a7cc8cb796be7"
   unitares/src/mcp_handlers/identity/session.py: "cc60f281b7fc3276"
   unitares/src/mcp_handlers/schemas/identity.py: "6a02e1c69d225e98"
   unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/schema_brief.py: "401bbce563c30439"
-  unitares/skills/governance-lifecycle/SKILL.md: "b7b5def9a4254b18"
+  unitares/src/schema_brief.py: "45f4dd23df9559fa"
+  unitares/skills/governance-lifecycle/SKILL.md: "4eb1a81007c168b6"
   unitares/skills/governance-fundamentals/SKILL.md: "aff9a780b6957313"
   unitares/skills/knowledge-graph/SKILL.md: "eff53add72cc4e9b"
   unitares/skills/dialectic-reasoning/SKILL.md: "654ebf805517c262"
@@ -84,9 +87,10 @@ These are the primary workflow tools; raw implementation tools such as
 1.6.0 and later exposes one complete catalog, including routers, diagnostics,
 and installed plugins. No tool mode is needed; old `GOVERNANCE_TOOL_MODE`
 settings are ignored. Use `list_tools` for the live contract and
-`describe_tool` for action parameters. Older servers may still advertise a
-restricted profile; inspect their actual catalog (see governance-lifecycle,
-*MCP Tools Reference*). The full raw
+the complete capability-name index, `list_tools(lite=false)` for rich catalog
+metadata, and `describe_tool` for action parameters. Older servers may still
+advertise a restricted profile; inspect their actual catalog (see
+governance-lifecycle, *MCP Tools Reference*). The full raw
 payload remains available under `raw_governance`; the read aliases
 `check_working_state` and `search_shared_memory` default compact and require
 their documented full-mode option to include it.
