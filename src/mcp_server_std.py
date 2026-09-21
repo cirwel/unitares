@@ -445,7 +445,7 @@ async def inject_lightweight_heartbeat(
 
 
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[TextContent]:
-    """Handle tool calls from MCP client"""
+    """Handle a stdio call, using a configured remote proxy when available."""
     process_mgr.write_heartbeat()
 
     if arguments is None:
@@ -483,6 +483,13 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
                     }, indent=2)
                 )]
 
+    return await _call_local_tool(name, arguments)
+
+
+async def _call_local_tool(
+    name: str, arguments: dict[str, Any]
+) -> Sequence[TextContent]:
+    """Run the local stdio boundary after proxy selection has settled."""
     # Activity tracking for auto-heartbeat
     agent_id = arguments.get('agent_id') if isinstance(arguments, dict) else None
     session_id = arguments.get('client_session_id') if isinstance(arguments, dict) else None
@@ -526,15 +533,25 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
     try:
         from src.mcp_handlers import dispatch_tool
         from src.mcp_handlers.context import (
-            reset_tool_dispatch_surface,
-            set_tool_dispatch_surface,
+            reset_nested_tool_invoker,
+            set_nested_tool_invoker,
         )
 
-        surface_token = set_tool_dispatch_surface("stdio")
+        async def _nested_invoker(target_name, target_arguments):
+            nested = dict(target_arguments or {})
+            if session_id and not nested.get("client_session_id"):
+                nested["client_session_id"] = session_id
+            # Re-enter this exact module object's local boundary so target
+            # activity tracking, JSONL/presence telemetry, and error handling
+            # are identical to the direct call after the already-settled proxy
+            # decision. A failed optional proxy is not retried per nested hop.
+            return await _call_local_tool(target_name, nested)
+
+        invoker_token = set_nested_tool_invoker(_nested_invoker)
         try:
             result = await dispatch_tool(name, arguments)
         finally:
-            reset_tool_dispatch_surface(surface_token)
+            reset_nested_tool_invoker(invoker_token)
         latency_ms = int((time.monotonic() - t0) * 1000)
         if result is not None:
             success, error_type = classify_tool_result(result)

@@ -92,6 +92,47 @@ def _normalize_direct_http_result(result: Any) -> Any:
             return result
     return result
 
+
+async def execute_nested_http_tool(
+    tool_name: str, arguments: Dict[str, Any]
+) -> Any:
+    """Execute a gateway target through the REST prebind boundary again."""
+    from src.http_routes import access
+    from src.mcp_handlers.context import (
+        get_context_client_session_id,
+        get_csid_transport_injected,
+        get_session_signals,
+        reset_csid_transport_injected,
+        reset_session_context,
+        set_csid_transport_injected,
+        set_session_context,
+    )
+
+    nested = dict(arguments or {})
+    explicit_session = bool(nested.get("client_session_id"))
+    session_id = nested.get("client_session_id") or get_context_client_session_id()
+    if session_id and not explicit_session:
+        nested["client_session_id"] = session_id
+
+    # A nested explicit session is caller input just like a direct REST body.
+    # An inherited session retains the outer route's injected/proven status.
+    inherited_injected = get_csid_transport_injected()
+    csid_token = set_csid_transport_injected(
+        False if explicit_session else inherited_injected
+    )
+    context_token = set_session_context(
+        session_key=session_id,
+        client_session_id=session_id,
+    )
+    try:
+        signals = get_session_signals()
+        if signals is not None:
+            await access._resolve_http_bound_agent(tool_name, nested, signals)
+        return await execute_http_tool(tool_name, nested)
+    finally:
+        reset_session_context(context_token)
+        reset_csid_transport_injected(csid_token)
+
 async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any:
     # Read-purity (trust contract §3.5), REST half: this direct handler
     # bypasses handle_get_governance_metrics, so without its own guard an
@@ -320,16 +361,16 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
 
         handler = get_direct_http_tool_handler(tool_name)
         from src.mcp_handlers.context import (
-            reset_tool_dispatch_surface,
-            set_tool_dispatch_surface,
+            reset_nested_tool_invoker,
+            set_nested_tool_invoker,
         )
 
-        surface_token = set_tool_dispatch_surface("rest")
+        invoker_token = set_nested_tool_invoker(execute_nested_http_tool)
         if handler is not None:
             try:
                 result = await handler(arguments)
             finally:
-                reset_tool_dispatch_surface(surface_token)
+                reset_nested_tool_invoker(invoker_token)
             latency_ms = int((time.monotonic() - t0) * 1000)
             success, error_type = classify_tool_result(result)
             record_tool_usage(tool_name=tool_name,
@@ -341,7 +382,7 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
         try:
             result = await execute_http_dispatch_fallback(tool_name, arguments)
         finally:
-            reset_tool_dispatch_surface(surface_token)
+            reset_nested_tool_invoker(invoker_token)
         latency_ms = int((time.monotonic() - t0) * 1000)
         success, error_type = classify_tool_result(result)
         record_tool_usage(tool_name=tool_name,
