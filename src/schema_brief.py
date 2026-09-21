@@ -18,11 +18,10 @@ models. Measure that layer with ``tool_surface_cost.py --surface mcp``;
 ``--surface catalog`` measures the upstream definitions separately.
 
 Pydantic also repeats ``default: null`` on every optional field. JSON Schema
-treats ``default`` as an annotation rather than a validation rule, and a null
-default says no more than the field's absence from ``required`` plus its
-existing nullable type. Those null annotations are stripped by default and
-restorable with ``UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep``. Concrete defaults
-remain advertised.
+treats ``default`` as an annotation rather than a validation rule, but callers
+can use it as omission/default metadata. Those annotations therefore remain
+advertised by default. Operators who explicitly trade that metadata for a
+smaller listing can set ``UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip``.
 
 So this module trims the *advertised* text and leaves the authored text where
 it already lives. ``describe_tool(tool_name=..., action=...)`` reads the
@@ -90,10 +89,10 @@ PROPERTY_TITLE_MODES = ("strip", "keep")
 DEFAULT_PROPERTY_TITLE_MODE = "strip"
 
 #: What the advertised schema does with generated ``default: null`` keywords.
-#:   strip — remove them (default); requiredness and null validation stay put
-#:   keep  — leave them, as Pydantic emits them
+#:   strip — remove them; requiredness and null validation stay put
+#:   keep  — leave them, as Pydantic emits them (default)
 NULL_DEFAULT_MODES = ("strip", "keep")
-DEFAULT_NULL_DEFAULT_MODE = "strip"
+DEFAULT_NULL_DEFAULT_MODE = "keep"
 
 _MODE_ENV = "UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS"
 _TITLE_ENV = "UNITARES_TOOL_SCHEMA_PROPERTY_TITLES"

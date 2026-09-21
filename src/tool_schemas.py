@@ -294,9 +294,8 @@ def advertised_input_schema(
     ``UNITARES_TOOL_SCHEMA_PROPERTY_TITLES`` (``strip``).
 
     ``null_defaults`` follows the same cross-surface rule. A generated
-    ``default: null`` is an annotation, not requiredness or null validation,
-    and defaults to ``UNITARES_TOOL_SCHEMA_NULL_DEFAULTS`` (``strip``).
-    Concrete defaults remain advertised.
+    ``default: null`` is caller-visible omission/default metadata and remains
+    advertised unless ``UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip`` is set.
     """
     if tool_name in _HIDE_IDENTITY_PARAMS_TOOLS:
         schema = _hide_auto_injected_identity(schema)

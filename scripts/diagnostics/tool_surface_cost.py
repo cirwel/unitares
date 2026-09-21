@@ -473,9 +473,9 @@ def _render_boilerplate(modes, bytes_per_token: int, surface: str = "mcp") -> No
         f"{bytes_per_token} B/token."
     )
     print(
-        "A zero null-default value means the default listing policy already "
-        "removed them; rerun with UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=keep "
-        "to measure the retained baseline."
+        "The default listing preserves null-default metadata. Set "
+        "UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip to measure the optional "
+        "smaller surface."
     )
 
 

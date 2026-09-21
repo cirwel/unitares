@@ -509,12 +509,12 @@ class TestPropertyTitles:
 class TestNullDefaults:
     """A null default annotates an optional field; it does not validate it."""
 
-    def test_no_advertised_schema_carries_a_null_default(self):
+    def test_default_advertised_schema_preserves_null_defaults(self):
+        total = 0
         for tool_name, schema in _schemas("brief").items():
             null_defaults = _null_default_nodes(schema)
-            assert not null_defaults, (
-                f"{tool_name} still advertises null defaults: {null_defaults[:3]}"
-            )
+            total += len(null_defaults)
+        assert total > 0
 
     def test_keep_reproduces_the_pydantic_annotations_exactly(self, monkeypatch):
         monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "keep")
@@ -616,14 +616,14 @@ class TestNullDefaults:
         assert out["properties"]["optional"]["x-ui"] == {"default": None}
         assert "default" not in out["properties"]["optional"]
 
-    def test_the_default_is_strip(self, monkeypatch):
+    def test_the_default_is_keep(self, monkeypatch):
         monkeypatch.delenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", raising=False)
-        assert resolve_null_default_mode() == "strip"
-        assert DEFAULT_NULL_DEFAULT_MODE == "strip"
+        assert resolve_null_default_mode() == "keep"
+        assert DEFAULT_NULL_DEFAULT_MODE == "keep"
 
     def test_an_unknown_mode_falls_back_to_the_default(self, monkeypatch, caplog):
         monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", "terse")
-        assert resolve_null_default_mode() == "strip"
+        assert resolve_null_default_mode() == "keep"
         assert "terse" in caplog.text
 
     def test_the_advertised_surface_actually_got_smaller(self, monkeypatch):
