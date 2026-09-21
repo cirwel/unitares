@@ -82,6 +82,7 @@ esac
         "FAKE_TOOL_EXIT": str(tool_exit),
         "UNITARES_SERVER_URL": "https://gov.example.test",
         "UNITARES_HTTP_API_TOKEN": "test-token",
+        "UNITARES_CLOUD_PROXY_AUTH": "0",
         "UNITARES_FILE_LEASES_ENABLED": "0",
         "UNITARES_FILE_LEASES_REQUIRED": "0",
     }
