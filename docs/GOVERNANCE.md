@@ -17,23 +17,23 @@ and support expectations without guessing.
   non-obvious rationale in the PR, issue, or proposal that carried the work.
 
 Technical disagreement and negative results are welcome. Participation is
-governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and security reports follow
-[SECURITY.md](SECURITY.md).
+governed by [CODE_OF_CONDUCT.md](../.github/CODE_OF_CONDUCT.md), and security reports follow
+[SECURITY.md](../.github/SECURITY.md).
 
 ## Contributions and maintainership
 
 Open an issue before a substantial contribution; see
-[CONTRIBUTING.md](CONTRIBUTING.md). Sustained contributors may be granted triage
+[CONTRIBUTING.md](../.github/CONTRIBUTING.md). Sustained contributors may be granted triage
 or maintenance responsibility after demonstrating sound review judgment,
 respect for compatibility and security boundaries, and reliable follow-through.
 
-[`CODEOWNERS`](.github/CODEOWNERS) records current ownership. A second maintainer would be added there
+[`CODEOWNERS`](../.github/CODEOWNERS) records current ownership. A second maintainer would be added there
 before branch protection begins requiring an external approval; the project
 does not simulate independent review while only one maintainer exists.
 
 ## Releases and project direction
 
 The [roadmap](ROADMAP.md) describes current priorities without promising dates.
-The [release process](docs/operations/RELEASE_PROCESS.md) defines version,
+The [release process](operations/RELEASE_PROCESS.md) defines version,
 artifact, and provenance checks. Release notes and the changelog are the record
 of shipped behavior; proposals are not commitments.

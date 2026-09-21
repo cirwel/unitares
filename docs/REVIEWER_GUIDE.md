@@ -101,7 +101,7 @@ UNITARES_DEMO_PORT=18767 make demo
 2. Reproduce the §11.6 verdict counterfactual with [`CIRWEL/unitares-repro-v6`](https://github.com/CIRWEL/unitares-repro-v6).
 3. Inspect [`CIRWEL/eisv-lumen`](https://github.com/CIRWEL/eisv-lumen) for trajectory-derived expression and benchmark artifacts.
 4. Check GitHub Actions on this repo for tests, documentation validation, and CodeQL.
-5. Read [`SECURITY.md`](../SECURITY.md) and [`CONTRIBUTING.md`](../CONTRIBUTING.md) to understand operational posture.
+5. Read [`SECURITY.md`](../.github/SECURITY.md) and [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md) to understand operational posture.
 
 ## Buyer / operator wedge
 

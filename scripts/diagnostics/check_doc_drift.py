@@ -50,7 +50,7 @@ def parse_stamp_date(raw: str) -> date | None:
 
 def freshness_failures(root: Path, today: date) -> list[str]:
     failures: list[str] = []
-    candidates = sorted(root.glob("docs/**/*.md")) + [root / "ROADMAP.md"]
+    candidates = sorted(root.glob("docs/**/*.md"))
     for path in candidates:
         if not path.exists():
             continue

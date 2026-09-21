@@ -110,7 +110,7 @@ grow.
 | Connect an agent or application | [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
 | Understand the product and architecture | [Product definition](docs/PRODUCT_DEFINITION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) |
 | Evaluate the claims | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
-| Contribute | [Contributing](CONTRIBUTING.md) · [Development guide](AGENTS.md) |
+| Contribute | [Contributing](.github/CONTRIBUTING.md) · [Development guide](AGENTS.md) |
 
 The [documentation index](docs/README.md) covers deployment profiles,
 operations, security, compatibility, research, and the full tool surface.

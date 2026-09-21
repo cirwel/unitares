@@ -14,7 +14,7 @@ make demo                           # 60-second install check (six check-ins)
 
 If you already have services on `5432`, `6379`, or `8767`, either skip Compose when a local UNITARES server is already live, or set `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `GOVERNANCE_HOST_PORT`, and `UNITARES_DEMO_PORT` to use alternate host ports.
 
-Bare-metal install (Homebrew Postgres + native Python) is in [`docs/install/PLAYBOOK.md`](docs/install/PLAYBOOK.md). Architecture overview is in [`docs/UNIFIED_ARCHITECTURE.md`](docs/UNIFIED_ARCHITECTURE.md).
+Bare-metal install (Homebrew Postgres + native Python) is in [`docs/install/PLAYBOOK.md`](../docs/install/PLAYBOOK.md). Architecture overview is in [`docs/UNIFIED_ARCHITECTURE.md`](../docs/UNIFIED_ARCHITECTURE.md).
 
 ## Tests
 
@@ -56,7 +56,7 @@ source of truth; do not copy a version number from this file:
 pip install "$(grep -E '^mcp==' constraints.txt)" -r requirements-full.txt -c constraints.txt
 ```
 
-See the header of [`constraints.txt`](constraints.txt) for why each pin is
+See the header of [`constraints.txt`](../constraints.txt) for why each pin is
 there and what bumping one requires.
 
 Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_agents.py`) run without a live Postgres/AGE; database-backed tests still need the services from *Quick setup* above.
@@ -67,7 +67,7 @@ Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_age
 - **One topic per PR.** If a change touches the identity ontology *and* the lease plane, those are two PRs unless you can convince the maintainer otherwise.
 - **No `git add -A`** — stage by name. The `data/` tree contains runtime state that's easy to accidentally commit.
 - **Update tests in the same PR.** Bug fixes that don't include a regression test won't merge.
-- **Identity-touching changes** require reading [`docs/ontology/identity.md`](docs/ontology/identity.md) and [`AGENTS.md`](AGENTS.md) first. The identity layer is the most constraint-laden part of the system.
+- **Identity-touching changes** require reading [`docs/ontology/identity.md`](../docs/ontology/identity.md) and [`AGENTS.md`](../AGENTS.md) first. The identity layer is the most constraint-laden part of the system.
 
 ## Code style
 
@@ -75,11 +75,11 @@ Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_age
   `ruff check`. CI currently gates the configured Ruff rule set (unused imports)
   but does not run a repository-wide format check.
 - Type hints encouraged but not enforced repo-wide; new modules should be fully typed.
-- No new SQLite or in-process state stores — one Postgres, schema-isolated. See [`docs/operations/database_architecture.md`](docs/operations/database_architecture.md).
+- No new SQLite or in-process state stores — one Postgres, schema-isolated. See [`docs/operations/database_architecture.md`](../docs/operations/database_architecture.md).
 
 ## Licensing
 
-By submitting a contribution you agree it's licensed under the [Apache License 2.0](LICENSE), same as the rest of the project. No CLA required — `inbound = outbound`.
+By submitting a contribution you agree it's licensed under the [Apache License 2.0](../LICENSE), same as the rest of the project. No CLA required — `inbound = outbound`.
 
 ## What I won't merge
 
