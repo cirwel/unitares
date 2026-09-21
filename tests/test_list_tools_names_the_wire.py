@@ -46,9 +46,6 @@ from tests.helpers.wire_names import (
 pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
 
 _BARE_TOKEN = re.compile(r"\b[a-z][a-z0-9_]*\b")
-_OR_PREFIX = re.compile(r"\AOR\s+")
-
-
 @pytest.fixture
 def mounted(first_party_tool_surface) -> set[str]:
     return build_mount()
@@ -137,14 +134,7 @@ def _full_view_names(payload):
 
 
 def _lite_view_names(payload):
-    out = [(f"tools[{i}].name", t["name"]) for i, t in enumerate(payload["tools"])]
-    for category, block in payload["categories_summary"].items():
-        out += [(f"categories_summary.{category}.tools", n) for n in block["tools"]]
-    for workflow, steps in payload["workflows"].items():
-        out += [(f"workflows.{workflow}", _OR_PREFIX.sub("", step)) for step in steps]
-    out += [("signatures", key) for key in payload["signatures"]]
-    out += _getting_started_names("", payload["getting_started_path"], payload["essential_toolkit"])
-    return out
+    return [(f"tools[{i}].name", t["name"]) for i, t in enumerate(payload["tools"])]
 
 
 def _call_shapes_everywhere(payload, path="$"):
@@ -190,7 +180,7 @@ async def test_the_full_view_names_only_what_the_mount_dispatches(mounted):
 async def test_the_compact_view_names_only_what_the_mount_dispatches(mounted):
     payload = await _list_tools(lite=True)
     entries = _lite_view_names(payload)
-    assert len(entries) > 100
+    assert len(entries) > 40
     actions = declared_actions()
     assert dead_ends(entries, mounted, actions) == []
     assert dead_ends(list(_call_shapes_everywhere(payload)), mounted, actions) == []

@@ -28,23 +28,23 @@ defmodule Wave3aHandlers.Handlers.ListToolsTest do
   @opts HTTPRouter.init([])
   @bearer "test-bearer-token-do-not-use-in-prod"
 
-  # Fixture mirroring the Python probe's `/v1/probe/list_tools` `data`
-  # payload. The probe CALLS `handle_list_tools({})` and surfaces its
-  # `success_response` output verbatim, with `server_time` masked by the
-  # probe's `mask_timestamps` helper — hence the `<MASKED_TIMESTAMP>` literal
-  # and the deterministic `agent_signature: {"uuid": null}` (no bound caller
-  # in the probe context).
+  # Representative Python probe `/v1/probe/list_tools` `data` payload. The
+  # probe CALLS `handle_list_tools({})` and surfaces its `success_response`
+  # output verbatim. Lite tool records are name-only; rich metadata requires
+  # lite=false. `server_time` is masked by the probe's `mask_timestamps`
+  # helper, and the probe context has no bound caller.
   @list_tools_data %{
     "success" => true,
     "server_time" => "<MASKED_TIMESTAMP>",
     "agent_signature" => %{"uuid" => nil},
     "tools" => [
-      %{"name" => "start_session", "hint" => "Create your identity", "tier" => "essential"},
-      %{"name" => "list_tools", "hint" => "List available tools", "tier" => "common"}
+      %{"name" => "start_session"},
+      %{"name" => "list_tools"}
     ],
     "total_available" => 24,
     "shown" => 2,
-    "more" => "list_tools(lite=false) for all tools with full category details",
+    "more" =>
+      "list_tools(lite=false) for descriptions, categories, tiers, workflows, and relationships",
     "tip" => "describe_tool(tool_name=...) for parameter details and examples"
   }
 
@@ -194,6 +194,7 @@ defmodule Wave3aHandlers.Handlers.ListToolsTest do
       refute Map.has_key?(body, "data")
       assert body["total_available"] == 24
       assert is_list(body["tools"])
+      assert Enum.all?(body["tools"], &(Map.keys(&1) == ["name"]))
     end
 
     test "probe failure surfaces as ok: false at the probe-mapped status" do

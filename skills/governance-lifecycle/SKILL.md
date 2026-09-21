@@ -31,13 +31,16 @@ source_files:
   # live in these two files; the reference drifts silently when they move.
   - unitares/src/tool_modes.py
   - unitares/src/tool_mode_listing.py
+  # Added 2026-09-21: the reference distinguishes the name-only lite handshake
+  # from rich list_tools browsing; that response shape lives here.
+  - unitares/src/mcp_handlers/introspection/tool_introspection.py
   # Added 2026-09-08: the reference now says the advertised parameter
   # descriptions are abridged and names describe_tool as where the full text
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "478215b83413f0ef"
+  unitares/src/mcp_handlers/identity/handlers.py: "5d8d49c146ae8d8e"
   unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f2f61da6afb477a9"
@@ -49,8 +52,9 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "a0e94cb9d29d161d"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "0f922d11fa4ac843"
+  unitares/src/tool_modes.py: "5049da9bfd3037e9"
   unitares/src/tool_mode_listing.py: "9949074d92d20b22"
+  unitares/src/mcp_handlers/introspection/tool_introspection.py: "6b0a7cc8cb796be7"
   unitares/src/schema_brief.py: "45f4dd23df9559fa"
 ---
 
@@ -269,10 +273,12 @@ before its first check-in; it does not need a recovery reflection. Inspect
 Interface contract 1.6.0 and later exposes one complete catalog on MCP, REST,
 and stdio, including installed plugin tools. No tool mode is needed; legacy
 `GOVERNANCE_TOOL_MODE` settings are ignored. `list_tools(lite=true)` reports
-the live interface version and surface hash. Here `lite` only controls response
-detail. Use categories to browse and `describe_tool(tool_name=..., action=...)`
-to inspect the parameters of one router action. Prefer primary workflow names;
-raw implementations remain discoverable and callable for compatibility.
+the live interface version and surface hash plus one name-only record for every
+advertised capability. Here `lite` only controls response detail, not which
+capabilities exist. Use `list_tools(lite=false, category=...)` to browse rich
+metadata and `describe_tool(tool_name=..., action=...)` to inspect the
+parameters of one router action. Prefer primary workflow names; raw
+implementations remain discoverable and callable for compatibility.
 Authorization and identity gates still apply to each action.
 
 Older servers may advertise a restricted profile. Inspect the client's actual
@@ -305,4 +311,4 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `call_model()` — Delegate to a configured secondary model for analysis
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
-- `list_tools()` / `describe_tool()` — Inspect the deployed catalog and full action parameters instead of guessing tool names. Available in the complete catalog; older servers may require their own discovery-profile configuration.
+- `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.

@@ -38,6 +38,10 @@ class ListToolsParams(AgentIdentityMixin):
     )
     lite: Union[bool, str, None] = Field(
         default=True,
+        # Kept byte-stable in this response-only change because parameter
+        # descriptions are part of the versioned input-schema digest. The
+        # accurate response split is served by the tool description itself;
+        # update this sentence with the next negotiated contract release.
         description="If true (default), return minimal response (names + descriptions only, ~500B vs ~4KB)."
     )
 
