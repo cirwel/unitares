@@ -186,9 +186,9 @@ async def test_annotations_survive_the_live_fastmcp_listing():
     )
     assert not unannotated, f"mounted on /mcp/ without annotations: {unannotated}"
 
-    health = listed["health_check"].annotations
-    assert health.model_dump(by_alias=True, exclude_none=True) == {
-        "title": "Server Health Snapshot",
+    catalog = listed["list_tools"].annotations
+    assert catalog.model_dump(by_alias=True, exclude_none=True) == {
+        "title": "Browse Tool Catalog",
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
@@ -277,9 +277,9 @@ async def test_annotations_survive_the_rest_proxy_round_trip(monkeypatch):
     )
     assert not dropped, f"annotations lost in the stdio-over-REST rebuild: {dropped}"
 
-    health = proxied["health_check"]
-    assert health.annotations.model_dump(by_alias=True, exclude_none=True) == {
-        "title": "Server Health Snapshot",
+    catalog = proxied["list_tools"]
+    assert catalog.annotations.model_dump(by_alias=True, exclude_none=True) == {
+        "title": "Browse Tool Catalog",
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
@@ -289,8 +289,8 @@ async def test_annotations_survive_the_rest_proxy_round_trip(monkeypatch):
     # get_tool_input_schema because mcp 2.x renamed the field to input_schema.
     from src.mcp_compat import get_tool_input_schema
 
-    assert get_tool_input_schema(health)
-    assert health.description
+    assert get_tool_input_schema(catalog)
+    assert catalog.description
 
 
 @pytest.mark.asyncio
@@ -312,8 +312,8 @@ async def test_proxy_rebuild_tolerates_a_payload_with_no_annotations(monkeypatch
             {
                 "type": "function",
                 "function": {
-                    "name": "health_check",
-                    "description": "Server health.",
+                    "name": "identity",
+                    "description": "Identity inspection.",
                     "parameters": {"type": "object", "properties": {}},
                 },
             },
@@ -351,7 +351,7 @@ async def test_proxy_rebuild_tolerates_a_payload_with_no_annotations(monkeypatch
     from src.mcp_compat import get_tool_input_schema
 
     rebuilt = {tool.name: tool for tool in await stdio.list_tools()}
-    assert set(rebuilt) == {"health_check", "list_tools"}
+    assert set(rebuilt) == {"identity", "list_tools"}
     for tool in rebuilt.values():
         assert tool.annotations is None
         assert get_tool_input_schema(tool) == {"type": "object", "properties": {}}

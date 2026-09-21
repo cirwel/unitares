@@ -110,6 +110,22 @@ class DescribeToolParams(AgentIdentityMixin):
                 setattr(self, name, True)
         return self
 
+
+class UseToolParams(AgentIdentityMixin):
+    """Invoke one public capability discovered through list_tools."""
+
+    tool_name: str = Field(
+        ...,
+        description="Exact public capability name returned by list_tools.",
+    )
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Arguments for the target capability; inspect its schema with "
+            "describe_tool before invoking it."
+        ),
+    )
+
 class UpdateConfigParams(AgentIdentityMixin):
     """
     Update server configuration safely.

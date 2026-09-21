@@ -42,11 +42,13 @@ see the [interface contract](INTERFACE_CONTRACT.md) for the authoritative mappin
 | Signed coordination | Deployment's lease-plane interface | Needs the configured lease service and identity proofs; it is not automatic ownership of arbitrary host actions. |
 
 “Core” and “additional” are reader guidance. They do not rename the existing
-`essential`, `common`, and `advanced` tiers or introduce a reduced tool mode.
-The complete mounted public catalog remains advertised. `list_tools(category=...)`
-filters by topic and `list_tools(essential_only=true)` selects the essential
-browsing subset; `describe_tool` supplies full parameter details after
-the compact name index or rich catalog view.
+`essential`, `common`, and `advanced` tiers. The complete mounted public catalog
+remains negotiable and callable, while the initial transport listing is
+progressive by default. Use `list_tools(lite=true)` for every capability name,
+`describe_tool` for its parameters, and `use_tool` when its schema was omitted
+from the initial listing. `UNITARES_TOOL_ADVERTISEMENT=full` restores the full
+up-front listing. Category, tier, and `essential_only` filters affect browsing,
+not target authorization.
 
 ## Choose a deployment profile
 

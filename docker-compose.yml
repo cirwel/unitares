@@ -121,6 +121,7 @@ services:
       DB_POSTGRES_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-age:5432/${POSTGRES_DB:-governance}
       DB_BACKEND: postgres
       DB_AGE_GRAPH: governance_graph
+      UNITARES_TOOL_ADVERTISEMENT: ${UNITARES_TOOL_ADVERTISEMENT:-progressive}
       REDIS_URL: redis://redis:6379/0
       # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
       UNITARES_KNOWLEDGE_BACKEND: postgres

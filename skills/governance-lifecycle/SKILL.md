@@ -40,7 +40,7 @@ source_files:
   - unitares/src/schema_brief.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "5d8d49c146ae8d8e"
+  unitares/src/mcp_handlers/identity/handlers.py: "d82070a0d97f2830"
   unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f2f61da6afb477a9"
@@ -52,9 +52,9 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "2b6f70a94a7361f5"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "5049da9bfd3037e9"
-  unitares/src/tool_mode_listing.py: "9949074d92d20b22"
-  unitares/src/mcp_handlers/introspection/tool_introspection.py: "6b0a7cc8cb796be7"
+  unitares/src/tool_modes.py: "60fb261244c59d3a"
+  unitares/src/tool_mode_listing.py: "7f50ce631689ce55"
+  unitares/src/mcp_handlers/introspection/tool_introspection.py: "0ffd2f7bc93fba79"
   unitares/src/schema_brief.py: "401bbce563c30439"
 ---
 
@@ -270,16 +270,20 @@ before its first check-in; it does not need a recovery reflection. Inspect
 
 ## MCP Tools Reference
 
-Interface contract 1.6.0 and later exposes one complete catalog on MCP, REST,
-and stdio, including installed plugin tools. No tool mode is needed; legacy
-`GOVERNANCE_TOOL_MODE` settings are ignored. `list_tools(lite=true)` reports
-the live interface version and surface hash plus one name-only record for every
-advertised capability. Here `lite` only controls response detail, not which
-capabilities exist. Use `list_tools(lite=false, category=...)` to browse rich
-metadata and `describe_tool(tool_name=..., action=...)` to inspect the
-parameters of one router action. Prefer primary workflow names; raw
-implementations remain discoverable and callable for compatibility.
-Authorization and identity gates still apply to each action.
+Interface contract 1.13.0 and later separates the complete negotiated catalog
+from the initial transport advertisement. MCP, REST, and stdio begin with a
+small progressive surface by default. `list_tools(lite=true)` returns the live
+interface version, surface hash, and a name-only record for every complete
+capability; `describe_tool(tool_name=..., action=...)` returns its parameters;
+`use_tool(tool_name=..., arguments={...})` invokes a capability omitted from
+the initial listing through its normal identity, validation, authorization,
+routing, timeout, response, and telemetry paths. Here `lite` controls response
+detail, not capability reachability. Use
+`list_tools(lite=false, category=...)` to browse rich metadata.
+Operators that require every schema up front can set
+`UNITARES_TOOL_ADVERTISEMENT=full`. Legacy `GOVERNANCE_TOOL_MODE` settings are
+ignored. Prefer primary workflow names; raw implementations remain callable
+for compatibility.
 
 Older servers may advertise a restricted profile. Inspect the client's actual
 tool catalog and server instructions; do not assume a name is callable merely
@@ -291,7 +295,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `sync_state()` — Check in with work summary and complexity. Pass `confidence` **only when you are actually stating a belief about your own work**: the server mints a tactical prediction from any value supplied and scores it into the fleet calibration curve, so a habitual or placeholder number becomes a forecast nobody made. Omitting it mints nothing and costs nothing.
 - `check_working_state()` — Read your current EISV state
 - `identity(client_session_id=...)` — Confirm who the runtime thinks you are and how continuity was resolved; never call it with no arguments (see Identity above), and include `continuity_token` for proof-owned UUID rebinds
-- `health_check()` — Check operator-facing server health when behavior seems odd
+- `health_check()` — Check operator-facing server health when behavior seems odd; discover its schema and invoke it through `use_tool` under progressive advertisement
 - `search_shared_memory(query=...)` — Find existing knowledge before creating new entries
 - `store_finding(...)` — Store a durable discovery, root cause, or correction
 - `update_finding(discovery_id=..., ...)` — Revise or close an existing finding
@@ -312,3 +316,4 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `observe()` — Read governance observations and fleet diagnostics
 - `config()` — Read or change runtime thresholds; writes are privileged
 - `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.
+- `use_tool(tool_name=..., arguments={...})` — Invoke a complete-catalog capability omitted from the initial progressive `tools/list`; target middleware and authorization still apply

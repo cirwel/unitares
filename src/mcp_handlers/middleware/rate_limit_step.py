@@ -108,6 +108,36 @@ def _is_pre_onboard_read_call(name: str, arguments: Dict[str, Any]) -> bool:
         return False
 
 
+def _use_tool_delegates_to_public_target(arguments: Dict[str, Any]) -> bool:
+    """Return whether the gateway will re-enter dispatch for a real target.
+
+    Successful gateway calls are charged by their nested target, so charging
+    them here would double-count. Calls that the gateway rejects never re-enter
+    the pipeline and need their own charge to prevent an unbounded malformed or
+    unknown-target request loop.
+    """
+    target = str(arguments.get("tool_name") or "").strip()
+    nested = arguments.get("arguments")
+    if not target or target == "use_tool":
+        return False
+    if nested is not None and not isinstance(nested, dict):
+        return False
+    try:
+        from ..introspection.tool_introspection import (
+            _registered_public_tool_names,
+        )
+
+        return target in set(_registered_public_tool_names())
+    except Exception:
+        logger.warning(
+            "_use_tool_delegates_to_public_target: classification failed for %r — "
+            "failing closed (rate-limited)",
+            target,
+            exc_info=True,
+        )
+        return False
+
+
 async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Rate limiting for non-read-only tools + loop detection for expensive reads."""
 
@@ -141,6 +171,14 @@ async def check_rate_limit(name: str, arguments: Dict[str, Any], ctx) -> Any:
             )]
 
         _tool_call_history[loop_key].append(now)
+
+    # ``use_tool`` is a transport gateway when it names a valid public target.
+    # Its nested dispatch re-enters this middleware for the final target, so
+    # charging successful gateway calls here would double-count. Rejected
+    # gateway calls never re-enter and intentionally fall through to the
+    # general limiter below.
+    if name == "use_tool" and _use_tool_delegates_to_public_target(arguments):
+        return name, arguments, ctx
 
     # General rate limiting (skip for read-only tools and pre-onboard reads)
     if _READ_ONLY_TOOLS.matches(name, arguments) or _is_pre_onboard_read_call(name, arguments):

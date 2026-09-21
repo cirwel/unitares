@@ -185,7 +185,12 @@ async def _proxy_http_list_tools() -> list[Tool]:
     import urllib.request
 
     base = _normalize_http_proxy_base(STDIO_PROXY_HTTP_URL)
-    url = f"{base}/v1/tools"
+    # Always fetch the complete backend catalog, then apply this stdio
+    # process's advertisement mode below.  The proxy and backend can be
+    # configured independently; asking for the backend default would make a
+    # locally configured ``full`` proxy unable to restore schemas omitted by
+    # a progressive backend.
+    url = f"{base}/v1/tools?mode=full"
 
     headers = {"Accept": "application/json", "X-Session-ID": f"stdio:{os.getpid()}"}
     if STDIO_PROXY_HTTP_BEARER_TOKEN:
@@ -216,6 +221,12 @@ async def _proxy_http_list_tools() -> list[Tool]:
         ))
     try:
         from src.tool_modes import TOOL_MODE, should_include_tool
+        # The backend already applied its public/hidden policy.  Preserve its
+        # complete catalog in full mode so a newer backend or backend-only
+        # plugin remains discoverable through an older stdio bridge.  Only the
+        # progressive profile needs the bridge's local entrypoint allowlist.
+        if TOOL_MODE == "full":
+            return tools
         return [t for t in tools if should_include_tool(t.name, mode=TOOL_MODE)]
     except Exception:
         return tools
@@ -445,7 +456,7 @@ async def inject_lightweight_heartbeat(
 
 
 async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[TextContent]:
-    """Handle tool calls from MCP client"""
+    """Handle a stdio call, using a configured remote proxy when available."""
     process_mgr.write_heartbeat()
 
     if arguments is None:
@@ -483,6 +494,13 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
                     }, indent=2)
                 )]
 
+    return await _call_local_tool(name, arguments)
+
+
+async def _call_local_tool(
+    name: str, arguments: dict[str, Any]
+) -> Sequence[TextContent]:
+    """Run the local stdio boundary after proxy selection has settled."""
     # Activity tracking for auto-heartbeat
     agent_id = arguments.get('agent_id') if isinstance(arguments, dict) else None
     session_id = arguments.get('client_session_id') if isinstance(arguments, dict) else None
@@ -523,17 +541,43 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
     # an alias's implied action; building afterwards would misreport every
     # aliased call as action_source="explicit".
     usage_payload = build_tool_usage_payload(name, arguments)
+    nested_delegated = False
     try:
         from src.mcp_handlers import dispatch_tool
-        result = await dispatch_tool(name, arguments)
+        from src.mcp_handlers.context import (
+            reset_nested_tool_invoker,
+            set_nested_tool_invoker,
+        )
+
+        async def _nested_invoker(target_name, target_arguments):
+            nonlocal nested_delegated
+            nested_delegated = True
+            nested = dict(target_arguments or {})
+            if (
+                "client_session_id" not in nested
+                and "client_session_id" in arguments
+            ):
+                nested["client_session_id"] = session_id
+            # Re-enter this exact module object's local boundary so target
+            # activity tracking, JSONL/presence telemetry, and error handling
+            # are identical to the direct call after the already-settled proxy
+            # decision. A failed optional proxy is not retried per nested hop.
+            return await _call_local_tool(target_name, nested)
+
+        invoker_token = set_nested_tool_invoker(_nested_invoker)
+        try:
+            result = await dispatch_tool(name, arguments)
+        finally:
+            reset_nested_tool_invoker(invoker_token)
         latency_ms = int((time.monotonic() - t0) * 1000)
         if result is not None:
             success, error_type = classify_tool_result(result)
-            record_tool_usage(tool_name=name,
-                              agent_id=resolve_minted_agent_id(name, agent_id, result),
-                              success=success,
-                              error_type=error_type, latency_ms=latency_ms,
-                              session_id=session_id, payload=usage_payload)
+            if not nested_delegated:
+                record_tool_usage(tool_name=name,
+                                  agent_id=resolve_minted_agent_id(name, agent_id, result),
+                                  success=success,
+                                  error_type=error_type, latency_ms=latency_ms,
+                                  session_id=session_id, payload=usage_payload)
             return result
         record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
                           error_type="unknown_tool", latency_ms=latency_ms,
@@ -544,10 +588,11 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
         # failure returned an error to the caller and left audit.tool_usage
         # silent, so a broken deploy looked like "no traffic" rather than
         # "every call failed".
-        record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
-                          error_type="handler_registry_unavailable",
-                          latency_ms=int((time.monotonic() - t0) * 1000),
-                          session_id=session_id, payload=usage_payload)
+        if not nested_delegated:
+            record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
+                              error_type="handler_registry_unavailable",
+                              latency_ms=int((time.monotonic() - t0) * 1000),
+                              session_id=session_id, payload=usage_payload)
         return [TextContent(type="text", text=json.dumps({"success": False, "error": f"Handler registry not available for tool '{name}'"}, indent=2))]
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -557,9 +602,10 @@ async def call_tool(name: str, arguments: dict[str, Any] | None) -> Sequence[Tex
             f"Error executing tool '{name}': {str(e)}",
             recovery={"action": "Check tool parameters and try again"}
         )
-        record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
-                          error_type="execution_error", latency_ms=latency_ms,
-                          session_id=session_id, payload=usage_payload)
+        if not nested_delegated:
+            record_tool_usage(tool_name=name, agent_id=agent_id, success=False,
+                              error_type="execution_error", latency_ms=latency_ms,
+                              session_id=session_id, payload=usage_payload)
         return [sanitized_error]
 
 

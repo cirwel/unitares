@@ -56,11 +56,14 @@ its own identity, declare the dispatcher as parent with
 
 The primary tools return a compact agent-facing envelope. State-changing tools
 preserve the raw payload under `raw_governance`; read aliases omit that repeated
-payload by default and expose a full-mode escape hatch. Interface contract 1.6.0 and later advertises one complete catalog, including
-all routers and discovery tools. Legacy `GOVERNANCE_TOOL_MODE` values are
-ignored. `list_tools()` reports the current catalog and contract version;
-`describe_tool(tool_name=..., action=...)` provides the full action parameters.
-Raw implementations remain available for independently upgraded clients.
+payload by default and expose a full-mode escape hatch. Interface contract
+1.13.0 and later negotiates one complete catalog while initially advertising a
+small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
+`list_tools(lite=true)` reports every capability name and the contract version;
+`describe_tool(tool_name=..., action=...)` provides the full parameters; and
+`use_tool(tool_name=..., arguments={...})` invokes a capability omitted from
+the initial listing. Set `UNITARES_TOOL_ADVERTISEMENT=full` when a client needs
+every schema up front. Raw implementations remain available for independently upgraded clients.
 Each action still enforces its own authorization and identity requirements.
 
 For `sync_state`, read `action_summary` first. It keeps the policy action,

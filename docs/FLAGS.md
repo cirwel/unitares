@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**173 flags.**
+**174 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -185,6 +185,7 @@ index; that one is the curated decision record.
 | `UNITARES_STDIO_PROXY_STRICT` | `'1'` | — | src/mcp_server_std.py |
 | `UNITARES_STDIO_PROXY_URL` | `None (no reader fallback)` | — | src/mcp_server_std.py |
 | `UNITARES_S_SETPOINT` | `'1'` | Whether the per-class S setpoint is active (UNITARES_S_SETPOINT) | config/governance_config.py |
+| `UNITARES_TOOL_ADVERTISEMENT` | `'progressive'` | Resolve the process advertisement mode; invalid values fail open. | src/tool_modes.py |
 | `UNITARES_TOOL_SCHEMA_BRIEF_BUDGET` | `''` | Resolve the per-description character budget. | src/schema_brief.py |
 | `UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS` | `''` | Resolve the advertised field-description mode | src/schema_brief.py |
 | `UNITARES_TOOL_SCHEMA_NULL_DEFAULTS` | `''` | Resolve what the advertised schema does with ``default: null`` | src/schema_brief.py |

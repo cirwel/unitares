@@ -4,6 +4,7 @@ Tool introspection handlers (list_tools, describe_tool).
 Extracted from admin.py for maintainability.
 """
 
+import json
 from typing import Dict, Any, List, Sequence
 from mcp.types import TextContent
 from src.mcp_compat import get_tool_input_schema
@@ -140,12 +141,12 @@ def _format_lite_parameter(
     return f"{field_name}: {field_type}"
 
 def _not_advertised_summary(tools_list, mode: str) -> dict:
-    """Explain registration/catalog discrepancies without suggesting a mode."""
+    """Explain capabilities omitted from the initial advertisement."""
     names = sorted(t["name"] for t in tools_list if not t.get("advertised", True))
     return {
-        "count": len(names), "tools": names, "mode": "full",
-        "reason": "Registered names without a public schema in this catalog snapshot",
-        "note": "Discovery is complete by default. Use health_check and describe_tool to inspect a catalog discrepancy; mode settings do not hide capabilities.",
+        "count": len(names), "tools": names, "mode": mode,
+        "reason": "Public capabilities omitted from the initial progressive tools/list advertisement",
+        "note": "Discover with list_tools, inspect with describe_tool, and invoke with use_tool; set UNITARES_TOOL_ADVERTISEMENT=full to advertise every schema up front.",
     }
 
 
@@ -206,6 +207,27 @@ def _orientation_description(
     return first_line(description) or f"Tool: {tool_name}"
 
 
+def _registered_public_tool_names() -> list[str]:
+    """Return the live public dispatch index used by discovery and gateway.
+
+    Entry-point plugins can register after the mounted MCP schema table was
+    built, and a partial mount can omit a schema while leaving its handler
+    callable. The decorator/handler registry is therefore the authority for
+    the complete on-demand capability index; both ``list_tools`` and
+    ``use_tool`` must consult the same refreshed snapshot.
+    """
+    from src.interface_contract import get_public_tool_definitions
+    from src.mcp_handlers import refresh_tool_handlers_from_registry
+
+    refresh_tool_handlers_from_registry()
+    return [
+        tool.name
+        for tool in get_public_tool_definitions(
+            "full", include_unmounted=True
+        )
+    ]
+
+
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -216,7 +238,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         include_advanced (bool): If false, exclude Tier 3 (advanced) tools (default: true)
         tier (str): Filter by tier: "essential", "common", "advanced", or "all" (default: "all")
         category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
-        lite (bool): If true, return the compact federation handshake: one name-only record per advertised tool, the interface contract and continuation hints (default: true)
+        lite (bool): If true, return the compact federation handshake: one name-only record per public capability, the interface contract and continuation hints (default: true)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
     """
     
@@ -225,10 +247,8 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # (notably in embedded/test hosts); synchronize the decorator registry
     # first so orientation never advertises a tool the dispatcher cannot yet
     # resolve. The normal server bootstrap performs the same idempotent step.
-    from src.mcp_handlers import TOOL_HANDLERS, refresh_tool_handlers_from_registry
-    refresh_tool_handlers_from_registry()
     from ..tool_stability import AGENT_WORKFLOW_ALIASES
-    registered_tool_names = sorted(set(TOOL_HANDLERS.keys()) | set(AGENT_WORKFLOW_ALIASES))
+    registered_tool_names = _registered_public_tool_names()
     
     # Parse filter parameters (handle string booleans from MCP transport)
     essential_only = coerce_bool(arguments.get("essential_only"), False)
@@ -257,20 +277,25 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         get_public_tool_definitions,
     )
     from src.tool_modes import TOOL_MODE, TOOL_TIERS
-    interface_contract = get_interface_contract_summary(TOOL_MODE)
+    interface_contract = get_interface_contract_summary()
 
-    # Orientation and all transports share the same complete catalog, and the
-    # definitions tools/list serves are also where each advertised name's
-    # description comes from (_orientation_description).
+    # list_tools is the complete capability index even when the initial MCP
+    # advertisement is progressive.  Keep a second set so the rich view can
+    # say which names a schema-driven client received directly.
     try:
-        public_definitions = list(get_public_tool_definitions(TOOL_MODE))
+        public_definitions = list(
+            get_public_tool_definitions("full", include_unmounted=True)
+        )
+        directly_advertised = list(get_public_tool_definitions(TOOL_MODE))
     except Exception:
         public_definitions = []
-    advertised_names = {tool.name for tool in public_definitions} or None
+        directly_advertised = []
+    advertised_names = {tool.name for tool in directly_advertised} or None
     # An unavailable/empty schema catalog fails open to registration.
     wire_descriptions = {
         tool.name: tool.description or "" for tool in public_definitions
     }
+    public_names = set(wire_descriptions) or None
 
     # Deprecated tools - hidden from list_tools by default.
     # Two independent sources, and both are needed:
@@ -283,14 +308,18 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     #     removed (2026-08-29).
     from ..tool_stability import list_all_aliases
     from ..decorators import _TOOL_DEFINITIONS
-    _deprecated = (
-        set(list_all_aliases().keys())
-        | {n for n, td in _TOOL_DEFINITIONS.items() if td.deprecated}
-    ) - set(AGENT_WORKFLOW_ALIASES)
-    # ...but never hide a name this deployment actually advertises. Orientation
-    # describes the callable surface; a tool on the wire that list_tools omits
-    # is the WIRE_NAME_NOT_IN_ORIENTATION defect, and it is worse than listing a
-    # deprecated tool, which the entry marks as deprecated anyway.
+    deprecated_aliases = (
+        set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
+    )
+    deprecated_handlers = {
+        name for name, definition in _TOOL_DEFINITIONS.items()
+        if definition.deprecated
+    }
+    _deprecated = deprecated_aliases | deprecated_handlers
+    # ...but never hide a name this deployment exposes in its complete public
+    # catalog. list_tools is the negotiation index even when tools/list starts
+    # with the progressive subset; omitting a public deprecated plugin here
+    # makes the contract and gateway name a capability discovery cannot find.
     #
     # This exemption was introduced because leave_note carried
     # deprecated=True/superseded_by="knowledge" while still sitting in
@@ -299,16 +328,17 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # operator has since settled that contradiction the other way -- leave_note
     # is not deprecated and no longer carries the flag -- so the exemption is
     # no longer load-bearing for any tool shipping today. It stays as the
-    # general rule: whatever this deployment advertises, orientation lists.
+    # general rule: whatever this deployment exposes publicly, orientation
+    # lists.
     #
-    # In the degraded path (advertised surface unavailable) fall back to the
+    # In the degraded path (public surface unavailable) fall back to the
     # pre-2026-08-29 rule exactly -- alias keys only -- so an unavailable
     # advertised set can never hide a tool that the decorator flag alone
     # would suppress.
-    DEPRECATED_TOOLS = (
-        set(list_all_aliases().keys()) - set(AGENT_WORKFLOW_ALIASES)
-        if advertised_names is None
-        else _deprecated - advertised_names
+    DEPRECATED_TOOLS = deprecated_aliases | (
+        set()
+        if public_names is None
+        else deprecated_handlers - public_names
     )
 
     tool_relationships = tool_catalog.TOOL_RELATIONSHIPS
@@ -421,7 +451,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         usage_data = await get_usage_data()
         tools_list = order_tools_by_usage(tools_list, usage_data)
     
-    # LITE MODE: the complete advertised name index used by federation
+    # LITE MODE: the complete public capability-name index used by federation
     # negotiation, without repeating per-tool metadata or onboarding prose.
     # ``interface_contract.federation.negotiation.capabilities_path`` is
     # ``tools[*].name``, so every advertised name remains present. Rich
@@ -430,7 +460,6 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         lite_tools = [
             {"name": t["name"]}
             for t in tools_list
-            if advertised_names is None or t.get("advertised", True)
         ]
         # Sort by workflow order (onboard first) or usage if progressive enabled
         if progressive and usage_data:
@@ -456,7 +485,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "total_available": len(tools_list),
             "shown": len(lite_tools),
             "more": "list_tools(lite=false) for descriptions, categories, tiers, workflows, and relationships",
-            "tip": "describe_tool(tool_name=...) for parameter details and examples",
+            "tip": "describe_tool(tool_name=...) for parameters; use_tool(tool_name=..., arguments={...}) when the capability is absent from the initial tools/list",
+            "advertisement": {
+                "mode": TOOL_MODE,
+                "direct_count": len(advertised_names or lite_tools),
+                "full_mode_env": "UNITARES_TOOL_ADVERTISEMENT=full",
+            },
         }
         
         # Add progressive metadata if enabled
@@ -700,6 +734,120 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     
     return success_response(tools_info)
 
+
+@mcp_tool("use_tool", timeout=None, requires_identity="pre_onboard")
+async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Invoke a public capability omitted from progressive advertisement."""
+    target = str(arguments.get("tool_name") or "").strip()
+    if not target:
+        return [error_response(
+            "tool_name is required",
+            error_code="TOOL_NAME_REQUIRED",
+            recovery={"action": "Call list_tools(lite=true) for capability names"},
+        )]
+    if target == "use_tool":
+        return [error_response(
+            "use_tool cannot invoke itself",
+            error_code="RECURSIVE_TOOL_INVOCATION",
+            recovery={"action": "Name the final target capability directly"},
+        )]
+
+    nested = arguments.get("arguments")
+    if nested is None:
+        nested = {}
+    if not isinstance(nested, dict):
+        return [error_response(
+            "arguments must be a JSON object",
+            error_code="INVALID_TOOL_ARGUMENTS",
+            recovery={"action": f"Call describe_tool(tool_name={target!r})"},
+        )]
+    nested = dict(nested)
+
+    public_names = set(_registered_public_tool_names())
+    if target not in public_names:
+        return [error_response(
+            f"Unknown public capability: {target}",
+            error_code="TOOL_NOT_FOUND",
+            recovery={
+                "action": "Call list_tools(lite=true) and use an exact returned name",
+                "related_tools": ["list_tools", "describe_tool"],
+            },
+        )]
+
+    # The active transport owns re-entry. This preserves MCP session proof and
+    # Wave 3a routing, REST target-specific prebinding, and stdio activity plus
+    # telemetry behavior instead of approximating them in this handler.
+    from src.mcp_handlers.context import get_nested_tool_invoker
+
+    invoker = get_nested_tool_invoker()
+    if invoker is not None:
+        transport_result = await invoker(target, nested)
+        if isinstance(transport_result, (list, tuple)):
+            return transport_result
+        return [TextContent(
+            type="text", text=json.dumps(transport_result, default=str)
+        )]
+
+    # Direct handler calls (tests and embedders) have no transport callback.
+    # Preserve their historical local fallback and propagate an explicit outer
+    # session only here; real transports decide session provenance themselves.
+    if (
+        "client_session_id" not in nested
+        and "client_session_id" in arguments
+    ):
+        nested["client_session_id"] = arguments.get("client_session_id")
+    from src.mcp_handlers import dispatch_tool
+    from src.services.tool_usage_recorder import (
+        build_tool_usage_payload,
+        classify_tool_result,
+        record_tool_usage,
+        resolve_minted_agent_id,
+    )
+
+    usage_payload = build_tool_usage_payload(target, nested)
+    started = _time.monotonic()
+    try:
+        result = await dispatch_tool(target, nested)
+    except Exception as exc:
+        record_tool_usage(
+            tool_name=target,
+            agent_id=nested.get("agent_id"),
+            success=False,
+            error_type=type(exc).__name__,
+            latency_ms=int((_time.monotonic() - started) * 1000),
+            session_id=nested.get("client_session_id"),
+            payload=usage_payload,
+        )
+        raise
+    latency_ms = int((_time.monotonic() - started) * 1000)
+    if result is None:
+        record_tool_usage(
+            tool_name=target,
+            agent_id=nested.get("agent_id"),
+            success=False,
+            error_type="unknown_tool",
+            latency_ms=latency_ms,
+            session_id=nested.get("client_session_id"),
+            payload=usage_payload,
+        )
+        return [error_response(
+            f"Capability did not dispatch: {target}",
+            error_code="TOOL_NOT_FOUND",
+        )]
+
+    success, error_type = classify_tool_result(result)
+    actor = resolve_minted_agent_id(target, nested.get("agent_id"), result)
+    record_tool_usage(
+        tool_name=target,
+        agent_id=actor,
+        success=success,
+        error_type=error_type,
+        latency_ms=latency_ms,
+        session_id=nested.get("client_session_id"),
+        payload=usage_payload,
+    )
+    return result
+
 @mcp_tool("describe_tool", timeout=10.0, requires_identity="pre_onboard")
 async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -728,6 +876,17 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
 
         from ..tool_stability import get_tool_stability, resolve_tool_alias
         tool_name, alias_info = resolve_tool_alias(requested_tool_name)
+        from ..decorators import is_tool_hidden
+
+        if is_tool_hidden(requested_tool_name) or is_tool_hidden(tool_name):
+            return [error_response(
+                f"Unknown tool: {requested_tool_name}",
+                recovery={
+                    "action": "Call list_tools to see available tool names",
+                    "related_tools": ["list_tools"],
+                },
+                context={"tool_name": requested_tool_name},
+            )]
         stability = get_tool_stability(tool_name).value
 
         from src.tool_descriptions import TOOL_DESCRIPTIONS

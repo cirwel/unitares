@@ -235,10 +235,10 @@ def _session_id_from_ctx(ctx: Context | None) -> str | None:
 
 # Cache tool wrappers to avoid recreating functions on every call
 # Max size: 100 tools (future-proofing for dynamic tool registration)
-# The advertised surface is the registered tools (src.tool_meta.WIRE_ORDER)
-# plus the workflow aliases (tool_stability.AGENT_WORKFLOW_ALIASES): 50 names
-# (42 + 8) at be117c2, 2026-09-11, so there is headroom. Recount from those
-# two tuples, not from this comment.
+# Every public capability is registered and stays directly dispatchable. The
+# listing layer may advertise only the progressive entry set; ``use_tool`` is
+# the callable gateway to the rest of this mounted table. The cache still needs
+# headroom for the complete registered surface, not just its initial listing.
 _MAX_TOOL_WRAPPER_CACHE_SIZE = 100
 _tool_wrappers_cache: Dict[str, callable] = {}
 
@@ -287,6 +287,7 @@ def get_tool_wrapper(tool_name: str):
             usage_payload = {}
             session_id = None
             dispatch_metadata_sanitized = False
+            nested_delegated = False
 
             def _record(success, error_type=None, result=None):
                 """Fire-and-forget audit row.
@@ -395,12 +396,31 @@ def get_tool_wrapper(tool_name: str):
                     )
 
                 # Dispatch to existing handler (which has @mcp_tool timeout protection)
-                result = await dispatch_tool(tool_name, kwargs)
+                from src.mcp_handlers.context import (
+                    reset_nested_tool_invoker,
+                    set_nested_tool_invoker,
+                )
+
+                async def _nested_invoker(target_name, target_arguments):
+                    nonlocal nested_delegated
+                    nested_delegated = True
+                    return await _invoke_mcp_nested_tool(
+                        target_name,
+                        target_arguments,
+                        outer_arguments=kwargs,
+                    )
+
+                invoker_token = set_nested_tool_invoker(_nested_invoker)
+                try:
+                    result = await dispatch_tool(tool_name, kwargs)
+                finally:
+                    reset_nested_tool_invoker(invoker_token)
 
                 # Record successful call metrics
                 duration = time.time() - start_time
-                TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="success").inc()
-                TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
+                if not nested_delegated:
+                    TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="success").inc()
+                    TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
 
                 if result is None:
                     TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="not_found").inc()
@@ -413,7 +433,8 @@ def get_tool_wrapper(tool_name: str):
                 # see _identity_refusal_status). A refused call is now
                 # countable instead of auditing as a succeeding anonymous one.
                 success, error_type = classify_tool_result(result)
-                _record(success, error_type=error_type, result=result)
+                if not nested_delegated:
+                    _record(success, error_type=error_type, result=result)
 
                 # Extract structured payload from TextContent response
                 # Many MCP clients enforce outputSchema and require structured output.
@@ -436,14 +457,16 @@ def get_tool_wrapper(tool_name: str):
             except Exception as e:
                 # Record error metrics
                 duration = time.time() - start_time
-                TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="error").inc()
-                TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
+                if not nested_delegated:
+                    TOOL_CALLS_TOTAL.labels(tool_name=tool_name, status="error").inc()
+                    TOOL_CALL_DURATION.labels(tool_name=tool_name).observe(duration)
 
                 # Log error for visibility
                 # Note: @mcp_tool decorator on handlers also catches exceptions,
                 # but dispatch_tool may raise before reaching handler (e.g., rate limit)
                 logger.error(f"Error in tool wrapper {tool_name}: {e}", exc_info=True)
-                _record(False, error_type=type(e).__name__)
+                if not nested_delegated:
+                    _record(False, error_type=type(e).__name__)
                 return {"success": False, "error": str(e), "error_type": type(e).__name__}
 
         wrapper.__name__ = tool_name
@@ -481,6 +504,46 @@ TOOLS_NEEDING_SESSION_INJECTION = call_set(
         "dialectic",
     },
 )
+
+
+async def _invoke_mcp_nested_tool(
+    tool_name: str,
+    arguments: Dict[str, object],
+    *,
+    outer_arguments: Dict[str, object],
+):
+    """Re-enter the MCP target wrapper with direct-call session semantics."""
+    from src.mcp_handlers.context import (
+        reset_csid_transport_injected,
+        set_csid_transport_injected,
+    )
+
+    nested = dict(arguments or {})
+    csid_token = set_csid_transport_injected(False)
+    try:
+        # ``use_tool`` itself is not session-injected. An explicit outer CSID
+        # is therefore caller input and behaves exactly as if it had appeared
+        # on a directly named target.
+        if (
+            "client_session_id" not in nested
+            and "client_session_id" in outer_arguments
+        ):
+            nested["client_session_id"] = outer_arguments.get("client_session_id")
+
+        # Reproduce create_typed_wrapper's per-target policy. Targets outside
+        # this set resolve the caller-proven MCP session from transport context;
+        # copying it into arguments would downgrade it to server_inferred.
+        if (
+            TOOLS_NEEDING_SESSION_INJECTION.matches(tool_name)
+            and "client_session_id" not in nested
+        ):
+            session_id = _session_id_from_ctx(None)
+            if session_id:
+                nested["client_session_id"] = session_id
+                set_csid_transport_injected(True)
+        return await get_tool_wrapper(tool_name)(**nested)
+    finally:
+        reset_csid_transport_injected(csid_token)
 
 # FastMCP validates tool arguments before dispatch_tool sees them. For these
 # internal/provenance-heavy tools, UNITARES dispatch middleware is the source of

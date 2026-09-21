@@ -25,7 +25,7 @@ class ToolDefinition:
     """Single source of truth for a registered MCP tool."""
     name: str
     handler: Callable
-    timeout: float = 30.0
+    timeout: Optional[float] = 30.0
     description: str = ""
     deprecated: bool = False
     hidden: bool = False
@@ -112,7 +112,7 @@ def _is_first_party_module(module: str) -> bool:
 
 def mcp_tool(
     name: Optional[str] = None,
-    timeout: float = 30.0,
+    timeout: Optional[float] = 30.0,
     description: Optional[str] = None,
     deprecated: bool = False,
     hidden: bool = False,
@@ -149,7 +149,8 @@ def mcp_tool(
 
     Args:
         name: Tool name (defaults to function name without 'handle_' prefix)
-        timeout: Timeout in seconds (default: 30.0)
+        timeout: Timeout in seconds (default: 30.0), or ``None`` when a
+            gateway delegates timeout enforcement to the selected handler.
         description: Tool description (defaults to function docstring)
         deprecated: If True, tool still works but warns users to use superseded_by
         hidden: If True, tool is not shown in list_tools (internal use only)
@@ -225,9 +226,13 @@ def mcp_tool(
                 )
             start_time = time.time()
             try:
-                result = await asyncio.wait_for(func(arguments), timeout=timeout)
+                result = (
+                    await func(arguments)
+                    if timeout is None
+                    else await asyncio.wait_for(func(arguments), timeout=timeout)
+                )
                 elapsed = time.time() - start_time
-                if elapsed > timeout * 0.8:
+                if timeout is not None and elapsed > timeout * 0.8:
                     logger.warning(
                         f"Tool '{tool_name}' took {elapsed:.2f}s "
                         f"({elapsed/timeout*100:.1f}% of {timeout}s timeout)"
@@ -240,6 +245,8 @@ def mcp_tool(
                     result = [result]
                 return result
             except asyncio.TimeoutError:
+                if timeout is None:
+                    raise
                 logger.warning(f"Tool '{tool_name}' timed out after {timeout}s")
                 # Wave 0 step 2A (RFC roadmap §86): emit coordination_failure
                 # via the SYNC audit_logger path. Avoids the anyio task-group
@@ -336,7 +343,7 @@ def get_tool_registry() -> Dict[str, Callable]:
     return {name: td.handler for name, td in _TOOL_DEFINITIONS.items()}
 
 
-def get_tool_timeout(tool_name: str) -> float:
+def get_tool_timeout(tool_name: str) -> Optional[float]:
     """Get timeout for a tool."""
     td = _TOOL_DEFINITIONS.get(tool_name)
     return td.timeout if td else 30.0

@@ -2,12 +2,12 @@
 """Check the running Compose server's discovery and named-call contract.
 
 Run inside the governance-mcp container, using its installed MCP dependency:
-    docker compose exec -T governance-mcp python - --mode full < scripts/ci/check_mcp_tool_surface.py
+    docker compose exec -T governance-mcp python - --mode progressive < scripts/ci/check_mcp_tool_surface.py
 
 This checks the real HTTP mount, not only the in-process registration table.
-The only tool call is the read-only list_tools introspection handler. Its
-contract and the MCP listing must expose the complete catalog under every
-legacy mode input. Initialize must still provide workflow orientation.
+The only tool call is the read-only list_tools introspection handler. The MCP
+listing must match the selected advertisement, while list_tools must negotiate
+the complete catalog. Initialize must still provide workflow orientation.
 """
 
 import argparse
@@ -18,7 +18,7 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from src.mcp_compat import mcp_httpx
-from src.tool_modes import get_tools_for_mode
+from src.tool_modes import advertised_tool_names_full, get_tools_for_mode
 from src.interface_contract import get_interface_contract_summary
 
 
@@ -66,8 +66,13 @@ async def check(mode: str, url: str) -> None:
                         }
                         raise RuntimeError(f"{mode}: federation contract mismatch: {differences}")
                     shown = {tool["name"] for tool in payload["tools"]}
-                    if shown != expected:
-                        raise RuntimeError(f"{mode}: introspection disagrees with discovery")
+                    complete = advertised_tool_names_full()
+                    if shown != complete:
+                        raise RuntimeError(
+                            f"{mode}: federation handshake is incomplete; "
+                            f"missing={sorted(complete - shown)}, "
+                            f"extra={sorted(shown - complete)}"
+                        )
 
     print(
         f"PASS: {mode} advertises {len(names)} tools; list_tools dispatches by "
@@ -78,7 +83,9 @@ async def check(mode: str, url: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mode", choices=("minimal", "standard", "lite", "full"), default="full"
+        "--mode",
+        choices=("progressive", "full", "minimal", "standard", "lite"),
+        default="progressive",
     )
     parser.add_argument("--url", default="http://127.0.0.1:8767/mcp/")
     args = parser.parse_args()

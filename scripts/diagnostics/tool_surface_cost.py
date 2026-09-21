@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What each GOVERNANCE_TOOL_MODE profile costs on the wire.
+"""What each tool-advertisement profile costs on the wire.
 
 `count_tools.py` answers "how many tools are there". This answers the question
 a context budget actually asks: **how much does advertising them cost**, in the
@@ -33,8 +33,8 @@ as `count_tools.py`.
 
 Usage:
     python3 scripts/diagnostics/tool_surface_cost.py                 # all profiles
-    python3 scripts/diagnostics/tool_surface_cost.py --mode standard # per-tool breakdown
-    python3 scripts/diagnostics/tool_surface_cost.py --mode standard --params
+    python3 scripts/diagnostics/tool_surface_cost.py --mode progressive # default listing
+    python3 scripts/diagnostics/tool_surface_cost.py --mode full --params
     python3 scripts/diagnostics/tool_surface_cost.py --json
     python3 scripts/diagnostics/tool_surface_cost.py --check-ladder  # CI invariant
 """
@@ -71,9 +71,13 @@ DEFAULT_BYTES_PER_TOKEN = 4
 #: calling), not a rung on this ladder, and comparing them to it is meaningless.
 LADDER = ("minimal", "standard", "lite", "full")
 
-#: Profiles reported by default. The operator profiles are measured on request
-#: via --mode but do not clutter the ladder comparison.
-ALL_PROFILES = LADDER + ("operator_readonly", "operator_recovery")
+#: Profiles reported by default. ``progressive`` is the current product
+#: default; the legacy labels remain measurable as full-catalog compatibility
+#: inputs until their diagnostic callers migrate.
+ALL_PROFILES = ("progressive",) + LADDER + (
+    "operator_readonly",
+    "operator_recovery",
+)
 
 SURFACES = ("mcp", "catalog")
 
@@ -483,7 +487,7 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Measure the wire cost of each GOVERNANCE_TOOL_MODE profile"
+        description="Measure the wire cost of each tool-advertisement profile"
     )
     parser.add_argument(
         "--mode",

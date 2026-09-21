@@ -304,6 +304,15 @@ TOOL_ANNOTATIONS: Dict[str, Dict[str, Any]] = {
         "idempotentHint": True,
         "openWorldHint": False,
     },
+    "use_tool": {
+        # A gateway inherits the most consequential class of any target it can
+        # dispatch. Target middleware still enforces the actual operation.
+        "title": "Invoke Catalog Capability",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
     "skills": {
         "title": "Governance Skill Bundle",
         "readOnlyHint": True,

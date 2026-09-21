@@ -83,15 +83,17 @@ a prototype or a system?
 
 | | |
 |---|---|
-| **42 tools** on the wire | one complete catalog, every name advertised on every transport (legacy `GOVERNANCE_TOOL_MODE` settings are accepted and ignored); 8 of them are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
+| **43 registered tools** | one complete catalog remains negotiable and callable on every transport; the default initial listing is progressive and omitted names run through `use_tool` after discovery (`UNITARES_TOOL_ADVERTISEMENT=full` restores every schema up front; legacy `GOVERNANCE_TOOL_MODE` is ignored). 8 tools are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
 | **13,614 test functions** | across 776 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
 | **67 database migrations** | slot-and-name drift is gated by the repo doctor |
 | **524 Python modules** | `src/`, `governance_core/`, and the reference residents |
 | **226 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
 | **7 companion repositories** | including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland; the main integrations are listed under [Ecosystem](../README.md#ecosystem) |
 
-Recounted 2026-09-09 against tracked files at `e017c45e`, each with the command
-that produced it. Test files: `git ls-files tests/` filtered to `test_*.py`;
+The registered-tool count was refreshed 2026-09-20 at `76a68c02` after adding
+`use_tool`; the remaining structural counts were recounted 2026-09-09 against
+tracked files at `e017c45e`, each with the command that produced it. Test files:
+`git ls-files tests/` filtered to `test_*.py`;
 test functions: an AST walk of those files for `def test_*`. Migrations:
 `git ls-files db/postgres/migrations/ | wc -l`. Python modules:
 `git ls-files src/ governance_core/ agents/ | grep -c '\.py$'`. Documents:

@@ -196,7 +196,9 @@ def test_every_dispatch_entry_point_feeds_the_shared_recorder():
     entry_points = {
         "mcp_streamable_http_wrapper": tr.get_tool_wrapper,
         "rest_v1_tools_call": http_tool_service.execute_http_tool,
-        "stdio_call_tool": std.call_tool,
+        # call_tool settles optional proxying, then every local call (including
+        # a use_tool target) enters this shared recording boundary.
+        "stdio_local_call": std._call_local_tool,
     }
     unwired = [
         name
