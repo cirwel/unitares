@@ -92,6 +92,29 @@ esac
 SERVER_URL="${UNITARES_SERVER_URL:-}"
 preflight_ok=1
 
+# Capture the response body and status separately. curl can return non-zero
+# after receiving HTTP headers (for example, when a response times out), so do
+# not erase a useful status with 000 merely because its process status failed.
+probe_url() {
+  local response
+  if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+    response=$(printf 'Authorization: Bearer %s\n' "${UNITARES_HTTP_API_TOKEN}" \
+      | curl -sS --max-time 3 -H @- "$@" -w '\n%{http_code}' 2>/dev/null)
+  else
+    response=$(curl -sS --max-time 3 "$@" -w '\n%{http_code}' 2>/dev/null)
+  fi
+  case "${response}" in
+    *$'\n'[0-9][0-9][0-9])
+      PROBE_CODE="${response##*$'\n'}"
+      PROBE_BODY="${response%$'\n'*}"
+      ;;
+    *)
+      PROBE_CODE=000
+      PROBE_BODY="${response}"
+      ;;
+  esac
+}
+
 if [ -z "${SERVER_URL}" ]; then
   preflight_ok=0
   log "WARN UNITARES_SERVER_URL unset — hooks will target http://localhost:8767,"
@@ -104,47 +127,70 @@ else
     *) log "WARN not https:// — container egress is proxied; plain-HTTP and" \
            "non-standard ports do not leave the sandbox." ;;
   esac
-  case "${SERVER_URL%/}" in
-    */mcp) MCP_URL="${SERVER_URL%/}/" ;;
-    *) MCP_URL="${SERVER_URL%/}/mcp/" ;;
+  BASE_URL="${SERVER_URL%/}"
+  case "${BASE_URL}" in
+    */mcp)
+      preflight_ok=0
+      log "WARN UNITARES_SERVER_URL must be the server base URL, without /mcp;" \
+          "hooks append /health and /v1/tools/call themselves."
+      ;;
   esac
-  # Probe the route hooks actually use. /health does not exercise the MCP
-  # bearer or DNS-rebinding gates, so it can return 200 while every hook gets
-  # 401 or 421. A GET that reaches the MCP session layer returns 200 or 400.
-  if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
-    code=$(printf 'Authorization: Bearer %s\n' "${UNITARES_HTTP_API_TOKEN}" \
-      | curl -sS -o /dev/null -w '%{http_code}' --max-time 3 \
-          -H 'Accept: application/json, text/event-stream' -H @- \
-          "${MCP_URL}" 2>/dev/null) || code=000
-  else
-    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 \
-      -H 'Accept: application/json, text/event-stream' \
-      "${MCP_URL}" 2>/dev/null) || code=000
-  fi
-  case "${code}" in
-    200|400) log "server MCP route usable (${code})" ;;
-    401)
-      preflight_ok=0
-      if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
-        log "WARN ${MCP_URL} rejected the configured bearer (401); hooks are OFFLINE."
-      else
-        log "WARN ${MCP_URL} requires a bearer (401); set UNITARES_HTTP_API_TOKEN."
-      fi
-      ;;
-    421)
-      preflight_ok=0
-      log "WARN ${MCP_URL} rejected its external Host (421); add the hostname" \
-          "to UNITARES_MCP_ALLOWED_HOSTS on the server."
-      ;;
+
+  # Probe both routes used by the plugin hooks. The health route proves basic
+  # reachability. The deliberately invalid REST request proves the bearer and
+  # DNS-rebinding gates without invoking a tool or changing server state. Its
+  # distinctive validation error prevents a proxy's generic 400 from looking
+  # like a usable UNITARES endpoint.
+  HEALTH_URL="${BASE_URL}/health"
+  probe_url "${HEALTH_URL}"
+  case "${PROBE_CODE}" in
+    200) log "server health route usable (200)" ;;
     000)
       preflight_ok=0
-      log "WARN ${MCP_URL} unreachable. If the domain is not on" \
+      log "WARN ${HEALTH_URL} unreachable. If the domain is not on" \
           "the environment's network allowlist the egress proxy refuses it;" \
           "add it there, or accept OFFLINE governance for this session."
       ;;
     *)
       preflight_ok=0
-      log "WARN ${MCP_URL} returned ${code}; hooks may be OFFLINE."
+      log "WARN ${HEALTH_URL} returned ${PROBE_CODE}; the session-start hook may be OFFLINE."
+      ;;
+  esac
+
+  TOOLS_URL="${BASE_URL}/v1/tools/call"
+  probe_url -H 'Content-Type: application/json' --data '{}' "${TOOLS_URL}"
+  code="${PROBE_CODE}"
+  case "${code}" in
+    400)
+      if [[ "${PROBE_BODY}" == *"Missing 'name' field"* ]]; then
+        log "server tool route usable (authenticated validation response)"
+      else
+        preflight_ok=0
+        log "WARN ${TOOLS_URL} returned an unrecognized 400; hooks may be OFFLINE."
+      fi
+      ;;
+    401)
+      preflight_ok=0
+      if [ -n "${UNITARES_HTTP_API_TOKEN:-}" ]; then
+        log "WARN ${TOOLS_URL} rejected the configured bearer (401); hooks are OFFLINE."
+      else
+        log "WARN ${TOOLS_URL} requires a bearer (401); set UNITARES_HTTP_API_TOKEN."
+      fi
+      ;;
+    421)
+      preflight_ok=0
+      log "WARN ${TOOLS_URL} rejected its external Host (421); add the hostname" \
+          "to UNITARES_MCP_ALLOWED_HOSTS on the server."
+      ;;
+    000)
+      preflight_ok=0
+      log "WARN ${TOOLS_URL} unreachable. If the domain is not on" \
+          "the environment's network allowlist the egress proxy refuses it;" \
+          "add it there, or accept OFFLINE governance for this session."
+      ;;
+    *)
+      preflight_ok=0
+      log "WARN ${TOOLS_URL} returned ${code}; hooks may be OFFLINE."
       ;;
   esac
 fi
