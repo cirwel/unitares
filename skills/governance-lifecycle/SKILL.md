@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-20"
+last_verified: "2026-09-21"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -50,8 +50,8 @@ source_digests:
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/tool_modes.py: "0f922d11fa4ac843"
-  unitares/src/tool_mode_listing.py: "3d6824551c6f921b"
-  unitares/src/schema_brief.py: "6463bc8ed3919816"
+  unitares/src/tool_mode_listing.py: "9949074d92d20b22"
+  unitares/src/schema_brief.py: "401bbce563c30439"
 ---
 
 # Agent Lifecycle
