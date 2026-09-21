@@ -221,6 +221,12 @@ async def _proxy_http_list_tools() -> list[Tool]:
         ))
     try:
         from src.tool_modes import TOOL_MODE, should_include_tool
+        # The backend already applied its public/hidden policy.  Preserve its
+        # complete catalog in full mode so a newer backend or backend-only
+        # plugin remains discoverable through an older stdio bridge.  Only the
+        # progressive profile needs the bridge's local entrypoint allowlist.
+        if TOOL_MODE == "full":
+            return tools
         return [t for t in tools if should_include_tool(t.name, mode=TOOL_MODE)]
     except Exception:
         return tools

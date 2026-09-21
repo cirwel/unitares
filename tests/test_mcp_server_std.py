@@ -1487,8 +1487,8 @@ class TestListToolsHandler:
                 {
                     "type": "function",
                     "function": {
-                        "name": "health_check",
-                        "description": "Health",
+                        "name": "backend_only_plugin_tool",
+                        "description": "Backend-only plugin",
                         "parameters": {"type": "object", "properties": {}},
                     },
                 }
@@ -1514,7 +1514,7 @@ class TestListToolsHandler:
         tools = await stdio._proxy_http_list_tools()
 
         assert requested_urls == ["http://stub.invalid/v1/tools?mode=full"]
-        assert [tool.name for tool in tools] == ["health_check"]
+        assert [tool.name for tool in tools] == ["backend_only_plugin_tool"]
 
     @pytest.mark.asyncio
     async def test_local_tools_returned_no_proxy(self):
