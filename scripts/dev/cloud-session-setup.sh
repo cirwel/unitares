@@ -248,7 +248,7 @@ else:
     # reachability. The deliberately invalid REST request proves the bearer and
     # strict REST posture without invoking a tool or changing server state. Its
     # distinctive validation error prevents a proxy's generic 400 from looking
-    # like a usable UNITARES endpoint. A separate HEAD request to /mcp/ proves
+    # like a usable UNITARES endpoint. A separate MCP initialize request proves
     # that transport's Host and Origin gates, which do not protect REST routes.
     HEALTH_URL="${BASE_URL}/health"
     probe_url "${HEALTH_URL}"
@@ -359,8 +359,10 @@ port = f":{parsed.port}" if parsed.port else ""
 print(f"{parsed.scheme}://{host}{port}")
 ' "${BASE_URL}" 2>/dev/null) || SERVER_ORIGIN="${BASE_URL}"
     MCP_URL="${BASE_URL}/mcp/"
-    probe_url -I -H "Origin: ${SERVER_ORIGIN}" \
-      -H 'Accept: application/json, text/event-stream' "${MCP_URL}"
+    MCP_INITIALIZE='{"jsonrpc":"2.0","id":"unitares-cloud-preflight","method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"unitares-cloud-preflight","version":"1.0"}}}'
+    probe_url -H "Origin: ${SERVER_ORIGIN}" \
+      -H 'Accept: application/json, text/event-stream' \
+      -H 'Content-Type: application/json' --data "${MCP_INITIALIZE}" "${MCP_URL}"
     code="${PROBE_CODE}"
     if [ "${PROBE_CURL_RC}" -ne 0 ]; then
       preflight_ok=0
@@ -368,8 +370,43 @@ print(f"{parsed.scheme}://{host}{port}")
           "(curl ${PROBE_CURL_RC}); MCP clients may be OFFLINE."
     else
       case "${code}" in
-        200|400|405)
-          log "server MCP Host/Origin gates accepted the deployment URL"
+        200)
+          mcp_probe_result=$(printf '%s' "${PROBE_BODY}" | python3 -c '
+import json
+import sys
+
+body = sys.stdin.read()
+candidates = [body]
+candidates.extend(
+    line.removeprefix("data:").strip()
+    for line in body.splitlines()
+    if line.startswith("data:")
+)
+for candidate in candidates:
+    try:
+        payload = json.loads(candidate)
+    except (json.JSONDecodeError, TypeError):
+        continue
+    result = payload.get("result") if isinstance(payload, dict) else None
+    if (
+        payload.get("jsonrpc") == "2.0"
+        and payload.get("id") == "unitares-cloud-preflight"
+        and isinstance(result, dict)
+        and result.get("protocolVersion")
+        and isinstance(result.get("serverInfo"), dict)
+    ):
+        print("valid")
+        break
+else:
+    print("invalid")
+' 2>/dev/null) || mcp_probe_result="invalid"
+          if [ "${mcp_probe_result}" = "valid" ]; then
+            log "server MCP initialize succeeded through the Host/Origin gates"
+          else
+            preflight_ok=0
+            log "WARN ${MCP_URL} returned 200 without a valid UNITARES MCP"
+            log "     initialize response; a proxy or WAF may be misrouting the path."
+          fi
           ;;
         401)
           preflight_ok=0
