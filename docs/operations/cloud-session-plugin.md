@@ -236,7 +236,7 @@ heterogeneous reviewer CLI.
   these paths use, although it restricts unrelated GraphQL operations.
 - The reviewer is heterogeneous by construction: `default_reviewer` picks
   `codex` for any branch not named `codex/*`. The standard hosted image does
-  not include the Codex CLI, so `review.sh review` cannot generate that
+  not include the Codex CLI, so `review.sh` cannot generate that
   automatic review there.
 
 Self-reviewing is not the workaround, and the gate already refuses it —
@@ -246,7 +246,7 @@ that needs the Codex reviewer therefore stays `review`-pending until an
 external reviewer produces the artifact. The cloud session can post a human or
 council artifact itself with
 `./scripts/dev/review.sh record <file> --reviewer-name <who>`, or another
-machine with the reviewer CLI can run `./scripts/dev/review.sh review`.
+machine with the reviewer CLI can run `./scripts/dev/review.sh`.
 
 The record is keyed on the diff, so it can be produced at any later point
 without re-pushing.
