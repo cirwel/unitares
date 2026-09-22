@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "unitares",
+  "version": "0.1.0",
+  "description": "Connect Hermes Agent to a running UNITARES accountability runtime over MCP.",
+  "author": {
+    "name": "CIRWEL",
+    "url": "https://github.com/cirwel"
+  },
+  "homepage": "https://github.com/cirwel/unitares",
+  "repository": "https://github.com/cirwel/unitares",
+  "license": "Apache-2.0",
+  "keywords": [
+    "ai-agents",
+    "accountability",
+    "governance",
+    "mcp",
+    "runtime-safety"
+  ]
+}
