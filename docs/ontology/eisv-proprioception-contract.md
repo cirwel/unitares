@@ -549,9 +549,9 @@ The distinction is operational, not vocabulary:
 
 This document's prose was already interoceptive throughout — "running hot",
 "running careful", brittle, scattered, residual-from-own-baseline, and
-"deviation inside a healthy basin is room to learn". A basin *is* a homeostatic
-setpoint region; proprioception has no setpoints. Only the label was
-proprioceptive.
+"deviation inside a healthy basin is room to learn". A basin can be interpreted
+operationally as a setpoint region; proprioception itself has no setpoints. Only
+the label was proprioceptive.
 
 ### The split, as derived in `src/behavioral_sensor.py`
 
@@ -1444,12 +1444,12 @@ philosophical failures of proprioception.
 
 ## Prior art / positioning
 
-EISV-as-proprioception is an **engineering instance of interoceptive inference,
-not a new theory** (prior-art audit:
+EISV's proprioceptive framing is **informed by and structurally adjacent to work
+on interoceptive inference; it is not presented here as a formal implementation
+of that theory** (prior-art audit:
 `docs/ontology/trajectory-identity-prior-art-2026-06.md`). The
 "sense your own internal state, keep it within viable bounds, before any verdict"
-posture this contract describes is the established interoceptive-inference branch
-of the Free Energy Principle: Seth (2013), *Trends in Cognitive Sciences*
+posture has theoretical neighbors in work on interoceptive inference: Seth (2013), *Trends in Cognitive Sciences*
 17(11):565-573; the Friston-co-authored "Life-inspired Interoceptive AI" (arXiv
 2309.05999), with its self/world Markov-blanket factorization; Tschantz, Seth &
 Pezzulo (2022), *Biological Psychology* (interoceptive control as prediction-error
@@ -1458,8 +1458,10 @@ Machine Framework (2026), *Physics of Life Reviews*.
 
 Two cautions follow, both consistent with the rest of this contract:
 
-- **Neighbor, not grounding.** Cite these as the framework EISV instantiates;
-  do **not** claim EISV's coordinates are variational free-energy quantities —
+- **Neighbor, not grounding.** Cite these as theoretical neighbors and research
+  context for EISV, not as grounding or evidence that EISV formally instantiates
+  their constructs. Do **not** claim EISV's coordinates are variational
+  free-energy quantities —
   that grounding claim retired with the v7 F-hat spike (see
   `paper-positioning.md`, 2026-04-23). The "thermometer, not a court" framing
   here is *the same* pre-judgmental stance the interoceptive literature gives
