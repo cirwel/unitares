@@ -16,7 +16,7 @@ The clone pin below names the latest verified public release, which can lag
 the source version while a release is being prepared.
 
 ```bash
-git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.22.1 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo
