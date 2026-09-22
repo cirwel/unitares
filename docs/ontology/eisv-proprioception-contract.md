@@ -1,10 +1,52 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** August 21, 2026
+**Last Updated:** September 22, 2026
 **Status:** Active
 
 ---
+
+## Canonical operational doctrine
+
+> **Digital proprioception senses. EISV estimates state. Autonomic governance regulates.**
+
+This is the canonical operational reading of EISV.
+
+**Digital proprioception is the sensing layer.** It names the runtime observations
+that make an agent/process legible to itself and to the surrounding governance
+system. The term does not imply subjective experience, biological equivalence,
+or independent volition.
+
+**EISV is the state-estimation layer.** It turns those observations into a
+structured estimate of runtime state. EISV is designed as a runtime state
+estimator for autonomic regulation. That is an architectural role, not evidence
+that EISV improves autonomic regulation relative to simpler state
+representations; comparative benefit remains an experimental question.
+
+**Autonomic governance is the regulation layer.** Policy, review, identity,
+authority, outcomes, and enforcement may consume EISV state estimates, but an
+EISV reading does not by itself authorize intervention. Measurement, state
+estimation, verdict formation, policy, and enforcement remain distinct
+surfaces.
+
+The stronger biological, thermodynamic, allostatic, free-energy, and related
+interpretations in the repository are research interpretations or historical
+lineage unless separately supported by evidence. UNITARES does not require
+those interpretations to be literally true for the operational EISV contract
+above to hold.
+
+When describing EISV, distinguish four epistemic levels rather than collapsing
+them:
+
+1. **Operational / deployed** — what the runtime currently computes or uses.
+2. **Measured / empirical** — what an experiment or dated observation supports.
+3. **Research interpretation** — a model or explanatory framing under study.
+4. **Hypothetical / analogy** — a useful comparison that is not itself evidence.
+
+Do not promote a claim upward across those levels without new evidence. In
+particular, "EISV enables autonomic agents" is not an established claim. The
+defensible current statement is: **EISV is designed as a runtime state estimator
+for autonomic regulation.**
 
 ## Contract
 
