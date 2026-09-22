@@ -21,16 +21,9 @@ The package does **not** install, update, or start UNITARES and does not carry c
 
 ## Prerequisite
 
-Run UNITARES locally before enabling the plugin. The repository quickstart is:
+Run UNITARES locally before enabling the plugin. Follow the repository's pinned-release quickstart from the root README, then verify the MCP endpoint is reachable at:
 
-```bash
-v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION)
-git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git
-cd unitares
-docker compose up -d --wait
-```
-
-Then verify the MCP endpoint is reachable at `http://127.0.0.1:8767/mcp/`.
+`http://127.0.0.1:8767/mcp/`
 
 ## Test directly from GitHub
 
