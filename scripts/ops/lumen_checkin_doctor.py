@@ -249,6 +249,22 @@ def io_live_session_row_count() -> int | None:
     return int(out) if out.isdigit() else None
 
 
+def io_recovery_persisted(fingerprint: str) -> bool | None:
+    """Is this RECOVERED notice a durable audit.events row? None = can't tell.
+
+    /api/findings answers success before its fire-and-forget persist, which
+    swallows DB errors, so only a readback shows the notice actually landed.
+    `fingerprint` is built here from an int, never from outside input.
+    """
+    out = _run(
+        ["psql", "-h", "localhost", "-U", "postgres", "-d", "governance", "-tAc",
+         "select count(*) from audit.events"
+         " where event_type = 'lumen_checkin_finding'"
+         f" and payload->>'fingerprint' = '{fingerprint}'"]
+    ).strip()
+    return int(out) > 0 if out.isdigit() else None
+
+
 def io_redis_uptime_s() -> int | None:
     out = _run(["redis-cli", "INFO", "server"])
     m = re.search(r"uptime_in_seconds:(\d+)", out)
@@ -334,6 +350,7 @@ DEFAULT_IO: dict[str, Callable[..., Any]] = {
     "resume": io_resume,
     "pi_restart_services": io_pi_restart_services,
     "post_finding": io_post_finding,
+    "recovery_persisted": io_recovery_persisted,
     "now": time.time,
     "sleep": time.sleep,
 }
@@ -561,22 +578,34 @@ class Doctor:
             return
         # Incident-specific fingerprint. Governance dedups on fingerprint
         # alone inside a 30-min window and answers success=true, deduped=true
-        # WITHOUT storing an event — so a fixed fingerprint would let a second
-        # incident's recovery "succeed" into nothing, leaving its critical as
-        # the last durable row. Keyed per incident, a dedup can only mean an
-        # earlier attempt for THIS incident already landed.
+        # WITHOUT storing an event, so a fixed fingerprint would let a second
+        # incident's recovery "succeed" into nothing.
+        fingerprint = f"lumen-checkin-recovered-{int(last_problem)}"
+        # Closed only on a durable row. A success reply is not one: the
+        # endpoint acks before a fire-and-forget persist that swallows DB
+        # errors. Until the row shows up, every healthy tick re-posts; inside
+        # the dedup window that is a no-op, after it a fresh attempt.
+        persisted = self.io["recovery_persisted"](fingerprint)
+        if persisted:
+            self._close_recovery(last_problem, "confirmed in audit.events")
+            return
         delivered = self.io["post_finding"](
-            "info", f"lumen-checkin-recovered-{int(last_problem)}",
+            "info", fingerprint,
             f"RECOVERED: Lumen is checking in again — {evidence}",
             _load_secret("UNITARES_HTTP_API_TOKEN"),
         )
         if not delivered:
-            # Marking it recovered anyway would leave the critical as the last
-            # durable word forever — the exact condition this notice exists to
-            # end. Retry on the next healthy tick instead.
-            log("RECOVERED notice not confirmed by governance — retrying next tick")
+            log("RECOVERED notice not accepted by governance — retrying next tick")
             return
-        log(f"posted RECOVERED notice — {evidence}")
+        if persisted is None:
+            # No readback available. Fall back to the delivery ack rather than
+            # re-posting forever on a probe that may never answer.
+            self._close_recovery(last_problem, "acked; audit.events readback unavailable")
+            return
+        log(f"posted RECOVERED notice — closing once audit.events shows it ({evidence})")
+
+    def _close_recovery(self, last_problem: float, how: str) -> None:
+        log(f"RECOVERED notice closed — {how}")
         self.state["problem_alert_at"] = last_problem
         self.state["recovered_at"] = self.io["now"]()
 

@@ -345,6 +345,8 @@ def make_doctor(doc_mod, io_overrides, dry_run=False):
         "post_finding": lambda sev, fp, msg, token: calls["findings"].append((sev, fp, msg))
                         or True,
     }
+    # Default: whatever was posted became durable.
+    io["recovery_persisted"] = lambda fp: any(f == fp for _, f, _ in calls["findings"])
     io.update(io_overrides)
     return doc_mod.Doctor(io=io, dry_run=dry_run), calls
 
@@ -599,3 +601,36 @@ def test_back_to_back_incidents_get_distinct_recovery_fingerprints(doc_mod):
     state["frozen"] = False; doctor.run_once()   # recovered again
     recovered = [fp for _, fp, _ in calls["findings"] if "recovered" in fp]
     assert len(recovered) == 2 and recovered[0] != recovered[1]
+
+
+def test_acked_but_unpersisted_recovery_stays_open_and_reposts(doc_mod, tmp_path):
+    """/api/findings acks before a persist that swallows DB errors: an ack
+    alone must not close the incident."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    doctor, calls = make_doctor(doc_mod, {"recovery_persisted": lambda fp: False})
+    doctor.run_once()
+    doctor.run_once()
+    assert len(calls["findings"]) == 2           # retried, not closed
+    assert "recovered_at" not in doctor.state
+
+
+def test_persisted_recovery_closes_without_reposting(doc_mod, tmp_path):
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    doctor, calls = make_doctor(doc_mod, {})
+    doctor.run_once()                            # posts
+    doctor.run_once()                            # reads it back, closes
+    doctor.run_once()                            # nothing left to say
+    assert len(calls["findings"]) == 1
+    assert doctor.state["recovered_at"] > 0
+
+
+def test_unavailable_readback_falls_back_to_the_ack(doc_mod, tmp_path):
+    """A probe that can't answer must not turn into a RECOVERED every tick."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    doctor, calls = make_doctor(doc_mod, {"recovery_persisted": lambda fp: None})
+    doctor.run_once()
+    doctor.run_once()
+    assert len(calls["findings"]) == 1
