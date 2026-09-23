@@ -67,8 +67,9 @@ is the merge gate.
 - A draft PR means "visible, not claiming merged." **Merging** is the
   operator's deliberate action. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
-  actually passed — CI green, review round joined, no collision with an
-  in-flight branch.
+  actually passed — CI green, a completed review with findings addressed (see
+  "Review workflow" below), and no collision with an in-flight branch. A
+  neutral UNREVIEWED warning is not review completion.
 - **Readiness is agent-declared, never operator-inferred.** The operator
   pressing merge in order cannot verify content and should not have to
   guess doneness: a PR still in draft is "still working — hands off," even
@@ -85,6 +86,153 @@ is the merge gate.
   still revising is the trigger shape of the post-merge orphan-push
   incidents — the human gate authorizes; the evidence lives with CI,
   reviews, and the merge-loss guards.
+
+### Review workflow
+
+"Review round joined" used to be prose: some PRs carried a
+review in the body, some in a comment, most in neither, and nothing could tell
+which. It is now a command and a status check, the way `test-cache.sh` made
+the test run one.
+
+- `./scripts/dev/review.sh` reviews the PR diff for `HEAD` in a fresh
+  reviewer session, preferring the other model (Claude for `codex/*`, Codex
+  otherwise) and falling back to the available provider, read-only, within a
+  shared 30-minute budget, and posts a **review record**
+  comment. `ship.sh` now waits for it on every PR push and prints the
+  findings to its caller. After pushing another way, the **authoring agent**
+  runs the same command without waiting for an operator prompt. If a review
+  is already running, the command joins its result instead of treating
+  "started" as "finished". A bounded wait that expires reports incomplete.
+- The `review` check (`.github/workflows/review-gate.yml`) succeeds when a
+  review for the PR's **current diff** is `CLEAN`, or `FINDINGS(n)` has
+  dispositions. Unresolved findings produce `action_required`. Missing review
+  or reviewer failure produces a **neutral UNREVIEWED warning**, with the
+  author's next action. An outage is never a clean review or a failing test.
+  This check replaces the legacy commit status; old heads may still show
+  that historical status until the next push. GitHub branch protections are
+  separate and are not changed by this workflow.
+- Findings: fix and push (the new diff is reviewed), or post rebuttals with
+  `./scripts/dev/review.sh dispose <file>` — never drop one silently.
+- A separate human or model code review of the actual diff can be recorded
+  with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
+  where the file ends with `VERDICT: CLEAN` or `VERDICT: FINDINGS(n)`. The flag
+  attests a separate reviewer examined this diff; it is not authentication.
+  Consult remains advisory; do not turn advice into a verdict by adding a
+  marker. Council/dialectic is optional escalation for consequential design
+  choices or disagreement. Routine PRs need one completed code review. The
+  gate needs no model and no paid key; CI only reads review evidence.
+- The record is keyed on the diff (path + blob of every changed file against
+  the merge base), not the commit, so a base merge that leaves the PR's files
+  alone — including `draft-base-refresh.yml`'s — keeps it.
+- The gate proves a review was recorded, not that it was honest: every agent
+  posts through the same GitHub account, so a comment cannot distinguish a
+  real review from an author's own. A record whose reviewer is the PR's own
+  author is not a review.
+- Bot PRs (dependabot) get no exemption: the incident that motivated "no
+  mechanical exemption" was a dependency bump. Nobody has to remember them
+  either: the optional `review_gate.py sweep` fallback reviews one quiet PR per run
+  from the owner's account or dependabot, **including drafts**, after 15
+  minutes without an update. A draft restricts readiness and merging; it must
+  not prevent the review needed to reach readiness. `no-auto-review` holds
+  automatic review of intentionally unfinished work. Outside contributors'
+  PRs get a human first. A lock in the git common dir keeps the sweep and an
+  author's review from running the same diff twice. Failed runs retry at most
+  three times per provider per diff; unresolved findings and exhausted retries are reported
+  as author follow-up in the sweep log, never silently treated as clean.
+
+Quota, authentication, and startup failures put that provider on a one-hour
+cooldown shared across worktrees; the other provider is tried immediately.
+`--reviewer codex` or `--reviewer claude` explicitly retries after access is
+restored. Findings stop routing: another model cannot erase an inconvenient
+review. Separate output directories preserve each attempt.
+
+Native Codex is an optional default for an operator who has enabled GitHub
+code review. On this operator's UNITARES repo, the 2026-09-23 pilot used
+**Review team PRs / Every push**, with exhaustive review and credit overage
+left off. The trigger was then reduced to **On PR open**: base updates had
+started another review that finished after #2352 merged. Authors still run
+`review.sh` for changed diffs, so review completion stays part of delivery.
+Enable the author/sweep integration in the shared local repository:
+
+```bash
+git config review.native true
+```
+
+`review.sh` first reads native completion evidence for the current commit. If
+nothing has started after 30 seconds, it posts one `@codex review` request
+bound to the head and diff; this covers drafts that automatic review misses.
+It waits up to ten minutes within the total review budget before using the
+local fallback. Existing requests are reused, and an expired request is not
+posted again on each sweep. `--reviewer` explicitly selects the local path;
+`--fresh` can re-review clean evidence but cannot bypass unresolved findings.
+
+The adapter recognizes the official Codex bot's submitted reviews and explicit
+clean comments naming the reviewed commit. It also joins a completed activity
+row naming that commit with the bot's clean PR reaction posted after that
+completion; a stale reaction cannot approve a new push. It validates abbreviated hashes
+against local git objects and invalidates evidence on a new head. Retargeted
+PRs use local review because native artifacts identify the head but not the
+reviewed base; even a completion arriving after retarget may have reviewed
+the earlier base. A reaction or "Completed" activity row alone, and absence of
+findings, are not sufficient. A completed native run is not requested again
+while its evidence is arriving. Findings remain open across later clean results
+or outages until individually disposed. CI consumes native evidence without
+starting a model, regardless of the local opt-in setting. Author commands also
+read existing native findings even when native dispatch is off. If GitHub review
+history is unreadable, CI preserves its previous check and the author command
+reports incomplete evidence; it never substitutes a partial clean result.
+Reviewer availability and evidence availability are separate failures. A final
+head-and-diff check prevents a concurrent push or retarget from being handed
+back as reviewed.
+
+Joining a native clean result publishes a diff-bound review record once. This
+triggers CI even when the clean reaction arrived after the activity comment's
+workflow finished; reactions themselves have no workflow event. The quiet-PR
+sweep also records completed native clean reviews. Local review commands stop
+on closed or merged PRs and check again before publishing results. Native
+cloud reviews already in flight can still finish after merge; triage any valid
+late findings in a follow-up change rather than reopening the merged PR.
+
+Native review focuses on major correctness issues. Consult is still useful
+for focused design advice; council/dialectic remains an optional escalation.
+Neither becomes an extra mandatory review step.
+
+Pilot evidence: [draft #2340 native completion](https://github.com/cirwel/unitares/pull/2340#issuecomment-5794562451)
+named its reviewed commit after an explicit request. Automatic review did not
+start on the initial draft of #2352 during the pilot; the command-owned request
+is therefore necessary for this workflow. See the PR for subsequent push and
+fallback validation.
+
+The working agent reads the result, addresses findings, waits for CI, and
+marks **its own** PR ready before declaring completion. A detached review
+(`review.sh --background`) is useful while the agent does other work, but the
+agent must call `review.sh` again to join before leaving. `SHIP_NO_REVIEW=1`
+explicitly defers this step and prints the author's next action. If review
+cannot finish, exit 2 distinguishes an **UNREVIEWED** handoff from findings
+(exit 1). Report the blocker and the exact command to resume; keep the draft.
+The sweep
+supplies a missing review; it does not fix code, declare readiness, or merge.
+
+The fallback needs an actual scheduler installation. On the operator's Mac:
+
+```bash
+python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares
+launchctl print gui/$(id -u)/com.unitares.review-sweep
+unitares-automations census --grep review-sweep --all
+```
+
+This opt-in installer copies a small bootstrap outside the development
+checkout, loads a 30-minute launchd job, and records run outcomes through
+`unitares-automation-run` when installed. It uses existing CLI authentication.
+Each run refreshes a locked trusted checkout from `origin/master`; a separate
+locked checkout supplies PR context. Logs are in
+`~/Library/Logs/unitares-review-sweep.log`. Merely having `review-sweep.sh` on
+disk is not evidence that the job is installed or running.
+
+The `review` check describes review evidence; it is separate from the test
+suite. A neutral warning asks the author to start/join review and links here.
+Readiness still requires completed review. The sweep does not promote a draft
+merely because tests passed or because a warning is nonblocking.
 
 `ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
 every change** — runtime, docs, or tests:

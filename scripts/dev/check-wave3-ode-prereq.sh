@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-wave3-ode-prereq.sh — Wave 3 §14 ordering gate.
 #
-# RFC (docs/proposals/beam-wave-3-handler-dispatch.md §14): all ten prereq
+# RFC (docs/proposals/active/beam-wave-3-handler-dispatch.md §14): all ten prereq
 # PRs land BEFORE any commit in elixir/handler_dispatch/. This lint engages
 # only when an elixir/handler_dispatch tree exists; until then it passes,
 # so it is safe to wire into CI from prereq PR #1 onward.
@@ -12,7 +12,7 @@
 #      docs/handoffs/wave-3-section-5-2-boundary-audit-<date>.md, but
 #      docs/handoffs/ is gitignored — un-checkable in CI. ADAPTATION
 #      (documented for council review in prereq PR #1): a committed summary at
-#      docs/proposals/wave-3-section-5-2-boundary-audit-summary.md satisfies
+#      docs/proposals/active/wave-3-section-5-2-boundary-audit-summary.md satisfies
 #      the gate in CI; the local gitignored handoff also satisfies it for
 #      local runs. Either is sufficient.
 #
@@ -44,7 +44,7 @@ for f in "${required[@]}"; do
 done
 
 audit_ok=0
-if [[ -e "$ROOT/docs/proposals/wave-3-section-5-2-boundary-audit-summary.md" ]]; then
+if [[ -e "$ROOT/docs/proposals/active/wave-3-section-5-2-boundary-audit-summary.md" ]]; then
   audit_ok=1
 fi
 if compgen -G "$ROOT/docs/handoffs/wave-3-section-5-2-boundary-audit-*.md" >/dev/null 2>&1; then
@@ -52,7 +52,7 @@ if compgen -G "$ROOT/docs/handoffs/wave-3-section-5-2-boundary-audit-*.md" >/dev
 fi
 if [[ "$audit_ok" -ne 1 ]]; then
   echo "[wave3-prereq] MISSING §5.2 boundary-cost audit artifact (committed summary" >&2
-  echo "  docs/proposals/wave-3-section-5-2-boundary-audit-summary.md, or local" >&2
+  echo "  docs/proposals/active/wave-3-section-5-2-boundary-audit-summary.md, or local" >&2
   echo "  docs/handoffs/wave-3-section-5-2-boundary-audit-<date>.md)" >&2
   fail=1
 fi

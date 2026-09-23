@@ -46,6 +46,14 @@ SKIP_DIRS = {
     "_build",
 }
 
+
+def _skip_scan_dir(path: Path) -> bool:
+    # The proposal archive is a canonical reading path, with maintained links
+    # and index coverage. Other historical archive trees remain out of scope.
+    proposal_archive = REPO_ROOT / "docs" / "proposals" / "archive"
+    return path.name in SKIP_DIRS and path != proposal_archive
+
+
 # Files to skip (historical records — dead refs are expected)
 SKIP_FILES = {"docs/CHANGELOG.md", "CHANGELOG.md"}
 
@@ -256,7 +264,7 @@ def _collect_md_basename_refs() -> dict[str, set[str]]:
     """
     refs: dict[str, set[str]] = {}
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        dirs[:] = [d for d in dirs if not _skip_scan_dir(Path(root) / d)]
         for fn in files:
             if Path(fn).suffix not in _REF_SCAN_EXTS:
                 continue
@@ -673,7 +681,7 @@ def _has_positive_shipped_marker(text: str) -> bool:
 def _load_demotion_retention_reviews() -> dict[str, str]:
     """Load reasoned retention decisions from dated lifecycle review records."""
 
-    review_dir = REPO_ROOT / "docs" / "proposals" / "resolved"
+    review_dir = REPO_ROOT / "docs" / "proposals" / "archive"
     retained: dict[str, str] = {}
     if not review_dir.is_dir():
         return retained
@@ -710,8 +718,8 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
         parts = rel.parts
         if not parts or parts[0] != "docs":
             continue
-        # Scope: proposals/ (but not already-demoted resolved/) and ontology/.
-        in_proposals = "proposals" in parts and "resolved" not in parts
+        # Scope: current proposals and ontology, excluding historical records.
+        in_proposals = "proposals" in parts and not {"archive", "resolved"}.intersection(parts)
         in_ontology = "ontology" in parts
         if not (in_proposals or in_ontology):
             continue
@@ -751,12 +759,12 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
         if _ACTIVE_REMAINING.search(status):
             warnings.append(
                 f"  {rel}: partially shipped in {loc} — split the shipped part "
-                f"to resolved/ (or a stub) and keep only the open work forward-looking"
+                f"to archive/ (or a stub) and keep only the open work forward-looking"
             )
         else:
             warnings.append(
                 f"  {rel}: reads fully shipped in {loc} — consider moving to "
-                f"proposals/resolved/, or stub + point at the live canonical doc"
+                f"proposals/archive/, or stub + point at the live canonical doc"
             )
     return warnings
 
@@ -1052,7 +1060,7 @@ def check_pitch_vocabulary(md_files: list[Path]) -> list[str]:
 def collect_md_files() -> list[Path]:
     md_files = []
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        dirs[:] = [d for d in dirs if not _skip_scan_dir(Path(root) / d)]
         for f in files:
             if f.endswith(".md") and f not in SKIP_FILES:
                 md_files.append(Path(root) / f)

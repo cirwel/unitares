@@ -54,7 +54,15 @@ case "$*" in
   "issue comment"*|"issue edit"*|"issue close"*) exit 0 ;;
   "api repos/"*"/compare/"*)
     [ -f "$d/compare.fail" ] && exit 1
-    cat "$d/compare.json" 2>/dev/null || exit 1 ;;
+    request="$*"
+    anchor="${request##*/compare/}"
+    anchor="${anchor%%...*}"
+    [ -f "$d/compare_${anchor}.fail" ] && exit 1
+    if [ -f "$d/compare_${anchor}.json" ]; then
+      cat "$d/compare_${anchor}.json"
+    else
+      cat "$d/compare.json" 2>/dev/null || exit 1
+    fi ;;
   "api repos/"*"/events?per_page=100&page=1")
     cat "$d/events_page1.json" 2>/dev/null || echo "[]" ;;
   "api repos/"*"/events?per_page=100&page="*) echo "[]" ;;
@@ -127,19 +135,110 @@ MERGED_PR = {
 def test_orphan_push_fires_on_merged_pr_with_new_commits(guard_env):
     env, data, summary = guard_env
     (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
-    (data / "compare.json").write_text(json.dumps({
+    lost = {"sha": "a" * 40, "commit": {"message": "fix: the lost work"}}
+    squashed = {"sha": "c" * 40, "commit": {"message": "already squashed"}}
+    (data / f"compare_{'e' * 40}.json").write_text(json.dumps({
         "status": "ahead",
-        "commits": [{"sha": "a" * 40, "commit": {"message": "fix: the lost work"}}],
+        "commits": [lost],
+    }))
+    (data / "compare_master.json").write_text(json.dumps({
+        "status": "ahead", "commits": [squashed, lost],
     }))
     proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/dead-branch", PUSHED_SHA="b" * 40)
     assert proc.returncode == 1, proc.stderr
     log = calls(data)
     assert "issue create" in log
-    # squash-safety: the orphan set is anchored on the merged PR's head,
-    # never on an ancestry diff against the default branch
+    # Squash safety requires the merged head; base filtering removes only
+    # commits already on the default branch.
     assert f"compare/{'e' * 40}...{'b' * 40}" in log
+    assert f"compare/master...{'b' * 40}" in log
     assert "cherry-pick " + "a" * 40 in log
+    assert "cherry-pick " + "c" * 40 not in log
     assert "ORPHAN PUSH" in summary.read_text()
+
+
+def test_orphan_push_excludes_default_branch_commits_after_restart(guard_env):
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    landed = {"sha": "c" * 40, "commit": {"message": "already on master"}}
+    lost = {"sha": "a" * 40, "commit": {"message": "fix: the lost work"}}
+    (data / f"compare_{'e' * 40}.json").write_text(json.dumps({
+        "status": "diverged", "commits": [landed, lost],
+    }))
+    (data / "compare_master.json").write_text(json.dumps({
+        "status": "ahead", "commits": [lost],
+    }))
+
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/restarted", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 1, proc.stderr
+    log = calls(data)
+    assert "cherry-pick " + "a" * 40 in log
+    assert "c" * 40 not in log
+    assert "ORPHAN PUSH" in summary.read_text()
+
+
+def test_orphan_push_restart_with_only_default_branch_commits_is_prunable(guard_env):
+    env, data, summary = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    landed = {"sha": "c" * 40, "commit": {"message": "already on master"}}
+    (data / f"compare_{'e' * 40}.json").write_text(json.dumps({
+        "status": "diverged", "commits": [landed],
+    }))
+    (data / "compare_master.json").write_text(json.dumps({
+        "status": "behind", "commits": [],
+    }))
+
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/restarted", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 0, proc.stderr
+    assert "issue create" not in calls(data)
+    assert "PRUNABLE" in summary.read_text()
+
+
+def test_orphan_push_second_compare_failure_is_indeterminate(guard_env):
+    env, data, _ = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    (data / f"compare_{'e' * 40}.json").write_text(json.dumps({
+        "status": "ahead",
+        "commits": [{"sha": "a" * 40, "commit": {"message": "possibly lost"}}],
+    }))
+    (data / "compare_master.fail").touch()
+
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/restarted", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 1, proc.stderr
+    log = calls(data)
+    assert "INDETERMINATE" in log
+    assert "cherry-pick <verify shas first>" in log
+
+
+@pytest.mark.parametrize("incomplete_anchor", ["head", "base"])
+def test_orphan_push_incomplete_compare_is_indeterminate(guard_env, incomplete_anchor):
+    env, data, _ = guard_env
+    (data / "pr_list.json").write_text(json.dumps([MERGED_PR]))
+    lost = {"sha": "a" * 40, "commit": {"message": "possibly lost"}}
+    head_commits = [lost]
+    base_commits = [lost]
+    if incomplete_anchor == "head":
+        head_commits = [{"sha": f"{i:040x}"} for i in range(250)]
+    else:
+        # GitHub returns the most recent 250 commits. The older orphan can
+        # therefore be absent from this response even though it is part of
+        # the comparison and needs to be recovered.
+        base_commits = [{"sha": f"{i:040x}"} for i in range(250)]
+    (data / f"compare_{'e' * 40}.json").write_text(json.dumps({
+        "status": "ahead", "total_commits": 251 if incomplete_anchor == "head" else 1,
+        "commits": head_commits,
+    }))
+    (data / "compare_master.json").write_text(json.dumps({
+        "status": "ahead", "total_commits": 251 if incomplete_anchor == "base" else 1,
+        "commits": base_commits,
+    }))
+
+    proc = run_guard("orphan_push_guard.py", env, BRANCH="claude/restarted", PUSHED_SHA="b" * 40)
+    assert proc.returncode == 1, proc.stderr
+    log = calls(data)
+    assert "INDETERMINATE" in log
+    assert "cherry-pick <verify shas first>" in log
+    assert "cherry-pick " + "a" * 40 not in log
 
 
 def test_orphan_push_prunable_content_is_not_an_alarm(guard_env):

@@ -101,11 +101,11 @@ UUID is an identity anchor, not sufficient proof that the current execution cont
 Standard agent workflow:
 
 1. Fresh process: `start_session(force_new=true)` — save the returned `agent_uuid` / `client_session_id`
-2. Fresh process inheriting prior work: `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="new_session")`
+2. Fresh process inheriting from an **exited** predecessor: `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="explicit")` — a succession claim naming a live parent is rejected and cleared
 3. Same live owner / proof-owned rebind: `identity(agent_uuid=..., continuity_token=..., resume=true)`
 4. `sync_state()` for work logging
 5. `check_working_state()` for read-only state
-6. `identity()` to confirm current binding
+6. `identity(client_session_id=...)` to confirm current binding — with no proof argument the call is gated to a fresh mint and confirms nothing
 
 Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
 `get_governance_metrics(...)`. Use them for older clients or when inspecting
@@ -230,7 +230,7 @@ Symptom:
 Fix:
 
 - rerun `start_session(force_new=true)` (raw implementation: `onboard(...)`)
-- if the process is continuing prior work, include `parent_agent_id=<prior uuid>` and `spawn_reason="new_session"`
+- if the process is taking over from a predecessor that has exited, include `parent_agent_id=<prior uuid>` and `spawn_reason="explicit"`; co-location with a live agent is not lineage and is rejected
 - avoid bare `identity(agent_uuid=..., resume=true)`; use a matching `continuity_token` only for same-owner rebinding
 
 ### Start script exits unexpectedly
@@ -250,7 +250,7 @@ When something feels wrong, do the checks in this order:
 
 1. Run `./scripts/diagnostics/check_health.sh`
 2. If HTTP is up, call `health_check()`
-3. If an agent identity looks wrong, call `identity()`
+3. If an agent identity looks wrong, read it with `agent(action="get", agent_id=...)` — never with that agent's `client_session_id`, which is its possession proof and would bind you as it; a bare `identity()` is no better, since it mints a fresh identity instead of reading one
 4. If the issue is governance-state related, call `check_working_state()` (raw implementation: `get_governance_metrics(...)`)
 5. Only after that inspect logs or restart services
 

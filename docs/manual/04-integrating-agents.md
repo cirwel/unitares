@@ -14,7 +14,7 @@ schemas belong to `list_tools()` / `describe_tool()` and
 2. **Same running process:** pass `client_session_id` on later check-ins and
    writes.
 3. **Real handoff from a finished predecessor:** start fresh and declare
-   `parent_agent_id=<prior uuid>, spawn_reason="new_session"`.
+   `parent_agent_id=<prior uuid>, spawn_reason="explicit"`.
 4. Call `sync_state(...)` after meaningful work.
 5. Call `record_result(...)` when a bounded external outcome exists.
 6. Use `check_working_state()` for a read-only state check.
@@ -54,23 +54,25 @@ its own identity, declare the dispatcher as parent with
 | Record an outcome | `record_result(...)` | `outcome_event` |
 | Request review | `request_review(...)` | `dialectic(action="request")` |
 
-The primary tools return a compact agent-facing envelope. State-changing tools
-preserve the raw payload under `raw_governance`; read aliases omit that repeated
-payload by default and expose a full-mode escape hatch. Interface contract 1.6.0 and later advertises one complete catalog, including
-all routers and discovery tools. Legacy `GOVERNANCE_TOOL_MODE` values are
-ignored. `list_tools()` reports the current catalog and contract version;
-`describe_tool(tool_name=..., action=...)` provides the full action parameters.
-Raw implementations remain available for independently upgraded clients.
+The primary tools return a compact agent-facing envelope. Read aliases and
+bounded `sync_state` modes omit the repeated raw payload by default and expose
+a full-mode escape hatch; other state-changing tools retain it. Interface contract
+1.13.0 and later negotiates one complete catalog while initially advertising a
+small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
+`list_tools(lite=true)` reports every capability name and the contract version;
+`describe_tool(tool_name=..., action=...)` provides the full parameters; and
+`use_tool(tool_name=..., arguments={...})` invokes a capability omitted from
+the initial listing. Set `UNITARES_TOOL_ADVERTISEMENT=full` when a client needs
+every schema up front. Raw implementations remain available for independently upgraded clients.
 Each action still enforces its own authorization and identity requirements.
 
 For `sync_state`, read `action_summary` first. It keeps the policy action,
 one-line reason, risk score, and verdict maturity together; a cold-start result
 is labeled `verdict_confidence="provisional"` at that surface. If the response
-also contains `legacy_diagnostics`, treat that block as compatibility telemetry,
-not behavioral health evidence. `response_options` documents the routine,
-actionable, and complete modes in-band, while `_response_size` reports the
-approximate serialized size and suggests a smaller mode when the payload is
-large.
+contains `legacy_diagnostics`, treat that block as compatibility telemetry, not
+behavioral health evidence. Routine bounded responses omit repeated mode
+coaching and size receipts; `response_mode="full"` restores the canonical
+payload and its diagnostics.
 
 For routine `proceed` / `approve` check-ins, `compact` omits the duplicated
 `policy_evaluation` and advisory-only `enforcement` blocks. A guide, pause,

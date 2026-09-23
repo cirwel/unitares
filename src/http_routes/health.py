@@ -36,6 +36,15 @@ async def http_health(request):
     server_build_sha = getattr(request.state, "_http_api_server_build_sha", "unknown")
     has_streamable_http = request.state._http_api_has_streamable_http
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    rest_strict = access.rest_strict_required()
+    mcp_bearer = access.mcp_bearer_required()
+    bearer_header = "Authorization: Bearer <token>"
+    rest_header = (
+        bearer_header
+        if (rest_strict and mcp_bearer)
+        or (not rest_strict and bool(http_api_token))
+        else None
+    )
 
     # Calculate uptime
     uptime_seconds = time.time() - server_start_time
@@ -92,8 +101,13 @@ async def http_health(request):
             "dashboard": "GET /dashboard"
         },
         "auth": {
-            "enabled": bool(http_api_token),
-            "header": "Authorization: Bearer <token>" if http_api_token else None
+            "enabled": bool(http_api_token) or rest_strict or mcp_bearer,
+            "rest_strict": rest_strict,
+            "mcp_bearer_required": mcp_bearer,
+            # Backward-compatible REST hint plus explicit per-transport hints.
+            "header": rest_header,
+            "rest_header": rest_header,
+            "mcp_header": bearer_header if mcp_bearer else None,
         },
         "session": {
             "header": "X-Session-ID (recommended for stable identity binding)"

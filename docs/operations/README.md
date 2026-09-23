@@ -38,6 +38,9 @@ or [User Manual](../manual/README.md).
 - [`resident-roster.md`](resident-roster.md) — configured resident set.
 - [`cloud-deploy-runbook.md`](cloud-deploy-runbook.md) — hosting the governance
   stack off the primary machine: exposure, off-site backups, cutover.
+- [`cloud-session-plugin.md`](cloud-session-plugin.md) — why the governance
+  plugin is absent in Claude Code cloud sessions, a hook-by-hook audit of what
+  survives a residentless container, and the setup-script wiring.
 - [`redis-retirement-soak-runbook.md`](redis-retirement-soak-runbook.md) —
   staged Redis mirror-retirement checks and rollback gates.
 - [`lease-plane-operator-runbook.md`](lease-plane-operator-runbook.md) — Elixir
@@ -63,7 +66,8 @@ or [User Manual](../manual/README.md).
   — when a positive control may make an instrument's silence informative, and the
   coherence-gate control that could not fail.
 - [`eisv-ablation-frozen-2026-08-09.md`](eisv-ablation-frozen-2026-08-09.md) —
-  current frozen trusted-anchor matrix; selection-adjusted result is negative.
+  frozen trusted-anchor matrix; descriptive non-detection after selection
+  adjustment, with read-specific power unresolved in the preserved evidence.
 - [`ablation-initiates-finding-2026-06-16.md`](ablation-initiates-finding-2026-06-16.md)
   — historical measurement record, superseded for current lift claims.
 - [`self-report-verdict-dependence-2026-06-28.md`](self-report-verdict-dependence-2026-06-28.md)

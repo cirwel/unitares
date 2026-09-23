@@ -25,6 +25,10 @@
 #   ./scripts/dev/ship.sh --classify          # just print "runtime" or "other"
 #   ./scripts/dev/ship.sh --plan "commit message"
 #
+# Every PR push runs ./scripts/dev/review.sh and joins its result, so the
+# working agent can act on findings before leaving. SHIP_NO_REVIEW=1 explicitly
+# defers review; the author still owns starting/joining it before readiness.
+#
 # Requirements: staged changes (git add already done) unless --stage-all is
 # used, gh CLI authed.
 
@@ -439,6 +443,25 @@ case "$DELIVERY" in
         git commit -m "$COMMIT_MESSAGE"
         git push -u origin "$BRANCH"
         create_or_show_pr "$DELIVERY"
+        # Joining is part of shipping: a detached reviewer can finish after
+        # its author exits, leaving findings nobody handles and a draft stuck.
+        if [[ "${SHIP_NO_REVIEW:-0}" != "1" ]]; then
+            if ./scripts/dev/review.sh; then
+                echo "[ship] review joined; check CI and mark your own PR ready when validation passes."
+            else
+                review_rc=$?
+                if [[ "$review_rc" == "2" ]]; then
+                    echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
+                    echo "[ship] report the blocker and next action explicitly; keep the PR draft."
+                    exit 2
+                fi
+                echo "[ship] branch pushed and PR opened; review needs author follow-up."
+                echo "[ship] address the result above, then run ./scripts/dev/review.sh before marking ready."
+                exit 1
+            fi
+        else
+            echo "[ship] review explicitly deferred; author must run ./scripts/dev/review.sh before marking ready."
+        fi
         ;;
     *)
         echo "internal error: unknown delivery path $DELIVERY" >&2

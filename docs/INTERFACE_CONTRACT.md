@@ -1,10 +1,10 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.11.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.13.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
-not one transport. The server advertises the same
-callable names and source input schemas through:
+not one transport. Every transport negotiates the same complete catalog, while
+the initial schema advertisement is progressive by default:
 
 - Streamable HTTP MCP at `/mcp/`
 - REST discovery at `GET /v1/tools`
@@ -41,12 +41,13 @@ first-class public spelling such as `start_session` or `sync_state`; a
 `canonical_tool` is the underlying registered tool. Both are dispatched by the
 same server authority.
 
-A listed capability is:
+A contract capability is:
 
-1. advertised by each local public discovery surface;
-2. accepted by the common dispatcher; and
-3. described by the same source input schema before transport-specific
-   serialization.
+1. present in the complete `list_tools(lite=true)` negotiation index;
+2. accepted by the common dispatcher, directly when advertised or through
+   `use_tool`; and
+3. described from the same source input schema through `describe_tool` and,
+   under full advertisement, every transport listing.
 
 The `federation.lifecycle` section also names the product-facing lifecycle
 capabilities and their normalized success/failure envelope. It guarantees the
@@ -72,21 +73,29 @@ unchanged. A listed tool is dispatchable, but successful execution still
 depends on storage, identity/authorization, and any configured inference or
 reviewer services. Tool counts alone establish none of those conditions.
 
-## One catalog and compatibility
+## Complete catalog, progressive advertisement, and compatibility
 
-Since interface release 1.6.0 the contract advertises every registered-and-mounted public tool,
-including primary workflow aliases, on every transport. A definition registered
-after server mounting is omitted rather than advertised without a dispatch path.
-No mode selection is required. Legacy
-`GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
-but ignored, including the former operator profiles. They were discovery
-filters, never authorization boundaries. Existing action authorization and
-identity gates remain in force.
+Since interface release 1.13.0 the contract distinguishes capability identity
+from initial advertisement. Every registered-and-mounted public tool, including
+primary workflow aliases, remains in the complete catalog. By default MCP,
+REST, and stdio advertise a small workflow surface plus `list_tools`,
+`describe_tool`, and `use_tool`; schema-driven clients discover an omitted name,
+inspect it, then invoke it through `use_tool`. The gateway runs the target's
+normal identity, validation, authorization, timeout, response, and
+telemetry paths. `UNITARES_TOOL_ADVERTISEMENT=full` advertises every schema up
+front. Legacy `GOVERNANCE_TOOL_MODE` values are ignored. Existing action
+authorization and identity gates remain in force.
 
-The retained `mode` contract field always reports `full`. All legacy mode
-values produce the same surface hash. `list_tools(lite=true)` is the compact
-view of this complete catalog; `lite` controls response detail, not capability
-availability. Category and tier filters are optional browsing aids.
+The retained `mode` contract field always reports `full`, because it describes
+the complete capability set. All advertisement modes produce the same surface
+hash. The separate `advertisement` block declares the default, the full-mode
+environment switch, and the progressive entrypoints. `list_tools(lite=true)`
+is the compact name index of the complete catalog: each capability appears once as
+`{"name": "..."}` beside the interface summary, without descriptions,
+categories, signatures, workflows, or relationship copies. `lite` controls
+response detail, not capability availability. Use `lite=false` to browse rich
+metadata; category and tier filters narrow either view, and `describe_tool`
+provides one capability's parameters on demand.
 
 Raw implementation names remain discoverable and callable so existing clients
 can upgrade independently. Prefer primary workflow names for normalized
@@ -104,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.11.0` is the negotiated interface release. Compatible additions
+- `version: 1.13.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -144,7 +153,19 @@ The two identifiers serve different jobs:
   `describe_tool(tool_name="knowledge", action="search")`.
   `search_knowledge_graph` also records its clarified filter description, so
   three input digests and the surface digest move. This release follows 1.10.0's
-  `list_tools` wire correction).
+  `list_tools` wire correction; 1.12.0, 2026-09-19: `dialectic` declares
+  `judgment_formed` on `antithesis` and `synthesis`. Unlike 1.10.0 and 1.11.0,
+  which advertised parameters the handler already read, this is new behavior: a
+  reviewer that could not form a judgment passes `judgment_formed: false`, and
+  the server records an abstention without claiming or changing reviewer-slot
+  ownership rather than filing a binding rejection with no reasoning behind it.
+  The slot is open only when no reviewer was already assigned. The default is true,
+  so omitting it is the prior behavior exactly and no existing caller changes;
+  nothing is removed or renamed, and one input digest and the surface digest
+  move; 1.13.0, 2026-09-20: `use_tool` is added and capability negotiation is
+  separated from the default progressive transport advertisement. The complete
+  catalog and its hashes remain transport-neutral, while operators can restore
+  the up-front full listing with `UNITARES_TOOL_ADVERTISEMENT=full`).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

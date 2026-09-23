@@ -59,10 +59,42 @@ both believing they are canonical.
    - `UNITARES_LEASE_ATTESTATION_ISSUER` / `_AUDIENCE` — stable,
      deployment-specific identifiers; never reuse across independent
      deployments.
-   - `UNITARES_HTTP_API_TOKEN` and (if external outcome producers post in)
-     `UNITARES_OPERATOR_TOKENS`.
+   - `UNITARES_MCP_BEARER_TOKENS` — a unique bearer used by every remote MCP
+     and REST client. A non-empty allowlist makes REST strict by default; do
+     not set `UNITARES_REST_STRICT=0`. This is load-bearing behind a loopback
+     tunnel, where the local trusted-network branch would otherwise bypass
+     `UNITARES_HTTP_API_TOKEN`.
+   - `UNITARES_MCP_ALLOWED_HOSTS` — include the tunnel's public hostname exactly
+     as it arrives in the HTTP `Host` header, without a scheme (for example,
+     `localhost,127.0.0.1,governance.example.com`). Otherwise `/health/ready`
+     can pass while the MCP transport rejects the tunnel with 421.
+   - `UNITARES_MCP_ALLOWED_ORIGINS` / `UNITARES_HTTP_CORS_EXTRA_ORIGINS` — put
+     each browser MCP client's exact origin in **both** lists, including
+     `https://` and excluding a trailing slash (for example,
+     `http://localhost:8767,http://127.0.0.1:8767,https://governance.example.com`).
+     The first list configures MCP transport Origin validation; the second
+     configures the outer HTTP CORS preflight. Omitting either blocks the
+     browser before it can use MCP. The cloud runtime verifier is not a browser
+     and does not prove this CORS configuration.
+   - `UNITARES_DASHBOARD_RP_ID` / `UNITARES_DASHBOARD_ORIGIN` — set these to the
+     public dashboard hostname and exact HTTPS origin (for example,
+     `governance.example.com` and `https://governance.example.com`). Passkey
+     enrollment and sign-in are bound to this pair. If `_ORIGIN` is empty it
+     defaults to `https://` plus the RP id.
+   - `UNITARES_MCP_BEARER_TOKEN` — the singular client credential used by the
+     lease plane for governance REST calls. Set it to one exact member of the
+     plural `UNITARES_MCP_BEARER_TOKENS` allowlist above.
+   - Dashboard users authenticate with a passkey-backed dashboard session.
+     The RP id and origin above must match the browser-visible deployment.
+     Strict REST ignores `UNITARES_HTTP_API_TOKEN`, even on loopback;
+     non-browser telemetry and REST clients must send a member of
+     `UNITARES_MCP_BEARER_TOKENS`.
+   - `UNITARES_OPERATOR_TOKENS` — configure at least one unique, high-entropy
+     token to bootstrap the first dashboard passkey. The same operator
+     credential is required whenever an operator mints another one-time
+     enrollment code, and when external outcome producers post in.
 4. `docker compose up -d --build` and wait for health checks.
-5. Verify: `curl -fsS http://127.0.0.1:8767/v1/tools` returns 200, then an
+5. Verify: `curl -fsS http://127.0.0.1:8767/health/ready` returns 200, then an
    MCP client `onboard()` round-trip through the tunnel (next section).
 
 `scripts/ops/rotate-secrets.sh` documents the rotation path once the install
@@ -88,6 +120,29 @@ Either way the governance HTTP surface is now reachable from untrusted
 networks, which is why step 3 above is not optional: the dev-default signing
 key and bearer token are public knowledge (they are in this repository).
 
+### Bootstrap the first dashboard passkey
+
+After the tunnel is live, use one exact member of `UNITARES_OPERATOR_TOKENS`
+to mint the initial 10-minute, single-use enrollment code. Keep the token out
+of URLs and shell history; the placeholder below should come from a secret
+manager or a non-logged interactive shell:
+
+```bash
+read -rsp 'Bootstrap operator token: ' UNITARES_BOOTSTRAP_OPERATOR_TOKEN
+printf '\n'
+curl -fsS -X POST \
+  -H "X-Unitares-Operator: ${UNITARES_BOOTSTRAP_OPERATOR_TOKEN}" \
+  https://governance.example.com/auth/enroll
+unset UNITARES_BOOTSTRAP_OPERATOR_TOKEN
+```
+
+Open `https://governance.example.com/auth/signin?enroll=1`, type the returned
+code, and create the passkey before the code expires. The `enroll=1` query is
+only a nonsecret UI marker; the code itself is sent in a request header. Sign
+in with the new passkey before treating dashboard access as recovered. Keep an
+operator token configured if this deployment must mint additional enrollment
+codes or accept external operator writes.
+
 ## Off-site backups
 
 `scripts/ops/backup_governance.sh` already produces daily compressed
@@ -103,7 +158,7 @@ machine. Two gaps to close on any deployment whose machine can be lost:
    way the dump alerts.
 2. **Redis is state, not cache, and needs its own snapshot.** Most live
    session/identity bindings exist only in Redis (see
-   `docs/proposals/redis-retirement-v0.md`). Trigger `BGSAVE` (or rely on
+   `docs/proposals/archive/redis-retirement-v0.md`). Trigger `BGSAVE` (or rely on
    AOF, which the Compose service enables) and copy the resulting
    `dump.rdb`/`appendonly.aof` off-site alongside the SQL dump.
 

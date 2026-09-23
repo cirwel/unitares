@@ -23,7 +23,7 @@ deploy worktree) instead of an agent-owned linked worktree is surfaced as an
 **advisory warning** by default. Add `--require-worktree` to make that a hard
 failure (strict mode) once the fleet reliably works in worktrees — the
 advisory→strict rollout mirrors the Surface Lease Plane. Rationale:
-`docs/proposals/worktree-isolation-vs-lease-default.md`.
+`docs/proposals/active/worktree-isolation-vs-lease-default.md`.
 
 A cached `parent_agent_id` from a prior session is context, not a lineage
 instruction: co-location in this workspace is not lineage, and the prior session
@@ -34,7 +34,7 @@ same-live-owner diagnostic rebinds.
 Call `onboard()` against UNITARES using the strongest honest mode:
 
 - default: a fresh session onboards fresh — pass `force_new=true` with no `parent_agent_id`
-- declare lineage only for a real causal event: a dispatched subagent (`parent_agent_id=<dispatcher uuid>`, `spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id=<prior uuid>`, `spawn_reason="new_session"`). Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`) and the claim cleared, unless `spawn_reason` marks a dispatched child (`subagent`, `dispatch`, `dialectic_reviewer`) or a `compaction` continuation — those relationships expect the parent to still be live.
+- declare lineage only for a real causal event: a dispatched subagent (`parent_agent_id=<dispatcher uuid>`, `spawn_reason="subagent"`, usually set automatically by the dispatcher) or a handoff from a finished prior session (`parent_agent_id=<prior uuid>`, `spawn_reason="explicit"`). Declaring a currently-live agent as parent is rejected (`lineage_coincidental_rejected`) and the claim cleared, unless `spawn_reason` marks a dispatched child (`subagent`, `dispatch`, `dialectic_reviewer`) or a `compaction` continuation — those relationships expect the parent to still be live.
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
 

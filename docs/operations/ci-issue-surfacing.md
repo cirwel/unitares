@@ -77,7 +77,7 @@ plus an `ANTHROPIC_API_KEY` repo secret, and is intentionally out of scope here.
 The deduped `ci-finding` issues are the hand-off point a fix loop would later
 consume. The **land** half — branch protection + operator-armed merge-when-green,
 with the agent stopping at ready-for-review — is planned in
-[`merge-automation-plan.md`](./merge-automation-plan.md).
+[`merge-automation-plan.md`](merge-automation-plan.md).
 
 ## Carrying findings the other way: GitHub to the record
 

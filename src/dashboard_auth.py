@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import os
 import secrets
@@ -25,8 +26,16 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
-DASHBOARD_RP_ID = "gov.cirwel.org"
-DASHBOARD_EXPECTED_ORIGIN = "https://gov.cirwel.org"
+def _dashboard_webauthn_config() -> tuple[str, str]:
+    """Read hosted WebAuthn overrides, deriving an HTTPS origin from the RP id."""
+    rp_id = os.getenv("UNITARES_DASHBOARD_RP_ID", "").strip() or "gov.cirwel.org"
+    expected_origin = (
+        os.getenv("UNITARES_DASHBOARD_ORIGIN", "").strip() or f"https://{rp_id}"
+    )
+    return rp_id, expected_origin
+
+
+DASHBOARD_RP_ID, DASHBOARD_EXPECTED_ORIGIN = _dashboard_webauthn_config()
 DASHBOARD_RP_NAME = "UNITARES Governance"
 
 SESSION_COOKIE = "__Host-unitares_session"
@@ -387,7 +396,10 @@ def _auth_page(name: str) -> Response:
     target = base / name
     if not target.is_file():
         return HTMLResponse("Dashboard authentication UI is not installed.", status_code=503)
-    return HTMLResponse(target.read_text(), headers={"Cache-Control": "no-store"})
+    content = target.read_text().replace(
+        "{{DASHBOARD_RP_ID}}", html.escape(DASHBOARD_RP_ID)
+    )
+    return HTMLResponse(content, headers={"Cache-Control": "no-store"})
 
 
 async def http_auth_signin(request):

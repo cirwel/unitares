@@ -206,7 +206,8 @@ def _continuity_token_resume_rejected(
             "reason": "continuity_token_resume_retired",
             "action": (
                 "Call start_session(force_new=true, parent_agent_id=<prior UUID>, "
-                "spawn_reason='new_session') instead of resuming by token."
+                "spawn_reason='explicit') instead of resuming by token. The prior "
+                "process must have exited; a live one is a sibling, not a predecessor."
             ),
             "preserved_path": (
                 "Same-live-process PATH 0 remains available as "
@@ -1929,12 +1930,13 @@ def _build_tool_mode_info(verbose: bool):
                 "current_mode": TOOL_MODE,
                 "visible_tools": len(mode_tools),
                 "total_tools": len(all_tools),
-                "available_modes": ["full"],
+                "available_modes": ["progressive", "full"],
                 "tip": (
-                    "One complete tool catalog is available. No mode selection "
-                    "is needed; legacy GOVERNANCE_TOOL_MODE settings are ignored. "
-                    "Use list_tools() for categories and describe_tool() for "
-                    "full parameters or an individual router action."
+                    "Use list_tools(lite=true) for the complete capability index, "
+                    "describe_tool() for parameters, and use_tool() for capabilities "
+                    "omitted from the initial progressive listing. Set "
+                    "UNITARES_TOOL_ADVERTISEMENT=full to advertise every schema up "
+                    "front; legacy GOVERNANCE_TOOL_MODE settings are ignored."
                 ),
             }
         except Exception as e:

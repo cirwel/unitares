@@ -47,7 +47,7 @@ Interpretation guards (also printed in every report):
 
 - Descriptive only. Nothing here is an outcome-prediction claim, and nothing
   here feeds the pre-registered read in
-  ``docs/proposals/eisv-outcome-grounding-stop-rule-v0.md``.
+  ``docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md``.
 - Raw-step smoothness at sub-hour cadence reflects the estimator's EMA
   low-pass, not agent dynamics.
 - The hour-of-day share carries no phase and therefore supports no claim

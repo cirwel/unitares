@@ -179,8 +179,9 @@ def test_the_diff_is_not_vacuous_against_fastmcp_regeneration():
 
 @pytest.mark.parametrize("field_descriptions", ["brief", "full", "off"])
 @pytest.mark.parametrize("property_titles", ["strip", "keep"])
+@pytest.mark.parametrize("null_defaults", ["strip", "keep"])
 def test_mount_listing_is_the_catalog_schema_verbatim(
-    monkeypatch, field_descriptions, property_titles
+    monkeypatch, field_descriptions, property_titles, null_defaults
 ):
     """Whole-schema equality, in every advertised-text mode.
 
@@ -194,6 +195,7 @@ def test_mount_listing_is_the_catalog_schema_verbatim(
     """
     monkeypatch.setenv("UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS", field_descriptions)
     monkeypatch.setenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", property_titles)
+    monkeypatch.setenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", null_defaults)
 
     catalog = _catalog()
     mount = _fresh_mount()
@@ -211,7 +213,8 @@ def test_mount_listing_is_the_catalog_schema_verbatim(
     assert not differing, (
         f"/mcp/ listing differs from the catalog for {len(differing)} tool(s) "
         f"under field_descriptions={field_descriptions}, "
-        f"property_titles={property_titles}: {differing}"
+        f"property_titles={property_titles}, "
+        f"null_defaults={null_defaults}: {differing}"
     )
 
 
@@ -222,6 +225,7 @@ async def test_live_mount_advertises_the_catalog(monkeypatch):
 
     monkeypatch.setattr("src.tool_modes.TOOL_MODE", "full")
     monkeypatch.delenv("UNITARES_TOOL_SCHEMA_PROPERTY_TITLES", raising=False)
+    monkeypatch.delenv("UNITARES_TOOL_SCHEMA_NULL_DEFAULTS", raising=False)
     listed = {
         tool.name: get_tool_input_schema(tool, {}) or {}
         for tool in await mcp_server.mcp.list_tools()

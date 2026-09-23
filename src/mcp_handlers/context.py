@@ -13,7 +13,7 @@ With contextvars, session context is set once at dispatch entry and accessible e
 
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 # =============================================================================
 # SESSION SIGNALS (unified transport signal capture)
 # =============================================================================
@@ -91,6 +91,30 @@ _transport_client_hint: ContextVar[Optional[str]] = ContextVar('transport_client
 # This enables implicit identity binding without clients manually passing client_session_id
 _mcp_session_id: ContextVar[Optional[str]] = ContextVar('mcp_session_id', default=None)
 _session_resolution_source: ContextVar[Optional[str]] = ContextVar('session_resolution_source', default=None)
+
+# Transport-owned re-entry callback for nested public-tool gateways. The
+# transport installs this only while its dispatcher is executing a handler;
+# ``use_tool`` calls it instead of guessing how MCP, REST, or stdio would have
+# prepared and observed a directly named target.
+NestedToolInvoker = Callable[[str, Dict[str, Any]], Awaitable[Any]]
+_nested_tool_invoker: ContextVar[Optional[NestedToolInvoker]] = ContextVar(
+    'nested_tool_invoker', default=None
+)
+
+
+def set_nested_tool_invoker(invoker: NestedToolInvoker) -> object:
+    """Install the active transport's direct-call re-entry callback."""
+    return _nested_tool_invoker.set(invoker)
+
+
+def get_nested_tool_invoker() -> Optional[NestedToolInvoker]:
+    """Return the active transport's nested direct-call callback, if any."""
+    return _nested_tool_invoker.get()
+
+
+def reset_nested_tool_invoker(token: object) -> None:
+    """Restore the previous nested callback after a transport dispatch."""
+    _nested_tool_invoker.reset(token)
 
 def set_session_context(
     session_key: Optional[str] = None,
@@ -310,6 +334,11 @@ _csid_transport_injected: ContextVar[bool] = ContextVar('csid_transport_injected
 def set_csid_transport_injected(value: bool = True) -> object:
     """Mark that the client_session_id in arguments was transport-injected, not caller-sent."""
     return _csid_transport_injected.set(value)
+
+
+def reset_csid_transport_injected(token: object) -> None:
+    """Restore whether the active request's client session was transport-injected."""
+    _csid_transport_injected.reset(token)
 
 
 def get_csid_transport_injected() -> bool:

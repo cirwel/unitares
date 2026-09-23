@@ -37,21 +37,22 @@ this table does not currently hold.
 | Predictive lift | **Non-detection; inconclusive for weak effects** | In the frozen 2026-08-09 cohort, no slice cleared the selection-aware null (selective p = 0.070–0.567). The first power characterisation was withdrawn for corrupted synthetic pairing and uncontrolled class-balance drift, and the preserved record omits the cluster geometry needed to reconstruct read-specific power, so the corrected [power audit](operations/falsifiability-power-audit-2026-08-23.md) sets no standing AUC ceiling. |
 | Incident prevention or benefit from pausing | **Untested** | No governed-versus-ungoverned comparison has shown an incident prevented or an outcome improved by pausing. |
 | Review binds on the reviewed agent | **Exercised path** | A paused agent cannot resolve its own session over a standing reviewer objection: the submission is recorded, the session is not resolved, and it waits for facilitation (`src/dialectic_protocol.py`). 33 non-canary sessions carry such a submission after a reviewer's rejection. Since the 2026-07-02 reviewer-label split, 81 non-canary verdicts are recorded and 77 carry the reviewer's conditions; 42 dissent, one of which is a parse failure recorded as disagreement rather than a reviewer's judgement. |
-| Benefit from review and coordination | **Untested** | These records cover dialectic-mediated review only: review run through subagent councils or external models leaves no row unless filed through `reviewer_provenance`, a field no caller has yet populated, so that gap is in recording rather than occurrence. Benefit is separate and unmeasured — every change went through the reviewed path, leaving zero untreated cases to compare against. |
+| Review-driven correction traces | **Operational observation** | A [retrospective audit](evaluations/review-correction-traces-2026-09-21.md) fixed a sample of 20 recently created, merged PRs before inspecting review findings. Eight contain a public finding-to-revision chain and two contain an author-recorded internal review with a matching revision. Another PR implements a condition retained from an earlier structured review. This establishes inspectable correction traces, not causality or comparative lift. |
+| Comparative benefit from review and coordination | **Untested** | The retrospective has no matched unreviewed or conventional-review control, and some records were author-relayed or filed under the same GitHub identity. Dialectic review, councils, external models, and ordinary repository review also have incomplete common instrumentation. No estimate of incident reduction, net productivity, or UNITARES's incremental contribution follows from the observed corrections. |
 | Robustness to a motivated attacker | **Structural limit** | A capable process can optimize or conceal behavior outside the monitored proxy; independent evidence remains necessary. See the [scope and threat model](SCOPE_AND_THREAT_MODEL.md). |
 
 The outcome read carries a protocol qualification. After the frozen cutoff,
 recurring automation exposed live discrimination output: the ablation watchdog
 completed 42 of 51 executions and the dogfood guard completed 43 of 52. Those
 jobs are paused. The fixed
-[2026-12-01 gate](proposals/eisv-outcome-grounding-stop-rule-v0.md) remains
+[2026-12-01 gate](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md) remains
 an operational decision rule, but it is not the only post-registration read and
 cannot be described as clean single-read blinding; its report must disclose the
 interim access and read-specific power.
 
 The validation the system does claim — reliability, faithfulness under
 intervention, and calibration — is scoped and partly built; the
-[roadmap](../ROADMAP.md) tracks it. The DOI identifies a
+[roadmap](ROADMAP.md) tracks it. The DOI identifies a
 [public preprint](https://doi.org/10.5281/zenodo.19647159), not peer-reviewed
 validation.
 
@@ -83,15 +84,17 @@ a prototype or a system?
 
 | | |
 |---|---|
-| **42 tools** on the wire | one complete catalog, every name advertised on every transport (legacy `GOVERNANCE_TOOL_MODE` settings are accepted and ignored); 8 of them are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
+| **43 registered tools** | one complete catalog remains negotiable and callable on every transport; the default initial listing is progressive and omitted names run through `use_tool` after discovery (`UNITARES_TOOL_ADVERTISEMENT=full` restores every schema up front; legacy `GOVERNANCE_TOOL_MODE` is ignored). 8 tools are consolidated routers over 52 actions, 8 workflow aliases carry the agent-facing names, and a 70-entry alias table resolves legacy names |
 | **13,614 test functions** | across 776 files, sharded in CI, with the fleet-neutrality and evidence contracts enforced as tests rather than as conventions |
 | **67 database migrations** | slot-and-name drift is gated by the repo doctor |
 | **524 Python modules** | `src/`, `governance_core/`, and the reference residents |
 | **226 documents** | ontology, proposals, operations runbooks, and the evaluation index, with dead-reference checks in CI |
 | **7 companion repositories** | including a published SDK, a host adapter, a Raspberry Pi testbed, and the resident userland; the main integrations are listed under [Ecosystem](../README.md#ecosystem) |
 
-Recounted 2026-09-09 against tracked files at `e017c45e`, each with the command
-that produced it. Test files: `git ls-files tests/` filtered to `test_*.py`;
+The registered-tool count was refreshed 2026-09-20 at `76a68c02` after adding
+`use_tool`; the remaining structural counts were recounted 2026-09-09 against
+tracked files at `e017c45e`, each with the command that produced it. Test files:
+`git ls-files tests/` filtered to `test_*.py`;
 test functions: an AST walk of those files for `def test_*`. Migrations:
 `git ls-files db/postgres/migrations/ | wc -l`. Python modules:
 `git ls-files src/ governance_core/ agents/ | grep -c '\.py$'`. Documents:
@@ -120,7 +123,7 @@ non-repudiation. Asymmetric or DPoP-style keys were considered and shelved on
 verified by an operator who does not already trust its issuer, which is the whole
 problem a federation exchange has to solve. Whether the remaining records suffice
 to exchange cross-operator attestations without centralizing raw telemetry is
-open on the **multi-principal trust** track in the [roadmap](../ROADMAP.md).
+open on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
 
 ## Identity binding and the lease plane
 

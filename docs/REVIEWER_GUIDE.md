@@ -101,7 +101,7 @@ UNITARES_DEMO_PORT=18767 make demo
 2. Reproduce the §11.6 verdict counterfactual with [`CIRWEL/unitares-repro-v6`](https://github.com/CIRWEL/unitares-repro-v6).
 3. Inspect [`CIRWEL/eisv-lumen`](https://github.com/CIRWEL/eisv-lumen) for trajectory-derived expression and benchmark artifacts.
 4. Check GitHub Actions on this repo for tests, documentation validation, and CodeQL.
-5. Read [`SECURITY.md`](../SECURITY.md) and [`CONTRIBUTING.md`](../CONTRIBUTING.md) to understand operational posture.
+5. Read [`SECURITY.md`](../.github/SECURITY.md) and [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md) to understand operational posture.
 
 ## Buyer / operator wedge
 
@@ -151,7 +151,7 @@ python3 -m pytest tests/test_ablation_negative_controls.py \
 
 **With a deployment DB** (a real fleet's outcomes via `GOVERNANCE_DATABASE_URL`, or
 the shipped reproducibility kit `CIRWEL/unitares-repro-v6`) — first read the
-[outcome-grounding stop rule](proposals/eisv-outcome-grounding-stop-rule-v0.md)
+[outcome-grounding stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
 and the
 [systemic design audit](ontology/falsification-design-system-audit-2026-08-23.md).
 Between registered reads, only the support inventory is permitted here; it does
@@ -196,7 +196,7 @@ to avoid the flag reproduces the scraped-confidence defect client-side (#1445).
 The response carries a `validation_visibility` note when the flag is stamped,
 and `outcome_inventory.py` reports the population as `calibration_excluded_only`
 with `scraped_only_rows_kept` (#1790; decision packet
-[`proposals/outcome-fixture-conflation-decision-packet-v0.md`](proposals/outcome-fixture-conflation-decision-packet-v0.md)).
+[`proposals/archive/outcome-fixture-conflation-decision-packet-v0.md`](proposals/archive/outcome-fixture-conflation-decision-packet-v0.md)).
 
 Envelope telemetry is future-only: rows written before
 `eisv.telemetry.v1` appear as `legacy/no-envelope` and are never assigned an
@@ -248,10 +248,13 @@ BEAM harness lane excluded:
   demonstrated.**
 - **What the non-detection does not say.** A `NON_DETECTION` slice cannot
   distinguish "no association" from "an association this cohort is too small to
-  resolve". The instrument's power on a cohort of this shape is measured in
+  resolve". The corrected
   [`operations/falsifiability-power-audit-2026-08-23.md`](operations/falsifiability-power-audit-2026-08-23.md)
-  by `scripts/analysis/ablation_power_probe.py`. Quote the p-values with that
-  power figure, or the reader will hear a demonstrated negative.
+  withdraws its original power table and explains why the preserved evidence
+  cannot establish read-specific power for this frozen cohort. Report the
+  p-values with that unresolved power limitation. The corrected synthetic
+  procedure in `scripts/analysis/ablation_power_probe.py` supplies no valid
+  historical power number for this slice.
 
 This does not validate EISV, establish predictive lift, or create a standing AUC
 bound. It is a reproducible dated descriptive snapshot after best-candidate

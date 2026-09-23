@@ -8,6 +8,16 @@ class TestPydanticSchemas:
     full coverage of the type coercions and bounds checking previously handled 
     by manual validators."""
 
+    def test_dialectic_judgment_flag_does_not_coerce_numeric_bool(self):
+        from src.mcp_handlers.schemas.dialectic import SubmitAntithesisParams
+
+        with pytest.raises(ValidationError):
+            SubmitAntithesisParams(
+                session_id="session",
+                agent_id="agent-reviewer",
+                judgment_formed=1,
+            )
+
     def test_onboard_origin_is_a_closed_observability_enum(self):
         from src.mcp_handlers.schemas.identity import OnboardParams
 

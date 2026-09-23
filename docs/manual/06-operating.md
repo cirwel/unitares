@@ -48,7 +48,7 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 - Agent identity is bearer-token-based (symmetric stack retained intentionally).
 - The dashboard reads PostgreSQL directly with the same auth model as MCP.
 
-**Multi-tenant or public-facing deployment needs a harder auth posture than the defaults.** Set bearer/OAuth gates and host allowlists before exposing anything. Vulnerability reports: [`../../SECURITY.md`](../../SECURITY.md). Full scope and threat model: [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).
+**Multi-tenant or public-facing deployment needs a harder auth posture than the defaults.** Set bearer/OAuth gates and host allowlists before exposing anything. Vulnerability reports: [`../../SECURITY.md`](../../.github/SECURITY.md). Full scope and threat model: [`../SCOPE_AND_THREAT_MODEL.md`](../SCOPE_AND_THREAT_MODEL.md).
 
 ## 6.4 Tuning governance thresholds
 

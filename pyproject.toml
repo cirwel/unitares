@@ -115,7 +115,7 @@ Changelog = "https://github.com/cirwel/unitares/blob/master/docs/CHANGELOG.md"
 #
 # This does NOT apply to the client SDK: `unitares-sdk` (agents/sdk/) is a
 # separate distribution with its own namespace and is already published on
-# PyPI (`pip install unitares-sdk`) — see COMPATIBILITY.md. Don't generalize
+# PyPI (`pip install unitares-sdk`) — see docs/COMPATIBILITY.md. Don't generalize
 # this comment to "UNITARES has no PyPI package."
 # metadata exists so the tree is a coherent, testable package.
 [tool.setuptools.packages.find]

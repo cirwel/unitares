@@ -1,11 +1,9 @@
-"""
-CI drift guard: the advertised MCP wire surface must match the mode sets.
+"""CI drift guards for registration, advertisement, and introspection.
 
-`GOVERNANCE_TOOL_MODE` defaults to "standard" (src/tool_modes.py): the five-tool
-checkpoint loop plus shared memory, structured review, and advisory inference.
-Under `GOVERNANCE_TOOL_MODE=lite` the server advertises exactly
-the tools in `LITE_MODE_TOOLS` over the MCP protocol. That advertised surface
-is composed from two places (src/tool_registration.py + src/tool_mode_listing.py):
+Legacy profile labels resolve to the complete catalog. The current default is
+the progressive entry surface, while ``list_tools(lite=true)`` remains the
+complete name-only federation handshake. The mounted MCP surface is composed
+from two places (src/tool_registration.py + src/tool_mode_listing.py):
 
   1. `auto_register_all_tools()` registers every `register=True` handler
      (`get_tool_registry()`); the tools/list filter advertises those the
@@ -17,8 +15,7 @@ is composed from two places (src/tool_registration.py + src/tool_mode_listing.py
 
 Registration is mode-independent since the 2026-09 surface cut, so a name
 outside the mode still dispatches on /mcp/ (tests/test_tool_mode_listing.py);
-what these tests pin is the ADVERTISED set, which is all a schema-driven client
-can see.
+what these tests pin is registration and the explicitly selected listing.
 
 If someone adds a tool to `LITE_MODE_TOOLS` but forgets `register=True` (or an
 alias entry), it would be silently dropped from the wire — the client sees fewer
@@ -282,22 +279,32 @@ def test_workflow_aliases_are_lite_visible():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["minimal", "lite", "operator_readonly", "full"])
-async def test_orientation_compact_view_matches_the_wire(monkeypatch, mode):
-    """list_tools' default view must equal what this deployment advertises.
+async def test_orientation_compact_view_is_name_only_and_under_four_kib():
+    """Lite is a bounded handshake, not a second copy of tool metadata."""
+    import json
 
-    Orientation and the wire are filtered by different things, and until
-    2026-08-29 neither direction agreed. The compact view filtered on the
-    hardcoded LITE_MODE_TOOLS constant while the wire is filtered by
-    GOVERNANCE_TOOL_MODE, so under operator_readonly list_tools named 19 tools
-    the wire would not dispatch and hid 3 it would. A schema-driven MCP client
-    can only call advertised names, so an orientation surface that disagrees
-    with the wire either invents tools or conceals them.
+    from src.mcp_handlers.introspection import tool_introspection
 
-    This pins BOTH directions in every deployable mode. It is not a claim that
-    unadvertised tools are unwanted: list_tools(lite=false) still lists them,
-    flagged advertised=false, with a `not_advertised` block saying why.
-    """
+    raw = (await tool_introspection.handle_list_tools({"lite": True}))[0].text
+    payload = json.loads(raw)
+
+    assert len(raw.encode("utf-8")) <= 4096
+    assert payload["tools"]
+    assert all(set(tool) == {"name"} for tool in payload["tools"])
+    assert {
+        "categories_summary",
+        "essential_toolkit",
+        "getting_started_path",
+        "signatures",
+        "tier_summary",
+        "workflows",
+    }.isdisjoint(payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["progressive", "full"])
+async def test_orientation_compact_view_is_the_complete_handshake(monkeypatch, mode):
+    """Advertisement mode does not shrink federation capability negotiation."""
     import json
 
     import src.tool_modes as tool_modes
@@ -308,13 +315,9 @@ async def test_orientation_compact_view_matches_the_wire(monkeypatch, mode):
 
     result = await tool_introspection.handle_list_tools({"lite": True})
     shown = {tool["name"] for tool in json.loads(result[0].text)["tools"]}
-    wire = {tool.name for tool in get_public_tool_definitions(mode)}
+    complete = {tool.name for tool in get_public_tool_definitions("full")}
 
-    assert shown == wire, (
-        f"{mode}: list_tools default view disagrees with the MCP wire.\n"
-        f"  named but not dispatchable: {sorted(shown - wire)}\n"
-        f"  advertised but hidden:      {sorted(wire - shown)}"
-    )
+    assert shown == complete
 
 
 def test_no_alias_name_is_also_a_registered_tool():

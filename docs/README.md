@@ -10,16 +10,17 @@ an analogy or proposal is not mistaken for a deployed contract.
 
 | You are… | Read in this order |
 |---|---|
-| **A reviewer / first-time visitor** | [repo README](../README.md) → [`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) → [`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md) |
+| **A reviewer / first-time visitor** | [repo README](../README.md) → [product](PRODUCT_DEFINITION.md) → [architecture](UNIFIED_ARCHITECTURE.md) → [interface](INTERFACE_CONTRACT.md) → [evidence and limits](EVIDENCE_AND_LIMITS.md) |
 | **Integrating an agent client** | [`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md) → [`integration/CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) → [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
+| **Following current research** | [current designs and contracts](proposals/active/README.md); [frozen protocols](proposals/registered/README.md) have their own registration and execution rules |
 | **Reading research history** | [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) → [`ontology/README.md`](ontology/README.md) → [`proposals/README.md`](proposals/README.md) |
 
-Project-level status and participation live at the repository root:
-[roadmap](../ROADMAP.md), [compatibility](../COMPATIBILITY.md),
-[governance](../GOVERNANCE.md), [support](../SUPPORT.md), and
-[contributing](../CONTRIBUTING.md).
+Project-level status lives in `docs/`; participation and community policies live in `.github/`:
+[roadmap](ROADMAP.md), [compatibility](COMPATIBILITY.md),
+[governance](GOVERNANCE.md), [support](../.github/SUPPORT.md), and
+[contributing](../.github/CONTRIBUTING.md).
 
 ## Reader-facing documentation
 
@@ -41,6 +42,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
 - **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named federation blocker. The root README carries a compressed version.
+- **[`evaluations/review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md)** — a fixed 20-PR retrospective linking review findings to corrective patches, with attribution and causal limits stated beside the result.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
 - **[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)** — versioned measurement → derivation → policy → enforcement provenance stored with each new state row.
 - **[`CHANGELOG.md`](CHANGELOG.md)** — release history.
@@ -55,6 +57,7 @@ Operating guidance for individual subsystems lives next to the code as Skills, n
 
 User- and integrator-facing how-tos. Thin by design — most architecture lives in `UNIFIED_ARCHITECTURE.md` and the repo README.
 
+- [`CODEX_START.md`](guides/CODEX_START.md) — human-facing Codex quickstart for direct repository work
 - [`START_HERE.md`](guides/START_HERE.md) — compatibility redirect to the current audience paths
 - [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — canonical symptom-and-recovery guide
 - [`CIRS_PROTOCOL.md`](guides/CIRS_PROTOCOL.md) — multi-agent coordination protocol (specialized; not a general architecture overview)
@@ -81,9 +84,13 @@ The system's versioned identity ontology, the resolution ledger, and the working
 
 ## Operator and contributor documentation
 
-### `operations/` — operator-internal runbooks
+### `operations/` — runbooks and dated evidence
 
-How to run this in production. Most readers can skip these.
+Production runbooks share this directory with dated deployment and evaluation
+records. Operators use the runbooks; evaluators follow the evidence links in
+[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md) and
+[`EVALUATION_INDEX.md`](EVALUATION_INDEX.md). The operations index separates
+live procedures from preserved evidence and its inference limits.
 
 → Start at **[`operations/README.md`](operations/README.md)**. The primary
 documents are the [operator runbook](operations/OPERATOR_RUNBOOK.md),
@@ -109,7 +116,10 @@ These are research and engineering provenance, not a list of shipped features.
 Active and resolved RFCs that do not belong in `ontology/` live here. Each doc
 carries its own resolution status in the body.
 
-→ Status-grouped index at **[`proposals/README.md`](proposals/README.md)**.
+→ [Proposal guide](proposals/README.md):
+[current designs and contracts](proposals/active/README.md),
+[registered protocols](proposals/registered/README.md), and
+[historical and parked work](proposals/archive/README.md).
 
 ### `essays/` — optional, non-normative interpretation
 

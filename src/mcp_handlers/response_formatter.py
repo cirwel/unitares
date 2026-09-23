@@ -39,6 +39,7 @@ _RESPONSE_MODE_ALIASES = {
     "interpreted": "standard",
 }
 _ACTIONABLE_HEALTH_STATUSES = frozenset({"at_risk", "critical"})
+_ACTIONABLE_IDENTITY_TIERS = frozenset({"weak", "degraded", "refused"})
 
 
 def normalize_discovery_list(value: Any) -> list:
@@ -325,6 +326,32 @@ def _auto_response_mode(response_data: dict) -> str:
     policy_inputs = _policy_inputs(response_data)
     policy_verdict = policy_inputs.get("verdict")
     metrics_verdict = metrics.get("verdict")
+    if isinstance(policy_verdict, dict):
+        policy_verdict = (
+            policy_verdict.get("value")
+            or policy_verdict.get("verdict")
+            or policy_verdict.get("action")
+        )
+    if isinstance(metrics_verdict, dict):
+        metrics_verdict = (
+            metrics_verdict.get("value")
+            or metrics_verdict.get("verdict")
+            or metrics_verdict.get("action")
+        )
+    margin = decision.get("margin") or policy_inputs.get("margin")
+    identity_assurance = response_data.get("identity_assurance")
+    identity_assurance = (
+        identity_assurance if isinstance(identity_assurance, dict) else {}
+    )
+    identity_tier = str(identity_assurance.get("tier") or "").lower()
+    identity_degraded = bool(
+        identity_tier in _ACTIONABLE_IDENTITY_TIERS
+        or identity_assurance.get("caller_proven") is False
+    )
+    warnings = response_data.get("warnings")
+    warnings_present = (
+        bool(warnings) if isinstance(warnings, (list, tuple, dict, str)) else False
+    )
 
     if (
         health_status in _ACTIONABLE_HEALTH_STATUSES
@@ -333,6 +360,12 @@ def _auto_response_mode(response_data: dict) -> str:
         or metrics_verdict in _ACTIONABLE_POLICY_VERDICTS
         or policy.get("sub_action") == "guide"
         or decision.get("sub_action") == "guide"
+        or decision.get("require_human") is True
+        or margin in {"warning", "critical"}
+        or identity_degraded
+        or _compact_enforcement_is_actionable(response_data.get("enforcement"))
+        or bool(response_data.get("recovery_hint"))
+        or warnings_present
     ):
         return "mirror"
     return "compact"

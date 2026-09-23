@@ -1,5 +1,5 @@
 from typing import ClassVar, List, Literal, Mapping, Optional, Tuple, Union
-from pydantic import Field, model_validator
+from pydantic import Field, StrictBool, model_validator
 from .mixins import AgentIdentityMixin
 
 class RequestDialecticReviewParams(AgentIdentityMixin):
@@ -96,11 +96,29 @@ class SubmitAntithesisParams(AgentIdentityMixin):
         default=None,
         description="Why reviewer ownership is being taken over for this antithesis submission"
     )
+    judgment_formed: Union[StrictBool, str, None] = Field(
+        default=True,
+        description=(
+            "False declares that no judgment was reached -- the model returned "
+            "nothing that could be parsed as a verdict. The server then records "
+            "an abstention and leaves the reviewer slot unclaimed (or preserves "
+            "the existing assignment) instead of filing a binding rejection "
+            "nobody can act on. Default True: a caller that "
+            "omits it is stating it judged. This is NOT the same as disagreeing, "
+            "and NOT the same as reviewer_provenance.degraded, which describes "
+            "the backend rather than whether a judgment exists."
+        ),
+    )
 
     @model_validator(mode='after')
     def coerce_types(self):
         if isinstance(self.take_over_if_requested, str):
             self.take_over_if_requested = self.take_over_if_requested.lower() in ('true', '1', 'yes')
+        if isinstance(self.judgment_formed, str):
+            # Mirror the coercion above, but note the DEFAULT is inverted: an
+            # unrecognised string here means "not a judgment", so a garbled
+            # value fails toward abstention rather than toward filing one.
+            self.judgment_formed = self.judgment_formed.strip().lower() in ('true', '1', 'yes')
         return self
 
 class SubmitSynthesisParams(AgentIdentityMixin):
@@ -120,10 +138,22 @@ class SubmitSynthesisParams(AgentIdentityMixin):
         ),
     )
     
+    judgment_formed: Union[StrictBool, str, None] = Field(
+        default=True,
+        description=(
+            "False declares that no judgment was reached on this round -- the "
+            "model returned nothing parseable. The server records an abstention "
+            "and leaves the standing verdict untouched rather than overwriting a "
+            "reasoned objection with an empty one and burning a synthesis round."
+        ),
+    )
+
     @model_validator(mode='after')
     def coerce_types(self):
         if isinstance(self.agrees, str):
             self.agrees = self.agrees.lower() in ('true', '1', 'yes')
+        if isinstance(self.judgment_formed, str):
+            self.judgment_formed = self.judgment_formed.strip().lower() in ('true', '1', 'yes')
         return self
 
 class LlmAssistedDialecticParams(AgentIdentityMixin):
@@ -163,11 +193,11 @@ class DialecticParams(AgentIdentityMixin):
         "antithesis": (
                 "session_id", "concerns", "reasoning", "observed_metrics",
                 "reviewer_provenance", "take_over_if_requested",
-                "takeover_reason",
+                "takeover_reason", "judgment_formed",
         ),
         "synthesis": (
                 "session_id", "agrees", "reasoning", "proposed_conditions",
-                "conditions",
+                "conditions", "judgment_formed",
         ),
         "reassign": (
                 "session_id", "new_reviewer_id",
@@ -214,6 +244,18 @@ class DialecticParams(AgentIdentityMixin):
     concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis)")
     take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
+    judgment_formed: Union[StrictBool, str, None] = Field(
+        True,
+        description=(
+            "Set false (action=antithesis/synthesis) to declare that NO judgment "
+            "was reached -- the model returned nothing parseable as a verdict. "
+            "The server records an abstention without claiming or changing the "
+            "reviewer slot, instead of filing a binding rejection nobody can act "
+            "on. Omitting "
+            "it means you judged. Not the same as disagreeing, and not the same "
+            "as reviewer_provenance.degraded, which describes the backend."
+        ),
+    )
     agrees: Union[bool, str, None] = Field(None, description="Agreement flag (for action=synthesis)")
     # `vote` was removed 2026-09-08: it documented "for action=vote" against a
     # router with no `vote` action, and no handler ever read it. `conditions`

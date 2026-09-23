@@ -3,9 +3,9 @@
 ``src/plugin_loader.py`` promises the flag "skips plugin loading entirely",
 but until 2026-09-09 it only gated the entry-point loader. Importing a plugin
 module directly runs its ``@mcp_tool`` decorators, which register tools into
-the registry the interface contract is built from. That happens after
-``mcp_server_bootstrap`` has mounted the surface, so the tool is COUNTED and
-never DISPATCHABLE.
+the registry the interface contract is built from. Before the progressive
+gateway, doing that after ``mcp_server_bootstrap`` mounted the surface made the
+tool COUNTED and never DISPATCHABLE.
 
 Measured on a server started with the flag set, polling once a second:
 
@@ -23,9 +23,10 @@ was a reachable production state, not a test artifact.
 
 That importer, the deep-health Pi probe, was removed with the rest of the
 Mac-to-Pi coupling on 2026-09-13, so no shipped module imports a plugin package
-by name any more. What remains here holds for any plugin: the predicate the
-loader and every future importer must share, and the invariant that the
-contract never names a capability dispatch would refuse.
+by name any more. Progressive advertisement now makes late visible handlers
+reachable through ``use_tool``; what remains here holds for any plugin: the
+predicate every future importer must share, and the invariant that the mount
+exposes the gateway while the contract names only visible dispatch handlers.
 """
 
 from __future__ import annotations
@@ -68,12 +69,10 @@ class TestPredicate:
 class TestContractCannotOutrunDispatch:
     """The invariant nobody had written down.
 
-    A capability may appear in the federation contract only if the mounted
-    surface will dispatch it. ``tools/list`` serves FastMCP's mounted table
-    while ``src/interface_contract.py`` builds from the decorator registry, and
-    the two are reconciled exactly once, at
-    ``mcp_server_bootstrap.auto_register_all_tools``. Every late registration
-    after that point is an advertised promise the server breaks.
+    The progressive mount may omit a capability schema only when it mounts the
+    discovery/detail/gateway trio that reaches the visible live registry. The
+    federation contract may therefore be wider than ``tools/list``, but must
+    never include hidden handlers or names dispatch cannot resolve.
 
     ⛔This is NOT the plugin flag's problem, which is why fixing callers could
     not close it. The same divergence is reachable with plugins ENABLED
@@ -84,17 +83,20 @@ class TestContractCannotOutrunDispatch:
     after building the contract: 50 capabilities became 51 with the flag unset.
     """
 
-    def test_no_capability_is_advertised_that_dispatch_would_refuse(self):
-        """Fails on a live server whose registry grew after the mount."""
+    def test_progressive_gateway_keeps_live_contract_dispatchable(self):
+        """Late visible handlers remain reachable without remounting schemas."""
         import sys
         import types
 
         from src.interface_contract import build_interface_contract
+        from src.mcp_handlers.decorators import get_tool_registry, is_tool_hidden
+        from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
 
         # Stand in for a mounted server: the real one is a subprocess, and this
         # invariant is about the reconciliation, not about the transport.
         mounted = {name: object() for name in (
             "start_session", "sync_state", "health_check", "identity",
+            "list_tools", "describe_tool", "use_tool",
         )}
         fake_server = types.ModuleType("src.mcp_server")
         fake_server.mcp = types.SimpleNamespace(
@@ -111,11 +113,18 @@ class TestContractCannotOutrunDispatch:
                 sys.modules["src.mcp_server"] = original
 
         advertised = {c["name"] for c in capabilities}
-        assert advertised <= set(mounted), (
-            "contract advertises capabilities the mounted surface will refuse: "
-            f"{sorted(advertised - set(mounted))}"
+        visible_dispatch = {
+            name for name in get_tool_registry()
+            if not is_tool_hidden(name)
+        } | set(AGENT_WORKFLOW_ALIASES)
+        gateway = {"list_tools", "describe_tool", "use_tool"}
+
+        assert gateway <= set(mounted)
+        assert advertised <= visible_dispatch
+        assert advertised - set(mounted), (
+            "the fixture must exercise capabilities reached through use_tool, "
+            "not only names mounted directly"
         )
-        assert advertised, "narrowing removed everything; the intersection is wrong"
 
     def test_an_unmounted_server_still_describes_the_registry(self):
         """Generators and unit tests must keep their pre-existing behaviour.

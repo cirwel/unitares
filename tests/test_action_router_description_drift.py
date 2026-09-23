@@ -111,11 +111,10 @@ async def test_dialectic_describes_quick_and_drops_dead_vote():
 
 
 def _served_description(tool: str) -> str:
-    """The description this deployment actually advertises for ``tool``."""
-    import src.tool_modes
+    """The description the complete negotiated catalog serves for ``tool``."""
     from src.interface_contract import get_public_tool_definitions
 
-    for definition in get_public_tool_definitions(src.tool_modes.TOOL_MODE):
+    for definition in get_public_tool_definitions("full"):
         if definition.name == tool:
             return definition.description or ""
     raise AssertionError(f"{tool} is not advertised; the roster changed")

@@ -74,7 +74,7 @@ VERSION_REFERENCES = [
     ("CITATION.cff", [
         (r'version: "([\d.]+)"', r'version: "{version}"'),
     ]),
-    ("COMPATIBILITY.md", [
+    ("docs/COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',
          r'| UNITARES server | `v{version}`'),
         # Historical plugin bundle evidence is pinned to its inspected tag.
@@ -104,7 +104,7 @@ PUBLISHED_VERSION_REFERENCES = [
         (r'Replace `@v([\d.]+)` with another server release tag',
          r'Replace `@v{version}` with another server release tag'),
     ]),
-    ("COMPATIBILITY.md", [
+    ("docs/COMPATIBILITY.md", [
         (r'\| Published server/container \| `v([\d.]+)`',
          r'| Published server/container | `v{version}`'),
     ]),

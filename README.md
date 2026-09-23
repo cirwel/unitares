@@ -29,7 +29,8 @@ while keeping their own models, tools, and runtimes. They interoperate with
 each other over their own transports or A2A; UNITARES is the record behind
 them, not the transport between them.
 
-The goal is simple: agent work should remain attributable, reviewable, and
+UNITARES preserves accountability across discontinuities in agent identity,
+context, process, and time. Agent work remains attributable, reviewable, and
 recoverable even when the process that started it is gone.
 
 ## What UNITARES gives you
@@ -49,10 +50,15 @@ recoverable even when the process that started it is gone.
   continue earlier work.
 
 These are mechanisms that run and leave records, which is a different claim from
-improving outcomes. The frozen outcome-lift read did not establish predictive
-lift — inconclusive rather than ruled out — and prevention or improvement from
-pausing remains untested. The [claim ledger](docs/EVIDENCE_AND_LIMITS.md) marks
-which side of that line each capability sits on.
+improving outcomes. A [retrospective audit](docs/evaluations/review-correction-traces-2026-09-21.md)
+found documented review-driven revisions in 10 of 20 recently created, merged
+PRs, plus one later PR implementing a condition retained from an earlier
+structured review. That establishes inspectable correction traces, not
+comparative lift over ordinary review. The frozen outcome-lift read did not
+establish predictive lift — inconclusive rather than ruled out — and prevention
+or improvement from pausing remains untested. The
+[claim ledger](docs/EVIDENCE_AND_LIMITS.md) marks which side of that line each
+capability sits on.
 
 Together, these form an operator-owned accountability layer across coding
 agents, research agents, background agents, and custom runtimes. What it adds
@@ -110,7 +116,7 @@ grow.
 | Connect an agent or application | [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
 | Understand the product and architecture | [Product definition](docs/PRODUCT_DEFINITION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) |
 | Evaluate the claims | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
-| Contribute | [Contributing](CONTRIBUTING.md) · [Development guide](AGENTS.md) |
+| Contribute | [Contributing](.github/CONTRIBUTING.md) · [Development guide](AGENTS.md) |
 
 The [documentation index](docs/README.md) covers deployment profiles,
 operations, security, compatibility, research, and the full tool surface.

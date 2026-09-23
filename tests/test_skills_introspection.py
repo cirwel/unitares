@@ -172,3 +172,42 @@ def test_handler_returns_stale_flag_per_skill():
     for skill in payload["skills"]:
         assert "stale" in skill, f"skill {skill['name']} missing stale flag"
         assert isinstance(skill["stale"], bool)
+
+
+def test_compute_stale_reads_in_utc_not_the_local_clock(monkeypatch):
+    """Pin the UTC/local disagreement, not just the UTC reading.
+
+    `scripts/client/_check_freshness.py` stamps `last_verified` in UTC.
+    `_compute_stale` used to read it back with a local `date.today()`, so on a
+    host behind UTC every age came out one day short and the declared
+    freshness window silently widened.
+
+    Deriving the fixtures from the current UTC date cannot catch that: on a
+    UTC host — which is what CI runs — the two clocks agree and the old
+    implementation passes. Both clocks are frozen here, and disagreeing, so
+    the last assertion fails against `date.today()`.
+    """
+    from datetime import date, datetime, timezone
+
+    from src.mcp_handlers.introspection import skills as skills_mod
+
+    class _LocalDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 9, 19)  # host is behind UTC
+
+    class _UtcClock:
+        @staticmethod
+        def now(tz=None):
+            return datetime(2026, 9, 20, 0, 30, tzinfo=tz or timezone.utc)
+
+    monkeypatch.setattr(skills_mod, "date", _LocalDate)
+    monkeypatch.setattr(skills_mod, "datetime", _UtcClock)
+
+    # Stamped today in UTC: fresh either way.
+    assert skills_mod._compute_stale("2026-09-20", 7) is False
+    # Exactly the window edge in UTC (7 days): fresh, and not yet stale.
+    assert skills_mod._compute_stale("2026-09-13", 7) is False
+    # 8 days old in UTC, but only 7 under the local clock. This is the
+    # assertion the old `date.today()` implementation gets wrong.
+    assert skills_mod._compute_stale("2026-09-12", 7) is True

@@ -1,0 +1,97 @@
+# Contributing to UNITARES
+
+UNITARES is a solo-developed deep-tech project in active research-and-production use. Contributions are welcome but not the primary path — most issues get worked through directly by the maintainer, and the architecture is still evolving (paper v6 → v7).
+
+If you're considering a contribution, please **open an issue first** describing what you'd like to change. Saves both of us from wasted work on something that doesn't fit the direction.
+
+## Quick setup
+
+```bash
+git clone https://github.com/cirwel/unitares.git && cd unitares
+docker compose up -d --wait         # Postgres + AGE + pgvector + Redis + server
+make demo                           # 60-second install check (six check-ins)
+```
+
+If you already have services on `5432`, `6379`, or `8767`, either skip Compose when a local UNITARES server is already live, or set `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `GOVERNANCE_HOST_PORT`, and `UNITARES_DEMO_PORT` to use alternate host ports.
+
+Bare-metal install (Homebrew Postgres + native Python) is in [`docs/install/PLAYBOOK.md`](../docs/install/PLAYBOOK.md). Architecture overview is in [`docs/UNIFIED_ARCHITECTURE.md`](../docs/UNIFIED_ARCHITECTURE.md).
+
+## Tests
+
+```bash
+make test                          # full suite with coverage
+make test-cache-quick              # cached full suite without coverage
+pytest tests/test_<specific>.py    # single test file
+```
+
+New behavior needs a test. New tests should live in `tests/` alongside the existing ones; integration tests hit a real Postgres (not mocks) — see the test harness docs in `tests/` if you're touching the database layer.
+
+### Fresh / remote environments
+
+The project requires **Python 3.14+** (`pyproject.toml` `requires-python`), and `pytest` lives in `requirements-full.txt` — a bare `pip install -e .` won't pull it. Some cloud/CI/web containers (including Claude Code on the web) default `python3` to an older interpreter and don't pre-install the full deps, so set up an explicit 3.14 venv once per environment:
+
+```bash
+python3.14 -m venv .venv && . .venv/bin/activate   # use any 3.14+ interpreter
+pip install -r requirements-full.txt -c constraints.txt   # same resolution CI installs
+pytest tests/test_<specific>.py                    # now resolvable
+```
+
+`-c constraints.txt` is not optional decoration. The ranges in
+`requirements-full.txt` float, so without it pip resolves whatever is newest on
+PyPI today rather than the versions CI and production actually run. The `mcp`
+pin is the one that bites: a release other than the one `constraints.txt`
+carries can make most of the suite fail to *collect*, not merely to pass.
+Reach for the `mcp-newest` lane (CI runs it as a blocking job) when testing
+the unconstrained resolution is the point; otherwise always pass `-c`.
+
+**On an environment that already has dependencies installed**, that command is
+not enough on its own. A pip constraint binds only when pip decides to install
+a package; it does not downgrade one already present that satisfies the range.
+An existing venv — or one seeded by `pip install -e .` — therefore keeps its
+own `mcp` and the install still reports success. Rebuild the venv, or pin
+explicitly to the version `constraints.txt` carries. Its `mcp==` line is the
+source of truth; do not copy a version number from this file:
+
+```bash
+pip install "$(grep -E '^mcp==' constraints.txt)" -r requirements-full.txt -c constraints.txt
+```
+
+See the header of [`constraints.txt`](../constraints.txt) for why each pin is
+there and what bumping one requires.
+
+Pure-unit suites (e.g. `tests/test_naming_helpers.py`, `tests/test_lifecycle_agents.py`) run without a live Postgres/AGE; database-backed tests still need the services from *Quick setup* above.
+
+## Pull request conventions
+
+- **Commit messages:** imperative mood, scope prefix when useful (`docs:`, `feat(lease-plane):`, `fix(identity):`). Body explains the *why*. No AI-attribution footers.
+- **One topic per PR.** If a change touches the identity ontology *and* the lease plane, those are two PRs unless you can convince the maintainer otherwise.
+- **No `git add -A`** — stage by name. The `data/` tree contains runtime state that's easy to accidentally commit.
+- **Update tests in the same PR.** Bug fixes that don't include a regression test won't merge.
+- **Identity-touching changes** require reading [`docs/ontology/identity.md`](../docs/ontology/identity.md) and [`AGENTS.md`](../AGENTS.md) first. The identity layer is the most constraint-laden part of the system.
+
+## Code style
+
+- Python 3.14+. Format touched Python files with `ruff format` and lint with
+  `ruff check`. CI currently gates the configured Ruff rule set (unused imports)
+  but does not run a repository-wide format check.
+- Type hints encouraged but not enforced repo-wide; new modules should be fully typed.
+- No new SQLite or in-process state stores — one Postgres, schema-isolated. See [`docs/operations/database_architecture.md`](../docs/operations/database_architecture.md).
+
+## Licensing
+
+By submitting a contribution you agree it's licensed under the [Apache License 2.0](../LICENSE), same as the rest of the project. No CLA required — `inbound = outbound`.
+
+## What I won't merge
+
+- Substrate-migration proposals without falsifying evidence — the current Python + Postgres stack is the deliberate choice; see commit history and `docs/proposals/` for prior considerations
+- Backwards-compatibility shims for already-removed identity primitives (the `resolve_by_name_claim` / STRICT env / etc. removals were intentional; see `docs/ontology/s1-continuity-token-retirement.md`)
+- Feature flags that exist only to soften a sharp behavioral edge — if the new behavior is right, ship it; if it isn't, don't ship it
+- Cosmetic-only refactors without a behavior or readability win
+
+## Security
+
+See [`SECURITY.md`](SECURITY.md). Do not file security issues as public PRs or issues.
+
+## Reporting issues that aren't security
+
+Open a GitHub issue. Include version (`cat VERSION`), Python version, Postgres version, and the smallest reproduction you have. Logs in `data/logs/` and `data/audit_log.jsonl` are often what's needed — strip any agent identifiers you don't want to share.

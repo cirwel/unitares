@@ -1,6 +1,6 @@
 """Soak read + positive control for the coherence gate shadow.
 
-This is step 4 of `docs/proposals/coherence-proprioceptive-thresholds-v0.md`
+This is step 4 of `docs/proposals/active/coherence-proprioceptive-thresholds-v0.md`
 section 6: after the `coherence_gate_shadow` instrument (built in
 `src/coherence_gate_shadow.py`, flag `UNITARES_COHERENCE_GATE_SHADOW`) has
 soaked on real traffic, re-read the gate crossing counts — and interpret

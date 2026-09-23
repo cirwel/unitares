@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What each GOVERNANCE_TOOL_MODE profile costs on the wire.
+"""What each tool-advertisement profile costs on the wire.
 
 `count_tools.py` answers "how many tools are there". This answers the question
 a context budget actually asks: **how much does advertising them cost**, in the
@@ -33,8 +33,8 @@ as `count_tools.py`.
 
 Usage:
     python3 scripts/diagnostics/tool_surface_cost.py                 # all profiles
-    python3 scripts/diagnostics/tool_surface_cost.py --mode standard # per-tool breakdown
-    python3 scripts/diagnostics/tool_surface_cost.py --mode standard --params
+    python3 scripts/diagnostics/tool_surface_cost.py --mode progressive # default listing
+    python3 scripts/diagnostics/tool_surface_cost.py --mode full --params
     python3 scripts/diagnostics/tool_surface_cost.py --json
     python3 scripts/diagnostics/tool_surface_cost.py --check-ladder  # CI invariant
 """
@@ -71,9 +71,13 @@ DEFAULT_BYTES_PER_TOKEN = 4
 #: calling), not a rung on this ladder, and comparing them to it is meaningless.
 LADDER = ("minimal", "standard", "lite", "full")
 
-#: Profiles reported by default. The operator profiles are measured on request
-#: via --mode but do not clutter the ladder comparison.
-ALL_PROFILES = LADDER + ("operator_readonly", "operator_recovery")
+#: Profiles reported by default. ``progressive`` is the current product
+#: default; the legacy labels remain measurable as full-catalog compatibility
+#: inputs until their diagnostic callers migrate.
+ALL_PROFILES = ("progressive",) + LADDER + (
+    "operator_readonly",
+    "operator_recovery",
+)
 
 SURFACES = ("mcp", "catalog")
 
@@ -239,6 +243,19 @@ def _without_property_titles(schema: dict) -> dict:
     return apply_property_title_mode(schema, "strip")
 
 
+def _without_null_defaults(schema: dict) -> dict:
+    """The schema with every ``default: null`` annotation removed.
+
+    JSON Schema's ``default`` keyword does not participate in validation.
+    Requiredness stays in ``required`` and explicit-null acceptance stays in
+    the field's type, so this transform is validation-neutral. Concrete
+    defaults remain visible.
+    """
+    from src.schema_brief import apply_null_default_mode
+
+    return apply_null_default_mode(schema, "strip")
+
+
 def _without_null_unions(schema: dict) -> dict:
     """The schema with `anyOf: [{type: X}, {type: "null"}]` flattened to X.
 
@@ -271,6 +288,8 @@ def boilerplate_savings(mode: str, surface: str = "mcp") -> Optional[Dict[str, i
 
     - `property_title` is a machine-generated echo of the property name. It is
       validation-neutral to remove, but changes schema fingerprints.
+    - `null_default` is a validation-neutral annotation removal. It leaves
+      requiredness, nullable types and every concrete default intact.
     - `null_union` is a real narrowing of what validates. Measured, not
       recommended.
     """
@@ -293,9 +312,16 @@ def boilerplate_savings(mode: str, surface: str = "mcp") -> Optional[Dict[str, i
     return {
         "baseline": baseline,
         "property_title": baseline - total(_without_property_titles),
+        "null_default": baseline - total(_without_null_defaults),
         "null_union": baseline - total(_without_null_unions),
         "both": baseline
         - total(lambda schema: _without_null_unions(_without_property_titles(schema))),
+        "all": baseline
+        - total(
+            lambda schema: _without_null_unions(
+                _without_null_defaults(_without_property_titles(schema))
+            )
+        ),
     }
 
 
@@ -419,16 +445,17 @@ def _render_params(cost: ProfileCost, surface: str = "mcp") -> None:
 
 def _render_boilerplate(modes, bytes_per_token: int, surface: str = "mcp") -> None:
     print(
-        "Structural boilerplate in the advertised schemas. `title` is a "
-        "generated annotation. Dropping it preserves validation, but changes "
-        "schema fingerprints.\n`anyOf` null-union flattening is "
+        "Structural boilerplate in the advertised schemas. `title` and "
+        "`default: null` are annotations. Dropping either preserves validation, "
+        "but changes schema fingerprints.\n`anyOf` null-union flattening is "
         "measured for scale only -- it DOES change what\nvalidates, and is not "
         "a recommendation.\n"
     )
     print(
-        f"{'profile':<20}{'baseline':>11}{'title':>16}{'null-union':>16}{'both':>16}"
+        f"{'profile':<20}{'baseline':>11}{'title':>16}{'null-default':>16}"
+        f"{'null-union':>16}{'all':>16}"
     )
-    print("-" * 79)
+    print("-" * 95)
     for mode in modes:
         savings = boilerplate_savings(mode, surface)
         if savings is None:
@@ -441,12 +468,18 @@ def _render_boilerplate(modes, bytes_per_token: int, surface: str = "mcp") -> No
 
         print(
             f"{mode:<20}{base:>11,}{cell('property_title'):>16}"
-            f"{cell('null_union'):>16}{cell('both'):>16}"
+            f"{cell('null_default'):>16}{cell('null_union'):>16}"
+            f"{cell('all'):>16}"
         )
     print()
     print(
         "Percentages: divide by baseline. Tokens estimated at "
         f"{bytes_per_token} B/token."
+    )
+    print(
+        "The default listing preserves null-default metadata. Set "
+        "UNITARES_TOOL_SCHEMA_NULL_DEFAULTS=strip to measure the optional "
+        "smaller surface."
     )
 
 
@@ -454,7 +487,7 @@ def main() -> int:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Measure the wire cost of each GOVERNANCE_TOOL_MODE profile"
+        description="Measure the wire cost of each tool-advertisement profile"
     )
     parser.add_argument(
         "--mode",
@@ -479,7 +512,7 @@ def main() -> int:
         action="store_true",
         help=(
             "Report bytes recoverable from structural schema boilerplate "
-            "(property titles, null unions) rather than from prose"
+            "(property titles, null defaults, null unions) rather than from prose"
         ),
     )
     parser.add_argument(

@@ -296,7 +296,7 @@ def _principal_rollup(agents_list: Sequence[dict], meta_lookup=None) -> dict:
     or coarse keys (IP:UA fingerprint, the ``<harness>_<date>`` label) are
     excluded by construction — the ontology names both performative. This is the
     first-class form of identity.md research-agenda #3 ("identity as integral,
-    not point-value"); see docs/proposals/principal-rollup-v0.md.
+    not point-value"); see docs/proposals/active/principal-rollup-v0.md.
 
     Reads the REAL ``thread_id``/``parent_agent_id`` from agent metadata (the
     output dicts may carry a redacted parent/id), over exactly the population in

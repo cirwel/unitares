@@ -5,7 +5,7 @@ facets of (the octopus to the per-process tentacle). It is computed as a
 connected component over only agent-DECLARED edges — shared ``thread_id`` and
 declared lineage (``parent_agent_id``). Spoofable/coarse keys (IP:UA
 fingerprint, the ``<harness>_<date>`` label) are excluded by construction; the
-ontology names both performative. See docs/proposals/principal-rollup-v0.md.
+ontology names both performative. See docs/proposals/active/principal-rollup-v0.md.
 
 This module holds a DERIVED rollup, recomputed periodically by a background
 sweeper (``principal_rollup_sweeper_task``) and read by the identity/onboard

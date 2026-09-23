@@ -3,15 +3,17 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-09-14"
+last_verified: "2026-09-21"
 freshness_days: 21
 source_files:
+  - unitares/src/knowledge_authority.py
   - unitares/src/mcp_handlers/knowledge/handlers.py
   - unitares/src/mcp_handlers/knowledge/synthesis.py
   - unitares/src/mcp_handlers/schemas/knowledge.py
   - unitares/src/alias_schema.py
   - unitares/src/mcp_handlers/consolidated.py
   - unitares/src/mcp_handlers/tool_stability.py
+  - unitares/src/tool_descriptions.json
   - unitares/src/mcp_handlers/support/param_normalization.py
   - unitares/src/knowledge_graph.py
   - unitares/src/knowledge_graph_lifecycle.py
@@ -19,17 +21,19 @@ source_files:
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
 source_digests:
-  unitares/src/mcp_handlers/knowledge/handlers.py: "1ab1637f68d63e1b"
+  unitares/src/knowledge_authority.py: "14ca01da11026c91"
+  unitares/src/mcp_handlers/knowledge/handlers.py: "8fba909430c84d99"
   unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
-  unitares/src/mcp_handlers/schemas/knowledge.py: "66f607237f3a3daf"
+  unitares/src/mcp_handlers/schemas/knowledge.py: "9c39082b0155c223"
   unitares/src/alias_schema.py: "b3cf7437056198f8"
-  unitares/src/mcp_handlers/consolidated.py: "a30cdc7a8387f0e8"
+  unitares/src/mcp_handlers/consolidated.py: "0d5ba1d977de9480"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
+  unitares/src/tool_descriptions.json: "0e176948125842f6"
   unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"
-  unitares/src/knowledge_graph.py: "0f53dddc433c13aa"
+  unitares/src/knowledge_graph.py: "5e29c9483595cb70"
   unitares/src/knowledge_graph_lifecycle.py: "3d943c8664beedd6"
   unitares/src/storage/knowledge_graph_age.py: "0541b46146c6084c"
-  unitares/src/storage/knowledge_graph_postgres.py: "212a048e391c53b3"
+  unitares/src/storage/knowledge_graph_postgres.py: "47ea4d27622e7318"
   unitares/src/db/mixins/knowledge_graph.py: "f3f00b0381c5fa10"
 ---
 
@@ -71,6 +75,13 @@ search action. A supplied-but-blank query is rejected so a caller mistake cannot
 into an accidental broad scan. Omit `include_details` to let the server expand a
 small result set (up to 3 hits) automatically; pass `include_details=false` when
 summaries only are intentional.
+
+Default search is authority-aware. Imported memory rows remain searchable, but
+their `authority.tier="imported_context"` marker down-ranks them in close
+relevance contests against native findings and evidence-linked governed claims.
+This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
+to preserve raw backend order, or filter by a source-memory tag to inspect that
+lane directly.
 
 ## Quick Contribution
 
@@ -118,7 +129,33 @@ For more control, use the `knowledge()` tool with an action parameter:
 | `synthesize` | Roll up a topic's discoveries into a summary row (see below) |
 | `stats` | Lifecycle-bucket statistics |
 | `supersede` | Create a SUPERSEDES edge from `discovery_id` (newer) to `supersedes_id` (older) and flip the older row to `superseded` — AGE backend only; on the default Postgres backend it returns an error |
+| `promote` | Create a governed claim from an imported-memory `discovery_id`, one or more non-memory `evidence_ids`, an explicit `verification_basis`, and a `decision_standard`; the source remains unchanged |
 | `audit` | Read-only staleness/health scoring (`scope` open \| all \| by_agent, `top_n` default 10) |
+
+## Memory authority and promotion
+
+Imported memory is context, not policy. Source tags such as `memory-sync` and
+the harness-neutral `source-<provider>-memory` pattern classify a row as
+`imported_context`. Normal stores are `native_finding`. A row becomes
+`governed_claim` only through `knowledge(action="promote")`, which adds a
+server-authored receipt that ordinary store arguments cannot forge.
+
+```
+knowledge(
+  action: "promote",
+  discovery_id: "<imported-memory-id>",
+  evidence_ids: ["<native-finding-id>"],
+  summary: "Bounded claim accepted after verification",
+  verification_basis: "Repository configuration and integration test agree",
+  decision_standard: "At least one non-memory artifact independently supports it"
+)
+```
+
+The promotion path requires a caller-owned registered identity, refuses to let
+the source corroborate itself, and refuses imported memories as independent
+evidence. It creates a new row linked to the source and evidence; it does not
+rewrite or delete the imported memory. “Governed” means the transition is
+attributable and evidence-linked, not that the resulting claim is infallible.
 
 ## Discovery Types
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -35,9 +37,11 @@ def test_shared_contract_http_setup_has_runnable_dependency_contract() -> None:
     ]["full"]
     assert "uvicorn>=0.35.0,<1.0.0" in full
     assert any(requirement.startswith("starlette") for requirement in full)
+    assert "webauthn>=2.8.0,<4.0.0" in full
     for requirements_file in ("requirements-full.txt", "requirements-docker.txt"):
         assert "uvicorn>=0.35.0,<1.0.0" in _read(requirements_file)
         assert "cryptography>=41.0.0,<51.0.0" in _read(requirements_file)
+        assert "webauthn>=2.8.0,<4.0.0" in _read(requirements_file)
 
 
 def _requirement_name(requirement: str) -> str:
@@ -177,6 +181,43 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "UNITARES_LEASE_ATTESTATION_SIGNING_KEY:" in compose
     assert "refusing replay" in manual
     assert "UNITARES_CONTINUITY_TOKEN_SECRET:" in compose
+    assert "UNITARES_MCP_BEARER_TOKENS:" in compose
+    assert (
+        "UNITARES_MCP_ALLOWED_HOSTS: "
+        "${UNITARES_MCP_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+    ) in compose
+    assert (
+        "UNITARES_MCP_ALLOWED_ORIGINS: "
+        "${UNITARES_MCP_ALLOWED_ORIGINS:-http://localhost:8767,http://127.0.0.1:8767}"
+    ) in compose
+    assert (
+        "UNITARES_HTTP_CORS_EXTRA_ORIGINS: "
+        "${UNITARES_HTTP_CORS_EXTRA_ORIGINS:-}"
+    ) in compose
+    assert (
+        "UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-gov.cirwel.org}"
+    ) in compose
+    assert "UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}" in compose
+    assert (
+        "UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}"
+    ) in compose
+    assert (
+        compose.count(
+            "UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}"
+        )
+        == 2
+    )
+    assert "UNITARES_REST_STRICT:" in compose
+    assert "http://127.0.0.1:8767/health/ready" in compose
+    assert "http://127.0.0.1:8767/v1/tools -o /dev/null" not in compose
+    cloud_runbook = _read("docs/operations/cloud-session-plugin.md")
+    assert "does **not** prove automatic hooks are active" in cloud_runbook
+    assert "git show origin/master:scripts/dev/cloud-session-setup.sh \\\n  | bash -s -- --verify-runtime" not in cloud_runbook
+    assert 'unitares_runtime_setup="$(' in cloud_runbook
+    assert 'test -n "$unitares_runtime_setup" &&' in cloud_runbook
+    assert 'bash -s -- --verify-runtime <<<"$unitares_runtime_setup"' in cloud_runbook
+    assert "./scripts/dev/review.sh review" not in cloud_runbook
+    assert "machine with the reviewer CLI can run `./scripts/dev/review.sh`." in cloud_runbook
     assert "rejecting A's" in manual
     assert "condition: service_healthy" in compose
 
@@ -186,6 +227,47 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "scripts/demo/coordination_demo.py" in makefile
     assert "run: make coordination-demo" in workflow
     assert "elixir/lease_plane/**" in workflow
+
+
+def test_cloud_runtime_verifier_fails_when_payload_extraction_fails(
+    tmp_path: Path,
+) -> None:
+    runbook = _read("docs/operations/cloud-session-plugin.md")
+    command_match = re.search(
+        r"run the canonical payload in runtime\nverification mode:\n\n"
+        r"```bash\n(?P<command>.*?)\n```",
+        runbook,
+        re.DOTALL,
+    )
+    assert command_match is not None
+
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text("#!/bin/sh\nexit 23\n")
+    fake_git.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+
+    completed = subprocess.run(
+        ["bash", "-c", command_match.group("command")],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=False,
+    )
+
+    assert completed.returncode == 23
+
+
+def test_cloud_deploy_runbook_bootstraps_the_first_passkey() -> None:
+    runbook = _read("docs/operations/cloud-deploy-runbook.md")
+
+    assert "`UNITARES_OPERATOR_TOKENS` — configure at least one" in runbook
+    assert "to bootstrap the first dashboard passkey" in runbook
+    assert "X-Unitares-Operator: ${UNITARES_BOOTSTRAP_OPERATOR_TOKEN}" in runbook
+    assert "https://governance.example.com/auth/enroll" in runbook
+    assert "https://governance.example.com/auth/signin?enroll=1" in runbook
+    assert "10-minute, single-use enrollment code" in runbook
 
 
 def test_advanced_bare_metal_path_uses_one_schema_bootstrap() -> None:
@@ -228,7 +310,7 @@ def test_operator_surfaces_do_not_demote_redis_to_optional_cache() -> None:
 def _advertised_sdk_versions() -> dict[str, str]:
     """Every SDK version this repository advertises to the public, by surface."""
     surfaces = {
-        "COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
+        "docs/COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
         "docs/public-site/index.md": r"pip install unitares-sdk==([\d.]+)",
     }
     found = {}
@@ -263,7 +345,7 @@ def test_public_sdk_install_commands_agree() -> None:
 
 
 def test_published_sdk_and_rest_envelope_are_current() -> None:
-    compatibility = _read("COMPATIBILITY.md")
+    compatibility = _read("docs/COMPATIBILITY.md")
     manual = _read("docs/manual/03-running-the-server.md")
     assert "pip install unitares-sdk==" in compatibility
     assert "Until its first PyPI release" not in compatibility

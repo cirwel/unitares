@@ -573,16 +573,7 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
     assert "cold-start prior" in env["verdict_caveat"]
     assert "metrics.verdict.evidence" in env["verdict_caveat"]
     assert env["state_summary"]["verdict_provisional"] is True
-    assert env["legacy_diagnostics"] == {
-        "source": "legacy_tanh_v",
-        "role": "ode_control_feedback",
-        "health_evidence": False,
-        "interpretation": (
-            "Compatibility ODE controller feedback; diagnostic context, "
-            "not a behavioral health score."
-        ),
-        "coherence": 0.49,
-    }
+    assert "legacy_diagnostics" not in env
     # state_summary.coherence carries the same "not health-rated" badge inline
     # (matching check_working_state's lite presentation of the same legacy
     # field) instead of a bare float a reader has to cross-reference against
@@ -949,6 +940,108 @@ def test_full_sync_state_reports_large_response_and_reduction_mode():
     assert "response_mode='compact'" in env["_response_size"]["reduce_with"]
 
 
+def test_routine_sync_state_omits_duplicate_raw_payload_and_stays_bounded():
+    source = {
+        "success": True,
+        "status": "healthy",
+        "health_status": "healthy",
+        "decision": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "reason": "Low risk (25.3%) - healthy operating range",
+            "margin": "settling",
+            "nearest_edge": None,
+        },
+        "metrics": {
+            "E": 0.72,
+            "I": 0.79,
+            "S": 0.21,
+            "V": -0.02,
+            "coherence": 0.49,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+            "risk_score": 0.25,
+            "risk_score_latest": 0.25,
+            "phi": 0.17,
+            "verdict": {
+                "value": "safe",
+                "meaning": "Behavioral assessment: low risk. Provisional.",
+                "evidence": {
+                    "grade": "provisional",
+                    "basis": "ode_fallback",
+                },
+            },
+            "health_status": "healthy",
+        },
+        "policy_evaluation": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "guidance": "45% margin to PAUSE threshold",
+            "inputs": {"verdict": "safe", "risk_score": 0.25},
+        },
+    }
+
+    formatted = format_response(deepcopy(source), {"response_mode": "auto"})
+    assert formatted["_mode"] == "compact"
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": "auto"},
+    )
+
+    assert "raw_governance" not in env
+    assert env["raw_governance_available"] is True
+    assert "response_options" not in env
+    assert "legacy_diagnostics" not in env
+    assert "_response_size" not in env
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 2_500
+
+
+def test_actionable_auto_sync_state_is_bounded_but_self_sufficient():
+    source = {
+        "success": True,
+        "status": "critical",
+        "health_status": "critical",
+        "decision": {
+            "action": "pause",
+            "sub_action": "reject",
+            "reason": "Risk crossed the pause threshold.",
+            "margin": "critical",
+            "nearest_edge": "risk_pause",
+            "require_human": True,
+        },
+        "metrics": {
+            "coherence": 0.31,
+            "coherence_source": "legacy_tanh_v",
+            "coherence_role": "ode_control_feedback",
+            "risk_score": 0.82,
+            "risk_score_latest": 0.88,
+            "verdict": "high-risk",
+            "health_status": "critical",
+        },
+        "recovery_hint": "Call self_recovery(action='review', reflection='...').",
+    }
+
+    formatted = format_response(deepcopy(source), {"response_mode": "auto"})
+    assert formatted["_mode"] == "mirror"
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": "auto"},
+    )
+
+    assert "raw_governance" not in env
+    assert env["action_summary"]["action"] == "pause"
+    assert env["state_summary"]["nearest_edge"] == "risk_pause"
+    assert "stop this line of work" in env["next_action"]
+    assert "self_recovery(action='review'" in env["recovery_hint"]
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 4_000
+
+
 @pytest.mark.parametrize(
     ("mode", "wire_limit"),
     (("compact", 4_000), ("standard", 6_000), ("interpreted", 6_000)),
@@ -1029,7 +1122,8 @@ def test_agent_summary_modes_stay_small_with_large_audit_gates(
 
     wire_bytes = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
     assert wire_bytes < wire_limit
-    assert env["_response_size"]["size_class"] in {"small", "medium"}
+    assert "raw_governance" not in env
+    assert env["raw_governance_available"] is True
     assert "policy_evaluation" not in formatted
     assert "enforcement" not in formatted
     assert "response_mode='full'" in formatted["_raw_available"]
@@ -1068,6 +1162,77 @@ def test_search_envelope_compact_mode_keeps_memory_suggestions():
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
     assert "raw_governance" not in env
     assert env["memory_suggestions"][0]["summary"] == "prior art"
+
+
+def test_search_lean_projection_bounds_historical_summaries_and_total_wire():
+    payload = {
+        "success": True,
+        "count": 5,
+        "discoveries": [
+            {
+                "id": f"d{i}",
+                "summary": ("qualification-preserving context 🌱 " * 180)
+                + "under cold-start conditions only",
+                "type": "experiment",
+                "status": "open",
+                "tags": [f"tag-{n}" for n in range(9)],
+                "similarity": 0.9 - (i * 0.01),
+                "rrf_score": 0.7,
+                "fusion_score": 0.8,
+                "details_preview": "bounded detail preview",
+                "has_details": True,
+            }
+            for i in range(5)
+        ],
+        "discovery_retrieval_options": {
+            "current_tier": "digest",
+            "open_one": "knowledge(action='details', discovery_id='...')",
+            "all_inline": "include_details=true",
+        },
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory",
+        "knowledge",
+        payload,
+        {"response_mode": "lean"},
+    )
+
+    suggestions = env["memory_suggestions"]
+    assert len(suggestions) <= 3
+    assert env["state_summary"]["result_set_truncated"] is True
+    first = suggestions[0]
+    assert first["preview_truncated"] is True
+    assert len(first["summary"]) <= 240
+    assert first["tags"] == [f"tag-{n}" for n in range(5)]
+    assert first["tags_truncated"] is True
+    assert first["relevance"] == pytest.approx(0.8)
+    assert first["relevance_basis"] == "fusion"
+    assert "rrf_score" not in first
+    assert "fusion_score" not in first
+    assert "similarity" not in first
+    assert "_response_size" not in env
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+
+
+def test_search_projection_budget_drops_oversized_single_result():
+    payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "title": "legacy-title-" + "x" * 10_000,
+                "summary": "short summary",
+                "tags": ["tag-" + "x" * 10_000],
+            }
+        ],
+        "total_count": 1,
+    }
+
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+
+    assert env["projection_truncated"] is True
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
 
 
 def test_metrics_envelope_full_mode_keeps_memory_suggestions():

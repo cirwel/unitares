@@ -37,6 +37,7 @@ from .knowledge.handlers import (
     handle_synthesize_knowledge_graph,
     handle_get_lifecycle_stats,
     handle_supersede_discovery,
+    handle_promote_memory_claim,
     handle_audit_knowledge_graph,
 )
 from .lifecycle.handlers import (
@@ -133,7 +134,7 @@ def _observe_operator_refusal(
                     "action": "declare_lineage",
                     "call": (
                         "onboard(force_new=true, parent_agent_id=<prior UUID>, "
-                        "spawn_reason='new_session')"
+                        "spawn_reason='explicit')"
                     ),
                     "when": "A finished predecessor explicitly handed this work to you.",
                 },
@@ -183,6 +184,7 @@ handle_knowledge = action_router(
         "synthesize": handle_synthesize_knowledge_graph,
         "stats": handle_get_lifecycle_stats,
         "supersede": handle_supersede_discovery,
+        "promote": handle_promote_memory_claim,
         "audit": handle_audit_knowledge_graph,
     },
     timeout=120.0,
@@ -195,12 +197,14 @@ handle_knowledge = action_router(
         "search": {"query": "search_query"},
         "store": {"content": "details"},  # Allow 'content' as alias for 'details'
         "update": {"content": "details"},  # Allow 'content' as alias for 'details'
+        "promote": {"content": "details"},
         "note": {"content": "summary"},
     },
     examples=[
         "knowledge(action='store', summary='Found bug in auth', discovery_type='bug_found')",
         "knowledge(action='search', query='authentication issues')",
         "knowledge(action='note', content='Remember to check cache')",
+        "knowledge(action='promote', discovery_id='memory-id', evidence_ids=['finding-id'], summary='Verified claim', verification_basis='tests passed', decision_standard='independent source agrees')",
         "knowledge(action='synthesize')  # roll up the densest topics into summaries",
         "knowledge(action='synthesize', topic='identity', dry_run=true)",
     ],

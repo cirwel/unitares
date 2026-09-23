@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**42 registered tools · 8 consolidated (52 actions) · 70 aliases.**
+**43 registered tools · 8 consolidated (53 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -47,11 +47,12 @@ removal authority.
 
 | Mode | Declared | Advertised | Declared only | Advertised only |
 |---|---:|---:|---|---|
-| `minimal` | 50 | 50 | — | — |
-| `lite` | 50 | 50 | — | — |
-| `operator_readonly` | 50 | 50 | — | — |
-| `operator_recovery` | 50 | 50 | — | — |
-| `full` | 50 | 50 | — | — |
+| `progressive` | 13 | 13 | — | — |
+| `minimal` | 51 | 51 | — | — |
+| `lite` | 51 | 51 | — | — |
+| `operator_readonly` | 51 | 51 | — | — |
+| `operator_recovery` | 51 | 51 | — | — |
+| `full` | 51 | 51 | — | — |
 
 ### Workflow alias views
 
@@ -67,11 +68,11 @@ note for why the raw rendering is not.
 | `check_working_state` | `get_governance_metrics` | 4 | — | `sha256:e94e167be72e8f627d43bd10502906e00d7ccc0f6ef6526bea421f8646666e23` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:16db80fdb6373ac45fb5578d6696deb9161ef433fab350c005b5586bab144f1d` |
 | `request_review` | `dialectic` | 9 | — | `sha256:ef0ec0a2ec8c3a11f7f4747bda14003f470a5e420e91e175d4ac0e3735ba5dbb` |
-| `search_shared_memory` | `knowledge` | 23 | — | `sha256:85acc25999b62773a2dd76cfd39024c66b599d3ec682fcb1704c289bf0f90280` |
+| `search_shared_memory` | `knowledge` | 27 | — | `sha256:912a5fbb8c5ba493591393ed20b79c9f6b31407387c3723ef094d450bddcbda8` |
 | `start_session` | `onboard` | 17 | — | `sha256:54a9f14fabc4e5d2d7c6593bdb21a5390f7fc2112615afb4501d7492dcfbb117` |
-| `store_finding` | `knowledge` | 13 | — | `sha256:b5143b063d1417d420349bbe98cb23044284df3f25724af117d9d723da868262` |
+| `store_finding` | `knowledge` | 13 | — | `sha256:dcc00e81d99845be515b018554a872c05269be23161e8afe23e06efce8386cfa` |
 | `sync_state` | `process_agent_update` | 23 | — | `sha256:376d01d3dddddadb31105f11b4c01f720acb73fce00fe1556e096a0868b3fffb` |
-| `update_finding` | `knowledge` | 13 | — | `sha256:6e6ae43df48bd0784f60773aba2d1079691fcb1a8a8689c0f551d8f9cc1c46b7` |
+| `update_finding` | `knowledge` | 13 | — | `sha256:a29af94c8c82916db3800f2f5e8a878ad83e0ab5366f0426f18ea629643b6e75` |
 
 ## Deterministic findings
 
@@ -133,6 +134,7 @@ edits that changed no edge.
 | `set_thresholds` | `src/mcp_handlers/admin/config.py handle_set_thresholds` | `src/mcp_handlers/schemas/admin.py SetThresholdsParams` | 15s | — |
 | `simulate_update` | `src/mcp_handlers/core.py handle_simulate_update` | `src/mcp_handlers/schemas/core.py SimulateUpdateParams` | 30s | — |
 | `skills` | `src/mcp_handlers/introspection/skills.py handle_skills` | `src/mcp_handlers/schemas/skills.py SkillsParams` | 10s | identity=pre_onboard |
+| `use_tool` | `src/mcp_handlers/introspection/tool_introspection.py handle_use_tool` | `src/mcp_handlers/schemas/admin.py UseToolParams` | target-defined | identity=pre_onboard |
 | `verify_trajectory_identity` | `src/mcp_handlers/identity/handlers.py handle_verify_trajectory_identity` | `src/mcp_handlers/schemas/identity.py VerifyTrajectoryIdentityParams` | 10s | — |
 
 ## Action routing
@@ -213,6 +215,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `get` | `src/mcp_handlers/knowledge/handlers.py handle_get_knowledge_graph` | — |
 | `list` | `src/mcp_handlers/knowledge/handlers.py handle_list_knowledge_graph` | — |
 | `note` | `src/mcp_handlers/knowledge/handlers.py handle_knowledge_note` | `content`→`summary` |
+| `promote` | `src/mcp_handlers/knowledge/handlers.py handle_promote_memory_claim` | `content`→`details` |
 | `search` | `src/mcp_handlers/knowledge/handlers.py handle_search_knowledge_graph` | `query`→`search_query` |
 | `stats` | `src/mcp_handlers/knowledge/handlers.py handle_get_lifecycle_stats` | — |
 | `store` | `src/mcp_handlers/knowledge/handlers.py handle_store_knowledge_graph` | `content`→`details` |

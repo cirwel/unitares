@@ -43,9 +43,9 @@ def test_fresh_stamp_passes_and_stale_stamp_fails(tmp_path):
 
 
 def test_last_reviewed_variant_and_roadmap_are_checked(tmp_path):
-    _write(tmp_path, "ROADMAP.md", "# R\n\n**Last reviewed:** 2026-01-01\n")
+    _write(tmp_path, "docs/ROADMAP.md", "# R\n\n**Last reviewed:** 2026-01-01\n")
     failures = check_doc_drift.freshness_failures(tmp_path, TODAY)
-    assert failures and failures[0].startswith("ROADMAP.md:")
+    assert failures and failures[0].startswith("docs/ROADMAP.md:")
 
 
 def test_burndown_tolerates_stale_and_flags_cleared_entries(tmp_path, monkeypatch):
@@ -65,7 +65,7 @@ def test_burndown_tolerates_stale_and_flags_cleared_entries(tmp_path, monkeypatc
 def test_exemptions_and_unstamped_docs_are_skipped(tmp_path):
     _write(
         tmp_path,
-        "docs/proposals/resolved/old.md",
+        "docs/proposals/archive/old.md",
         "# archived\n\n**Last Updated:** 2025-01-01\n",
     )
     _write(

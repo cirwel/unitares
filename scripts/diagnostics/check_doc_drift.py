@@ -17,12 +17,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Freshness ceiling: a doc that carries a "Last Updated" / "Last reviewed"
 # stamp is claiming its content was verified on that date. Beyond this age
 # the claim is stale — re-verify the content and restamp, or archive the doc
-# (docs/proposals/resolved/). Docs without a stamp are not checked here;
+# (docs/proposals/archive/). Docs without a stamp are not checked here;
 # REQUIRED_STATUS_PREFIX governs which docs must carry markers at all.
 MAX_STAMP_AGE_DAYS = 120
 
 # Preserved-as-written records keep their original stamps by design.
-FRESHNESS_EXEMPT_DIRS = ("docs/proposals/resolved/",)
+FRESHNESS_EXEMPT_DIRS = ("docs/proposals/archive/",)
 FRESHNESS_EXEMPT_NAME = re.compile(r"20\d{2}-\d{2}")
 
 # Known-stale docs with a rewrite tracked in an issue. An entry suppresses the
@@ -50,7 +50,7 @@ def parse_stamp_date(raw: str) -> date | None:
 
 def freshness_failures(root: Path, today: date) -> list[str]:
     failures: list[str] = []
-    candidates = sorted(root.glob("docs/**/*.md")) + [root / "ROADMAP.md"]
+    candidates = sorted(root.glob("docs/**/*.md"))
     for path in candidates:
         if not path.exists():
             continue

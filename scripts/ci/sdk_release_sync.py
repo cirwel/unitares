@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPI_JSON = "https://pypi.org/pypi/unitares-sdk/json"
 SDK_TAG = re.compile(r"sdk-v(\d+\.\d+\.\d+)")
 SDK_SURFACES = {
-    "COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
+    "docs/COMPATIBILITY.md": r"pip install unitares-sdk==([\d.]+)",
     "docs/public-site/index.md": r"pip install unitares-sdk==([\d.]+)",
 }
 

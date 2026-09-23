@@ -44,7 +44,7 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
     published = tmp_path / "PUBLISHED_VERSION"
     manual = tmp_path / "docs" / "manual" / "02-install.md"
     manual.parent.mkdir(parents=True)
-    compatibility = tmp_path / "COMPATIBILITY.md"
+    compatibility = tmp_path / "docs/COMPATIBILITY.md"
     source.write_text("2.21.0\n", encoding="utf-8")
     published.write_text("2.21.0\n", encoding="utf-8")
     manual.write_text(

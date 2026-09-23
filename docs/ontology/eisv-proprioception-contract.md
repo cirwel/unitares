@@ -1,15 +1,57 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** August 21, 2026
+**Last Updated:** September 22, 2026
 **Status:** Active
 
 ---
 
+## Canonical operational doctrine
+
+> **Digital proprioception senses. EISV estimates state. Autonomic governance regulates.**
+
+This is the canonical operational reading of EISV.
+
+**Digital proprioception is the sensing layer.** It names the runtime observations
+that make an agent/process legible to itself and to the surrounding governance
+system. The term does not imply subjective experience, biological equivalence,
+or independent volition.
+
+**EISV is the state-estimation layer.** It turns those observations into a
+structured estimate of runtime state. EISV is designed as a runtime state
+estimator for autonomic regulation. That is an architectural role, not evidence
+that EISV improves autonomic regulation relative to simpler state
+representations; comparative benefit remains an experimental question.
+
+**Autonomic governance is the regulation layer.** Policy, review, identity,
+authority, outcomes, and enforcement may consume EISV state estimates, but an
+EISV reading does not by itself authorize intervention. Measurement, state
+estimation, verdict formation, policy, and enforcement remain distinct
+surfaces.
+
+The stronger biological, thermodynamic, allostatic, free-energy, and related
+interpretations in the repository are research interpretations or historical
+lineage unless separately supported by evidence. UNITARES does not require
+those interpretations to be literally true for the operational EISV contract
+above to hold.
+
+When describing EISV, distinguish four epistemic levels rather than collapsing
+them:
+
+1. **Operational / deployed** — what the runtime currently computes or uses.
+2. **Measured / empirical** — what an experiment or dated observation supports.
+3. **Research interpretation** — a model or explanatory framing under study.
+4. **Hypothetical / analogy** — a useful comparison that is not itself evidence.
+
+Do not promote a claim upward across those levels without new evidence. In
+particular, "EISV enables autonomic agents" is not an established claim. The
+defensible current statement is: **EISV is designed as a runtime state estimator
+for autonomic regulation.**
+
 ## Contract
 
-**EISV is proprioception**: runtime self-state telemetry about agent strain,
-coherence, entropy, integrity, and imbalance. It is the system saying "my balance
+**EISV serves a proprioceptive engineering role**: it is a runtime self-state
+estimate about agent strain, coherence, entropy, integrity, and imbalance. It is the system saying "my balance
 is changing" or "this process is running hot," not a court deciding whether a
 worker was morally bad.
 
@@ -20,8 +62,10 @@ external outcome evidence, policy, and review surfaces that are separate from
 the measurement vector.
 
 "Proprioception" here is the anti-verdict claim, and it holds. It is not a claim
-that all four axes share one sensory class: E is externally referenced, I and S
-are interoceptive, and V has no afferent at all. Because those classes imply
+that all four axes share one sensory class: E incorporates externally referenced
+signals; I and S primarily summarize internally or self-referenced runtime
+information; V is derived from other state dimensions rather than receiving an
+independent input. Because those classes imply
 different validation regimes, see **Sensory class split** below before designing
 or scheduling any EISV validation work.
 
@@ -114,7 +158,7 @@ them was broader than the data.
 **Corrected citation.** An earlier revision of this paragraph named the
 pre-registered outcome-grounding stop rule (#1425) as forbidding the re-fit. That
 citation is withdrawn. #1425
-([stop rule](../proposals/eisv-outcome-grounding-stop-rule-v0.md)) is scoped to
+([stop rule](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)) is scoped to
 outcome-label discrimination — whether EISV separates good outcomes from bad — and
 constrains re-runs of the ablation probe. These anchors are fitted on a label-free
 slice: a median and a p95 over `HEALTHY_REGIMES`, consuming no outcome label. *What
@@ -377,7 +421,7 @@ sets `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=false` and restarts the service.
 ## Decision record — V-reintroduction deferred (2026-08-07)
 
 The grounded-coherence re-derivation proposal
-(`docs/proposals/eisv-grounded-coherence-rederivation-v0.md`) drops V from the
+(`docs/proposals/active/eisv-grounded-coherence-rederivation-v0.md`) drops V from the
 certified core and leaves reintroduction — as a policy-layer leaky EMA of the
 outcome-channel residual — as an open design decision. That decision was taken
 through a governed dialectic review (session `3e003d82fb2d251e`, resolved
@@ -497,27 +541,29 @@ The distinction is operational, not vocabulary:
 - **Proprioception has an external referent.** There is a true joint angle, so
   acuity is scored as error against it. An axis in this class is validated by
   agreement with something outside itself.
-- **Interoception has no external referent** and is organised around homeostatic
-  setpoints, which is why it is intrinsically valenced. Its standard measurement
-  model (Garfinkel et al. 2015) splits into three dissociable dimensions:
+- **Interoceptive constructs are not generally defined by one externally correct
+  state value** and are often organised around homeostatic setpoints. Some
+  interoceptive measurements still use physiological referents. The Garfinkel
+  et al. (2015) measurement model, for example, splits into three dissociable
+  dimensions:
   **accuracy** (performance against a physiological referent), **sensibility**
   (self-report), and **awareness** (confidence–accuracy correspondence). An axis
   in this class is validated by reliability, faithfulness and calibration, never
   by outcome agreement, because there is no outcome for it to agree with.
 
-This document's prose was already interoceptive throughout — "running hot",
+This document's prose has long used interoceptive analogies — "running hot",
 "running careful", brittle, scattered, residual-from-own-baseline, and
-"deviation inside a healthy basin is room to learn". A basin *is* a homeostatic
-setpoint region; proprioception has no setpoints. Only the label was
-proprioceptive.
+"deviation inside a healthy basin is room to learn". A basin can be interpreted
+operationally as a setpoint region; proprioception itself has no setpoints. Only
+the label was proprioceptive.
 
 ### The split, as derived in `src/behavioral_sensor.py`
 
 | Axis | Derivation (weights as coded) | Class | Validation regime | Gated by the 2026-12-01 stop rule? |
 |---|---|---|---|---|
 | **E** | `_compute_E` (:233) — 35% decision success, 25% legacy `C(V)` level, 20% complexity calibration, 20% outcome success (:277); then a 20% continuity blend and 15% `1.0 - tool_error_rate` (:64) | **Externally referenced.** Decision outcomes, tool errors and outcome success are world facts, not self-state | Error against referent | **No** — blocked by a *join*, not by labels |
-| **I** | `_compute_I` (:288) — 50% `1.0 - calibration_error` (:293), 30% legacy coherence trend, 20% outcome consistency (:307) | **Interoceptive — Garfinkel *awareness*.** Its dominant term is confidence-vs-correctness correspondence | Metacognitive calibration (ECE / meta-d′) | **No** |
-| **S** | `_compute_S` (:332) — 40% drift norm, 35% regime instability, 25% complexity divergence (:337-344), plus a tool-velocity term | **Interoceptive — homeostatic/arousal.** How much am I moving and switching; no correct value exists | Test–retest reliability + faithfulness under intervention | **No** |
+| **I** | `_compute_I` (:288) — 50% `1.0 - calibration_error` (:293), 30% legacy coherence trend, 20% outcome consistency (:307) | **Internally referenced / calibration-related.** Its dominant term is confidence-vs-correctness correspondence. *Research interpretation:* this may be compared with Garfinkel-style interoceptive awareness. | Metacognitive calibration (ECE / meta-d′) | **No** |
+| **S** | `_compute_S` (:332) — 40% drift norm, 35% regime instability, 25% complexity divergence (:337-344), plus a tool-velocity term | **Self-relative / deviation-dynamics.** How much is the runtime moving and switching; no single externally correct value exists. *Research interpretation:* this may be compared with homeostatic or arousal constructs. | Test–retest reliability + faithfulness under intervention | **No** |
 | **V** | `_compute_V(E_history, I_history)` (:366) — 60% (E slope − I slope) + 40% instantaneous E−I gap (:382) | **Not a sense.** Takes no exogenous input; a deterministic function of two other axes | None available — see below | n/a |
 
 **E — the referent exists and is not joined.** E already ingests machine-checked
@@ -538,8 +584,9 @@ by letting EISV create its own labels. The repair is to repoint the referent at
 the external signals E already ingests, not to rebuild the script.
 
 **S — validatable today, entirely offline.** Drift norm, regime-transition
-counting and complexity divergence are self-relative dynamics with no correct
-value, which is what makes S a homeostatic reading rather than a positional one.
+counting and complexity divergence are self-relative dynamics with no single
+externally correct value. That makes a homeostatic interpretation plausible as
+research context, rather than establishing S itself as a homeostatic construct.
 That removes outcome agreement from its regime and leaves the two checks the
 interpretability and observability literatures actually use: test–retest
 reliability (same state, same reading) and faithfulness under intervention
@@ -647,7 +694,7 @@ the recurring read protocol in
 **1. Individuality axiom** — *"each agent's raw behavioral EISV series has an
 agent-specific, temporally stable operating level."* → **UNTESTED AS DEPLOYED.**
 
-Pre-registered v2 (`docs/proposals/eisv-individuality-v2-preregistration.md`,
+Pre-registered v2 (`docs/proposals/archive/eisv-individuality-v2-preregistration.md`,
 script sha `e512c01c…`, thresholds frozen 2026-07-02) returned **FAIL** at the
 2026-07-16 interim read; an unofficial dry run of the frozen script on
 2026-07-29 reproduced it (leg A 1/7, leg B 1 of 3 dims).
@@ -767,7 +814,7 @@ permutation blocks were not independent adjudicated failures. Its negative
 makes prospective prediction worse. The recurring trend was paused on
 2026-08-22 because its TSV did not record anchor scope and would mix that
 withdrawn cohort with the current trusted default. The single 2026-12-01 read
-defined in `docs/proposals/eisv-outcome-grounding-stop-rule-v0.md` is the only
+defined in `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md` is the only
 confirmatory outcome read. Until then, the question is unresolved, not negative.
 
 **5. "Bounded and mean-reverting, not a random walk"** → **partly TRUE BY
@@ -1350,7 +1397,7 @@ direct repoint with this narrower rule in its message.
 
 **Parked, with its wake.** Re-scoring `guide` (or removing `decision_e` from E)
 would change a predictor in the 2026-12-01 pre-registered outcome read
-(`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md`); changing it before
+(`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`); changing it before
 that read contaminates the registered series. Wake: the 12-01 read has run, AND
 a separately preregistered recursive replay or prospective shadow exists. More
 rows from #1777's one-step shadow cannot identify closed-loop gain or basin
@@ -1402,12 +1449,12 @@ philosophical failures of proprioception.
 
 ## Prior art / positioning
 
-EISV-as-proprioception is an **engineering instance of interoceptive inference,
-not a new theory** (prior-art audit:
+EISV's proprioceptive framing is **informed by and structurally adjacent to work
+on interoceptive inference; it is not presented here as a formal implementation
+of that theory** (prior-art audit:
 `docs/ontology/trajectory-identity-prior-art-2026-06.md`). The
 "sense your own internal state, keep it within viable bounds, before any verdict"
-posture this contract describes is the established interoceptive-inference branch
-of the Free Energy Principle: Seth (2013), *Trends in Cognitive Sciences*
+posture has theoretical neighbors in work on interoceptive inference: Seth (2013), *Trends in Cognitive Sciences*
 17(11):565-573; the Friston-co-authored "Life-inspired Interoceptive AI" (arXiv
 2309.05999), with its self/world Markov-blanket factorization; Tschantz, Seth &
 Pezzulo (2022), *Biological Psychology* (interoceptive control as prediction-error
@@ -1416,12 +1463,15 @@ Machine Framework (2026), *Physics of Life Reviews*.
 
 Two cautions follow, both consistent with the rest of this contract:
 
-- **Neighbor, not grounding.** Cite these as the framework EISV instantiates;
-  do **not** claim EISV's coordinates are variational free-energy quantities —
+- **Neighbor, not grounding.** Cite these as theoretical neighbors and research
+  context for EISV, not as grounding or evidence that EISV formally instantiates
+  their constructs. Do **not** claim EISV's coordinates are variational
+  free-energy quantities —
   that grounding claim retired with the v7 F-hat spike (see
   `paper-positioning.md`, 2026-04-23). The "thermometer, not a court" framing
   here is *the same* pre-judgmental stance the interoceptive literature gives
   interoception: it informs regulation, it does not adjudicate.
 - **Novelty window.** The interoceptive-AI literature is converging quickly
-  (2024–2026); positioning EISV as a rediscovered/instantiated framework rather
-  than a novel one is the honest and durable framing.
+  (2024–2026). Positioning EISV in relation to established work on interoceptive
+  inference and adjacent control frameworks, rather than presenting those ideas
+  as novel theoretical discoveries, is the honest and durable framing.

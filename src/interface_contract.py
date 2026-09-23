@@ -1,14 +1,11 @@
-"""Versioned, transport-neutral contract for UNITARES tool discovery.
+"""Versioned, transport-neutral contract for UNITARES capabilities.
 
-The three public dispatch surfaces -- streamable HTTP MCP, REST
-``/v1/tools``, and local stdio -- must advertise the same callable names and
-source input schemas independently of legacy tool-mode settings. The ``/mcp/``
-registrar advertises these same schemas verbatim (``src/tool_registration.py``,
-``_advertise_catalog_schema``; before 2026-09-11 FastMCP's regeneration from
-the typed wrappers dropped bounds, defaults and ``$defs``), so the catalog
-fingerprints describe every transport's listing. Dispatch already resolves
-workflow aliases on every surface; this module makes discovery use that same
-contract.
+The complete catalog is negotiated through ``list_tools(lite=true)`` and is
+callable on every transport.  The default MCP/REST/stdio advertisement is a
+progressive subset; omitted names remain callable through ``use_tool`` after
+``describe_tool`` supplies their schema.  Operators may request the complete
+up-front listing.  The contract therefore fingerprints capabilities, not the
+size of one client's initial context.
 
 The contract describes tool reachability and the stable normalized lifecycle
 envelope used by product-facing workflow aliases.  It does not claim that a
@@ -83,7 +80,19 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # discovery exposes it too; search_knowledge_graph also records its clarified
 # filter description. This compatible addition follows the 1.10.0
 # list_tools wire correction.
-INTERFACE_CONTRACT_VERSION = "1.11.0"
+# 1.12.0 (2026-09-19): dialectic declares judgment_formed on antithesis and
+# synthesis. Unlike 1.10.0 and 1.11.0, which advertised parameters the handler
+# already read, this one is NEW behavior: set false, the server records an
+# abstention and refuses to file the verdict instead of consuming the session's
+# reviewer slot. Omitting it is the prior behavior exactly -- the default is
+# true, so no existing caller changes and nothing is removed or renamed. Only
+# dialectic's input_schema_sha256 and the surface digest move.
+# 1.13.0 (2026-09-20): add use_tool and separate the complete negotiated
+# capability catalog from the default progressive transport advertisement.
+# Every full-catalog capability remains discoverable through list_tools,
+# inspectable through describe_tool and callable through use_tool; full schema
+# advertisement remains available with UNITARES_TOOL_ADVERTISEMENT=full.
+INTERFACE_CONTRACT_VERSION = "1.13.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
@@ -105,9 +114,12 @@ PUBLIC_TRANSPORTS = (
 
 
 def workflow_alias_names_for_mode(mode: str) -> tuple[str, ...]:
-    """Compatibility API: workflow aliases are public under every old mode."""
+    """Workflow aliases advertised directly in ``mode``."""
     from src.mcp_handlers.tool_stability import AGENT_WORKFLOW_ALIASES
-    return tuple(AGENT_WORKFLOW_ALIASES)
+    from src.tool_modes import get_tools_for_mode
+
+    allowed = get_tools_for_mode(mode)
+    return tuple(name for name in AGENT_WORKFLOW_ALIASES if name in allowed)
 
 
 def build_alias_tool_definition(
@@ -192,34 +204,55 @@ def get_public_tool_definitions(
     mode: str = "full",
     *,
     client_type: str | None = None,
+    include_unmounted: bool = False,
 ) -> list[Tool]:
     """Return the exact advertised tool surface for a transport and mode.
 
-    Narrowed to the mounted table when a server has mounted one, so the
-    contract cannot promise a capability that dispatch would refuse. See
-    ``mounted_tool_names``.
+    Direct transport advertisement is narrowed to the mounted table when a
+    server has mounted one. ``include_unmounted`` instead returns the live,
+    visible handler catalog used by ``list_tools`` and ``use_tool``: those
+    handlers remain reachable through the gateway even when they registered
+    after the transport table mounted. See ``mounted_tool_names``.
     """
 
     # Importing the package settles every @mcp_tool decorator before the
-    # registry is read.  This is idempotent in long-running servers.
-    import src.mcp_handlers  # noqa: F401
+    # registry is read. This is idempotent in long-running servers. Refreshing
+    # also picks up entry-point plugins loaded after the package snapshot.
+    import src.mcp_handlers as handlers
 
-    from src.mcp_handlers.decorators import get_tool_registry
+    from src.mcp_handlers.decorators import (
+        get_tool_description,
+        get_tool_registry,
+        is_tool_hidden,
+    )
     from src.tool_modes import should_include_tool
     from src.tool_schemas import get_tool_definitions
 
+    if include_unmounted:
+        handlers.refresh_tool_handlers_from_registry()
     definitions = list(get_tool_definitions())
-    registered = set(get_tool_registry())
+    registered = (
+        set(handlers.TOOL_HANDLERS)
+        if include_unmounted
+        else set(get_tool_registry())
+    )
     public: dict[str, Tool] = {}
 
     for tool in definitions:
-        if tool.name not in registered:
+        if tool.name not in registered or is_tool_hidden(tool.name):
             continue
-        if should_include_tool(tool.name, mode=mode, client_type=client_type):
+        if (
+            include_unmounted and mode == "full"
+        ) or should_include_tool(tool.name, mode=mode, client_type=client_type):
             public[tool.name] = tool
+
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
 
     alias_names = workflow_alias_names_for_mode(mode)
     for alias_name in alias_names:
+        implementation, _ = resolve_tool_alias(alias_name)
+        if is_tool_hidden(alias_name) or is_tool_hidden(implementation):
+            continue
         try:
             public[alias_name] = build_alias_tool_definition(
                 alias_name,
@@ -227,10 +260,47 @@ def get_public_tool_definitions(
             )
         except KeyError:
             # Some introspection tests and embedded consumers deliberately
-            # install a partial schema catalog. Do not advertise an alias whose
-            # implementation schema is unavailable; the checked-in full
-            # contract still makes accidental production drift fail in CI.
-            continue
+            # install a partial schema catalog. Direct advertisement skips an
+            # alias whose implementation schema is unavailable. The gateway
+            # catalog still includes the dispatchable workflow name with an
+            # open fallback schema so its negotiated names and contract hash
+            # remain the same live set.
+            if not include_unmounted:
+                continue
+            _, alias_info = resolve_tool_alias(alias_name)
+            public[alias_name] = Tool(
+                name=alias_name,
+                description=(
+                    alias_info.migration_note if alias_info is not None else ""
+                ),
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            )
+
+    # A late plugin can register a handler before its optional schema package
+    # is visible, and embedded hosts deliberately exercise partial catalogs.
+    # The gateway still accepts such public handlers, so negotiate an open
+    # schema instead of omitting their name. Hidden handlers remain internal.
+    if include_unmounted:
+        for tool_name in sorted(registered):
+            if tool_name in public or is_tool_hidden(tool_name):
+                continue
+            if mode != "full" and not should_include_tool(
+                tool_name, mode=mode, client_type=client_type
+            ):
+                continue
+            public[tool_name] = Tool(
+                name=tool_name,
+                description=get_tool_description(tool_name) or f"Tool: {tool_name}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": True,
+                },
+            )
 
     # Workflow names are the product-facing path and belong at the top of
     # bounded CLI/discovery output. Preserve the canonical schema-catalog order
@@ -241,13 +311,17 @@ def get_public_tool_definitions(
         for tool in definitions
         if tool.name in public and tool.name not in alias_names
     )
+    ordered_names.extend(
+        name for name in sorted(public)
+        if name not in ordered_names
+    )
 
     # Never advertise what dispatch would refuse. Narrowing happens last so it
     # cannot reorder the surface, and only when a server has actually mounted a
     # table — see mounted_tool_names() for why this is not the same as the
     # registry, and for the measurement that motivated it.
     mounted = mounted_tool_names()
-    if mounted is not None:
+    if mounted is not None and not include_unmounted:
         ordered_names = [name for name in ordered_names if name in mounted]
 
     return [public[name] for name in ordered_names]
@@ -258,11 +332,26 @@ def _capability_record(tool: Tool) -> dict[str, Any]:
 
     implementation, alias = resolve_tool_alias(tool.name)
     input_schema = get_tool_input_schema(tool, {}) or {}
-    schema_bytes = json.dumps(
-        input_schema,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    try:
+        schema_bytes = json.dumps(
+            input_schema,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        # Embedded hosts can expose a dispatchable handler before its schema
+        # object has settled. Match the gateway's open-schema fallback rather
+        # than dropping the capability or failing the whole negotiation.
+        input_schema = {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": True,
+        }
+        schema_bytes = json.dumps(
+            input_schema,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
     return {
         "name": tool.name,
         "implementation": implementation,
@@ -275,11 +364,15 @@ def _capability_record(tool: Tool) -> dict[str, Any]:
 
 
 def build_interface_contract(mode: str = "full") -> dict[str, Any]:
-    """Build the deterministic machine-readable interface contract."""
+    """Build the complete deterministic capability contract.
+
+    ``mode`` is retained for callers from the pre-1.13 API.  Advertisement
+    mode never changes federation capability identity.
+    """
 
     capabilities = [
         _capability_record(tool)
-        for tool in get_public_tool_definitions(mode)
+        for tool in get_public_tool_definitions("full", include_unmounted=True)
     ]
     canonical = json.dumps(
         capabilities,
@@ -291,6 +384,18 @@ def build_interface_contract(mode: str = "full") -> dict[str, Any]:
         "version": INTERFACE_CONTRACT_VERSION,
         "scope": "tool_surface_and_lifecycle_envelopes",
         "mode": "full",
+        "advertisement": {
+            "default_mode": "progressive",
+            "full_mode_env": {
+                "name": "UNITARES_TOOL_ADVERTISEMENT",
+                "value": "full",
+            },
+            "progressive_entrypoints": [
+                "list_tools",
+                "describe_tool",
+                "use_tool",
+            ],
+        },
         "transports": list(PUBLIC_TRANSPORTS),
         "surface_sha256": hashlib.sha256(canonical).hexdigest(),
         "capabilities": capabilities,
@@ -350,6 +455,7 @@ def get_interface_contract_summary(mode: str = "full") -> dict[str, Any]:
         "transports": contract["transports"],
         "scope": contract["scope"],
         "federation": contract["federation"],
+        "advertisement": contract["advertisement"],
     }
 
 

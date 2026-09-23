@@ -10,7 +10,7 @@ HTTP clients) would bypass BEAM dispatch even when the operator has flipped
 ``WAVE_3A_*_ON_BEAM=true`` and the routing table is populated, because the
 five core tools in ``_DIRECT_HTTP_TOOL_HANDLERS`` short-circuit MCP dispatch.
 
-See ``docs/proposals/resolved/beam-wave-3a-read-only-handlers.md`` v0.2 §5 (Wave 3a
+See ``docs/proposals/archive/beam-wave-3a-read-only-handlers.md`` v0.2 §5 (Wave 3a
 cutover sequence) + architect FIND-A4 (dispatch-path question).
 """
 
@@ -91,6 +91,82 @@ def _normalize_direct_http_result(result: Any) -> Any:
         except (json.JSONDecodeError, TypeError):
             return result
     return result
+
+
+async def execute_nested_http_tool(
+    tool_name: str, arguments: Dict[str, Any]
+) -> Any:
+    """Execute a gateway target through the REST prebind boundary again."""
+    from src.http_routes import access
+    from src.mcp_handlers.context import (
+        get_context_client_session_id,
+        get_csid_transport_injected,
+        get_session_signals,
+        reset_csid_transport_injected,
+        reset_session_context,
+        set_csid_transport_injected,
+        set_session_context,
+    )
+
+    nested = dict(arguments or {})
+    explicit_session = "client_session_id" in nested
+    session_id = (
+        nested.get("client_session_id")
+        if explicit_session
+        else get_context_client_session_id()
+    )
+    if session_id and not explicit_session:
+        nested["client_session_id"] = session_id
+
+    # A nested explicit session is caller input just like a direct REST body.
+    # An inherited session retains the outer route's injected/proven status.
+    inherited_injected = get_csid_transport_injected()
+    csid_token = set_csid_transport_injected(
+        False if explicit_session else inherited_injected
+    )
+    context_token = set_session_context(
+        session_key=session_id,
+        client_session_id=session_id,
+    )
+    try:
+        signals = get_session_signals()
+        if signals is not None:
+            await access._resolve_http_bound_agent(tool_name, nested, signals)
+        # Non-core targets re-enter the HTTP fallback dispatch pipeline, whose
+        # post-validation steps charge the target. Core REST targets use the
+        # direct-handler shortcut instead, so charge them here after target-
+        # specific prebinding. The outer use_tool call deliberately deferred
+        # its charge to this target and must not turn that shortcut into a
+        # zero-charge path.
+        if get_direct_http_tool_handler(tool_name) is not None:
+            from src.mcp_handlers.context import get_context_agent_id
+            from src.mcp_handlers.middleware import DispatchContext, check_rate_limit
+
+            rate_started = time.monotonic()
+            rate_result = await check_rate_limit(
+                tool_name,
+                nested,
+                DispatchContext(
+                    bound_agent_id=get_context_agent_id(),
+                    client_session_id=session_id,
+                ),
+            )
+            if isinstance(rate_result, list):
+                success, error_type = classify_tool_result(rate_result)
+                record_tool_usage(
+                    tool_name=tool_name,
+                    agent_id=nested.get("agent_id") or get_context_agent_id(),
+                    success=success,
+                    error_type=error_type,
+                    latency_ms=int((time.monotonic() - rate_started) * 1000),
+                    session_id=nested.get("client_session_id"),
+                    payload=build_tool_usage_payload(tool_name, nested),
+                )
+                return rate_result
+        return await execute_http_tool(tool_name, nested)
+    finally:
+        reset_session_context(context_token)
+        reset_csid_transport_injected(csid_token)
 
 async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any:
     # Read-purity (trust contract §3.5), REST half: this direct handler
@@ -262,6 +338,7 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
     agent_id = arguments.get("agent_id") if isinstance(arguments, dict) else None
     session_id = arguments.get("client_session_id") if isinstance(arguments, dict) else None
     t0 = time.monotonic()
+    nested_delegated = False
     # #1387 action discriminator. Built HERE, alongside the latency clock and
     # BEFORE any dispatch, because the pipeline mutates `arguments` in place:
     # `params_step.resolve_alias` writes the alias's implied action into the
@@ -319,29 +396,49 @@ async def execute_http_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
             # emitted the §4.2 fallback event; nothing to do here.
 
         handler = get_direct_http_tool_handler(tool_name)
+        from src.mcp_handlers.context import (
+            reset_nested_tool_invoker,
+            set_nested_tool_invoker,
+        )
+
+        async def _nested_invoker(target_name, target_arguments):
+            nonlocal nested_delegated
+            nested_delegated = True
+            return await execute_nested_http_tool(target_name, target_arguments)
+
+        invoker_token = set_nested_tool_invoker(_nested_invoker)
         if handler is not None:
-            result = await handler(arguments)
+            try:
+                result = await handler(arguments)
+            finally:
+                reset_nested_tool_invoker(invoker_token)
             latency_ms = int((time.monotonic() - t0) * 1000)
             success, error_type = classify_tool_result(result)
+            if not nested_delegated:
+                record_tool_usage(tool_name=tool_name,
+                                  agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
+                                  success=success, error_type=error_type,
+                                  latency_ms=latency_ms, session_id=session_id,
+                                  payload=usage_payload)
+            return _normalize_direct_http_result(result)
+        try:
+            result = await execute_http_dispatch_fallback(tool_name, arguments)
+        finally:
+            reset_nested_tool_invoker(invoker_token)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        success, error_type = classify_tool_result(result)
+        if not nested_delegated:
             record_tool_usage(tool_name=tool_name,
                               agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
                               success=success, error_type=error_type,
                               latency_ms=latency_ms, session_id=session_id,
                               payload=usage_payload)
-            return _normalize_direct_http_result(result)
-        result = await execute_http_dispatch_fallback(tool_name, arguments)
-        latency_ms = int((time.monotonic() - t0) * 1000)
-        success, error_type = classify_tool_result(result)
-        record_tool_usage(tool_name=tool_name,
-                          agent_id=resolve_minted_agent_id(tool_name, agent_id, result),
-                          success=success, error_type=error_type,
-                          latency_ms=latency_ms, session_id=session_id,
-                          payload=usage_payload)
         return result
     except Exception as e:
         latency_ms = int((time.monotonic() - t0) * 1000)
-        record_tool_usage(tool_name=tool_name, agent_id=agent_id,
-                          success=False, error_type=type(e).__name__,
-                          latency_ms=latency_ms, session_id=session_id,
-                          payload=usage_payload)
+        if not nested_delegated:
+            record_tool_usage(tool_name=tool_name, agent_id=agent_id,
+                              success=False, error_type=type(e).__name__,
+                              latency_ms=latency_ms, session_id=session_id,
+                              payload=usage_payload)
         raise

@@ -14,7 +14,7 @@ paused agent's api_key), this process:
   * after a disagreement, stays alive for a bounded window to evaluate the
     paused agent's response under the SAME reviewer identity before exiting.
 
-Design: docs/proposals/orchestrated-dialectic-reviewer-v0.md
+Design: docs/proposals/active/orchestrated-dialectic-reviewer-v0.md
 
 The verdict-derivation (`parse_reviewer_verdict`) and prompt-construction
 (`build_review_prompt`) are PURE functions so the independence-critical behavior
@@ -221,6 +221,16 @@ class Verdict:
     # True when we could not extract a real model judgment and fell back to a
     # conservative default. A fallback verdict must DISAGREE — never rubber-stamp.
     degraded: bool = False
+    # False ONLY when no judgment was formed at all (the model returned nothing
+    # we could parse). This is NOT the same as `degraded`: a model that judged
+    # and was then conservatively downgraded — approving without naming the
+    # terms it ratifies — is degraded but HAS judged, and its objection is real
+    # and must still be filed. A verdict with judgment_formed=False is not a
+    # verdict; see run(), which abstains on it rather than filing it.
+    judgment_formed: bool = True
+    # Filled from the server's abstention response so operators know whether
+    # this attempt found an actually open slot or an existing assignment.
+    reviewer_slot_open: bool | None = None
 
 
 def build_review_prompt(thesis: Thesis) -> str:
@@ -307,6 +317,36 @@ def build_continuation_prompt(
     )
 
 
+#: One repair attempt, then abstain. A weaker local model routinely forms a
+#: perfectly good judgment and then fails the JSON envelope; a single re-ask
+#: separates that formatting slip from a model that genuinely cannot judge, and
+#: only the second deserves an abstention. More attempts would just be waiting:
+#: the paused agent is blocked throughout and this reviewer holds no slot while
+#: it retries. Raised from zero on 2026-09-19 review: one-shot abstention
+#: treated a transient parse failure as proof that no judgment could be formed.
+_VERDICT_REPAIR_ATTEMPTS = 1
+
+
+def build_repair_prompt(thesis: Thesis, unparseable: str) -> str:
+    """Re-ask for the judgment already made, in the shape the protocol needs.
+
+    Deliberately NOT a fresh review: re-running the original prompt would
+    invite a different verdict and turn a formatting retry into quiet
+    reviewer-shopping. The model's own unusable reply is quoted back so it can
+    restate the same position as JSON.
+    """
+    return (
+        build_review_prompt(thesis)
+        + "\n\n---\nYOUR PREVIOUS REPLY COULD NOT BE PARSED. It is quoted below.\n"
+        "Do NOT reconsider the thesis and do NOT change your position — restate "
+        "the SAME judgment you already reached, as STRICT JSON and nothing "
+        "else, with no prose before or after it and no markdown fence:\n"
+        '{"agrees": true | false, "root_cause": "...", '
+        '"proposed_conditions": ["..."], "reasoning": "..."}\n\n'
+        f"YOUR UNPARSEABLE REPLY:\n{unparseable[:4000]}"
+    )
+
+
 def parse_reviewer_verdict(model_text: str) -> Verdict:
     """Derive a Verdict from raw model output. Pure.
 
@@ -324,6 +364,7 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
             reasoning="Reviewer model returned no parseable verdict; defaulting to "
             "disagreement (no independent approval without a real judgment).",
             degraded=True,
+            judgment_formed=False,
         )
     try:
         obj = json.loads(match.group(0))
@@ -335,6 +376,7 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
             reasoning="Reviewer model emitted malformed JSON; defaulting to "
             "disagreement.",
             degraded=True,
+            judgment_formed=False,
         )
 
     agrees = _coerce_bool(obj.get("agrees"))
@@ -349,6 +391,7 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
         proposed_conditions=conditions,
         reasoning=str(obj.get("reasoning", "")).strip(),
         degraded=False,
+        judgment_formed=True,
     )
 
 
@@ -639,6 +682,16 @@ def _verdict_with_ratified_conditions(
     if not verdict.agrees or verdict.proposed_conditions:
         return verdict
 
+    # Unreachable-by-construction, so state it as a check rather than trust it.
+    # The early return above excludes `not verdict.agrees`, and every parse
+    # failure yields agrees=False, so a verdict reaching here has judged. That
+    # invariant is implicit and would break silently if the parser or the guard
+    # above changed — and breaking it would DROP A REAL OBJECTION, the exact
+    # failure class this module now exists to prevent. Fail loudly instead.
+    assert verdict.judgment_formed, (
+        "a verdict with no judgment reached the approval-downgrade path; "
+        "the early return above should have made this impossible"
+    )
     inherited = paused_response.get("proposed_conditions") or previous_verdict.proposed_conditions
     if isinstance(inherited, str):
         inherited = [inherited] if inherited.strip() else []
@@ -650,6 +703,7 @@ def _verdict_with_ratified_conditions(
             proposed_conditions=inherited,
             reasoning=verdict.reasoning,
             degraded=verdict.degraded,
+            judgment_formed=verdict.judgment_formed,
         )
     return Verdict(
         agrees=False,
@@ -660,6 +714,12 @@ def _verdict_with_ratified_conditions(
             + " Approval omitted the conditions being ratified; retaining the objection."
         ).strip(),
         degraded=True,
+        # The model DID judge here — it approved, just without naming terms.
+        # That objection is real and must still be filed, so this path never
+        # abstains. A literal True, not verdict.judgment_formed: this branch
+        # DERIVES a protocol objection, so the judgment is formed here whatever
+        # the input carried. The assert above is what keeps that honest.
+        judgment_formed=True,
     )
 
 
@@ -754,6 +814,18 @@ async def continue_after_disagreement(
         next_verdict = _verdict_with_ratified_conditions(
             parse_reviewer_verdict(model_text), paused_response, current_verdict
         )
+        if not next_verdict.judgment_formed:
+            # Same rule as the initial verdict. Filing this would burn a
+            # synthesis round and overwrite a REASONED standing rejection with
+            # an empty one — the paused agent would lose the objection it was
+            # answering. Preserve it, exactly as the timeout and model-failure
+            # branches above already do.
+            logger.warning(
+                "Dialectic continuation produced no parseable judgment; "
+                "preserving the standing rejection rather than filing a "
+                "non-verdict over it"
+            )
+            return current_verdict
         result = await client.call_tool(
             "dialectic",
             {
@@ -780,8 +852,89 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
     reviewer_text = await obtain_reviewer_text(build_review_prompt(thesis))
-    provenance = reviewer_backend_provenance()
     verdict = parse_reviewer_verdict(reviewer_text)
+    for _ in range(_VERDICT_REPAIR_ATTEMPTS):
+        if verdict.judgment_formed:
+            break
+        logger.warning(
+            "Dialectic reviewer got no parseable judgment on session %s; "
+            "re-asking once for the same verdict in the required shape before "
+            "abstaining.",
+            thesis.session_id,
+        )
+        try:
+            reviewer_text = await obtain_reviewer_text(
+                build_repair_prompt(thesis, reviewer_text)
+            )
+        except Exception as exc:  # noqa: BLE001 — a failed repair just abstains
+            logger.warning("Dialectic reviewer repair attempt failed: %r", exc)
+            break
+        repaired = parse_reviewer_verdict(reviewer_text)
+        # A REPAIR MAY CONFIRM AN OBJECTION. IT MAY NEVER MANUFACTURE AN
+        # APPROVAL.
+        #
+        # build_repair_prompt asks the model not to change its position, but
+        # asking is not enforcing, and the reply being restated was UNPARSEABLE
+        # by construction -- so there is no way to check the position held. A
+        # first reply that rejected the thesis in prose, followed by a
+        # parseable `agrees: true`, would file an approval that no one can
+        # verify was ever the model's judgment, and an approval can resolve the
+        # session and release the paused agent.
+        #
+        # Approval is the one direction that must never rest on an
+        # unverifiable restatement, which is the same rule
+        # parse_reviewer_verdict already applies to a failed parse: "a reviewer
+        # that cannot form a judgment must not silently approve". Keep the
+        # original non-judgment and abstain; the slot stays open for a reviewer
+        # that can judge. The cost is a genuine approval that merely botched
+        # its format, and that is the correct direction to lose one.
+        #
+        # Found by independent review of this PR (codex, 2026-09-19): the
+        # docstring claimed a property only the prompt provided.
+        if repaired.judgment_formed and repaired.agrees:
+            logger.warning(
+                "Dialectic reviewer repair returned an APPROVAL on session %s; "
+                "discarding it and abstaining. The reply it restates was "
+                "unparseable, so the position cannot be confirmed unchanged.",
+                thesis.session_id,
+            )
+            break
+        verdict = repaired
+    # Read provenance AFTER the last attempt, so it names the backend that
+    # actually produced the verdict being filed rather than the first one tried.
+    provenance = reviewer_backend_provenance()
+
+    # ABSTAIN rather than file a non-judgment.
+    #
+    # A reviewer that could not form a judgment has not reviewed anything.
+    # Filing here would claim the open reviewer slot and record a BINDING
+    # rejection whose reasoning is empty: it blocks the paused agent, tells it
+    # nothing it can act on, is indistinguishable on the record from a reasoned
+    # rejection, and — because the slot is now taken — locks out a reviewer that
+    # COULD judge. Fail-closed must mean "no approval", never "silent
+    # rejection"; those are different verdicts and only one of them is honest
+    # about what happened.
+    #
+    # This is the posture the IN-PROCESS synthetic reviewer already takes
+    # ("the fully-degraded case ... the session stays open rather than
+    # fabricating one", _synthetic_review_approves in
+    # src/mcp_handlers/dialectic/handlers.py). The orchestrated path simply
+    # never had it.
+    #
+    # Live instance, 2026-09-19, session 99ff6f25a310d23e on PR #2316: the
+    # codex backend was unavailable, the fallback gemma4 returned no parseable
+    # verdict, and the PR acquired a reasonless standing rejection — while an
+    # independent reviewer holding a reproduced counterexample was refused the
+    # slot four minutes later. The operator had asked for a non-evasive review
+    # and got a blocking non-answer.
+    if not verdict.judgment_formed:
+        logger.warning(
+            "Dialectic reviewer ABSTAINING on session %s: %s produced no "
+            "parseable judgment. The server will record the abstention without "
+            "assuming anything about reviewer-slot ownership.",
+            thesis.session_id,
+            _reviewer_audit_text(provenance),
+        )
 
     client = GovernanceClient(governance_url)
     await client.connect()
@@ -796,12 +949,13 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         # Claim the open reviewer slot as first-responder. The bare submit_*
         # handlers are register=False; the public MCP surface is the `dialectic`
         # umbrella tool (action='antithesis'/'synthesis'). (live-found 2026-06-23)
-        await client.call_tool(
+        antithesis_result = await client.call_tool(
             "dialectic",
             {
                 "action": "antithesis",
                 "session_id": thesis.session_id,
                 "reasoning": verdict.reasoning,
+                "judgment_formed": verdict.judgment_formed,
                 # Attribution rides the antithesis because it is the reviewer's
                 # own first message and is always written; the synthesis row
                 # joins to it by session_id. See _provenance_for_message.
@@ -812,6 +966,33 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 },
             },
         )
+        if not verdict.judgment_formed:
+            if isinstance(antithesis_result, dict):
+                if antithesis_result.get("abstained") is True:
+                    slot_state = antithesis_result.get("reviewer_slot_open")
+                    verdict.reviewer_slot_open = (
+                        slot_state if isinstance(slot_state, bool) else None
+                    )
+                else:
+                    # A legacy/partial server may ignore judgment_formed and
+                    # file a normal verdict. Do not report a fabricated open
+                    # slot when the server did not acknowledge abstention.
+                    verdict.reviewer_slot_open = None
+            slot_state = (
+                "the reviewer slot remains OPEN"
+                if verdict.reviewer_slot_open is True
+                else (
+                    "the existing reviewer assignment remains unchanged"
+                    if verdict.reviewer_slot_open is False
+                    else "the server did not provide a reliable reviewer-slot state"
+                )
+            )
+            logger.warning(
+                "Dialectic reviewer abstention recorded for session %s; %s",
+                thesis.session_id,
+                slot_state,
+            )
+            return verdict
         # Submit the model-derived verdict — agrees may be False (the whole point).
         #
         # No `reasoning` here, deliberately. The argument was made once, in the
@@ -896,6 +1077,25 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 — a reviewer crash must be loud, not silent
         print(f"FATAL: reviewer failed: {exc!r}", flush=True)
         return 1
+    if not verdict.judgment_formed:
+        # Distinct from 0 (reviewed) and from 1 (crashed): the reviewer ran,
+        # reached the model, and could not form a judgment. "The producer ran
+        # and found nothing" and "the producer never ran" are different
+        # findings and must not share an exit code.
+        print(
+            "reviewer ABSTAINED: no parseable judgment; no verdict filed; "
+            + (
+                "the reviewer slot remains OPEN"
+                if verdict.reviewer_slot_open is True
+                else (
+                    "the existing reviewer assignment remains unchanged"
+                    if verdict.reviewer_slot_open is False
+                    else "the server did not provide a reliable reviewer-slot state"
+                )
+            ),
+            flush=True,
+        )
+        return 3
     print(f"reviewer done: agrees={verdict.agrees} degraded={verdict.degraded}", flush=True)
     return 0
 

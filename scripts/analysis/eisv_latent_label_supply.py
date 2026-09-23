@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Latent exogenous bad-label supply — honest-floor Milestone 1 (read-only).
 
-The design tournament (docs/proposals/eisv-grounding-next-move-v0.md) made this
+The design tournament (docs/proposals/active/eisv-grounding-next-move-v0.md) made this
 the first decision-gate: before building any label-capture plumbing, measure how
 many genuinely-exogenous, attributable BAD labels the fleet could supply per
 quarter. Gate-3 power is set by the bad (minority) class; this counts its supply.

@@ -5,12 +5,12 @@
 UNITARES is self-hosted accountability infrastructure for operators running
 multiple AI agents. Its federation kernel connects independent runtimes to one
 operator-controlled server over MCP or HTTP, where they share a durable record
-while keeping their own models, tools, and runtimes. The goal is simple: agent
+while keeping their own models, tools, and runtimes. Agent
 work should remain attributable, reviewable, and recoverable even when the
 process that started it is gone. It runs beside evals, guardrails, and
 sandboxes and replaces none of them.
 
-**Current public releases:** [server v2.21.0](https://github.com/cirwel/unitares/releases/tag/v2.21.0)
+**Current public releases:** [server v2.22.1](https://github.com/cirwel/unitares/releases/tag/v2.22.1)
 · [Python SDK 0.3.0](https://pypi.org/project/unitares-sdk/0.3.0/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
@@ -50,7 +50,7 @@ parallel diagnostic path, not the live decision mechanism.
 Run the documented stack and a six-check-in wiring demo:
 
 ```bash
-git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.22.1 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
@@ -65,7 +65,7 @@ python -m pip install unitares-sdk==0.3.0
 Or inspect the signed multi-architecture server image:
 
 ```bash
-docker pull ghcr.io/cirwel/unitares:v2.21.0
+docker pull ghcr.io/cirwel/unitares:v2.22.1
 ```
 
 The demo establishes that the stack is wired. It does not establish predictive
@@ -80,7 +80,7 @@ value or governance efficacy.
 | What are the threat model and blind spots? | [Scope and threat model](https://github.com/cirwel/unitares/blob/master/docs/SCOPE_AND_THREAT_MODEL.md) |
 | What evidence can be regenerated? | [Evaluation catalog](https://github.com/cirwel/unitares/blob/master/docs/EVALUATION_INDEX.md) |
 | How is the system operated and released? | [Operations docs](https://github.com/cirwel/unitares/tree/master/docs/operations) |
-| What remains on the roadmap? | [Roadmap](https://github.com/cirwel/unitares/blob/master/ROADMAP.md) |
+| What remains on the roadmap? | [Roadmap](https://github.com/cirwel/unitares/blob/master/docs/ROADMAP.md) |
 
 ## Evidence boundary
 

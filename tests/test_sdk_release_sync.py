@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _advertised(version: str | None = "0.3.0") -> dict[str, str | None]:
     return {
-        "COMPATIBILITY.md": version,
+        "docs/COMPATIBILITY.md": version,
         "docs/public-site/index.md": version,
     }
 
@@ -78,7 +78,7 @@ def test_stale_and_missing_public_claims_are_both_visible():
         published="0.3.0",
         tagged={"0.3.0"},
         advertised={
-            "COMPATIBILITY.md": "0.2.2",
+            "docs/COMPATIBILITY.md": "0.2.2",
             "docs/public-site/index.md": None,
         },
     )

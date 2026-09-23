@@ -28,7 +28,11 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
-from .events import emit_reviewer_reassigned
+from .events import (
+    emit_participant_abstained,
+    emit_reviewer_abstained,
+    emit_reviewer_reassigned,
+)
 from .responses import (
     default_cooldown_steps,
     default_escalate_steps,
@@ -1437,7 +1441,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             recovery={
                 "action": "Ensure your session is bound to this agent",
                 "related_tools": ["identity"],
-                "workflow": "Identity auto-binds on first tool call. Use identity() to check binding."
+                "workflow": "Pass client_session_id on this call to bind as yourself. identity(client_session_id=...) reports the binding; a bare identity() mints a new agent instead of reading yours."
             },
             arguments=arguments
         )]
@@ -2106,6 +2110,24 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
 # handle_llm_assisted_dialectic so transcripts/calibration treat both the same.
 SYNTHETIC_REVIEWER_ID = "llm-synthetic-reviewer"
 
+
+def _judgment_was_formed(value: Any) -> bool:
+    """Resolve the abstention flag with a fail-closed raw-handler contract.
+
+    The schema validator already maps unknown strings to ``False``, but these
+    handlers are also called directly by tests and by compatibility paths that
+    can bypass schema validation.  Only an omitted/``None`` value preserves the
+    backwards-compatible default of ``True``; a malformed supplied value must
+    not silently file a verdict.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes"}
+    if isinstance(value, bool):
+        return value
+    return False
+
 # Reviewer/model provenance persisted with a verdict, riding the namespaced
 # observed_metrics["reviewer_backend"] key the orchestrated reviewer already
 # writes (agents/dialectic_reviewer/reviewer.py:_provenance_for_message — see
@@ -2326,6 +2348,17 @@ async def _run_synthetic_review(
     antithesis = await generate_antithesis(thesis, agent_state)
     if not antithesis:
         logger.info("[DIALECTIC] Synthetic reviewer produced no antithesis")
+        # Already the right DECISION — it declines to fabricate a verdict. What
+        # was missing is any trace of it: a caller reading the session saw an
+        # untouched thesis, identical to one no reviewer ever looked at. Record
+        # the attempt on the same stream as every other abstention.
+        await emit_reviewer_abstained(
+            session_id=session.session_id,
+            reviewer_agent_id=SYNTHETIC_REVIEWER_ID,
+            paused_agent_id=session.paused_agent_id,
+            phase=session.phase.value,
+            reason="synthetic_reviewer_no_antithesis",
+        )
         return None
 
     now = datetime.now(timezone.utc).isoformat()
@@ -2368,6 +2401,19 @@ async def _run_synthetic_review(
         # Antithesis landed but synthesis failed: leave the session at SYNTHESIS
         # for the paused agent/operator to finish. Better than no antithesis.
         logger.warning("[DIALECTIC] Synthetic antithesis recorded but synthesis failed")
+        # The antithesis DID land, so this abstention is narrower than the one
+        # above: a real objection is on the record and only the synthesis half
+        # is missing. Recorded so "the reviewer stopped here" is a readable
+        # fact rather than something inferred from a gap in the transcript.
+        await emit_reviewer_abstained(
+            session_id=session.session_id,
+            reviewer_agent_id=SYNTHETIC_REVIEWER_ID,
+            paused_agent_id=session.paused_agent_id,
+            phase=session.phase.value,
+            reviewer_backend=_synthetic_reviewer_provenance(antithesis),
+            reason="synthetic_reviewer_no_synthesis",
+            slot_claimed=True,
+        )
         return {
             "antithesis": antithesis,
             "synthesis": None,
@@ -2821,6 +2867,15 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     recovery=session_not_found_recovery(),
                 )]
 
+        judgment_formed = _judgment_was_formed(arguments.get("judgment_formed"))
+
+        if not judgment_formed and session.phase != DialecticPhase.ANTITHESIS:
+            return success_response({
+                "success": False,
+                "session_id": session_id,
+                "error": f"Cannot submit antithesis in phase {session.phase.value}",
+            })
+
         original_reviewer_id = session.reviewer_agent_id
         reviewer_takeover = None
 
@@ -2872,16 +2927,30 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             if validation_error:
                 return validation_error
 
-            try:
-                reviewer_takeover = await _apply_reviewer_reassignment(
-                    session_id,
-                    session,
-                    agent_id,
-                    reason=takeover_reason,
-                    strict_persistence=True,
-                )
-            except Exception as e:
-                return [error_response(f"Reviewer takeover failed during persistence: {e}")]
+            if judgment_formed:
+                try:
+                    reviewer_takeover = await _apply_reviewer_reassignment(
+                        session_id,
+                        session,
+                        agent_id,
+                        reason=takeover_reason,
+                        strict_persistence=True,
+                    )
+                except Exception as e:
+                    return [error_response(f"Reviewer takeover failed during persistence: {e}")]
+
+        # The paused agent may answer an assigned reviewer's objection during
+        # synthesis, but it cannot become the reviewer merely by declaring an
+        # abstention. Preserve the same self-review boundary as the normal
+        # submit_antithesis path before recording any abstention event.
+        if (
+            not judgment_formed
+            and session.reviewer_agent_id is None
+            and agent_id == session.paused_agent_id
+        ):
+            return [error_response(
+                "Requestor cannot review their own session (use reviewer_mode='self' for self-review)",
+            )]
 
         # First-responder eligibility: if no reviewer assigned, validate the
         # submitter before the protocol auto-assigns them as reviewer.
@@ -2901,6 +2970,57 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     )]
             except Exception as e:
                 logger.warning(f"First-responder eligibility check failed (proceeding): {e}")
+
+        # ── A NON-JUDGMENT IS NOT A VERDICT ──────────────────────────────────
+        # Run the normal ownership and eligibility gates first, but return
+        # before session.submit_antithesis so no abstention can claim a slot or
+        # advance the phase. A reviewer that could not form a judgment has not
+        # reviewed anything, and filing on its behalf records a binding
+        # rejection with empty reasoning.
+        if not judgment_formed:
+            reviewer_slot_open = session.reviewer_agent_id is None
+            abstention_recorded = await emit_reviewer_abstained(
+                session_id=session_id,
+                reviewer_agent_id=agent_id,
+                paused_agent_id=session.paused_agent_id,
+                phase=session.phase.value,
+                reviewer_backend=_merge_caller_reviewer_provenance(
+                    arguments.get("observed_metrics"),
+                    arguments.get("reviewer_provenance"),
+                ).get("reviewer_backend"),
+                reason="no_judgment_formed",
+            )
+            if abstention_recorded is False:
+                return [error_response(
+                    "Could not record the abstention audit event; no abstention was acknowledged",
+                    error_code="ABSTENTION_AUDIT_WRITE_FAILED",
+                )]
+            return success_response({
+                "abstained": True,
+                "session_id": session_id,
+                "reviewer_slot_claimed": False,
+                "reviewer_slot_open": reviewer_slot_open,
+                "phase": session.phase.value,
+                "message": (
+                    "Recorded an abstention: no judgment was formed, so no verdict "
+                    + (
+                        "was filed and the reviewer slot remains OPEN."
+                        if reviewer_slot_open
+                        else "was filed; the existing reviewer assignment remains unchanged."
+                    )
+                ),
+                "next_step": (
+                    (
+                        "A reviewer that can judge may still claim this session."
+                        if reviewer_slot_open
+                        else "The assigned reviewer or an authenticated operator must "
+                        "reassign this session before another reviewer can claim it."
+                    )
+                    + " The abstention is on the audit stream as "
+                    "dialectic_reviewer_abstained; it is not a rejection and "
+                    "does not count as a review round."
+                ),
+            })
 
         # Create antithesis message. An explicit reviewer_provenance argument
         # (e.g. an external Codex/other-model consult being filed as a governed
@@ -3088,7 +3208,63 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         "may submit synthesis."
                     ),
                 )]
-    
+
+            if (
+                not _judgment_was_formed(arguments.get("judgment_formed"))
+                and session.phase != DialecticPhase.SYNTHESIS
+            ):
+                return success_response({
+                    "success": False,
+                    "session_id": session_id,
+                    "error": f"Cannot submit synthesis in phase {session.phase.value}",
+                })
+
+            # ── A NON-JUDGMENT IS NOT A VERDICT (synthesis side) ─────────────
+            # The reconsideration rounds re-ask the model, so they can also come
+            # back unparseable. Filing that would burn a synthesis round against
+            # max_synthesis_rounds AND overwrite a REASONED standing objection
+            # with an empty one -- destroying the very thing the paused agent is
+            # in the middle of answering. Abstain: the standing verdict stands
+            # untouched and the round is not spent.
+            if not _judgment_was_formed(arguments.get("judgment_formed")):
+                if agent_id == session.paused_agent_id:
+                    abstention_recorded = await emit_participant_abstained(
+                        session_id=session_id,
+                        participant_agent_id=agent_id,
+                        paused_agent_id=session.paused_agent_id,
+                        phase=session.phase.value,
+                        reason="no_judgment_formed",
+                    )
+                else:
+                    abstention_recorded = await emit_reviewer_abstained(
+                        session_id=session_id,
+                        reviewer_agent_id=agent_id,
+                        paused_agent_id=session.paused_agent_id,
+                        phase=session.phase.value,
+                        reviewer_backend=_merge_caller_reviewer_provenance(
+                            arguments.get("observed_metrics"),
+                            arguments.get("reviewer_provenance"),
+                        ).get("reviewer_backend"),
+                        reason="no_judgment_formed",
+                    )
+                if abstention_recorded is False:
+                    return [error_response(
+                        "Could not record the abstention audit event; no abstention was acknowledged",
+                        error_code="ABSTENTION_AUDIT_WRITE_FAILED",
+                    )]
+                return success_response({
+                    "abstained": True,
+                    "session_id": session_id,
+                    "phase": session.phase.value,
+                    "synthesis_round": getattr(session, "synthesis_round", None),
+                    "round_consumed": False,
+                    "message": (
+                        "Recorded an abstention: no judgment was formed, so no "
+                        "synthesis was filed. Any standing verdict is unchanged "
+                        "and no synthesis round was consumed."
+                    ),
+                })
+
             # Coerce agrees to bool (MCP tools may send "true"/"false" strings)
             raw_agrees = arguments.get('agrees', False)
             if isinstance(raw_agrees, str):

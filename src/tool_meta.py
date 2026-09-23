@@ -170,6 +170,9 @@ TOOL_META: Tuple[ToolMeta, ...] = (
              related_to=('describe_tool',)),
     ToolMeta("describe_tool", category="admin", tier="essential", operation="read", stability=STABLE,
              related_to=('list_tools',)),
+    ToolMeta("use_tool", category="admin", tier="essential", operation="write", stability=BETA,
+             depends_on=('list_tools', 'describe_tool'),
+             related_to=('list_tools', 'describe_tool')),
     # Server-authored skill bundle
     ToolMeta("skills", category="admin", tier="common", operation="read", stability=BETA,
              related_to=('list_tools', 'describe_tool')),

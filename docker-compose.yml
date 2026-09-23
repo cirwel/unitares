@@ -93,6 +93,10 @@ services:
       UNITARES_LEASE_TRUSTED_ISSUERS: '${UNITARES_LEASE_TRUSTED_ISSUERS:-{"unitares-local":"http://governance-mcp:8767/v1/lease-holder/keys"}}'
       # Exact private-Compose exception; every other HTTP key URL is rejected.
       UNITARES_LEASE_TRUST_INSECURE_HTTP_URLS: http://governance-mcp:8767/v1/lease-holder/keys
+      # Singular client credential used by the lease plane for governance REST
+      # calls. On hosted deployments it must be one member of the plural
+      # UNITARES_MCP_BEARER_TOKENS server allowlist below.
+      UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
     depends_on:
       postgres-age:
@@ -117,6 +121,7 @@ services:
       DB_POSTGRES_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-age:5432/${POSTGRES_DB:-governance}
       DB_BACKEND: postgres
       DB_AGE_GRAPH: governance_graph
+      UNITARES_TOOL_ADVERTISEMENT: ${UNITARES_TOOL_ADVERTISEMENT:-progressive}
       REDIS_URL: redis://redis:6379/0
       # PostgreSQL is the canonical KG store; AGE is an explicit graph-feature opt-in.
       UNITARES_KNOWLEDGE_BACKEND: postgres
@@ -129,12 +134,29 @@ services:
       # surfaces. Empty default = unchanged behavior (default-deny stays on).
       #   UNITARES_OPERATOR_TOKENS — csv allowlist for X-Unitares-Operator
       #     (required by /v1/harness/outcome, the external outcome-producer path)
-      #   UNITARES_HTTP_API_TOKEN  — dashboard/telemetry read auth
+      #   UNITARES_HTTP_API_TOKEN  — local dashboard/telemetry read auth
+      #   UNITARES_MCP_BEARER_TOKENS — hosted /mcp + strict REST bearer allowlist
+      #   UNITARES_MCP_ALLOWED_HOSTS — external Host values accepted by /mcp
+      #   UNITARES_MCP_ALLOWED_ORIGINS — origins accepted by MCP transport
+      #   UNITARES_HTTP_CORS_EXTRA_ORIGINS — browser MCP preflight origins
+      #   UNITARES_DASHBOARD_RP_ID / _ORIGIN — hosted passkey relying party
+      #   UNITARES_REST_STRICT     — defaults on with MCP bearers; never disable
+      #     for a deployment exposed through a loopback tunnel
       #   UNITARES_BUILD_SHA       — self-reported build sha for /health
       #     (the image carries no .git, so git rev-parse cannot answer inside
       #     the container; e.g. UNITARES_BUILD_SHA=$(git rev-parse --short HEAD))
       UNITARES_OPERATOR_TOKENS: ${UNITARES_OPERATOR_TOKENS:-}
       UNITARES_HTTP_API_TOKEN: ${UNITARES_HTTP_API_TOKEN:-}
+      UNITARES_MCP_BEARER_TOKENS: ${UNITARES_MCP_BEARER_TOKENS:-}
+      # Singular client credential forwarded to orchestrated MCP reviewers.
+      # It must be one member of the plural server allowlist above.
+      UNITARES_MCP_BEARER_TOKEN: ${UNITARES_MCP_BEARER_TOKEN:-}
+      UNITARES_MCP_ALLOWED_HOSTS: ${UNITARES_MCP_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      UNITARES_MCP_ALLOWED_ORIGINS: ${UNITARES_MCP_ALLOWED_ORIGINS:-http://localhost:8767,http://127.0.0.1:8767}
+      UNITARES_HTTP_CORS_EXTRA_ORIGINS: ${UNITARES_HTTP_CORS_EXTRA_ORIGINS:-}
+      UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-gov.cirwel.org}
+      UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}
+      UNITARES_REST_STRICT: ${UNITARES_REST_STRICT:-}
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}
@@ -161,10 +183,9 @@ services:
       lease-plane:
         condition: service_healthy
     healthcheck:
-      # /v1/tools is a plain REST endpoint that returns 200 once the server
-      # is ready. The MCP path /mcp/ requires SSE Accept headers so a bare
-      # GET 406s — fine for clients, bad for healthcheck.
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8767/v1/tools -o /dev/null || exit 1"]
+      # Readiness is intentionally public so strict hosted bearer auth cannot
+      # make Compose report a healthy governance server as unhealthy.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8767/health/ready -o /dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6

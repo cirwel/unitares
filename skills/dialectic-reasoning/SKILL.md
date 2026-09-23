@@ -4,7 +4,7 @@ description: >
   Use when an agent is participating in a UNITARES dialectic session — paused and needs to
   submit a thesis, reviewing another agent's thesis, or synthesizing conditions for resolution.
   Covers structured argumentation and convergence.
-last_verified: "2026-09-14"
+last_verified: "2026-09-23"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
@@ -23,17 +23,17 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/query.py
 source_digests:
   unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "cebb8c905db22006"
+  unitares/src/mcp_handlers/dialectic/handlers.py: "2b6f70a94a7361f5"
   unitares/src/mcp_handlers/dialectic/auth.py: "e6bcc28d7e2a4260"
   unitares/src/mcp_handlers/dialectic/session.py: "eb5ed22eb5684038"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
   unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
   unitares/src/mcp_handlers/dialectic/reviewer.py: "183603f3918b1896"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
-  unitares/src/mcp_handlers/schemas/dialectic.py: "0e7bcaa2ebbd1e97"
+  unitares/src/mcp_handlers/schemas/dialectic.py: "79d37cf9418094b7"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/identity/operator.py: "cc2698ddc37a4091"
-  unitares/src/mcp_handlers/lifecycle/query.py: "d2a87c234d9c4d76"
+  unitares/src/mcp_handlers/lifecycle/query.py: "776439b33c67a397"
 ---
 
 # Dialectic Reasoning
@@ -186,13 +186,23 @@ actually happens.
 
 - **Stamp it, don't infer it.** The field is descriptive, not identity proof.
   Record the backend and model that actually ran.
-- **Mark failures as failures.** Set `degraded: true` when the consult errored,
-  timed out, or returned no verdict. A failed pass filed as a clean one is worse
-  than no row at all.
+- **Mark failures as failures.** Set `degraded: true` when the consult errored
+  or timed out but still reached a judgment you are filing. A failed pass filed
+  as a clean one is worse than no row at all.
+- **If no judgment was reached, do not file one.** When the consult returned
+  nothing you could read as a verdict, pass `judgment_formed: false` instead.
+  The server records an abstention without claiming or changing reviewer-slot
+  ownership; the slot is OPEN only when no reviewer was already assigned. It does
+  not file a rejection. `degraded` describes the BACKEND, `judgment_formed`
+  says whether a verdict exists at all, and the two are not interchangeable —
+  a model that judged and then failed its output format is degraded but HAS
+  judged, and that objection is real and must still be filed. Filing a
+  non-verdict claims the one reviewer slot and blocks the paused agent behind
+  reasoning nobody can act on (live: session `99ff6f25a310d23e`, 2026-09-19).
 - **Never backfill.** File only a review this session actually performed;
   filing past passes after the fact fabricates governed history.
 
-If identity or session continuity looks suspect, verify with `identity()` before
+If identity or session continuity looks suspect, verify with `identity(client_session_id=...)` before
 assuming the thesis belongs to the agent you think it does. An independent
 reviewer also receives server-captured pause evidence separately from the paused
 agent's narrative. Treat its measurement, policy, and enforcement provenance as

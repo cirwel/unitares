@@ -17,10 +17,12 @@ PRUNABLE class — hygiene, deliberately NOT an alarm here.
 
 Squash discipline: a squash-merged branch's own commits are never
 ancestors of the default branch, so a naive `master...tip` compare lists
-the entire already-merged history. The orphan set is instead anchored on
-the merged PR's own head (`headRefOid...tip`): commits beyond what the PR
-merged are the orphans, the rest is landed content. For a CLOSED-unmerged
-PR nothing was squashed, so the default-branch compare is the right one.
+the entire already-merged history. For a MERGED PR, the orphan set is the
+intersection of commits beyond its head (`headRefOid...tip`) and commits
+absent from the default branch (`master...tip`). This also excludes default
+branch commits when a branch name is restarted from newer master. For a
+CLOSED-unmerged PR nothing was squashed, so the default-branch compare alone
+is the right one.
 
 Two honest limits. (1) A push-triggered workflow runs the definition on
 the PUSHED ref, so branches cut before this workflow merged never run it;
@@ -44,9 +46,10 @@ An abandoned push never acquires either, so it still fires, minutes later
 as the docstring below already allows. Fresh `<author>/<topic>-<id>` names
 still avoid the window entirely.
 
-Fail-open on API errors, but degraded is never silent — see
-merge_loss_common.py. When the guard DOES fire, issue-filing failures do
-not soften it: the run still exits 1 so the red X survives.
+API errors and incomplete comparisons produce an INDETERMINATE finding,
+never a definitive recovery recipe. When the guard DOES fire,
+issue-filing failures do not soften it: the run still exits 1 so the red X
+survives.
 
 Env (set by .github/workflows/orphan-push-guard.yml):
   GITHUB_REPOSITORY  owner/name
@@ -76,15 +79,24 @@ from merge_loss_common import (
 GUARD = "orphan-push-guard"
 
 GhError = (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError)
+MAX_UNPAGED_COMPARE_COMMITS = 250
+
+
+def incomplete_compare(cmp: dict) -> bool:
+    """GitHub's unpaginated compare response may omit older commits."""
+    commits = cmp.get("commits", [])
+    total = cmp.get("total_commits")
+    return len(commits) >= MAX_UNPAGED_COMPARE_COMMITS or (
+        isinstance(total, int) and total != len(commits)
+    )
 
 
 def orphan_commits(repo: str, newest_pr: dict, sha: str, base: str):
     """The commits this push carries beyond what the branch's PR landed.
 
-    Anchored on the merged PR's head when there is one (squash-safe: the
-    orphans are exactly the commits beyond what got squashed); on the
-    default branch for a CLOSED-unmerged PR (nothing was squashed, so the
-    whole unlanded tail is the finding). Returns (commits | None, error_note).
+    For a merged PR, retain only commits beyond its head that are also
+    absent from the default branch. For a CLOSED-unmerged PR, compare only
+    against the default branch. Returns (commits | None, error_note).
     """
     anchor = newest_pr.get("headRefOid") if newest_pr.get("state") == "MERGED" else None
     anchor = anchor or base
@@ -94,7 +106,20 @@ def orphan_commits(repo: str, newest_pr: dict, sha: str, base: str):
         return None, f"compare `{anchor[:12]}...{sha[:9]}` failed — orphaned commits could NOT be listed"
     if cmp.get("status") in ("identical", "behind"):
         return [], None
-    return cmp.get("commits", []), None
+    if incomplete_compare(cmp):
+        return None, f"compare `{anchor[:12]}...{sha[:9]}` incomplete — orphaned commits could NOT be listed"
+    beyond_pr = cmp.get("commits", [])
+    if anchor == base:
+        return beyond_pr, None
+
+    try:
+        not_on_base = gh_json("api", f"repos/{repo}/compare/{base}...{sha}")
+    except GhError:
+        return None, f"compare `{base}...{sha[:9]}` failed — orphaned commits could NOT be listed"
+    if incomplete_compare(not_on_base):
+        return None, f"compare `{base}...{sha[:9]}` incomplete — orphaned commits could NOT be listed"
+    absent_shas = {commit["sha"] for commit in not_on_base.get("commits", [])}
+    return [commit for commit in beyond_pr if commit["sha"] in absent_shas], None
 
 
 DEFAULT_GRACE_S = 120

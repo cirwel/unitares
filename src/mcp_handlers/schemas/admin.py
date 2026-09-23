@@ -38,6 +38,10 @@ class ListToolsParams(AgentIdentityMixin):
     )
     lite: Union[bool, str, None] = Field(
         default=True,
+        # Kept byte-stable in this response-only change because parameter
+        # descriptions are part of the versioned input-schema digest. The
+        # accurate response split is served by the tool description itself;
+        # update this sentence with the next negotiated contract release.
         description="If true (default), return minimal response (names + descriptions only, ~500B vs ~4KB)."
     )
 
@@ -105,6 +109,22 @@ class DescribeToolParams(AgentIdentityMixin):
             elif value is None:
                 setattr(self, name, True)
         return self
+
+
+class UseToolParams(AgentIdentityMixin):
+    """Invoke one public capability discovered through list_tools."""
+
+    tool_name: str = Field(
+        ...,
+        description="Exact public capability name returned by list_tools.",
+    )
+    arguments: Dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Arguments for the target capability; inspect its schema with "
+            "describe_tool before invoking it."
+        ),
+    )
 
 class UpdateConfigParams(AgentIdentityMixin):
     """
