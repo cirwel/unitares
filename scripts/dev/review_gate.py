@@ -356,6 +356,15 @@ def native_records(comments: list[dict], reviews: list[dict], inline: list[dict]
             continue
         findings = [c for c in inline if c.get("pull_request_review_id") == review["id"]
                     and is_codex_bot(c)]
+        # GitHub files a bot's answer inside an existing thread as a new review
+        # with an empty body, bound to the current head. That is conversation on
+        # an earlier finding, not a review of this diff; the formal re-review of
+        # the head decides it. Counting it blocked #2369 on Codex's own "no
+        # blocking findings" reply. A review with any top-level comment, a body,
+        # or no surviving comments at all still counts below.
+        if (findings and all(c.get("in_reply_to_id") for c in findings)
+                and not (review.get("body") or "").strip()):
+            continue
         clean = review.get("state") == "APPROVED" and not findings
         # A submitted/dismissed review with no explicit approval stays visible,
         # including when someone deleted its inline comments. Never infer clean.

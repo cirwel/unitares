@@ -799,3 +799,30 @@ def test_onboard_full_mode_is_unchanged_default():
     assert payload["identity_context"]["identity_is"] == "uuid"
     assert payload["identity_assurance"]["tier"] == "strong"
     assert payload["session_continuity"]["client_session_id"] == "sess-min"
+
+
+@pytest.mark.parametrize(
+    ("lineage_fork", "expected", "absent"),
+    [
+        (True, "A predecessor exists (position 7).", "does not make it your predecessor"),
+        (False, "sharing a thread does not make it your predecessor", "A predecessor exists"),
+    ],
+)
+def test_onboard_welcome_names_predecessor_only_for_lineage_fork(
+    lineage_fork, expected, absent
+):
+    # A co-located earlier node is a sibling, not a predecessor: the welcome
+    # line must not assert lineage the fork classification did not find.
+    thread_context = {
+        "is_root": False,
+        "thread_id": "t-shared-fingerprint",
+        "position": 9,
+        "predecessor": {"uuid": "other", "position": 7, "label": "unrelated"},
+        "identity_lineage_fork": lineage_fork,
+        "honest_message": "msg",
+    }
+    payload = build_onboard_response_data(
+        **_onboard_kwargs(thread_context=thread_context, response_mode="minimal")
+    )
+    assert expected in payload["welcome"]
+    assert absent not in payload["welcome"]
