@@ -105,6 +105,11 @@ def compute_drift_vector(
     else:
         agent_drift_norm = 0.0
 
+    # Whether the self-report actually entered the vector on THIS check-in, so
+    # risk_attribution can say what happened rather than what was intended.
+    # On the MCP check-in path the value arrives as an ndarray, which the
+    # list/tuple test above rejects, so this is False there (see #2372).
+    monitor._last_self_report_blended = agent_drift_norm > 0.01
     if agent_drift_norm > 0.01:
         ad = list(agent_drift_raw) + [0.0] * max(0, 3 - len(agent_drift_raw))
         blend = 0.3
