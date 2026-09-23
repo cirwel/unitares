@@ -270,11 +270,13 @@ class NativeReview:
     records: list[Record]
     running: bool = False
     unavailable_reason: str = ""
+    completed: bool = False
 
 
 def native_records(comments: list[dict], reviews: list[dict], inline: list[dict],
-                   events: list[dict], key: str, head: str) -> NativeReview:
-    """Normalize observed Codex GitHub artifacts. A reaction is never evidence.
+                   events: list[dict], key: str, head: str,
+                   reactions: list[dict] | None = None) -> NativeReview:
+    """Normalize observed Codex artifacts; a reaction alone is not evidence.
 
     Native completion is accepted only with an explicit reviewed commit. The
     artifact does not identify the reviewed base, so retargeted PRs use the
@@ -284,6 +286,7 @@ def native_records(comments: list[dict], reviews: list[dict], inline: list[dict]
     if any(e.get("event") in {"base_ref_changed", "base_ref_force_pushed"} for e in events):
         return NativeReview([], unavailable_reason="PR base changed; native evidence does not name the reviewed base")
     result = NativeReview([])
+    completions = []
     for c in comments:
         if not is_codex_bot(c):
             continue
@@ -304,6 +307,37 @@ def native_records(comments: list[dict], reviews: list[dict], inline: list[dict]
                 commit = re.search(r"`([0-9a-f]+)`", fields[3])
                 if commit and reviewed_head(commit[1], head):
                     result.running |= any(word in fields[2] for word in ("**Running**", "**Queued**"))
+                    if "**Completed**" in fields[2]:
+                        result.completed = True
+                        completed = re.search(r'<relative-time datetime="([^"]+)"', fields[2])
+                        if completed:
+                            completions.append((completed[1], c))
+    # Native automatic review can finish clean with only its activity row and
+    # a PR thumbs-up. Require both, with a fresh reaction AFTER that exact
+    # head's completion time; an old approval must never bless a new push.
+    if not result.running:
+        for completed, comment in completions:
+            for reaction in reactions or []:
+                # GitHub's reactions endpoint reports this app as type User,
+                # while comments report Bot. Bind its immutable account ID to
+                # the already-verified summary author instead of trusting type.
+                reactor = reaction.get("user") or {}
+                author_id = comment["user"].get("id")
+                if (not author_id or reactor.get("id") != author_id
+                        or reactor.get("login") != CODEX_BOT or reaction.get("content") != "+1"):
+                    continue
+                try:
+                    fresh = timestamp(reaction.get("created_at", "")) >= timestamp(completed) > 0
+                except (ValueError, TypeError):
+                    continue
+                if fresh:
+                    text = (f"Codex completed code review for `{head}` at {completed}; "
+                            f"its clean reaction was posted at {reaction['created_at']}.\n\n"
+                            + comment["body"])
+                    result.records.append(Record(key, "CLEAN", 0, False, "codex-native",
+                                                 comment.get("html_url", ""), text,
+                                                 reaction["created_at"]))
+                    break
     for review in reviews:
         when = review.get("submitted_at") or ""
         if (not is_codex_bot(review) or review.get("commit_id") != head
@@ -327,7 +361,10 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     reviews = api_pages(f"repos/{repo}/pulls/{pr}/reviews")
     inline = api_pages(f"repos/{repo}/pulls/{pr}/comments") if reviews else []
     events = api_pages(f"repos/{repo}/issues/{pr}/events")
-    return native_records(comments, reviews, inline, events, key, head)
+    summary = any(is_codex_bot(c) and "<!-- codex-pull-request-review-summary -->"
+                  in (c.get("body") or "") for c in comments)
+    reactions = api_pages(f"repos/{repo}/issues/{pr}/reactions") if summary else []
+    return native_records(comments, reviews, inline, events, key, head, reactions)
 
 
 def native_enabled() -> bool:
@@ -374,7 +411,7 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
         if requests and all(
                 time.time() - timestamp(c.get("created_at", "")) >= NATIVE_WAIT_S for c in requests):
             break
-        if not snapshot.running and not requested and time.monotonic() - started >= 30:
+        if not snapshot.running and not snapshot.completed and not requested and time.monotonic() - started >= 30:
             body = (f"@codex review\n\nReview the current draft diff at `{head}`. "
                     "The author owns fixes and readiness.\n\n" + request_marker + "\n")
             subprocess.run(["gh", "pr", "comment", str(pr), "--body-file", "-"],

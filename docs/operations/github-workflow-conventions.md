@@ -164,12 +164,15 @@ posted again on each sweep. `--reviewer` explicitly selects the local path;
 `--fresh` can re-review clean evidence but cannot bypass unresolved findings.
 
 The adapter recognizes the official Codex bot's submitted reviews and explicit
-clean comments naming the reviewed commit. It validates abbreviated hashes
+clean comments naming the reviewed commit. It also joins a completed activity
+row naming that commit with the bot's clean PR reaction posted after that
+completion; a stale reaction cannot approve a new push. It validates abbreviated hashes
 against local git objects and invalidates evidence on a new head. Retargeted
 PRs use local review because native artifacts identify the head but not the
 reviewed base; even a completion arriving after retarget may have reviewed
-the earlier base. Bare reactions, a "Completed" activity row, and absence of
-findings are not sufficient. Findings remain open across later clean results
+the earlier base. A reaction or "Completed" activity row alone, and absence of
+findings, are not sufficient. A completed native run is not requested again
+while its evidence is arriving. Findings remain open across later clean results
 or outages until individually disposed. CI consumes native evidence without
 starting a model, regardless of the local opt-in setting. Author commands also
 read existing native findings even when native dispatch is off. If GitHub review

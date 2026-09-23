@@ -522,6 +522,58 @@ def test_unbound_clean_or_completed_activity_cannot_pass(repo):
     assert snapshot.running and not snapshot.records
 
 
+def _native_completion(head):
+    comment = _native_comment(head)
+    comment["user"]["id"] = 199175422
+    comment["body"] = ("<!-- codex-pull-request-review-summary -->\n"
+                       '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-09-23T13:10:09.283517Z">'
+                       f"completion time</relative-time> | `{head[:7]}` | New commits |")
+    reaction = {"user": dict(comment["user"]), "content": "+1", "created_at": "2026-09-23T13:10:12Z"}
+    reaction["user"]["type"] = "User"  # observed reactions API shape differs from comments
+    return comment, reaction
+
+
+def test_native_completed_head_and_fresh_clean_reaction_are_joined(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment, reaction = _native_completion(head)
+    snapshot = rg.native_records([comment], [], [], [], "k", head, [reaction])
+    assert snapshot.completed and snapshot.records[0].verdict == "CLEAN"
+    assert head in snapshot.records[0].text
+    assert snapshot.records[0].url == comment["html_url"]
+    # Neither half is sufficient on its own.
+    assert not rg.native_records([comment], [], [], [], "k", head).records
+    assert not rg.native_records([], [], [], [], "k", head, [reaction]).records
+    # A fresh reaction never erases actual findings for this head.
+    review = {"id": 1, "user": dict(comment["user"]), "commit_id": head,
+              "state": "COMMENTED", "submitted_at": "2026-09-23T13:10:10Z", "body": "bug"}
+    snapshot = rg.native_records([comment], [review], [], [], "k", head, [reaction])
+    assert rg.latest_matching([], "k", snapshot.records).verdict == "FINDINGS"
+
+
+@pytest.mark.parametrize("invalid", ["stale", "wrong-user", "missing-user-id", "eyes", "running", "wrong-head", "retarget", "bad-time"])
+def test_native_completion_rejects_unbound_or_stale_clean_reactions(repo, invalid):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment, reaction = _native_completion(head)
+    events = []
+    if invalid == "stale":
+        reaction["created_at"] = "2026-09-23T13:09:00Z"
+    elif invalid == "wrong-user":
+        reaction["user"]["id"] = 1234
+    elif invalid == "missing-user-id":
+        reaction["user"].pop("id")
+    elif invalid == "eyes":
+        reaction["content"] = "eyes"
+    elif invalid == "running":
+        comment["body"] = comment["body"].replace("**Completed**", "**Running**")
+    elif invalid == "wrong-head":
+        head = _git(repo, "rev-parse", "master")
+    elif invalid == "retarget":
+        events = [{"event": "base_ref_changed"}]
+    elif invalid == "bad-time":
+        reaction["created_at"] = "unknown"
+    assert not rg.native_records([comment], [], [], events, "k", head, [reaction]).records
+
+
 def test_native_findings_survive_later_clean_until_disposed(repo):
     head = _git(repo, "rev-parse", "HEAD")
     review = {"id": 12, "user": {"login": rg.CODEX_BOT, "type": "Bot"},
@@ -638,6 +690,18 @@ def test_native_reader_fetches_review_and_inline_evidence(repo, monkeypatch):
     assert calls == ['repos/o/r/pulls/1/reviews', 'repos/o/r/pulls/1/comments', 'repos/o/r/issues/1/events']
 
 
+def test_native_reader_fetches_reactions_for_activity_evidence(repo, monkeypatch):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment, reaction = _native_completion(head)
+    calls = []
+    def pages(endpoint):
+        calls.append(endpoint)
+        return [reaction] if endpoint.endswith('/reactions') else []
+    monkeypatch.setattr(rg, "api_pages", pages)
+    assert read_native_api("o/r", 1, "k", head, [comment]).records[0].verdict == "CLEAN"
+    assert calls == ['repos/o/r/pulls/1/reviews', 'repos/o/r/issues/1/events', 'repos/o/r/issues/1/reactions']
+
+
 def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkeypatch):
     head = _git(repo, "rev-parse", "HEAD")
     clock = [1000.0]
@@ -654,8 +718,8 @@ def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkey
 
 
 @pytest.mark.parametrize("budget", [30, 300, 600, 1800])
-@pytest.mark.parametrize("running", [False, True])
-def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, budget, running):
+@pytest.mark.parametrize("activity", ["missing", "running", "completed"])
+def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, budget, activity):
     # Exercise the command through native polling into a real fallback attempt:
     # a missing/stuck native review used to exhaust short budgets completely.
     head = _git(repo, "rev-parse", "HEAD")
@@ -667,7 +731,8 @@ def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, b
     monkeypatch.setattr(rg, "native_enabled", lambda: True)
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
-    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], running=running))
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview(
+        [], running=activity == "running", completed=activity == "completed"))
     requests = []
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: requests.append(kw["input"]))
     monkeypatch.setattr(rg, "provider_cooldown", lambda provider: None)
@@ -677,7 +742,7 @@ def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, b
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=budget, fresh=False)) == 0
     assert len(attempts) == 1 and attempts[0][1] > 0
     assert clock[0] - 1000 <= budget / 2
-    assert len(requests) <= (0 if running else 1)
+    assert len(requests) <= (1 if activity == "missing" else 0)
 
 
 @pytest.mark.parametrize("running", [False, True])
