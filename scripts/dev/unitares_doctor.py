@@ -2513,16 +2513,20 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     session's last recorded act. #1819 downgrades a *proven* risk-only
     cold-start hard stop to guidance, so the expected steady state is zero.
 
-    Only NON-authored pauses count. The guard is ineligible, by design, when
-    the check-in is the agent's own report (`epistemic_gate.agent_authored`,
-    `ineligibility_reason: agent_authored_report`): an agent that tells
-    governance it is high-risk keeps that verdict. Counting those pauses made
-    the canary warn for days on 2026-09-21's single pause, a Codex session's
-    self-authored second check-in with the guard deployed and on. Rows from
-    before the guard carry no `epistemic_gate`; they count, since authorship
-    cannot be shown for them. Authored pauses are still reported, uncounted.
-    The denominator is filtered the same way: a window whose cold starts were
-    all agent-authored never exercised the guard, so it SKIPs, never PASSes.
+    Only NON-authored decisions count. The guard is ineligible, by design,
+    when the check-in is the agent's own report (`epistemic_class =
+    'agent_report'`, `ineligibility_reason: agent_authored_report`): an agent
+    that tells governance it is high-risk keeps that verdict. Counting those
+    pauses made the canary warn for days on 2026-09-21's single pause, a
+    Codex session's self-authored second check-in with the guard deployed
+    and on. Authorship is read from the row's top-level `epistemic_class`,
+    the field the guard itself decides on, because it is on every decision;
+    the guard's own `epistemic_gate` block is attached to risk-routed pauses
+    only, so it cannot classify the denominator. A row whose class is absent
+    counts as non-authored, since authorship cannot be shown for it.
+    Authored pauses are still reported, uncounted. The denominator is
+    filtered the same way: a window whose cold starts were all
+    agent-authored never exercised the guard, so it SKIPs, never PASSes.
 
     Zero is also what this check sees when nothing is looking, which is the
     whole reason it exists. The denominator is cold-start *decisions* of any
@@ -2541,16 +2545,16 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
         "WITH d AS ("
         "  SELECT state_json->'eisv_telemetry'#>>'{policy_evaluation,action}' AS act,"
         "         state_json->'eisv_telemetry'#>>'{policy_evaluation,inputs,verdict_source}' AS vsrc,"
-        "         state_json->'eisv_telemetry'#>>'{policy_evaluation,epistemic_gate,agent_authored}' AS authored"
+        "         state_json->>'epistemic_class' AS eclass"
         "  FROM core.agent_state"
         "  WHERE recorded_at > now() - interval '7 days'"
         "    AND state_json ? 'eisv_telemetry')"
         "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'"
-        "                          AND authored IS DISTINCT FROM 'true'),"
+        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
-        "                          AND authored IS DISTINCT FROM 'true'),"
+        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
-        "                          AND authored = 'true')"
+        "                          AND eclass = 'agent_report')"
         " FROM d"
     ))
     if row is None or len(row) < 3:

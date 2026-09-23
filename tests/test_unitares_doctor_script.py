@@ -2253,7 +2253,10 @@ def test_cold_start_canary_counts_rows_without_a_gate_as_non_authored(doctor, mo
                         lambda url, sql, *a, **k: seen.setdefault("sql", sql) and None)
     doctor.check_cold_start_pause_canary("postgresql:///x")
     # Both the denominator and the pause count keep gate-less rows.
-    assert seen["sql"].count("authored IS DISTINCT FROM 'true'") == 2
+    assert seen["sql"].count("eclass IS DISTINCT FROM 'agent_report'") == 2
+    # Authorship comes from the field on every row, not the pause-only gate.
+    assert "state_json->>'epistemic_class'" in seen["sql"]
+    assert "epistemic_gate" not in seen["sql"]
 
 
 def test_cold_start_canary_skips_when_db_unreachable(doctor, monkeypatch):
