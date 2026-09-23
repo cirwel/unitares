@@ -21,6 +21,7 @@ sys.modules["review_gate"] = rg
 _spec.loader.exec_module(rg)
 read_native_api = rg.read_native
 completed_review_exit = rg.completed_review_exit
+require_open = rg.require_open
 
 
 @pytest.fixture(autouse=True)
@@ -28,6 +29,7 @@ def no_cloud_reads(monkeypatch):
     """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
+    monkeypatch.setattr(rg, "require_open", lambda *args: None)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -646,12 +648,69 @@ def test_ci_preserves_existing_check_when_native_evidence_is_unreadable(monkeypa
     assert "Existing review check preserved" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("remote_head,new_key", [("changed", "k"), ("h", "changed")])
-def test_completed_review_cannot_handoff_a_changed_head_or_base_diff(monkeypatch, remote_head, new_key):
+@pytest.mark.parametrize("remote_head,new_key,expected", [("changed", "k", 0), ("h", "changed", 2), ("changed", "changed", 2)])
+def test_completed_review_handoff_uses_the_remote_diff_not_commit_identity(monkeypatch, remote_head, new_key, expected):
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": remote_head, "baseRefName": "new-base"})
-    monkeypatch.setattr(rg, "git", lambda *args: "")
-    monkeypatch.setattr(rg, "diff_key", lambda *args: new_key)
-    assert completed_review_exit("o/r", 1, "k", "h", 0) == rg.UNREVIEWED
+    fetched, compared = [], []
+    monkeypatch.setattr(rg, "git", lambda *args: fetched.append(args) or "")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: compared.append(args) or new_key)
+    assert completed_review_exit("o/r", 1, "k", "h", 0) == expected
+    assert compared == [("origin/new-base", remote_head)]
+    assert "+refs/pull/1/head:refs/review-gate/head" in fetched[0]
+
+
+def test_joining_native_clean_publishes_one_durable_ci_trigger(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    comments, posted = [], []
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
+    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", "native-url", "completed head + fresh reaction")
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean]))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("reviewed again"))
+    def post(pr, rec, heading, text):
+        posted.append((rec, heading, text))
+        comments.append(_comment(rec))
+    monkeypatch.setattr(rg, "post_record", post)
+    args = SimpleNamespace(reviewer=None, fresh=False, budget=30)
+    assert rg.cmd_review(args) == 0
+    assert rg.cmd_review(args) == 0
+    assert len(posted) == 1
+    assert posted[0][0].verdict == "CLEAN" and "native-url" in posted[0][1]
+    assert "fresh reaction" in posted[0][2]
+
+
+def test_sweep_records_native_clean_without_starting_another_review(repo, monkeypatch):
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", "url", "clean evidence")
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean]))
+    posted = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: posted.append(args))
+    monkeypatch.setattr(rg.subprocess, "run", lambda *args, **kw: pytest.fail("started another review"))
+    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=15, dry_run=False)) == 0
+    assert len(posted) == 1 and posted[0][0] == 3
+
+
+@pytest.mark.parametrize("state", ["CLOSED", "MERGED"])
+def test_closed_pr_stops_before_native_request_or_record(monkeypatch, state):
+    monkeypatch.setattr(rg, "require_open", require_open)
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"state": state, "headRefOid": "h"})
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: pytest.fail("read closed PR evidence"))
+    monkeypatch.setattr(rg.subprocess, "run", lambda *args, **kw: pytest.fail("published on a closed PR"))
+    with pytest.raises(rg.ClosedPullRequest):
+        rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", "h")
+    with pytest.raises(rg.ClosedPullRequest):
+        rg.post_record(1, rg.Record("k", "CLEAN", 0, False, "codex"), "CLEAN", "review output")
+
+
+def test_merged_pr_command_stops_without_telling_author_to_retry(monkeypatch, capsys):
+    monkeypatch.setattr(rg, "require_open", require_open)
+    monkeypatch.setattr(rg, "current_pr", lambda: {"state": "MERGED", "number": 1})
+    monkeypatch.setattr(rg, "git", lambda *args: pytest.fail("started reviewing merged PR"))
+    assert rg.main(["review"]) == 0
+    assert "review work has stopped" in capsys.readouterr().out
 
 
 def test_native_findings_are_visible_and_disposable_without_dispatch_opt_in(repo, monkeypatch, capsys):
