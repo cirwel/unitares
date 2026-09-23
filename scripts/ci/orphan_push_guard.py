@@ -46,9 +46,10 @@ An abandoned push never acquires either, so it still fires, minutes later
 as the docstring below already allows. Fresh `<author>/<topic>-<id>` names
 still avoid the window entirely.
 
-Fail-open on API errors, but degraded is never silent — see
-merge_loss_common.py. When the guard DOES fire, issue-filing failures do
-not soften it: the run still exits 1 so the red X survives.
+API errors and incomplete comparisons produce an INDETERMINATE finding,
+never a definitive recovery recipe. When the guard DOES fire,
+issue-filing failures do not soften it: the run still exits 1 so the red X
+survives.
 
 Env (set by .github/workflows/orphan-push-guard.yml):
   GITHUB_REPOSITORY  owner/name
@@ -78,6 +79,16 @@ from merge_loss_common import (
 GUARD = "orphan-push-guard"
 
 GhError = (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError)
+MAX_UNPAGED_COMPARE_COMMITS = 250
+
+
+def incomplete_compare(cmp: dict) -> bool:
+    """GitHub's unpaginated compare response may omit older commits."""
+    commits = cmp.get("commits", [])
+    total = cmp.get("total_commits")
+    return len(commits) >= MAX_UNPAGED_COMPARE_COMMITS or (
+        isinstance(total, int) and total != len(commits)
+    )
 
 
 def orphan_commits(repo: str, newest_pr: dict, sha: str, base: str):
@@ -95,6 +106,8 @@ def orphan_commits(repo: str, newest_pr: dict, sha: str, base: str):
         return None, f"compare `{anchor[:12]}...{sha[:9]}` failed — orphaned commits could NOT be listed"
     if cmp.get("status") in ("identical", "behind"):
         return [], None
+    if incomplete_compare(cmp):
+        return None, f"compare `{anchor[:12]}...{sha[:9]}` incomplete — orphaned commits could NOT be listed"
     beyond_pr = cmp.get("commits", [])
     if anchor == base:
         return beyond_pr, None
@@ -103,6 +116,8 @@ def orphan_commits(repo: str, newest_pr: dict, sha: str, base: str):
         not_on_base = gh_json("api", f"repos/{repo}/compare/{base}...{sha}")
     except GhError:
         return None, f"compare `{base}...{sha[:9]}` failed — orphaned commits could NOT be listed"
+    if incomplete_compare(not_on_base):
+        return None, f"compare `{base}...{sha[:9]}` incomplete — orphaned commits could NOT be listed"
     absent_shas = {commit["sha"] for commit in not_on_base.get("commits", [])}
     return [commit for commit in beyond_pr if commit["sha"] in absent_shas], None
 
