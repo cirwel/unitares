@@ -626,11 +626,13 @@ def test_persisted_recovery_closes_without_reposting(doc_mod, tmp_path):
     assert doctor.state["recovered_at"] > 0
 
 
-def test_unavailable_readback_falls_back_to_the_ack(doc_mod, tmp_path):
-    """A probe that can't answer must not turn into a RECOVERED every tick."""
+def test_unavailable_readback_keeps_the_incident_open(doc_mod, tmp_path):
+    """An ack is also what a failed persist returns, so an unverifiable
+    recovery stays open; governance's dedup window bounds the reposts."""
     import json
     (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
     doctor, calls = make_doctor(doc_mod, {"recovery_persisted": lambda fp: None})
     doctor.run_once()
     doctor.run_once()
-    assert len(calls["findings"]) == 1
+    assert len(calls["findings"]) == 2
+    assert "recovered_at" not in doctor.state

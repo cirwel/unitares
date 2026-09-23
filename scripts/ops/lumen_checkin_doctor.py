@@ -597,12 +597,12 @@ class Doctor:
         if not delivered:
             log("RECOVERED notice not accepted by governance — retrying next tick")
             return
-        if persisted is None:
-            # No readback available. Fall back to the delivery ack rather than
-            # re-posting forever on a probe that may never answer.
-            self._close_recovery(last_problem, "acked; audit.events readback unavailable")
-            return
-        log(f"posted RECOVERED notice — closing once audit.events shows it ({evidence})")
+        # With no readback (persisted is None) the incident stays open too: an
+        # ack is exactly what a failed persist also returns. The repost cost
+        # is bounded by governance's dedup window, one row per 30 min at most.
+        log("posted RECOVERED notice — closing once audit.events shows it"
+            + (" (READBACK UNAVAILABLE: psql probe failed)" if persisted is None else "")
+            + f" ({evidence})")
 
     def _close_recovery(self, last_problem: float, how: str) -> None:
         log(f"RECOVERED notice closed — {how}")
