@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 # --- identity_session (leaf) ---
 from .session import (
     FOREIGN_DESTINATION_SOURCES,
+    UNDECLARED_DESTINATION_PROVENANCE,
     bind_destination_refusal,
     derive_session_key,
     derive_session_key_with_source,
@@ -1654,9 +1655,12 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
             mcp_key_source,
         )
     elif mcp_session_key:
-        # The helper applies the same predicate itself (#2147); if it ever
-        # disagrees with the guard above, its refusal must surface as one
-        # rather than fall through to a payload claiming `bound: True`.
+        # The helper applies the same predicate itself (#2147). The two differ
+        # on corners neither live caller reaches: the guard above is stricter
+        # on the agent's own stable id when it resolved via a foreign source
+        # (the helper owns it by construction), the helper is stricter on an
+        # undeclared source (the ladder always names one). Whichever refuses
+        # must surface as a refusal rather than fall through to `bound: True`.
         bound_info = await _perform_session_bind(
             target_uuid,
             mcp_session_key,
@@ -1690,6 +1694,10 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         ),
         "message": (
             f"Resolved agent '{target_label or target_agent_id}', but declined to "
+            f"bind this transport: the destination key's provenance was not "
+            f"declared, so it cannot be shown to be yours. Your identity is unchanged."
+            if rebind_refused == UNDECLARED_DESTINATION_PROVENANCE
+            else f"Resolved agent '{target_label or target_agent_id}', but declined to "
             f"bind this transport: the destination key resolved via "
             f"'{rebind_refused}', which is keyed on the User-Agent alone and can "
             f"belong to another caller. Your identity is unchanged."

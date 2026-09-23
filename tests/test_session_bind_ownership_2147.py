@@ -7,7 +7,7 @@ onto whatever key it was handed, in Redis, Postgres and the sticky transport
 cache, so the next caller to reach it with a foreign key would repeat #2142.
 
 The ownership predicate the safe callers already applied now lives in one
-place (`bind_destination_refusal`) and the helper applies it itself. The four
+place (`bind_destination_refusal`) and the helper applies it itself. The three
 shapes the live call sites produce are pinned here as still succeeding.
 """
 

@@ -524,11 +524,15 @@ def bind_destination_refusal(
     Any other declared ladder source names the caller's own transport.
     """
     if session_key:
+        from .shared import make_client_session_id
         try:
-            from .shared import make_client_session_id
             if session_key == make_client_session_id(agent_uuid):
                 return None
-        except Exception:
+        except ValueError:
+            # A malformed (<12-char) uuid cannot own a stable id; fall through
+            # to the source check. Only this error is expected here -- anything
+            # else would silently degrade the own-key short-circuit into a
+            # source-only check, so it is left to raise.
             pass
     if key_source in FOREIGN_DESTINATION_SOURCES:
         return key_source
