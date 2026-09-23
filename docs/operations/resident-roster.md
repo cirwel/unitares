@@ -157,7 +157,9 @@ credential, not merely a lookup hint.
 
 `scripts/dev/check_fleet_identity_leak.py` (wired into pre-commit and the
 `Repo Scope Guard` workflow) fails the build if a resident name appears as a
-string literal in `src/` or `agents/sdk/src/`. Read the roster instead.
+string literal in any of its four scanned roots — `src/`, `governance_core/`,
+`config/` and `agents/sdk/src/`. Read the roster instead. (It globs `*.py`
+only, so non-Python files under those roots are outside its reach.)
 
 Provenance in a **comment** is deliberately not flagged — a note explaining that
 a threshold has its value because of what a particular resident did on a
@@ -165,7 +167,7 @@ particular date is the reason the constant is what it is, and deleting it would
 make the code less honest without making it more portable.
 
 The guard also prints the couplings that already exist and have not been fixed
-(currently `src/agent_lifecycle.py` and `src/http_routes/vigil.py`) on every
+(currently one: `src/http_routes/vigil.py`) on every
 run, passing or failing. It does not silence them: a guard that reported
 "clean" over known coupling would be the same instrument-optimism failure it
 exists to catch.

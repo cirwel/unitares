@@ -16,10 +16,9 @@ It does not own EISV, calibration, KG, or identity issuance. Those stay in Pytho
 - **DynamicSupervisor** — a supervisor that starts and stops child processes at runtime. The lease plane uses one for per-lease holder processes.
 - **Registry** — a process directory. "Find me the holder process for surface X."
 - **`:DOWN`** — the message a supervisor or monitor receives when a watched process dies. The corpse-lock fix: when a local lease holder dies, the supervisor sees `:DOWN`, releases the lease, writes the Postgres release row.
-- **Oban** — durable job queue. Reaper sweeps, handoff timeouts, audit-outbox drains run as Oban jobs. If the BEAM node restarts, Oban jobs resume from Postgres.
-- **PromEx** — Prometheus metrics exporter. Lease-plane metrics flow into the existing Sentinel/dashboard surface.
-- **Telemetry** — structured event emission. Lease events fire telemetry; PromEx aggregates, audit-outbox persists.
-- **Ecto / Postgrex** — the Postgres ORM and driver. The lease plane talks to the same `governance` database UNITARES uses.
+- **`PeriodicWorker`** — an in-process GenServer scheduler. Reaper sweeps, handoff timeouts and audit-outbox drains run as its children. Its moduledoc notes that the `perform/1` callback shape matches Oban's worker boundary, but **Oban is not a dependency**: the schedule lives in process memory, so a BEAM node restart starts the cadence over rather than resuming queued work from Postgres. Durable state is the Postgres rows themselves — the next sweep re-derives what to do from them.
+- **Postgrex** — the Postgres driver, used directly against raw SQL. **Not Ecto**, deliberately: `UnitaresLeasePlane.Repo` and `EffectRepo` both say so in their moduledocs, to keep this v0 app's dependency set minimal. The lease plane talks to the same `governance` database UNITARES uses.
+- **Metrics** — there is no metrics exporter. The lease plane emits no `:telemetry` events of its own (`:telemetry` appears only transitively, inside Bandit and db_connection), and PromEx is not a dependency anywhere in `elixir/`. Operator-visible numbers come from the audit rows and the `/v1/health` payload, which Sentinel polls.
 
 ## Start
 
@@ -88,7 +87,14 @@ Sentinel monitors the lease plane via `GET /v1/health` (RFC §7.7).
 A successful `/v1/health` probe returns `{"ok": true, "status": "ok", "protocol_version": "v1.0"}` with HTTP 200, proving:
 1. Bandit/Plug router is up
 2. `HTTPAuth` plug accepts the configured `LEASE_PLANE_BEARER_TOKEN`
-3. The Postgres `governance` connection is alive
+3. The JSON envelope round-trips
+
+It does **not** prove the Postgres `governance` connection is alive. The handler
+does no database work — it returns a literal map plus `Application.get_env/3`
+reads and an `IdentityMetrics.snapshot()`. The router says so of the
+unauthenticated `/health` sibling: the static payload "cannot 503 when Postgres
+is down, which is exactly what a liveness probe wants." Treat a 200 here as
+"the boundary is up," and read database health from the alarm rules below.
 
 **Sentinel alarm rules**
 
@@ -319,7 +325,9 @@ rm ~/.config/cirwel/secrets.env.bak
 launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane
 
 # 3. Update any local Python clients that had the old token cached
-# (LeasePlaneClientConfig.force_release_token — see src/lease_plane/client.py)
+# (LeasePlaneClientConfig.force_release_token — see
+#  agents/sdk/src/unitares_sdk/lease_plane/client.py; src/lease_plane/ is a
+#  back-compat alias shim holding only __init__.py)
 ```
 
 **Recovery from accidental token leak**
@@ -380,8 +388,8 @@ If an orphan is blocking work and waiting for TTL is unacceptable:
 curl -fsS -X POST \
   -H "Authorization: Bearer $LEASE_FORCE_RELEASE_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"lease_id":"<lease-uuid-from-query-above>","release_reason":"forced"}' \
-  http://127.0.0.1:8788/v1/lease/release
+  -d '{"lease_id":"<lease-uuid-from-query-above>"}' \
+  http://127.0.0.1:8788/v1/lease/force-release
 ```
 
 Or via the Python client (preferred — contract-layer rejection if the token is misconfigured):

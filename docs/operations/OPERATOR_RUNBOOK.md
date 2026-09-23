@@ -12,7 +12,13 @@ From the repo root:
 ./scripts/ops/start_with_deps.sh
 ```
 
-This ensures PostgreSQL is reachable at `DB_POSTGRES_URL`, then launches the governance server on port `8767`.
+This probes a hardcoded `localhost:5432` with the Homebrew `postgresql@17`
+binaries, runs `brew services start postgresql@17` if nothing answers, then
+launches the governance server on port `8767`. Note that it does **not** read
+`DB_POSTGRES_URL`: if you point that variable at another host, port or
+container, this script still checks and starts the local Homebrew instance.
+Use `./scripts/diagnostics/check_health.sh` below to verify the database your
+configuration actually names.
 
 If you already know dependencies are ready and only want the server:
 
@@ -49,7 +55,7 @@ The `health_check()` tool now also returns `operator_summary`:
 
 Use `first_action` as the initial remediation hint instead of reading every component block first.
 
-For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis such as Redis, calibration DB, knowledge graph, and Pi connectivity.
+For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis. It returns these components: `agent_metadata`, `audit_db`, `calibration`, `calibration_db`, `data_directory`, `identity_continuity`, `knowledge_graph`, `lease_plane`, `primary_db`, `redis_cache` and `telemetry`. Pi connectivity is not among them — the Mac→Pi coupling was retired by operator decision (#2189).
 
 ## Status at a Glance
 
@@ -195,11 +201,19 @@ Fix:
 ./scripts/ops/start_with_deps.sh
 ```
 
-If that still fails, inspect:
+If that still fails, read the server's output. `start_with_deps.sh` execs
+`start_server.sh`, which execs `python3 src/mcp_server.py` with no redirection,
+so the log goes to that terminal rather than to a file — run it in the
+foreground and read it there, or capture it yourself:
 
 ```bash
-tail -f /tmp/unitares.log
+./scripts/ops/start_with_deps.sh 2>&1 | tee /tmp/unitares-debug.log
 ```
+
+`/tmp/unitares.log` exists only if the server was last started by
+`./scripts/ops/start_unitares.sh`, which is the one start path that redirects
+there. After a `start_with_deps.sh` launch, that file is absent or stale — do
+not diagnose from it.
 
 ### Knowledge graph degraded
 
