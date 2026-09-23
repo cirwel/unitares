@@ -2197,17 +2197,17 @@ def test_provisioning_script_it_points_at_actually_exists_and_runs(tmp_path):
 
 
 def test_cold_start_canary_warns_when_a_cold_start_pause_fires(doctor, monkeypatch):
-    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "3"])
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "3", "0"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.WARN
-    assert "3 phi_cold_start pause(s)" in result.message
+    assert "3 non-authored phi_cold_start pause(s)" in result.message
     # Deployment is the first thing to rule out: merged is not deployed.
     assert "DEPLOYED" in result.message
 
 
 def test_cold_start_canary_skips_when_no_cold_starts_happened(doctor, monkeypatch):
     """An empty population must never read as a clean bill of health."""
-    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["0", "0"])
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["0", "0", "0"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.SKIP
     assert result.status is not doctor.Status.PASS
@@ -2215,10 +2215,36 @@ def test_cold_start_canary_skips_when_no_cold_starts_happened(doctor, monkeypatc
 
 
 def test_cold_start_canary_passes_only_with_a_live_denominator(doctor, monkeypatch):
-    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "0"])
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "0", "0"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.PASS
-    assert "0 pauses across 340 cold-start decisions" in result.message
+    assert "0 non-authored pauses across 340 cold-start decisions" in result.message
+
+
+def test_cold_start_canary_does_not_warn_on_agent_authored_pauses(doctor, monkeypatch):
+    """The guard leaves an agent's own report in force, so its pause is not a
+    guard failure. It is still named, so it is never silently dropped."""
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["367", "0", "1"])
+    result = doctor.check_cold_start_pause_canary("postgresql:///x")
+    assert result.status is doctor.Status.PASS
+    assert "1 agent-authored cold-start pause(s) not counted" in result.message
+
+
+def test_cold_start_canary_warns_on_non_authored_even_beside_authored(doctor, monkeypatch):
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["367", "2", "1"])
+    result = doctor.check_cold_start_pause_canary("postgresql:///x")
+    assert result.status is doctor.Status.WARN
+    assert "2 non-authored phi_cold_start pause(s)" in result.message
+    assert "1 agent-authored" in result.message
+
+
+def test_cold_start_canary_counts_rows_without_a_gate_as_non_authored(doctor, monkeypatch):
+    """Pre-guard rows cannot prove authorship; the SQL must not drop them."""
+    seen = {}
+    monkeypatch.setattr(doctor, "_psql_row",
+                        lambda url, sql, *a, **k: seen.setdefault("sql", sql) and None)
+    doctor.check_cold_start_pause_canary("postgresql:///x")
+    assert "authored IS DISTINCT FROM 'true'" in seen["sql"]
 
 
 def test_cold_start_canary_skips_when_db_unreachable(doctor, monkeypatch):

@@ -478,3 +478,88 @@ def test_dry_run_diagnoses_but_never_acts(doc_mod):
     }, dry_run=True)
     assert doctor.run_once() == doc_mod.C2_DNS_FREEZE
     assert calls["restart"] == 0 and calls["findings"] == []
+
+
+# ------------------------------------------------------------ recovery notice
+#
+# unitares_doctor's finding_producer_live reads a fail-only producer's healthy
+# silence as death unless its last word was an info all-clear.
+
+def _frozen_then_fresh(doc_mod, clock_state):
+    def central():
+        if clock_state["frozen"]:
+            return {"status": "active", "last_update": iso(NOW - 4000)}
+        return {"status": "active", "last_update": iso(NOW - 60)}
+    return central
+
+
+def test_recovery_after_critical_posts_one_info_all_clear(doc_mod):
+    state = {"frozen": True}
+    doctor, calls = make_doctor(doc_mod, {"central_agent": _frozen_then_fresh(doc_mod, state)})
+    assert doctor.run_once() == doc_mod.UNKNOWN
+    assert [sev for sev, _, _ in calls["findings"]] == ["critical"]
+
+    state["frozen"] = False
+    assert doctor.run_once() == doc_mod.HEALTHY
+    sev, fp, msg = calls["findings"][-1]
+    assert (sev, fp) == ("info", "lumen-checkin-recovered")
+    assert msg.startswith("RECOVERED:")
+
+    doctor.run_once()
+    assert len(calls["findings"]) == 2  # said once, then silent again
+
+
+def test_recovery_notice_survives_a_fresh_process(doc_mod):
+    """The job is one process per tick, so the open incident lives on disk."""
+    state = {"frozen": True}
+    overrides = {"central_agent": _frozen_then_fresh(doc_mod, state)}
+    doctor, _ = make_doctor(doc_mod, overrides)
+    doctor.run_once()
+    state["frozen"] = False
+    doctor2, calls2 = make_doctor(doc_mod, overrides)
+    doctor2.run_once()
+    assert [(sev, fp) for sev, fp, _ in calls2["findings"]] == [
+        ("info", "lumen-checkin-recovered")]
+
+
+def test_info_only_incident_needs_no_recovery_notice(doc_mod):
+    """A restart gap's last word is already info — nothing to clear."""
+    state = {"frozen": True}
+    doctor, calls = make_doctor(doc_mod, {
+        "central_agent": _frozen_then_fresh(doc_mod, state),
+        "pi_anima_uptime_s": lambda: 400.0,
+    })
+    assert doctor.run_once() == doc_mod.RESTART_GAP
+    state["frozen"] = False
+    doctor.run_once()
+    assert [sev for sev, _, _ in calls["findings"]] == ["info"]
+    assert "recovered" not in calls["findings"][0][1]
+
+
+def test_pre_upgrade_state_with_an_open_critical_recovers_once(doc_mod, tmp_path):
+    """Live state written before severities were recorded: the last alert was
+    a critical `unknown`, so the first healthy tick after deploy says so."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {
+        "unknown": NOW - 86400, "host_sleep_gap": NOW - 90000}}))
+    doctor, calls = make_doctor(doc_mod, {})
+    doctor.run_once()
+    doctor.run_once()
+    assert [fp for _, fp, _ in calls["findings"]] == ["lumen-checkin-recovered"]
+
+
+def test_pre_upgrade_state_with_only_info_alerts_stays_silent(doc_mod, tmp_path):
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {
+        "restart_gap": NOW - 86400, "host_sleep_gap": NOW - 90000}}))
+    doctor, calls = make_doctor(doc_mod, {})
+    doctor.run_once()
+    assert calls["findings"] == []
+
+
+def test_dry_run_never_posts_recovery(doc_mod, tmp_path):
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 60}}))
+    doctor, calls = make_doctor(doc_mod, {}, dry_run=True)
+    doctor.run_once()
+    assert calls["findings"] == []
