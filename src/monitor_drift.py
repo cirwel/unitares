@@ -108,6 +108,12 @@ def compute_drift_vector(
     # On the MCP check-in path the value arrives as an ndarray, which the
     # list/tuple test above rejects, so this is False there (see #2372).
     monitor._last_self_report_blended = agent_drift_norm > 0.01
+    # Sticky for this monitor: once blended, the vector reaches the behavioral
+    # assessment through several inputs (behavioral S, ODE-derived auxiliaries)
+    # and persists in its EMA, so attribution stops calling it independent.
+    # In-process only; unreachable from the MCP path, which never blends.
+    if monitor._last_self_report_blended:
+        monitor._self_report_ever_blended = True
     if agent_drift_norm > 0.01:
         ad = list(agent_drift_raw) + [0.0] * max(0, 3 - len(agent_drift_raw))
         blend = 0.3

@@ -1303,11 +1303,6 @@ class UNITARESMonitor:
         # easy to misread as "the physical sensor is cut", so record which
         # source actually fed these observations rather than leaving it to be
         # inferred from raw_obs magnitudes.
-        # Whether a blended self-report actually reached this check-in's
-        # behavioral observation: only when the monitor's own behavioral sensor
-        # produced it from this drift norm. A supplied sensor_eisv, or the
-        # short-history fallback, never reads the drift norm.
-        self._last_self_report_fed_behavioral = False
         sensor_eisv = agent_state.get('sensor_eisv')
         if sensor_eisv:
             # Use externally supplied sensor EISV directly when available
@@ -1339,15 +1334,6 @@ class UNITARESMonitor:
                 beh_I_obs = beh_sensor['I']
                 beh_S_obs = beh_sensor['S']
                 beh_obs_source = 'behavioral_sensor'
-                self._last_self_report_fed_behavioral = bool(
-                    getattr(self, '_last_self_report_blended', False)
-                )
-                # Sticky: the behavioral state is an EMA, so a report that fed
-                # it once keeps a decaying share in later check-ins' state.
-                # In-process only (not persisted), and only reachable by direct
-                # callers passing a list; the MCP path never blends.
-                if self._last_self_report_fed_behavioral:
-                    self._self_report_ever_fed_behavioral = True
             else:
                 # Insufficient history — use continuity layer inputs as fallback
                 beh_E_obs = continuity_metrics.E_input if continuity_metrics.E_input is not None else 0.5

@@ -172,8 +172,7 @@ def _build_risk_attribution(
     *,
     behavioral_confidence=None,
     self_report_blended: bool = False,
-    self_report_fed_behavioral: bool = False,
-    self_report_ever_fed_behavioral: bool = False,
+    self_report_ever_blended: bool = False,
 ) -> Dict:
     """Decompose the risk/verdict by signal provenance.
 
@@ -283,25 +282,17 @@ def _build_risk_attribution(
             "verification and policy maturity records."
         )
     elif primary_driver == "behavioral_assessment":
-        if self_report_fed_behavioral:
-            # A blended report reaches the verdict only when the monitor's own
-            # behavioral sensor built this observation from the drift norm
-            # (40% of S). Not with a supplied sensor_eisv, and not on the
-            # short-history fallback.
+        if self_report_ever_blended:
+            # Direct callers passing a list get the blend. The blended vector
+            # then reaches the behavioral assessment through several inputs
+            # (behavioral S, ODE-derived auxiliaries) and persists in its EMA,
+            # so the assessment is not independent of the report from then on.
             note = (
                 "This verdict is the behavioral assessment (EMA residuals vs this "
                 "agent's own baseline + absolute floors). Your self-reported "
-                "ethical_drift was blended into the drift norm on this check-in, "
-                "and that norm feeds the behavioral S estimate, so on this path "
-                "the assessment is not independent of your report."
-            )
-        elif self_report_ever_fed_behavioral:
-            note = (
-                "This verdict is the behavioral assessment (EMA residuals vs this "
-                "agent's own baseline + absolute floors). Your self-reported "
-                "ethical_drift did not feed this check-in's observation, but "
-                "earlier blended reports did, and the smoothed state still "
-                "carries a decaying share of them."
+                "ethical_drift has been blended into the drift vector on this "
+                "monitor, and the blended vector feeds inputs to this assessment, "
+                "so on this path the assessment is not independent of your report."
             )
         else:
             note = (
@@ -478,11 +469,8 @@ def build_result(
         baseline_status=_baseline_status,
         behavioral_confidence=getattr(_beh, 'confidence', None),
         self_report_blended=bool(getattr(monitor, '_last_self_report_blended', False)),
-        self_report_fed_behavioral=bool(
-            getattr(monitor, '_last_self_report_fed_behavioral', False)
-        ),
-        self_report_ever_fed_behavioral=bool(
-            getattr(monitor, '_self_report_ever_fed_behavioral', False)
+        self_report_ever_blended=bool(
+            getattr(monitor, '_self_report_ever_blended', False)
         ),
     )
 
