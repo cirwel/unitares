@@ -349,7 +349,9 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
     outage. Unknown formats/absence/timeout fall back; none mean clean.
     """
     started = time.monotonic()
-    deadline = started + min(NATIVE_WAIT_S, args.budget)
+    # Keep at least half of a short budget for the local reviewers. Native
+    # absence/stalls must not spend the fallback's entire allowance.
+    deadline = started + min(NATIVE_WAIT_S, args.budget / 2)
     request_marker = f"<!-- {NATIVE_REQUEST} head={head} key={key} -->"
     requested = False
     print("[review] joining native Codex review (bounded wait; local fallback available)", flush=True)

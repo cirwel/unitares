@@ -653,6 +653,33 @@ def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkey
     assert len(posted) == 1 and f"head={head} key=k" in posted[0]
 
 
+@pytest.mark.parametrize("budget", [30, 300, 600, 1800])
+@pytest.mark.parametrize("running", [False, True])
+def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, budget, running):
+    # Exercise the command through native polling into a real fallback attempt:
+    # a missing/stuck native review used to exhaust short budgets completely.
+    head = _git(repo, "rev-parse", "HEAD")
+    clock = [1000.0]
+    monkeypatch.setattr(rg.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(rg.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: head)
+    monkeypatch.setattr(rg, "native_enabled", lambda: True)
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], running=running))
+    requests = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: requests.append(kw["input"]))
+    monkeypatch.setattr(rg, "provider_cooldown", lambda provider: None)
+    attempts = []
+    monkeypatch.setattr(rg, "_review_locked", lambda args, pr, key, provider:
+                        attempts.append((provider, args.budget)) or 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=budget, fresh=False)) == 0
+    assert len(attempts) == 1 and attempts[0][1] > 0
+    assert clock[0] - 1000 <= budget / 2
+    assert len(requests) <= (0 if running else 1)
+
+
 @pytest.mark.parametrize("running", [False, True])
 def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch, running):
     head = _git(repo, "rev-parse", "HEAD")
