@@ -99,10 +99,14 @@ class RegisteredReadProtocol:
     binds_uncertainty_seed: bool = False
     # When set, a registered read under this protocol runs only while the live
     # `eisv_skeptic_report.EISV_PRIOR_STATE_MODELS` tuple and `DISPERSION_FEATURE`
-    # are equal to these values. They record the candidate NAMES, in their
-    # selection ORDER (max() keeps the first maximal element), and the dispersion
-    # feature name as they stood when the protocol's condition-4 clarification
-    # was registered (2026-09-23). They do not record what any candidate computes:
+    # are equal to these values. They record the candidate tuple as written and
+    # the dispersion feature name as they stood when the protocol's condition-4
+    # clarification was registered (2026-09-23). The comparison is exact tuple
+    # equality, so a reordering refuses too; that is conservative, not a claim
+    # that the tuple's order selects: score_deltas_vs_baseline uses the tuple
+    # as a membership filter and iterates build_model_scores' construction
+    # order, so an exact tie on the selection key is broken by construction
+    # order, which is NOT recorded here. Nor is what any candidate computes:
     # the model constructors, their binning, min_feature_rows, the dispersion
     # window and snapshot minimum are not compared. The check reads source
     # constants, so it detects a drifted checkout; it is not a runtime tamper

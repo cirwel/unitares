@@ -354,18 +354,24 @@ rationale would call unstable.
 **Candidate set at the time of this clarification, and the pin.** The
 winner is drawn from `EISV_PRIOR_STATE_MODELS` in
 `scripts/analysis/eisv_skeptic_report.py`, which at `master` `fb966bad`
-names seven candidates, in this order:
+names seven candidates:
 `previous_bad_plus_prior_risk`, `prior_risk_binned`, `prior_phi_binned`,
 `prior_s_binned`, `prior_verdict`, `prior_eisv_dispersion_binned`,
 `previous_bad_plus_dispersion`. `global_bad_rate`, `previous_outcome_bad`
 (the baseline) and `reported_confidence_raw` are scored but are not
 candidates and cannot win. Selection among candidates is the lexicographic
 key `(beats_baseline, auc_delta, brier_improvement)` in
-`eisv_ablation_matrix.py`; `max` keeps the first maximal element, so the
-tuple's order is part of what selects.
+`eisv_ablation_matrix.py`. `max` keeps the first maximal element, and the
+candidates reach it in the order `build_model_scores` constructs them
+(`prior_risk_binned`, `previous_bad_plus_prior_risk`,
+`prior_eisv_dispersion_binned`, `previous_bad_plus_dispersion`,
+`prior_phi_binned`, `prior_s_binned`, `prior_verdict`), not in the order
+of `EISV_PRIOR_STATE_MODELS`, which `score_deltas_vs_baseline` uses only as
+a membership filter. An exact tie on all three keys is therefore resolved
+by construction order.
 
 Alongside this clarification, a separately disclosed code change records
-these seven names, in this order, and `DISPERSION_FEATURE = "prior_s_disp"`
+these seven names, as the tuple is written, and `DISPERSION_FEATURE = "prior_s_disp"`
 on this protocol's entry in `REGISTERED_READ_MANIFEST`
 (`eisv_ablation_matrix.py`), taken from `master` `fb966bad`. From that
 change on, a `--read-protocol registered` read under this protocol's id (the
@@ -374,9 +380,13 @@ registered id and its `-retry-<n>` forms) compares the live
 if either differs. A difference is therefore adjudicated by the CLI as a
 refusal to read; it is not disclosed and read through. The condition-4
 rule above does not depend on the pin; the read does. What the pin
-freezes, stated exactly: the candidate names, their order, and the
-dispersion feature name. What it does not freeze: what any candidate
-computes. The model constructors in `build_model_scores`, their binning,
+freezes, stated exactly: the candidate tuple as written and the dispersion
+feature name. The comparison is exact tuple equality, so a reordering of
+the tuple also refuses; that is a conservative choice of comparison, not a
+claim that the tuple's order selects. What it does not freeze: the
+tie-break order, which is the construction order in `build_model_scores`
+and is not recorded anywhere, and what any candidate computes. The model
+constructors in `build_model_scores`, their binning,
 `min_feature_rows` (30), `MIN_DISPERSION_SNAPSHOTS` (5) and
 `DISPERSION_WINDOW_MINUTES` (90.0) remain governed only by the registered
 command's "run from a checkout of `master`". `score_deltas_vs_baseline`
@@ -437,7 +447,7 @@ block threshold, the 0.05 level, the 400-resample null, the cohort, the
 fixture rule, the cutoff, the date, the command, or any estimator in
 `eisv_ablation_matrix.py` or `eisv_skeptic_report.py`. It authorises no
 read before 2026-12-01. It does not itself pin anything: recording the
-candidate names, their order and `DISPERSION_FEATURE` in
+candidate tuple and `DISPERSION_FEATURE` in
 `REGISTERED_READ_MANIFEST` is a separate, disclosed code change made
 alongside this clarification, and the rule above does not depend on it. It
 does not change `independent-operator-cohort-preregistration-v0.md`'s

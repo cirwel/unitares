@@ -1265,7 +1265,10 @@ def test_registered_read_refuses_a_moved_candidate_tuple(monkeypatch, tmp_path):
     with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
         matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID + "-retry-3"), now=now)
 
-    # Same names, different order: max() keeps the first maximal element, so order selects.
+    # Same names, different order: the comparison is exact tuple equality, so a reordered
+    # tuple refuses too. Conservative, not a claim that order selects: the tuple is a
+    # membership filter and ties are broken by build_model_scores' construction order,
+    # which is not pinned.
     monkeypatch.setattr(skeptic_module, "EISV_PRIOR_STATE_MODELS", tuple(reversed(original)))
     with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
         matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
