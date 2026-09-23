@@ -82,8 +82,12 @@ class ToolDocExtractor:
 
             tree = ast.parse(content)
 
-            # Determine category from filename
-            category = file_path.stem  # e.g., 'core', 'lifecycle', 'admin'
+            # Category is the handler subpackage (admin/handlers.py -> 'admin');
+            # a top-level module keeps its own stem (core.py -> 'core'). The
+            # leaf filename alone is meaningless once the scan recurses, since
+            # many subpackages name their module handlers.py or operations.py.
+            rel = file_path.relative_to(self.handlers_dir)
+            category = rel.parts[0] if len(rel.parts) > 1 else file_path.stem
 
             # Only look at module-level functions (not nested)
             for node in tree.body:
@@ -184,19 +188,29 @@ class ToolDocExtractor:
         md.append("- ✅ **No scripts needed** - Tools are the primary interface\n")
         md.append("---\n")
 
+        # Known categories first in their curated order, then every other
+        # discovered category alphabetically. A category missing from
+        # category_info must still render: skipping it silently dropped 88 of
+        # 95 tools while the header still claimed the full count.
+        ordered = [k for k in category_info if k in categories]
+        ordered += sorted(k for k in categories if k not in category_info)
+
+        def _info(key):
+            return category_info.get(
+                key, (key.replace('_', ' ').title(), f"Tools defined under `{key}`"))
+
         md.append("## 📋 Table of Contents\n\n")
-        for category_key in category_info.keys():
-            if category_key in categories:
-                name, _ = category_info[category_key]
-                md.append(f"- [{name}](#{category_key.replace('_', '-')})\n")
+        for category_key in ordered:
+            name, _ = _info(category_key)
+            md.append(f"- [{name}](#{category_key.replace('_', '-')})\n")
         md.append("\n---\n")
 
+        rendered = 0
         # Generate sections for each category
-        for category_key, (category_name, category_desc) in category_info.items():
-            if category_key not in categories:
-                continue
-
+        for category_key in ordered:
+            category_name, category_desc = _info(category_key)
             tools = categories[category_key]
+            rendered += len(tools)
             md.append(f"\n## {category_name}\n")
             md.append(f"*{category_desc}*\n\n")
 
@@ -216,6 +230,11 @@ class ToolDocExtractor:
 
                 md.append(f"**Source:** `{tool.file_path}`\n\n")
                 md.append("---\n\n")
+
+        if rendered != len(self.tools):
+            raise SystemExit(
+                f"generate_tool_docs: rendered {rendered} of {len(self.tools)} "
+                "extracted tools; refusing to write an incomplete inventory")
 
         md.append("\n## 📚 Additional Resources\n\n")
         md.append("- **Start Here:** `docs/guides/START_HERE.md`\n")
