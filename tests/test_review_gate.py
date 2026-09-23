@@ -10,6 +10,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -262,18 +263,92 @@ def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
             "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
 
 
-def test_sweep_takes_ready_owner_and_dependabot_prs_only():
+def test_sweep_covers_quiet_drafts_but_respects_trust_and_explicit_holds():
     from datetime import datetime, timezone
     now = datetime(2026, 9, 19, 1, 0, tzinfo=timezone.utc).timestamp()
     prs = [
         _pr(1),                                        # owner, ready, quiet: yes
         _pr(2, login="app/dependabot"),                # dependabot: yes
-        _pr(3, draft=True),                            # draft: owner's ship.sh reviews it
+        _pr(3, draft=True),                            # drafts need review to become ready
         _pr(4, login="stranger"),                      # outside author: a human first
         _pr(5, updated="2026-09-19T00:55:00Z"),        # pushed 5 min ago: not yet
+        {**_pr(6, draft=True), "labels": [{"name": "no-auto-review"}]},
+        {**_pr(7), "labels": [{"name": "no-auto-review"}]},
+        _pr(8, draft=True, updated="2026-09-19T00:55:00Z"),
     ]
     got = [p["number"] for p in rg.sweep_candidates(prs, "cirwel", now, 15 * 60)]
-    assert got == [1, 2]
+    assert got == [1, 2, 3]
+
+
+@pytest.mark.parametrize("verdict,expected", [("CLEAN", 0), ("FINDINGS", 1), ("FAILED", 1)])
+def test_foreground_joins_running_review_and_returns_its_result(repo, monkeypatch, verdict, expected):
+    key = "k" * 64
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "owner/repo", key, "codex/change"))
+    comments = []
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
+    monkeypatch.setattr(rg, "_review_locked", lambda *args: pytest.fail("duplicated running review"))
+    with rg.review_lock(key) as background:
+        assert background.held
+
+        def finish_review(seconds):
+            comments.append(_comment(rg.Record(key, verdict, 1, False, "claude")))
+            background.__exit__()
+
+        monkeypatch.setattr(rg.time, "sleep", finish_review)
+        args = SimpleNamespace(reviewer=None, fresh=False, budget=10)
+        assert rg.cmd_review(args) == expected
+
+
+def test_join_timeout_does_not_claim_review_completion(repo, monkeypatch, capsys):
+    key = "k" * 64
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "owner/repo", key, "codex/change"))
+    with rg.review_lock(key):
+        assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=0)) == 1
+    assert "no completed review joined" in capsys.readouterr().out
+
+
+def test_review_returns_findings_text_to_the_working_agent(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    finding = "1. file.py:3 loses the result on timeout.\nVERDICT: FINDINGS(1)"
+    monkeypatch.setattr(rg, "run_reviewer", lambda *args: (finding, "exit 0"))
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    assert rg._review_locked(SimpleNamespace(base="master", budget=10), 1, "k", "claude") == 1
+    assert finding in capsys.readouterr().out
+    assert records[0][1].verdict == "FINDINGS"
+
+
+def test_failed_reviewer_exposes_cause_and_an_alternative(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    monkeypatch.setattr(rg, "run_reviewer", lambda *args: ("Weekly limit reached", "exit 1"))
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    assert rg._review_locked(SimpleNamespace(base="master", budget=10), 1, "k", "claude") == 1
+    output = capsys.readouterr().out
+    assert "Weekly limit reached" in output and "record <file>" in output
+    assert records[0][1].verdict == "FAILED"
+
+
+def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeypatch, capsys):
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    def listing(*args):
+        assert "labels" in args[-1]
+        return [_pr(3, draft=True)]
+    monkeypatch.setattr(rg, "gh_json", listing)
+    monkeypatch.setattr(rg, "git", lambda *args: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "review_lock", lambda *args: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("launched in dry run"))
+    args = SimpleNamespace(quiet_minutes=15, dry_run=True)
+    assert rg.cmd_sweep(args) == 0
+    output = capsys.readouterr().out
+    assert "PR #3" in output and "1 review candidate(s)" in output
+    assert "no reviews to start" not in output
 
 
 def test_review_lock_is_exclusive_and_releases(repo):

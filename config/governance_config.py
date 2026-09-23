@@ -445,7 +445,7 @@ class GovernanceConfig:
     # self-report-independent read of described adverse actions (governance_core.
     # verification) can RAISE the verdict/risk but never lower a worse Φ signal.
     # Default OFF: this is the Phase-2 actuator wiring of the v2 verification
-    # layer and is council-gated (docs/proposals/verification-weighted-verdict-v0.md).
+    # layer and is council-gated (docs/proposals/active/verification-weighted-verdict-v0.md).
     VERIFICATION_FLOOR_ENABLED = os.environ.get('GOVERNANCE_VERIFICATION_FLOOR', 'false').lower() == 'true'
 
     # Shadow of the verification floor: compute the SAME deterministic signal
@@ -942,7 +942,7 @@ class GovernanceConfig:
     # Raising this restores enforcement between the old and new thresholds.
     #
     # Choosing the value is an operator call, not a derivation; see
-    # docs/proposals/gap-recovery-arming-semantics-v0.md for the options and what
+    # docs/proposals/active/gap-recovery-arming-semantics-v0.md for the options and what
     # the data does and does not settle.
     GAP_RECOVERY_ARM_SECONDS = DT_MAX * DT_EXPECTED_INTERVAL / DT  # 150.0s
 
@@ -1478,7 +1478,7 @@ _apply_class_calibration_overlay()
 # baseline (complexity=0.5), but the *measured* healthy S is 0.17–0.31 per class
 # (HEALTHY_OPERATING_POINT_BY_CLASS). That offset makes the manifold readout
 # unthresholdable as a control signal (a healthy agent reads ~0.17, below the
-# 0.40 critical line). See docs/proposals/eisv-fixed-point-calibration-gap-v0.md.
+# 0.40 critical line). See docs/proposals/archive/eisv-fixed-point-calibration-gap-v0.md.
 #
 # Fix: decay S toward a per-class setpoint σ instead of toward 0, i.e.
 # `-μ(S - σ)`. Choosing σ = healthy_S − S_SETPOINT_DRIVER_OFFSET lands the S
@@ -1512,7 +1512,7 @@ def phi_telemetry_only() -> bool:
     When on, the behavioral/residual assessment is authoritative for the verdict
     and risk score whenever it is confident; Φ no longer floors them (it only
     over-flags hard work as risk — the RLHF/punish-toward-ideal shape, see
-    docs/proposals/eisv-maths-roadmap-v0.md §8.0). Φ is still computed and
+    docs/proposals/active/eisv-maths-roadmap-v0.md §8.0). Φ is still computed and
     surfaced as a telemetry field. Cold-start agents (behavioral confidence below
     the gate) still fall back to the Φ path as the prior. Because authoritative
     behavioral can only *de-escalate* relative to the Φ floor, this never
@@ -1575,7 +1575,7 @@ def session_mirror_shadow_enabled() -> bool:
     are best-effort (failures swallowed) and nothing reads the mirror yet. Lets
     the durable mirror be populated and its write-path parity measured before the
     read flip. Redis-retirement Phase 1A — see
-    docs/proposals/redis-retirement-phase-1-plan.md.
+    docs/proposals/archive/redis-retirement-phase-1-plan.md.
     """
     return os.getenv("UNITARES_SESSION_MIRROR_SHADOW", "").strip().lower() in {"1", "true", "on", "yes"}
 

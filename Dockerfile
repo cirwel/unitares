@@ -17,7 +17,7 @@
 # float results enough to move a verdict near a threshold. Dependabot-docker is
 # configured to bump this digest with the Docker Quickstart job validating each
 # bump (see .github/dependabot.yml). This is the reproducibility *bridge* — the
-# robustness fix is continuous verdict blending (docs/proposals/continuous-verdict-blending-v0.md).
+# robustness fix is continuous verdict blending (docs/proposals/archive/continuous-verdict-blending-v0.md).
 FROM python:3.14-slim@sha256:cad9a2c871761c413caa6fdd6441c783451e740a48aaeba60ae62a8b53525ef6
 
 WORKDIR /app

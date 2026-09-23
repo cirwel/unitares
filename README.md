@@ -29,7 +29,8 @@ while keeping their own models, tools, and runtimes. They interoperate with
 each other over their own transports or A2A; UNITARES is the record behind
 them, not the transport between them.
 
-Agent work should remain attributable, reviewable, and
+UNITARES preserves accountability across discontinuities in agent identity,
+context, process, and time. Agent work remains attributable, reviewable, and
 recoverable even when the process that started it is gone.
 
 ## What UNITARES gives you

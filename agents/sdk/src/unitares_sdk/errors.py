@@ -30,7 +30,7 @@ class GovernanceUnavailableError(GovernanceError):
         super().__init__(message)
 
 
-# Pinned by docs/proposals/beam-wave-3-handler-dispatch.md §3.2 step 3; the
+# Pinned by docs/proposals/active/beam-wave-3-handler-dispatch.md §3.2 step 3; the
 # server-side single source is src/mcp_transport.py::make_unavailable_body.
 UNAVAILABLE_ERROR = "governance_temporarily_unavailable"
 

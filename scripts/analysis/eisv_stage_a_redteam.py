@@ -2,7 +2,7 @@
 """Stage A red-team — does enabling UNITARES_S_SETPOINT shift the verdict/risk
 of HEALTHY agents on the ODE/phi control path?
 
-Context (docs/proposals/eisv-fixed-point-calibration-gap-v0.md, addendum v0.1):
+Context (docs/proposals/archive/eisv-fixed-point-calibration-gap-v0.md, addendum v0.1):
 Stage A adds a per-class S setpoint σ so the ODE rests at the *measured* healthy
 S (~0.17-0.31) instead of S*≈0.091. This is correct for the MANIFOLD readout
 (distance from the healthy point shrinks → coherence rises toward 1.0).

@@ -48,7 +48,7 @@ def test_containment_note_defines_non_refutation_statuses():
 
 
 def test_distributional_probe_is_not_greenlit_without_retiring_the_capability():
-    probe = _read("docs/proposals/resolved/eisv-distributional-signal-probe-v0.md")
+    probe = _read("docs/proposals/archive/eisv-distributional-signal-probe-v0.md")
     normalized = " ".join(probe.split())
 
     assert "stronger KILL inference withdrawn" in normalized
@@ -61,7 +61,7 @@ def test_distributional_probe_is_not_greenlit_without_retiring_the_capability():
 
 def test_reference_benchmark_does_not_refute_the_warmed_deployed_ema():
     contract = _read("docs/ontology/eisv-proprioception-contract.md")
-    result = _read("docs/proposals/eisv-individuality-v2-result.md")
+    result = _read("docs/proposals/archive/eisv-individuality-v2-result.md")
     normalized = " ".join((contract + "\n" + result).split())
 
     assert "BENCHMARK FAIL for the cold-start reconstruction" in normalized
@@ -74,7 +74,7 @@ def test_reference_benchmark_does_not_refute_the_warmed_deployed_ema():
 
 def test_propagation_surfaces_do_not_restore_withdrawn_inferences():
     index = _read("docs/EVALUATION_INDEX.md")
-    gate_note = _read("docs/proposals/2026-06-24-wave-3-gate-framing.md")
+    gate_note = _read("docs/proposals/archive/2026-06-24-wave-3-gate-framing.md")
 
     assert "guide self-loop cannot flip the basin as deployed" not in index
     assert "recursive guide-loop counterfactual is `UNIDENTIFIED`" in index
@@ -140,7 +140,7 @@ def test_current_operator_surfaces_do_not_restore_the_legacy_noise_label():
         "docs/manual/05-reading-the-signals.md",
         "docs/operations/eisv-ablation-frozen-2026-08-09.md",
         "docs/operations/falsifiability-power-audit-2026-08-23.md",
-        "docs/proposals/independent-operator-cohort-preregistration-v0.md",
+        "docs/proposals/registered/independent-operator-cohort-preregistration-v0.md",
         "docs/REVIEWER_GUIDE.md",
         "scripts/analysis/ablation_power_probe.py",
     )

@@ -10,10 +10,11 @@ an analogy or proposal is not mistaken for a deployed contract.
 
 | You are… | Read in this order |
 |---|---|
-| **A reviewer / first-time visitor** | [repo README](../README.md) → [`PRODUCT_DEFINITION.md`](PRODUCT_DEFINITION.md) → [`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md) → [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md) → [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md) → [`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md) → [`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md) |
+| **A reviewer / first-time visitor** | [repo README](../README.md) → [product](PRODUCT_DEFINITION.md) → [architecture](UNIFIED_ARCHITECTURE.md) → [interface](INTERFACE_CONTRACT.md) → [evidence and limits](EVIDENCE_AND_LIMITS.md) |
 | **Integrating an agent client** | [`INTERFACE_CONTRACT.md`](INTERFACE_CONTRACT.md) → [`integration/CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) → [`manual/04-integrating-agents.md`](manual/04-integrating-agents.md) → [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) → [`guides/TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) |
 | **Installing / deploying** | [`manual/02-install.md`](manual/02-install.md) → [`install/PLAYBOOK.md`](install/PLAYBOOK.md) → [`operations/OPERATOR_RUNBOOK.md`](operations/OPERATOR_RUNBOOK.md) |
 | **Contributing to the identity layer** | [`../AGENTS.md`](../AGENTS.md) → [`ontology/README.md`](ontology/README.md) → [`ontology/identity.md`](ontology/identity.md) → [`ontology/plan.md`](ontology/plan.md) |
+| **Following current research** | [current designs and contracts](proposals/active/README.md); [frozen protocols](proposals/registered/README.md) have their own registration and execution rules |
 | **Reading research history** | [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md) → [`ontology/README.md`](ontology/README.md) → [`proposals/README.md`](proposals/README.md) |
 
 Project-level status lives in `docs/`; participation and community policies live in `.github/`:
@@ -111,7 +112,10 @@ These are research and engineering provenance, not a list of shipped features.
 Active and resolved RFCs that do not belong in `ontology/` live here. Each doc
 carries its own resolution status in the body.
 
-→ Status-grouped index at **[`proposals/README.md`](proposals/README.md)**.
+→ [Proposal guide](proposals/README.md):
+[current designs and contracts](proposals/active/README.md),
+[registered protocols](proposals/registered/README.md), and
+[historical and parked work](proposals/archive/README.md).
 
 ### `essays/` — optional, non-normative interpretation
 

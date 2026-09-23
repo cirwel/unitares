@@ -1,6 +1,6 @@
 """Orchestrated dialectic reviewer — the agent-orchestrator's first consumer.
 
-See docs/proposals/orchestrated-dialectic-reviewer-v0.md.
+See docs/proposals/active/orchestrated-dialectic-reviewer-v0.md.
 """
 from .reviewer import (
     Thesis,

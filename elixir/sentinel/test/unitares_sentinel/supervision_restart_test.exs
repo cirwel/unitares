@@ -2,7 +2,7 @@ defmodule UnitaresSentinel.SupervisionRestartTest do
   @moduledoc """
   Wave 1 condition 3 — "supervision tree absorbs at least one induced fault
   (kill a worker, supervisor restarts, no manual intervention)"
-  (`docs/proposals/beam-footprint-roadmap-v0.md`:685).
+  (`docs/proposals/active/beam-footprint-roadmap-v0.md`:685).
 
   `forced_release_poller_structure_test.exs` pins that a dead-DB tick *exits* —
   the precondition for a restart. This test closes the condition itself: a

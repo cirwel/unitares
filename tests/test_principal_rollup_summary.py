@@ -2,7 +2,7 @@
 
 A principal is a connected component over agent-declared edges only — shared
 thread_id and declared lineage. The rollup is additive to the summary (it never
-changes `total`/`participated`); see docs/proposals/principal-rollup-v0.md.
+changes `total`/`participated`); see docs/proposals/active/principal-rollup-v0.md.
 """
 from __future__ import annotations
 

@@ -20,7 +20,7 @@ Run the tracer and its focused tests from the repository root:
 
 ```bash
 python3 -m scripts.demo.federation_tracer.tracer \
-  --output docs/proposals/accountable-testbed-federation-trace.json
+  --output docs/proposals/archive/accountable-testbed-federation-trace.json
 python3 -m pytest tests/test_federation_tracer.py -q
 ```
 

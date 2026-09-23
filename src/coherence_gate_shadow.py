@@ -5,7 +5,7 @@ it records what a per-agent gate WOULD have said next to what the fleet-constant
 gate actually said, so the two can be compared on real traffic before anything
 is changed. Same discipline as ``grounding_shadow``.
 
-Why this exists (docs/proposals/coherence-proprioceptive-thresholds-v0.md):
+Why this exists (docs/proposals/active/coherence-proprioceptive-thresholds-v0.md):
 
 `69ee5a79` promoted E/I/S/V to behavioral values because "the ODE attractor
 convergence made all agents look identical", but left coherence reading the

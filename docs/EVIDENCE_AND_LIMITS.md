@@ -45,7 +45,7 @@ The outcome read carries a protocol qualification. After the frozen cutoff,
 recurring automation exposed live discrimination output: the ablation watchdog
 completed 42 of 51 executions and the dogfood guard completed 43 of 52. Those
 jobs are paused. The fixed
-[2026-12-01 gate](proposals/eisv-outcome-grounding-stop-rule-v0.md) remains
+[2026-12-01 gate](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md) remains
 an operational decision rule, but it is not the only post-registration read and
 cannot be described as clean single-read blinding; its report must disclose the
 interim access and read-specific power.

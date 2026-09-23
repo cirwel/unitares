@@ -112,7 +112,7 @@ def test_flags_product_definition_surface(tmp_path, monkeypatch, doc_health):
 def test_ignores_non_pitch_surfaces(tmp_path, monkeypatch, doc_health):
     for rel_path in (
         "docs/essays/thermodynamics.md",
-        "docs/proposals/eisv-maths-roadmap-v0.md",
+        "docs/proposals/active/eisv-maths-roadmap-v0.md",
         "docs/ontology/eisv-proprioception-contract.md",
         "agents/sdk/README.md",
     ):

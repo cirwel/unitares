@@ -10,7 +10,7 @@ work should remain attributable, reviewable, and recoverable even when the
 process that started it is gone. It runs beside evals, guardrails, and
 sandboxes and replaces none of them.
 
-**Current public releases:** [server v2.21.0](https://github.com/cirwel/unitares/releases/tag/v2.21.0)
+**Current public releases:** [server v2.22.1](https://github.com/cirwel/unitares/releases/tag/v2.22.1)
 · [Python SDK 0.3.0](https://pypi.org/project/unitares-sdk/0.3.0/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
@@ -50,7 +50,7 @@ parallel diagnostic path, not the live decision mechanism.
 Run the documented stack and a six-check-in wiring demo:
 
 ```bash
-git clone --branch v2.21.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v2.22.1 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
@@ -65,7 +65,7 @@ python -m pip install unitares-sdk==0.3.0
 Or inspect the signed multi-architecture server image:
 
 ```bash
-docker pull ghcr.io/cirwel/unitares:v2.21.0
+docker pull ghcr.io/cirwel/unitares:v2.22.1
 ```
 
 The demo establishes that the stack is wired. It does not establish predictive

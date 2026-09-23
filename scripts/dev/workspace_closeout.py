@@ -157,7 +157,7 @@ def classify_workspace(root: Path) -> "WorkspaceIsolation":
     The main working tree has git_dir == git_common_dir; a linked worktree's
     git_dir is `<common>/worktrees/<name>`. Agents should mutate code only in an
     agent-owned linked worktree — never the shared main checkout or the deploy
-    worktree (see docs/proposals/worktree-isolation-vs-lease-default.md).
+    worktree (see docs/proposals/active/worktree-isolation-vs-lease-default.md).
     """
     rc_a, git_dir_out, _ = _run(["git", "rev-parse", "--absolute-git-dir"], root)
     rc_b, common_out, _ = _run(["git", "rev-parse", "--git-common-dir"], root)

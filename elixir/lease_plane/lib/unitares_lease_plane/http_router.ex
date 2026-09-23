@@ -660,7 +660,7 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # NOT part of the lease RFC's conformance surface. Leases and messages share
   # this node (one bearer, one identity gate, one Postgrex pool) but not one
   # contract: a lease is an exclusive claim, a message is not exclusive.
-  # Contract: docs/proposals/agent-message-transport-v0.md.
+  # Contract: docs/proposals/active/agent-message-transport-v0.md.
   #
   # TRANSPORT ONLY. Nothing here long-polls, wakes, spawns, or spends, so the
   # disconfirmers in agent-channel-wake-gate-v0.md are untouched.

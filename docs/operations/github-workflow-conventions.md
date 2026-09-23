@@ -68,7 +68,7 @@ is the merge gate.
   operator's deliberate action. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
   actually passed — CI green (the `review` check included: see "Review
-  gate" below), no collision with an in-flight branch.
+  workflow" below), no collision with an in-flight branch.
 - **Readiness is agent-declared, never operator-inferred.** The operator
   pressing merge in order cannot verify content and should not have to
   guess doneness: a PR still in draft is "still working — hands off," even
@@ -86,7 +86,9 @@ is the merge gate.
   incidents — the human gate authorizes; the evidence lives with CI,
   reviews, and the merge-loss guards.
 
-**Review gate.** "Review round joined" used to be prose: some PRs carried a
+### Review workflow
+
+"Review round joined" used to be prose: some PRs carried a
 review in the body, some in a comment, most in neither, and nothing could tell
 which. It is now a command and a status check, the way `test-cache.sh` made
 the test run one.
@@ -94,8 +96,11 @@ the test run one.
 - `./scripts/dev/review.sh` reviews the PR diff for `HEAD` with the *other*
   model (Codex reviews `claude/*` and everything else, Claude reviews
   `codex/*`), read-only, on a 30-minute budget, and posts a **review record**
-  comment. `ship.sh` starts it in the background on every PR push; run it by
-  hand after pushing any other way.
+  comment. `ship.sh` now waits for it on every PR push and prints the
+  findings to its caller. After pushing another way, the **authoring agent**
+  runs the same command without waiting for an operator prompt. If a review
+  is already running, the command joins its result instead of treating
+  "started" as "finished". A bounded wait that expires reports incomplete.
 - The `review` commit status (`.github/workflows/review-gate.yml`) is green
   when the latest record for the PR's **current diff** is `CLEAN`, or
   `FINDINGS(n)` with dispositions. Undisposed findings or no record leave it
@@ -103,7 +108,7 @@ the test run one.
   never clean.
 - Findings: fix and push (the new diff is reviewed), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
-- Any review can be the record: a council, a human, another model —
+- Any independent review can be the record: consult, council, a human, another model —
   `./scripts/dev/review.sh record <file> --reviewer-name <who>`, where the file
   ends with `VERDICT: CLEAN` or `VERDICT: FINDINGS(n)`. The gate needs no model
   and no paid key; CI only reads comments.
@@ -116,12 +121,44 @@ the test run one.
   author is not a review.
 - Bot PRs (dependabot) get no exemption: the incident that motivated "no
   mechanical exemption" was a dependency bump. Nobody has to remember them
-  either: `review_gate.py sweep` (scheduled every 30 min on the operator's
-  host) reviews, one per run, any ready PR from the owner's account or
-  dependabot that has no record for its current diff and has been quiet
-  for 15 minutes. Drafts are left to their owner's `ship.sh`; outside
-  contributors' PRs get a human first. A lock in the git common dir keeps
-  the sweep and a `ship.sh` review from running the same diff twice.
+  either: the optional `review_gate.py sweep` fallback reviews one quiet PR per run
+  from the owner's account or dependabot, **including drafts**, after 15
+  minutes without an update. A draft restricts readiness and merging; it must
+  not prevent the review needed to reach readiness. `no-auto-review` holds
+  automatic review of intentionally unfinished work. Outside contributors'
+  PRs get a human first. A lock in the git common dir keeps the sweep and an
+  author's review from running the same diff twice. Failed runs retry at most
+  three times per diff; unresolved findings and exhausted retries are reported
+  as author follow-up in the sweep log, never silently treated as clean.
+
+The working agent reads the result, addresses findings, waits for CI, and
+marks **its own** PR ready before declaring completion. A detached review
+(`review.sh --background`) is useful while the agent does other work, but the
+agent must call `review.sh` again to join before leaving. `SHIP_NO_REVIEW=1`
+explicitly defers this step and prints the author's next action. If review
+cannot finish, report the blocker and the exact command to resume. The sweep
+supplies a missing review; it does not fix code, declare readiness, or merge.
+
+The fallback needs an actual scheduler installation. On the operator's Mac:
+
+```bash
+python3 scripts/ops/install-review-sweep.py --repo ~/projects/unitares
+launchctl print gui/$(id -u)/com.unitares.review-sweep
+unitares-automations census --grep review-sweep --all
+```
+
+This opt-in installer copies a small bootstrap outside the development
+checkout, loads a 30-minute launchd job, and records run outcomes through
+`unitares-automation-run` when installed. It uses existing CLI authentication.
+Each run refreshes a locked trusted checkout from `origin/master`; a separate
+locked checkout supplies PR context. Logs are in
+`~/Library/Logs/unitares-review-sweep.log`. Merely having `review-sweep.sh` on
+disk is not evidence that the job is installed or running.
+
+The `review` status describes review evidence; it is separate from the test
+suite. A pending status asks the author to start/join review and links here.
+Readiness requires a completed review under this convention; whether the
+status also blocks GitHub merging is a repository protection setting.
 
 `ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
 every change** — runtime, docs, or tests:
