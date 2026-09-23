@@ -620,9 +620,11 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # clock, not the stuck-process clock. STUCK_SESSION_THRESHOLD (2h)
             # measures "this process is wedged"; an operator may simply be
             # asleep. FACILITATION_TIMEOUT (4h) exists for exactly this and was
-            # only reachable inside the ANTITHESIS branch, so a session that
-            # asked for a human at THESIS — which is where all 50 facilitation
-            # events actually come from — fell straight through to FAILED at 2h.
+            # historically (until #2202 hoisted the facilitation write above
+            # out of the phase branches) only reachable inside the ANTITHESIS
+            # branch, so a session that asked for a human at THESIS — which is
+            # where all 50 facilitation events actually came from — fell
+            # straight through to FAILED at 2h.
             #
             # That is the whole dead-end: swept to `failed`, and `reassign` then
             # refuses any phase but THESIS/ANTITHESIS, so the session became

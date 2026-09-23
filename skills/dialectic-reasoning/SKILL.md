@@ -27,7 +27,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/auth.py: "e6bcc28d7e2a4260"
   unitares/src/mcp_handlers/dialectic/session.py: "eb5ed22eb5684038"
   unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
-  unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
+  unitares/src/mcp_handlers/dialectic/auto_resolve.py: "1efe8b70836e5729"
   unitares/src/mcp_handlers/dialectic/reviewer.py: "183603f3918b1896"
   unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
   unitares/src/mcp_handlers/schemas/dialectic.py: "79d37cf9418094b7"
@@ -289,7 +289,10 @@ may claim it.
 ## Facilitation and Reviewer Recovery
 
 If no eligible reviewer remains, the session may report
-`awaiting_facilitation`. This is a paused request for human help, not a reviewer
+`awaiting_facilitation`. A session that stalls in SYNTHESIS with its reviewer
+still assigned raises the same request; the sweep does not reassign at that
+phase, because the protocol requires the same reviewer to revise its own
+verdict. This is a paused request for human help, not a reviewer
 verdict. A timeout sweep can eventually mark it failed, but that sweep outcome
 does not mean either side won.
 
