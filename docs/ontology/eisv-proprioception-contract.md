@@ -62,8 +62,10 @@ external outcome evidence, policy, and review surfaces that are separate from
 the measurement vector.
 
 "Proprioception" here is the anti-verdict claim, and it holds. It is not a claim
-that all four axes share one sensory class: E is externally referenced, I and S
-are interoceptive, and V has no afferent at all. Because those classes imply
+that all four axes share one sensory class: E incorporates externally referenced
+signals; I and S primarily summarize internally or self-referenced runtime
+information; V is derived from other state dimensions rather than receiving an
+independent input. Because those classes imply
 different validation regimes, see **Sensory class split** below before designing
 or scheduling any EISV validation work.
 
@@ -558,8 +560,8 @@ the label was proprioceptive.
 | Axis | Derivation (weights as coded) | Class | Validation regime | Gated by the 2026-12-01 stop rule? |
 |---|---|---|---|---|
 | **E** | `_compute_E` (:233) — 35% decision success, 25% legacy `C(V)` level, 20% complexity calibration, 20% outcome success (:277); then a 20% continuity blend and 15% `1.0 - tool_error_rate` (:64) | **Externally referenced.** Decision outcomes, tool errors and outcome success are world facts, not self-state | Error against referent | **No** — blocked by a *join*, not by labels |
-| **I** | `_compute_I` (:288) — 50% `1.0 - calibration_error` (:293), 30% legacy coherence trend, 20% outcome consistency (:307) | **Interoceptive — Garfinkel *awareness*.** Its dominant term is confidence-vs-correctness correspondence | Metacognitive calibration (ECE / meta-d′) | **No** |
-| **S** | `_compute_S` (:332) — 40% drift norm, 35% regime instability, 25% complexity divergence (:337-344), plus a tool-velocity term | **Interoceptive — homeostatic/arousal.** How much am I moving and switching; no correct value exists | Test–retest reliability + faithfulness under intervention | **No** |
+| **I** | `_compute_I` (:288) — 50% `1.0 - calibration_error` (:293), 30% legacy coherence trend, 20% outcome consistency (:307) | **Internally referenced / calibration-related.** Its dominant term is confidence-vs-correctness correspondence. *Research interpretation:* this may be compared with Garfinkel-style interoceptive awareness. | Metacognitive calibration (ECE / meta-d′) | **No** |
+| **S** | `_compute_S` (:332) — 40% drift norm, 35% regime instability, 25% complexity divergence (:337-344), plus a tool-velocity term | **Self-relative / deviation-dynamics.** How much is the runtime moving and switching; no single externally correct value exists. *Research interpretation:* this may be compared with homeostatic or arousal constructs. | Test–retest reliability + faithfulness under intervention | **No** |
 | **V** | `_compute_V(E_history, I_history)` (:366) — 60% (E slope − I slope) + 40% instantaneous E−I gap (:382) | **Not a sense.** Takes no exogenous input; a deterministic function of two other axes | None available — see below | n/a |
 
 **E — the referent exists and is not joined.** E already ingests machine-checked
@@ -1467,5 +1469,6 @@ Two cautions follow, both consistent with the rest of this contract:
   here is *the same* pre-judgmental stance the interoceptive literature gives
   interoception: it informs regulation, it does not adjudicate.
 - **Novelty window.** The interoceptive-AI literature is converging quickly
-  (2024–2026); positioning EISV as a rediscovered/instantiated framework rather
-  than a novel one is the honest and durable framing.
+  (2024–2026). Positioning EISV in relation to established work on interoceptive
+  inference and adjacent control frameworks, rather than presenting those ideas
+  as novel theoretical discoveries, is the honest and durable framing.
