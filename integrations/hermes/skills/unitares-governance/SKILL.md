@@ -9,7 +9,9 @@ UNITARES is a separate accountability runtime. This Hermes plugin connects to it
 
 ## Start of a new agent process
 
-Call `start_session(force_new=true)` once to mint a fresh process identity. Keep the returned identity and continuity data for the life of that running process.
+Call `start_session(force_new=true)` once to mint a fresh process identity. Save the returned `agent_uuid` and `client_session_id` for the life of that running process. Pass `client_session_id` explicitly on later UNITARES calls, especially writes. A transport-inferred binding is not sufficient for writes under strict identity.
+
+Reserve `continuity_token` for an explicit same-process identity rebind; do not attach it to routine calls.
 
 Do not mint a new UNITARES identity just because the user sends another message.
 
@@ -17,7 +19,7 @@ If this process is an intentional handoff from an exited predecessor, declare th
 
 ## Ongoing work
 
-Use `sync_state()` as the normal check-in path while the same process continues.
+When there is meaningful work to report, call `sync_state(response_text=..., complexity=..., client_session_id=...)`. Do not manufacture a check-in for every message or tool call.
 
 Treat UNITARES state estimates and coherence signals as runtime telemetry, not as an oracle about task correctness or real-world outcomes.
 
