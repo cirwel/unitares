@@ -6,6 +6,13 @@
 **Council pass v0.1 (2026-05-04):** dialectic-knowledge-architect (2B/4C/3D/4N), feature-dev:code-reviewer (2B/3C/2D/2N), live-verifier (7 VERIFIED, 6 DRIFT, 0 REFUTED, 1 SOURCE_ONLY) — all findings folded inline. Architect C3 + reviewer C3 both flagged "v0.1 destination committed pre-experiment"; the v0.1 conditionality block was the fold for that finding, and v0.2 was the realization of it.
 **Council pass v0.3:** none on the migration call itself — that's an operator decision after a multi-session debate, and adversarial review of the call after operator commitment is the relitigation pattern v0.3 is trying to end. Council passes ARE expected on technical scope (Wave 1 supervisor topology, BEAM↔Python boundary contracts, identity-state migration) once those land as RFCs.
 
+> **Status re-read 2026-09-23 (proposals audit):** this roadmap was last revised on
+> 2026-06-25. Since then the operator signed Wave 3 **GO-WITH-REDUCED-SCOPE** on
+> 2026-08-22 ([`wave-3-go-decision-2026-08-16.md`](../archive/wave-3-go-decision-2026-08-16.md)).
+> That signature ratifies the handler-dispatch RFC's V0.6 scope (identity middleware out,
+> dialectic stuck-session work in) and authorises one gate document, **not an
+> implementation start**. Read "committed to proceed" below in that light.
+
 ---
 
 ## V0.4 RESOLUTION 2026-06-25 — operator decision: Wave 3 committed; latency gate retired

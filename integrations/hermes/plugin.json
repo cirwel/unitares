@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "unitares",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Connect Hermes Agent to a running UNITARES accountability runtime over MCP.",
   "author": {
     "name": "CIRWEL",

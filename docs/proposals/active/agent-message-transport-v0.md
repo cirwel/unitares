@@ -6,6 +6,11 @@ predates this branch, so `/v1/msg/*` 404s there today. This document is the
 contract for those routes. It is deliberately *not* an amendment to
 `surface-lease-plane-v0.md`: leases and messages share a node, not a contract.
 
+> **Status re-read 2026-09-23 (proposals audit):** deployed. The live
+> `governance` database is at migration 70 and `lease_plane.topic_messages`
+> exists; the lease plane (`:8788`) serves `/v1/msg/*` behind its bearer gate.
+> The paragraph above records the state when this contract was written.
+
 ## 1. Why this exists
 
 Cross-harness agent messages (Claude↔Codex, later Fable) were carried as

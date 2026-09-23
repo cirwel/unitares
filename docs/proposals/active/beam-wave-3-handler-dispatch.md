@@ -2,6 +2,14 @@
 
 **Status:** **COMMITTED AND OPEN — no active implementation.** The commitment to proceed (V0.4, operator, 2026-06-25) stands. What is retired is one *design*: the (γ) narrow cut at `process_agent_update`, set aside 2026-06-28. Read the **V0.5 STATUS CORRECTION** for what a resumption should and should not carry forward, then **V0.6 SCOPE REDUCTION** for the proposed shape of that resumption. ⛔V0.6 is an **unratified proposal**; the title's three-leg scope is unchanged until the operator signs.
 
+> **Status re-read 2026-09-23 (proposals audit):** V0.6 is **no longer unratified.**
+> The operator signed GO-WITH-REDUCED-SCOPE on 2026-08-22
+> ([`wave-3-go-decision-2026-08-16.md`](../archive/wave-3-go-decision-2026-08-16.md) §4),
+> which ratifies this V0.6 scope reduction and **does not authorise an implementation
+> start**; the smaller gate ([`wave-3-reduced-scope-gate-v0.md`](wave-3-reduced-scope-gate-v0.md))
+> is owed first and is itself unratified. The V0.6 heading and the ⛔ lines inside it are the
+> text as proposed on 2026-08-17 and are kept unchanged.
+
 ## V0.6 SCOPE REDUCTION (2026-08-17) — PROPOSED, UNRATIFIED
 
 ⛔**Nothing here is a decision.** This section proposes the scope reduction that §11 criterion 8

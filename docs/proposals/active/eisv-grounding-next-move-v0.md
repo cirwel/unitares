@@ -14,6 +14,12 @@ tournament (5 seeded proposals → 3-judge panel → adversarial stress on the t
 > because its command used the contaminated all-anchor scope; the registered
 > read now fixes trusted anchors explicitly. The label-free recommendations here
 > still stand.
+>
+> **Re-read 2026-09-23 (proposals audit):** the TL;DR's "unwinnable … by
+> arithmetic" and §Do NOT's "no EISV feature beats the baseline" describe power
+> and a non-detection at the label supply of the time. They are not a negative
+> outcome result: the stop rule holds the outcome question **unresolved** pending
+> its registered 2026-12-01 read.
 
 ## TL;DR
 
