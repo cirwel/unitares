@@ -1,7 +1,8 @@
 # EISV outcome-grounding: scope correction and a stop rule
 
 Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17;
-power-characterisation correction, 2026-08-23
+power-characterisation correction, 2026-08-23; condition 4 clarification,
+2026-09-23
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -300,6 +301,156 @@ automatically.
 
 Do not adjust these thresholds after seeing the read. The point of writing them
 down now is that they were chosen before the data existed.
+
+### Pre-data clarification — 2026-09-23: what condition 4's "family" means
+
+PASS condition 4 above says the winning candidate must be "the same family as
+at this read's other lead slice". The word "family" appears nowhere else in
+this document and is mapped onto the candidate set in no code, test, or
+document (#2154). This block defines it before the registered cohort exists.
+It is a clarification of an undefined term, not a change to any threshold,
+cohort, cutoff, date, estimator, or command.
+
+**Definition.** For this read, condition 4 is met if and only if the
+`Best EISV/prior model` cell of the task / 365 d / lead 0 row is
+byte-identical to the `Best EISV/prior model` cell of the task / 365 d /
+lead 30 row in the matrix output of the single registered read
+(`--read-id eisv-outcome-grounding-2026-12-01`, or the one `-retry-<n>` id
+whose receipt the report discloses as the attempt that completed), and
+neither cell is `-`. "Family" therefore means the candidate's name as
+`scripts/analysis/eisv_ablation_matrix.py` prints it; two candidates are in
+the same family only when they are the same candidate. Nothing else is
+compared: not the feature a candidate reads, not its delta, not its
+confidence interval, and not the set of candidates that were fitted.
+
+**How it is applied.** The report quotes both cells verbatim and writes one
+of `condition 4: met (<name> at both leads)` or
+`condition 4: unmet (<name at lead 0> / <name at lead 30>)`. A `-` in either
+cell (no candidate/baseline delta was formable on that slice) is `unmet`,
+and the report writes `condition 4: unmet (- / <name>)` or
+`condition 4: unmet (<name> / -)` or `condition 4: unmet (- / -)` as the
+cells read. The comparison uses the registered read's output only; the
+pre-declared sensitivity cohort, any exploratory or reproduction read, and
+the output of any failed attempt play no part. Whether the two names happen
+to share an EISV feature may be reported as context; it does not decide the
+condition.
+
+**Why this reading.** (1) The condition's own rationale names the argmax:
+"an argmax that changes with a nuisance parameter is noise-mining." The
+argmax is a candidate name, so the stability asked for is stability of that
+name. (2) The pull request that registered this document (#1425, merged
+2026-07-31) described the fourth condition as "a stable argmax across
+leads"; this block restores that gloss. It is cited as the registering
+text's contemporaneous wording, not as a pre-data warrant: the same pull
+request body also reported the 2026-07-31 historical read. (3) It is
+decidable from two printed cells with no mapping table, so no analyst
+choice exists at read time, and the definition needs no knowledge of which
+candidates exist or were fitted: it reads the same under any candidate
+tuple. Whether the read may *run* under a changed tuple is a separate
+question, answered by the pin described below. (4) It is the most
+conservative reading available: every coarser partition admits winners the
+rationale would call unstable.
+
+**Candidate set at the time of this clarification, and the pin.** The
+winner is drawn from `EISV_PRIOR_STATE_MODELS` in
+`scripts/analysis/eisv_skeptic_report.py`, which at `master` `fb966bad`
+names seven candidates, in this order:
+`previous_bad_plus_prior_risk`, `prior_risk_binned`, `prior_phi_binned`,
+`prior_s_binned`, `prior_verdict`, `prior_eisv_dispersion_binned`,
+`previous_bad_plus_dispersion`. `global_bad_rate`, `previous_outcome_bad`
+(the baseline) and `reported_confidence_raw` are scored but are not
+candidates and cannot win. Selection among candidates is the lexicographic
+key `(beats_baseline, auc_delta, brier_improvement)` in
+`eisv_ablation_matrix.py`; `max` keeps the first maximal element, so the
+tuple's order is part of what selects.
+
+Alongside this clarification, a separately disclosed code change records
+these seven names, in this order, and `DISPERSION_FEATURE = "prior_s_disp"`
+on this protocol's entry in `REGISTERED_READ_MANIFEST`
+(`eisv_ablation_matrix.py`), taken from `master` `fb966bad`. From that
+change on, a `--read-protocol registered` read under this protocol's id (the
+registered id and its `-retry-<n>` forms) compares the live
+`eisv_skeptic_report` constants to the recorded values and refuses to read
+if either differs. A difference is therefore adjudicated by the CLI as a
+refusal to read; it is not disclosed and read through. The condition-4
+rule above does not depend on the pin; the read does. What the pin
+freezes, stated exactly: the candidate names, their order, and the
+dispersion feature name. What it does not freeze: what any candidate
+computes. The model constructors in `build_model_scores`, their binning,
+`min_feature_rows` (30), `MIN_DISPERSION_SNAPSHOTS` (5) and
+`DISPERSION_WINDOW_MINUTES` (90.0) remain governed only by the registered
+command's "run from a checkout of `master`". `score_deltas_vs_baseline`
+binds its `candidate_names` default when the module is imported, so the
+guard compares source constants: it detects a drifted checkout and is not
+a runtime guarantee about what a read computes.
+
+**Execution contract, strengthened.** The pin strengthens the registered
+execution contract rather than disclosing something about it: the command
+says "run from a checkout of `master`", and from the pin on, a `master`
+whose candidate tuple or dispersion feature has moved cannot run this read
+until the checkout is corrected or the manifest and this document are
+amended by pull request. The operator attests this strengthening on merge
+together with the clarification. Recovery path, so that a December refusal
+is not ambiguous between "protocol violation" and "nothing happened yet":
+the refusal is raised inside `validate_read_protocol`, which
+`record_read_receipt` calls as its first statement, before the ledger
+directory is created and before the receipt file is created with `O_EXCL`;
+`main_async` calls `record_read_receipt` before `build_matrix_from_db`. A
+read refused this way writes no receipt, consumes no read id, and touches
+no database. The same `eisv-outcome-grounding-2026-12-01` id is then used
+once the checkout is corrected or the manifest amended; the `-retry-<n>`
+rule above governs failures after a receipt exists and is not triggered.
+The refusal message names both the recorded and the live values; if a
+refusal occurs, the December report discloses it.
+
+**Disclosure of what was known when this was written.** The frozen
+2026-08-09 descriptive matrix was public when this block was written. On
+its two task-scope lead 0 / lead 30 pairs (30 d and 90 d windows, neither
+the registered 365 d window) the winning names differ
+(`prior_risk_binned` / `previous_bad_plus_dispersion` at 30 d;
+`prior_risk_binned` / `prior_s_binned` at 90 d), so this definition would
+have been unmet on every recorded pair. It is written with that fact in
+view and is not presented as chosen in ignorance of it. It was written
+before any access to the registered cohort; no live outcome read was
+performed to prepare it. A coarser feature-axis partition was considered
+and rejected (decision record:
+`docs/proposals/active/open-decisions-packet-v0.md`, item D4; audit: #2154);
+the adversarial design review of that packet split between the two
+readings, and the operator selected winner-name identity. The feature-axis
+partition would also have been unmet on every recorded pair, so the choice
+between the two readings changed no recorded verdict.
+
+**Smallest relevant effect.** The power-characterisation correction above
+records that no beta, AUC delta, or equivalent effect size fills the
+"predeclared smallest relevant effect" slot, and that the operator must
+declare one before any further live outcome-discrimination access. No
+declared value exists anywhere in this repository; this block records that
+slot as `[OPERATOR: declare value before any further live access]`. Until
+it is filled, the December read implements the operational stop rule and
+reports the scientific inference as `INCONCLUSIVE`, exactly as the gate
+already says; no agent-chosen value is substituted, and the unfilled slot
+bars any further live outcome-discrimination access until the operator
+declares one.
+
+**What this block does not do.** It does not alter conditions 1–3, the 150
+block threshold, the 0.05 level, the 400-resample null, the cohort, the
+fixture rule, the cutoff, the date, the command, or any estimator in
+`eisv_ablation_matrix.py` or `eisv_skeptic_report.py`. It authorises no
+read before 2026-12-01. It does not itself pin anything: recording the
+candidate names, their order and `DISPERSION_FEATURE` in
+`REGISTERED_READ_MANIFEST` is a separate, disclosed code change made
+alongside this clarification, and the rule above does not depend on it. It
+does not change `independent-operator-cohort-preregistration-v0.md`'s
+protocol; that document's "adopted verbatim" sentence is amended alongside
+this clarification so its reading of "family" agrees with this one, while
+its enrollment ledger is empty. It does not resolve the condition 1 →
+condition 2 redundancy at 400 resamples (#2154 §2) or the agent-stratified
+null question (#2154 §3).
+
+**Attestation.** Attested by the operator on merge as a clarification of an
+undefined term, not a weakening of the registered protocol (`CLAUDE.md`,
+"Measurement authority — what a number may decide", exemption for
+pre-registered scientific stop rules).
 
 ### Feasibility diagnostic for condition 3 — disclosure corrected 2026-08-23
 
