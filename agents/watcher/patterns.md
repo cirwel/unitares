@@ -310,14 +310,18 @@ force-pushed master and lost ~80 commits on the remote.
 
 **Hint template:** `destructive git op — requires explicit user approval`
 
-### P015 — Docker commands against retired containers (severity: medium, project-specific, violation_class: VOI)
+### P015 — Docker commands against the wrong database for this deployment (severity: medium, project-specific, violation_class: VOI)
 
-Any `docker exec postgres-age` or `docker-compose` command targeting the retired
-`postgres-age` container. The canonical database is Homebrew PostgreSQL@17 on
-port 5432. Docker postgres-age is retired; commands targeting it will either
-fail or hit stale data.
+Any `docker exec postgres-age` or `docker-compose` command targeting the
+`postgres-age` container. **This is a deployment mismatch, not a dead service:**
+`docker-compose.yml` ships `postgres-age` as the advertised one-command
+quickstart (Postgres 18 + AGE + pgvector, built from
+`db/postgres/Dockerfile.age-vector`) and CI exercises it. But *this* deployment's
+canonical database is Homebrew PostgreSQL@17 on port 5432, so a command aimed at
+the container reaches a different database than the live one — empty or stale
+relative to what the operator means, rather than failing outright.
 
-**Hint template:** `docker postgres-age retired — use homebrew psql on 5432`
+**Hint template:** `docker postgres-age is the quickstart DB, not this deployment's — use homebrew psql on 5432`
 
 ### P016 — Nested-success-false swallowed in envelope parsing (severity: high, violation_class: INT)
 
