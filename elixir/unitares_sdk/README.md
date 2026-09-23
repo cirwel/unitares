@@ -58,8 +58,11 @@ would be false economy:
 
 ## Use
 
-Not on Hex, by the same reasoning that keeps the Python SDK off PyPI: GitHub is
-already load-bearing for this fleet, and a package index is a new third party.
+Not on Hex: GitHub is already load-bearing for this fleet, and a package index
+is a new third party. This is a decision about *this* SDK only — the Python SDK
+is **not** a precedent for it. `unitares-sdk` publishes to PyPI from
+`.github/workflows/publish-sdk.yml` on an `sdk-v*` tag, via PyPI Trusted
+Publishing.
 
 Pin by `ref`, not `branch` — cross-repo version skew is this fleet's most
 reliable failure mode, and two live services already run from different commits

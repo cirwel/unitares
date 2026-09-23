@@ -713,6 +713,28 @@ def test_joining_native_clean_publishes_one_durable_ci_trigger(repo, monkeypatch
     assert "fresh reaction" in posted[0][2]
 
 
+def test_published_review_evidence_cannot_dispatch_incidental_bot_commands(monkeypatch):
+    posted = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kwargs: posted.append(kwargs["input"]))
+    rg.post_record(1, rg.Record("k", "CLEAN", 0, False, "codex-native"), "CLEAN",
+                   "Reviewed commit: abc1234\nExample: @codex review or @CODEX address that feedback.")
+    assert "@codex" not in posted[0].lower()
+    assert "Reviewed commit: abc1234" in posted[0]
+    assert "Example: Codex review or Codex address that feedback." in posted[0]
+    assert rg.parse_record(posted[0]).verdict == "CLEAN"
+
+
+def test_native_receipt_write_racing_a_push_cannot_complete_an_old_diff(monkeypatch):
+    posted = []
+    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", "url", "clean evidence")
+    monkeypatch.setattr(rg, "post_record", lambda *args: posted.append(True))
+    # The remote diff changes during the receipt write. The final validation
+    # must observe that change, not reuse a successful pre-publication check.
+    monkeypatch.setattr(rg, "completed_review_exit", lambda *args: rg.UNREVIEWED if posted else 0)
+    assert rg.finish_record("o/r", 1, "k", "h", clean, []) == rg.UNREVIEWED
+    assert posted == [True]
+
+
 def test_sweep_records_native_clean_without_starting_another_review(repo, monkeypatch):
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
     monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
