@@ -50,8 +50,8 @@ for autonomic regulation.**
 
 ## Contract
 
-**EISV is proprioception**: runtime self-state telemetry about agent strain,
-coherence, entropy, integrity, and imbalance. It is the system saying "my balance
+**EISV serves a proprioceptive engineering role**: it is a runtime self-state
+estimate about agent strain, coherence, entropy, integrity, and imbalance. It is the system saying "my balance
 is changing" or "this process is running hot," not a court deciding whether a
 worker was morally bad.
 
@@ -541,15 +541,17 @@ The distinction is operational, not vocabulary:
 - **Proprioception has an external referent.** There is a true joint angle, so
   acuity is scored as error against it. An axis in this class is validated by
   agreement with something outside itself.
-- **Interoception has no external referent** and is organised around homeostatic
-  setpoints, which is why it is intrinsically valenced. Its standard measurement
-  model (Garfinkel et al. 2015) splits into three dissociable dimensions:
+- **Interoceptive constructs are not generally defined by one externally correct
+  state value** and are often organised around homeostatic setpoints. Some
+  interoceptive measurements still use physiological referents. The Garfinkel
+  et al. (2015) measurement model, for example, splits into three dissociable
+  dimensions:
   **accuracy** (performance against a physiological referent), **sensibility**
   (self-report), and **awareness** (confidence–accuracy correspondence). An axis
   in this class is validated by reliability, faithfulness and calibration, never
   by outcome agreement, because there is no outcome for it to agree with.
 
-This document's prose was already interoceptive throughout — "running hot",
+This document's prose has long used interoceptive analogies — "running hot",
 "running careful", brittle, scattered, residual-from-own-baseline, and
 "deviation inside a healthy basin is room to learn". A basin can be interpreted
 operationally as a setpoint region; proprioception itself has no setpoints. Only
@@ -582,8 +584,9 @@ by letting EISV create its own labels. The repair is to repoint the referent at
 the external signals E already ingests, not to rebuild the script.
 
 **S — validatable today, entirely offline.** Drift norm, regime-transition
-counting and complexity divergence are self-relative dynamics with no correct
-value, which is what makes S a homeostatic reading rather than a positional one.
+counting and complexity divergence are self-relative dynamics with no single
+externally correct value. That makes a homeostatic interpretation plausible as
+research context, rather than establishing S itself as a homeostatic construct.
 That removes outcome agreement from its regime and leaves the two checks the
 interpretability and observability literatures actually use: test–retest
 reliability (same state, same reading) and faithfulness under intervention
