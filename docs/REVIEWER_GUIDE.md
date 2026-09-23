@@ -248,10 +248,13 @@ BEAM harness lane excluded:
   demonstrated.**
 - **What the non-detection does not say.** A `NON_DETECTION` slice cannot
   distinguish "no association" from "an association this cohort is too small to
-  resolve". The instrument's power on a cohort of this shape is measured in
+  resolve". The corrected
   [`operations/falsifiability-power-audit-2026-08-23.md`](operations/falsifiability-power-audit-2026-08-23.md)
-  by `scripts/analysis/ablation_power_probe.py`. Quote the p-values with that
-  power figure, or the reader will hear a demonstrated negative.
+  withdraws its original power table and explains why the preserved evidence
+  cannot establish read-specific power for this frozen cohort. Report the
+  p-values with that unresolved power limitation. The corrected synthetic
+  procedure in `scripts/analysis/ablation_power_probe.py` supplies no valid
+  historical power number for this slice.
 
 This does not validate EISV, establish predictive lift, or create a standing AUC
 bound. It is a reproducible dated descriptive snapshot after best-candidate

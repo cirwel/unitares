@@ -2,6 +2,10 @@
 
 Frozen protocols and protocols that register at their introducing merge. Preserve their registration, amendment and stop rules. **Placement here does not enroll a cohort, authorize execution, or re-register anything.** Three rows still carry the index’s dated Active tag; their bodies specify registration at merge.
 
+Some bodies preserve their original “DRAFT” or “proposed” headers. Read the
+registration clause and the operative sections linked below before acting;
+the dated index tag supplies no execution authority.
+
 [Proposal guide](../README.md) · [Migration inventory](../../dev/proposals-layout-2347.json)
 
 ## Accountability and calibration protocols
@@ -19,7 +23,7 @@ Frozen protocols and protocols that register at their introducing merge. Preserv
 
 | Document | Status |
 |---|---|
-| [`eisv-outcome-grounding-stop-rule-v0.md`](eisv-outcome-grounding-stop-rule-v0.md) | **Registered** · Registered 2026-12-01 read (proposed 2026-07-31; evidence-scope correction 2026-08-17). The [fixture-rule decision packet](../archive/outcome-fixture-conflation-decision-packet-v0.md) governs what the read does with post-cutoff rows. Never re-run or refreshed |
+| [`eisv-outcome-grounding-stop-rule-v0.md`](eisv-outcome-grounding-stop-rule-v0.md) | **Registered** · Fixed 2026-12-01 read. The historical “proposed” header is preserved; the [Summary](eisv-outcome-grounding-stop-rule-v0.md#summary) states the operative decision and the [pre-registered gate](eisv-outcome-grounding-stop-rule-v0.md#pre-registered-gate) binds execution. The [fixture-rule decision packet](../archive/outcome-fixture-conflation-decision-packet-v0.md) governs post-cutoff rows. Never re-run or refresh the registered read |
 | [`legacy-coherence-dependency-ablation-v0.md`](legacy-coherence-dependency-ablation-v0.md) | **Registered** · Prospective shadow contract, 2026-08-12; a distinct v0.1 shadow with the corrected fixture rule was registered beside it 2026-09-02 |
-| [`independent-operator-cohort-preregistration-v0.md`](independent-operator-cohort-preregistration-v0.md) | **Active** · DRAFT protocol that registers at the merge commit of its PR; amended 2026-09-02 before any enrollment |
+| [`independent-operator-cohort-preregistration-v0.md`](independent-operator-cohort-preregistration-v0.md) | **Active** · Original DRAFT header preserved. Its registration-at-merge clause took effect with [#1785](https://github.com/cirwel/unitares/pull/1785), merge commit `4907e926` (2026-08-21); amended 2026-09-02 before any enrollment. The [separate ledger](../active/independent-operator-cohort-enrollments.md) records enrollment and window starts |
 | [`self-improvement-loop-evaluation-v0.md`](self-improvement-loop-evaluation-v0.md) | **Active** · DRAFT protocol that registers at the merge commit of its PR |

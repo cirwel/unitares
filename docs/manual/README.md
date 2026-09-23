@@ -33,7 +33,7 @@ surface and not the agent runtime itself.
 
 ### Two fast paths
 
-- **Operator, "just make it run":** [Quickstart](../../README.md#quickstart) (Docker) → [3 · Running the server](03-running-the-server.md). Bare-metal instead: [2 · Installation](02-install.md).
+- **Operator, "just make it run":** [Install](../../README.md#install) (Docker) → [3 · Running the server](03-running-the-server.md). Bare-metal instead: [2 · Installation](02-install.md).
 - **Integrator, "I have a server, wire my agent":** [4 · Integrating agents](04-integrating-agents.md) → [5 · Reading the signals](05-reading-the-signals.md).
 
 ## Chapters

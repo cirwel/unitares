@@ -34,6 +34,11 @@ capability. Canonical correction:
 > proposed precision-weighted update rule.
 **Companion to:** `docs/REVIEWER_GUIDE.md` (§ Falsifiability), `scripts/analysis/eisv_skeptic_report.py`, `docs/EISV_COMPUTATION.md`, `docs/ontology/glossary.md` (FEP roadmap).
 
+**Reading note (2026-09-23):** The implementation note below preserves the
+2026-06-20 plan; the 2026-06-22 result above records its execution. For the
+standing outcome-read contract, follow the
+[registered stop rule](../registered/eisv-outcome-grounding-stop-rule-v0.md#pre-registered-gate).
+
 > **Implementation note (2026-06-20).** Probe A landed in the harness: the
 > dispersion-window `LATERAL` join, the `prior_*_disp` fields on `OutcomeRow`, the
 > `prior_eisv_dispersion_binned` + `previous_bad_plus_dispersion` models, the
