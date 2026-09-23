@@ -1,0 +1,106 @@
+"""risk_attribution must describe what happened to the self-reported drift.
+
+The MCP check-in handler passes ethical_drift as an ndarray, which the drift
+blend's list/tuple test rejects, so on that path the report never enters the
+vector. Direct Python callers passing a list do get the capped blend. The
+attribution text has to be true on both paths.
+"""
+
+import uuid
+
+import numpy as np
+
+from src.governance_monitor import UNITARESMonitor
+
+TEXT = "Implemented the requested change and ran the focused tests; they pass."
+
+
+def _attribution(ethical_drift, warm_updates=0, sensor_eisv=None):
+    monitor = UNITARESMonitor(f"test-attr-self-report-{uuid.uuid4().hex[:12]}", load_state=False)
+    for _ in range(warm_updates):
+        monitor.process_update(
+            {"parameters": np.array([]), "ethical_drift": [0.0, 0.0, 0.0],
+             "response_text": TEXT, "complexity": 0.5},
+            confidence=0.7,
+        )
+    result = monitor.process_update(
+        {
+            "parameters": np.array([]),
+            "ethical_drift": ethical_drift,
+            "response_text": TEXT,
+            "complexity": 0.5,
+            **({"sensor_eisv": sensor_eisv, "sensor_eisv_source": "behavioral"} if sensor_eisv else {}),
+        },
+        confidence=0.7,
+    )
+    return result["risk_attribution"]
+
+
+def _texts(attribution):
+    return attribution["sources"]["phi_drift"]["description"] + " " + attribution.get("note", "")
+
+
+def test_mcp_path_ndarray_report_is_described_as_not_entering():
+    text = _texts(_attribution(np.array([1.0, 1.0, 1.0])))
+    assert "did not enter" in text
+    assert "was blended" not in text
+
+
+def test_direct_list_report_is_described_as_blended():
+    text = _texts(_attribution([1.0, 1.0, 1.0]))
+    assert "was blended in at a capped 30%" in text
+    assert "did not enter" not in text
+
+
+def test_zero_report_is_described_as_not_entering():
+    text = _texts(_attribution([0.0, 0.0, 0.0]))
+    assert "did not enter" in text
+
+
+def test_warm_blended_report_is_not_called_independent():
+    attribution = _attribution([1.0, 1.0, 1.0], warm_updates=5)
+    assert attribution["primary_driver"] == "behavioral_assessment"
+    assert "not independent of your report" in attribution["note"]
+
+
+def test_warm_mcp_path_report_keeps_independent_wording():
+    attribution = _attribution(np.array([1.0, 1.0, 1.0]), warm_updates=5)
+    assert attribution["primary_driver"] == "behavioral_assessment"
+    assert "independent behavioral assessment" in attribution["note"]
+
+
+def test_warm_blended_report_with_supplied_sensor_keeps_independent_wording():
+    # A supplied sensor_eisv is used directly and never reads the drift norm.
+    attribution = _attribution(
+        [1.0, 1.0, 1.0], warm_updates=5,
+        sensor_eisv={"E": 0.7, "I": 0.7, "S": 0.3, "V": 0.0},
+    )
+    assert "independent behavioral assessment" in attribution["note"]
+    assert "not independent" not in attribution["note"]
+
+
+def test_short_history_fallback_keeps_independent_wording():
+    # Check-in 3: behavioral confidence reaches 0.3 but the sensor still has
+    # too little history, so the continuity fallback supplies the observation.
+    third = _attribution([1.0, 1.0, 1.0], warm_updates=2)
+    assert third["primary_driver"] == "behavioral_assessment"
+    assert "not independent" not in third["note"]
+    # From check-in 4 the sensor has history and reads the blended norm.
+    fourth = _attribution([1.0, 1.0, 1.0], warm_updates=3)
+    assert "not independent of your report" in fourth["note"]
+
+
+def test_zero_report_after_a_fed_report_mentions_the_carryover():
+    monitor = UNITARESMonitor(f"test-attr-carry-{uuid.uuid4().hex[:12]}", load_state=False)
+    def update(drift):
+        return monitor.process_update(
+            {"parameters": np.array([]), "ethical_drift": drift,
+             "response_text": TEXT, "complexity": 0.5},
+            confidence=0.7,
+        )["risk_attribution"]
+    for _ in range(5):
+        update([0.0, 0.0, 0.0])
+    assert "not independent of your report" in update([1.0, 1.0, 1.0])["note"]
+    after = update([0.0, 0.0, 0.0])["note"]
+    assert "earlier blended reports did" in after
+    assert "independent behavioral assessment" not in after

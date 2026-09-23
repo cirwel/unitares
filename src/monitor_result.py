@@ -171,6 +171,9 @@ def _build_risk_attribution(
     baseline_status: Dict = None,
     *,
     behavioral_confidence=None,
+    self_report_blended: bool = False,
+    self_report_fed_behavioral: bool = False,
+    self_report_ever_fed_behavioral: bool = False,
 ) -> Dict:
     """Decompose the risk/verdict by signal provenance.
 
@@ -213,11 +216,19 @@ def _build_risk_attribution(
         "provenance": "computed",
         "description": (
             "Norm of the ethical-drift vector that feeds the Φ telemetry. It is "
-            ">=70% server-derived (coherence deviation, complexity divergence, "
-            "calibration error, decision-consistency); the agent's self-reported "
-            "ethical_drift is blended at a capped 30% and only when nonzero — a "
-            "[0,0,0] report contributes nothing. Φ is telemetry by default, so "
-            "this drives the live verdict only pre-warmup (the cold-start prior)."
+            "server-derived (coherence deviation, complexity divergence, "
+            "calibration error, decision-consistency). "
+            + (
+                "The agent's self-reported ethical_drift was blended in at a "
+                "capped 30% on this check-in. "
+                if self_report_blended
+                else "The agent's self-reported ethical_drift did not enter "
+                "this vector on this check-in; on the MCP check-in path it "
+                "currently never does, so a [1,1,1] report and a [0,0,0] "
+                "report are scored the same. "
+            )
+            + "Φ is telemetry by default, so this drives the live verdict only "
+            "pre-warmup (the cold-start prior)."
         ),
         "ethical_drift_norm": (
             float(drift_vector.norm)
@@ -272,11 +283,32 @@ def _build_risk_attribution(
             "verification and policy maturity records."
         )
     elif primary_driver == "behavioral_assessment":
-        note = (
-            "This verdict is the independent behavioral assessment (EMA residuals "
-            "vs this agent's own baseline + absolute floors). Φ and your reported "
-            "ethical_drift are telemetry here, not the driver."
-        )
+        if self_report_fed_behavioral:
+            # A blended report reaches the verdict only when the monitor's own
+            # behavioral sensor built this observation from the drift norm
+            # (40% of S). Not with a supplied sensor_eisv, and not on the
+            # short-history fallback.
+            note = (
+                "This verdict is the behavioral assessment (EMA residuals vs this "
+                "agent's own baseline + absolute floors). Your self-reported "
+                "ethical_drift was blended into the drift norm on this check-in, "
+                "and that norm feeds the behavioral S estimate, so on this path "
+                "the assessment is not independent of your report."
+            )
+        elif self_report_ever_fed_behavioral:
+            note = (
+                "This verdict is the behavioral assessment (EMA residuals vs this "
+                "agent's own baseline + absolute floors). Your self-reported "
+                "ethical_drift did not feed this check-in's observation, but "
+                "earlier blended reports did, and the smoothed state still "
+                "carries a decaying share of them."
+            )
+        else:
+            note = (
+                "This verdict is the independent behavioral assessment (EMA "
+                "residuals vs this agent's own baseline + absolute floors). Φ and "
+                "your reported ethical_drift are telemetry here, not the driver."
+            )
     elif primary_driver == "phi_floor":
         note = (
             "Behavioral is warm but Φ-telemetry is disabled (non-default): the "
@@ -287,9 +319,13 @@ def _build_risk_attribution(
         note = (
             "Behavioral baseline not yet warm (confidence < 0.3): the verdict uses "
             "the Φ cold-start prior, computed mostly from server-derived signals "
-            "(complexity divergence, coherence, calibration). Your self-reported "
-            "ethical_drift contributes a capped <=30% blend only when nonzero; the "
-            "independent behavioral signal is not yet weighted."
+            "(complexity divergence, coherence, calibration). "
+            + (
+                "Your self-reported ethical_drift was blended in at a capped 30%; "
+                if self_report_blended
+                else "Your self-reported ethical_drift did not enter it; "
+            )
+            + "the independent behavioral signal is not yet weighted."
         )
 
     attribution = {
@@ -441,6 +477,13 @@ def build_result(
         behavioral_assessment,
         baseline_status=_baseline_status,
         behavioral_confidence=getattr(_beh, 'confidence', None),
+        self_report_blended=bool(getattr(monitor, '_last_self_report_blended', False)),
+        self_report_fed_behavioral=bool(
+            getattr(monitor, '_last_self_report_fed_behavioral', False)
+        ),
+        self_report_ever_fed_behavioral=bool(
+            getattr(monitor, '_self_report_ever_fed_behavioral', False)
+        ),
     )
 
     if task_type_adjustment:

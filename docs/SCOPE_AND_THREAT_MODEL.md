@@ -52,8 +52,12 @@ Absolute safety floors still apply on top of that.
 **Before the behavioral channel reaches confidence 0.3** (check-ins 1–2), the
 verdict comes from the Φ cold-start prior: computed mostly
 from server-derived signals (complexity divergence, coherence, calibration), with
-any self-reported `ethical_drift` only a capped ≤30% blend and the independent
-behavioral signal telemetry-only. Described-behavior semantics don't fully register
+the independent behavioral signal telemetry-only. A self-reported `ethical_drift`
+does not currently enter the drift vector, Φ, or the verdict in any phase. A
+capped 30% blend is implemented but has never run on the check-in path, because
+the handler passes the vector as an array that the blend's type check rejects
+(found 2026-09-23). Whether self-reports should affect the decision at all is an
+open policy question, so the blend has deliberately not been repaired. Described-behavior semantics don't fully register
 until check-in 3; self-relative scoring still waits until check-in 25.
 
 State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral
