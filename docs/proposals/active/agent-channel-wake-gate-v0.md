@@ -15,6 +15,12 @@ failure the go-decision's amendment-before-signature ordering was built to
 prevent. This gate borrows Wave 3's *discipline* and none of its
 *permission*. It belongs to the agent-orchestrator / dispatch surface.
 
+> **Re-read 2026-09-23 (proposals audit):** piece A below is framed against a
+> governance-KG-backed channel. The KG mailbox has since been superseded by the
+> lease-plane message transport ([`agent-message-transport-v0.md`](agent-message-transport-v0.md),
+> `/v1/msg/*`, deployed). The disconfirmers and piece A's scope need re-deriving
+> against that transport before this gate is put up for signature.
+
 ## 1. What is proposed
 
 Cross-vendor agent-to-agent messaging with **wake**, in two separable
