@@ -492,6 +492,11 @@ def test_native_clean_expires_on_changed_head_or_retarget(repo):
     assert not rg.native_records([comment], [], [], [], "k", newer).records
     events = [{"event": "base_ref_changed", "created_at": "2026-09-23T12:12:00Z"}]
     assert not rg.native_records([comment], [], [], events, "k", head).records
+    # Completion after retarget is also ambiguous: it may have started before
+    # the base changed. Native artifacts only name the head, not that base.
+    events[0]["created_at"] = "2026-09-23T12:11:00Z"
+    snapshot = rg.native_records([comment], [], [], events, "k", head)
+    assert not snapshot.records and snapshot.unavailable_reason
 
 
 def test_unbound_clean_or_completed_activity_cannot_pass(repo):
@@ -566,13 +571,14 @@ def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkey
     assert len(posted) == 1 and f"head={head} key=k" in posted[0]
 
 
-def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch):
+@pytest.mark.parametrize("running", [False, True])
+def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch, running):
     head = _git(repo, "rev-parse", "HEAD")
     marker = f"<!-- {rg.NATIVE_REQUEST} head={head} key=k -->"
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [{"author_association": "OWNER", "body": marker,
                                                         "created_at": "2000-01-01T00:00:00Z"}])
-    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], running=running))
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("duplicate request"))
     assert rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", head) is None
 

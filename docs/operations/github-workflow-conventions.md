@@ -165,8 +165,10 @@ posted again on each sweep. `--reviewer` explicitly selects the local path;
 
 The adapter recognizes the official Codex bot's submitted reviews and explicit
 clean comments naming the reviewed commit. It validates abbreviated hashes
-against local git objects and invalidates evidence on a new head or later
-base retarget. Bare reactions, a "Completed" activity row, and absence of
+against local git objects and invalidates evidence on a new head. Retargeted
+PRs use local review because native artifacts identify the head but not the
+reviewed base; even a completion arriving after retarget may have reviewed
+the earlier base. Bare reactions, a "Completed" activity row, and absence of
 findings are not sufficient. Findings remain open across later clean results
 or outages until individually disposed. CI consumes native evidence without
 starting a model, regardless of the local opt-in setting.
