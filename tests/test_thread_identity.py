@@ -69,6 +69,15 @@ class TestInferSpawnReason:
             False,
         )
 
+    def test_explicit_lineage_reason_without_parent_is_kept(self):
+        # A declared reason is a declaration even with no parent: the
+        # no-parent short-circuit must not swallow it.
+        reason = infer_spawn_reason(
+            {"spawn_reason": "compaction", "client_hint": "claude-code"},
+            existing_nodes=[{"agent_id": "prev"}],
+        )
+        assert reason == "compaction"
+
     def test_parent_agent_id_present(self):
         reason = infer_spawn_reason(
             {"parent_agent_id": "some-uuid"},
@@ -261,6 +270,23 @@ class TestBuildForkContext:
         assert "they are not your predecessors" in ctx["honest_message"]
         assert "share a registry UUID" not in ctx["honest_message"]
         assert "no child UUID minted" not in ctx["honest_message"]
+
+    def test_minted_fresh_does_not_change_a_lineage_fork_message(self):
+        ctx = build_fork_context(
+            thread_id="t-lineage",
+            position=2,
+            parent_uuid="parent",
+            spawn_reason="explicit",
+            all_nodes=[
+                {"agent_id": "parent", "thread_position": 1},
+                {"agent_id": "child", "thread_position": 2},
+            ],
+            agent_uuid="child",
+            minted_fresh=True,
+        )
+        assert ctx["episode_fork_kind"] == "identity_lineage"
+        assert "declared parent parent" in ctx["honest_message"]
+        assert "they are not your predecessors" not in ctx["honest_message"]
 
     def test_resumed_uuid_keeps_r6_sibling_message(self):
         ctx = build_fork_context(
