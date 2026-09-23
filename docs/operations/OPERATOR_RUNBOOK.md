@@ -21,12 +21,25 @@ To verify the database the server actually uses, run
 `./scripts/diagnostics/check_health.sh` below, with one caveat. It reads
 `DB_POSTGRES_URL` only from the shell environment and falls back to localhost.
 It does not load `.env`, which `start_server.sh` does. If the URL is set only in
-`.env`, pass it explicitly:
+`.env`, load it into a subshell with the same loop `start_server.sh` uses, so
+the check sees exactly what the server sees:
 
 ```bash
-DB_POSTGRES_URL="$(grep -E '^DB_POSTGRES_URL=' .env | cut -d= -f2-)" \
+(
+  # Same parsing as scripts/ops/start_server.sh: skip comments and blank
+  # lines, trim whitespace around the key, keep everything after the first "=".
+  while IFS='=' read -r key value; do
+    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+    key=$(echo "$key" | xargs); [[ -z "$key" ]] && continue
+    export "$key=$value"
+  done < .env
   ./scripts/diagnostics/check_health.sh
+)
 ```
+
+A hand-written `grep` for the variable is not a substitute. It misses forms the
+server accepts, such as whitespace around the key, and an empty result makes
+the check fall back to localhost without saying so.
 
 If you already know dependencies are ready and only want the server:
 
