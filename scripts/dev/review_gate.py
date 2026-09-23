@@ -14,7 +14,7 @@ test-cache.sh made the test run one.
     dispose        post dispositions for a FINDINGS record, clearing it
     key            print the diff key for HEAD
     sweep          review one quiet PR, including drafts, without a current review
-    ci             (workflow only) set the `review` commit status on a PR head
+    ci             (workflow only) set the `review` evidence check on a PR head
 
 The diff key
 ------------
@@ -33,9 +33,9 @@ access. The latest record whose key matches the head decides the status:
 
     CLEAN                          -> success
     FINDINGS(n) with dispositions  -> success
-    FINDINGS(n) without            -> pending   (fix, or `dispose`)
-    FAILED                         -> pending   (UNREVIEWED: reviewer unavailable)
-    no matching record             -> pending   (run the review)
+    FINDINGS(n) without            -> action_required (fix, or `dispose`)
+    FAILED                         -> neutral warning (UNREVIEWED)
+    no matching record             -> neutral warning (run the review)
 
 A failed or expired run is recorded as FAILED, never as clean: absence of
 findings from a reviewer that did not finish is not a review.
@@ -51,8 +51,8 @@ access. Treat a `record` whose reviewer is the PR's own author as no review.
 
 Cost
 ----
-The CI side reads comments with GITHUB_TOKEN and calls no model. The review
-itself runs locally through a CLI the operator already has (`codex`,
+The CI side reads comments with GITHUB_TOKEN and calls no model. Native Codex is operator opt-in (`git config review.native true`), with a
+bounded wait and local fallback. Otherwise the review runs through a CLI the operator already has (`codex`,
 `claude`); `record` takes any review text, so a contributor with no model at
 all can satisfy the gate with a human review. No metered API is on the
 required path (AGENTS.md, execution-cost policy).
@@ -72,6 +72,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 MARKER = "unitares-review v1"
@@ -83,6 +84,9 @@ PROVIDER_COOLDOWN_S = 3600
 UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
+CODEX_BOT = "chatgpt-codex-connector[bot]"
+NATIVE_REQUEST = "unitares-native-review v1"
+NATIVE_WAIT_S = 600
 
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
@@ -160,6 +164,7 @@ class Record:
     reviewer: str
     url: str = ""
     text: str = ""
+    created_at: str = ""
 
     def status(self) -> tuple[str, str]:
         if self.verdict == "CLEAN":
@@ -193,7 +198,8 @@ def parse_record(body: str) -> Record | None:
         return None
 
 
-def latest_matching(comments: list[dict], key: str) -> Record | None:
+def latest_matching(comments: list[dict], key: str,
+                    native: list[Record] = ()) -> Record | None:
     """The record that decides `key`'s status. Comments arrive oldest first.
 
     Normally the latest trusted record. But findings on a diff stay open until
@@ -201,7 +207,7 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
     diff — a re-run that came back quieter or crashed, or a `record` — does not
     clear or hide them, or re-rolling the reviewer would drop a finding silently.
     """
-    found, open_findings = None, []
+    records = []
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
             continue
@@ -212,25 +218,163 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
                 rec.disposed = False
             rec.url = c.get("html_url", "")
             rec.text = body
-            found = rec
-            if rec.verdict == "FINDINGS":
-                # A disposition answers ONE findings record — the most recent
-                # open one, with the same count — never every earlier one.
-                if not rec.disposed:
-                    open_findings.append(rec)
-                elif open_findings and open_findings[-1].findings == rec.findings:
-                    open_findings.pop()
-                else:
-                    rec.disposed = False  # answers nothing that is open
-                    open_findings.append(rec)
+            rec.created_at = c.get("created_at", "")
+            records.append(rec)
+    records.extend(rec for rec in native if rec.key == key)
+    found, completed, open_findings = None, None, []
+    for rec in sorted(records, key=lambda r: timestamp(r.created_at)):
+        found = rec
+        if rec.verdict != "FAILED":
+            completed = rec
+        if rec.verdict == "FINDINGS":
+            # A disposition answers ONE findings record, not every earlier one.
+            if not rec.disposed:
+                open_findings.append(rec)
+            elif open_findings and open_findings[-1].findings == rec.findings:
+                open_findings.pop()
+            else:
+                rec.disposed = False
+                open_findings.append(rec)
     # Open findings decide the status whatever came after them on this diff —
     # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
-    return open_findings[-1] if open_findings else found
+    return open_findings[-1] if open_findings else completed or found
 
 
 def pr_comments(repo: str, pr: int) -> list[dict]:
-    pages = gh_json("api", "--paginate", "--slurp", f"repos/{repo}/issues/{pr}/comments")
+    return api_pages(f"repos/{repo}/issues/{pr}/comments")
+
+
+def api_pages(endpoint: str) -> list[dict]:
+    pages = gh_json("api", "--paginate", "--slurp", endpoint)
     return [c for page in pages for c in page]
+
+
+def timestamp(value: str) -> float:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() if value else 0
+
+
+def is_codex_bot(item: dict) -> bool:
+    user = item.get("user") or {}
+    return user.get("login") == CODEX_BOT and user.get("type") == "Bot"
+
+
+def reviewed_head(short: str, head: str) -> bool:
+    # Native clean comments use ten hex digits; activity summaries use seven.
+    # Require an unambiguous object resolution, not merely a matching prefix.
+    return bool(re.fullmatch(r"[0-9a-f]{7,40}", short) and head.startswith(short)
+                and git("rev-parse", "--verify", f"{short}^{{commit}}", check=False).strip() == head)
+
+
+@dataclass
+class NativeReview:
+    records: list[Record]
+    running: bool = False
+
+
+def native_records(comments: list[dict], reviews: list[dict], inline: list[dict],
+                   events: list[dict], key: str, head: str) -> NativeReview:
+    """Normalize observed Codex GitHub artifacts. A reaction is never evidence.
+
+    Native completion is accepted only with an explicit reviewed commit. A
+    retarget after review invalidates it even when the head SHA stayed put.
+    Completed activity alone says nothing about whether findings were posted.
+    """
+    cutoff = max((timestamp(e.get("created_at", "")) for e in events
+                  if e.get("event") in {"base_ref_changed", "base_ref_force_pushed"}), default=0)
+    result = NativeReview([])
+    for c in comments:
+        if not is_codex_bot(c):
+            continue
+        body = c.get("body") or ""
+        when = c.get("updated_at") or c.get("created_at", "")
+        if timestamp(when) <= cutoff:
+            continue
+        commit = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]+)`", body, re.M)
+        if (re.match(r"^Codex Review: Didn['’]t find any major issues\.", body)
+                and commit and reviewed_head(commit[1], head)):
+            result.records.append(Record(key, "CLEAN", 0, False, "codex-native",
+                                         c.get("html_url", ""), body, when))
+        if "<!-- codex-pull-request-review-summary -->" in body:
+            for line in body.splitlines():
+                fields = line.split("|")
+                if len(fields) < 5 or "**Code Review**" not in fields[1]:
+                    continue
+                commit = re.search(r"`([0-9a-f]+)`", fields[3])
+                if commit and reviewed_head(commit[1], head):
+                    result.running |= any(word in fields[2] for word in ("**Running**", "**Queued**"))
+    for review in reviews:
+        when = review.get("submitted_at") or ""
+        if (not is_codex_bot(review) or review.get("commit_id") != head
+                or review.get("state") == "PENDING" or timestamp(when) <= cutoff):
+            continue
+        findings = [c for c in inline if c.get("pull_request_review_id") == review["id"]
+                    and is_codex_bot(c)]
+        clean = review.get("state") == "APPROVED" and not findings
+        # A submitted/dismissed review with no explicit approval stays visible,
+        # including when someone deleted its inline comments. Never infer clean.
+        text = "\n\n".join(f"{i}. {c.get('path')}:{c.get('line') or c.get('original_line')} "
+                            f"{c.get('body', '')}\n{c.get('html_url', '')}"
+                            for i, c in enumerate(findings, 1)) or review.get("body", "")
+        result.records.append(Record(key, "CLEAN" if clean else "FINDINGS",
+                                     0 if clean else max(1, len(findings)), False,
+                                     "codex-native", review.get("html_url", ""), text, when))
+    return result
+
+
+def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> NativeReview:
+    reviews = api_pages(f"repos/{repo}/pulls/{pr}/reviews")
+    inline = api_pages(f"repos/{repo}/pulls/{pr}/comments") if reviews else []
+    events = api_pages(f"repos/{repo}/issues/{pr}/events")
+    return native_records(comments, reviews, inline, events, key, head)
+
+
+def native_enabled() -> bool:
+    # Operator opt-in: no cloud/model service is required by a default install.
+    return git("config", "--bool", "review.native", check=False).strip() == "true"
+
+
+def current_record(repo: str, pr: int, key: str, head: str,
+                   comments: list[dict], *, native: bool = True) -> Record | None:
+    records = read_native(repo, pr, key, head, comments).records if native else []
+    return latest_matching(comments, key, records)
+
+
+def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
+    """Join cloud review; request it once for drafts missed by automatic review.
+
+    The caller holds the shared diff lock. A durable head+diff request marker
+    also prevents later sweeps from repeatedly mentioning the bot after an
+    outage. Unknown formats/absence/timeout fall back; none mean clean.
+    """
+    started = time.monotonic()
+    deadline = started + min(NATIVE_WAIT_S, args.budget)
+    request_marker = f"<!-- {NATIVE_REQUEST} head={head} key={key} -->"
+    requested = False
+    print("[review] joining native Codex review (bounded wait; local fallback available)", flush=True)
+    while time.monotonic() < deadline:
+        if gh_json("pr", "view", str(pr), "--json", "headRefOid")["headRefOid"] != head:
+            return Record(key, "FAILED", 0, False, "PR head changed; rerun review.sh")
+        comments = pr_comments(repo, pr)
+        snapshot = read_native(repo, pr, key, head, comments)
+        existing = latest_matching(comments, key, snapshot.records)
+        if existing and existing.verdict != "FAILED":
+            return existing
+        requests = [c for c in comments if c.get("author_association") in TRUSTED_ASSOCIATIONS
+                    and request_marker in (c.get("body") or "")]
+        requested |= bool(requests)
+        if requests and not snapshot.running and all(
+                time.time() - timestamp(c.get("created_at", "")) >= NATIVE_WAIT_S for c in requests):
+            break
+        if not snapshot.running and not requested and time.monotonic() - started >= 30:
+            body = (f"@codex review\n\nReview the current draft diff at `{head}`. "
+                    "The author owns fixes and readiness.\n\n" + request_marker + "\n")
+            subprocess.run(["gh", "pr", "comment", str(pr), "--body-file", "-"],
+                           input=body, text=True, capture_output=True, check=True)
+            requested = True
+            print("[review] requested native review for this head and diff", flush=True)
+        time.sleep(min(10, max(0, deadline - time.monotonic())))
+    print("[review] native review did not produce completed evidence in time; using local fallback")
+    return None
 
 
 def dispositions_complete(text: str, n: int) -> bool:
@@ -442,6 +586,7 @@ class review_lock:
 def cmd_review(args) -> int:
     pr, repo, key, branch = _resolve(args)
     reviewer = args.reviewer or default_reviewer(branch)
+    head = git("rev-parse", "HEAD").strip()
     deadline = time.monotonic() + args.budget
     joined = False
     while True:
@@ -450,8 +595,17 @@ def cmd_review(args) -> int:
                 # Re-read AFTER acquiring: a ship/sweep review may have posted
                 # while we waited. Joining it must return its actual result.
                 comments = pr_comments(repo, pr)
-                existing = (None if args.fresh and not joined else
-                            latest_matching(comments, key))
+                native = native_enabled()
+                try:
+                    existing = current_record(repo, pr, key, head, comments, native=native)
+                except SystemExit as exc:
+                    print(f"[review] WARNING: native evidence unavailable: {exc}")
+                    native = False
+                    existing = latest_matching(comments, key)
+                # --fresh can re-review a clean result; it cannot hide findings.
+                if (args.fresh and not joined and existing
+                        and not (existing.verdict == "FINDINGS" and not existing.disposed)):
+                    existing = None
                 if existing and (joined or existing.verdict != "FAILED"):
                     state, desc = existing.status()
                     print(f"[review] already recorded for this diff: {desc}\n{existing.url}")
@@ -461,6 +615,18 @@ def cmd_review(args) -> int:
                     return 0 if state == "success" else 1
                 args.failed_providers = {p for p in ("claude", "codex")
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
+                if native and not args.reviewer and not args.fresh:
+                    native_start = time.monotonic()
+                    try:
+                        rec = join_native(args, repo, pr, key, head)
+                    except (SystemExit, subprocess.SubprocessError) as exc:
+                        print(f"[review] WARNING: native review unavailable: {exc}")
+                        rec = None
+                    if rec:
+                        print(f"[review] {rec.status()[1]}\n{rec.url}\n{rec.text}")
+                        return (UNREVIEWED if rec.verdict == "FAILED"
+                                else 0 if rec.status()[0] == "success" else 1)
+                    args.budget = max(0, args.budget - int(time.monotonic() - native_start))
                 return review_with_fallback(args, pr, key, reviewer)
         if not joined:
             print("[review] joining the review already running for this diff…", flush=True)
@@ -505,7 +671,7 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
         print(f"[review] {provider} did not complete; checking remaining reviewers", flush=True)
     print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
           "this blocker and next action; retry scripts/dev/review.sh or record "
-          "an independent code review with record <file> --reviewer-name <who>.")
+          "an independent code review with record <file> --reviewer-name <who> --independent.")
     return UNREVIEWED
 
 
@@ -540,7 +706,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     else:
         print(text.strip()[-2000:])  # expose quota/auth/startup failures to the author
         print("[review] independent code reviews can also be recorded with: "
-              "scripts/dev/review.sh record <file> --reviewer-name <who>")
+              "scripts/dev/review.sh record <file> --reviewer-name <who> --independent")
     state, desc = rec.status()
     print(f"[review] {desc}")
     if rec.verdict == "FINDINGS":
@@ -569,7 +735,8 @@ def cmd_record(args) -> int:
 
 def cmd_dispose(args) -> int:
     pr, repo, key, _ = _resolve(args)
-    prior = latest_matching(pr_comments(repo, pr), key)
+    prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(),
+                           pr_comments(repo, pr), native=native_enabled())
     if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
         raise SystemExit("review_gate: no open FINDINGS record for this diff to dispose")
     text = Path(args.file).read_text()
@@ -643,7 +810,11 @@ def cmd_sweep(args) -> int:
             continue  # pushed since the listing; next run
         key = diff_key(f"origin/{base}", head)
         comments = pr_comments(repo, n)
-        rec = latest_matching(comments, key)
+        try:
+            rec = current_record(repo, n, key, head, comments, native=native_enabled())
+        except SystemExit as exc:
+            print(f"[sweep] WARNING: native evidence unavailable: {exc}")
+            rec = latest_matching(comments, key)
         if rec is not None and not (rec.verdict == "FAILED" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
@@ -673,6 +844,40 @@ def cmd_key(args) -> int:
     return 0
 
 
+def review_check(rec: Record | None) -> tuple[str, str]:
+    if rec is None:
+        return "neutral", "UNREVIEWED: author should run scripts/dev/review.sh (drafts included)"
+    if rec.verdict == "FAILED":
+        return "neutral", rec.status()[1]
+    if rec.verdict == "FINDINGS" and not rec.disposed:
+        return "action_required", rec.status()[1]
+    return "success", rec.status()[1]
+
+
+def post_check(repo: str, pr: int, head: str, conclusion: str, description: str,
+               url: str) -> None:
+    """Use neutral for outages; commit statuses cannot represent a warning."""
+    external_id = f"unitares-review:{pr}:{head}"
+    pages = gh_json("api", "--paginate", "--slurp",
+                    f"repos/{repo}/commits/{head}/check-runs?check_name={STATUS_CONTEXT}&filter=all")
+    existing = [c for page in pages for c in page.get("check_runs", [])
+                if c.get("external_id") == external_id
+                and (c.get("app") or {}).get("slug") == "github-actions"]
+    payload = {"name": STATUS_CONTEXT, "head_sha": head, "external_id": external_id,
+               "status": "completed", "conclusion": conclusion,
+               "output": {"title": description, "summary": f"{description}\n\n{url}"}}
+    if url:
+        payload["details_url"] = url
+    endpoint = f"repos/{repo}/check-runs"
+    method = "POST"
+    if existing:
+        endpoint += f"/{existing[0]['id']}"
+        method = "PATCH"
+        payload.pop("head_sha")
+    subprocess.run(["gh", "api", "--method", method, endpoint, "--input", "-"],
+                   input=json.dumps(payload), text=True, capture_output=True, check=True)
+
+
 # --------------------------------------------------------------------------
 # CI side: never executes PR code. The workflow checks out the BASE branch
 # (this script) and fetches the PR head only as git objects to hash.
@@ -690,19 +895,22 @@ def cmd_ci(args) -> int:
         f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}",
         f"+refs/pull/{pr}/head:refs/review-gate/head")
     key = diff_key(f"origin/{base_ref}", head)
-    rec = latest_matching(pr_comments(repo, pr), key)
+    comments = pr_comments(repo, pr)
+    try:
+        rec = current_record(repo, pr, key, head, comments)
+    except SystemExit as exc:
+        print(f"::warning::Native review evidence unavailable: {exc}")
+        rec = latest_matching(comments, key)
     if rec is None:
-        state, desc = "pending", "author: run scripts/dev/review.sh to start/join review (drafts included)"
         url = f"https://github.com/{repo}/blob/{base_ref}/docs/operations/github-workflow-conventions.md#review-workflow"
     else:
-        (state, desc), url = rec.status(), rec.url
-    print(f"PR #{pr} head {head[:12]} key {key[:12]}: {state} — {desc}")
+        url = rec.url
+    conclusion, desc = review_check(rec)
+    print(f"PR #{pr} head {head[:12]} key {key[:12]}: {conclusion} — {desc}")
+    if conclusion == "neutral":
+        print(f"::warning::{desc}")
     if args.post_status:
-        fields = ["-f", f"state={state}", "-f", f"context={STATUS_CONTEXT}",
-                  "-f", f"description={desc[:140]}"]
-        if url:
-            fields += ["-f", f"target_url={url}"]
-        _run(["gh", "api", "--method", "POST", f"repos/{repo}/statuses/{head}", *fields])
+        post_check(repo, pr, head, conclusion, desc, url)
     return 0
 
 
@@ -735,9 +943,10 @@ def main(argv: list[str] | None = None) -> int:
     sw.add_argument("--quiet-minutes", type=int, default=15)
     sw.add_argument("--dry-run", action="store_true")
 
-    c = sub.add_parser("ci", help="workflow: set the review status on a PR head")
+    c = sub.add_parser("ci", help="workflow: set the review evidence check on a PR head")
     c.add_argument("--repo", required=True)
-    c.add_argument("--post-status", action="store_true")
+    c.add_argument("--post-check", "--post-status", dest="post_status", action="store_true",
+                   help="publish a review check (legacy --post-status spelling is accepted)")
 
     args = p.parse_args(argv)
     if args.cmd == "ci" and args.pr is None:

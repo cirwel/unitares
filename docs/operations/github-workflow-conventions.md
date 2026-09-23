@@ -67,8 +67,9 @@ is the merge gate.
 - A draft PR means "visible, not claiming merged." **Merging** is the
   operator's deliberate action. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
-  actually passed — CI green (the `review` check included: see "Review
-  workflow" below), no collision with an in-flight branch.
+  actually passed — CI green, a completed review with findings addressed (see
+  "Review workflow" below), and no collision with an in-flight branch. A
+  neutral UNREVIEWED warning is not review completion.
 - **Readiness is agent-declared, never operator-inferred.** The operator
   pressing merge in order cannot verify content and should not have to
   guess doneness: a PR still in draft is "still working — hands off," even
@@ -102,11 +103,14 @@ the test run one.
   runs the same command without waiting for an operator prompt. If a review
   is already running, the command joins its result instead of treating
   "started" as "finished". A bounded wait that expires reports incomplete.
-- The `review` commit status (`.github/workflows/review-gate.yml`) is green
-  when the latest record for the PR's **current diff** is `CLEAN`, or
-  `FINDINGS(n)` with dispositions. Undisposed findings or no record leave it
-  pending; a reviewer that crashed or ran out of time records `FAILED`,
-  never clean.
+- The `review` check (`.github/workflows/review-gate.yml`) succeeds when a
+  review for the PR's **current diff** is `CLEAN`, or `FINDINGS(n)` has
+  dispositions. Unresolved findings produce `action_required`. Missing review
+  or reviewer failure produces a **neutral UNREVIEWED warning**, with the
+  author's next action. An outage is never a clean review or a failing test.
+  This check replaces the legacy commit status; old heads may still show
+  that historical status until the next push. GitHub branch protections are
+  separate and are not changed by this workflow.
 - Findings: fix and push (the new diff is reviewed), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
@@ -142,6 +146,41 @@ cooldown shared across worktrees; the other provider is tried immediately.
 restored. Findings stop routing: another model cannot erase an inconvenient
 review. Separate output directories preserve each attempt.
 
+Native Codex is an optional default for an operator who has enabled GitHub
+code review. On this operator's UNITARES repo, the 2026-09-23 pilot used
+**Review team PRs / Every push**, with exhaustive review and credit overage
+left off. Enable the author/sweep integration in the shared local repository:
+
+```bash
+git config review.native true
+```
+
+`review.sh` first reads native completion evidence for the current commit. If
+nothing has started after 30 seconds, it posts one `@codex review` request
+bound to the head and diff; this covers drafts that automatic review misses.
+It waits up to ten minutes within the total review budget before using the
+local fallback. Existing requests are reused, and an expired request is not
+posted again on each sweep. `--reviewer` explicitly selects the local path;
+`--fresh` can re-review clean evidence but cannot bypass unresolved findings.
+
+The adapter recognizes the official Codex bot's submitted reviews and explicit
+clean comments naming the reviewed commit. It validates abbreviated hashes
+against local git objects and invalidates evidence on a new head or later
+base retarget. Bare reactions, a "Completed" activity row, and absence of
+findings are not sufficient. Findings remain open across later clean results
+or outages until individually disposed. CI consumes native evidence without
+starting a model, regardless of the local opt-in setting.
+
+Native review focuses on major correctness issues. Consult is still useful
+for focused design advice; council/dialectic remains an optional escalation.
+Neither becomes an extra mandatory review step.
+
+Pilot evidence: [draft #2340 native completion](https://github.com/cirwel/unitares/pull/2340#issuecomment-5794562451)
+named its reviewed commit after an explicit request. Automatic review did not
+start on the initial draft of #2352 during the pilot; the command-owned request
+is therefore necessary for this workflow. See the PR for subsequent push and
+fallback validation.
+
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
 (`review.sh --background`) is useful while the agent does other work, but the
@@ -168,10 +207,10 @@ locked checkout supplies PR context. Logs are in
 `~/Library/Logs/unitares-review-sweep.log`. Merely having `review-sweep.sh` on
 disk is not evidence that the job is installed or running.
 
-The `review` status describes review evidence; it is separate from the test
-suite. A pending status asks the author to start/join review and links here.
-Readiness requires a completed review under this convention; whether the
-status also blocks GitHub merging is a repository protection setting.
+The `review` check describes review evidence; it is separate from the test
+suite. A neutral warning asks the author to start/join review and links here.
+Readiness still requires completed review. The sweep does not promote a draft
+merely because tests passed or because a warning is nonblocking.
 
 `ship.sh` enforces this. Its default `auto` route now opens a **draft PR for
 every change** — runtime, docs, or tests:
