@@ -2,8 +2,10 @@
 Auto-Resolve Stuck Dialectic Sessions
 
 Automatically handles sessions that are stuck/inactive for >2 hours.
-First attempts reviewer re-assignment, then marks awaiting facilitation,
-and only fails sessions after extended inactivity (4+ hours total).
+At ANTITHESIS it first attempts reviewer re-assignment, then marks awaiting
+facilitation; at SYNTHESIS it marks awaiting facilitation without reassigning
+(the verdict's author keeps review authority). Sessions are only failed after
+extended inactivity (4+ hours total).
 """
 
 from datetime import datetime, timedelta, timezone
@@ -210,7 +212,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     For each stuck session:
     1. If reviewer is gone and phase is ANTITHESIS: try auto re-assignment
     2. If no replacement available: mark awaiting_facilitation (not FAILED)
-    3. Only mark FAILED after extended inactivity (4+ hours)
+    3. If phase is SYNTHESIS: mark awaiting_facilitation, never reassign
+    4. Only mark FAILED after extended inactivity (4+ hours)
 
     Returns:
         Dict with counts of resolved/reassigned sessions and details
@@ -317,6 +320,13 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 continue
 
             check_time = _parse_timestamp(session.get("updated_at") or session.get("created_at"))
+
+            # Set by the phase branches below when this session should ask
+            # for a human instead of falling through to the reap. The request
+            # itself is recorded once, after the branches, so both phases
+            # share one guarded write path.
+            facilitation_reason: str | None = None
+            facilitation_note: str | None = None
 
             # For ANTITHESIS phase: try reviewer re-assignment
             if phase in ("antithesis", "ANTITHESIS") and reviewer_agent_id:
@@ -455,112 +465,156 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                         except Exception as e:
                             logger.warning(f"Could not persist reviewer reassignment for {session_id[:16]}: {e}")
 
-                    # No replacement found — record a standing facilitation
-                    # request if not too old.
-                    #
-                    # ⛔PERSIST THE FLAG, don't just narrate it. Until 2026-08-26
-                    # this branch appended the message, counted a facilitation
-                    # and returned — while `awaiting_facilitation` stayed false
-                    # in the row, because nothing here wrote it. Two costs, both
-                    # measured by replaying the sweeper over one stuck session:
-                    #
-                    #   1. `add_message` inserts into dialectic_messages and does
-                    #      NOT touch dialectic_sessions.updated_at (no trigger;
-                    #      migration 003), so the row kept looking stuck and this
-                    #      branch re-fired every sweep — three cycles, three
-                    #      identical transcript messages, `facilitation_count`
-                    #      counting cycles rather than sessions.
-                    #   2. At the 4h timeout the row was reaped with
-                    #      `awaiting_facilitation=false`, so `reopen_session` and
-                    #      `_apply_reviewer_reassignment` — both of which key on
-                    #      that flag — read it as an ordinary failure and refused
-                    #      to revive it. That is the same dead-end #1577 closed
-                    #      for requests raised at THESIS through the handler;
-                    #      requests the SWEEPER raises at ANTITHESIS never had
-                    #      the flag to be rescued by.
-                    #
-                    # The re-entry guard is what keeps the request to one
-                    # message and one count: `mark_awaiting_facilitation`
-                    # deliberately leaves `updated_at` alone (see its
-                    # docstring), so the row stays in the stuck set and this
-                    # branch is re-entered on every sweep — which is what keeps
-                    # `select_reviewer` retrying while a human is waited on.
-                    if check_time and check_time > fail_time and not awaiting_facilitation:
-                        try:
-                            write_attempt_count += 1
-                            recorded = await mark_awaiting_facilitation_async(session_id)
-                        except Exception as e:
-                            # Guarded like the neighbouring DB writes: this
-                            # runs inside the per-session loop of a sweep that
-                            # has already committed reaps, and letting it reach
-                            # the outer handler would discard their counts and
-                            # report the whole cycle as an error. Skip the
-                            # session; the next sweep retries it.
-                            logger.warning(
-                                f"Could not record facilitation request for "
-                                f"{session_id[:16]}: {e}"
-                            )
-                            continue
-                        if not recorded:
-                            # Guarded UPDATE wrote nothing — another writer
-                            # finished this session (dual-writer TOCTOU) or the
-                            # row is gone. Same posture as the refused reviewer
-                            # write above: don't narrate, don't count.
-                            logger.info(
-                                f"Session {session_id[:16]} facilitation write refused "
-                                "(row terminal or missing); request not recorded"
-                            )
-                            skipped_count += 1
-                            details.append({
-                                "session_id": session_id,
-                                "action": "write_refused",
-                                "attempted": ATTEMPT_AWAITING_FACILITATION,
-                            })
-                            await emit_write_refused(
-                                session_id=session_id,
-                                attempted=ATTEMPT_AWAITING_FACILITATION,
-                                paused_agent_id=paused_agent_id,
-                                source="sweeper",
-                            )
-                            continue
-                        _sync_cached_session(session_id, awaiting_facilitation=True)
-                        _overlap = await _probe_write_overlap(
-                            session_id, ATTEMPT_AWAITING_FACILITATION, paused_agent_id
-                        )
-                        if _overlap == "detected":
-                            overlap_detected_count += 1
-                        elif _overlap == "probe_failed":
-                            overlap_probe_failed_count += 1
-                        await emit_facilitation_needed(
-                            session_id=session_id,
-                            paused_agent_id=paused_agent_id,
-                            phase=phase,
-                            reason="reviewer_unresponsive",
-                        )
-                        try:
-                            await add_message_async(
-                                session_id=session_id,
-                                agent_id="system",
-                                message_type="system",
-                                reasoning=f"Reviewer '{reviewer_agent_id}' unresponsive. Awaiting human facilitation.",
-                            )
-                        except Exception as e:
-                            # Narration only. The request is committed; do not
-                            # unwind it, and do not fall through to the reap.
-                            logger.warning(f"Could not add facilitation message for {session_id[:16]}: {e}")
-                        facilitation_count += 1
-                        details.append({
-                            "session_id": session_id,
-                            "paused_agent_id": paused_agent_id,
-                            "phase": phase,
-                            "action": "awaiting_facilitation",
-                            "stuck_reviewer": reviewer_agent_id,
-                        })
-                        logger.info(
-                            f"Session {session_id[:16]} awaiting human facilitation "
-                            f"(reviewer {reviewer_agent_id} unresponsive)"
-                        )
-                        continue  # Don't fail yet — give human time
+                    # No replacement found — ask for a human (recorded below).
+                    facilitation_reason = "reviewer_unresponsive"
+                    facilitation_note = (
+                        f"Reviewer '{reviewer_agent_id}' unresponsive. Awaiting human facilitation."
+                    )
+
+            # For SYNTHESIS phase: ask for a human, never reassign (#2202).
+            #
+            # A reviewer that delivered a verdict and then went silent leaves the
+            # session here, and until this branch existed the sweeper never
+            # looked at it: the row fell straight through to FAILED at 2h while
+            # an ANTITHESIS stall got the 4h operator window above. The escape
+            # already exists — `handle_reassign_reviewer` admits any phase once
+            # `awaiting_facilitation` is set, and `_apply_reviewer_reassignment`
+            # rewinds to ANTITHESIS so the incoming reviewer gets a turn — but
+            # nothing raised the flag, so nobody could use it.
+            #
+            # ⛔NOT reusing the reassignment path above. The protocol requires
+            # the SAME reviewer to revise its own verdict; a replacement chosen
+            # by the sweeper carries a new identity that never formed the
+            # objection, and letting it revise the verdict writes a completed
+            # review that no reviewer completed. Handing that authority over is
+            # an operator's act, so the sweeper raises the request and stops.
+            #
+            # Deliberately NOT gated on the reviewer's stored status. That field
+            # is what `reviewer_status` reports and it read "active" on the live
+            # instance while the reviewer process was gone — a stored field, not
+            # a liveness probe. The reviewer's own continuation wait is 1h
+            # (`DEFAULT_CONTINUATION_WAIT_S`), so a SYNTHESIS row idle past the
+            # 2h stuck threshold has already outlived the window in which the
+            # reviewer could come back on its own. The sweeper does not load
+            # the transcript and cannot tell which party owes the move, so the
+            # note says what was observed and no more.
+            elif phase in ("synthesis", "SYNTHESIS") and reviewer_agent_id:
+                facilitation_reason = "synthesis_stalled"
+                facilitation_note = (
+                    f"Session stalled in SYNTHESIS with reviewer '{reviewer_agent_id}' "
+                    "(no message from either party past the stuck threshold). "
+                    "Awaiting human facilitation."
+                )
+
+            # Record a standing facilitation request if not too old.
+            #
+            # ⛔PERSIST THE FLAG, don't just narrate it. Until 2026-08-26
+            # this branch appended the message, counted a facilitation
+            # and returned — while `awaiting_facilitation` stayed false
+            # in the row, because nothing here wrote it. Two costs, both
+            # measured by replaying the sweeper over one stuck session:
+            #
+            #   1. `add_message` inserts into dialectic_messages and does
+            #      NOT touch dialectic_sessions.updated_at (no trigger;
+            #      migration 003), so the row kept looking stuck and this
+            #      branch re-fired every sweep — three cycles, three
+            #      identical transcript messages, `facilitation_count`
+            #      counting cycles rather than sessions.
+            #   2. At the 4h timeout the row was reaped with
+            #      `awaiting_facilitation=false`, so `reopen_session` and
+            #      `_apply_reviewer_reassignment` — both of which key on
+            #      that flag — read it as an ordinary failure and refused
+            #      to revive it. That is the same dead-end #1577 closed
+            #      for requests raised at THESIS through the handler;
+            #      requests the SWEEPER raises at ANTITHESIS never had
+            #      the flag to be rescued by.
+            #
+            # The re-entry guard is what keeps the request to one
+            # message and one count: `mark_awaiting_facilitation`
+            # deliberately leaves `updated_at` alone (see its
+            # docstring), so the row stays in the stuck set and this
+            # branch is re-entered on every sweep — which is what keeps
+            # `select_reviewer` retrying while a human is waited on.
+            if (
+                facilitation_reason
+                and check_time and check_time > fail_time
+                and not awaiting_facilitation
+            ):
+                try:
+                    write_attempt_count += 1
+                    recorded = await mark_awaiting_facilitation_async(session_id)
+                except Exception as e:
+                    # Guarded like the neighbouring DB writes: this
+                    # runs inside the per-session loop of a sweep that
+                    # has already committed reaps, and letting it reach
+                    # the outer handler would discard their counts and
+                    # report the whole cycle as an error. Skip the
+                    # session; the next sweep retries it.
+                    logger.warning(
+                        f"Could not record facilitation request for "
+                        f"{session_id[:16]}: {e}"
+                    )
+                    continue
+                if not recorded:
+                    # Guarded UPDATE wrote nothing — another writer
+                    # finished this session (dual-writer TOCTOU) or the
+                    # row is gone. Same posture as the refused reviewer
+                    # write above: don't narrate, don't count.
+                    logger.info(
+                        f"Session {session_id[:16]} facilitation write refused "
+                        "(row terminal or missing); request not recorded"
+                    )
+                    skipped_count += 1
+                    details.append({
+                        "session_id": session_id,
+                        "action": "write_refused",
+                        "attempted": ATTEMPT_AWAITING_FACILITATION,
+                    })
+                    await emit_write_refused(
+                        session_id=session_id,
+                        attempted=ATTEMPT_AWAITING_FACILITATION,
+                        paused_agent_id=paused_agent_id,
+                        source="sweeper",
+                    )
+                    continue
+                _sync_cached_session(session_id, awaiting_facilitation=True)
+                _overlap = await _probe_write_overlap(
+                    session_id, ATTEMPT_AWAITING_FACILITATION, paused_agent_id
+                )
+                if _overlap == "detected":
+                    overlap_detected_count += 1
+                elif _overlap == "probe_failed":
+                    overlap_probe_failed_count += 1
+                await emit_facilitation_needed(
+                    session_id=session_id,
+                    paused_agent_id=paused_agent_id,
+                    phase=phase,
+                    reason=facilitation_reason,
+                )
+                try:
+                    await add_message_async(
+                        session_id=session_id,
+                        agent_id="system",
+                        message_type="system",
+                        reasoning=facilitation_note,
+                    )
+                except Exception as e:
+                    # Narration only. The request is committed; do not
+                    # unwind it, and do not fall through to the reap.
+                    logger.warning(f"Could not add facilitation message for {session_id[:16]}: {e}")
+                facilitation_count += 1
+                details.append({
+                    "session_id": session_id,
+                    "paused_agent_id": paused_agent_id,
+                    "phase": phase,
+                    "action": "awaiting_facilitation",
+                    "stuck_reviewer": reviewer_agent_id,
+                })
+                logger.info(
+                    f"Session {session_id[:16]} awaiting human facilitation "
+                    f"(reviewer {reviewer_agent_id}, {facilitation_reason})"
+                )
+                continue  # Don't fail yet — give human time
 
             # A session already awaiting human facilitation runs on the HUMAN's
             # clock, not the stuck-process clock. STUCK_SESSION_THRESHOLD (2h)
