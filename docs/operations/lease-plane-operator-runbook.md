@@ -84,11 +84,12 @@ Sentinel monitors the lease plane via `GET /v1/health` (RFC §7.7).
 
 **What the probe is**
 
-A successful `/v1/health` probe returns HTTP 200 with `ok`, `status`, and an
-`identity_binding` object carrying `mode`, `proof_format` and `metrics` (from
-`IdentityMetrics.snapshot()`). It does **not** carry `protocol_version` — that
-field belongs to the unauthenticated `/health` payload described above. A 200
-here proves:
+A successful `/v1/health` probe returns HTTP 200 with `ok`, `status`,
+`protocol_version`, and an `identity_binding` object carrying `mode`,
+`proof_format` and `metrics` (from `IdentityMetrics.snapshot()`).
+`protocol_version` is not in the route's own map: the shared `json/3` helper
+injects it into every response, and `elixir/lease_plane/test/health_test.exs`
+pins it for this route. A 200 here proves:
 1. Bandit/Plug router is up
 2. `HTTPAuth` plug accepts the configured `LEASE_PLANE_BEARER_TOKEN`
 3. The JSON envelope round-trips

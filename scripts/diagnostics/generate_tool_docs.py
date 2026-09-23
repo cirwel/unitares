@@ -125,7 +125,9 @@ class ToolDocExtractor:
 
     def scan_handlers(self):
         """Scan all handler files for @mcp_tool decorated functions."""
-        handler_files = list(self.handlers_dir.glob("*.py"))
+        # Recursive: most tools live in subpackages (admin/, identity/,
+        # lifecycle/, observability/, ...). A top-level-only glob found 4.
+        handler_files = list(self.handlers_dir.rglob("*.py"))
 
         for file_path in handler_files:
             if file_path.name.startswith('_'):
