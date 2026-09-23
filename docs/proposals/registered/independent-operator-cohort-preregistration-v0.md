@@ -5,7 +5,7 @@ introducing this file, after an adversarial design review (three independent
 passes: conceptual refutation, ground-truth verification against the live
 system, and stranger-executability; material findings incorporated below).
 Enrollment records live in the separate append-only file
-`independent-operator-cohort-enrollments.md`, so the registered protocol text
+[`independent-operator-cohort-enrollments.md`](../active/independent-operator-cohort-enrollments.md), so the registered protocol text
 never moves after merge. Amendments to this file after registration are
 listed in the Amendment log at the bottom and change nothing retroactively.
 Tracks [#1607](https://github.com/cirwel/unitares/issues/1607).
@@ -390,3 +390,7 @@ architecture docs — a usability result carries no evidence about either.
   Decision record: governed session `e4ebf589a1c79b9d`; mechanism: PR #2062
   and its follow-up. Rows written before this amendment are not affected
   because no cohort window had started.
+- **Editorial navigation correction, 2026-09-23.** Turned the enrollment
+  filename in the opening paragraph into a link to the separate ledger after
+  its relocation. No protocol version, threshold, enrollment, window, stop
+  rule, or authorization changed; the existing amendment above is preserved.

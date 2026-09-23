@@ -1,6 +1,6 @@
 # Proposal layout migration — issue #2347
 
-**Status:** Proposal-directory pilot; broader documentation moves wait for reader feedback.
+**Status:** Proposal-directory pilot; post-merge reader feedback incorporated without further directory moves.
 **Source:** `41dbf4f2` (2026-09-22), after the #2342 semantic migration closed.
 
 The proposal directory now has three reading paths: current work and operative
@@ -143,3 +143,73 @@ are recorded on [PR #2350](https://github.com/cirwel/unitares/pull/2350).
 The `operations/`, `ontology/`, `evaluation/`, `evaluations/`, and loose docs-root
 layout stay outside this pilot. Further moves depend on reader feedback from
 this proposal migration, as #2347 specifies.
+
+## Post-merge reader feedback — 2026-09-23
+
+Two fresh Codex contexts read the merged tree at
+`49143add79ee630a60549f9ba79f1ca9b62b3423`. One took an integrator's perspective
+(R1); the other took a research evaluator's perspective (R2). Neither opened
+this migration report, the issue, prior feedback, or the migration diff before
+reporting. Both read the required `AGENTS.md` bootstrap, which already points
+to some relevant architecture, proposal, and evidence documents. This was
+therefore **not a fully unprimed or blind exercise**.
+
+Starting at the root `README.md`, both readers followed explicit links into
+representative bodies. They did not use a repository-wide filename search to
+find the destinations; scoped text searches within already selected documents
+helped locate passages. These are their observed routes, with the shared
+`README.md` starting point omitted after the first row:
+
+| Requested category | Observed route |
+|---|---|
+| Product | Both: `README.md` → `docs/PRODUCT_DEFINITION.md` |
+| Architecture | Both reached `docs/UNIFIED_ARCHITECTURE.md`; R1's traversal ended there, while R2 continued to `docs/dev/CANONICAL_SOURCES.md` |
+| Current research | Both: `docs/README.md` → `proposals/active/README.md`; R1 continued to `eisv-core-boundary-v0.md`, R2 to `pcalm-primal-dual-governance-v0.md` |
+| Frozen protocols | Both: `docs/README.md` → `proposals/registered/README.md` → `eisv-outcome-grounding-stop-rule-v0.md` |
+| Historical results | R1: `docs/README.md` → `proposals/README.md` → `archive/README.md` → `eisv-distributional-signal-probe-v0.md`; R2: `docs/README.md` → `EVALUATION_INDEX.md` → that archived probe |
+
+Both reached all five categories without a category-route dead end. They
+distinguished current product mechanisms from demonstrated benefit, canonical
+architecture summaries from runtime authority, and proposal placement from
+permission to execute. R1 identified the core-boundary proposal's later
+sequencing restriction; R2 identified PCALM's blocked real-constraint replay.
+Both recognized the fixed outcome-read gate and the archived probe's withdrawn
+stronger conclusion. Reaching these distinctions sometimes required reading
+past a misleading entry summary.
+
+Additional traversals covered the manual and operator runbook, the reviewer
+guide, the frozen ablation and corrected power audit, and the review-correction
+trace sample. The readers treated dated evidence as a preserved record and
+did not infer causal benefit or a population rate from the selected review
+sample. R2 used the link already seen in the active index to find the cohort
+enrollment ledger because the protocol supplied only its filename.
+
+### Findings and changes
+
+| Reader finding | Follow-up |
+|---|---|
+| R1: the manual's Docker fast path pointed to a removed `#quickstart` anchor | Link to the root README's current `#install` heading. |
+| R1: the core-boundary index emphasized an implementation ceiling before the stricter later sequencing decision | Lead its active-index row with operative §12.1: documentation and the preservation harness may proceed; Stage 1 and Stage 2 runtime work wait, with no waiver. Link to the existing decision and authorization sections; leave the proposal body intact. |
+| R1: the archived distributional probe retained a live-sounding June 20 run instruction beneath its June 22 result | Add a dated reading note identifying the old plan and linking the standing stop rule. Preserve the original implementation blockquote and result text. |
+| R1: the reviewer guide instructed readers to quote a power figure that the corrected audit had withdrawn | State the unresolved read-specific power limitation; the corrected synthetic procedure does not supply a valid historical power number for that frozen slice. |
+| R2: the operations index called the frozen ablation result negative | Describe the selection-adjusted non-detection and unresolved read-specific power, matching the preserved evidence. |
+| R2: the docs index told most readers to skip `operations/`, although it holds essential evaluation evidence | Describe the directory's mixed role and point evaluators to the evidence and evaluation guides. |
+| R2: original DRAFT/proposed headers made registration state unclear at entry | Keep those historical headers and dated index tags; add operative-section links and explain the cohort protocol's registration-at-merge provenance in the registered index. Its introducing [PR #1785](https://github.com/cirwel/unitares/pull/1785) merged as `4907e926` on 2026-08-21. |
+| R2: the cohort protocol supplied no direct enrollment link; R2 relied on the earlier active-index route | Turn that filename into a relative link to the separate active enrollment ledger and record the editorial correction in the required amendment log; change no protocol clause or enrollment record. |
+
+### Decision and limits
+
+Keep the physical layout for now. These routes support the smaller navigation
+and inference corrections above; they supply no concrete reason for another
+directory move. Issue [#2347](https://github.com/cirwel/unitares/issues/2347)
+remains the coordination anchor for later feedback and any inventoried follow-up.
+The other documentation directories remain in place.
+
+This is bounded feedback from two technical agent contexts, not a human
+usability study, a before/after improvement measurement, a complete link audit,
+or live-system validation. Representative reads do not establish that every
+document is clear. No scientific analysis was rerun, no frozen read was
+refreshed, and no registration, stop rule, enrollment, or runtime authorization
+was changed. The cohort protocol edit repairs navigation only and adds a dated
+editorial amendment entry; its original header, registration clause, prior
+amendment entry, and substantive text remain.
