@@ -1,6 +1,6 @@
 """Instrument-preservation harness for the EISV check-in path.
 
-First implementation step of ``docs/proposals/eisv-core-boundary-v0.md`` (§8.1,
+First implementation step of ``docs/proposals/active/eisv-core-boundary-v0.md`` (§8.1,
 §14). It pins, against the current code and with no seam or flag present:
 
 1. what the estimator computes for fixed check-in sequences (golden file);
@@ -69,7 +69,7 @@ def test_estimator_trajectories_match_golden():
         f"The pinned EISV instrument changed: {difference}. Treat this as an "
         "instrument change, not a stale fixture. Before the registered "
         "2026-12-01 read's preservation horizon, regenerating the golden file "
-        "needs the operator decision in docs/proposals/eisv-core-boundary-v0.md "
+        "needs the operator decision in docs/proposals/active/eisv-core-boundary-v0.md "
         "§12.1."
     )
 

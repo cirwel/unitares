@@ -95,7 +95,7 @@ COORDINATION_FAILURE_BEAM_PYTHON_BOUNDARY_BEAM_TO_PYTHON_REQUEST_FAILED = (
     "coordination_failure.beam_python_boundary.beam_to_python_request_failed"
 )
 
-# Wave 3a stop-sign event types (RFC docs/proposals/resolved/beam-wave-3a-read-only-handlers.md
+# Wave 3a stop-sign event types (RFC docs/proposals/archive/beam-wave-3a-read-only-handlers.md
 # §4.2). PR #2 of v0.2 sequencing lands the constants ahead of PR #3's Python
 # transport per-tool routing table — the routing-table fallback path is the
 # first emitter of `coordination_failure.wave_3a.fallback`, the BEAM-side
@@ -139,7 +139,7 @@ COORDINATION_FAILURE_WAVE_3A_ENVELOPE_INVALID = (
     "coordination_failure.wave_3a.envelope_invalid"
 )
 
-# Wave 3 §14 prereq PR #1 (RFC docs/proposals/beam-wave-3-handler-dispatch.md
+# Wave 3 §14 prereq PR #1 (RFC docs/proposals/active/beam-wave-3-handler-dispatch.md
 # §8.4): shadow-window divergence, ETS↔PG reconciliation divergence, and the
 # cutover 503 circuit-breaker breach. Constants land ahead of their emitters
 # per the Wave 3a precedent — the shadow comparator runner

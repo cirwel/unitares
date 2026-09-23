@@ -1,7 +1,7 @@
 """Orchestrator-vouched identity — INERT proof-of-concept seam.
 
 ⚠ THIS MODULE IS NOT WIRED INTO IDENTITY RESOLUTION. It is the pure-logic seam
-for the design in ``docs/proposals/orchestrator-vouched-identity-v0.md`` (Wave 3,
+for the design in ``docs/proposals/archive/orchestrator-vouched-identity-v0.md`` (Wave 3,
 deferred to the 2026-06-24 gate read). Nothing here is referenced by
 ``src/mcp_handlers/identity/resolution.py``, the tier classifier
 (``identity_payloads.py``), or the strict write-gate (``phases.py``). Importing

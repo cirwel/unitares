@@ -100,7 +100,7 @@ not** drive verdicts.
 
 | Component | What it is | Key modules | Maturity |
 |---|---|---|---|
-| **Coordination / lease plane** | BEAM (Elixir/OTP) kernel for single-writer coordination + liveness on shared surfaces (Plexus). Port 8788, bearer-gated. | `lease_plane.*`, the `dispatch_beam` client | **PARTIAL** — advisory-first rollout; Wave 3a read-only cutovers live; Wave 3 proper is committed and open with no active implementation (see [`proposals/beam-wave-3-handler-dispatch.md`](proposals/beam-wave-3-handler-dispatch.md)) |
+| **Coordination / lease plane** | BEAM (Elixir/OTP) kernel for single-writer coordination + liveness on shared surfaces (Plexus). Port 8788, bearer-gated. | `lease_plane.*`, the `dispatch_beam` client | **PARTIAL** — advisory-first rollout; Wave 3a read-only cutovers live; Wave 3 proper is committed and open with no active implementation (see [`proposals/active/beam-wave-3-handler-dispatch.md`](proposals/active/beam-wave-3-handler-dispatch.md)) |
 | **Reference resident agents** | Specialized, optional governed clients; examples rather than Core internals or a general agent framework. | `agents/` and independently deployed residents | **LIVE** in the maintainer deployment |
 | **Substrate** | Durable truth | ONE Postgres = relational + Apache AGE 1.7 + pgvector; Redis = de-facto primary session store (not optional), being migrated to PG-mirror | **MATURE** |
 | **Surfaces** | How agents/humans reach it | MCP `/mcp/` · REST `/v1/tools/call` · Dashboard `/dashboard` · SDK · governance plugin (Claude Code/Codex hooks) · host-adapter | **LIVE** |

@@ -1,6 +1,6 @@
 """Soak read for the verification-floor shadow — a rate, with its denominator.
 
-The verification floor (`docs/proposals/verification-weighted-verdict-v0.md`)
+The verification floor (`docs/proposals/active/verification-weighted-verdict-v0.md`)
 ships default-off with its shadow default-ON, so every deployment that has not
 opted out is already computing the signal on every check-in. Its acceptance gate
 asks for "a real false-positive-regression pass on a larger benign corpus". Live

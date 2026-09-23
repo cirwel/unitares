@@ -207,6 +207,6 @@ yourself — the frozen rows live in
 and the synthetic negative-control path runs on a fresh clone with no deployment
 DB. What you should **not** do is re-run the live discrimination matrix against
 a deployment DB between registered reads: the
-[outcome-grounding stop rule](proposals/eisv-outcome-grounding-stop-rule-v0.md)
+[outcome-grounding stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
 reserves that for the registered execution, and an interim re-run is a selective
 re-read, not reviewer hygiene.

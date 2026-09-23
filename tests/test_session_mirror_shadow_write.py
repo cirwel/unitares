@@ -4,7 +4,7 @@ When UNITARES_SESSION_MIRROR_SHADOW is off (default), the mirror helpers must be
 no-ops. When on, they must dual-write to the PG mirror (best-effort: a DB failure
 is swallowed and never propagates to the live identity path).
 
-See docs/proposals/redis-retirement-phase-1-plan.md.
+See docs/proposals/archive/redis-retirement-phase-1-plan.md.
 """
 
 import sys

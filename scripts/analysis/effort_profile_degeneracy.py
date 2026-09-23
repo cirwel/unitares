@@ -2,7 +2,7 @@
 """Degeneracy check for the effort-profile label channel — REFUTED, no authority.
 
 REFUTED 2026-08-26 by three adversarial passes. See section 0 of
-docs/proposals/eisv-effort-profile-channel-v0.md. In short:
+docs/proposals/archive/eisv-effort-profile-channel-v0.md. In short:
 
   * The authority split this implements does not hold. `turns` was granted KILL
     authority for being judgement-free; `_is_human_turn` embeds four judgement
@@ -25,7 +25,7 @@ Original docstring follows.
 
 Degeneracy check for the effort-profile label channel (read-only, local files).
 
-Implements §14 of docs/proposals/eisv-effort-profile-channel-v0.md, whose
+Implements §14 of docs/proposals/archive/eisv-effort-profile-channel-v0.md, whose
 thresholds were committed before any corpus was measured. This script does not
 re-derive them and must not be edited to move them; a threshold change is a
 change to that section, reviewed as such.

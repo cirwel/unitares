@@ -319,7 +319,7 @@ def test_relative_link_check_covers_proposals(tmp_path, monkeypatch, doc_health)
     the repo. Against that, the exemption blinded the check across the live RFC
     thread, which is where records get moved into resolved/ — precisely the
     operation that breaks sibling links. A deliberately broken link in
-    docs/proposals/beam-wave-3-handler-dispatch.md passed the checker clean.
+    docs/proposals/active/beam-wave-3-handler-dispatch.md passed the checker clean.
 
     A genuine forward reference is still expressible: cite the doc by name
     without a link, the same convention already used for docs/handoffs/."""
@@ -395,11 +395,12 @@ def test_doc_referenced_from_index_not_orphan(tmp_path, monkeypatch, doc_health)
 def test_doc_referenced_only_from_code_not_orphan(tmp_path, monkeypatch, doc_health):
     """A doc cited from a source file (not any .md) is still reachable."""
     (tmp_path / "docs" / "proposals").mkdir(parents=True)
-    spec = tmp_path / "docs" / "proposals" / "lineage-causal-only-semantics.md"
+    spec = tmp_path / "docs" / "proposals" / "active" / "lineage-causal-only-semantics.md"
+    spec.parent.mkdir(parents=True, exist_ok=True)
     spec.write_text("design")
     src = tmp_path / "src"
     src.mkdir()
-    (src / "helpers.py").write_text("# see docs/proposals/lineage-causal-only-semantics.md\n")
+    (src / "helpers.py").write_text("# see docs/proposals/active/lineage-causal-only-semantics.md\n")
 
     monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
     assert doc_health.check_index_orphans([spec]) == []
@@ -530,7 +531,7 @@ def test_dated_review_record_retains_frozen_contract(
         tmp_path
         / "docs"
         / "proposals"
-        / "resolved"
+        / "archive"
         / "demotion-review-2026-08-16.md"
     )
     review.parent.mkdir(parents=True)
@@ -556,7 +557,7 @@ def test_dated_review_record_requires_substantive_reason(
         tmp_path
         / "docs"
         / "proposals"
-        / "resolved"
+        / "archive"
         / "demotion-review-2026-08-16.md"
     )
     review.parent.mkdir(parents=True)
@@ -689,13 +690,33 @@ def test_collect_md_files_skips_elixir_deps_and_build_dirs(tmp_path, monkeypatch
     assert doc_health.collect_md_files() == [real_doc]
 
 
+def test_proposal_archive_remains_in_doc_health_scan(tmp_path, monkeypatch, doc_health):
+    """Moving a proposal into the canonical archive must retain link coverage."""
+    canonical = tmp_path / "docs" / "proposals" / "archive" / "record.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("See [evidence](missing-evidence.md).\n")
+    for directory in ("archive", "docs/archive", "docs/proposals/active/archive"):
+        historical = tmp_path / directory / "old.md"
+        historical.parent.mkdir(parents=True)
+        historical.write_text("See [old](old-evidence.md).\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+
+    collected = doc_health.collect_md_files()
+    assert collected == [canonical]
+    warnings = doc_health.check_relative_links(collected)
+    assert len(warnings) == 1 and "missing-evidence.md" in warnings[0]
+    refs = doc_health._collect_md_basename_refs()
+    assert refs["missing-evidence.md"] == {"docs/proposals/archive/record.md"}
+    assert "old-evidence.md" not in refs
+
+
 # --- Relative-link checking must NOT skip docs/proposals/ --------------------
 #
 # The two link checks shared one skip set, so exempting `proposals` from
 # bare-filename drift also blinded the *relative link* check across the entire
 # live RFC thread. A broken `[text](path.md)` there went unreported: measured
 # 2026-08-16, a deliberately broken link in
-# docs/proposals/beam-wave-3-handler-dispatch.md passed the checker clean.
+# docs/proposals/active/beam-wave-3-handler-dispatch.md passed the checker clean.
 #
 # The rationales differ and so must the skip sets. Bare refs in planning docs
 # drift by design (23 such refs under proposals, e.g. the placeholder migration

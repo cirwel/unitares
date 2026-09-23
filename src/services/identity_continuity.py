@@ -101,7 +101,7 @@ def get_identity_continuity_status(
         # Split deliberately: the old flat "postgres" was false for the half that
         # matters operationally. Identities are durable in PG; live session
         # bindings are Redis-authoritative and are NOT mirrored durably yet
-        # (Redis-retirement Phase 1 — docs/proposals/redis-retirement-v0.md).
+        # (Redis-retirement Phase 1 — docs/proposals/archive/redis-retirement-v0.md).
         "source_of_truth": (
             "postgres (identities); redis (live session bindings)"
             if mode == "redis"

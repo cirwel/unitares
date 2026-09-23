@@ -139,7 +139,7 @@ viable bounds" as the prior art EISV's contract describes):
 - **Tschantz, Seth, Pezzulo (2022), *Biological Psychology*** — interoceptive
   control = minimizing prediction error (free energy) against set-points;
   homeostatic / **allostatic** / goal-directed. The allostatic branch is also
-  the named mechanism in `docs/proposals/genesis-baseline-aging-v0.md`.
+  the named mechanism in `docs/proposals/archive/genesis-baseline-aging-v0.md`.
 - **Interoceptive Machine Framework (2026), *Physics of Life Reviews*** — the
   closest architectural prior art: homeostatic/allostatic/enactive principles
   with concrete viability variables (energy, actuator strain, prediction-error

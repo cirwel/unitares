@@ -497,5 +497,5 @@ Repository evidence:
 - [`competitive-analysis-2026-06.md`](competitive-analysis-2026-06.md)
 - [Competitive claims map, PR #2256](https://github.com/cirwel/unitares/pull/2256)
 - [Cross-agent review of this audit, PR #2258](https://github.com/cirwel/unitares/pull/2258)
-- [`independent-operator-cohort-preregistration-v0.md`](../proposals/independent-operator-cohort-preregistration-v0.md)
-- [`independent-operator-cohort-enrollments.md`](../proposals/independent-operator-cohort-enrollments.md)
+- [`independent-operator-cohort-preregistration-v0.md`](../proposals/registered/independent-operator-cohort-preregistration-v0.md)
+- [`independent-operator-cohort-enrollments.md`](../proposals/active/independent-operator-cohort-enrollments.md)

@@ -1,7 +1,7 @@
 """General (closed-form) solution of the reduced 3-state EISV system.
 
-Companion to ``docs/proposals/eisv-general-solution-v0.md``. The reduced
-dynamics proposed in ``docs/proposals/eisv-grounded-coherence-rederivation-v0.md``
+Companion to ``docs/proposals/active/eisv-general-solution-v0.md``. The reduced
+dynamics proposed in ``docs/proposals/active/eisv-grounded-coherence-rederivation-v0.md``
 (section 3.2) are upper-triangular:
 
     dS/dt = -mu*S + lambda1*u + beta_c*c

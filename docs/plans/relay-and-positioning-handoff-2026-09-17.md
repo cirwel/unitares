@@ -8,7 +8,7 @@
 
 | PR | What it is | Where |
 |---|---|---|
-| #2255 | NeMo Relay exporter and policy gate as an optional SDK extra, with the re-layering decision packet | `agents/sdk/src/unitares_sdk/integrations/nemo_relay.py`, `agents/sdk/tests/test_nemo_relay_plugin.py`, `agents/sdk/README.md` (section "NeMo Relay integration"), `docs/proposals/relay-substrate-relayering-v0.md` |
+| #2255 | NeMo Relay exporter and policy gate as an optional SDK extra, with the re-layering decision packet | `agents/sdk/src/unitares_sdk/integrations/nemo_relay.py`, `agents/sdk/tests/test_nemo_relay_plugin.py`, `agents/sdk/README.md` (section "NeMo Relay integration"), `docs/proposals/active/relay-substrate-relayering-v0.md` |
 | #2256 | Claims falsification audit and market map, superseding the June map | `docs/ontology/competitive-analysis-2026-09.md`; index entry in `docs/ontology/README.md` |
 | #2256, commit `b9a103c` | The `discord-bridge` skill re-verification stamp, ported from #2258 so the smoke job's calendar gate stopped failing every branch | `skills/discord-bridge/SKILL.md`, `skills/unitares-governance/SKILL.md`, `skills/SKILLS_MANIFEST.sha256` |
 

@@ -82,7 +82,7 @@ def apply_verification_floor(
     worse self-attested Φ/drift signal, mirroring the Φ-floor invariant the council
     protects (continuous-verdict-blending-v0.md #3). An empty signal ("safe"/0.0)
     is a no-op. Phase-2 actuator wiring of the v2 verification layer; see
-    docs/proposals/verification-weighted-verdict-v0.md. Gated default-off by
+    docs/proposals/active/verification-weighted-verdict-v0.md. Gated default-off by
     GovernanceConfig.VERIFICATION_FLOOR_ENABLED at the call site.
     """
     return (
@@ -1192,7 +1192,7 @@ class UNITARESMonitor:
         # statement about numerical integration (DT_MAX is an Euler stability
         # cap) and is telemetry only — decay is no longer gap-proportional above
         # it. Semantics for the saturated band remain open; see
-        # docs/proposals/gap-recovery-arming-semantics-v0.md.
+        # docs/proposals/active/gap-recovery-arming-semantics-v0.md.
         #
         # gap_recovery_armed: the agent was absent long enough that the next N
         # attestations may run on stale/transient state (MacBook clamshell
@@ -1476,7 +1476,7 @@ class UNITARESMonitor:
         # A deterministic, self-report-INDEPENDENT read of *described* adverse
         # actions can RAISE the verdict/risk but never lower it — closing the
         # sub-warmup hole where a confessed-sabotage check-in scores like a clean
-        # refactor (docs/proposals/verification-weighted-verdict-v0.md). Applied
+        # refactor (docs/proposals/active/verification-weighted-verdict-v0.md). Applied
         # regardless of behavioral confidence because it is self-report-independent.
         # Only the fast regex floor runs inline; the local-model backend is
         # out-of-band by design (40–70s/call must never sit on the request path).

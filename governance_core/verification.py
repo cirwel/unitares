@@ -19,7 +19,7 @@ tampering, backup/rollback destruction, credential/data exfiltration,
 concealment-from-review, protected-history rewriting, safety-control bypass — and
 returns a structured signal.
 
-Design contract (see ``docs/proposals/verification-weighted-verdict-v0.md``):
+Design contract (see ``docs/proposals/active/verification-weighted-verdict-v0.md``):
 
 * **Escalate-only / one-sided.** The signal is a *floor* — it is meant to be
   combined into the verdict via ``max()`` (see :func:`apply_as_floor`). It may

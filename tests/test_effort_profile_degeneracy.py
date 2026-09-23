@@ -1,6 +1,6 @@
 """Verdict-logic coverage for the effort-profile degeneracy check.
 
-The script implements §14 of docs/proposals/eisv-effort-profile-channel-v0.md,
+The script implements §14 of docs/proposals/archive/eisv-effort-profile-channel-v0.md,
 whose thresholds were committed before any corpus was measured. These tests pin
 the behaviour that section specifies -- in particular that the support gate
 fires before any degeneracy claim, and that the cycle markers can never produce

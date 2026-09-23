@@ -8,17 +8,17 @@
 # council/live-verifier review process inline and are frozen technical records,
 # not living product docs. Allowlisted so status-header refreshes can land
 # without a gutting rewrite (2026-06-28).
-docs/proposals/resolved/beam-wave-1-sentinel.md
-docs/proposals/resolved/beam-wave-3a-read-only-handlers.md
-docs/proposals/beam-wave-3-handler-dispatch.md
-docs/proposals/beam-wave-3-gamma-hybrid-v0.md
+docs/proposals/archive/beam-wave-1-sentinel.md
+docs/proposals/archive/beam-wave-3a-read-only-handlers.md
+docs/proposals/active/beam-wave-3-handler-dispatch.md
+docs/proposals/archive/beam-wave-3-gamma-hybrid-v0.md
 
 # Frozen decision-record proposals whose SUBJECT is the review process itself
 # (same class as the BEAM Wave RFCs above) — allowlisted 2026-07-01 so the
 # stranded post-merge amendments (parked-behind-demand note, gate reframe)
 # could re-land without a gutting rewrite.
-docs/proposals/operator-decision-packet-v0.md
-docs/proposals/2026-06-24-wave-3-gate-framing.md
+docs/proposals/archive/operator-decision-packet-v0.md
+docs/proposals/archive/2026-06-24-wave-3-gate-framing.md
 
 # The ontology ledger — chronological record whose HISTORICAL entries (S15-c,
 # S21-b, S10, R1, R2; all pre-dating the 2026-08-13 guard tightening) document
@@ -37,4 +37,31 @@ docs/ontology/plan.md
 # body performed the audit the gate depends on. Allowlisted 2026-09-13 so a
 # status-header refresh could land without a gutting rewrite of someone else's
 # record. Exempts the file, not the practice.
-docs/proposals/wave-3-section-5-2-boundary-audit-summary.md
+docs/proposals/active/wave-3-section-5-2-boundary-audit-summary.md
+
+# Proposal-layout pilot (#2347): these exact files contain previously published
+# technical decision/review records, preserved from source commit 41dbf4f2.
+# Relocation makes the full-file scope scan encounter the old text again.
+# Their content preservation and source hashes are audited in
+# docs/dev/proposals-layout-2347.json; the inventory quotes the same provenance.
+# This does not authorize new session notes or an exemption for a whole folder.
+docs/dev/proposals-layout-2347.json
+docs/proposals/active/agent-orchestrator-beam-v0.md
+docs/proposals/active/beam-footprint-roadmap-v0.md
+docs/proposals/active/governed-effect-plane-v0.md
+docs/proposals/active/surface-lease-plane-phase-a-plan.md
+docs/proposals/active/surface-lease-plane-v0.md
+docs/proposals/archive/ADR-001-operator-vision-delegation.md
+docs/proposals/archive/beam-governed-effects-dossier-2026-06-18.md
+docs/proposals/archive/beam-proprioception-case-v0.md
+docs/proposals/archive/behavioral-running-hot-detector-v0.md
+docs/proposals/archive/continuous-verdict-blending-v0.md
+docs/proposals/archive/eisv-basin-health-gating-v0.md
+docs/proposals/archive/monitor-delegated-liveness-v0.md
+docs/proposals/archive/onboard-bootstrap-checkin.md
+docs/proposals/archive/orchestrator-vouched-identity-v0.md
+docs/proposals/archive/refined-phase-5-evidence-contract.md
+docs/proposals/archive/s19-attestation-mechanism.md
+docs/proposals/archive/section-129-measurement-fix-2026-06-03.md
+docs/proposals/archive/wave-0-step-2-call-site-scoping.md
+docs/proposals/archive/wave-1-window-evaluation-2026-05-18.md
