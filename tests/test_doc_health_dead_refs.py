@@ -690,6 +690,26 @@ def test_collect_md_files_skips_elixir_deps_and_build_dirs(tmp_path, monkeypatch
     assert doc_health.collect_md_files() == [real_doc]
 
 
+def test_proposal_archive_remains_in_doc_health_scan(tmp_path, monkeypatch, doc_health):
+    """Moving a proposal into the canonical archive must retain link coverage."""
+    canonical = tmp_path / "docs" / "proposals" / "archive" / "record.md"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_text("See [evidence](missing-evidence.md).\n")
+    for directory in ("archive", "docs/archive", "docs/proposals/active/archive"):
+        historical = tmp_path / directory / "old.md"
+        historical.parent.mkdir(parents=True)
+        historical.write_text("See [old](old-evidence.md).\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+
+    collected = doc_health.collect_md_files()
+    assert collected == [canonical]
+    warnings = doc_health.check_relative_links(collected)
+    assert len(warnings) == 1 and "missing-evidence.md" in warnings[0]
+    refs = doc_health._collect_md_basename_refs()
+    assert refs["missing-evidence.md"] == {"docs/proposals/archive/record.md"}
+    assert "old-evidence.md" not in refs
+
+
 # --- Relative-link checking must NOT skip docs/proposals/ --------------------
 #
 # The two link checks shared one skip set, so exempting `proposals` from

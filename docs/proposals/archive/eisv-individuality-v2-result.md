@@ -30,7 +30,7 @@ agents in the original per-agent table are omitted for length — every one carr
 
 # EISV individuality v2 — pre-registered read
 
-Registration: `2026-07-02T18:00:00+00:00` — only rows recorded after this instant are counted. Spec: `docs/proposals/archive/eisv-individuality-v2-preregistration.md` (thresholds frozen; do not reinterpret).
+Registration: `2026-07-02T18:00:00+00:00` — only rows recorded after this instant are counted. Spec: `docs/proposals/eisv-individuality-v2-preregistration.md` (thresholds frozen; do not reinterpret).
 
 
 ## Per-agent (eligible only; 46 sub-threshold agents omitted, all `eligible=no`)

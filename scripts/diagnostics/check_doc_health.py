@@ -46,6 +46,14 @@ SKIP_DIRS = {
     "_build",
 }
 
+
+def _skip_scan_dir(path: Path) -> bool:
+    # The proposal archive is a canonical reading path, with maintained links
+    # and index coverage. Other historical archive trees remain out of scope.
+    proposal_archive = REPO_ROOT / "docs" / "proposals" / "archive"
+    return path.name in SKIP_DIRS and path != proposal_archive
+
+
 # Files to skip (historical records — dead refs are expected)
 SKIP_FILES = {"docs/CHANGELOG.md", "CHANGELOG.md"}
 
@@ -256,7 +264,7 @@ def _collect_md_basename_refs() -> dict[str, set[str]]:
     """
     refs: dict[str, set[str]] = {}
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        dirs[:] = [d for d in dirs if not _skip_scan_dir(Path(root) / d)]
         for fn in files:
             if Path(fn).suffix not in _REF_SCAN_EXTS:
                 continue
@@ -1052,7 +1060,7 @@ def check_pitch_vocabulary(md_files: list[Path]) -> list[str]:
 def collect_md_files() -> list[Path]:
     md_files = []
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+        dirs[:] = [d for d in dirs if not _skip_scan_dir(Path(root) / d)]
         for f in files:
             if f.endswith(".md") and f not in SKIP_FILES:
                 md_files.append(Path(root) / f)

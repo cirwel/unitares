@@ -54,8 +54,8 @@ Preserve registered instruments and their authorization boundaries.
 
 The [migration record](../dev/proposals-layout-2347.md) records the inventory,
 placement exceptions, reference checks, and compatibility limits for #2347.
-The existing Wave 1/Wave 3a locators, the published outcome-grounding
-stop-rule locator, and paths embedded in historical SQL migrations and frozen
+The existing Wave 1/Wave 3a locators, the published outcome-grounding stop rule
+and accountable-testbed preregistration locators, and paths embedded in historical SQL migrations and frozen
 evaluation evidence remain.
 The legacy `resolved/` directory contains only a migration compatibility pointer.
 The incremental-value and orientation protocols retain their original paths

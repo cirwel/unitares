@@ -32,8 +32,9 @@ python3 scripts/dev/proposals_inventory.py --ref 41dbf4f2 --output inventory.jso
 ```
 
 The committed migration artifact adds the reviewed placement map, reference
-rewrite plan, compatibility decisions, and an audit of six companion repository
-revisions. It is a dated record, not a second live proposal-status registry.
+rewrite plan, compatibility decisions, and an audit of seven companion repository
+revisions plus a published Zenodo deposit. It is a dated record, not a second
+live proposal-status registry.
 
 ## Placement decisions
 
@@ -47,7 +48,7 @@ revisions. It is a dated record, not a second live proposal-status registry.
 | Parked proposals go in `archive/` | This preserves their questions and resume conditions without presenting them as a current implementation queue. |
 | The incremental-value and orientation protocols retain their original paths and bytes | The pilot manifest and cohort enrollment bind their SHA-256 hashes. Rewriting even their links breaks those bindings. The current-work and registered indexes link to the preserved originals; neither manifests nor instruments are rehashed. |
 
-The root directory has fourteen files: the guide, eleven compatibility locators,
+The root directory has sixteen files: the guide, thirteen compatibility locators,
 and the two protocols whose digests are bound by manifests or enrollment.
 Each audience directory has a short explanation and the original index rows,
 still grouped by subject. No proposal was deleted or merged into another.
@@ -64,15 +65,23 @@ enrollments and results, and the accountability capture's historical quotations.
 The individuality and orientation runners retain their bytes because published
 results or enrollments cite their hashes. Three more locators preserve those
 records' references to the maths roadmap, open-decisions packet, and individuality
-preregistration. The inventory records the preserved files and their hashes.
+preregistration. The explicitly verbatim individuality result transcript retains
+its original path, which resolves through that locator. The inventory records
+the preserved files and their hashes.
 Links pinned to a historical Git commit retain that commit and path. Only
 floating links to this repository's `master` or `main` move.
 
 The companion-repository scan inspected committed trees of the governance
-plugin, public site, three paper repositories, and the reproduction repository.
+plugin, public site, four paper repositories, and the reproduction repository.
 Their exact revisions are in the JSON. The digital-proprioception paper names
 the outcome-grounding stop rule; its old locator is retained. The two preexisting
-Wave 1 and Wave 3a compatibility locators also remain. This bounded scan does
+Wave 1 and Wave 3a compatibility locators also remain. Council review added the
+accountable-testbeds paper and verified its public
+[Zenodo deposit](https://zenodo.org/records/21930162): the deposited manuscript's
+reference [29] cites the original v0 metrics-preregistration path, and the
+deposit metadata cites v1. Both original paths now retain compatibility locators.
+The JSON records the inspected repository revision and public deposit evidence,
+including the PDF digest. This bounded scan does
 not establish absence of links elsewhere on the web or in untracked files.
 
 GitHub does not redirect a moved `blob/master` URL. Other old floating deep links
@@ -86,7 +95,9 @@ the PR validation.
 Three archived dated records lacked a parseable header status before the move.
 The recursive guard records those exact exceptions rather than editing history;
 it rejects stale exceptions, new missing status fields, missing or duplicate
-index rows, broken links, and incorrect totals.
+index rows, broken links, and incorrect totals. Both document-health filesystem
+walks include the canonical proposal archive; unrelated historical archive
+directories retain their existing exclusions.
 
 The scope guard scans entire relocated files, so it encounters previously
 published review records again. Its allowlist names those exact preserved
@@ -117,8 +128,17 @@ The model returned relative paths and expressed uncertainty about their roots.
 Link resolution is checked separately by the deterministic guards. This is
 advisory evidence from supplied text, **not** a traversed-link usability test,
 governed review, independent PR approval, or measured human-reader improvement.
-The full independent PR review remains a separate gate; the requested Claude
-route was unavailable because of its weekly limit.
+The requested Claude route was unavailable because of its weekly limit.
+
+The subsequent independent council used three fresh Codex contexts for
+provenance, tooling, and navigation; the author did not serve as a reviewer.
+Before reading the migration report or diff, the navigation reviewer followed
+the repository links from `README.md` through all five categories and into
+representative bodies. It reached the current core-boundary proposal, registered
+outcome-grounding protocol, and historical individuality result with their
+status and authority distinctions intact. This is one technical reviewer's
+actual traversal, not measured human-reader improvement. Findings and re-review
+are recorded on [PR #2350](https://github.com/cirwel/unitares/pull/2350).
 
 The `operations/`, `ontology/`, `evaluation/`, `evaluations/`, and loose docs-root
 layout stay outside this pilot. Further moves depend on reader feedback from

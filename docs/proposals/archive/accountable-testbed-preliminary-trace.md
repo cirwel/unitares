@@ -6,7 +6,7 @@
 machine-readable capture is
 [`accountable-testbed-federation-trace.json`](accountable-testbed-federation-trace.json),
 and the implementation is in
-[`scripts/demo/federation_tracer/`](../../scripts/demo/federation_tracer/).
+[`scripts/demo/federation_tracer/`](../../../scripts/demo/federation_tracer/).
 The companion
 [`accountable-testbed-metrics-preregistration-v1.md`](../registered/accountable-testbed-metrics-preregistration-v1.md)
 registers the broader baseline, scale, and replication evaluation before

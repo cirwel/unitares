@@ -345,7 +345,21 @@
       "referenced_by": [
         "documentation_or_other"
       ],
-      "external_references": [],
+      "external_references": [
+        {
+          "repository": "accountable-testbeds-paper",
+          "commit": "e35d0bd82c16d3848fa4b17c5c2c311c20a8fdaf",
+          "path": "refs.bib",
+          "line": 73,
+          "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v0.md",
+          "text": "howpublished = {\\url{https://github.com/cirwel/unitares/blob/master/docs/proposals/accountable-testbed-metrics-preregistration-v0.md}}"
+        },
+        {
+          "record_url": "https://zenodo.org/records/21930162",
+          "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v0.md",
+          "basis": "PDF reference [29], page 17"
+        }
+      ],
       "proposed_path": "docs/proposals/registered/accountable-testbed-metrics-preregistration-v0.md",
       "placement_reason": "Index declares a registered/frozen protocol; preserve its body and authority."
     },
@@ -395,7 +409,21 @@
       "referenced_by": [
         "documentation_or_other"
       ],
-      "external_references": [],
+      "external_references": [
+        {
+          "repository": "accountable-testbeds-paper",
+          "commit": "e35d0bd82c16d3848fa4b17c5c2c311c20a8fdaf",
+          "path": ".zenodo.json",
+          "line": 26,
+          "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v1.md",
+          "text": "\"identifier\": \"https://github.com/cirwel/unitares/blob/master/docs/proposals/accountable-testbed-metrics-preregistration-v1.md\","
+        },
+        {
+          "record_url": "https://zenodo.org/records/21930162",
+          "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v1.md",
+          "basis": "Zenodo isSupplementedBy metadata"
+        }
+      ],
       "proposed_path": "docs/proposals/registered/accountable-testbed-metrics-preregistration-v1.md",
       "placement_reason": "Index declares a registered/frozen protocol; preserve its body and authority."
     },
@@ -7848,9 +7876,27 @@
       "repository": "unitares-repro-v6",
       "commit": "2d6955bf69877f2a2baa343928376896a5e254a9",
       "reference_candidates": []
+    },
+    {
+      "repository": "accountable-testbeds-paper",
+      "commit": "e35d0bd82c16d3848fa4b17c5c2c311c20a8fdaf",
+      "reference_candidates": [
+        {
+          "path": ".zenodo.json",
+          "line": 26,
+          "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v1.md",
+          "text": "\"identifier\": \"https://github.com/cirwel/unitares/blob/master/docs/proposals/accountable-testbed-metrics-preregistration-v1.md\","
+        },
+        {
+          "path": "refs.bib",
+          "line": 73,
+          "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v0.md",
+          "text": "howpublished = {\\url{https://github.com/cirwel/unitares/blob/master/docs/proposals/accountable-testbed-metrics-preregistration-v0.md}}"
+        }
+      ]
     }
   ],
-  "external_audit_limit": "Local committed revisions of six named repositories; untracked files, other hosts, and the whole public web are not surveyed.",
+  "external_audit_limit": "Local committed revisions of seven named repositories and the cited Zenodo deposit; untracked files, other hosts, and the whole public web are not surveyed.",
   "compatibility": {
     "retained_stubs": [
       "docs/proposals/beam-wave-1-sentinel.md",
@@ -7875,6 +7921,10 @@
     "digest_bound_protocols": [
       "docs/proposals/eisv-incremental-value-ablation-v1.md",
       "docs/proposals/orientation-constraint-set-preregistration-v0.md"
+    ],
+    "published_preregistration_locators": [
+      "docs/proposals/accountable-testbed-metrics-preregistration-v0.md",
+      "docs/proposals/accountable-testbed-metrics-preregistration-v1.md"
     ]
   },
   "reference_rewrite_plan": [
@@ -9244,5 +9294,27 @@
     "docs/proposals/archive/section-129-measurement-fix-2026-06-03.md",
     "docs/proposals/archive/wave-0-step-2-call-site-scoping.md",
     "docs/proposals/archive/wave-1-window-evaluation-2026-05-18.md"
+  ],
+  "published_reference_audit": [
+    {
+      "record_url": "https://zenodo.org/records/21930162",
+      "api_url": "https://zenodo.org/api/records/21930162",
+      "doi": "10.5281/zenodo.21930162",
+      "inspected_date": "2026-09-23",
+      "metadata_reference": {
+        "field": "metadata.related_identifiers (relation=isSupplementedBy)",
+        "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v1.md",
+        "url": "https://github.com/cirwel/unitares/blob/master/docs/proposals/accountable-testbed-metrics-preregistration-v1.md"
+      },
+      "pdf_reference": {
+        "url": "https://zenodo.org/api/records/21930162/files/accountability-without-a-trusted-center.pdf/content",
+        "sha256": "968df0ecc1694a2170731b6c400d93fec21946c9abc2b174c65aece561e0c9e2",
+        "page": 17,
+        "reference": "[29]",
+        "proposal": "docs/proposals/accountable-testbed-metrics-preregistration-v0.md",
+        "url_in_pdf": "https://github.com/cirwel/unitares/blob/master/docs/proposals/accountable-testbed-metrics-preregistration-v0.md",
+        "basis": "Deposited PDF reference text and hyperlink URI annotations inspected by the independent provenance reviewer."
+      }
+    }
   ]
 }

@@ -107,7 +107,7 @@ agents. None clears the selection-aware null (selective p = 0.070–0.567).
 That snapshot is not the 2026-12-01 confirmatory read, does not establish a
 standing AUC bound, and does not measure prevention or a causal policy effect.
 Its frozen command and rows are recorded in
-`../operations/eisv-ablation-frozen-2026-08-09.md`. No new discrimination read
+[the dated evidence record](../../operations/eisv-ablation-frozen-2026-08-09.md). No new discrimination read
 was run for the 2026-08-17 correction.
 
 ## Protocol deviation — disclosed 2026-08-23

@@ -60,6 +60,20 @@ def test_duplicate_basenames_are_conservative_candidates_not_false_certainty(rep
         assert any(r["path"] == "src/use.py" for r in rows[path]["inbound_reference_candidates"])
 
 
+@pytest.mark.parametrize("directory", ["active", "registered", "archive", "archive/older"])
+def test_qualified_child_index_references_are_inventoried(repo, directory):
+    index = f"docs/proposals/{directory}/README.md"
+    write(repo, index, "# Reading path\n")
+    write(repo, "docs/guide.md", f"See `{index}`.\n")
+    write(repo, "docs/unrelated.md", "See README.md.\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "Add qualified child-index reference")
+
+    rows = {r["path"]: r for r in inventory(repo)["documents"]}
+    refs = rows[index]["inbound_reference_candidates"]
+    assert {r["path"] for r in refs} == {"docs/guide.md"}
+
+
 def test_content_date_ignores_whitespace_only_path_change(repo):
     initial = git(repo, "rev-parse", "HEAD")
     write(repo, "docs/proposals/active/current.md", "# Current\n\n\nStatus:   implemented\n")

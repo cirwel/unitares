@@ -66,6 +66,9 @@ INDEX_EXEMPT = {
     "beam-wave-1-sentinel.md",
     "beam-wave-3a-read-only-handlers.md",
     "eisv-outcome-grounding-stop-rule-v0.md",
+    # Published Zenodo metadata and the deposited paper cite these paths.
+    "accountable-testbed-metrics-preregistration-v0.md",
+    "accountable-testbed-metrics-preregistration-v1.md",
     # Published references in historical SQL migrations remain valid without
     # editing those migrations (including their diagnostic strings).
     "agent-channel-wake-gate-v0.md",

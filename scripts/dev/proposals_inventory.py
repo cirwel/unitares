@@ -127,7 +127,7 @@ def inventory(root: Path, revision: str = "HEAD") -> dict:
             if pattern:
                 for match in pattern.finditer(line):
                     targets.update(by_name[match[1]])
-            for index in (INDEX, PROPOSALS + "resolved/README.md"):
+            for index in indexes:
                 if index in line:
                     targets.add(index)
             for target in sorted(targets - {source}):
