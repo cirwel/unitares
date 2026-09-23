@@ -23,8 +23,9 @@ implementation is Built. The archive includes Parked questions that may resume.
 The child indexes preserve the disposition reading taken on **2026-09-03**,
 plus subsequently added rows. A proposals audit on **2026-09-23** re-read the
 rows whose status the code, git history or the maintainer deployment had
-overturned (retagging 13 of them and annotating others), and parked five Active rows
-whose documents are untouched for 30 days and wait on nothing in flight; rows it
+overturned (retagging 13 of them and annotating others), and, at the operator's
+selection that day, parked five Active rows whose documents are untouched for
+30 days and wait on nothing in flight; rows it
 did not flag keep the 2026-09-03 reading. The tags are not a current work queue or permission
 to build. In particular, an Active row can be blocked or already partly built.
 Read its body and linked implementation before choosing work.
