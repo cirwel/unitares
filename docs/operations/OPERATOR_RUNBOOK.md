@@ -17,8 +17,16 @@ binaries, runs `brew services start postgresql@17` if nothing answers, then
 launches the governance server on port `8767`. Note that it does **not** read
 `DB_POSTGRES_URL`: if you point that variable at another host, port or
 container, this script still checks and starts the local Homebrew instance.
-Use `./scripts/diagnostics/check_health.sh` below to verify the database your
-configuration actually names.
+To verify the database the server actually uses, run
+`./scripts/diagnostics/check_health.sh` below, with one caveat. It reads
+`DB_POSTGRES_URL` only from the shell environment and falls back to localhost.
+It does not load `.env`, which `start_server.sh` does. If the URL is set only in
+`.env`, pass it explicitly:
+
+```bash
+DB_POSTGRES_URL="$(grep -E '^DB_POSTGRES_URL=' .env | cut -d= -f2-)" \
+  ./scripts/diagnostics/check_health.sh
+```
 
 If you already know dependencies are ready and only want the server:
 
