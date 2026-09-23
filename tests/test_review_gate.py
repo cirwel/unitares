@@ -20,12 +20,14 @@ rg = importlib.util.module_from_spec(_spec)
 sys.modules["review_gate"] = rg
 _spec.loader.exec_module(rg)
 read_native_api = rg.read_native
+completed_review_exit = rg.completed_review_exit
 
 
 @pytest.fixture(autouse=True)
 def no_cloud_reads(monkeypatch):
     """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -552,15 +554,52 @@ def test_outage_does_not_erase_a_completed_review():
     assert rg.latest_matching(comments, "k").verdict == "CLEAN"
 
 
-def test_native_api_outage_uses_local_fallback(repo, monkeypatch):
+def test_native_evidence_outage_does_not_replace_unread_findings(repo, monkeypatch):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
     monkeypatch.setattr(rg, "native_enabled", lambda: True)
     def unavailable(*args, **kwargs):
         raise SystemExit("GitHub review API unavailable")
     monkeypatch.setattr(rg, "current_record", unavailable)
-    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: 0)
-    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 0
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("replaced unread findings"))
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
+
+
+def test_late_native_findings_reach_author_after_local_fallback(repo, monkeypatch, capsys):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    completed = []
+    finding = rg.Record("k", "FINDINGS", 1, False, "codex-native", "url", "1. Late finding")
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([finding] if completed else []))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: completed.append(True) or 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
+    assert "Late finding" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("prior", ["CLEAN", "FINDINGS", None])
+def test_ci_preserves_existing_check_when_native_evidence_is_unreadable(monkeypatch, capsys, prior):
+    # Native review round 2 on #2352: an API outage must not re-publish a
+    # partial local CLEAN (or no record) over an existing action_required.
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"state": "open", "head": {"sha": "h"}, "base": {"ref": "master"}})
+    monkeypatch.setattr(rg, "git", lambda *args: "")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    comments = [_comment(rg.Record("k", prior, 1, False, "claude"))] if prior else []
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
+    def incomplete(*args):
+        raise SystemExit("GitHub reviews endpoint unavailable")
+    monkeypatch.setattr(rg, "read_native", incomplete)
+    monkeypatch.setattr(rg, "post_check", lambda *args: pytest.fail("overwrote existing check with partial evidence"))
+    assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
+    assert "Existing review check preserved" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("remote_head,new_key", [("changed", "k"), ("h", "changed")])
+def test_completed_review_cannot_handoff_a_changed_head_or_base_diff(monkeypatch, remote_head, new_key):
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": remote_head, "baseRefName": "new-base"})
+    monkeypatch.setattr(rg, "git", lambda *args: "")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: new_key)
+    assert completed_review_exit("o/r", 1, "k", "h", 0) == rg.UNREVIEWED
 
 
 def test_native_findings_are_visible_and_disposable_without_dispatch_opt_in(repo, monkeypatch, capsys):

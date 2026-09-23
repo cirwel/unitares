@@ -543,6 +543,24 @@ def _resolve(args) -> tuple[int, str, str, str]:
     return info["number"], repo_slug(), key, info["headRefName"]
 
 
+def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) -> int:
+    """A completed review must still describe the PR we are handing back."""
+    if result:
+        return result
+    try:
+        info = gh_json("pr", "view", str(pr), "--json", "headRefOid,baseRefName")
+        base = f"origin/{info['baseRefName']}"
+        git("fetch", "--quiet", "origin", f"+refs/heads/{info['baseRefName']}:refs/remotes/{base}")
+        current = info["headRefOid"] == head and diff_key(base, head) == key
+    except SystemExit as exc:
+        print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
+        return UNREVIEWED
+    if not current:
+        print("[review] UNREVIEWED: the PR head or base diff changed during review; push/join the current diff again")
+        return UNREVIEWED
+    return 0
+
+
 class review_lock:
     """One review per diff on this machine, across every worktree.
 
@@ -606,9 +624,9 @@ def cmd_review(args) -> int:
                 try:
                     existing = current_record(repo, pr, key, head, comments)
                 except SystemExit as exc:
-                    print(f"[review] WARNING: native evidence unavailable: {exc}")
-                    native = False
-                    existing = latest_matching(comments, key)
+                    print(f"[review] UNREVIEWED: review evidence is incomplete: {exc}. "
+                          "Retry review.sh when GitHub evidence is readable; existing findings remain open.")
+                    return UNREVIEWED
                 # --fresh can re-review a clean result; it cannot hide findings.
                 if (args.fresh and not joined and existing
                         and not (existing.verdict == "FINDINGS" and not existing.disposed)):
@@ -619,22 +637,38 @@ def cmd_review(args) -> int:
                     print(existing.text)
                     if existing.verdict == "FAILED":
                         return UNREVIEWED
-                    return 0 if state == "success" else 1
+                    return completed_review_exit(repo, pr, key, head, 0 if state == "success" else 1)
                 args.failed_providers = {p for p in ("claude", "codex")
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
                     native_start = time.monotonic()
                     try:
                         rec = join_native(args, repo, pr, key, head)
-                    except (SystemExit, subprocess.SubprocessError) as exc:
+                    except SystemExit as exc:
+                        print(f"[review] UNREVIEWED: review evidence is incomplete: {exc}; retry review.sh")
+                        return UNREVIEWED
+                    except subprocess.SubprocessError as exc:
                         print(f"[review] WARNING: native review unavailable: {exc}")
                         rec = None
                     if rec:
                         print(f"[review] {rec.status()[1]}\n{rec.url}\n{rec.text}")
-                        return (UNREVIEWED if rec.verdict == "FAILED"
-                                else 0 if rec.status()[0] == "success" else 1)
+                        return completed_review_exit(repo, pr, key, head,
+                                                     UNREVIEWED if rec.verdict == "FAILED"
+                                                     else 0 if rec.status()[0] == "success" else 1)
                     args.budget = max(0, args.budget - int(time.monotonic() - native_start))
-                return review_with_fallback(args, pr, key, reviewer)
+                result = review_with_fallback(args, pr, key, reviewer)
+                # A cloud review can finish while the local fallback runs.
+                # Return those findings too, instead of letting the local
+                # CLEAN hide them from the working author until a later CI run.
+                try:
+                    latest = current_record(repo, pr, key, head, pr_comments(repo, pr))
+                except SystemExit as exc:
+                    print(f"[review] UNREVIEWED: completion evidence is incomplete: {exc}; retry review.sh")
+                    return UNREVIEWED
+                if latest and latest.verdict == "FINDINGS" and not latest.disposed:
+                    print(f"[review] {latest.status()[1]}\n{latest.url}\n{latest.text}")
+                    return 1
+                return completed_review_exit(repo, pr, key, head, result)
         if not joined:
             print("[review] joining the review already running for this diff…", flush=True)
             joined = True
@@ -820,7 +854,7 @@ def cmd_sweep(args) -> int:
             rec = current_record(repo, n, key, head, comments)
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
-            rec = latest_matching(comments, key)
+            continue  # cannot decide which findings remain open from partial evidence
         if rec is not None and not (rec.verdict == "FAILED" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
@@ -905,8 +939,11 @@ def cmd_ci(args) -> int:
     try:
         rec = current_record(repo, pr, key, head, comments)
     except SystemExit as exc:
-        print(f"::warning::Native review evidence unavailable: {exc}")
-        rec = latest_matching(comments, key)
+        print(f"::warning::Review evidence incomplete: {exc}. Existing review check preserved; "
+              "retry this workflow when GitHub evidence is readable.")
+        # Do not overwrite an existing action_required with success/neutral
+        # derived from only the issue-comment portion of the review history.
+        return 0
     if rec is None:
         url = f"https://github.com/{repo}/blob/{base_ref}/docs/operations/github-workflow-conventions.md#review-workflow"
     else:

@@ -171,7 +171,13 @@ reviewed base; even a completion arriving after retarget may have reviewed
 the earlier base. Bare reactions, a "Completed" activity row, and absence of
 findings are not sufficient. Findings remain open across later clean results
 or outages until individually disposed. CI consumes native evidence without
-starting a model, regardless of the local opt-in setting.
+starting a model, regardless of the local opt-in setting. Author commands also
+read existing native findings even when native dispatch is off. If GitHub review
+history is unreadable, CI preserves its previous check and the author command
+reports incomplete evidence; it never substitutes a partial clean result.
+Reviewer availability and evidence availability are separate failures. A final
+head-and-diff check prevents a concurrent push or retarget from being handed
+back as reviewed.
 
 Native review focuses on major correctness issues. Consult is still useful
 for focused design advice; council/dialectic remains an optional escalation.
