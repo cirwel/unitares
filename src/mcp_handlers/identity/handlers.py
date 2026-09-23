@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 # --- identity_session (leaf) ---
 from .session import (
     FOREIGN_DESTINATION_SOURCES,
+    bind_destination_refusal,
     derive_session_key,
     derive_session_key_with_source,
     _extract_base_fingerprint,
@@ -1427,12 +1428,34 @@ async def _perform_session_bind(
     session_key: str,
     display_agent_id: str = None,
     source: str = "auto_bind",
+    *,
+    key_source: Optional[str] = None,
 ) -> dict:
     """Bind a session key to an agent UUID (Redis + PostgreSQL + sticky transport).
 
-    Shared helper used by both identity() auto-bind and bind_session().
+    Shared helper used by identity()/onboard() for the agent's own stable
+    session id and by bind_session() for a transport key.
     All steps are best-effort — failures are logged but don't prevent binding.
+
+    ``key_source`` is the ladder source the destination resolved through
+    (``derive_session_key_with_source``). It is not needed for the agent's own
+    stable id, which is owned by construction. Any other key is checked with
+    ``bind_destination_refusal`` HERE, not only in the callers (#2147): a
+    destination that belongs to someone else, or whose provenance the caller
+    did not declare, is refused before anything is written. The refusal is
+    the same shape as a successful bind, with ``bound`` False, a named
+    ``bind_refused`` reason and no key echoed.
     """
+    refusal = bind_destination_refusal(agent_uuid, session_key, key_source)
+    if refusal:
+        logger.warning(
+            "[%s] refused bind: destination key resolved via %s, "
+            "which is not this caller's own session key",
+            source,
+            refusal,
+        )
+        return {"bound": False, "session_key": None, "bind_refused": refusal}
+
     bound_info = {"bound": False, "session_key": session_key[:20] + "..." if session_key else None}
 
     # 1. Redis cache
@@ -1631,7 +1654,18 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
             mcp_key_source,
         )
     elif mcp_session_key:
-        await _perform_session_bind(target_uuid, mcp_session_key, display_agent_id=target_agent_id, source="bind_session")
+        # The helper applies the same predicate itself (#2147); if it ever
+        # disagrees with the guard above, its refusal must surface as one
+        # rather than fall through to a payload claiming `bound: True`.
+        bound_info = await _perform_session_bind(
+            target_uuid,
+            mcp_session_key,
+            display_agent_id=target_agent_id,
+            source="bind_session",
+            key_source=mcp_key_source,
+        )
+        if bound_info.get("bind_refused"):
+            rebind_refused = bound_info["bind_refused"]
 
     # Update request context so subsequent calls in this request use the correct agent
     try:
