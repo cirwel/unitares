@@ -453,10 +453,26 @@ def _merge_request_context_defaults(context: dict[str, Any]) -> None:
         if "transport" not in context and signals and signals.transport:
             context["transport"] = signals.transport
 
+        # Same precedence as build_runtime_provenance: a transport-declared
+        # harness wins over a request-body claim, which wins over the UA hint.
+        # Writes that skip the runtime envelope (knowledge store/note) would
+        # otherwise file a header-declared harness under its UA or a
+        # provider-shaped body value.
+        # The header passes the envelope's sanitizer first: a rejected value
+        # (oversized, URL, credential-shaped) must neither persist nor displace
+        # a body claim.
+        from src.model_harness_provenance import _HARNESS_MAX, _safe_identifier
+
+        reported_harness, _ = _safe_identifier(
+            signals.reported_harness_type if signals else None,
+            maximum=_HARNESS_MAX,
+        )
         client_hint = get_context_client_hint() or (
             signals.client_hint if signals else None
         )
-        if "harness_type" not in context and client_hint:
+        if reported_harness is not None:
+            context["harness_type"] = reported_harness
+        elif "harness_type" not in context and client_hint:
             context["harness_type"] = client_hint
 
         resolution_source = get_session_resolution_source()
