@@ -1,6 +1,12 @@
 # Legacy coherence identity ablation v0
 
 Status: measurement-only proposal
+
+> **Status re-read 2026-09-23 (proposals audit):** the measurement shadow is
+> built and computed on every check-in (`compute_legacy_coherence_identity_shadow`
+> in `src/behavioral_trajectory.py`, called from
+> `src/mcp_handlers/updates/phases.py`). The aggregation read this document asks
+> for has not been done.
 Schema: `legacy_coherence_identity_ablation.v1`
 
 ## Decision
