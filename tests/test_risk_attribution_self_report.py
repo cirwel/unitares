@@ -69,28 +69,18 @@ def test_warm_mcp_path_report_keeps_independent_wording():
     assert "independent behavioral assessment" in attribution["note"]
 
 
-def test_warm_blended_report_with_supplied_sensor_keeps_independent_wording():
-    # A supplied sensor_eisv is used directly and never reads the drift norm.
+def test_warm_blended_report_with_supplied_sensor_is_not_called_independent():
+    # A supplied sensor_eisv bypasses the behavioral sensor, but the blended
+    # vector still reaches the assessment via ODE-derived inputs.
     attribution = _attribution(
         [1.0, 1.0, 1.0], warm_updates=5,
         sensor_eisv={"E": 0.7, "I": 0.7, "S": 0.3, "V": 0.0},
     )
-    assert "independent behavioral assessment" in attribution["note"]
-    assert "not independent" not in attribution["note"]
+    assert attribution["primary_driver"] == "behavioral_assessment"
+    assert "not independent of your report" in attribution["note"]
 
 
-def test_short_history_fallback_keeps_independent_wording():
-    # Check-in 3: behavioral confidence reaches 0.3 but the sensor still has
-    # too little history, so the continuity fallback supplies the observation.
-    third = _attribution([1.0, 1.0, 1.0], warm_updates=2)
-    assert third["primary_driver"] == "behavioral_assessment"
-    assert "not independent" not in third["note"]
-    # From check-in 4 the sensor has history and reads the blended norm.
-    fourth = _attribution([1.0, 1.0, 1.0], warm_updates=3)
-    assert "not independent of your report" in fourth["note"]
-
-
-def test_zero_report_after_a_fed_report_mentions_the_carryover():
+def test_zero_report_after_a_blended_report_is_not_called_independent():
     monitor = UNITARESMonitor(f"test-attr-carry-{uuid.uuid4().hex[:12]}", load_state=False)
     def update(drift):
         return monitor.process_update(
@@ -100,7 +90,6 @@ def test_zero_report_after_a_fed_report_mentions_the_carryover():
         )["risk_attribution"]
     for _ in range(5):
         update([0.0, 0.0, 0.0])
+    assert "independent behavioral assessment" in update([0.0, 0.0, 0.0])["note"]
     assert "not independent of your report" in update([1.0, 1.0, 1.0])["note"]
-    after = update([0.0, 0.0, 0.0])["note"]
-    assert "earlier blended reports did" in after
-    assert "independent behavioral assessment" not in after
+    assert "not independent of your report" in update([0.0, 0.0, 0.0])["note"]
