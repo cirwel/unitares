@@ -47,12 +47,27 @@ class TestInferSpawnReason:
         )
         assert reason == "explicit"
 
-    def test_claude_code_with_existing_nodes(self):
+    def test_claude_code_with_existing_nodes_and_parent(self):
         reason = infer_spawn_reason(
-            {"client_hint": "claude-code"},
+            {"client_hint": "claude-code", "parent_agent_id": "some-uuid"},
             existing_nodes=[{"agent_id": "prev"}],
         )
         assert reason == "compaction"
+
+    @pytest.mark.parametrize("client_hint", ["claude-code", "claude_code", "claude-code-web"])
+    def test_claude_code_without_parent_is_not_lineage(self, client_hint):
+        # Co-located thread nodes are not a declaration: without a declared
+        # parent, inference must not return a lineage reason, or the fork is
+        # reported and persisted as a context continuation nobody declared.
+        reason = infer_spawn_reason(
+            {"client_hint": client_hint},
+            existing_nodes=[{"agent_id": "prev"}],
+        )
+        assert reason == "new_session"
+        assert classify_episode_fork(2, "fresh", None, reason) == (
+            "sibling_locus",
+            False,
+        )
 
     def test_parent_agent_id_present(self):
         reason = infer_spawn_reason(

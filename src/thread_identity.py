@@ -51,22 +51,31 @@ def infer_spawn_reason(
 
     Priority:
     1. Explicit caller-provided spawn_reason
-    2. Claude Code client + existing thread nodes → "compaction"
-    3. parent_agent_id present → "subagent"
-    4. Existing thread nodes → "new_session"
+    2. No parent_agent_id declared → "new_session"
+    3. Claude Code client + existing thread nodes → "compaction"
+    4. parent_agent_id present + existing thread nodes → "subagent"
     5. Default → "new_session"
+
+    Inference never manufactures a lineage reason for an undeclared parent.
+    A lineage reason (``compaction``, ``subagent``) classifies the fork as
+    ``identity_lineage`` and is persisted as ``spawn_reason``, so returning
+    one here would report and record a declaration the caller never made.
+    Thread co-location alone does not establish it: a thread derived from an
+    IP:UA fingerprint is shared by every unrelated session behind one egress
+    address and client (cloud-hosted harnesses, 2026-09-23).
     """
     explicit = arguments.get("spawn_reason")
     if explicit:
         return explicit
 
+    if not arguments.get("parent_agent_id"):
+        return "new_session"
+
     if existing_nodes:
         client_hint = arguments.get("client_hint", "")
         if "claude_code" in client_hint or "claude-code" in client_hint:
             return "compaction"
-        if arguments.get("parent_agent_id"):
-            return "subagent"
-        return "new_session"
+        return "subagent"
 
     return "new_session"
 
