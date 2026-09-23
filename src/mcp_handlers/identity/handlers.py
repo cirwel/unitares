@@ -2747,6 +2747,7 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 spawn_reason=_spawn_reason,
                 all_nodes=all_nodes,
                 agent_uuid=agent_uuid,
+                minted_fresh=bool(is_new),
             )
     except Exception as e:
         logger.debug(f"[THREAD] Could not build thread context: {e}")
