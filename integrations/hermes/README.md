@@ -17,6 +17,26 @@ The package registers one MCP server named `unitares` at the standard loopback e
 
 It also bundles the `unitares-governance` skill.
 
+The MCP entry carries four static, non-secret provenance headers:
+
+| Header | Value | Why |
+|---|---|---|
+| `X-Unitares-Harness-Type` | `hermes` | Names the harness, independent of which model provider Hermes is using |
+| `X-Unitares-Harness-Source` | `caller_declared` | The value is package configuration, not something UNITARES observed |
+| `X-Unitares-Adapter-Type` | `unitares-hermes-plugin` | Names the integration that delivered the observation |
+| `X-Unitares-Adapter-Version` | the `plugin.json` version | Lets reports separate package revisions |
+
+These headers are descriptive context only. UNITARES never uses them as identity proof, verdict authority, or a policy key (see `docs/operations/model-harness-risk-cohorts.md`), and they do not enter the transport fingerprint.
+
+## Model providers
+
+Hermes can run on several model providers, including API-key providers, OpenAI Codex sign-in (`openai-codex`), and Claude subscription providers. The harness is still Hermes in every case. That is why the harness is pinned in a header rather than inferred:
+
+- Hermes provider ids such as `openai-codex`, `claude`, and `claude-code` look like other harness names. UNITARES' S22 comparison normalizes those strings to the Codex CLI and Claude Code harnesses, so a Hermes check-in that reported its provider as its harness would be filed under the wrong harness. The header wins over request-body harness claims, which closes that path.
+- Some Hermes runtimes hand the tool loop to another agent process (the Codex app-server runtime and a proposed Claude Agent SDK runtime). If that process makes the MCP call, its User-Agent names Codex or Claude Code. A configured harness header still takes precedence over User-Agent detection, as long as the runtime forwards the configured headers. Confirm it does before relying on this for a given runtime.
+
+The model changes with the provider, so it cannot be a static header. The bundled skill asks the agent to report `model_provider` and `model` in `sync_state`'s `provenance_context`. Those values are recorded as caller-declared and never enter an exact-model cohort.
+
 The package does **not** install, update, or start UNITARES and does not carry credentials.
 
 ## Prerequisite
