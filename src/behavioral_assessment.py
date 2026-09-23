@@ -19,8 +19,9 @@ principled fix for the 2026-06-13 ultra-stable-agent false-pause (#686).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from src.behavioral_state import BehavioralEISV
 
@@ -42,6 +43,11 @@ class AssessmentResult:
 
     # Optional guidance text
     guidance: Optional[str] = None
+
+    # Baselined floor-breach verdict floor record (issue #1995). None unless
+    # UNITARES_FLOOR_BREACH_CAUTION_SHADOW or _APPLY is on, so the default
+    # result is unchanged; see floor_breach_caution_*_enabled below.
+    floor_breach_caution: Optional[Dict[str, Any]] = None
 
 
 # Verdict thresholds
@@ -76,12 +82,62 @@ RISK_CAUTION_THRESHOLD = 0.60
 # coherence pause layer in governance_monitor.py, but it reads the
 # diagnostic ODE state, which follows this signal only through the sensor
 # spring coupling, with lag -- not a same-check-in guarantee. Whether any
-# of this should force at least "caution" sooner is an open calibration
-# question for the operator — issue #1995.
+# of this should force at least "caution" sooner is a calibration question
+# for the operator — issue #1995; the baselined-only verdict floor below is
+# that thread's candidate answer, shipped default-OFF behind flags.
 ABSOLUTE_E_FLOOR = 0.30
 ABSOLUTE_I_FLOOR = 0.30
 ABSOLUTE_S_CEILING = 0.70
 ABSOLUTE_V_CEILING = 0.50
+
+# --- Baselined floor-breach verdict floor (issue #1995) -----------------------
+# The thread's stop rule (2026-09-02) woke on 2026-09-13: the #2047 counter
+# recorded its first baselined breach-and-safe rows (59 in window). The
+# candidate change it names is option 2 in its baselined-only form: when the
+# agent's baseline is warm AND an absolute floor is breached, the verdict is
+# at least "caution". Risk, health, and components are untouched — this is a
+# verdict floor, not a reweight (option 3), so the graded region below the
+# floors is unchanged. The as-written option 2 (any breach) is ruled out by
+# the thread's cold-start finding: the harness's canned first three check-ins
+# breach |V| for every fresh agent by arithmetic.
+#
+# Both flags default OFF. SHADOW records what the floor would have done on
+# the AssessmentResult (and from there into the #2047 observation row in
+# audit.events) without touching the verdict; APPLY changes the verdict and
+# records that it did. Read at call time, not import time, so a deployment
+# flips them with a restart and tests can set them per case. Like the other
+# constants here, read straight from the environment rather than through
+# config.governance_config, to keep this module's import numpy-free.
+FLOOR_BREACH_VERDICT_FLOOR = "caution"
+
+
+def floor_breach_caution_shadow_enabled() -> bool:
+    """Whether to record what the baselined floor-breach verdict floor would do
+    (UNITARES_FLOOR_BREACH_CAUTION_SHADOW). Default off.
+
+    Measurement only: the verdict is never changed. The record lands on
+    ``AssessmentResult.floor_breach_caution`` and is carried into the issue
+    #1995 ``absolute_floor_observation`` telemetry row, so the shadow pass the
+    thread asks for reads from the same sink as the counter that woke it.
+    """
+    return os.getenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", "").strip().lower() in {
+        "1", "true", "on", "yes",
+    }
+
+
+def floor_breach_caution_apply_enabled() -> bool:
+    """Whether a baselined absolute-floor breach forces at least "caution"
+    (UNITARES_FLOOR_BREACH_CAUTION_APPLY). Default off.
+
+    LIVE-AFFECTING when on: the behavioral verdict is authoritative post-warmup
+    under UNITARES_PHI_TELEMETRY_ONLY, and monitor_decision maps "caution" to
+    sub_action "guide". Escalate-only and baselined-only: never lowers a
+    verdict, never fires before the agent's own baseline is warm. Implies the
+    shadow record, with ``applied`` marking rows the floor actually changed.
+    """
+    return os.getenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "").strip().lower() in {
+        "1", "true", "on", "yes",
+    }
 
 # --- Absolute-basin-health gate edges (issue #689) ----------------------------
 # Self-relative z-deviation risk is gated by how far the ABSOLUTE EISV value sits
@@ -236,6 +292,32 @@ def assess_behavioral_state(
     else:
         verdict = "high-risk"
 
+    # --- Baselined floor-breach verdict floor (issue #1995; default OFF) ---
+    # Escalate-only, one step: a warm baseline plus any breached absolute floor
+    # lifts "safe" to "caution" and leaves anything already worse alone. With
+    # neither flag set this block is a no-op and the result is unchanged.
+    floor_breach_caution: Optional[Dict[str, Any]] = None
+    apply_floor = floor_breach_caution_apply_enabled()
+    if apply_floor or floor_breach_caution_shadow_enabled():
+        eligible = bool(floor_components) and bool(state.is_baselined)
+        floored_verdict = verdict
+        if eligible and verdict == "safe":
+            floored_verdict = FLOOR_BREACH_VERDICT_FLOOR
+        would_change = floored_verdict != verdict
+        floor_breach_caution = {
+            "mode": "apply" if apply_floor else "shadow",
+            "floor": FLOOR_BREACH_VERDICT_FLOOR,
+            "behavioral_baselined": bool(state.is_baselined),
+            "breach_count": len(floor_components),
+            "eligible": eligible,
+            "unfloored_verdict": verdict,
+            "floored_verdict": floored_verdict,
+            "would_change": would_change,
+            "applied": bool(apply_floor and would_change),
+        }
+        if apply_floor:
+            verdict = floored_verdict
+
     # --- Health ---
     if risk < 0.20:
         health = "healthy"
@@ -257,6 +339,7 @@ def assess_behavioral_state(
         coherence=round(coherence, 4),
         components={k: round(v, 4) for k, v in components.items()},
         guidance=guidance,
+        floor_breach_caution=floor_breach_caution,
     )
 
 

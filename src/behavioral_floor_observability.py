@@ -93,4 +93,12 @@ def build_absolute_floor_observation(
             for component, _dimension in _COMPONENT_DIMENSIONS
             if component in floor_components
         }
+    if assessment.floor_breach_caution is not None:
+        # Issue #1995 verdict-floor shadow/apply record.  Present only when
+        # UNITARES_FLOOR_BREACH_CAUTION_SHADOW or _APPLY is on, so the default
+        # row keeps its exact key set.  Under APPLY, ``behavioral_verdict``
+        # above is the floored verdict and ``breach_with_safe_behavioral_verdict``
+        # goes False for rows the floor changed; ``unfloored_verdict`` here keeps
+        # the pre-floor reading so the counter's history stays comparable.
+        observation["floor_breach_caution"] = dict(assessment.floor_breach_caution)
     return observation

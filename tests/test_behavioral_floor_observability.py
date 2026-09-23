@@ -155,6 +155,44 @@ def test_observation_schema_is_bounded_json_and_snapshots_verdict_geometry():
     assert json.loads(json.dumps(observation)) == observation
 
 
+def test_verdict_floor_record_reaches_observation_only_when_flagged(monkeypatch):
+    """Issue #1995 verdict-floor shadow/apply record rides the #2047 row.
+
+    The production shape that woke the stop rule on 2026-09-13: warm baseline,
+    |V| just past the ceiling, S/E/I clean, behavioral risk far below safe.
+    """
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", raising=False)
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", raising=False)
+    state = _state(E=0.41, I=0.91, S=0.15, V=-0.505)
+    _normalize_baseline_at_current_state(state)
+
+    off = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert off["breached_dimensions"] == ["V"]
+    assert off["behavioral_verdict"] == "safe"
+    assert off["breach_with_safe_behavioral_verdict"] is True
+    assert "floor_breach_caution" not in off
+
+    monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", "1")
+    shadow = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert shadow["behavioral_verdict"] == "safe"
+    assert shadow["breach_with_safe_behavioral_verdict"] is True
+    assert shadow["floor_breach_caution"]["mode"] == "shadow"
+    assert shadow["floor_breach_caution"]["would_change"] is True
+    assert shadow["floor_breach_caution"]["applied"] is False
+    assert {k: v for k, v in shadow.items() if k != "floor_breach_caution"} == off
+    assert json.loads(json.dumps(shadow)) == shadow
+
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW")
+    monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1")
+    applied = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert applied["behavioral_verdict"] == "caution"
+    assert applied["behavioral_risk"] == off["behavioral_risk"]
+    assert applied["breach_with_safe_behavioral_verdict"] is False
+    assert applied["floor_breach_caution"]["mode"] == "apply"
+    assert applied["floor_breach_caution"]["unfloored_verdict"] == "safe"
+    assert applied["floor_breach_caution"]["applied"] is True
+
+
 def test_threshold_snapshot_reads_the_assessment_source_at_evaluation_time(monkeypatch):
     monkeypatch.setattr(behavioral_assessment, "ABSOLUTE_E_FLOOR", 0.25)
     state = _state(E=0.20)
