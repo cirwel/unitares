@@ -2521,6 +2521,8 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     self-authored second check-in with the guard deployed and on. Rows from
     before the guard carry no `epistemic_gate`; they count, since authorship
     cannot be shown for them. Authored pauses are still reported, uncounted.
+    The denominator is filtered the same way: a window whose cold starts were
+    all agent-authored never exercised the guard, so it SKIPs, never PASSes.
 
     Zero is also what this check sees when nothing is looking, which is the
     whole reason it exists. The denominator is cold-start *decisions* of any
@@ -2543,7 +2545,8 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
         "  FROM core.agent_state"
         "  WHERE recorded_at > now() - interval '7 days'"
         "    AND state_json ? 'eisv_telemetry')"
-        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'),"
+        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'"
+        "                          AND authored IS DISTINCT FROM 'true'),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
         "                          AND authored IS DISTINCT FROM 'true'),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
@@ -2561,21 +2564,22 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     if cold_starts == 0:
         return CheckResult(
             name, mode, Status.SKIP,
-            "no phi_cold_start decisions in 7d — nothing to observe, so a zero "
-            "here would not mean the guard is working",
+            "no non-authored phi_cold_start decisions in 7d — nothing to "
+            "observe, so a zero here would not mean the guard is working"
+            + authored_note,
         )
     if pauses:
         return CheckResult(
             name, mode, Status.WARN,
             f"{pauses} non-authored phi_cold_start pause(s) in 7d across "
-            f"{cold_starts} cold-start decisions — #1819 downgrades a proven "
+            f"{cold_starts} non-authored cold-start decisions — #1819 downgrades a proven "
             "risk-only cold start to guidance, so check in order: is #1819 "
             "actually DEPLOYED (compare the running build_sha, not master), is "
             "GOVERNANCE_NON_AUTHORED_COLD_START_GUARD on, and did an "
             "independent hard stop legitimately fire" + authored_note,
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"0 non-authored pauses across {cold_starts} cold-start "
+                       f"0 pauses across {cold_starts} non-authored cold-start "
                        f"decisions in 7d" + authored_note)
 
 

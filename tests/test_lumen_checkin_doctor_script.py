@@ -342,7 +342,8 @@ def make_doctor(doc_mod, io_overrides, dry_run=False):
                    or {"success": True},
         "pi_restart_services": lambda admin: calls.__setitem__(
             "restart", calls["restart"] + 1) or ["tailscaled: ok", "anima: ok"],
-        "post_finding": lambda sev, fp, msg, token: calls["findings"].append((sev, fp, msg)),
+        "post_finding": lambda sev, fp, msg, token: calls["findings"].append((sev, fp, msg))
+                        or True,
     }
     io.update(io_overrides)
     return doc_mod.Doctor(io=io, dry_run=dry_run), calls
@@ -563,3 +564,18 @@ def test_dry_run_never_posts_recovery(doc_mod, tmp_path):
     doctor, calls = make_doctor(doc_mod, {}, dry_run=True)
     doctor.run_once()
     assert calls["findings"] == []
+
+
+def test_undelivered_recovery_is_retried_not_marked_done(doc_mod, tmp_path):
+    """A swallowed POST failure must not close the incident: the critical
+    would stay the last durable word and finding_producer_live warns again."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    attempts = []
+    doctor, _ = make_doctor(doc_mod, {
+        "post_finding": lambda sev, fp, msg, token: attempts.append(fp) and False})
+    doctor.run_once()
+    doctor2, calls2 = make_doctor(doc_mod, {})
+    doctor2.run_once()
+    assert attempts == ["lumen-checkin-recovered"]
+    assert [fp for _, fp, _ in calls2["findings"]] == ["lumen-checkin-recovered"]

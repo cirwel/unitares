@@ -305,9 +305,10 @@ def io_pi_restart_services(admin_secret: str) -> list[str]:
     return results
 
 
-def io_post_finding(severity: str, fingerprint: str, message: str, token: str) -> None:
+def io_post_finding(severity: str, fingerprint: str, message: str, token: str) -> bool:
+    """True only when governance confirmed the finding (stored or deduped)."""
     try:
-        _http_json(
+        resp = _http_json(
             f"{GOV_URL}/api/findings",
             {"type": "lumen_checkin_finding", "severity": severity,
              "message": message,
@@ -315,8 +316,9 @@ def io_post_finding(severity: str, fingerprint: str, message: str, token: str) -
              "agent_name": "lumen-checkin-doctor", "fingerprint": fingerprint},
             headers={"Authorization": f"Bearer {token}"} if token else {},
         )
-    except (urllib.error.URLError, OSError, TimeoutError):
-        pass  # escalation is best-effort; the log line below always lands
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return False  # escalation is best-effort; the log line below always lands
+    return resp.get("success") is True
 
 
 DEFAULT_IO: dict[str, Callable[..., Any]] = {
@@ -557,11 +559,17 @@ class Doctor:
         last_problem = self._last_problem_alert()
         if last_problem <= self.state.get("recovered_at", 0) or self.dry_run:
             return
-        self.io["post_finding"](
+        delivered = self.io["post_finding"](
             "info", "lumen-checkin-recovered",
             f"RECOVERED: Lumen is checking in again — {evidence}",
             _load_secret("UNITARES_HTTP_API_TOKEN"),
         )
+        if not delivered:
+            # Marking it recovered anyway would leave the critical as the last
+            # durable word forever — the exact condition this notice exists to
+            # end. Retry on the next healthy tick instead.
+            log("RECOVERED notice not confirmed by governance — retrying next tick")
+            return
         log(f"posted RECOVERED notice — {evidence}")
         self.state["problem_alert_at"] = last_problem
         self.state["recovered_at"] = self.io["now"]()
