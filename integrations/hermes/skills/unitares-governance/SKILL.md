@@ -13,9 +13,13 @@ Short dispatched subagents usually do not onboard. Give the driver their work so
 
 If a dispatched subagent needs its own identity, call `start_session(force_new=true, parent_agent_id=<driver_uuid>, spawn_reason="subagent")` using the driver's UUID from the dispatch context. Make at least one meaningful `sync_state(response_text=..., complexity=..., client_session_id=<returned_client_session_id>)` call before exit. Do not infer a parent from a shared machine or workspace.
 
-## Start of a new agent process
+## Persistent residents
 
-For a standalone process, call `start_session(force_new=true)` once to mint a fresh process identity. Save the returned `agent_uuid` and `client_session_id` for the life of that running process. Pass `client_session_id` explicitly on later UNITARES calls, especially writes. A transport-inferred binding is not sufficient for writes under strict identity.
+A persistent or substrate Hermes resident uses its deployment's dedicated identity pattern and anchor across restarts. Do not apply the ordinary-session fresh identity rule to each restart. This portable plugin does not configure a resident identity; follow that deployment's identity instructions.
+
+## Ordinary agent sessions
+
+For a new ordinary agent process that is neither a dispatched subagent nor a persistent resident, call `start_session(force_new=true)` once to mint a fresh process identity. Save the returned `agent_uuid` and `client_session_id` for the life of that running process. Pass `client_session_id` explicitly on later UNITARES calls, especially writes. A transport-inferred binding is not sufficient for writes under strict identity.
 
 Reserve `continuity_token` for an explicit same-process identity rebind; do not attach it to routine calls.
 
