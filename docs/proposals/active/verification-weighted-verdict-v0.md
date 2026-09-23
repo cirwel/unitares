@@ -3,7 +3,7 @@
 **Status:** v0 — **not enabled.** Phase 1 (detector) + Phase 1.5 (local-model backend) +
 Phase 2 (actuator wiring) have landed, but the wiring is behind a **default-off** flag
 (`GOVERNANCE_VERIFICATION_FLOOR`). The draft can merge as inert scaffolding; **enabling
-the flag in a live deployment is the council-gated act.** What satisfies that gate is
+the flag in a live deployment is the gated act.** What satisfies that gate is
 open — see D2 in [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md). For the
 Φ→telemetry / `resolve_verdict_risk` owners.
 **Author:** follow-up to the self-report-dependence worked example, 2026-06-28.
@@ -223,8 +223,8 @@ merge as inert scaffolding, but enabling is the deliberate, gated act):
 - [x] (Phase 2.5) the shadow's durable sink + denominator + reader
   (`src/verification_floor_shadow.py`, `scripts/analysis/verification_floor_shadow_read.py`),
   closing issue #2169 — the shadow ran default-on and persisted nowhere.
-- [ ] (Phase 2 enable) the enable gate `continuous-verdict-blending-v0.md` states, as
-  D2 in `open-decisions-packet-v0.md` resolves it, plus a larger
+- [ ] (Phase 2 enable) the enable gate `continuous-verdict-blending-v0.md` states, once
+  D2 in `open-decisions-packet-v0.md` is decided, plus a larger
   false-positive-regression corpus, before the flag is turned on in any live deployment.
 
 ## Relation to neighboring work
