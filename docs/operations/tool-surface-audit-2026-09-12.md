@@ -384,7 +384,7 @@ Reported as a measurement with no removal authority attached.
   is 10,976 bytes with 51 parameters; the eight routers and the four alias
   views over them are 36% of the total.
 - All 50 advertised first lines exceed the 140-character routing line proposed
-  in `docs/proposals/tool-surface-legibility-v0.md` (median 523 characters).
+  in `docs/proposals/active/tool-surface-legibility-v0.md` (median 523 characters).
 
 What this does not establish: anything about which tools are valued, and
 nothing about whether the size changes what an agent calls. It is the fixed

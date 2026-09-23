@@ -1,6 +1,6 @@
 -- 051_session_mirror_tables.sql
 --
--- Redis-retirement Phase 1A (docs/proposals/redis-retirement-phase-1-plan.md):
+-- Redis-retirement Phase 1A (docs/proposals/archive/redis-retirement-phase-1-plan.md):
 -- durable PostgreSQL mirror for session/identity state that today lives only in
 -- Redis. ADDITIVE and INERT: nothing writes here yet. The dual-write wiring
 -- (modifying _cache_session / set_onboard_pin / resolution.py) is a separate,

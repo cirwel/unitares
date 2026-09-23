@@ -24,8 +24,8 @@ def test_readme_leads_with_the_product_and_earned_capabilities() -> None:
 
 
 def test_readme_links_to_evidence_instead_of_repeating_the_ledger() -> None:
-    assert "[Evidence and limits](docs/EVIDENCE_AND_LIMITS.md)" in README
-    assert "[Reviewer Guide](docs/REVIEWER_GUIDE.md)" in README
+    assert "[Evidence and limits](../docs/EVIDENCE_AND_LIMITS.md)" in README
+    assert "[Reviewer Guide](../docs/REVIEWER_GUIDE.md)" in README
     assert "## Evidence and limits" not in README
     assert "### Current claim status" not in README
     assert "Predictive lift |" not in README

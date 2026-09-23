@@ -188,7 +188,7 @@ it leaves the symmetric agent-level scheme unchanged and claims nothing about
 party intent. It is the witness-receipt construction named below, made
 concrete as one option; what it needs before it can be enabled honestly, and
 why the choice of semantics stays with the operator, is in
-[`proposals/dialectic-resolution-receipt-v0.md`](proposals/dialectic-resolution-receipt-v0.md).
+[`proposals/dialectic-resolution-receipt-v0.md`](proposals/active/dialectic-resolution-receipt-v0.md).
 
 This is a statement of the deployed boundary, not an argument that issuer
 non-repudiation is the only route across it. Constructions exist that supply

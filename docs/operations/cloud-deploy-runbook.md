@@ -158,7 +158,7 @@ machine. Two gaps to close on any deployment whose machine can be lost:
    way the dump alerts.
 2. **Redis is state, not cache, and needs its own snapshot.** Most live
    session/identity bindings exist only in Redis (see
-   `docs/proposals/redis-retirement-v0.md`). Trigger `BGSAVE` (or rely on
+   `docs/proposals/archive/redis-retirement-v0.md`). Trigger `BGSAVE` (or rely on
    AOF, which the Compose service enables) and copy the resulting
    `dump.rdb`/`appendonly.aof` off-site alongside the SQL dump.
 

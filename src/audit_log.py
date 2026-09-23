@@ -184,7 +184,7 @@ class AuditLogger:
         `eligible` is False until the agent's behavioral baseline is mature
         enough to estimate its own dispersion; those rows carry agrees=None so
         they cannot be silently counted as agreement.
-        See docs/proposals/coherence-proprioceptive-thresholds-v0.md.
+        See docs/proposals/active/coherence-proprioceptive-thresholds-v0.md.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),

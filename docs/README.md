@@ -111,7 +111,10 @@ These are research and engineering provenance, not a list of shipped features.
 Active and resolved RFCs that do not belong in `ontology/` live here. Each doc
 carries its own resolution status in the body.
 
-→ Status-grouped index at **[`proposals/README.md`](proposals/README.md)**.
+→ [Proposal guide](proposals/README.md):
+[current designs and contracts](proposals/active/README.md),
+[registered protocols](proposals/registered/README.md), and
+[historical and parked work](proposals/archive/README.md).
 
 ### `essays/` — optional, non-normative interpretation
 

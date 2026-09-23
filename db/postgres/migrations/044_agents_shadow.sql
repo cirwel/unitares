@@ -1,6 +1,6 @@
 -- 044_agents_shadow.sql
 --
--- Wave 3 §8.1 (docs/proposals/beam-wave-3-handler-dispatch.md): shadow table
+-- Wave 3 §8.1 (docs/proposals/active/beam-wave-3-handler-dispatch.md): shadow table
 -- for core.agents — the second of the two coupled tables written on PATH-3
 -- fresh mint (surface D in §3.1). Same design as 043_identities_shadow.sql;
 -- see that migration's header for the FK and sequence rationale.

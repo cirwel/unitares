@@ -1,6 +1,6 @@
 """Wave 3 §3.2 transport-side 503 machinery — §14 prereq PR #10.
 
-Spec: ``docs/proposals/beam-wave-3-handler-dispatch.md`` §3.2 step 3 (503
+Spec: ``docs/proposals/active/beam-wave-3-handler-dispatch.md`` §3.2 step 3 (503
 circuit-breaker for the cutover gap) and §14 row 10. This module is the
 RFC-named single source for:
 

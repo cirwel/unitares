@@ -1,6 +1,6 @@
 -- Migration 035: Wave 0 coordination_events instrumentation
 --
--- Implements docs/proposals/beam-footprint-roadmap-v0.md Wave 0:
+-- Implements docs/proposals/active/beam-footprint-roadmap-v0.md Wave 0:
 -- "emit structured events on coordination-class failures (asyncpg connect
 --  errors, anyio task-group cancellations, executor pool exhaustion, MCP
 --  handler timeouts) and persist them in a Chronicler-readable form.
@@ -110,7 +110,7 @@ CREATE TABLE IF NOT EXISTS audit.coordination_events_2026_06
 CREATE TABLE IF NOT EXISTS audit.coordination_events_default
     PARTITION OF audit.coordination_events DEFAULT;
 
-COMMENT ON TABLE audit.coordination_events IS 'Wave 0 (RFC docs/proposals/beam-footprint-roadmap-v0.md): single-surface replay log for coordination-class failures. Sentinel-style alarm rules + dashboard panel + Chronicler projection all read from here. event_type extends by adding new dotted namespaces; never reuse or rename existing values.';
+COMMENT ON TABLE audit.coordination_events IS 'Wave 0 (RFC docs/proposals/active/beam-footprint-roadmap-v0.md): single-surface replay log for coordination-class failures. Sentinel-style alarm rules + dashboard panel + Chronicler projection all read from here. event_type extends by adding new dotted namespaces; never reuse or rename existing values.';
 
 COMMENT ON COLUMN audit.coordination_events.event_type IS 'Dotted namespace per roadmap §94. Wave 0 locks coordination_failure.<class>: asyncpg_connect_error, anyio_cancellation, executor_pool_exhaustion, mcp_handler_timeout. Future waves extend the family prefix (coordination_recovery.*, etc.).';
 

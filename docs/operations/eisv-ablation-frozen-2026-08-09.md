@@ -94,7 +94,7 @@ independent between blocks, so the table reports bad rows and agents alongside
 the block count.
 
 The preregistered stop rule and next confirmatory date live in
-[`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/eisv-outcome-grounding-stop-rule-v0.md).
+[`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md).
 
 ## Protocol disclosure — added 2026-08-23
 

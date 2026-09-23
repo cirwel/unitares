@@ -151,7 +151,7 @@ python3 -m pytest tests/test_ablation_negative_controls.py \
 
 **With a deployment DB** (a real fleet's outcomes via `GOVERNANCE_DATABASE_URL`, or
 the shipped reproducibility kit `CIRWEL/unitares-repro-v6`) — first read the
-[outcome-grounding stop rule](proposals/eisv-outcome-grounding-stop-rule-v0.md)
+[outcome-grounding stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
 and the
 [systemic design audit](ontology/falsification-design-system-audit-2026-08-23.md).
 Between registered reads, only the support inventory is permitted here; it does
@@ -196,7 +196,7 @@ to avoid the flag reproduces the scraped-confidence defect client-side (#1445).
 The response carries a `validation_visibility` note when the flag is stamped,
 and `outcome_inventory.py` reports the population as `calibration_excluded_only`
 with `scraped_only_rows_kept` (#1790; decision packet
-[`proposals/outcome-fixture-conflation-decision-packet-v0.md`](proposals/outcome-fixture-conflation-decision-packet-v0.md)).
+[`proposals/outcome-fixture-conflation-decision-packet-v0.md`](proposals/archive/outcome-fixture-conflation-decision-packet-v0.md)).
 
 Envelope telemetry is future-only: rows written before
 `eisv.telemetry.v1` appear as `legacy/no-envelope` and are never assigned an

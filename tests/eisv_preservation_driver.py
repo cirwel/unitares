@@ -2,7 +2,7 @@
 
 Pins what the live EISV estimator produces for fixed check-in sequences, so a
 later change that claims to leave the instrument untouched (the observational
-checkpoint seam in ``docs/proposals/eisv-core-boundary-v0.md``) can be shown to
+checkpoint seam in ``docs/proposals/active/eisv-core-boundary-v0.md``) can be shown to
 change nothing. It is a regression pin, not a statement that these values are
 correct: agreement with the golden file means "the same as the code it was
 recorded from", never "valid".
@@ -30,7 +30,7 @@ subprocess so no earlier test in the session can leak state into it)::
 
 Regenerating the golden file changes the pinned instrument. Before the
 registered 2026-12-01 read's preservation horizon that needs the operator
-decision recorded in ``docs/proposals/eisv-core-boundary-v0.md`` §12.1; after
+decision recorded in ``docs/proposals/active/eisv-core-boundary-v0.md`` §12.1; after
 it, do it only with a change that is meant to alter EISV behaviour, and say so::
 
     python -m tests.eisv_preservation_driver --write-golden

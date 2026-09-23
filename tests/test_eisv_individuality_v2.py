@@ -1,7 +1,7 @@
 """Model-organism checks for the pre-registered individuality v2 machinery.
 
 No DB. Each organism pins a row of the discrimination table in
-docs/proposals/eisv-individuality-v2-preregistration.md — the spec's promise
+docs/proposals/archive/eisv-individuality-v2-preregistration.md — the spec's promise
 that the legs separate anchoredness, individuality, drift, and stickiness.
 Seeds are fixed; permutation nulls are seeded inside the module.
 """

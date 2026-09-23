@@ -112,7 +112,7 @@ Agents and operators interact through several bound services. All bind to `127.0
 | Gateway MCP | `8768` | `/mcp/` | Reduced surface for weak external clients |
 | Lease plane | `8788` | `/v1/lease/*` (bearer-auth, fail-closed) | Elixir/OTP coordination layer for single-writer surfaces — runbook in [`operations/lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) |
 | PostgreSQL@17 + AGE | `5432` | `postgresql://…/governance` | Single source of truth |
-| Redis | `6379` | `redis://…/0` | De-facto primary session/identity store — not optional; most live sessions exist only here. Being migrated to a Postgres-mirror model (`docs/proposals/redis-retirement-v0.md`) |
+| Redis | `6379` | `redis://…/0` | De-facto primary session/identity store — not optional; most live sessions exist only here. Being migrated to a Postgres-mirror model (`docs/proposals/archive/redis-retirement-v0.md`) |
 
 ## Recovery: Circuit Breaker + Dialectic
 
@@ -170,7 +170,7 @@ PR #290, but that fix is one workaround at one site, not closure of the bug clas
 registered the test in advance: PR #350 (merged 2026-05-05) dropped `force=True`
 from six observe sub-handlers, removing a 3221-await `load_metadata_async` loop
 from the request path, and steady-state fell to 92–182ms. The V0.2 RESOLUTION of
-[`proposals/beam-footprint-roadmap-v0.md`](proposals/beam-footprint-roadmap-v0.md)
+[`proposals/beam-footprint-roadmap-v0.md`](proposals/active/beam-footprint-roadmap-v0.md)
 records the verdict — "the 60× amplification floor was the 3221-await loop, not
 anyio/asyncio coupling at the substrate layer". That surface is the one this
 section cited until now as the class's most recent new variant: PR #348's
@@ -299,7 +299,7 @@ For Lumen's internal architecture (sensors, neural bands, DrawingEISV, LED pipel
 The system is in active development. Larger conceptual shifts and shipping RFCs live in:
 
 - **[`ontology/`](ontology/)** — the versioned identity ontology and the research/system RFCs that evolve it. Start at [`ontology/README.md`](ontology/README.md).
-- **[`proposals/`](proposals/)** — RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination work is here ([`plexus-scope.md`](proposals/plexus-scope.md), [`surface-lease-plane-v0.md`](proposals/surface-lease-plane-v0.md), [`beam-footprint-roadmap-v0.md`](proposals/beam-footprint-roadmap-v0.md), [`monitor-delegated-liveness-v0.md`](proposals/monitor-delegated-liveness-v0.md), and the `wave-*` series).
+- **[`proposals/`](proposals/)** — RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination work is here ([`plexus-scope.md`](proposals/active/plexus-scope.md), [`surface-lease-plane-v0.md`](proposals/active/surface-lease-plane-v0.md), [`beam-footprint-roadmap-v0.md`](proposals/active/beam-footprint-roadmap-v0.md), [`monitor-delegated-liveness-v0.md`](proposals/archive/monitor-delegated-liveness-v0.md), and the `wave-*` series).
 - **The paper** — [`unitares-paper-v6`](https://github.com/cirwel/unitares-paper-v6) (DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)). v7 is in scoping; see [`ontology/paper-positioning.md`](ontology/paper-positioning.md).
 
 If runtime code and this doc disagree, runtime wins. Disputes resolve against [`dev/CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md).

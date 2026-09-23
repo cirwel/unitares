@@ -4,8 +4,8 @@ A resident's finding being adjudicated by an operator/human is ground truth from
 *outside* the governance loop (Invariant 4 clean — not the loop validating its
 own trajectory), so the resulting outcome carries
 ``verification_source='external_signal'``. This is the exogenous-anchor channel
-the EISV residual falsifiability test needs (docs/proposals/eisv-maths-roadmap-v0.md
-§6.3 / Appendix B; docs/proposals/eisv-stage0-bridge-b-label-routing.md).
+the EISV residual falsifiability test needs (docs/proposals/active/eisv-maths-roadmap-v0.md
+§6.3 / Appendix B; docs/proposals/active/eisv-stage0-bridge-b-label-routing.md).
 
 Parameterized by ``finding_kind`` so each baselined resident maps to its own
 ``outcome_type`` (``watcher_finding_*``, ``sentinel_finding_*``, …) while sharing

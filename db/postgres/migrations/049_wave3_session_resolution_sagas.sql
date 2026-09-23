@@ -1,6 +1,6 @@
 -- 049_wave3_session_resolution_sagas.sql
 --
--- Wave 3 §9.1 (docs/proposals/beam-wave-3-handler-dispatch.md): crash-safe saga
+-- Wave 3 §9.1 (docs/proposals/active/beam-wave-3-handler-dispatch.md): crash-safe saga
 -- state machine for dialectic session-resolution. Additive, zero cutover risk:
 -- nothing writes here yet. The BEAM session GenServer (Wave 3 implementation —
 -- NOT this migration) drives the saga forward path (§9.2) and crash recovery

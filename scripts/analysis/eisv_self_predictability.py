@@ -69,7 +69,7 @@ RAW_DIMS = ("E", "I", "S")
 # before any model is scored on the raw series.
 WARMUP_RAW = 8
 
-# Individuality gate (docs/proposals/eisv-grounding-next-move-v0.md, step 4):
+# Individuality gate (docs/proposals/active/eisv-grounding-next-move-v0.md, step 4):
 # the per-agent reference must beat fleet-mean AND persistence AND AR(1),
 # out-of-sample, for a majority of agents with at least this many raw states.
 RAW_GATE_MIN_STATES = 50

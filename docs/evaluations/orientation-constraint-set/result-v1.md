@@ -10,7 +10,7 @@ visual self-schema, which was not tested.
 
 ## Frozen inputs and execution
 
-- Protocol: [`orientation-constraint-set-preregistration-v0.md`](../../proposals/orientation-constraint-set-preregistration-v0.md), commit `d6dc0c79`
+- Protocol: [`orientation-constraint-set-preregistration-v0.md`](../../proposals/registered/orientation-constraint-set-preregistration-v0.md), commit `d6dc0c79`
 - Prior plumbing abort: [`result-v0.md`](result-v0.md), commit `18694182`
 - Enrollment: [`enrollment-v1.json`](enrollment-v1.json), commit `d84c7407`
 - Enrollment digest: `6658c0b467db3b6ca1c12965c1da33d1c7da732a9053dd9f5c739e7cc95727a7`

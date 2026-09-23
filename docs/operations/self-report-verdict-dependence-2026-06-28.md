@@ -269,7 +269,7 @@ could not be relied on even if it were weighted in this regime.
   baselines*, the verdict is dominated by an unverified self-report. Complementary
   demonstrations of the same meta-claim — *a governance verdict inherits the weakest link
   in its inputs* — but keep the numbers distinct; do not merge them.
-- **[`docs/proposals/continuous-verdict-blending-v0.md`](../proposals/continuous-verdict-blending-v0.md):**
+- **[`docs/proposals/archive/continuous-verdict-blending-v0.md`](../proposals/archive/continuous-verdict-blending-v0.md):**
   the v2-adjacent work on making the φ→behavioral blend drift-robust and one-sided. The
   "behavioral can escalate but not erase Φ" invariant cited above is the one that proposal
   is careful to preserve.

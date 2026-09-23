@@ -44,7 +44,7 @@ BEGIN
               'which is not safe against existing rows. Remediate by either: '
               '(a) draining existing leases (release + verify released_at IS NOT NULL on every row), '
               'or (b) running a separate data-migration step that re-INSERTs each row into the '
-              'post-026 schema. See docs/proposals/surface-lease-plane-v0.md §7.2.3.',
+              'post-026 schema. See docs/proposals/active/surface-lease-plane-v0.md §7.2.3.',
               row_count;
         END IF;
     END IF;

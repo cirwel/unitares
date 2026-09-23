@@ -42,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 EVALUATION_DIR = REPO_ROOT / "docs" / "evaluations" / "eisv-incremental-value"
 DEFAULT_MANIFEST_SCHEMA_PATH = EVALUATION_DIR / "pilot-manifest-v1.schema.json"
 DEFAULT_MANIFEST_PATH = EVALUATION_DIR / "pilot-manifest-v1.example.json"
-PROTOCOL_PATH = REPO_ROOT / "docs" / "proposals" / (
+PROTOCOL_PATH = REPO_ROOT / "docs" / "proposals" / "active" / (
     "eisv-incremental-value-ablation-v1.md"
 )
 STORE_MANIFEST_NAME = "pilot-manifest.json"

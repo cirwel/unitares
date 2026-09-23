@@ -271,7 +271,7 @@ async def principal_rollup_sweeper_task(interval_seconds: float = 60.0):
     """Recompute the DERIVED principal (octopus) rollup from the in-memory
     agent-metadata cache, so identity/onboard responses can surface "you are
     instance K of principal P" (see ``src/services/principal_rollup.py`` and
-    docs/proposals/principal-rollup-v0.md).
+    docs/proposals/active/principal-rollup-v0.md).
 
     Council 2026-06-18 (unanimous): the principal is NEVER resolved at mint — it
     is recomputed here from the accumulated declared edges. Pure CPU over the

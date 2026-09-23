@@ -17,7 +17,7 @@ That is sufficient to keep the read a non-detection rather than a refutation.
 
 **Scope guard:** this changes nothing about the pre-registered 2026-12-01
 confirmatory read in
-[`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/eisv-outcome-grounding-stop-rule-v0.md)
+[`../proposals/eisv-outcome-grounding-stop-rule-v0.md`](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
 — not its date, its cutoff, its four PASS conditions, or its kill criterion. It
 supplies a corrected procedure that read will need in order to be reported
 honestly. It does not supply a valid historical power number for the frozen

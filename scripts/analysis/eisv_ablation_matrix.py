@@ -109,7 +109,7 @@ REGISTERED_READ_MANIFEST: tuple[RegisteredReadProtocol, ...] = (
         # (`...-sensitivity`) is a reproduction read and matches nothing here.
         read_id_pattern=re.compile(r"eisv-outcome-grounding-2026-12-01(?:-retry-[0-9]+)?"),
         fixture_rule=REGISTERED_FIXTURE_RULE,
-        registered_in="docs/proposals/eisv-outcome-grounding-stop-rule-v0.md",
+        registered_in="docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md",
     ),
     RegisteredReadProtocol(
         name="independent-operator-cohort-v0.1",
@@ -117,7 +117,7 @@ REGISTERED_READ_MANIFEST: tuple[RegisteredReadProtocol, ...] = (
         # the participant segment cannot itself contain a day58 marker.
         read_id_pattern=re.compile(r"operator-(?:(?!-day58-)[A-Za-z0-9._:-])+-day58-seed-(?P<seed>[012])"),
         fixture_rule=CORRECTED_FIXTURE_RULE,
-        registered_in="docs/proposals/independent-operator-cohort-preregistration-v0.md",
+        registered_in="docs/proposals/registered/independent-operator-cohort-preregistration-v0.md",
         binds_uncertainty_seed=True,
     ),
 )

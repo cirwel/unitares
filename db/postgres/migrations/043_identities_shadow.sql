@@ -1,6 +1,6 @@
 -- 043_identities_shadow.sql
 --
--- Wave 3 §8.1 (docs/proposals/beam-wave-3-handler-dispatch.md): shadow table
+-- Wave 3 §8.1 (docs/proposals/active/beam-wave-3-handler-dispatch.md): shadow table
 -- for core.identities during the Wave 3 shadow window. The BEAM shadow writer
 -- (Wave 3 implementation — NOT this migration; nothing writes here yet)
 -- dual-writes PATH-3 fresh mints into this table. The comparator at

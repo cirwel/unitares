@@ -18,7 +18,7 @@
 --
 -- SCOPE -- TRANSPORT ONLY. This is neither piece A (long-poll receive /
 -- change feed) nor piece B (spawn-on-message) of
--- docs/proposals/agent-channel-wake-gate-v0.md. Nothing here blocks, wakes,
+-- docs/proposals/active/agent-channel-wake-gate-v0.md. Nothing here blocks, wakes,
 -- spawns, or spends. That gate's disconfirmers (D1 config, D2 volume, D3
 -- spend, D4 lineage, D5 cheap-half, D6 substrate) are untouched and its
 -- 2026-09-11 observation window is unaffected. This also does not cite and
@@ -206,7 +206,7 @@ CREATE INDEX IF NOT EXISTS idx_topic_messages_expires_at
 COMMENT ON TABLE lease_plane.topic_messages IS
     'Addressed, expiring agent-to-agent messages. Transport only: no wake, no '
     'spawn, no authority. A row grants its recipient nothing beyond the right '
-    'to read and reply -- see docs/proposals/agent-channel-wake-gate-v0.md '
+    'to read and reply -- see docs/proposals/active/agent-channel-wake-gate-v0.md '
     'SS3b(2). Replaces governance-KG channel notes, which broadcast addressed '
     'traffic into a full-text-indexed durable knowledge store.';
 

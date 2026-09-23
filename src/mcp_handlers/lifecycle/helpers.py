@@ -31,7 +31,7 @@ def clear_loop_detector_state(meta) -> None:
 # Spawn reasons that represent an intentional, causal lineage edge — as opposed
 # to the noisy co-location ``new_session`` default that the SessionStart nudge
 # mints between unrelated same-workspace sessions. Mirrors the taxonomy in
-# docs/proposals/lineage-causal-only-semantics.md (PR #721): a child declaring
+# docs/proposals/active/lineage-causal-only-semantics.md (PR #721): a child declaring
 # one of these attests a real dependency, so its parent is something an operator
 # probably does not mean to sweep in a bulk "archive everyone" pass. The
 # predicate is fail-closed for unknown values and shared with the other lineage
