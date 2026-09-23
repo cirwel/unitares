@@ -561,6 +561,9 @@ def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     if len(text) > COMMENT_LIMIT:
         text = text[:COMMENT_LIMIT] + "\n\n… (truncated; full text in the local .review-cache)"
     body += text.strip() + "\n"
+    # Evidence is not a new bot command. Native footers include example
+    # mentions that dispatch cloud tasks when copied by the author's account.
+    body = re.sub(r"@codex\b", "Codex", body, flags=re.I)
     subprocess.run(["gh", "pr", "comment", str(pr), "--body-file", "-"],
                    input=body, text=True, check=True, capture_output=True)
 
@@ -628,9 +631,7 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
 
 def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
                   comments: list[dict]) -> int:
-    result = completed_review_exit(repo, pr, key, head,
-                                  UNREVIEWED if rec.verdict == "FAILED"
-                                  else 0 if rec.status()[0] == "success" else 1)
+    result = UNREVIEWED if rec.verdict == "FAILED" else 0 if rec.status()[0] == "success" else 1
     if result == 0 and rec.verdict == "CLEAN" and rec.reviewer == "codex-native":
         # Reactions have no workflow event. A durable comment both re-runs CI
         # when the clean reaction arrives late and preserves diff equivalence.
@@ -640,7 +641,9 @@ def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
         if not recorded:
             post_record(pr, Record(key, "CLEAN", 0, False, "codex-native"),
                         f"CLEAN — native review joined: {rec.url}", rec.text)
-    return result
+    # The receipt's network write can race a push too. Validate after it so
+    # publishing evidence for an earlier diff cannot finish the current one.
+    return completed_review_exit(repo, pr, key, head, result)
 
 
 class review_lock:
