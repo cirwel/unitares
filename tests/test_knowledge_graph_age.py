@@ -510,6 +510,9 @@ class TestAddDiscovery:
         # --only-missing: a bare run rewrites every existing vector (#2364).
         assert "reembed_corpus.py --only-missing" in msg
         assert "UNITARES_EMBEDDING_MODEL" in msg
+        # The command must paste into a POSIX shell as-is: `VAR=<model>` is a
+        # redirection from a file named "model", not a placeholder.
+        assert "=<" not in msg
 
         debugs = self._embedding_skip_records(caplog, logging.DEBUG)
         assert len(debugs) == 1, [r.getMessage() for r in caplog.records]
