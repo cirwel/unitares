@@ -7,15 +7,21 @@ description: Use UNITARES from Hermes Agent for accountable long-running agent w
 
 UNITARES is a separate accountability runtime. This Hermes plugin connects to it over MCP at the standard local endpoint.
 
+## Dispatched subagents
+
+Short dispatched subagents usually do not onboard. Give the driver their work so it can report through its own session.
+
+If a dispatched subagent needs its own identity, call `start_session(force_new=true, parent_agent_id=<driver_uuid>, spawn_reason="subagent")` using the driver's UUID from the dispatch context. Make at least one meaningful `sync_state(response_text=..., complexity=..., client_session_id=<returned_client_session_id>)` call before exit. Do not infer a parent from a shared machine or workspace.
+
 ## Start of a new agent process
 
-Call `start_session(force_new=true)` once to mint a fresh process identity. Save the returned `agent_uuid` and `client_session_id` for the life of that running process. Pass `client_session_id` explicitly on later UNITARES calls, especially writes. A transport-inferred binding is not sufficient for writes under strict identity.
+For a standalone process, call `start_session(force_new=true)` once to mint a fresh process identity. Save the returned `agent_uuid` and `client_session_id` for the life of that running process. Pass `client_session_id` explicitly on later UNITARES calls, especially writes. A transport-inferred binding is not sufficient for writes under strict identity.
 
 Reserve `continuity_token` for an explicit same-process identity rebind; do not attach it to routine calls.
 
 Do not mint a new UNITARES identity just because the user sends another message.
 
-If this process is an intentional handoff from an exited predecessor, declare the parent identity and explicit spawn reason when starting the session.
+If this process is an intentional handoff from an exited predecessor, pass its UUID as `parent_agent_id` and use `spawn_reason="explicit"` when starting the session.
 
 ## Ongoing work
 
