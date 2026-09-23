@@ -55,7 +55,7 @@ The `health_check()` tool now also returns `operator_summary`:
 
 Use `first_action` as the initial remediation hint instead of reading every component block first.
 
-For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis. It returns these components: `agent_metadata`, `audit_db`, `calibration`, `calibration_db`, `data_directory`, `identity_continuity`, `knowledge_graph`, `lease_plane`, `primary_db`, `redis_cache` and `telemetry`. Pi connectivity is not among them — the Mac→Pi coupling was retired by operator decision (#2189).
+For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis, such as Redis, calibration DB, the knowledge graph and the lease plane. It does **not** report Pi connectivity — the Mac→Pi coupling was retired by operator decision (#2189). The authoritative list is whatever `get_health_check_data` in `src/services/runtime_queries.py` assembles into `checks[...]`; read it there rather than trusting an enumeration in prose.
 
 ## Status at a Glance
 
@@ -201,19 +201,29 @@ Fix:
 ./scripts/ops/start_with_deps.sh
 ```
 
-If that still fails, read the server's output. `start_with_deps.sh` execs
-`start_server.sh`, which execs `python3 src/mcp_server.py` with no redirection,
-so the log goes to that terminal rather than to a file — run it in the
-foreground and read it there, or capture it yourself:
+If that still fails, read the server's log. Where it is depends on how the
+server was started:
+
+```bash
+make logs        # LaunchAgent deployment — tails data/logs/mcp_server.log
+make logs-err    # ... and data/logs/mcp_server_error.log
+```
+
+Those are the paths `scripts/ops/com.unitares.governance-mcp.plist` sets via
+`StandardOutPath` / `StandardErrorPath`, so they are the right ones whenever the
+server runs under launchd — which is the deployment the install steps prescribe.
+
+If instead you started it by hand with `start_with_deps.sh`, there is no log
+file: that path execs `start_server.sh`, which execs `python3 src/mcp_server.py`
+with no redirection, so output goes to that terminal. Capture it when you start:
 
 ```bash
 ./scripts/ops/start_with_deps.sh 2>&1 | tee /tmp/unitares-debug.log
 ```
 
-`/tmp/unitares.log` exists only if the server was last started by
-`./scripts/ops/start_unitares.sh`, which is the one start path that redirects
-there. After a `start_with_deps.sh` launch, that file is absent or stale — do
-not diagnose from it.
+`/tmp/unitares.log` is written by `./scripts/ops/start_unitares.sh` only. If the
+server was last started any other way, that file is absent or stale — do not
+diagnose from it.
 
 ### Knowledge graph degraded
 

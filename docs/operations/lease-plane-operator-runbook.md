@@ -16,9 +16,9 @@ It does not own EISV, calibration, KG, or identity issuance. Those stay in Pytho
 - **DynamicSupervisor** — a supervisor that starts and stops child processes at runtime. The lease plane uses one for per-lease holder processes.
 - **Registry** — a process directory. "Find me the holder process for surface X."
 - **`:DOWN`** — the message a supervisor or monitor receives when a watched process dies. The corpse-lock fix: when a local lease holder dies, the supervisor sees `:DOWN`, releases the lease, writes the Postgres release row.
-- **`PeriodicWorker`** — an in-process GenServer scheduler. Reaper sweeps, handoff timeouts and audit-outbox drains run as its children. Its moduledoc notes that the `perform/1` callback shape matches Oban's worker boundary, but **Oban is not a dependency**: the schedule lives in process memory, so a BEAM node restart starts the cadence over rather than resuming queued work from Postgres. Durable state is the Postgres rows themselves — the next sweep re-derives what to do from them.
+- **`PeriodicWorker`** — an in-process GenServer scheduler. Reaper sweeps, handoff timeouts and audit-outbox drains each run in their own `PeriodicWorker` instance, supervised by `UnitaresLeasePlane.Supervisor`, which calls the worker's `perform/1` in that process. Its moduledoc notes that the `perform/1` shape matches Oban's worker boundary, but **Oban is not a dependency**: the schedule is `Process.send_after` state, so a BEAM node restart re-arms from `initial_delay_ms` and starts the cadence over. Nothing is lost by that, because there is no queue to resume — durable state is the Postgres rows, and the next sweep re-derives its work from them. There are also **no retries**: a failed run logs and waits for the next tick.
 - **Postgrex** — the Postgres driver, used directly against raw SQL. **Not Ecto**, deliberately: `UnitaresLeasePlane.Repo` and `EffectRepo` both say so in their moduledocs, to keep this v0 app's dependency set minimal. The lease plane talks to the same `governance` database UNITARES uses.
-- **Metrics** — there is no metrics exporter. The lease plane emits no `:telemetry` events of its own (`:telemetry` appears only transitively, inside Bandit and db_connection), and PromEx is not a dependency anywhere in `elixir/`. Operator-visible numbers come from the audit rows and the `/v1/health` payload, which Sentinel polls.
+- **Metrics** — there is no metrics exporter. The lease plane emits no `:telemetry` events of its own (`:telemetry` reaches `mix.lock` only transitively, via Bandit, Plug, db_connection and thousand_island), and PromEx is not a dependency anywhere in `elixir/`. Operator-visible numbers come from the Postgres rows: both Sentinels read `lease_plane.lease_plane_events` directly (`elixir/sentinel/lib/unitares_sentinel/forced_release_poller.ex`, `agents/sentinel/agent.py`) rather than polling an HTTP endpoint.
 
 ## Start
 
@@ -84,7 +84,11 @@ Sentinel monitors the lease plane via `GET /v1/health` (RFC §7.7).
 
 **What the probe is**
 
-A successful `/v1/health` probe returns `{"ok": true, "status": "ok", "protocol_version": "v1.0"}` with HTTP 200, proving:
+A successful `/v1/health` probe returns HTTP 200 with `ok`, `status`, and an
+`identity_binding` object carrying `mode`, `proof_format` and `metrics` (from
+`IdentityMetrics.snapshot()`). It does **not** carry `protocol_version` — that
+field belongs to the unauthenticated `/health` payload described above. A 200
+here proves:
 1. Bandit/Plug router is up
 2. `HTTPAuth` plug accepts the configured `LEASE_PLANE_BEARER_TOKEN`
 3. The JSON envelope round-trips
@@ -94,7 +98,19 @@ does no database work — it returns a literal map plus `Application.get_env/3`
 reads and an `IdentityMetrics.snapshot()`. The router says so of the
 unauthenticated `/health` sibling: the static payload "cannot 503 when Postgres
 is down, which is exactly what a liveness probe wants." Treat a 200 here as
-"the boundary is up," and read database health from the alarm rules below.
+"the boundary is up" and nothing more. For database health, query Postgres
+directly (`pg_isready`, `pg_stat_activity`) or read the `lease_plane.*` tables;
+a lease write failing with `service_unavailable` is the signal that the
+database is in trouble, not the health probe.
+
+> **The two Postgres rows in the alarm table below rest on the premise this
+> section just refuted.** `lease_plane.db_degraded` fires on sustained 503s and
+> `lease_plane.slow` on probe latency — but this handler does no database work,
+> so a Postgres outage does not move either signal. The only 503 paths on this
+> route are a token that is not configured (`HTTPAuth`) and `Plug.ErrorHandler`.
+> Whether to re-point those alarms at a probe that does touch the database, or
+> to retire them, is an operator call; they are left as they are here rather
+> than silently redefined by a documentation change.
 
 **Sentinel alarm rules**
 
@@ -395,8 +411,8 @@ curl -fsS -X POST \
 Or via the Python client (preferred — contract-layer rejection if the token is misconfigured):
 
 ```python
-from src.lease_plane import (
-    LeasePlaneClient, LeasePlaneClientConfig, ReleaseRequest,
+from unitares_sdk.lease_plane import (
+    LeasePlaneClient, LeasePlaneClientConfig, ForceReleaseRequest,
 )
 import os
 config = LeasePlaneClientConfig(
@@ -404,9 +420,11 @@ config = LeasePlaneClientConfig(
     force_release_token=os.environ["LEASE_FORCE_RELEASE_TOKEN"],
 )
 client = LeasePlaneClient(config=config)
-result = client.force_release(ReleaseRequest(
+# ForceReleaseRequest carries lease_id ALONE. The router pins
+# release_reason='forced' server-side, so passing it here is an error —
+# use ReleaseRequest only for the ordinary /v1/lease/release path.
+result = client.force_release(ForceReleaseRequest(
     lease_id="<lease-uuid>",
-    release_reason="normal",  # pinned to 'forced' on the wire automatically
 ))
 print(result)  # SimpleOk on success, SimpleError otherwise
 ```
@@ -469,7 +487,7 @@ no dropped leases. Verify with `/v1/health` or `:application.loaded_applications
 TBD. Will include incident-class playbooks for:
 
 - Lease plane unreachable (callers fall through to advisory-skip; no work blocked, but conflict telemetry stops)
-- Postgres flapping (Oban retries the audit-outbox drains; the synchronous lease writes return `service_unavailable` to callers)
+- Postgres flapping (the synchronous lease writes return `service_unavailable` to callers; the audit-outbox drain does **not** retry — `AuditOutboxForwarder` runs under a `PeriodicWorker`, which logs the failed run and waits for the next tick, so the backlog clears on a later sweep rather than immediately)
 - Reaper falling behind (active-lease count grows, expired-but-not-released count grows; Sentinel alerts fire on threshold)
 - Audit-outbox backlog growing (UNITARES-side worker stalled or DB partition issue)
 - Phantom local holder (`:observer` shows the process alive, but Postgres has no lease row for it — schema invariant violated, file an incident)

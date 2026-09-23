@@ -158,8 +158,13 @@ credential, not merely a lookup hint.
 `scripts/dev/check_fleet_identity_leak.py` (wired into pre-commit and the
 `Repo Scope Guard` workflow) fails the build if a resident name appears as a
 string literal in any of its four scanned roots — `src/`, `governance_core/`,
-`config/` and `agents/sdk/src/`. Read the roster instead. (It globs `*.py`
-only, so non-Python files under those roots are outside its reach.)
+`config/` and `agents/sdk/src/`. Read the roster instead.
+
+Two things bound that reach. It globs `*.py` only, so non-Python files under
+those roots are invisible to it. And it carries a `NOT_IDENTITIES` list of files
+whose matches are homonyms rather than agent names — "steward" as a role in
+`VALID_ROLES`, service ids in `src/coordination_events.py`, and three more —
+which are skipped outright rather than flagged.
 
 Provenance in a **comment** is deliberately not flagged — a note explaining that
 a threshold has its value because of what a particular resident did on a
@@ -167,8 +172,9 @@ particular date is the reason the constant is what it is, and deleting it would
 make the code less honest without making it more portable.
 
 The guard also prints the couplings that already exist and have not been fixed
-(currently one: `src/http_routes/vigil.py`) on every
-run, passing or failing. It does not silence them: a guard that reported
+(currently one: `src/http_routes/vigil.py`) on every run, passing or failing —
+these are reported but do not fail the build. It does not silence them: a guard
+that reported
 "clean" over known coupling would be the same instrument-optimism failure it
 exists to catch.
 
