@@ -97,14 +97,20 @@ def compute_drift_vector(
     )
 
     # Blend agent-sent drift with governance-computed drift.
+    # Any sequence of numbers, numpy arrays included. The check-in handler
+    # passes np.array(ethical_drift); an isinstance(list, tuple) test here
+    # silently read every real report as norm 0.0, so the blend documented
+    # below never ran on the live path (found 2026-09-23 while working the
+    # conditions of dialectic ee8fc15c9e43e646).
     agent_drift_raw = agent_state.get('ethical_drift', [0.0, 0.0, 0.0])
-    if isinstance(agent_drift_raw, (list, tuple)) and len(agent_drift_raw) >= 1:
-        agent_drift_norm = sum(d * d for d in agent_drift_raw) ** 0.5
-    else:
-        agent_drift_norm = 0.0
+    try:
+        agent_drift_vals = [float(d) for d in agent_drift_raw]
+    except (TypeError, ValueError):
+        agent_drift_vals = []
+    agent_drift_norm = sum(d * d for d in agent_drift_vals) ** 0.5
 
     if agent_drift_norm > 0.01:
-        ad = list(agent_drift_raw) + [0.0] * max(0, 3 - len(agent_drift_raw))
+        ad = agent_drift_vals + [0.0] * max(0, 3 - len(agent_drift_vals))
         blend = 0.3
         drift_vector.calibration_deviation = (
             (1 - blend) * drift_vector.calibration_deviation + blend * min(1.0, abs(ad[0]))
