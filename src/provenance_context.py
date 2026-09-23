@@ -458,12 +458,20 @@ def _merge_request_context_defaults(context: dict[str, Any]) -> None:
         # Writes that skip the runtime envelope (knowledge store/note) would
         # otherwise file a header-declared harness under its UA or a
         # provider-shaped body value.
-        reported_harness = signals.reported_harness_type if signals else None
+        # The header passes the envelope's sanitizer first: a rejected value
+        # (oversized, URL, credential-shaped) must neither persist nor displace
+        # a body claim.
+        from src.model_harness_provenance import _HARNESS_MAX, _safe_identifier
+
+        reported_harness, _ = _safe_identifier(
+            signals.reported_harness_type if signals else None,
+            maximum=_HARNESS_MAX,
+        )
         client_hint = get_context_client_hint() or (
             signals.client_hint if signals else None
         )
-        if isinstance(reported_harness, str) and reported_harness.strip():
-            context["harness_type"] = reported_harness.strip()
+        if reported_harness is not None:
+            context["harness_type"] = reported_harness
         elif "harness_type" not in context and client_hint:
             context["harness_type"] = client_hint
 
