@@ -269,25 +269,27 @@ def reviewed_head(short: str, head: str) -> bool:
 class NativeReview:
     records: list[Record]
     running: bool = False
+    unavailable_reason: str = ""
 
 
 def native_records(comments: list[dict], reviews: list[dict], inline: list[dict],
                    events: list[dict], key: str, head: str) -> NativeReview:
     """Normalize observed Codex GitHub artifacts. A reaction is never evidence.
 
-    Native completion is accepted only with an explicit reviewed commit. A
-    retarget after review invalidates it even when the head SHA stayed put.
+    Native completion is accepted only with an explicit reviewed commit. The
+    artifact does not identify the reviewed base, so retargeted PRs use the
+    local diff-bound fallback, including reviews racing with a retarget.
     Completed activity alone says nothing about whether findings were posted.
     """
-    cutoff = max((timestamp(e.get("created_at", "")) for e in events
-                  if e.get("event") in {"base_ref_changed", "base_ref_force_pushed"}), default=0)
+    if any(e.get("event") in {"base_ref_changed", "base_ref_force_pushed"} for e in events):
+        return NativeReview([], unavailable_reason="PR base changed; native evidence does not name the reviewed base")
     result = NativeReview([])
     for c in comments:
         if not is_codex_bot(c):
             continue
         body = c.get("body") or ""
         when = c.get("updated_at") or c.get("created_at", "")
-        if timestamp(when) <= cutoff:
+        if not when:
             continue
         commit = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]+)`", body, re.M)
         if (re.match(r"^Codex Review: Didn['’]t find any major issues\.", body)
@@ -305,7 +307,7 @@ def native_records(comments: list[dict], reviews: list[dict], inline: list[dict]
     for review in reviews:
         when = review.get("submitted_at") or ""
         if (not is_codex_bot(review) or review.get("commit_id") != head
-                or review.get("state") == "PENDING" or timestamp(when) <= cutoff):
+                or review.get("state") == "PENDING" or not when):
             continue
         findings = [c for c in inline if c.get("pull_request_review_id") == review["id"]
                     and is_codex_bot(c)]
@@ -334,8 +336,8 @@ def native_enabled() -> bool:
 
 
 def current_record(repo: str, pr: int, key: str, head: str,
-                   comments: list[dict], *, native: bool = True) -> Record | None:
-    records = read_native(repo, pr, key, head, comments).records if native else []
+                   comments: list[dict]) -> Record | None:
+    records = read_native(repo, pr, key, head, comments).records
     return latest_matching(comments, key, records)
 
 
@@ -356,13 +358,18 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
             return Record(key, "FAILED", 0, False, "PR head changed; rerun review.sh")
         comments = pr_comments(repo, pr)
         snapshot = read_native(repo, pr, key, head, comments)
+        if snapshot.unavailable_reason:
+            print(f"[review] {snapshot.unavailable_reason}; using local fallback")
+            return None
         existing = latest_matching(comments, key, snapshot.records)
         if existing and existing.verdict != "FAILED":
             return existing
         requests = [c for c in comments if c.get("author_association") in TRUSTED_ASSOCIATIONS
                     and request_marker in (c.get("body") or "")]
         requested |= bool(requests)
-        if requests and not snapshot.running and all(
+        # A stuck activity row must not grant a new ten-minute wait on every
+        # sweep. The request's age bounds this attempt even while it says running.
+        if requests and all(
                 time.time() - timestamp(c.get("created_at", "")) >= NATIVE_WAIT_S for c in requests):
             break
         if not snapshot.running and not requested and time.monotonic() - started >= 30:
@@ -597,7 +604,7 @@ def cmd_review(args) -> int:
                 comments = pr_comments(repo, pr)
                 native = native_enabled()
                 try:
-                    existing = current_record(repo, pr, key, head, comments, native=native)
+                    existing = current_record(repo, pr, key, head, comments)
                 except SystemExit as exc:
                     print(f"[review] WARNING: native evidence unavailable: {exc}")
                     native = False
@@ -735,8 +742,7 @@ def cmd_record(args) -> int:
 
 def cmd_dispose(args) -> int:
     pr, repo, key, _ = _resolve(args)
-    prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(),
-                           pr_comments(repo, pr), native=native_enabled())
+    prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(), pr_comments(repo, pr))
     if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
         raise SystemExit("review_gate: no open FINDINGS record for this diff to dispose")
     text = Path(args.file).read_text()
@@ -811,7 +817,7 @@ def cmd_sweep(args) -> int:
         key = diff_key(f"origin/{base}", head)
         comments = pr_comments(repo, n)
         try:
-            rec = current_record(repo, n, key, head, comments, native=native_enabled())
+            rec = current_record(repo, n, key, head, comments)
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
             rec = latest_matching(comments, key)

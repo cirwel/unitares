@@ -19,6 +19,13 @@ _spec = importlib.util.spec_from_file_location("review_gate", SCRIPT)
 rg = importlib.util.module_from_spec(_spec)
 sys.modules["review_gate"] = rg
 _spec.loader.exec_module(rg)
+read_native_api = rg.read_native
+
+
+@pytest.fixture(autouse=True)
+def no_cloud_reads(monkeypatch):
+    """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -492,6 +499,11 @@ def test_native_clean_expires_on_changed_head_or_retarget(repo):
     assert not rg.native_records([comment], [], [], [], "k", newer).records
     events = [{"event": "base_ref_changed", "created_at": "2026-09-23T12:12:00Z"}]
     assert not rg.native_records([comment], [], [], events, "k", head).records
+    # Completion after retarget is also ambiguous: it may have started before
+    # the base changed. Native artifacts only name the head, not that base.
+    events[0]["created_at"] = "2026-09-23T12:11:00Z"
+    snapshot = rg.native_records([comment], [], [], events, "k", head)
+    assert not snapshot.records and snapshot.unavailable_reason
 
 
 def test_unbound_clean_or_completed_activity_cannot_pass(repo):
@@ -551,6 +563,42 @@ def test_native_api_outage_uses_local_fallback(repo, monkeypatch):
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 0
 
 
+def test_native_findings_are_visible_and_disposable_without_dispatch_opt_in(repo, monkeypatch, capsys):
+    # Native review finding on #2352: review.native controls dispatch, never
+    # whether already-published findings reach the author or can be disposed.
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    finding = rg.Record("k", "FINDINGS", 1, False, "codex-native", "review-url", "1. Real native finding")
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([finding]))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("hid native findings"))
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
+    assert "Real native finding" in capsys.readouterr().out
+    disposition = repo / "disposition.txt"
+    disposition.write_text("1. rebutted: the caller already validates input")
+    posted = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: posted.append(args[1]))
+    assert rg.cmd_dispose(SimpleNamespace(file=str(disposition))) == 0
+    assert posted[0].disposed and posted[0].reviewer == "codex-native"
+
+
+def test_native_reader_fetches_review_and_inline_evidence(repo, monkeypatch):
+    head = _git(repo, "rev-parse", "HEAD")
+    bot = {"login": rg.CODEX_BOT, "type": "Bot"}
+    calls = []
+    def pages(endpoint):
+        calls.append(endpoint)
+        if endpoint.endswith('/reviews'):
+            return [{"id": 1, "user": bot, "commit_id": head, "state": "COMMENTED",
+                     "submitted_at": "2026-09-23T12:00:00Z"}]
+        if endpoint.endswith('/comments'):
+            return [{"user": bot, "pull_request_review_id": 1, "body": "bug", "path": "a", "line": 1}]
+        return []
+    monkeypatch.setattr(rg, "api_pages", pages)
+    assert read_native_api("o/r", 1, "k", head, []).records[0].findings == 1
+    assert calls == ['repos/o/r/pulls/1/reviews', 'repos/o/r/pulls/1/comments', 'repos/o/r/issues/1/events']
+
+
 def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkeypatch):
     head = _git(repo, "rev-parse", "HEAD")
     clock = [1000.0]
@@ -566,13 +614,14 @@ def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkey
     assert len(posted) == 1 and f"head={head} key=k" in posted[0]
 
 
-def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch):
+@pytest.mark.parametrize("running", [False, True])
+def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch, running):
     head = _git(repo, "rev-parse", "HEAD")
     marker = f"<!-- {rg.NATIVE_REQUEST} head={head} key=k -->"
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [{"author_association": "OWNER", "body": marker,
                                                         "created_at": "2000-01-01T00:00:00Z"}])
-    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], running=running))
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("duplicate request"))
     assert rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", head) is None
 
