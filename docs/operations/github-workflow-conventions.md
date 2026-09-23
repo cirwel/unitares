@@ -224,8 +224,17 @@ operator's), the environment-independent path is a PR comment:
    the REST API) can do this, and drafts are covered.
 2. The `review` check re-runs on the Codex bot's comment and reads its result
    directly: a clean result becomes `clean (codex-native)`, and findings
-   appear as review threads to fix or rebut like any others.
-3. If Codex replies "Something went wrong" (for example `Provided git ref …
+   appear as review threads.
+3. **Fixing** a finding also works without tooling. Push the fix, then post
+   `@codex review` again: native review here triggers on PR open, not on
+   every push, and the new diff needs its own result. **Rebutting** a finding
+   does not work without tooling. The gate keeps a native finding open until
+   a diff-bound disposition record exists, and only `review.sh dispose` writes
+   one; a thread reply is not read. So reply on the thread with the rebuttal,
+   keep the PR in draft, and hand the disposition to someone who can run
+   `review.sh dispose`, naming the thread. Do not assemble the disposition
+   record by hand either.
+4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
    the retry succeeded. A second identical failure is an outage to report,
