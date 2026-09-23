@@ -5,7 +5,7 @@ Runs against governance_test; skips if unavailable. The methods are inert in
 production (nothing wires them yet) — these tests exercise them directly against
 a real PostgreSQL so the durable mirror is proven before the dual-write PR.
 
-See docs/proposals/redis-retirement-phase-1-plan.md.
+See docs/proposals/archive/redis-retirement-phase-1-plan.md.
 """
 
 import sys

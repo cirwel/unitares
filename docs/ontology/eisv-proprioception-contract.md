@@ -158,7 +158,7 @@ them was broader than the data.
 **Corrected citation.** An earlier revision of this paragraph named the
 pre-registered outcome-grounding stop rule (#1425) as forbidding the re-fit. That
 citation is withdrawn. #1425
-([stop rule](../proposals/eisv-outcome-grounding-stop-rule-v0.md)) is scoped to
+([stop rule](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)) is scoped to
 outcome-label discrimination — whether EISV separates good outcomes from bad — and
 constrains re-runs of the ablation probe. These anchors are fitted on a label-free
 slice: a median and a p95 over `HEALTHY_REGIMES`, consuming no outcome label. *What
@@ -421,7 +421,7 @@ sets `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=false` and restarts the service.
 ## Decision record — V-reintroduction deferred (2026-08-07)
 
 The grounded-coherence re-derivation proposal
-(`docs/proposals/eisv-grounded-coherence-rederivation-v0.md`) drops V from the
+(`docs/proposals/active/eisv-grounded-coherence-rederivation-v0.md`) drops V from the
 certified core and leaves reintroduction — as a policy-layer leaky EMA of the
 outcome-channel residual — as an open design decision. That decision was taken
 through a governed dialectic review (session `3e003d82fb2d251e`, resolved
@@ -694,7 +694,7 @@ the recurring read protocol in
 **1. Individuality axiom** — *"each agent's raw behavioral EISV series has an
 agent-specific, temporally stable operating level."* → **UNTESTED AS DEPLOYED.**
 
-Pre-registered v2 (`docs/proposals/eisv-individuality-v2-preregistration.md`,
+Pre-registered v2 (`docs/proposals/archive/eisv-individuality-v2-preregistration.md`,
 script sha `e512c01c…`, thresholds frozen 2026-07-02) returned **FAIL** at the
 2026-07-16 interim read; an unofficial dry run of the frozen script on
 2026-07-29 reproduced it (leg A 1/7, leg B 1 of 3 dims).
@@ -814,7 +814,7 @@ permutation blocks were not independent adjudicated failures. Its negative
 makes prospective prediction worse. The recurring trend was paused on
 2026-08-22 because its TSV did not record anchor scope and would mix that
 withdrawn cohort with the current trusted default. The single 2026-12-01 read
-defined in `docs/proposals/eisv-outcome-grounding-stop-rule-v0.md` is the only
+defined in `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md` is the only
 confirmatory outcome read. Until then, the question is unresolved, not negative.
 
 **5. "Bounded and mean-reverting, not a random walk"** → **partly TRUE BY
@@ -1397,7 +1397,7 @@ direct repoint with this narrower rule in its message.
 
 **Parked, with its wake.** Re-scoring `guide` (or removing `decision_e` from E)
 would change a predictor in the 2026-12-01 pre-registered outcome read
-(`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md`); changing it before
+(`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`); changing it before
 that read contaminates the registered series. Wake: the 12-01 read has run, AND
 a separately preregistered recursive replay or prospective shadow exists. More
 rows from #1777's one-step shadow cannot identify closed-loop gain or basin

@@ -50,7 +50,7 @@ FROZEN_WINDOW_COUNTS_BY_LEAD: dict[int, dict[int, int]] = {
 }
 
 # Condition 3 and the read date. Source:
-# docs/proposals/eisv-outcome-grounding-stop-rule-v0.md, "Pre-registered gate".
+# docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md, "Pre-registered gate".
 TARGET_BAD_CLUSTERS = 150
 READ_DATE = date(2026, 12, 1)
 REGISTERED_WINDOW_DAYS = 365

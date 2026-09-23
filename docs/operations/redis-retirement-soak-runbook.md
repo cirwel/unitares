@@ -1,6 +1,6 @@
 # Redis Retirement — Shadow Soak Runbook
 
-**Audience:** operator. **Purpose:** drive the Phase 1 shadow soak that gates the read flip, and decide whether `core.session_bindings` earns its place. Companion to `docs/proposals/redis-retirement-v0.md` (inventory) and `redis-retirement-phase-1-plan.md` (design, v1.1).
+**Audience:** operator. **Purpose:** drive the Phase 1 shadow soak that gates the read flip, and decide whether `core.session_bindings` earns its place. Companion to `docs/proposals/archive/redis-retirement-v0.md` (inventory) and `redis-retirement-phase-1-plan.md` (design, v1.1).
 
 This is operational, not aspirational: every step below maps to code already merged or in draft. Nothing here changes live behavior until you set `UNITARES_SESSION_MIRROR_SHADOW=1`, and that step is itself behavior-neutral (best-effort writes to inert tables).
 

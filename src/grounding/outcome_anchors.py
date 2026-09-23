@@ -1,6 +1,6 @@
 """Stage 0 — exogenous anchor tiering for ``audit.outcome_events``.
 
-The EISV maths roadmap (docs/proposals/eisv-maths-roadmap-v0.md) needs an
+The EISV maths roadmap (docs/proposals/active/eisv-maths-roadmap-v0.md) needs an
 *exogenous* anchor: a signal that comes from outside the governance loop, so the
 loop's references stay externally falsifiable. The substrate already exists —
 ``audit.outcome_events`` carries per-agent outcomes with an ``is_bad`` label, the
@@ -76,7 +76,7 @@ _EXPLICIT_FIXTURE_FLAGS = _CONTROLLED_FIXTURE_FLAGS - {"calibration_excluded"}
 # training on the row. Only the first two are fixture traffic. Reading the flag
 # as a fixture marker dropped every scraped-confidence row from the validation
 # instruments (issue #1790; decision packet
-# docs/proposals/outcome-fixture-conflation-decision-packet-v0.md).
+# docs/proposals/archive/outcome-fixture-conflation-decision-packet-v0.md).
 #
 # ``registered``: the flag is a fixture marker, whatever its cause. This is the
 #   predicate the 2026-12-01 pre-registered read was registered with, and the

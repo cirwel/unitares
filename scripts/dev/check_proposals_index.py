@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Fail if ``docs/proposals/README.md`` has drifted from the docs it indexes.
+"""Check the proposal guide and its recursive audience indexes.
 
-``docs/proposals/`` is 92 files and ~31k lines — over half of all documentation
-in this repo. What keeps it navigable is not the folder, it is the index:
-README.md tags every doc with one of five dispositions (Built / Registered /
-Active / Parked / Closed) so "what is alive here" has a one-word answer per doc.
+The root guide routes into active/, registered/, and archive/. The child
+indexes retain the hand-maintained dispositions (Built / Registered / Active /
+Parked / Closed); folder placement does not reclassify a proposal's status.
 
 That index is hand-maintained, and a hand-maintained curation surface rots
 quietly. This repo has the receipts. ``docs/operations/dormant-capability-registry.md``
@@ -61,12 +60,32 @@ INDEX = PROPOSALS / "README.md"
 
 VALID_TAGS = ("Built", "Registered", "Active", "Parked", "Closed")
 
-# Relocation stubs: the executed RFC lives in resolved/ and IS indexed there.
-# The stub is a redirect for old links, not a proposal in its own right, so it
-# does not earn an index row.
+# Compatibility locators: the canonical bodies are indexed by audience.
+# These clickable pointers are not HTTP redirects or new proposals.
 INDEX_EXEMPT = {
     "beam-wave-1-sentinel.md",
     "beam-wave-3a-read-only-handlers.md",
+    "eisv-outcome-grounding-stop-rule-v0.md",
+    # Published references in historical SQL migrations remain valid without
+    # editing those migrations (including their diagnostic strings).
+    "agent-channel-wake-gate-v0.md",
+    "beam-footprint-roadmap-v0.md",
+    "beam-wave-3-handler-dispatch.md",
+    "redis-retirement-phase-1-plan.md",
+    "surface-lease-plane-v0.md",
+    "resolved/beam-wave-3a-read-only-handlers.md",
+    # Frozen evidence and instruments retain their literal original references.
+    "eisv-maths-roadmap-v0.md",
+    "open-decisions-packet-v0.md",
+    "eisv-individuality-v2-preregistration.md",
+}
+
+# These three dated records already lacked status fields before the #2347
+# relocation. Preserve their text; recursive coverage must not invent a status.
+HISTORICAL_STATUS_EXEMPT = {
+    "archive/ode-profile-decomposition-2026-05-20.md",
+    "archive/wave-0-step-2-call-site-scoping.md",
+    "archive/wave-1-window-evaluation-T0-2026-05-19.md",
 }
 
 # Bodies with no parseable status line. EMPTY as of 2026-09-13, and the check
@@ -103,8 +122,8 @@ STATUS_RE = re.compile(
     r"|^\s*\**(?:status|disposition)\**\s*$",
     re.IGNORECASE,
 )
-LINK_RE = re.compile(r"\]\(([^)]+\.md)\)")
-ROW_LINK_RE = re.compile(r"^\|\s*\[[^]]*\]\(([^)]+\.md)\)\s*\|", re.MULTILINE)
+LINK_RE = re.compile(r"\]\(([^)]+)\)")
+ROW_LINK_RE = re.compile(r"^\|\s*\[[^]]*\]\(([^)]+\.(?:md|json))\)\s*\|", re.MULTILINE)
 ROW_TAG_RE = re.compile(r"^\|\s*\[.*?\]\([^)]+\)\s*\|\s*\*\*(" + "|".join(VALID_TAGS) + r")")
 COUNTS_RE = re.compile(
     r"(?:Current counts|Counts at tagging):\s*\n?\s*"
@@ -131,48 +150,58 @@ def main() -> int:
     problems: list[str] = []
     notes: list[str] = []
 
-    on_disk = {p.name for p in PROPOSALS.glob("*.md") if p.name != "README.md"}
-    linked = {
-        link.removeprefix("./")
-        for link in LINK_RE.findall(index_text)
+    on_disk = {
+        p.relative_to(PROPOSALS).as_posix()
+        for p in PROPOSALS.rglob("*")
+        if p.is_file() and p.suffix in {".md", ".json"} and p.name != "README.md"
     }
-    row_links = [link.removeprefix("./") for link in ROW_LINK_RE.findall(index_text)]
-    toplevel_row_counts = Counter(link for link in row_links if "/" not in link)
+    indexes = sorted(PROPOSALS.rglob("README.md"))
+    index_texts = {p: p.read_text(encoding="utf-8") for p in indexes}
+    row_counts: Counter[Path] = Counter()
+    linked: set[tuple[Path, str]] = set()
+    for path, body in index_texts.items():
+        linked.update((path, link) for link in LINK_RE.findall(body))
+        for link in ROW_LINK_RE.findall(body):
+            row_counts[(path.parent / link).resolve()] += 1
+    for name in INDEX_EXEMPT & on_disk:
+        stub = PROPOSALS / name
+        linked.update((stub, link) for link in LINK_RE.findall(stub.read_text(encoding="utf-8")))
 
     # 1. Coverage — every proposal has exactly one table row. A prose link is
     # useful context, but it is not the disposition/status entry this registry
     # promises and therefore cannot satisfy coverage.
     for name in sorted(on_disk - INDEX_EXEMPT):
-        row_count = toplevel_row_counts[name]
+        row_count = row_counts[(PROPOSALS / name).resolve()]
         if row_count == 0:
             problems.append(
-                f"not indexed: docs/proposals/{name} has no table row in README.md. "
+                f"not indexed: docs/proposals/{name} has no table row in an audience README.md. "
                 f"Add one, or add it to INDEX_EXEMPT with the reason."
             )
         elif row_count > 1:
             problems.append(
                 f"duplicate index rows: docs/proposals/{name} has {row_count} table rows "
-                "in README.md; exactly one is required."
+                "across proposal indexes; exactly one is required."
             )
 
     # 2. Dead links — every index link resolves.
-    for link in sorted(linked):
-        if link.startswith("../"):
-            target = (PROPOSALS / link).resolve()
-        else:
-            target = PROPOSALS / link
+    for source, link in sorted(linked):
+        if "://" in link or link.startswith(("#", "mailto:")):
+            continue
+        target = (source.parent / link.split("#", 1)[0]).resolve()
         if not target.exists():
-            problems.append(f"dead index link: README.md points at '{link}', which does not exist")
+            problems.append(f"dead index link: {source.relative_to(PROPOSALS)} points at '{link}', which does not exist")
 
     # 3. Stale exemptions — don't let the allowlists outlive their subjects.
     for name in sorted(INDEX_EXEMPT - on_disk):
         problems.append(f"stale INDEX_EXEMPT entry: '{name}' is no longer on disk; remove it")
     for name in sorted(STATUS_LINE_DEBT - on_disk):
         problems.append(f"stale STATUS_LINE_DEBT entry: '{name}' is no longer on disk; remove it")
+    for name in sorted(HISTORICAL_STATUS_EXEMPT - on_disk):
+        problems.append(f"stale HISTORICAL_STATUS_EXEMPT entry: '{name}' is no longer on disk; remove it")
 
     # 4. Status lines — flag new debt only; the known list is recorded, not enforced.
-    missing = {n for n in on_disk if not has_status_line(PROPOSALS / n)}
-    for name in sorted(missing - STATUS_LINE_DEBT):
+    missing = {n for n in on_disk if n.endswith(".md") and not has_status_line(PROPOSALS / n)}
+    for name in sorted(missing - STATUS_LINE_DEBT - HISTORICAL_STATUS_EXEMPT):
         problems.append(
             f"no status line: docs/proposals/{name} states no status in its first 15 lines. "
             f"The index is a map; the body is canonical."
@@ -183,13 +212,17 @@ def main() -> int:
             f"STATUS_LINE_DEBT is out of date: '{name}' now has a status line. "
             f"Remove it from the list so the debt count stays honest."
         )
+    for name in sorted(HISTORICAL_STATUS_EXEMPT - missing):
+        if name in on_disk:
+            problems.append(f"HISTORICAL_STATUS_EXEMPT is out of date: '{name}' now has a status line")
 
     # 5. Count arithmetic — the index's own summary must match its own rows.
     actual: dict[str, int] = {t: 0 for t in VALID_TAGS}
-    for line in index_text.splitlines():
-        m = ROW_TAG_RE.match(line)
-        if m:
-            actual[m.group(1)] += 1
+    for body in index_texts.values():
+        for line in body.splitlines():
+            m = ROW_TAG_RE.match(line)
+            if m:
+                actual[m.group(1)] += 1
 
     m = COUNTS_RE.search(index_text)
     if not m:
@@ -222,7 +255,7 @@ def main() -> int:
 
     indexed_count = len(on_disk - INDEX_EXEMPT)
     print(
-        f"✅ Proposals index guard: {indexed_count} proposal(s) have one table row, "
+        f"✅ Proposals index guard: {indexed_count} document(s)/artifact(s) have one table row, "
         f"{len(linked)} link(s) resolve, counts match rows"
     )
     return 0

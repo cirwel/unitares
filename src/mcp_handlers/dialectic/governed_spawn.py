@@ -10,7 +10,7 @@ same-session dispatches, and carries the §7/§8 proof material so the per-type
 binding flag (``UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN``) becomes
 flippable without further producer code.
 
-Honest scope (recorded in docs/proposals/governed-reviewer-spawn-v0.md): the
+Honest scope (recorded in docs/proposals/active/governed-reviewer-spawn-v0.md): the
 proposer here is a standing dispatcher identity whose continuity token is
 minted in-process by gov-mcp itself. For THIS producer the §6 behavioral veto
 and §7 tier recert are therefore structurally weak — gov-mcp is issuer, prover
@@ -313,7 +313,7 @@ async def governed_dispatch(
 
     The 5s budget is deliberate: the governed leg sits in front of the direct
     path inside submit_thesis's 90s tool budget, so its worst case must stay
-    small (see docs/proposals/governed-reviewer-spawn-v0.md §latency).
+    small (see docs/proposals/active/governed-reviewer-spawn-v0.md §latency).
     """
     uuid = dispatcher_uuid()
     if not uuid:

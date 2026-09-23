@@ -2,7 +2,7 @@
 """Provision the standing dispatcher identity for governed reviewer spawns.
 
 One-time operator step for activating UNITARES_DIALECTIC_GOVERNED_SPAWN (see
-docs/proposals/governed-reviewer-spawn-v0.md). Onboards a dedicated identity
+docs/proposals/active/governed-reviewer-spawn-v0.md). Onboards a dedicated identity
 via the gov-mcp REST surface and lands one sync_state so the identity has a
 durable core.agent_state row — that makes the §6 behavioral veto read a real
 (if largely static) posture for this proposer instead of the unknown-proposer

@@ -11,7 +11,7 @@ The fix surfaces that collision via an [S21A_PG_SESSION_COLLISION] warning
 upstream). These tests assert the warning fires on a divergent existing
 binding and stays quiet on a same-identity re-persist or a fresh insert.
 
-See docs/proposals/redis-retirement-phase-1-plan.md (prep fix).
+See docs/proposals/archive/redis-retirement-phase-1-plan.md (prep fix).
 """
 
 import sys

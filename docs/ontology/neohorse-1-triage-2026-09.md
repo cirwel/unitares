@@ -5,7 +5,7 @@ listing for NeoHorse-1 ([arXiv:2609.08183](https://arxiv.org/abs/2609.08183),
 TokenRhythm, submitted 2026-09-08, 377 upvotes at read time).
 **Follows:** `competitive-analysis-2026-06.md` (the MI9 / Auton triage), same format.
 **For:** the v7 §10 spine in `v7-related-work-draft.md`, and the motivation section of
-`docs/proposals/self-improvement-loop-evaluation-v0.md`.
+`docs/proposals/registered/self-improvement-loop-evaluation-v0.md`.
 **Verdict:** **Not encroaching.** Different plane, different sink, no contested claim on
 EISV, coherence, identity, dialectic, or shared memory. It does plant a flag on the word
 **harness**, and it is the loudest published instance of "the harness's per-turn records
@@ -75,7 +75,7 @@ That is the whole of the answer to "encroaching?": the core contributions are un
 
 ## The RSI claim, judged by this repo's own stop rule
 
-`docs/proposals/self-improvement-loop-evaluation-v0.md` names the confound this paper sits
+`docs/proposals/registered/self-improvement-loop-evaluation-v0.md` names the confound this paper sits
 on top of. Its lane taxonomy: lane O is operational closure (a loop exists and runs), lane
 F is a frozen non-adaptive automation beating no loop, lane A is outcome-conditioned policy
 updating beating the frozen policy. Only lane A can support a self-improvement claim, and

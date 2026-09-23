@@ -23,7 +23,7 @@ deploy worktree) instead of an agent-owned linked worktree is surfaced as an
 **advisory warning** by default. Add `--require-worktree` to make that a hard
 failure (strict mode) once the fleet reliably works in worktrees — the
 advisory→strict rollout mirrors the Surface Lease Plane. Rationale:
-`docs/proposals/worktree-isolation-vs-lease-default.md`.
+`docs/proposals/active/worktree-isolation-vs-lease-default.md`.
 
 A cached `parent_agent_id` from a prior session is context, not a lineage
 instruction: co-location in this workspace is not lineage, and the prior session

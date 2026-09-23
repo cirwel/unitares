@@ -3,7 +3,7 @@ defmodule UnitaresLeasePlane do
   Surface lease plane v0 — Elixir/OTP coordination kernel.
 
   Public-API wrappers live here. The contract is documented in
-  `docs/proposals/surface-lease-plane-v0.md` (RFC v0.5).
+  `docs/proposals/active/surface-lease-plane-v0.md` (RFC v0.5).
 
   Top-level invariant: BEAM owns live coordination, Python owns governance
   truth, Postgres owns durable truth. Nothing in this module may silently

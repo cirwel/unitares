@@ -427,7 +427,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert payload["lease"]["surface_kind"] == "dialectic"
     end
 
-    # --- §9 RFC named-gate tests (mirroring docs/proposals/surface-lease-plane-v0.md §9) ---
+    # --- §9 RFC named-gate tests (mirroring docs/proposals/active/surface-lease-plane-v0.md §9) ---
     #
     # These pin the gates by their §9-named description so the audit
     # (scripts/dev/audit_rfc_section_9_gates.py) reports them as exact rather

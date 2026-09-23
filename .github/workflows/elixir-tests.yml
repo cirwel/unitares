@@ -298,7 +298,7 @@ jobs:
       run: mix test
 
   # wave3a_handlers is the first inbound-HTTP MCP listener on BEAM (RFC
-  # docs/proposals/resolved/beam-wave-3a-read-only-handlers.md). No DB, no
+  # docs/proposals/archive/beam-wave-3a-read-only-handlers.md). No DB, no
   # path: deps (plug/bandit/finch/jason/meck, all hex) — self-contained like
   # agent_orchestrator, so a plain mix test job closes the gap. The suite
   # drives the router via Plug.Test without booting Bandit; `meck` stubs the

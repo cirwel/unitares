@@ -152,7 +152,7 @@ class SessionMixin:
     # FK-less durable mirror of the Redis session: payload, keyed by
     # session_key. INERT — nothing in production calls these yet; the
     # dual-write/read wiring is a separate flag-gated PR. See
-    # docs/proposals/redis-retirement-phase-1-plan.md.
+    # docs/proposals/archive/redis-retirement-phase-1-plan.md.
     # ------------------------------------------------------------------
 
     async def upsert_session_binding(

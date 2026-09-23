@@ -65,7 +65,7 @@ def test_burndown_tolerates_stale_and_flags_cleared_entries(tmp_path, monkeypatc
 def test_exemptions_and_unstamped_docs_are_skipped(tmp_path):
     _write(
         tmp_path,
-        "docs/proposals/resolved/old.md",
+        "docs/proposals/archive/old.md",
         "# archived\n\n**Last Updated:** 2025-01-01\n",
     )
     _write(

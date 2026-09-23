@@ -178,7 +178,7 @@ def test_exogenous_predicate_excludes_soft_and_self_referential():
 # ``calibration_excluded`` is stamped for three causes; only two are fixture
 # traffic. The corrected rule keeps rows whose only exclusion is a scraped
 # confidence; the registered rule (the pre-registered read's predicate) drops
-# them. See docs/proposals/outcome-fixture-conflation-decision-packet-v0.md.
+# them. See docs/proposals/archive/outcome-fixture-conflation-decision-packet-v0.md.
 
 
 def test_scraped_only_rows_are_fixtures_under_registered_but_not_corrected():

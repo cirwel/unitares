@@ -16,7 +16,7 @@ defmodule UnitaresLeasePlane.GovernedEffectIRConformanceTest do
   does the full schema validation; this one ties the real plane envelope shape
   to the same contract.
 
-  Mapping spec: docs/proposals/governed-effect-unitares-profile-v0.md.
+  Mapping spec: docs/proposals/active/governed-effect-unitares-profile-v0.md.
   """
   use ExUnit.Case, async: true
 

@@ -83,7 +83,8 @@ def test_repository_debt_list_and_reality_agree():
 def test_allowlists_are_not_empty_catch_alls():
     """A guard whose allowlist swallows everything checks nothing."""
     mod = _load_module()
-    on_disk = {p.name for p in (REPO_ROOT / "docs" / "proposals").glob("*.md")}
+    on_disk = {p.relative_to(REPO_ROOT / "docs" / "proposals").as_posix()
+               for p in (REPO_ROOT / "docs" / "proposals").rglob("*.md")}
     exempt = mod.INDEX_EXEMPT | mod.STATUS_LINE_DEBT
     # STATUS_LINE_DEBT is legitimately empty once paid off; INDEX_EXEMPT is not,
     # because the two relocation stubs it names are still on disk.
@@ -115,10 +116,16 @@ def tree(tmp_path: Path) -> Path:
     (root / "docs").mkdir(parents=True)
     (root / "scripts" / "dev").mkdir(parents=True)
     shutil.copytree(REPO_ROOT / "docs" / "proposals", root / "docs" / "proposals")
-    # The index links out to ../ontology/README.md; the guard resolves it, so
-    # the fixture has to provide it or every run reports a false dead link.
-    (root / "docs" / "ontology").mkdir()
-    (root / "docs" / "ontology" / "README.md").write_text("# ontology\n")
+    # The guide links out to the small canonical reading path and migration
+    # evidence. Their contents are irrelevant to this index guard fixture.
+    for relative in (
+        "AGENTS.md", "docs/PRODUCT_DEFINITION.md", "docs/UNIFIED_ARCHITECTURE.md",
+        "docs/INTERFACE_CONTRACT.md", "docs/EVIDENCE_AND_LIMITS.md",
+        "docs/dev/proposals-layout-2347.md", "docs/dev/proposals-layout-2347.json",
+    ):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("Fixture target\n")
     shutil.copy2(SCRIPT, root / "scripts" / "dev" / SCRIPT.name)
     return root
 
@@ -250,6 +257,38 @@ def test_detects_dead_index_link(tree: Path):
     assert "dead index link" in result.stdout
 
 
+@pytest.mark.parametrize("folder", ["active", "registered", "archive"])
+def test_unindexed_nested_proposal_cannot_escape_coverage(tree: Path, folder: str):
+    (tree / "docs" / "proposals" / folder / "new.md").write_text("# New\n\nStatus: draft\n")
+    result = _run_tree(tree)
+    assert result.returncode == 1
+    assert f"{folder}/new.md has no table row" in result.stdout
+
+
+def test_cross_index_duplicate_is_rejected(tree: Path):
+    index = tree / "docs" / "proposals" / "archive" / "README.md"
+    index.write_text(index.read_text() + "\n| [duplicate](../active/plexus-scope.md) | duplicate |\n")
+    result = _run_tree(tree)
+    assert result.returncode == 1
+    assert "duplicate index rows" in result.stdout
+
+
+def test_missing_supporting_artifact_is_rejected(tree: Path):
+    (tree / "docs" / "proposals" / "archive" / "accountable-testbed-federation-trace.json").unlink()
+    result = _run_tree(tree)
+    assert result.returncode == 1
+    assert "dead index link" in result.stdout
+
+
+def test_new_archive_cannot_hide_missing_status(tree: Path):
+    index = tree / "docs" / "proposals" / "archive" / "README.md"
+    (index.parent / "unstated.md").write_text("# Record\n\nNo labelled status.\n")
+    index.write_text(index.read_text() + "\n| [unstated](unstated.md) | historical |\n")
+    result = _run_tree(tree)
+    assert result.returncode == 1
+    assert "no status line: docs/proposals/archive/unstated.md" in result.stdout
+
+
 def test_detects_stale_allowlist_entry(tree: Path):
     """An allowlist entry whose file is gone is itself drift."""
     _seed_debt(tree, {"zz-never-existed.md"})
@@ -279,19 +318,20 @@ def test_guard_does_not_adjudicate_tag_correctness(tree: Path):
     tagging authority and README.md has stopped being canonical for its own rule.
     """
     readme = tree / "docs" / "proposals" / "README.md"
-    lines = readme.read_text().splitlines()
+    archive = tree / "docs" / "proposals" / "archive" / "README.md"
+    lines = archive.read_text().splitlines()
     for i, line in enumerate(lines):
         if line.startswith("| [") and "| **Parked" in line:
             lines[i] = line.replace("| **Parked", "| **Active", 1)
             break
     else:
         pytest.fail("no Parked row found to re-tag")
-    text = "\n".join(lines) + "\n"
+    archive.write_text("\n".join(lines) + "\n")
     line, counts = _counts_line(readme)
     rebalanced = line.replace(
         f"Active {counts['Active']}", f"Active {counts['Active'] + 1}"
     ).replace(f"Parked {counts['Parked']}", f"Parked {counts['Parked'] - 1}")
-    text = text.replace(line, rebalanced)
+    text = readme.read_text().replace(line, rebalanced)
     readme.write_text(text)
     result = _run_tree(tree)
     assert result.returncode == 0, result.stdout

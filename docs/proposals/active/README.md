@@ -1,0 +1,81 @@
+# Current proposals and contracts
+
+Design and measurement work, open decision packets, and current contracts whose implementation has shipped. **Placement here does not authorize implementation or establish that a proposal is ready.** The document body remains authoritative.
+
+[Proposal guide](../README.md) · [Migration inventory](../../dev/proposals-layout-2347.json)
+
+## Plexus / surface lease plane
+
+| Document | Status |
+|---|---|
+| [`plexus-scope.md`](plexus-scope.md) | **Built** · Active boundary name over the live Surface Lease Plane; Plexus Zero retained as manual fallback |
+| [`surface-lease-plane-v0.md`](surface-lease-plane-v0.md) | **Built (partial)** · The lease-plane RFC, v0.11+. Phase A shipped 2026-05-03 (PR #305); Phase B promotion window opened 2026-05-16; `resident` enforcement shipped (PR #476) |
+| [`surface-lease-plane-phase-a-plan.md`](surface-lease-plane-phase-a-plan.md) | **Built** · COMPLETE — Phase A execution plan, shipped with PR #305; retained here as the current PR-by-PR sequencing ledger cited by the BEAM roadmap and coordination kernel |
+| [`worktree-isolation-vs-lease-default.md`](worktree-isolation-vs-lease-default.md) | **Parked (since 2026-06-28)** · v0.2 counter-note / companion to the lease-plane RFC (not a replacement) |
+
+## BEAM footprint (substrate migration waves)
+
+| Document | Status |
+|---|---|
+| [`beam-footprint-roadmap-v0.md`](beam-footprint-roadmap-v0.md) | **Active** · v0.4 — destination A′ committed (operator decision 2026-05-05); Wave 3 committed to proceed 2026-06-25 and signed GO-WITH-REDUCED-SCOPE 2026-08-22 ([signed decision](../archive/wave-3-go-decision-2026-08-16.md)). Read the V0.4 RESOLUTION block first |
+| [`beam-wave-3-handler-dispatch.md`](beam-wave-3-handler-dispatch.md) | **Active** · COMMITTED AND OPEN, no active implementation — the commitment stands (V0.4, 2026-06-25); the (γ) narrow cut at `process_agent_update` was set aside 2026-06-28. Read the V0.5 STATUS CORRECTION and V0.6 SCOPE blocks before resuming |
+| [`agent-channel-wake-gate-v0.md`](agent-channel-wake-gate-v0.md) | **Active** · v0 — UNSIGNED disconfirmer gate for cross-vendor agent-channel wake; explicitly NOT under Wave 3's authorization |
+| [`agent-orchestrator-beam-v0.md`](agent-orchestrator-beam-v0.md) | **Built (dormant)** · v0 thin slice — council-reviewed library + smoke, not merged to any running surface |
+| [`governed-effect-plane-v0.md`](governed-effect-plane-v0.md) | **Built (partial)** · Draft v0.3 — Phase-4 readiness; the Phase 2 protocol contract for the dossier (dual `custody_mode`, effect envelope, typed errors, idempotency/custody-TTL/payload holes closed). The record_only shadow is built (PR #866); the execute half is not cleared |
+| [`wave-3-section-5-2-boundary-audit-summary.md`](wave-3-section-5-2-boundary-audit-summary.md) | **Built** · CI-checkable §5.2 boundary-cost audit summary (2026-06-10), required before `elixir/handler_dispatch/` commits |
+| [`beam-verbs-as-contract-capabilities-v0.md`](beam-verbs-as-contract-capabilities-v0.md) | **Active** · Design-only. Accounting settled 2026-08-29: capabilities use their own key, never the tool aggregate. PR #2032 folded the 2026-08-30 review; #1998 source review (2026-09-07) proposes sender-scoped atomic idempotency, one-logical-receiver cursor inbox and bounded dispatch/maintenance provenance. Send is independent of inbox. Retry/admission bounds and acceptance evidence remain required; lease exposure stays deferred with strict ownership, status visibility and footprint gates |
+| [`attestation-issuance-scope-v0.md`](attestation-issuance-scope-v0.md) | **Active** · Design-only; exact per-mint-site method/path model ratified 2026-08-29. Source review 2026-09-07 preserves the presence exemption boundary and stages send-only scope first, inbox with its consumer. No global prefix widening or unused ack scope; implementation still requires the companion RFC gates |
+| [`wave-3-reduced-scope-gate-v0.md`](wave-3-reduced-scope-gate-v0.md) | **Active** · PROPOSED, unratified as a gate — the reduced-scope conditions under which the signed GO proceeds; §6.3 names the calendar items whose slip halts Wave 3 outright |
+
+## Operator-vision delegation / identity hardening
+
+| Document | Status |
+|---|---|
+| [`fleet-workload-identity-auth-audit-v0.md`](fleet-workload-identity-auth-audit-v0.md) | **Active** · Draft v0.2 (2026-08-24) - council-ratified and Claude-reviewed threat model/Lease Plane pilot specification; v0.2 adds OS-isolated workload bootstrap, canonical proofs, fixed replay/audit semantics, off-state parity tests, availability/capacity gates, and break-glass recovery; live auth remains blocked |
+| [`cedar-delegation-authz-v0.md`](cedar-delegation-authz-v0.md) | **Active** · Draft v0 (2026-08-21) — decision pending, deferred-by-default. Cedar as the family's shared policy engine (pre-dispatch authorize step + the governed-effect plane's unbuilt §6 veto), principals from explicit delegation carriers only (operator token, vouched bindings — never lineage), #1387 `(tool, action)` as the action vocabulary, `stakes_table.py` as seed policy, shadow-mode first |
+| [`lineage-causal-only-semantics.md`](lineage-causal-only-semantics.md) | **Built** · IMPLEMENTED — the declaration-time parent-liveness gate shipped (see the doc's As-built section); cited from `src/mcp_handlers/lifecycle/helpers.py` |
+| [`principal-rollup-v0.md`](principal-rollup-v0.md) | **Built (partial)** · v0 proposal (2026-06-18) — count the **principal** (logical worker) not the process-instance; first-class form of identity.md research #3 ("identity as integral, not point-value"). Measurement shipped (`scripts/dev/octopus_rollup.py`); count/mint changes operator-gated. Sits atop `uuid-keyed-identity-migration` |
+
+## Other current work and contracts
+
+| Document | Status |
+|---|---|
+| [`dialectic-terminal-state-fidelity-v0.md`](dialectic-terminal-state-fidelity-v0.md) | **Active** · Decision packet, raised 2026-09-13 — `DialecticPhase.FAILED` is the terminal state for adjudication, exhaustion, reviewer non-completion and error alike, so the kernel's answer to its own "who challenged it?" question is unrecoverable once written. Options: a distinct terminal state (recommended), a structured reason field, or accept. Nothing implemented; companion to issue #2202 |
+| [`mirror-effectiveness-measurement-v0.md`](mirror-effectiveness-measurement-v0.md) | **Built (partial)** · Phases 0–1 landed (Phase 2 proposed) — deterministic, operator-funded-free measurement of whether a surfaced mirror signal changes agent behavior |
+| [`relay-substrate-relayering-v0.md`](relay-substrate-relayering-v0.md) | **Active** · Decision recorded (2026-09-17) on the 2026-09-16 packet, revised the same day after adversarial review — the NeMo Relay exporter and policy gate shipped as an optional SDK extra (`unitares_sdk.integrations.nemo_relay`); new host integrations default to Relay and the hook chain is held unchanged; upstream publication no longer waits on an external operator, a change in that item's governance role that owes the cohort protocol a dated clarification before recruitment; the execute half records **no decision** and its three options stay live and the commissioned design read is written ([`execute-plane-design-read-v0.md`](execute-plane-design-read-v0.md)) without deciding the row, which Wave 3 does not authorise building ahead of; the ninety-day evidence gate becomes a 2026-11-03 renew-or-stop process checkpoint that grades nothing |
+| [`execute-plane-design-read-v0.md`](execute-plane-design-read-v0.md) | **Active** · Pre-registration (2026-09-17) for the design read the Relay packet's row 3 commissions — states disconfirming conditions for all three execute-plane options before the comparative analysis, fixes the failure-mode and authority matrix the answer must fill, and bars any usage count from deciding the retire option. Carries no implementation authority and changes no option's status |
+| [`pcalm-primal-dual-governance-v0.md`](pcalm-primal-dual-governance-v0.md) | **Active** · Replay-first research design adapting PC-ALM's persistent-residual idea as non-authoritative constraint pressure; pure transition and synthetic invariants only, with no live wiring, selected real constraint, outcome read, or policy authority. The unwired primitive (`src/constraint_pressure.py`) is registered **KEEP-DORMANT** with its wake condition in `docs/operations/dormant-capability-registry.md` (Theme 7) |
+| [`kg-agent-adoption-pilot-v0.md`](kg-agent-adoption-pilot-v0.md) | **Active** · DRAFT / HOLD — offline fixture independently reviewed; production-plugin probe found the pinned root outside top five for five of six frozen queries, the one audit row required read-only decoder recovery, delayed auto-checkin falsified durable canary isolation, and live parity, scored runs, orchestration promotion, and live actuators remain unauthorized |
+| [`verification-weighted-verdict-v0.md`](verification-weighted-verdict-v0.md) | **Built (dormant)** · v0 (2026-06-28) — Phases 1/1.5/2 landed: deterministic escalate-only detector (`governance_core/verification.py`) + local-model/Ollama backend (`src/verification_backend.py`) + opt-in eval harness + **default-off** actuator wiring (`apply_verification_floor`, `GOVERNANCE_VERIFICATION_FLOOR`); separates the self-report-dependence worked example 0.0 vs 0.96 and flips flag-on sabotage to pause. **Enabling the flag is council-gated.** Honors the one-sided Φ-floor constraint. Phase 2.5 (2026-09-18, #2169) gives the default-ON shadow a durable sink and a denominator — it had been computing a would-fire signal on every check-in and persisting none of it |
+| [`governed-effect-s7-strong-tier-recert.md`](governed-effect-s7-strong-tier-recert.md) | **Built** · Design v0.2, council-folded — strong-tier re-certification gate for governed-effect `execute agent_spawn`; implementation landed separately in the governed-effect track |
+| [`tool-surface-legibility-v0.md`](tool-surface-legibility-v0.md) | **Active** · Draft v0 (2026-08-29), design-only, unreviewed — what an agent sees at selection time: a lintable description contract (routing first line; deep lore moves to `describe_tool` detail), discriminator lines for the inference and shared-memory clusters, and a session-start orientation map. Builds on the friendly-verb promotion + #1994 and the consult facade; no removals, no renames, identity-surface edits deferred to that coupled surface |
+| [`orchestrated-dialectic-reviewer-v0.md`](orchestrated-dialectic-reviewer-v0.md) | **Built (dormant)** · Implemented behind opt-in gates — standalone reviewer, governed-first spawn path, model-derived `agrees` including `False`, local/Codex/Claude backend routing, fallback behavior and provenance tests are present; operator rollout is a separate step from merge |
+| [`dialectic-resolution-receipt-v0.md`](dialectic-resolution-receipt-v0.md) | **Built (dormant)** · Wired and dormant: deployment-countersigned dialectic resolution record (Ed25519, `drr.v1`) a peer verifies offline with the pinned public key; mints only when an attestation key exists, and names the custody, key-history and second-principal preconditions before enabling is honest; issuer-level, never party-level, non-repudiation |
+| [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md) | **Active** · Seven open operator decisions: December-read interpretation and supplementary analysis, dashboard scope, review versus production authorization, doctor-check placement, and historical documentation enforcement. Includes non-binding Codex review recommendations and attributed read-only deployment observations, recorded 2026-09-10. No recommendation is recorded as operator-approved or implemented. |
+| [`agent-message-transport-v0.md`](agent-message-transport-v0.md) | **Built (dormant)** · Implemented, not deployed — migration 069 is unapplied on the maintainer deployment |
+| [`gap-recovery-arming-semantics-v0.md`](gap-recovery-arming-semantics-v0.md) | **Active** · Decision pending — operator call, not taken. Splits `GAP_RECOVERY_ARM_SECONDS` out of the `DT_MAX` Euler bound so "how long is an absence" can be set deliberately; default reproduces the legacy 150s boundary exactly, so no posture moves. Records what the 2026-08-06 audit (89.4% of pauses downgraded, 2.1% sleep-shaped) does and does not settle, and is the referent for the former dangling `task #7` comment |
+| [`consult-advisory-facade-v1.md`](consult-advisory-facade-v1.md) | **Active** · Implementation candidate for the consult advisory facade (2026-08-29) |
+| [`governed-effect-unitares-profile-v0.md`](governed-effect-unitares-profile-v0.md) | **Built** · Profile + runtime mapper implemented; companion to the governed-effect plane contract |
+| [`governed-reviewer-spawn-v0.md`](governed-reviewer-spawn-v0.md) | **Built (dormant)** · Built, inert (flag off); activation is an operator step (§Activation) |
+
+## EISV maths, coherence, and outcome grounding
+
+| Document | Status |
+|---|---|
+| [`eisv-maths-roadmap-v0.md`](eisv-maths-roadmap-v0.md) | **Active** · Design-intent roadmap (not a change); captures the direction, each step lands separately |
+| [`eisv-grounding-next-move-v0.md`](eisv-grounding-next-move-v0.md) | **Active** · Design-intent roadmap for the next grounding move (not a change) |
+| [`eisv-general-solution-v0.md`](eisv-general-solution-v0.md) | **Active** · Derivation + numerical verification; no deployed behaviour or flag |
+| [`eisv-grounded-coherence-rederivation-v0.md`](eisv-grounded-coherence-rederivation-v0.md) | **Active** · Design proposal, whiteboard candidate; not deployed |
+| [`coherence-proprioceptive-thresholds-v0.md`](coherence-proprioceptive-thresholds-v0.md) | **Active** · Proposal; changes no deployed behaviour. Blocked: the coherence signal is frozen (#1572) and nothing here is actionable until that is repaired |
+| [`exponential-growth-dynamics-v0.md`](exponential-growth-dynamics-v0.md) | **Built** · Site B (cohort priors) fully wired — the pure primitive merged in PR #1334 |
+| [`eisv-stage0-bridge-b-label-routing.md`](eisv-stage0-bridge-b-label-routing.md) | **Built (partial)** · Half (a) shipped in PR #1210; half (b) remains an active routing and population specification |
+| [`eisv-core-boundary-v0.md`](eisv-core-boundary-v0.md) | **Active** · DRAFT proposal (2026-09-17) — a neutral checkpoint spine keyed by `checkpoint_id` owns identity, ordering, provenance, claims, evidence, objections, outcomes and artifact links; EISV becomes a versioned, path-dependent subscriber producing advisory assessments; enforcement separately opt-in. Documentation only; authorizes at most a default-off observational seam and out-of-process shadow replay, first issue an instrument-preservation harness; governed architecture review rejection (sequencing before the read) stands as an operator decision; ownership move and authority posture wait for the 2026-12-01 read's preservation horizon |
+| [`eisv-incremental-value-ablation-v1.md`](../eisv-incremental-value-ablation-v1.md) | **Active** · Draft preregistration (protocol 0.3.0); no cohort enrolled and no experiment scheduled |
+| [`legacy-coherence-identity-ablation-v0.md`](legacy-coherence-identity-ablation-v0.md) | **Active** · Measurement-only proposal |
+| [`independent-operator-cohort-enrollments.md`](independent-operator-cohort-enrollments.md) | **Active** · Append-only enrollment ledger for the cohort protocol; entries are added by PR and never edited |
+
+## Effect authorization design
+
+| Document | Status |
+|---|---|
+| [`governed-effect-effect-binding-v0.md`](governed-effect-effect-binding-v0.md) | **Parked (since 2026-06-28)** · Design v0.2 — per-effect authorization, successor to the §7 strong-tier re-certification; demand-gated, build only when its §8 trigger fires |
