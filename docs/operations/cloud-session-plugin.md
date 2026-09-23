@@ -224,7 +224,7 @@ then runs with governance tools and OFFLINE hooks, which is a coherent posture:
 reads and manual `sync_state` calls still work through the MCP connector, and
 only the automatic lifecycle is absent.
 
-## Review records work; the automatic Codex reviewer does not
+## Review from hosted sessions
 
 A third gap, in the same family and worth knowing before shipping cloud-session
 work: the hosted image can read and update the PR, but it does not include every
@@ -234,19 +234,22 @@ heterogeneous reviewer CLI.
   `gh pr comment`, `review.sh record`, and the merged-PR push guard work for
   repositories attached to the session. The proxy supports the PR operations
   these paths use, although it restricts unrelated GraphQL operations.
-- The reviewer is heterogeneous by construction: `default_reviewer` picks
-  `codex` for any branch not named `codex/*`. The standard hosted image does
-  not include the Codex CLI, so `review.sh` cannot generate that
-  automatic review there.
+- Local review prefers the other model: `default_reviewer` picks `codex`
+  for branches not named `codex/*`. If that CLI is absent or unavailable,
+  `review.sh` tries the other provider in a fresh reviewer session. With
+  `git config review.native true`, it can instead request and join native
+  GitHub Codex review without needing a local Codex CLI.
 
-Self-reviewing is not the workaround, and the gate already refuses it —
-`cmd_record` rejects a record whose reviewer name matches the branch prefix,
-and the module docstring says to treat an author's record as no review. A PR
-that needs the Codex reviewer therefore stays `review`-pending until an
-external reviewer produces the artifact. The cloud session can post a human or
-council artifact itself with
-`./scripts/dev/review.sh record <file> --reviewer-name <who>`, or another
-machine with the reviewer CLI can run `./scripts/dev/review.sh`.
+The author cannot substitute their own self-check for independent review.
+`cmd_record` requires an explicit independence attestation; it does not infer
+independence from a provider name or branch prefix. A separate reviewer using
+the same model is valid. The cloud session can record an actual independent
+human or model code review with
+`./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
+or another machine with the reviewer CLI can run `./scripts/dev/review.sh`.
+Consult advice alone is not a code review. If no reviewer completes, the
+command returns UNREVIEWED and the author reports the blocker; CI shows a
+neutral warning. The author keeps the PR draft until review is complete.
 
 The record is keyed on the diff, so it can be produced at any later point
 without re-pushing.

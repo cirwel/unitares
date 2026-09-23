@@ -149,7 +149,10 @@ review. Separate output directories preserve each attempt.
 Native Codex is an optional default for an operator who has enabled GitHub
 code review. On this operator's UNITARES repo, the 2026-09-23 pilot used
 **Review team PRs / Every push**, with exhaustive review and credit overage
-left off. Enable the author/sweep integration in the shared local repository:
+left off. The trigger was then reduced to **On PR open**: base updates had
+started another review that finished after #2352 merged. Authors still run
+`review.sh` for changed diffs, so review completion stays part of delivery.
+Enable the author/sweep integration in the shared local repository:
 
 ```bash
 git config review.native true
@@ -181,6 +184,14 @@ reports incomplete evidence; it never substitutes a partial clean result.
 Reviewer availability and evidence availability are separate failures. A final
 head-and-diff check prevents a concurrent push or retarget from being handed
 back as reviewed.
+
+Joining a native clean result publishes a diff-bound review record once. This
+triggers CI even when the clean reaction arrived after the activity comment's
+workflow finished; reactions themselves have no workflow event. The quiet-PR
+sweep also records completed native clean reviews. Local review commands stop
+on closed or merged PRs and check again before publishing results. Native
+cloud reviews already in flight can still finish after merge; triage any valid
+late findings in a follow-up change rather than reopening the merged PR.
 
 Native review focuses on major correctness issues. Consult is still useful
 for focused design advice; council/dialectic remains an optional escalation.

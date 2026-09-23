@@ -71,6 +71,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -131,6 +132,16 @@ def git(*args: str, check: bool = True) -> str:
 
 def gh_json(*args: str):
     return json.loads(_run(["gh", *args]))
+
+
+class ClosedPullRequest(Exception):
+    """Stop local review work once its PR has been closed or merged."""
+
+
+def require_open(pr: int, info: dict | None = None) -> None:
+    info = info if info is not None else gh_json("pr", "view", str(pr), "--json", "state")
+    if info["state"] != "OPEN":
+        raise ClosedPullRequest(f"PR #{pr} is {info['state'].lower()}; review work has stopped")
 
 
 def diff_key(base: str, head: str) -> str:
@@ -393,7 +404,9 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
     requested = False
     print("[review] joining native Codex review (bounded wait; local fallback available)", flush=True)
     while time.monotonic() < deadline:
-        if gh_json("pr", "view", str(pr), "--json", "headRefOid")["headRefOid"] != head:
+        info = gh_json("pr", "view", str(pr), "--json", "headRefOid,state")
+        require_open(pr, info)
+        if info["headRefOid"] != head:
             return Record(key, "FAILED", 0, False, "PR head changed; rerun review.sh")
         comments = pr_comments(repo, pr)
         snapshot = read_native(repo, pr, key, head, comments)
@@ -456,7 +469,7 @@ def repo_slug() -> str:
 
 def current_pr() -> dict | None:
     proc = subprocess.run(["gh", "pr", "view", "--json",
-                           "number,headRefOid,headRefName,baseRefName"],
+                           "number,headRefOid,headRefName,baseRefName,state"],
                           text=True, capture_output=True)
     return json.loads(proc.stdout) if proc.returncode == 0 else None
 
@@ -542,6 +555,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
 
 
 def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
+    require_open(pr)  # a local reviewer may have finished after the merge
     body = f"{render_marker(rec)}\n### Review record — {heading}\n\n"
     body += f"Diff key `{rec.key[:12]}` · reviewer `{rec.reviewer}`\n\n"
     if len(text) > COMMENT_LIMIT:
@@ -554,9 +568,10 @@ def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
 def _resolve(args) -> tuple[int, str, str, str]:
     """PR number, repo, key, reviewer label for HEAD. Refuses a stale push."""
     info = current_pr() if args.pr is None else gh_json(
-        "pr", "view", str(args.pr), "--json", "number,headRefOid,headRefName,baseRefName")
+        "pr", "view", str(args.pr), "--json", "number,headRefOid,headRefName,baseRefName,state")
     if info is None:
         raise SystemExit("review_gate: no PR for this branch — ship it first (ship.sh opens one)")
+    require_open(info["number"], info)
     # Key against the PR's own base, as CI does — not a fixed master.
     args.base = args.base or f"origin/{info['baseRefName']}"
     remote, _, branch = args.base.partition("/")
@@ -586,18 +601,46 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
     """A completed review must still describe the PR we are handing back."""
     if result:
         return result
+    # Even different diffs of the same PR may be reviewed concurrently. Fetch
+    # both tips into private refs so another worktree cannot move our snapshot.
+    snapshot = f"refs/review-gate/handoff/{pr}/{uuid.uuid4().hex}"
+    base_ref, head_ref = f"{snapshot}/base", f"{snapshot}/head"
     try:
-        info = gh_json("pr", "view", str(pr), "--json", "headRefOid,baseRefName")
-        base = f"origin/{info['baseRefName']}"
-        git("fetch", "--quiet", "origin", f"+refs/heads/{info['baseRefName']}:refs/remotes/{base}")
-        current = info["headRefOid"] == head and diff_key(base, head) == key
+        info = gh_json("pr", "view", str(pr), "--json", "baseRefName,state")
+        require_open(pr, info)
+        git("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin",
+            f"+refs/heads/{info['baseRefName']}:{base_ref}",
+            f"+refs/pull/{pr}/head:{head_ref}")
+        # The record is diff-bound: message amendments and base-only merges
+        # remain valid. Use the fetched head, not an API SHA from before a push.
+        current = diff_key(base_ref, head_ref) == key
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED
+    finally:
+        git("update-ref", "-d", head_ref, check=False)
+        git("update-ref", "-d", base_ref, check=False)
     if not current:
         print("[review] UNREVIEWED: the PR head or base diff changed during review; push/join the current diff again")
         return UNREVIEWED
     return 0
+
+
+def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
+                  comments: list[dict]) -> int:
+    result = completed_review_exit(repo, pr, key, head,
+                                  UNREVIEWED if rec.verdict == "FAILED"
+                                  else 0 if rec.status()[0] == "success" else 1)
+    if result == 0 and rec.verdict == "CLEAN" and rec.reviewer == "codex-native":
+        # Reactions have no workflow event. A durable comment both re-runs CI
+        # when the clean reaction arrives late and preserves diff equivalence.
+        recorded = any(c.get("author_association") in TRUSTED_ASSOCIATIONS
+                       and (r := parse_record(c.get("body", "")))
+                       and r.key == key and r.verdict == "CLEAN" for c in comments)
+        if not recorded:
+            post_record(pr, Record(key, "CLEAN", 0, False, "codex-native"),
+                        f"CLEAN — native review joined: {rec.url}", rec.text)
+    return result
 
 
 class review_lock:
@@ -656,6 +699,7 @@ def cmd_review(args) -> int:
     while True:
         with review_lock(key) as lock:
             if lock.held:
+                require_open(pr)
                 # Re-read AFTER acquiring: a ship/sweep review may have posted
                 # while we waited. Joining it must return its actual result.
                 comments = pr_comments(repo, pr)
@@ -676,7 +720,7 @@ def cmd_review(args) -> int:
                     print(existing.text)
                     if existing.verdict == "FAILED":
                         return UNREVIEWED
-                    return completed_review_exit(repo, pr, key, head, 0 if state == "success" else 1)
+                    return finish_record(repo, pr, key, head, existing, comments)
                 args.failed_providers = {p for p in ("claude", "codex")
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
@@ -691,9 +735,7 @@ def cmd_review(args) -> int:
                         rec = None
                     if rec:
                         print(f"[review] {rec.status()[1]}\n{rec.url}\n{rec.text}")
-                        return completed_review_exit(repo, pr, key, head,
-                                                     UNREVIEWED if rec.verdict == "FAILED"
-                                                     else 0 if rec.status()[0] == "success" else 1)
+                        return finish_record(repo, pr, key, head, rec, pr_comments(repo, pr))
                     args.budget = max(0, args.budget - int(time.monotonic() - native_start))
                 result = review_with_fallback(args, pr, key, reviewer)
                 # A cloud review can finish while the local fallback runs.
@@ -756,6 +798,7 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
 
 
 def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
+    require_open(pr)
     out_dir = Path(CACHE_DIR) / key / reviewer
     out_dir.mkdir(parents=True, exist_ok=True)
     diff_path = (out_dir / "diff.txt").resolve()
@@ -899,6 +942,13 @@ def cmd_sweep(args) -> int:
                 for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":
                 print(f"[sweep] PR #{n}: author follow-up needed — {rec.status()[1]} {rec.url}")
+            elif not args.dry_run and rec.verdict == "CLEAN" and rec.reviewer == "codex-native":
+                with review_lock(key) as lock:
+                    if lock.held:
+                        comments = pr_comments(repo, n)
+                        rec = current_record(repo, n, key, head, comments)
+                        if rec is not None:
+                            finish_record(repo, n, key, head, rec, comments)
             continue  # report findings/retry exhaustion rather than silently skipping
         if review_lock(key).holder_alive():
             continue
@@ -1033,8 +1083,12 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
-    return {"review": cmd_review, "record": cmd_record, "dispose": cmd_dispose,
-            "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
+    try:
+        return {"review": cmd_review, "record": cmd_record, "dispose": cmd_dispose,
+                "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
+    except ClosedPullRequest as exc:
+        print(f"[review] {exc}")
+        return 0
 
 
 if __name__ == "__main__":
