@@ -136,6 +136,15 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         "UNITARES_DIALECTIC_CLAUDE_MODEL",
         "UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S",
         "UNITARES_DIALECTIC_CODEX_TIMEOUT_S",
+        # External (OpenAI-compatible) host: endpoint, model, and the NAME of
+        # the key variable. Without these a HOST=external/gemini selection
+        # reached the child alone, reported "not configured", and fell back to
+        # the local model. The key VALUE is deliberately not forwarded — the
+        # child inherits it from the orchestrator's own environment.
+        "UNITARES_DIALECTIC_EXTERNAL_BASE_URL",
+        "UNITARES_DIALECTIC_EXTERNAL_MODEL",
+        "UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV",
+        "UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S",
         "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS",
         "UNITARES_DIALECTIC_CONTINUATION_WAIT_S",
         "UNITARES_DIALECTIC_CONTINUATION_POLL_S",
