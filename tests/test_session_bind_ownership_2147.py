@@ -7,7 +7,7 @@ onto whatever key it was handed, in Redis, Postgres and the sticky transport
 cache, so the next caller to reach it with a foreign key would repeat #2142.
 
 The ownership predicate the safe callers already applied now lives in one
-place (`bind_destination_refusal`) and the helper applies it itself. The four
+place (`bind_destination_refusal`) and the helper applies it itself. The three
 shapes the live call sites produce are pinned here as still succeeding.
 """
 
@@ -238,3 +238,26 @@ class TestBindSessionEndToEnd:
         assert data["bound"] is False
         assert data["rebind_refused"] == "pinned_onboard_session"
         assert data["mcp_session_key"] is None
+        assert "User-Agent" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_an_undeclared_refusal_is_not_described_as_a_user_agent_collision(self, agent_uuid, writes):
+        """`undeclared_provenance` cannot reach bind_session today (every ladder
+        return names its source), but if it ever does the message must not
+        borrow the pinned_onboard_session explanation."""
+        async def _refuse(*args, **kwargs):
+            return {"bound": False, "session_key": None, "bind_refused": UNDECLARED_DESTINATION_PROVENANCE}
+
+        with patch.object(handlers, "resolve_session_identity", AsyncMock(return_value=self._resolved(agent_uuid))), \
+             patch.object(handlers, "derive_session_key_with_source",
+                          AsyncMock(return_value=("mcp:test-session", "mcp_session_id"))), \
+             patch.object(handlers, "_perform_session_bind", _refuse):
+            data = parse_result(await handlers.handle_bind_session({
+                "client_session_id": "agent-abc123",
+                "resume": True,
+            }))
+        assert data["bound"] is False
+        assert data["rebind_refused"] == UNDECLARED_DESTINATION_PROVENANCE
+        assert data["mcp_session_key"] is None
+        assert "User-Agent" not in data["message"]
+        assert "provenance" in data["message"]

@@ -40,7 +40,7 @@ source_files:
   - unitares/src/schema_brief.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "d82070a0d97f2830"
+  unitares/src/mcp_handlers/identity/handlers.py: "547ee75e2ada8d54"
   unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f5c881194d51f538"
