@@ -57,7 +57,8 @@ def _log_embedding_skipped(discovery_id: str, op: str) -> None:
         '(pip install -e ".[full,embeddings]" -c constraints.txt; the Docker '
         "image needs sentence-transformers uncommented in requirements-docker.txt), "
         "then backfill with UNITARES_EMBEDDING_MODEL=<model> "
-        "python scripts/migration/reembed_corpus.py. Further skips log at debug."
+        "python scripts/migration/reembed_corpus.py --only-missing. "
+        "Further skips log at debug."
     )
 
 

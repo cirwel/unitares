@@ -45,6 +45,15 @@ sys.path.insert(0, str(project_root))
 
 from src.storage.knowledge_graph import KnowledgeGraphAGE
 from src.knowledge_graph import DiscoveryNode, ResponseTo
+import src.storage.knowledge_graph_age as kg_age_module
+
+
+@pytest.fixture(autouse=True)
+def _reset_embedding_skip_warned(monkeypatch):
+    """The embedding-skip warning (#2293) is a module-global once-flag. Reset it
+    per test so any test that reaches the skip branch sees WARNING regardless of
+    what ran before it."""
+    monkeypatch.setattr(kg_age_module, "_embedding_skip_warned", False)
 
 
 # ============================================================================
@@ -482,10 +491,8 @@ class TestAddDiscovery:
         """
         import logging
         import src.embeddings as embeddings_module
-        import src.storage.knowledge_graph_age as kg_age_module
 
         monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
-        monkeypatch.setattr(kg_age_module, "_embedding_skip_warned", False)
 
         kg, _ = make_kg_with_mock_db()
         kg._check_rate_limit = AsyncMock()
@@ -500,7 +507,8 @@ class TestAddDiscovery:
         msg = warnings[0].getMessage()
         assert "disc-a" in msg
         assert "semantic search will not find this entry" in msg
-        assert "reembed_corpus.py" in msg
+        # --only-missing: a bare run rewrites every existing vector (#2364).
+        assert "reembed_corpus.py --only-missing" in msg
         assert "UNITARES_EMBEDDING_MODEL" in msg
 
         debugs = self._embedding_skip_records(caplog, logging.DEBUG)
@@ -515,10 +523,8 @@ class TestAddDiscovery:
         once-flag, so a store followed by a refresh yields one WARNING total."""
         import logging
         import src.embeddings as embeddings_module
-        import src.storage.knowledge_graph_age as kg_age_module
 
         monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
-        monkeypatch.setattr(kg_age_module, "_embedding_skip_warned", False)
 
         kg, _ = make_kg_with_mock_db()
         kg._pgvector_available = AsyncMock(return_value=True)
