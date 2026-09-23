@@ -478,9 +478,15 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # looked at it: the row fell straight through to FAILED at 2h while
             # an ANTITHESIS stall got the 4h operator window above. The escape
             # already exists — `handle_reassign_reviewer` admits any phase once
-            # `awaiting_facilitation` is set, and `_apply_reviewer_reassignment`
-            # rewinds to ANTITHESIS so the incoming reviewer gets a turn — but
-            # nothing raised the flag, so nobody could use it.
+            # `awaiting_facilitation` is set — but nothing raised the flag, so
+            # nobody could use it. What the operator's reassign then does
+            # depends on the row: inside the 4h window the session is still
+            # active, so `_apply_reviewer_reassignment` leaves it in SYNTHESIS
+            # and the replacement continues by submitting synthesis
+            # (`test_reassign_facilitates_standing_rejection_in_synthesis`);
+            # it rewinds to ANTITHESIS only for a refused self-review (old
+            # reviewer == paused agent), and reopens a row already reaped as
+            # `failed` to the phase it was waiting in.
             #
             # ⛔NOT reusing the reassignment path above. The protocol requires
             # the SAME reviewer to revise its own verdict; a replacement chosen
