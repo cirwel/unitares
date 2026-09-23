@@ -63,6 +63,9 @@ from scripts.analysis.eisv_skeptic_report import (
     split_rows_by_telemetry_dimension,
     summarize_conclusion,
 )
+# Module reference, not a name import: the registered-read guard below must read
+# the constants as they stand in the checkout at call time.
+import scripts.analysis.eisv_skeptic_report as skeptic_report
 from scripts.analysis.outcome_inventory import (
     harness_lane_from_detail,
     is_controlled_validation_fixture,
@@ -94,6 +97,19 @@ class RegisteredReadProtocol:
     # same value as --uncertainty-seed: the predeclared read id and the seed it
     # names are one thing, not two.
     binds_uncertainty_seed: bool = False
+    # When set, a registered read under this protocol runs only while the live
+    # `eisv_skeptic_report.EISV_PRIOR_STATE_MODELS` tuple and `DISPERSION_FEATURE`
+    # are equal to these values. They record the candidate NAMES, in their
+    # selection ORDER (max() keeps the first maximal element), and the dispersion
+    # feature name as they stood when the protocol's condition-4 clarification
+    # was registered (2026-09-23). They do not record what any candidate computes:
+    # the model constructors, their binning, min_feature_rows, the dispersion
+    # window and snapshot minimum are not compared. The check reads source
+    # constants, so it detects a drifted checkout; it is not a runtime tamper
+    # guarantee. None means the protocol does not record them (the operator
+    # cohort freezes the whole harness by sha256 at enrollment instead).
+    candidate_models: tuple[str, ...] | None = None
+    dispersion_feature: str | None = None
 
 
 # The protocol manifest. A `--read-protocol registered` read must match exactly
@@ -110,6 +126,18 @@ REGISTERED_READ_MANIFEST: tuple[RegisteredReadProtocol, ...] = (
         read_id_pattern=re.compile(r"eisv-outcome-grounding-2026-12-01(?:-retry-[0-9]+)?"),
         fixture_rule=REGISTERED_FIXTURE_RULE,
         registered_in="docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md",
+        # Literal names taken from master fb966bad (2026-09-23), never
+        # `=EISV_PRIOR_STATE_MODELS`: a pin that reads the live value is a tautology.
+        candidate_models=(
+            "previous_bad_plus_prior_risk",
+            "prior_risk_binned",
+            "prior_phi_binned",
+            "prior_s_binned",
+            "prior_verdict",
+            "prior_eisv_dispersion_binned",
+            "previous_bad_plus_dispersion",
+        ),
+        dispersion_feature="prior_s_disp",
     ),
     RegisteredReadProtocol(
         name="independent-operator-cohort-v0.1",
@@ -1073,6 +1101,25 @@ def validate_read_protocol(
                     "sensitivity cohort is a separate --read-protocol reproduction "
                     "--fixture-rule corrected read"
                 )
+            if entry.candidate_models is not None:
+                live_models = tuple(skeptic_report.EISV_PRIOR_STATE_MODELS)
+                if live_models != entry.candidate_models:
+                    errors.append(
+                        f"registered protocol {entry.name} pinned the candidate tuple "
+                        f"{entry.candidate_models!r} in REGISTERED_READ_MANIFEST; "
+                        f"eisv_skeptic_report.EISV_PRIOR_STATE_MODELS is now {live_models!r}. "
+                        "Run from the checkout the pin names, or amend the manifest and "
+                        f"{entry.registered_in} by pull request before the read"
+                    )
+            if entry.dispersion_feature is not None:
+                live_feature = skeptic_report.DISPERSION_FEATURE
+                if live_feature != entry.dispersion_feature:
+                    errors.append(
+                        f"registered protocol {entry.name} pinned DISPERSION_FEATURE="
+                        f"{entry.dispersion_feature!r}; eisv_skeptic_report.DISPERSION_FEATURE "
+                        f"is now {live_feature!r}. Run from the checkout the pin names, or amend "
+                        f"the manifest and {entry.registered_in} by pull request before the read"
+                    )
             if entry.binds_uncertainty_seed:
                 declared = int(entry.read_id_pattern.fullmatch(args.read_id).group("seed"))
                 if getattr(args, "uncertainty_seed", None) != declared:

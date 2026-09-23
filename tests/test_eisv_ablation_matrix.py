@@ -19,6 +19,7 @@ from scripts.analysis.eisv_ablation_matrix import (
     format_matrix_report,
     split_rows_by_harness_lane,
 )
+from scripts.analysis import eisv_skeptic_report as skeptic_module
 from scripts.analysis.eisv_skeptic_report import ModelScore, OutcomeRow
 from src.grounding.outcome_anchors import anchored_outcomes_predicate
 
@@ -1224,3 +1225,97 @@ def test_manifest_ambiguity_and_unregistered_ids_fail_closed(monkeypatch):
     monkeypatch.undo()
     with pytest.raises(matrix_module.ReadProtocolError, match="names no protocol"):
         matrix_module.effective_fixture_rule(_registered_args("unregistered-read"))
+
+
+# ---- the stop-rule read's candidate-tuple pin (condition 4 clarification, 2026-09-23) ----
+#
+# The guard compares SOURCE constants. `score_deltas_vs_baseline` binds its
+# `candidate_names` default at definition time, so monkeypatching the module
+# constant does not change what a read would compute; these tests assert
+# refusal only, never a computation change.
+
+STOP_RULE_READ_ID = "eisv-outcome-grounding-2026-12-01"
+
+
+def test_stop_rule_manifest_pins_the_live_candidate_tuple_and_dispersion_feature():
+    """Drift canary: any edit to either constant on master fails here, months before the read."""
+    entry = matrix_module.registered_read_protocol(STOP_RULE_READ_ID)
+    assert entry is not None
+    assert entry.candidate_models == tuple(skeptic_module.EISV_PRIOR_STATE_MODELS)
+    assert entry.dispersion_feature == skeptic_module.DISPERSION_FEATURE
+    assert len(entry.candidate_models) == 7
+    # The pin is literal, not a reference to the live tuple.
+    assert entry.candidate_models is not skeptic_module.EISV_PRIOR_STATE_MODELS
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+    matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID + "-retry-1"), now=now)
+
+
+def test_registered_read_refuses_a_moved_candidate_tuple(monkeypatch, tmp_path):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    original = tuple(skeptic_module.EISV_PRIOR_STATE_MODELS)
+
+    # An added candidate.
+    monkeypatch.setattr(skeptic_module, "EISV_PRIOR_STATE_MODELS", (*original, "prior_v_binned"))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple") as exc:
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+    # The message names both the recorded and the live tuple.
+    assert "prior_v_binned" in str(exc.value)
+    assert "prior_eisv_dispersion_binned" in str(exc.value)
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID + "-retry-3"), now=now)
+
+    # Same names, different order: max() keeps the first maximal element, so order selects.
+    monkeypatch.setattr(skeptic_module, "EISV_PRIOR_STATE_MODELS", tuple(reversed(original)))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+
+    # The refusal happens before the ledger exists: no receipt, no consumed read id.
+    args = _registered_args(STOP_RULE_READ_ID, "--read-ledger-dir", str(tmp_path))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
+        matrix_module.record_read_receipt(args, exclude_harness_lanes=("beam",), now=now)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_registered_read_refuses_a_swapped_dispersion_feature(monkeypatch, tmp_path):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(skeptic_module, "DISPERSION_FEATURE", "prior_risk_disp")
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned DISPERSION_FEATURE") as exc:
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+    assert "prior_s_disp" in str(exc.value)
+    assert "prior_risk_disp" in str(exc.value)
+    args = _registered_args(STOP_RULE_READ_ID, "--read-ledger-dir", str(tmp_path))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned DISPERSION_FEATURE"):
+        matrix_module.record_read_receipt(args, exclude_harness_lanes=("beam",), now=now)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_candidate_pin_leaves_exploratory_reproduction_and_operator_reads_alone(monkeypatch):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        skeptic_module, "EISV_PRIOR_STATE_MODELS", (*skeptic_module.EISV_PRIOR_STATE_MODELS, "prior_v_binned")
+    )
+    monkeypatch.setattr(skeptic_module, "DISPERSION_FEATURE", "prior_risk_disp")
+    # Exploratory and reproduction reads never enter the registered branch.
+    matrix_module.validate_read_protocol(
+        matrix_module.parse_args(
+            ["--read-protocol", "exploratory", "--read-id", "exploratory-20260901-000000",
+             "--acknowledge-contamination"]
+        ),
+        now=now,
+    )
+    matrix_module.validate_read_protocol(
+        matrix_module.parse_args(
+            [
+                "--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-2026-12-01-sensitivity",
+                "--acknowledge-contamination", "--fixture-rule", "corrected", "--as-of", "2026-06-01T00:00:00Z",
+            ]
+        ),
+        now=now,
+    )
+    # The operator-cohort entry records no pin (it freezes the harness by sha256 at enrollment).
+    operator = matrix_module.registered_read_protocol("operator-acme-day58-seed-0")
+    assert operator is not None and operator.candidate_models is None and operator.dispersion_feature is None
+    matrix_module.validate_read_protocol(
+        _registered_args("operator-acme-day58-seed-0", "--uncertainty-seed", "0"), now=now
+    )
