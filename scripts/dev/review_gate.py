@@ -13,7 +13,7 @@ test-cache.sh made the test run one.
                    a human, another model) as the record for this diff
     dispose        post dispositions for a FINDINGS record, clearing it
     key            print the diff key for HEAD
-    sweep          review one ready PR with no record for its diff (scheduled)
+    sweep          review one quiet PR, including drafts, without a current review
     ci             (workflow only) set the `review` commit status on a PR head
 
 The diff key
@@ -164,7 +164,7 @@ class Record:
             return "success", f"{self.findings} finding(s) disposed ({self.reviewer})"
         if self.verdict == "FINDINGS":
             return "pending", f"{self.findings} finding(s) need fixes or dispositions"
-        return "failure", f"review did not finish ({self.reviewer}); re-run it"
+        return "failure", f"review did not finish ({self.reviewer}); retry or record an independent review"
 
 
 def render_marker(r: Record) -> str:
@@ -399,17 +399,28 @@ def cmd_review(args) -> int:
     if branch.startswith(f"{reviewer}/"):
         raise SystemExit(f"review_gate: {reviewer} does not review its own {branch} — "
                          "the review is by the other model")
-    existing = None if args.fresh else latest_matching(pr_comments(repo, pr), key)
-    if existing and existing.verdict != "FAILED":
-        state, desc = existing.status()
-        print(f"[review] already recorded for this diff: {desc}\n{existing.url}")
-        return 0 if state == "success" else 1
-
-    with review_lock(key) as lock:
-        if not lock.held:
-            print("[review] a review of this diff is already running on this machine")
-            return 0
-        return _review_locked(args, pr, key, reviewer)
+    deadline = time.monotonic() + args.budget
+    joined = False
+    while True:
+        with review_lock(key) as lock:
+            if lock.held:
+                # Re-read AFTER acquiring: a ship/sweep review may have posted
+                # while we waited. Joining it must return its actual result.
+                existing = (None if args.fresh and not joined else
+                            latest_matching(pr_comments(repo, pr), key))
+                if existing and (joined or existing.verdict != "FAILED"):
+                    state, desc = existing.status()
+                    print(f"[review] already recorded for this diff: {desc}\n{existing.url}")
+                    return 0 if state == "success" else 1
+                return _review_locked(args, pr, key, reviewer)
+        if not joined:
+            print("[review] joining the review already running for this diff…", flush=True)
+            joined = True
+        if time.monotonic() >= deadline:
+            print("[review] still running; no completed review joined. "
+                  "Run scripts/dev/review.sh again before marking ready.")
+            return 1
+        time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
 def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
@@ -435,6 +446,13 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
     post_record(pr, rec, heading, text)
+    print(f"[review] full result: {out_dir / 'review.txt'}")
+    if parsed is not None:
+        print(text.strip())  # the working agent needs the findings, not just a count
+    else:
+        print(text.strip()[-2000:])  # expose quota/auth/startup failures to the author
+        print("[review] retry when available, or use independent consult/council/human "
+              "review and record it: scripts/dev/review.sh record <file> --reviewer-name <who>")
     state, desc = rec.status()
     print(f"[review] {desc}")
     if rec.verdict == "FINDINGS":
@@ -478,6 +496,7 @@ def cmd_dispose(args) -> int:
 
 BOT_AUTHORS = {"app/dependabot", "dependabot", "dependabot[bot]"}
 SWEEP_MAX_FAILED = 3  # a FAILED review is retried, but not forever
+SWEEP_HOLD_LABEL = "no-auto-review"
 
 
 def failed_runs(comments: list[dict], key: str) -> int:
@@ -493,8 +512,9 @@ def failed_runs(comments: list[dict], key: str) -> int:
 def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> list[dict]:
     """Open PRs the sweep may review, oldest-updated first.
 
-    - Drafts are skipped: a draft is "still working, hands off", and its owner's
-      ship.sh already reviews each push.
+    - Drafts are included: review is how their owners reach readiness. Reading
+      a diff never authorizes editing the branch, marking ready, or merging.
+    - `no-auto-review` explicitly holds automatic review of unfinished work.
     - Only the owner's account and dependabot: a stranger's PR gets a human
       first, not a model running over its code on this machine.
     - Nothing updated in the last `quiet_s`: the pusher's own review may be
@@ -505,7 +525,7 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
     out = []
     for p in prs:
         login = (p.get("author") or {}).get("login", "")
-        if p.get("isDraft"):
+        if SWEEP_HOLD_LABEL in {label["name"] for label in p.get("labels", [])}:
             continue
         if login.lower() != owner.lower() and login not in BOT_AUTHORS:
             continue
@@ -523,7 +543,8 @@ def cmd_sweep(args) -> int:
     this script is never executed."""
     repo = repo_slug()
     prs = gh_json("pr", "list", "--state", "open", "--limit", "100", "--json",
-                  "number,isDraft,author,headRefOid,headRefName,baseRefName,updatedAt")
+                  "number,isDraft,author,headRefOid,headRefName,baseRefName,updatedAt,labels")
+    candidates = 0
     for p in sweep_candidates(prs, repo.split("/")[0], time.time(), args.quiet_minutes * 60):
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
         git("fetch", "--quiet", "--no-tags", "origin",
@@ -536,10 +557,13 @@ def cmd_sweep(args) -> int:
         rec = latest_matching(comments, key)
         if rec is not None and not (rec.verdict == "FAILED"
                                     and failed_runs(comments, key) < SWEEP_MAX_FAILED):
-            continue  # reviewed — or failed often enough that a human should look
+            if rec.status()[0] != "success":
+                print(f"[sweep] PR #{n}: author follow-up needed — {rec.status()[1]} {rec.url}")
+            continue  # report findings/retry exhaustion rather than silently skipping
         if review_lock(key).holder_alive():
             continue
         print(f"[sweep] PR #{n} ({p['headRefName']}) has no review for {key[:12]}")
+        candidates += 1
         if args.dry_run:
             continue
         wt = Path(args.worktree).expanduser()
@@ -549,7 +573,8 @@ def cmd_sweep(args) -> int:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
         return subprocess.run([sys.executable, str(Path(__file__).resolve()),
                                "--pr", str(n), "review"], cwd=wt).returncode
-    print("[sweep] nothing to review")
+    print(f"[sweep] {candidates} review candidate(s)" if candidates else
+          "[sweep] no reviews to start")
     return 0
 
 
@@ -577,7 +602,8 @@ def cmd_ci(args) -> int:
     key = diff_key(f"origin/{base_ref}", head)
     rec = latest_matching(pr_comments(repo, pr), key)
     if rec is None:
-        state, desc, url = "pending", "no review for this diff yet — run scripts/dev/review.sh", ""
+        state, desc = "pending", "author: run scripts/dev/review.sh to start/join review (drafts included)"
+        url = f"https://github.com/{repo}/blob/{base_ref}/docs/operations/github-workflow-conventions.md#review-workflow"
     else:
         (state, desc), url = rec.status(), rec.url
     print(f"PR #{pr} head {head[:12]} key {key[:12]}: {state} — {desc}")
@@ -611,7 +637,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("key", help="print the diff key for HEAD")
 
-    sw = sub.add_parser("sweep", help="review one ready PR that has no record (scheduled)")
+    sw = sub.add_parser("sweep", help="review one quiet PR, including drafts (scheduled)")
     sw.add_argument("--worktree", required=True,
                     help="worktree to check PR heads out into (created if missing)")
     sw.add_argument("--quiet-minutes", type=int, default=15)
