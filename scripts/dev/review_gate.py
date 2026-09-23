@@ -71,6 +71,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -600,18 +601,25 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
     """A completed review must still describe the PR we are handing back."""
     if result:
         return result
+    # Even different diffs of the same PR may be reviewed concurrently. Fetch
+    # both tips into private refs so another worktree cannot move our snapshot.
+    snapshot = f"refs/review-gate/handoff/{pr}/{uuid.uuid4().hex}"
+    base_ref, head_ref = f"{snapshot}/base", f"{snapshot}/head"
     try:
-        info = gh_json("pr", "view", str(pr), "--json", "headRefOid,baseRefName,state")
+        info = gh_json("pr", "view", str(pr), "--json", "baseRefName,state")
         require_open(pr, info)
-        base = f"origin/{info['baseRefName']}"
-        git("fetch", "--quiet", "origin", f"+refs/heads/{info['baseRefName']}:refs/remotes/{base}",
-            f"+refs/pull/{pr}/head:refs/review-gate/head")
+        git("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin",
+            f"+refs/heads/{info['baseRefName']}:{base_ref}",
+            f"+refs/pull/{pr}/head:{head_ref}")
         # The record is diff-bound: message amendments and base-only merges
-        # accepted by _resolve must remain valid at the final handoff too.
-        current = diff_key(base, info["headRefOid"]) == key
+        # remain valid. Use the fetched head, not an API SHA from before a push.
+        current = diff_key(base_ref, head_ref) == key
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED
+    finally:
+        git("update-ref", "-d", head_ref, check=False)
+        git("update-ref", "-d", base_ref, check=False)
     if not current:
         print("[review] UNREVIEWED: the PR head or base diff changed during review; push/join the current diff again")
         return UNREVIEWED

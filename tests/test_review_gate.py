@@ -648,15 +648,50 @@ def test_ci_preserves_existing_check_when_native_evidence_is_unreadable(monkeypa
     assert "Existing review check preserved" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("remote_head,new_key,expected", [("changed", "k", 0), ("h", "changed", 2), ("changed", "changed", 2)])
-def test_completed_review_handoff_uses_the_remote_diff_not_commit_identity(monkeypatch, remote_head, new_key, expected):
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": remote_head, "baseRefName": "new-base"})
-    fetched, compared = [], []
-    monkeypatch.setattr(rg, "git", lambda *args: fetched.append(args) or "")
-    monkeypatch.setattr(rg, "diff_key", lambda *args: compared.append(args) or new_key)
-    assert completed_review_exit("o/r", 1, "k", "h", 0) == expected
-    assert compared == [("origin/new-base", remote_head)]
-    assert "+refs/pull/1/head:refs/review-gate/head" in fetched[0]
+@pytest.mark.parametrize("update,expected", [("amend", 0), ("content", 2), ("base", 2)])
+def test_handoff_validates_fetched_diff_when_api_head_is_stale(repo, monkeypatch, update, expected):
+    _git(repo, "remote", "add", "origin", str(repo))
+    head = _git(repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", head)
+
+    def pr_info(*args):
+        # A push races the API read. Its earlier head must not decide success.
+        if update == "amend":
+            _git(repo, "commit", "-q", "--amend", "-m", "same diff, new message")
+        elif update == "content":
+            (repo / "a.txt").write_text("unreviewed content\n")
+            _git(repo, "commit", "-q", "-am", "new diff")
+        else:
+            _git(repo, "update-ref", "refs/heads/master", head)
+        _git(repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"headRefOid": head, "baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    assert completed_review_exit("o/r", 1, key, head, 0) == expected
+    assert _git(repo, "for-each-ref", "refs/review-gate/handoff") == ""
+
+
+@pytest.mark.parametrize("fetch_fails", [False, True])
+def test_handoff_fetches_do_not_share_refs_and_clean_up_on_failure(monkeypatch, fetch_fails):
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    destinations, removed, compared = [], [], []
+
+    def git(*args, **kwargs):
+        if args[0] == "fetch":
+            destinations.extend(arg.split(":", 1)[1] for arg in args if arg.startswith("+refs/"))
+            if fetch_fails:
+                raise SystemExit("fetch failed")
+        elif args[:2] == ("update-ref", "-d"):
+            removed.append(args[2])
+        return ""
+
+    monkeypatch.setattr(rg, "git", git)
+    monkeypatch.setattr(rg, "diff_key", lambda *args: compared.extend(args) or "k")
+    for pr in (1, 2, 1):
+        assert completed_review_exit("o/r", pr, "k", "h", 0) == (2 if fetch_fails else 0)
+    assert len(set(destinations)) == 6  # private base AND head, even for the same PR
+    assert sorted(removed) == sorted(destinations)
+    assert compared == ([] if fetch_fails else destinations)
 
 
 def test_joining_native_clean_publishes_one_durable_ci_trigger(repo, monkeypatch):
