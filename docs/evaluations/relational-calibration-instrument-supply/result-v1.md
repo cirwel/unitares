@@ -1,14 +1,17 @@
 # Relational calibration instrument-supply read v1 — registered result
 
-**Status: `instrument_supply_not_ready`.** The one authoritative read found
+**Status: provisional `instrument_supply_not_ready`, pending adjudication of one
+disclosed deviation.** The one authoritative read found
 `strict_supply = 0`, below the frozen threshold of 200. Under the contract's
 stop rule this closes the attempt: no maturity, duration, hour-bucket, alpha,
 value, timestamp or ID check is loosened, and the query is not repeated. A later
 supply read needs a new version, a new future cutoff and a stated new premise.
 
-One pre-read query is disclosed below as a deviation for adjudication; if it is
-ruled disqualifying, the status becomes `contract_unreadable`, which also
-closes the read, without a supply conclusion.
+One pre-read query is disclosed below as a deviation for adjudication. If it is
+ruled harmless, the status is `instrument_supply_not_ready`; if disqualifying,
+it is `contract_unreadable`, which closes the read without a supply conclusion.
+Either way this attempt is closed and the query is not repeated; until the
+ruling, cite no supply conclusion from it.
 
 This is a count of instrument supply only. It says nothing about participant,
 principal or federation capacity, which the contract never measured.
