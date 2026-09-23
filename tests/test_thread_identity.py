@@ -240,6 +240,40 @@ class TestBuildForkContext:
         )
         assert "position_note" not in ctx
 
+    def test_fresh_mint_on_shared_thread_gets_fresh_sibling_message(self):
+        """A force_new mint on a co-occupied thread is sibling_locus, but it
+        did get a fresh UUID: the message must not claim a shared one."""
+        nodes = [
+            {"agent_id": "unrelated", "thread_position": 1},
+            {"agent_id": "fresh", "thread_position": 2},
+        ]
+        ctx = build_fork_context(
+            thread_id="t-shared",
+            position=2,
+            parent_uuid=None,
+            spawn_reason="new_session",
+            all_nodes=nodes,
+            agent_uuid="fresh",
+            minted_fresh=True,
+        )
+        assert ctx["episode_fork_kind"] == "sibling_locus"
+        assert "a fresh UUID" in ctx["honest_message"]
+        assert "they are not your predecessors" in ctx["honest_message"]
+        assert "share a registry UUID" not in ctx["honest_message"]
+        assert "no child UUID minted" not in ctx["honest_message"]
+
+    def test_resumed_uuid_keeps_r6_sibling_message(self):
+        ctx = build_fork_context(
+            thread_id="t-resumed",
+            position=3,
+            parent_uuid=None,
+            spawn_reason=None,
+            all_nodes=[{"agent_id": "same", "thread_position": 3}],
+            agent_uuid="same",
+        )
+        assert ctx["episode_fork_kind"] == "sibling_locus"
+        assert "share a registry UUID" in ctx["honest_message"]
+
     def test_handler_call_site_signature_contract(self):
         """Pin exact kwargs handlers.py:1946 passes after the 2026-05-02 fix.
 
@@ -267,6 +301,7 @@ class TestBuildForkContext:
             spawn_reason="subagent",
             all_nodes=all_nodes,
             agent_uuid="uuid-2",
+            minted_fresh=True,
         )
         assert ctx["thread_id"] == "t-abc123def456ab"
         assert ctx["position"] == 2

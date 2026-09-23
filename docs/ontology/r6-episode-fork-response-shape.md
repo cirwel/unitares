@@ -191,6 +191,7 @@ v2 phrasing, mirroring R2 v2's axiom-#12-aware language:
 
 - **`sibling_locus`:** "You share a registry UUID with prior process-instances under this thread, but you are a distinct subject — fresh process-instance, no child UUID minted. Memory access (KG, project files, harness-side caches) may be available; whether you have integrated it is yours to demonstrate, not asserted."
 - **`identity_lineage`:** "You are a distinct subject (a fresh UUID under declared parent `<parent_uuid>`, spawn_reason `<spawn_reason>`). Lineage was *declared* at this fork event; whether it becomes *confirmed* is governed by R2's protocol (see `provisional_lineage` flag and downstream R1 evaluation)."
+- **`sibling_locus`, freshly minted UUID** (onboard only, added 2026-09-23): classification also routes a `force_new` mint that lands on a thread earlier, unrelated process-instances occupy (a shared IP:UA fingerprint) to `sibling_locus`. The text above is false there, since a UUID *was* minted, so onboard passes `minted_fresh` and says: "You are a distinct subject - a fresh UUID on a thread that earlier process-instances also occupy. Sharing a thread declares no lineage: they are not your predecessors. Memory access … yours to demonstrate, not asserted." The thin `process_agent_update` variant cannot tell the two cases apart from `ctx.meta` and still uses the resumed-UUID text.
 - **`none` (root):** "You are the first observation under this thread. No fork."
 
 Notes on the language pass:

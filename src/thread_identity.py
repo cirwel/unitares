@@ -54,7 +54,7 @@ def infer_spawn_reason(
     2. No parent_agent_id declared → "new_session"
     3. Claude Code client + existing thread nodes → "compaction"
     4. parent_agent_id present + existing thread nodes → "subagent"
-    5. Default → "new_session"
+    5. Declared parent, no prior thread nodes → "new_session"
 
     Inference never manufactures a lineage reason for an undeclared parent.
     A lineage reason (``compaction``, ``subagent``) classifies the fork as
@@ -104,8 +104,26 @@ def fork_honest_message(
     episode_fork_kind: str,
     parent_uuid: Optional[str],
     spawn_reason: Optional[str],
+    *,
+    minted_fresh: bool = False,
 ) -> str:
-    """Build the R6 honest-message text shared by thin and rich contexts."""
+    """Build the R6 honest-message text shared by thin and rich contexts.
+
+    ``sibling_locus`` covers two cases the classification does not separate:
+    a resumed UUID reoccupying its thread (the case R6 was written for), and
+    a freshly minted UUID landing on a thread earlier, unrelated
+    process-instances already occupy (a shared IP:UA fingerprint). Only the
+    onboard caller knows which it is, so it passes ``minted_fresh``.
+    """
+    if episode_fork_kind == "sibling_locus" and minted_fresh:
+        return (
+            "You are a distinct subject - a fresh UUID on a thread that earlier "
+            "process-instances also occupy. Sharing a thread declares no "
+            "lineage: they are not your predecessors. Memory access (KG, "
+            "project files, harness-side caches) may be available; whether "
+            "you have integrated it is yours to demonstrate, not asserted."
+        )
+
     if episode_fork_kind == "sibling_locus":
         return (
             "You share a registry UUID with prior process-instances under this "
@@ -144,6 +162,7 @@ def build_fork_context(
     all_nodes: list[dict],
     *,
     agent_uuid: Optional[str] = None,
+    minted_fresh: bool = False,
 ) -> dict:
     """
     Build the fork context dict that the onboard response embeds.
@@ -208,6 +227,7 @@ def build_fork_context(
             episode_fork_kind,
             parent_uuid,
             spawn_reason,
+            minted_fresh=minted_fresh,
         ),
     }
 
