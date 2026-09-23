@@ -536,7 +536,12 @@ class TestAddDiscovery:
 
         warnings = self._embedding_skip_records(caplog, logging.WARNING)
         assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
-        assert "disc-r1" in warnings[0].getMessage()
+        msg = warnings[0].getMessage()
+        assert "disc-r1" in msg
+        # A skipped refresh leaves the OLD vector in place, so --only-missing
+        # skips this row on backfill; the warning must say so.
+        assert "old vector" in msg
+        assert "--only-missing will not rewrite" in msg
         assert len(self._embedding_skip_records(caplog, logging.DEBUG)) == 1
         # The skip returns before the discovery is ever fetched.
         kg.get_discovery.assert_not_awaited()
