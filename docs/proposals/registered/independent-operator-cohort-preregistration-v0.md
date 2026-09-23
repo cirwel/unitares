@@ -259,10 +259,11 @@ seeds are planned reads, not permission for additional exploratory slices.
 
 The primary slice is **scope=task, window=58, lead=30** (the temporally
 separated one); the lead-0 slice is reported as contemporaneous context.
-The candidate family is the harness's registered candidate set on that one
-slice; the number of candidates actually fitted (some drop below the
-harness's per-feature row minimum) is reported with the result. No other
-slice, stratum, or candidate may be published as a confirmatory claim.
+The winning candidate is drawn from the harness's registered candidate set
+(`EISV_PRIOR_STATE_MODELS` at the frozen sha) on that one slice; the number
+of candidates actually fitted (some drop below the harness's per-feature row
+minimum) is reported with the result. No other slice, stratum, or candidate
+may be published as a confirmatory claim.
 
 **Evaluability floor.** Two layers, and they are different kinds of thing:
 
@@ -294,9 +295,17 @@ verbatim.
   bad-row counts, permutable clusters, agents, per-`outcome_type` counts,
   selected delta, null p95, and selective p.
 - A "signal" sentence requires **all** of: selective p ≤ 0.05 on the
-  primary slice at all three seeds, and the winning candidate family
-  identical at lead 0 and lead 30 (the stop rule's family-consistency
-  condition, adopted verbatim — it exists to stop argmax noise-mining).
+  primary slice at all three seeds, and the same winning candidate at lead 0
+  and lead 30 — the `Best EISV/prior model` cell of the lead-0 row
+  byte-identical to that cell of the lead-30 row in the registered output,
+  and neither cell `-` (the stop rule's condition 4 as clarified on
+  2026-09-23; it exists to stop argmax noise-mining). A `-` in either cell
+  is unmet. The cell is expected to be identical across the three seeded
+  reads, because the winner is selected before the seed is used (the seed
+  drives the bootstrap interval and the selective null only); any
+  disagreement between seeds is disclosed as a harness defect, not
+  adjudicated as a failed condition. Whether the two names share an EISV
+  feature may be reported as context; it does not decide the condition.
 - **If the selective null was not formed** (fewer than 3 permutable
   clusters; the harness prints the conclusion *unqualified* in that case —
   verified in source at registration), the read publishes as "below the
@@ -340,9 +349,10 @@ Lane P, three branches, verbatim with the provenance tuple filled in:
 - No signal: *"On this operator's own labels the registered slice reported
   <verbatim label>; the selective null was not cleared (<tuple>)."*
 - Signal: *"On this operator's own labels the registered slice cleared its
-  selective null at all three seeds with a consistent candidate family
-  (<tuple>). This is a deployment-scoped association on task-negative
-  labels, not fleet-level validation and not misalignment detection."*
+  selective null at all three seeds with the same winning candidate at lead 0
+  and lead 30 (<name>; <tuple>). This is a deployment-scoped association on
+  task-negative labels, not fleet-level validation and not misalignment
+  detection."*
 
 **Disclosure swap, scoped:** a lane-U pass updates only the
 deployment-count statements (README "single-operator deployment" and the
@@ -394,3 +404,16 @@ architecture docs — a usability result carries no evidence about either.
   filename in the opening paragraph into a link to the separate ledger after
   its relocation. No protocol version, threshold, enrollment, window, stop
   rule, or authorization changed; the existing amendment above is preserved.
+- **Terminology clarification, 2026-09-23.** Lane P's "candidate family" now
+  follows the stop rule's 2026-09-23 pre-data clarification of its PASS
+  condition 4, made alongside this entry: the compared object is the winning
+  candidate's name as the harness prints it (`Best EISV/prior model`),
+  identical at lead 0 and lead 30 in the registered output, with `-` in
+  either cell counting as unmet. The earlier wording read the term as the
+  whole registered candidate set, under which the check could not fail on
+  the argmax flip it exists to catch; this narrows the reading and does not
+  weaken it. Three sentences changed inline: the primary-slice paragraph,
+  the "signal" read rule, and the verbatim Signal claim template (which now
+  carries the winning name). Made while the enrollment ledger is empty,
+  before any window start or lane-P access. No protocol version, threshold,
+  seed, read ID, fixture rule, cohort, or command changed.
