@@ -84,9 +84,13 @@ The system's versioned identity ontology, the resolution ledger, and the working
 
 ## Operator and contributor documentation
 
-### `operations/` — operator-internal runbooks
+### `operations/` — runbooks and dated evidence
 
-How to run this in production. Most readers can skip these.
+Production runbooks share this directory with dated deployment and evaluation
+records. Operators use the runbooks; evaluators follow the evidence links in
+[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md) and
+[`EVALUATION_INDEX.md`](EVALUATION_INDEX.md). The operations index separates
+live procedures from preserved evidence and its inference limits.
 
 → Start at **[`operations/README.md`](operations/README.md)**. The primary
 documents are the [operator runbook](operations/OPERATOR_RUNBOOK.md),
