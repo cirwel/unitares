@@ -19,6 +19,15 @@ _spec = importlib.util.spec_from_file_location("review_gate", SCRIPT)
 rg = importlib.util.module_from_spec(_spec)
 sys.modules["review_gate"] = rg
 _spec.loader.exec_module(rg)
+read_native_api = rg.read_native
+completed_review_exit = rg.completed_review_exit
+
+
+@pytest.fixture(autouse=True)
+def no_cloud_reads(monkeypatch):
+    """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -122,7 +131,7 @@ def test_untrusted_authors_cannot_post_a_record():
     ("CLEAN", False, "success"),
     ("FINDINGS", True, "success"),
     ("FINDINGS", False, "pending"),
-    ("FAILED", False, "failure"),
+    ("FAILED", False, "pending"),
 ])
 def test_status_mapping(verdict, disposed, state):
     assert rg.Record("k", verdict, 1, disposed, "codex").status()[0] == state
@@ -280,7 +289,7 @@ def test_sweep_covers_quiet_drafts_but_respects_trust_and_explicit_holds():
     assert got == [1, 2, 3]
 
 
-@pytest.mark.parametrize("verdict,expected", [("CLEAN", 0), ("FINDINGS", 1), ("FAILED", 1)])
+@pytest.mark.parametrize("verdict,expected", [("CLEAN", 0), ("FINDINGS", 1), ("FAILED", 2)])
 def test_foreground_joins_running_review_and_returns_its_result(repo, monkeypatch, verdict, expected):
     key = "k" * 64
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "owner/repo", key, "codex/change"))
@@ -303,7 +312,7 @@ def test_join_timeout_does_not_claim_review_completion(repo, monkeypatch, capsys
     key = "k" * 64
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "owner/repo", key, "codex/change"))
     with rg.review_lock(key):
-        assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=0)) == 1
+        assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=0)) == rg.UNREVIEWED
     assert "no completed review joined" in capsys.readouterr().out
 
 
@@ -327,7 +336,7 @@ def test_failed_reviewer_exposes_cause_and_an_alternative(tmp_path, monkeypatch,
     monkeypatch.setattr(rg, "run_reviewer", lambda *args: ("Weekly limit reached", "exit 1"))
     records = []
     monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
-    assert rg._review_locked(SimpleNamespace(base="master", budget=10), 1, "k", "claude") == 1
+    assert rg._review_locked(SimpleNamespace(base="master", budget=10), 1, "k", "claude") == rg.UNREVIEWED
     output = capsys.readouterr().out
     assert "Weekly limit reached" in output and "record <file>" in output
     assert records[0][1].verdict == "FAILED"
@@ -339,7 +348,7 @@ def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeyp
         assert "labels" in args[-1]
         return [_pr(3, draft=True)]
     monkeypatch.setattr(rg, "gh_json", listing)
-    monkeypatch.setattr(rg, "git", lambda *args: "h")
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
     monkeypatch.setattr(rg, "review_lock", lambda *args: SimpleNamespace(holder_alive=lambda: False))
@@ -388,3 +397,393 @@ def test_failed_runs_counts_only_failed_records_for_the_key():
         _comment(rg.Record(k, "FAILED", 0, False, "codex"), association="NONE"),
     ]
     assert rg.failed_runs(comments, k) == 2
+    assert rg.failed_runs(comments, k, "claude") == 0
+
+
+def test_quota_failure_falls_back_then_skips_provider_across_diffs(repo, monkeypatch, capsys):
+    calls, records = [], []
+    def reviewer(provider, prompt, out_dir, budget):
+        calls.append(provider)
+        return (("You've hit your weekly limit", "exit 1") if provider == "claude"
+                else ("Independent review complete.\nVERDICT: CLEAN", "exit 0"))
+    monkeypatch.setattr(rg, "run_reviewer", reviewer)
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args[1]))
+    args = SimpleNamespace(base="master", budget=30, reviewer=None)
+    assert rg.review_with_fallback(args, 1, "first", "claude") == 0
+    assert calls == ["claude", "codex"]
+    assert [rec.verdict for rec in records] == ["FAILED", "CLEAN"]
+    calls.clear()
+    assert rg.review_with_fallback(args, 2, "second", "claude") == 0
+    assert calls == ["codex"]
+    assert "skipping claude: quota cooldown" in capsys.readouterr().out
+
+
+def test_findings_stop_fallback(repo, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rg, "_review_locked", lambda *args: calls.append(args[-1]) or 1)
+    assert rg.review_with_fallback(SimpleNamespace(budget=30), 1, "k", "claude") == 1
+    assert calls == ["claude"]
+
+
+def test_exhaustion_of_one_provider_does_not_block_the_other(repo, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rg, "_review_locked", lambda *args: calls.append(args[-1]) or 0)
+    args = SimpleNamespace(budget=30, failed_providers={"claude"})
+    assert rg.review_with_fallback(args, 1, "k", "claude") == 0
+    assert calls == ["codex"]
+
+
+def test_both_unavailable_return_explicit_unreviewed(repo, monkeypatch, capsys):
+    for provider in ("claude", "codex"):
+        rg.remember_unavailable(provider, "rate limit", "exit 1")
+    monkeypatch.setattr(rg, "_review_locked", lambda *args: pytest.fail("ignored cooldown"))
+    assert rg.review_with_fallback(SimpleNamespace(budget=30), 1, "k", "claude") == 2
+    assert "UNREVIEWED" in capsys.readouterr().out
+
+
+def test_explicit_provider_retry_recovers_and_clears_cooldown(repo, monkeypatch):
+    rg.remember_unavailable("codex", "weekly limit", "exit 1")
+    calls = []
+    def reviewer(provider, *args):
+        calls.append(provider)
+        return "VERDICT: CLEAN", "exit 0"
+    monkeypatch.setattr(rg, "run_reviewer", reviewer)
+    monkeypatch.setattr(rg, "post_record", lambda *args: None)
+    args = SimpleNamespace(base="master", budget=30, reviewer="codex")
+    assert rg.review_with_fallback(args, 1, "k", "codex") == 0
+    assert calls == ["codex"] and rg.provider_cooldown("codex") is None
+
+
+def test_provider_cooldown_expires(repo, monkeypatch):
+    monkeypatch.setattr(rg.time, "time", lambda: 100)
+    rg.remember_unavailable("claude", "weekly limit", "exit 1")
+    monkeypatch.setattr(rg.time, "time", lambda: 100 + rg.PROVIDER_COOLDOWN_S)
+    assert rg.provider_cooldown("claude") is None
+
+
+def test_same_model_fresh_review_is_allowed(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer="codex", budget=30, fresh=False)) == 0
+
+
+def test_record_requires_explicit_independence(monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    with pytest.raises(SystemExit, match="--independent"):
+        rg.cmd_record(SimpleNamespace(independent=False))
+
+
+def _native_comment(head, *, when="2026-09-23T12:11:44Z"):
+    # Shape observed in the successful native draft pilot on PR #2340.
+    return {"user": {"login": rg.CODEX_BOT, "type": "Bot"},
+            "body": "Codex Review: Didn't find any major issues. Chef's kiss.\n\n"
+                    f"**Reviewed commit:** `{head[:10]}`\n",
+            "created_at": when, "html_url": "https://github.com/o/r/issues/1#issuecomment-1"}
+
+
+def test_native_clean_is_bound_to_current_commit_and_bot_identity(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment = _native_comment(head)
+    records = rg.native_records([comment], [], [], [], "k", head).records
+    assert len(records) == 1 and records[0].verdict == "CLEAN"
+    assert records[0].url == comment["html_url"]
+    comment["user"]["type"] = "User"
+    assert not rg.native_records([comment], [], [], [], "k", head).records
+
+
+def test_native_clean_expires_on_changed_head_or_retarget(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment = _native_comment(head)
+    (repo / "a.txt").write_text("new content\n")
+    _git(repo, "commit", "-qam", "fix")
+    newer = _git(repo, "rev-parse", "HEAD")
+    assert not rg.native_records([comment], [], [], [], "k", newer).records
+    events = [{"event": "base_ref_changed", "created_at": "2026-09-23T12:12:00Z"}]
+    assert not rg.native_records([comment], [], [], events, "k", head).records
+    # Completion after retarget is also ambiguous: it may have started before
+    # the base changed. Native artifacts only name the head, not that base.
+    events[0]["created_at"] = "2026-09-23T12:11:00Z"
+    snapshot = rg.native_records([comment], [], [], events, "k", head)
+    assert not snapshot.records and snapshot.unavailable_reason
+
+
+def test_unbound_clean_or_completed_activity_cannot_pass(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment = _native_comment(head)
+    comment["body"] = "Codex Review: Didn't find any major issues."
+    assert not rg.native_records([comment], [], [], [], "k", head).records
+    comment["body"] = ("<!-- codex-pull-request-review-summary -->\n"
+                       f"| 📝 **Code Review** | ✅ **Completed** | `{head[:7]}` | Manual request |")
+    snapshot = rg.native_records([comment], [], [], [], "k", head)
+    assert not snapshot.records and not snapshot.running
+    comment["body"] = comment["body"].replace("**Completed**", "**Running**")
+    snapshot = rg.native_records([comment], [], [], [], "k", head)
+    assert snapshot.running and not snapshot.records
+
+
+def _native_completion(head):
+    comment = _native_comment(head)
+    comment["user"]["id"] = 199175422
+    comment["body"] = ("<!-- codex-pull-request-review-summary -->\n"
+                       '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-09-23T13:10:09.283517Z">'
+                       f"completion time</relative-time> | `{head[:7]}` | New commits |")
+    reaction = {"user": dict(comment["user"]), "content": "+1", "created_at": "2026-09-23T13:10:12Z"}
+    reaction["user"]["type"] = "User"  # observed reactions API shape differs from comments
+    return comment, reaction
+
+
+def test_native_completed_head_and_fresh_clean_reaction_are_joined(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment, reaction = _native_completion(head)
+    snapshot = rg.native_records([comment], [], [], [], "k", head, [reaction])
+    assert snapshot.completed and snapshot.records[0].verdict == "CLEAN"
+    assert head in snapshot.records[0].text
+    assert snapshot.records[0].url == comment["html_url"]
+    # Neither half is sufficient on its own.
+    assert not rg.native_records([comment], [], [], [], "k", head).records
+    assert not rg.native_records([], [], [], [], "k", head, [reaction]).records
+    # A fresh reaction never erases actual findings for this head.
+    review = {"id": 1, "user": dict(comment["user"]), "commit_id": head,
+              "state": "COMMENTED", "submitted_at": "2026-09-23T13:10:10Z", "body": "bug"}
+    snapshot = rg.native_records([comment], [review], [], [], "k", head, [reaction])
+    assert rg.latest_matching([], "k", snapshot.records).verdict == "FINDINGS"
+
+
+@pytest.mark.parametrize("invalid", ["stale", "wrong-user", "missing-user-id", "eyes", "running", "wrong-head", "retarget", "bad-time"])
+def test_native_completion_rejects_unbound_or_stale_clean_reactions(repo, invalid):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment, reaction = _native_completion(head)
+    events = []
+    if invalid == "stale":
+        reaction["created_at"] = "2026-09-23T13:09:00Z"
+    elif invalid == "wrong-user":
+        reaction["user"]["id"] = 1234
+    elif invalid == "missing-user-id":
+        reaction["user"].pop("id")
+    elif invalid == "eyes":
+        reaction["content"] = "eyes"
+    elif invalid == "running":
+        comment["body"] = comment["body"].replace("**Completed**", "**Running**")
+    elif invalid == "wrong-head":
+        head = _git(repo, "rev-parse", "master")
+    elif invalid == "retarget":
+        events = [{"event": "base_ref_changed"}]
+    elif invalid == "bad-time":
+        reaction["created_at"] = "unknown"
+    assert not rg.native_records([comment], [], [], events, "k", head, [reaction]).records
+
+
+def test_native_findings_survive_later_clean_until_disposed(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    review = {"id": 12, "user": {"login": rg.CODEX_BOT, "type": "Bot"},
+              "commit_id": head, "state": "COMMENTED", "submitted_at": "2026-09-23T12:10:00Z",
+              "body": "Codex Review", "html_url": "review-url"}
+    inline = [{"user": review["user"], "pull_request_review_id": 12, "path": "a.py",
+               "line": 4, "body": "[P1] loses data", "html_url": "finding-url"}]
+    snapshot = rg.native_records([_native_comment(head)], [review], inline, [], "k", head)
+    rec = rg.latest_matching([], "k", snapshot.records)
+    assert rec.verdict == "FINDINGS" and "1. a.py:4" in rec.text
+    disposition = _comment(rg.Record("k", "FINDINGS", 1, True, "codex-native"), text="1. rebutted: caller validates input")
+    disposition["created_at"] = "2026-09-23T12:12:00Z"
+    assert rg.latest_matching([disposition], "k", snapshot.records).status()[0] == "success"
+    # Dismissing/deleting inline comments isn't a reasoned disposition.
+    review["state"] = "DISMISSED"
+    snapshot = rg.native_records([], [review], [], [], "k", head)
+    assert snapshot.records[0].verdict == "FINDINGS"
+
+
+def test_fresh_does_not_reroll_unresolved_findings(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [_comment(rg.Record("k", "FINDINGS", 1, False, "claude"))])
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("rerolled findings"))
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=True)) == 1
+
+
+def test_outage_does_not_erase_a_completed_review():
+    comments = [_comment(rg.Record("k", "CLEAN", 0, False, "codex")),
+                _comment(rg.Record("k", "FAILED", 0, False, "claude"))]
+    assert rg.latest_matching(comments, "k").verdict == "CLEAN"
+
+
+def test_native_evidence_outage_does_not_replace_unread_findings(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "native_enabled", lambda: True)
+    def unavailable(*args, **kwargs):
+        raise SystemExit("GitHub review API unavailable")
+    monkeypatch.setattr(rg, "current_record", unavailable)
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("replaced unread findings"))
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
+
+
+def test_late_native_findings_reach_author_after_local_fallback(repo, monkeypatch, capsys):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    completed = []
+    finding = rg.Record("k", "FINDINGS", 1, False, "codex-native", "url", "1. Late finding")
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([finding] if completed else []))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: completed.append(True) or 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
+    assert "Late finding" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("prior", ["CLEAN", "FINDINGS", None])
+def test_ci_preserves_existing_check_when_native_evidence_is_unreadable(monkeypatch, capsys, prior):
+    # Native review round 2 on #2352: an API outage must not re-publish a
+    # partial local CLEAN (or no record) over an existing action_required.
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"state": "open", "head": {"sha": "h"}, "base": {"ref": "master"}})
+    monkeypatch.setattr(rg, "git", lambda *args: "")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    comments = [_comment(rg.Record("k", prior, 1, False, "claude"))] if prior else []
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
+    def incomplete(*args):
+        raise SystemExit("GitHub reviews endpoint unavailable")
+    monkeypatch.setattr(rg, "read_native", incomplete)
+    monkeypatch.setattr(rg, "post_check", lambda *args: pytest.fail("overwrote existing check with partial evidence"))
+    assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
+    assert "Existing review check preserved" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("remote_head,new_key", [("changed", "k"), ("h", "changed")])
+def test_completed_review_cannot_handoff_a_changed_head_or_base_diff(monkeypatch, remote_head, new_key):
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": remote_head, "baseRefName": "new-base"})
+    monkeypatch.setattr(rg, "git", lambda *args: "")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: new_key)
+    assert completed_review_exit("o/r", 1, "k", "h", 0) == rg.UNREVIEWED
+
+
+def test_native_findings_are_visible_and_disposable_without_dispatch_opt_in(repo, monkeypatch, capsys):
+    # Native review finding on #2352: review.native controls dispatch, never
+    # whether already-published findings reach the author or can be disposed.
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    finding = rg.Record("k", "FINDINGS", 1, False, "codex-native", "review-url", "1. Real native finding")
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([finding]))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("hid native findings"))
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
+    assert "Real native finding" in capsys.readouterr().out
+    disposition = repo / "disposition.txt"
+    disposition.write_text("1. rebutted: the caller already validates input")
+    posted = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: posted.append(args[1]))
+    assert rg.cmd_dispose(SimpleNamespace(file=str(disposition))) == 0
+    assert posted[0].disposed and posted[0].reviewer == "codex-native"
+
+
+def test_native_reader_fetches_review_and_inline_evidence(repo, monkeypatch):
+    head = _git(repo, "rev-parse", "HEAD")
+    bot = {"login": rg.CODEX_BOT, "type": "Bot"}
+    calls = []
+    def pages(endpoint):
+        calls.append(endpoint)
+        if endpoint.endswith('/reviews'):
+            return [{"id": 1, "user": bot, "commit_id": head, "state": "COMMENTED",
+                     "submitted_at": "2026-09-23T12:00:00Z"}]
+        if endpoint.endswith('/comments'):
+            return [{"user": bot, "pull_request_review_id": 1, "body": "bug", "path": "a", "line": 1}]
+        return []
+    monkeypatch.setattr(rg, "api_pages", pages)
+    assert read_native_api("o/r", 1, "k", head, []).records[0].findings == 1
+    assert calls == ['repos/o/r/pulls/1/reviews', 'repos/o/r/pulls/1/comments', 'repos/o/r/issues/1/events']
+
+
+def test_native_reader_fetches_reactions_for_activity_evidence(repo, monkeypatch):
+    head = _git(repo, "rev-parse", "HEAD")
+    comment, reaction = _native_completion(head)
+    calls = []
+    def pages(endpoint):
+        calls.append(endpoint)
+        return [reaction] if endpoint.endswith('/reactions') else []
+    monkeypatch.setattr(rg, "api_pages", pages)
+    assert read_native_api("o/r", 1, "k", head, [comment]).records[0].verdict == "CLEAN"
+    assert calls == ['repos/o/r/pulls/1/reviews', 'repos/o/r/issues/1/events', 'repos/o/r/issues/1/reactions']
+
+
+def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkeypatch):
+    head = _git(repo, "rev-parse", "HEAD")
+    clock = [1000.0]
+    monkeypatch.setattr(rg.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(rg.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    posted = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: posted.append(kw["input"]))
+    clean = rg.Record("k", "CLEAN", 0, False, "codex-native")
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean] if posted else []))
+    assert rg.join_native(SimpleNamespace(budget=90), "o/r", 1, "k", head) == clean
+    assert len(posted) == 1 and f"head={head} key=k" in posted[0]
+
+
+@pytest.mark.parametrize("budget", [30, 300, 600, 1800])
+@pytest.mark.parametrize("activity", ["missing", "running", "completed"])
+def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, budget, activity):
+    # Exercise the command through native polling into a real fallback attempt:
+    # a missing/stuck native review used to exhaust short budgets completely.
+    head = _git(repo, "rev-parse", "HEAD")
+    clock = [1000.0]
+    monkeypatch.setattr(rg.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(rg.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: head)
+    monkeypatch.setattr(rg, "native_enabled", lambda: True)
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview(
+        [], running=activity == "running", completed=activity == "completed"))
+    requests = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: requests.append(kw["input"]))
+    monkeypatch.setattr(rg, "provider_cooldown", lambda provider: None)
+    attempts = []
+    monkeypatch.setattr(rg, "_review_locked", lambda args, pr, key, provider:
+                        attempts.append((provider, args.budget)) or 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=budget, fresh=False)) == 0
+    assert len(attempts) == 1 and attempts[0][1] > 0
+    assert clock[0] - 1000 <= budget / 2
+    assert len(requests) <= (1 if activity == "missing" else 0)
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch, running):
+    head = _git(repo, "rev-parse", "HEAD")
+    marker = f"<!-- {rg.NATIVE_REQUEST} head={head} key=k -->"
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [{"author_association": "OWNER", "body": marker,
+                                                        "created_at": "2000-01-01T00:00:00Z"}])
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], running=running))
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("duplicate request"))
+    assert rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", head) is None
+
+
+def test_join_native_rejects_a_push_during_review(repo, monkeypatch):
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": "new"})
+    rec = rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", "old")
+    assert rec.verdict == "FAILED" and "head changed" in rec.reviewer
+
+
+@pytest.mark.parametrize("verdict,disposed,expected", [
+    (None, False, "neutral"), ("FAILED", False, "neutral"),
+    ("CLEAN", False, "success"), ("FINDINGS", False, "action_required"),
+    ("FINDINGS", True, "success"),
+])
+def test_check_distinguishes_outages_from_findings(verdict, disposed, expected):
+    rec = rg.Record("k", verdict, 1, disposed, "codex") if verdict else None
+    conclusion, text = rg.review_check(rec)
+    assert conclusion == expected
+    if expected == "neutral":
+        assert "UNREVIEWED" in text
+
+
+def test_check_publication_updates_its_own_run_with_neutral_warning(monkeypatch):
+    import json
+    checks = [{"check_runs": [{"id": 4, "external_id": "unitares-review:1:head", "app": {"slug": "github-actions"}}]}]
+    monkeypatch.setattr(rg, "gh_json", lambda *args: checks)
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kwargs: calls.append((cmd, kwargs)))
+    rg.post_check("o/r", 1, "head", "neutral", "UNREVIEWED: unavailable", "https://example.com/review")
+    cmd, kwargs = calls[0]
+    assert "PATCH" in cmd and "repos/o/r/check-runs/4" in cmd
+    payload = json.loads(kwargs["input"])
+    assert payload["conclusion"] == "neutral" and "head_sha" not in payload

@@ -6,11 +6,13 @@
 #   ./scripts/dev/review.sh                     # start or join review; ship.sh does this
 #   ./scripts/dev/review.sh --background        # explicitly detach; join before readiness
 #   ./scripts/dev/review.sh --fresh             # re-review even if recorded
-#   ./scripts/dev/review.sh --reviewer claude   # override (default: the other model)
-#   ./scripts/dev/review.sh record FILE --reviewer-name NAME   # a council/human review
+#   ./scripts/dev/review.sh --reviewer claude   # retry preferred provider despite cooldown
+#   ./scripts/dev/review.sh record FILE --reviewer-name NAME --independent
 #   ./scripts/dev/review.sh dispose FILE        # dispositions for a FINDINGS record
 #
 # Semantics, record format and the CI half: scripts/dev/review_gate.py.
+# Exit 0: completed/disposed. Exit 1: findings need author action.
+# Exit 2: unavailable/incomplete review; report an explicit unreviewed handoff.
 
 set -euo pipefail
 

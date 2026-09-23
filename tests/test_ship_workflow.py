@@ -176,7 +176,7 @@ def test_explicit_draft_pr_uses_current_feature_branch(ship_repo: Path) -> None:
     assert plan["force_auto_branch"] == "0"
 
 
-@pytest.mark.parametrize("review_exit", [0, 1])
+@pytest.mark.parametrize("review_exit", [0, 1, 2])
 def test_ship_joins_review_and_surfaces_followup_after_push(ship_repo: Path, review_exit: int) -> None:
     run(["git", "checkout", "-q", "-b", "codex/review-flow"], ship_repo)
     stage_file(ship_repo, "docs/change.md")
@@ -196,7 +196,8 @@ def test_ship_joins_review_and_surfaces_followup_after_push(ship_repo: Path, rev
                             cwd=ship_repo, env=env, text=True, capture_output=True)
     assert result.returncode == review_exit, result.stdout + result.stderr
     assert f"review finished: {review_exit}" in result.stdout
-    assert ("review needs author follow-up" if review_exit else "review joined") in result.stdout
+    expected = {0: "review joined", 1: "review needs author follow-up", 2: "UNREVIEWED"}
+    assert expected[review_exit] in result.stdout
     assert run(["git", "rev-parse", "HEAD"], ship_repo).stdout == run(
         ["git", "rev-parse", "origin/codex/review-flow"], ship_repo).stdout
 
