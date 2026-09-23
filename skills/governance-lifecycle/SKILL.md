@@ -40,7 +40,7 @@ source_files:
   - unitares/src/schema_brief.py
 source_digests:
   unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "d82070a0d97f2830"
+  unitares/src/mcp_handlers/identity/handlers.py: "ec60c763a8bc243e"
   unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f5c881194d51f538"
@@ -52,7 +52,7 @@ source_digests:
   unitares/src/mcp_handlers/dialectic/handlers.py: "2b6f70a94a7361f5"
   unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "60fb261244c59d3a"
+  unitares/src/tool_modes.py: "703dd2ca10000c92"
   unitares/src/tool_mode_listing.py: "7f50ce631689ce55"
   unitares/src/mcp_handlers/introspection/tool_introspection.py: "0ffd2f7bc93fba79"
   unitares/src/schema_brief.py: "401bbce563c30439"

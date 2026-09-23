@@ -394,3 +394,34 @@ architecture docs — a usability result carries no evidence about either.
   filename in the opening paragraph into a link to the separate ledger after
   its relocation. No protocol version, threshold, enrollment, window, stop
   rule, or authorization changed; the existing amendment above is preserved.
+- **Disclosure of unlogged post-registration edits, recorded 2026-09-23.**
+  Two commits changed protocol text after registration at `4907e926` (#1785,
+  merged 2026-08-21T07:34Z) without an entry in this log, so the opening
+  statement that the text never moves after merge did not hold for them. This
+  entry records them on the date they were found; it does not make them
+  contemporaneous or retroactively authorized. Both predate any enrollment,
+  window start or lane-P access, and the enrollment ledger is empty at this
+  entry.
+  (1) `eea55ccc` (#1840, 2026-08-23) replaced the description of the
+  2026-08-09 matrix as "useful negative evidence" under the retired label with
+  `NON_DETECTION`, "a descriptive non-detection, not a negative result or
+  refutation", and added `--read-protocol registered`, a per-seed `--read-id`
+  and `--not-before` to the lane-P invocation, with the rule that reusing an ID
+  or moving either boundary after an access is a disclosed deviation.
+  (2) `1bdc33f4` (#1929, 2026-08-27) landed commit `30b69a91` (authored
+  2026-08-21T18:40Z, after the merge). It raised the plumbing check from three
+  conditions to five, and added the #1791 setup note and the dress-rehearsal
+  provenance row.
+  Neither edit relaxed a threshold, lane, stop rule or embargo; both narrow
+  what counts as a valid enrollment or read. They are recorded rather than
+  reverted because the registered read manifest and the repository's
+  `NON_DETECTION` contract test depend on the current text, and a revert would
+  restore a description the repository has withdrawn.
+  Left unedited and noted here: (i) the #1791 setup note was stale when it
+  landed, because #1794 fixed compose forwarding on 2026-08-21; (ii) the v0.1
+  entry above was added to this log on 2026-09-16 (`848b6d3a`), fourteen days
+  after the amendment it records; (iii) the dress-rehearsal row says the
+  rehearsal ran before registration, but the two defects it diagnosed (#1790,
+  #1791) were filed at 2026-08-21T18:39Z and its recording commit was authored
+  at 18:40Z, both after the 07:34Z merge, so the rehearsal most likely ran
+  after registration. The protocol version is unchanged.

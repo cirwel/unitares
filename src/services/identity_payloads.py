@@ -424,10 +424,18 @@ def build_onboard_response_data(
         else:
             pred = thread_context.get("predecessor")
             pred_desc = f" (position {pred['position']})" if pred and pred.get("position") else ""
+            # Only a lineage fork has a predecessor; an earlier node that
+            # merely shares the thread is a co-located sibling.
+            pred_sentence = (
+                f"A predecessor exists{pred_desc}."
+                if thread_context.get("identity_lineage_fork")
+                else f"An earlier node exists in this thread{pred_desc}; "
+                "sharing a thread does not make it your predecessor."
+            )
             welcome = (
                 f"Your session ID is `{stable_session_id}`. "
                 f"You are node {thread_context['position']} in thread {thread_context['thread_id'][:12]}. "
-                f"A predecessor exists{pred_desc}."
+                f"{pred_sentence}"
             )
         welcome_message = thread_context["honest_message"]
     elif is_new:
