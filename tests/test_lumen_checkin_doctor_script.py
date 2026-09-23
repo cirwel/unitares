@@ -503,7 +503,7 @@ def test_recovery_after_critical_posts_one_info_all_clear(doc_mod):
     state["frozen"] = False
     assert doctor.run_once() == doc_mod.HEALTHY
     sev, fp, msg = calls["findings"][-1]
-    assert (sev, fp) == ("info", "lumen-checkin-recovered")
+    assert sev == "info" and fp.startswith("lumen-checkin-recovered-")
     assert msg.startswith("RECOVERED:")
 
     doctor.run_once()
@@ -519,7 +519,7 @@ def test_recovery_notice_survives_a_fresh_process(doc_mod):
     state["frozen"] = False
     doctor2, calls2 = make_doctor(doc_mod, overrides)
     doctor2.run_once()
-    assert [(sev, fp) for sev, fp, _ in calls2["findings"]] == [
+    assert [(sev, fp.rsplit("-", 1)[0]) for sev, fp, _ in calls2["findings"]] == [
         ("info", "lumen-checkin-recovered")]
 
 
@@ -546,7 +546,8 @@ def test_pre_upgrade_state_with_an_open_critical_recovers_once(doc_mod, tmp_path
     doctor, calls = make_doctor(doc_mod, {})
     doctor.run_once()
     doctor.run_once()
-    assert [fp for _, fp, _ in calls["findings"]] == ["lumen-checkin-recovered"]
+    assert [fp for _, fp, _ in calls["findings"]] == [
+        f"lumen-checkin-recovered-{int(NOW - 86400)}"]
 
 
 def test_pre_upgrade_state_with_only_info_alerts_stays_silent(doc_mod, tmp_path):
@@ -577,5 +578,24 @@ def test_undelivered_recovery_is_retried_not_marked_done(doc_mod, tmp_path):
     doctor.run_once()
     doctor2, calls2 = make_doctor(doc_mod, {})
     doctor2.run_once()
-    assert attempts == ["lumen-checkin-recovered"]
-    assert [fp for _, fp, _ in calls2["findings"]] == ["lumen-checkin-recovered"]
+    assert attempts == [f"lumen-checkin-recovered-{int(NOW - 600)}"]
+    assert [fp for _, fp, _ in calls2["findings"]] == attempts
+
+
+def test_back_to_back_incidents_get_distinct_recovery_fingerprints(doc_mod):
+    """Governance dedups a repeated fingerprint for 30 min WITHOUT storing it,
+    so two recoveries inside that window must not share one."""
+    state = {"frozen": True}
+    clock = [NOW]
+    doctor, calls = make_doctor(doc_mod, {
+        "central_agent": _frozen_then_fresh(doc_mod, state),
+        "now": lambda: clock[0],
+    })
+    doctor.run_once()                       # incident 1: critical
+    state["frozen"] = False; doctor.run_once()   # recovered
+    clock[0] += 600
+    doctor.state["alerts"] = {}             # past the per-class cooldown
+    state["frozen"] = True; doctor.run_once()    # incident 2: critical
+    state["frozen"] = False; doctor.run_once()   # recovered again
+    recovered = [fp for _, fp, _ in calls["findings"] if "recovered" in fp]
+    assert len(recovered) == 2 and recovered[0] != recovered[1]

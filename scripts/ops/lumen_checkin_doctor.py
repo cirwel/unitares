@@ -559,8 +559,14 @@ class Doctor:
         last_problem = self._last_problem_alert()
         if last_problem <= self.state.get("recovered_at", 0) or self.dry_run:
             return
+        # Incident-specific fingerprint. Governance dedups on fingerprint
+        # alone inside a 30-min window and answers success=true, deduped=true
+        # WITHOUT storing an event — so a fixed fingerprint would let a second
+        # incident's recovery "succeed" into nothing, leaving its critical as
+        # the last durable row. Keyed per incident, a dedup can only mean an
+        # earlier attempt for THIS incident already landed.
         delivered = self.io["post_finding"](
-            "info", "lumen-checkin-recovered",
+            "info", f"lumen-checkin-recovered-{int(last_problem)}",
             f"RECOVERED: Lumen is checking in again — {evidence}",
             _load_secret("UNITARES_HTTP_API_TOKEN"),
         )
