@@ -29,6 +29,37 @@ from src.db.age_queries import (
 
 logger = get_logger(__name__)
 
+# Once-per-process flag for the embedding-skip warning (#2293). A discovery
+# written while sentence-transformers is missing lands in the graph but never
+# gets a pgvector row, and nothing retries it once the extra is installed. The
+# import-time warning in src.embeddings fires far from the write and is easy to
+# miss in a server log, so the first skipped write says so here, naming the
+# consequence and the remedy; later skips stay at debug to keep the log quiet.
+_embedding_skip_warned = False
+
+
+def _log_embedding_skipped(discovery_id: str, op: str) -> None:
+    """Log an embedding write skipped because embeddings are unavailable.
+
+    WARNING on the first skip in this process, DEBUG afterwards.
+    """
+    global _embedding_skip_warned
+    if _embedding_skip_warned:
+        logger.debug(
+            f"Embedding {op} skipped for {discovery_id}: embeddings unavailable"
+        )
+        return
+    _embedding_skip_warned = True
+    logger.warning(
+        f"Embedding {op} skipped for {discovery_id}: sentence-transformers is not "
+        "installed, so semantic search will not find this entry until it is "
+        "re-embedded (FTS still works). Install the embeddings extra "
+        '(pip install -e ".[full,embeddings]" -c constraints.txt; the Docker '
+        "image needs sentence-transformers uncommented in requirements-docker.txt), "
+        "then backfill with UNITARES_EMBEDDING_MODEL=<model> "
+        "python scripts/migration/reembed_corpus.py. Further skips log at debug."
+    )
+
 
 class KnowledgeGraphAGE:
     """
@@ -661,6 +692,8 @@ class KnowledgeGraphAGE:
                         task.add_done_callback(lambda t: logger.debug(f"_store_embedding failed: {t.exception()}") if t.exception() else None)
                     else:
                         logger.debug(f"Embedding returned None for {discovery.id}, skipping storage")
+                else:
+                    _log_embedding_skipped(discovery.id, "store")
             except Exception as e:
                 logger.debug(f"Failed to create embedding for {discovery.id}: {e}")
 
@@ -2118,6 +2151,7 @@ class KnowledgeGraphAGE:
         try:
             from src.embeddings import get_embeddings_service, embeddings_available
             if not embeddings_available():
+                _log_embedding_skipped(discovery_id, "refresh")
                 return
             discovery = await self.get_discovery(discovery_id)
             if not discovery:

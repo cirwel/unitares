@@ -458,6 +458,83 @@ class TestAddDiscovery:
         # The DELETE always runs; the INSERT must not.
         assert conn.executemany.await_count == 0
 
+    @staticmethod
+    def _embedding_skip_records(caplog, level: int) -> list:
+        import logging
+        import src.storage.knowledge_graph_age as kg_age_module
+        # Both the WARNING and the DEBUG form start "Embedding <op> skipped for".
+        return [
+            rec for rec in caplog.records
+            if rec.name == kg_age_module.__name__
+            and rec.levelno == level
+            and rec.getMessage().startswith("Embedding ")
+            and " skipped for " in rec.getMessage()
+        ]
+
+    @pytest.mark.asyncio
+    async def test_add_discovery_warns_once_when_embeddings_unavailable(
+        self, caplog, monkeypatch
+    ):
+        """Regression for #2293: a write that skips the pgvector row because
+        sentence-transformers is missing must say so — once per process at
+        WARNING, naming the consequence and the backfill — and at DEBUG after.
+        Before the fix the unavailable branch logged nothing at any level.
+        """
+        import logging
+        import src.embeddings as embeddings_module
+        import src.storage.knowledge_graph_age as kg_age_module
+
+        monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
+        monkeypatch.setattr(kg_age_module, "_embedding_skip_warned", False)
+
+        kg, _ = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=True)
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg.add_discovery(make_discovery(discovery_id="disc-a"))
+            await kg.add_discovery(make_discovery(discovery_id="disc-b"))
+
+        warnings = self._embedding_skip_records(caplog, logging.WARNING)
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+        msg = warnings[0].getMessage()
+        assert "disc-a" in msg
+        assert "semantic search will not find this entry" in msg
+        assert "reembed_corpus.py" in msg
+        assert "UNITARES_EMBEDDING_MODEL" in msg
+
+        debugs = self._embedding_skip_records(caplog, logging.DEBUG)
+        assert len(debugs) == 1, [r.getMessage() for r in caplog.records]
+        assert "disc-b" in debugs[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_refresh_embedding_shares_skip_warning_flag(
+        self, caplog, monkeypatch
+    ):
+        """The update_finding path (_refresh_embedding) skips through the same
+        once-flag, so a store followed by a refresh yields one WARNING total."""
+        import logging
+        import src.embeddings as embeddings_module
+        import src.storage.knowledge_graph_age as kg_age_module
+
+        monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
+        monkeypatch.setattr(kg_age_module, "_embedding_skip_warned", False)
+
+        kg, _ = make_kg_with_mock_db()
+        kg._pgvector_available = AsyncMock(return_value=True)
+        kg.get_discovery = AsyncMock()
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg._refresh_embedding("disc-r1")
+            await kg._refresh_embedding("disc-r2")
+
+        warnings = self._embedding_skip_records(caplog, logging.WARNING)
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+        assert "disc-r1" in warnings[0].getMessage()
+        assert len(self._embedding_skip_records(caplog, logging.DEBUG)) == 1
+        # The skip returns before the discovery is ever fetched.
+        kg.get_discovery.assert_not_awaited()
+
     @pytest.mark.asyncio
     async def test_add_discovery_with_tags(self):
         """Should create TAGGED edges for each tag."""
