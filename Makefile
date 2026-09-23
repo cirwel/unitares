@@ -58,7 +58,7 @@ logs-err: ## Tail server error logs
 # ── Documentation ────────────────────────────────────────
 
 docs: ## Generate tool documentation from @mcp_tool decorators
-	@python3 scripts/diagnostics/generate_tool_docs.py
+	@python3 scripts/generate_tool_docs.py
 
 validate: ## Run CI validation checks locally
 	@python3 scripts/dev/check_ci_python_version_sync.py
