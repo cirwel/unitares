@@ -595,6 +595,28 @@ def test_native_findings_survive_later_clean_until_disposed(repo):
     assert snapshot.records[0].verdict == "FINDINGS"
 
 
+def test_native_thread_reply_is_not_a_new_finding(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    bot = {"login": rg.CODEX_BOT, "type": "Bot"}
+    reply_review = {"id": 21, "user": bot, "commit_id": head, "state": "COMMENTED",
+                    "submitted_at": "2026-09-23T21:03:07Z", "body": "",
+                    "html_url": "reply-review-url"}
+    reply = {"user": bot, "pull_request_review_id": 21, "in_reply_to_id": 7,
+             "path": "a.md", "line": 3, "body": "No blocking findings.", "html_url": "reply-url"}
+    snapshot = rg.native_records([_native_comment(head)], [reply_review], [reply], [], "k", head)
+    rec = rg.latest_matching([], "k", snapshot.records)
+    assert rec.verdict == "CLEAN" and rec.status()[0] == "success"
+
+    # A top-level comment in the same review is a finding again.
+    top_level = {**reply, "in_reply_to_id": None, "body": "[P1] still wrong", "html_url": "new-url"}
+    snapshot = rg.native_records([], [reply_review], [reply, top_level], [], "k", head)
+    assert [r.verdict for r in snapshot.records] == ["FINDINGS"]
+
+    # So is a reply-only review that carries its own review body.
+    snapshot = rg.native_records([], [{**reply_review, "body": "Codex Review"}], [reply], [], "k", head)
+    assert [r.verdict for r in snapshot.records] == ["FINDINGS"]
+
+
 def test_fresh_does_not_reroll_unresolved_findings(repo, monkeypatch):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [_comment(rg.Record("k", "FINDINGS", 1, False, "claude"))])

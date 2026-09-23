@@ -354,6 +354,19 @@ class TestServerInstructions:
         assert "stakes" not in text
         assert "Not listed here" not in text
 
+    def test_instructions_offer_reading_before_binding(self):
+        """A first-contact agent learns it can read before what it must do.
+
+        search_shared_memory serves unbound callers, so the instructions lead
+        with it; a pause is explained where it is first named.
+        """
+        text = build_server_instructions("progressive")
+        assert text.index("search_shared_memory") < text.index("start_session")
+        assert "works before start_session" in text
+        pause = text.index("pause")
+        assert text.index("self_recovery") > pause
+        assert "never inferred from a shared thread" in text
+
     def test_full_instructions_match_full_advertisement(self):
         text = build_server_instructions("full")
         assert "complete tools/list schema catalog up front" in text
