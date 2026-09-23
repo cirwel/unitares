@@ -25,9 +25,9 @@
 #   ./scripts/dev/ship.sh --classify          # just print "runtime" or "other"
 #   ./scripts/dev/ship.sh --plan "commit message"
 #
-# Every PR push also starts ./scripts/dev/review.sh in the background, which
-# posts the review record the `review` status check reads. SHIP_NO_REVIEW=1
-# skips it (the check then stays pending until someone runs the review).
+# Every PR push runs ./scripts/dev/review.sh and joins its result, so the
+# working agent can act on findings before leaving. SHIP_NO_REVIEW=1 explicitly
+# defers review; the author still owns starting/joining it before readiness.
 #
 # Requirements: staged changes (git add already done) unless --stage-all is
 # used, gh CLI authed.
@@ -443,12 +443,17 @@ case "$DELIVERY" in
         git commit -m "$COMMIT_MESSAGE"
         git push -u origin "$BRANCH"
         create_or_show_pr "$DELIVERY"
-        # The review is part of shipping, like the push: it starts on every PR
-        # push and posts the record the `review` check reads. Keyed on the
-        # diff, so a push that changes nothing reviewable is a no-op.
+        # Joining is part of shipping: a detached reviewer can finish after
+        # its author exits, leaving findings nobody handles and a draft stuck.
         if [[ "${SHIP_NO_REVIEW:-0}" != "1" ]]; then
-            ./scripts/dev/review.sh --background || \
-                echo "[ship] review did not start; run ./scripts/dev/review.sh before marking ready"
+            if ! ./scripts/dev/review.sh; then
+                echo "[ship] branch pushed and PR opened; review needs author follow-up."
+                echo "[ship] address the result above, then run ./scripts/dev/review.sh before marking ready."
+                exit 1
+            fi
+            echo "[ship] review joined; check CI and mark your own PR ready when validation passes."
+        else
+            echo "[ship] review explicitly deferred; author must run ./scripts/dev/review.sh before marking ready."
         fi
         ;;
     *)

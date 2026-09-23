@@ -176,6 +176,31 @@ def test_explicit_draft_pr_uses_current_feature_branch(ship_repo: Path) -> None:
     assert plan["force_auto_branch"] == "0"
 
 
+@pytest.mark.parametrize("review_exit", [0, 1])
+def test_ship_joins_review_and_surfaces_followup_after_push(ship_repo: Path, review_exit: int) -> None:
+    run(["git", "checkout", "-q", "-b", "codex/review-flow"], ship_repo)
+    stage_file(ship_repo, "docs/change.md")
+    bin_dir = ship_repo / "fake-bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text('#!/bin/sh\necho "https://example.invalid/pr/1"\n')
+    gh.chmod(0o755)
+    reviewer = ship_repo / "scripts/dev/review.sh"
+    reviewer.write_text('#!/bin/sh\n[ "$#" -eq 0 ] || exit 99\n'
+                        f'echo "review finished: {review_exit}"\nexit {review_exit}\n')
+    reviewer.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+           "UNITARES_SECRETS_ENV": str(ship_repo / "no-secrets")}
+    env.pop("SHIP_NO_REVIEW", None)
+    result = subprocess.run([str(ship_repo / "scripts/dev/ship.sh"), "test: review flow"],
+                            cwd=ship_repo, env=env, text=True, capture_output=True)
+    assert result.returncode == review_exit, result.stdout + result.stderr
+    assert f"review finished: {review_exit}" in result.stdout
+    assert ("review needs author follow-up" if review_exit else "review joined") in result.stdout
+    assert run(["git", "rev-parse", "HEAD"], ship_repo).stdout == run(
+        ["git", "rev-parse", "origin/codex/review-flow"], ship_repo).stdout
+
+
 def test_stage_all_plan_classifies_dirty_worktree_without_staging(ship_repo: Path) -> None:
     path = ship_repo / "src" / "mcp_server.py"
     path.parent.mkdir(parents=True, exist_ok=True)
