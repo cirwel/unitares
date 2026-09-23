@@ -40,7 +40,7 @@ source_digests:
   unitares/src/governance_glossary.py: "251e06209e038a13"
   unitares/src/behavioral_state.py: "e214a51c1d7763c7"
   unitares/src/behavioral_sensor.py: "fce77d62fbd7b472"
-  unitares/src/behavioral_assessment.py: "2cbeea287b81399e"
+  unitares/src/behavioral_assessment.py: "cf1c6787064a8e5a"
   unitares/src/cold_start_risk_confirmation.py: "fccd80e216d63b6e"
   unitares/src/monitor_decision.py: "c80f4e13511fe8ba"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
