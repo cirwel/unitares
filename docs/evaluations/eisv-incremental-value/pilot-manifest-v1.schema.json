@@ -71,7 +71,7 @@
       ],
       "properties": {
         "protocol_path": {
-          "const": "docs/proposals/eisv-incremental-value-ablation-v1.md"
+          "const": "docs/proposals/active/eisv-incremental-value-ablation-v1.md"
         },
         "protocol_sha256": { "$ref": "#/$defs/sha256" },
         "episode_schema_path": {

@@ -955,7 +955,7 @@ async def adjudicate_finding(
     The operator verdict is ground truth from outside the loop, so the outcome is
     ``external_signal``; the handler auto-snapshots Sentinel's EISV by agent_id,
     giving the residual-vs-Φ falsifiability test a second baselined-resident
-    channel beyond Watcher (docs/proposals/eisv-stage0-bridge-b-label-routing.md).
+    channel beyond Watcher (docs/proposals/active/eisv-stage0-bridge-b-label-routing.md).
     Option A: the outcome_event is the durable adjudication record — backlog /
     audit.events status mutation is a deliberate follow-up.
     """

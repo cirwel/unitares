@@ -16,7 +16,7 @@ Refresh when fermata's IR changes:
 If a fermata IR bump breaks this test, that is the guard WORKING: the UNITARES
 profile mapping must be reconciled.
 
-Mapping spec: docs/proposals/governed-effect-unitares-profile-v0.md.
+Mapping spec: docs/proposals/active/governed-effect-unitares-profile-v0.md.
 """
 
 from __future__ import annotations

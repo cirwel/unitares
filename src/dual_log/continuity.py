@@ -50,7 +50,7 @@ class ContinuityMetrics:
     # silently filled by a default. Nothing below changes the math — they exist
     # so the decision to change the defaults can be made against the live
     # distribution instead of an assumption. See
-    # docs/proposals/substrate-portability-checkin-v0.md.
+    # docs/proposals/archive/substrate-portability-checkin-v0.md.
     self_complexity_defaulted: bool = False   # divergence used the 0.2 stand-in
     E_input_clipped: bool = False             # E_input hit a clip bound, carries no signal
     continuity_degenerate: bool = False       # text features can't move for this caller

@@ -2,7 +2,7 @@
 
 No Redis/PG needed — exercises compare_birth_cohort and _parse_bound_at directly.
 See scripts/ops/session_mirror_parity_check.py and
-docs/proposals/redis-retirement-phase-1-plan.md.
+docs/proposals/archive/redis-retirement-phase-1-plan.md.
 """
 
 import importlib.util

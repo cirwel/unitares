@@ -1,7 +1,7 @@
 defmodule UnitaresLeasePlane.GovernedEffect do
   @moduledoc """
   Record-only governed-effect shadow — Phase 3 thin slice of
-  `docs/proposals/governed-effect-plane-v0.md`.
+  `docs/proposals/active/governed-effect-plane-v0.md`.
 
   An agent PROPOSES an effect (an intent to mutate a surface). In
   `record_only` mode the plane:

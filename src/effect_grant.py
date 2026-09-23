@@ -1,6 +1,6 @@
 """Effect-binding grant primitive (governed-effect Phase 1 — content-binding).
 
-Design: docs/proposals/governed-effect-effect-binding-v0.md (#1075).
+Design: docs/proposals/active/governed-effect-effect-binding-v0.md (#1075).
 
 This is the **Option B** primitive: a server-minted, short-TTL, single-use
 grant that binds an authorization to an effect's *content*, so a captured

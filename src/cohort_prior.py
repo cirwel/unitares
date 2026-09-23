@@ -1,7 +1,7 @@
 """Cohort behavioral priors — shadow, read-only warm-start for per-agent baselines.
 
 Council-reviewed "Site B" of the exponential/growth-dynamics scoping
-(`docs/proposals/exponential-growth-dynamics-v0.md`). This is the ONE growth-shaped
+(`docs/proposals/active/exponential-growth-dynamics-v0.md`). This is the ONE growth-shaped
 move the review endorsed: a sharper starting prior *reduces* surprise, so it is
 compatible with the contractive governor and never touches the verdict path.
 

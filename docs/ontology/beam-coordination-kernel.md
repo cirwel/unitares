@@ -10,12 +10,12 @@
 
 This ontology-track plan converged with a parallel proposals-track RFC on the same primitive without coordination between sessions. Both should be read by anyone executing the spike:
 
-- **`docs/proposals/surface-lease-plane-v0.md`** — canonical lease-plane contract spec. It defines the `lease_plane.*` Postgres schema migrations, `/v1/lease/*` HTTP API, typed-absence return shapes, advisory → selective-enforcement rollout, surface-kind grammar, substrate-state extension, and Phase B gates.
-- **`docs/proposals/surface-lease-plane-phase-a-plan.md`** — shipped Phase A implementation ledger. Use this to reconstruct which RFC rows landed in which PR sequence.
+- **`docs/proposals/active/surface-lease-plane-v0.md`** — canonical lease-plane contract spec. It defines the `lease_plane.*` Postgres schema migrations, `/v1/lease/*` HTTP API, typed-absence return shapes, advisory → selective-enforcement rollout, surface-kind grammar, substrate-state extension, and Phase B gates.
+- **`docs/proposals/active/surface-lease-plane-phase-a-plan.md`** — shipped Phase A implementation ledger. Use this to reconstruct which RFC rows landed in which PR sequence.
 - **`docs/operations/lease-plane-operator-runbook.md`** — live operator surface for the running launchd service on `127.0.0.1:8788`.
-- **`docs/proposals/beam-footprint-roadmap-v0.md`** — roadmap-level migration decision. Current binding destination is stateful coordination to BEAM, stateless computation in Python.
-- **`docs/proposals/resolved/beam-wave-1-sentinel.md`** — executed Sentinel-on-BEAM Wave 1 RFC. Surface 1 cycle state, Surface 2 findings emission, and Surface 3 lease advisory are preserved as shipped provenance.
-- **`docs/proposals/beam-wave-3-handler-dispatch.md`** — handler dispatch, identity middleware, and dialectic resolution RFC. This is a single-writer identity/onboarding-adjacent surface; check open PRs before editing.
+- **`docs/proposals/active/beam-footprint-roadmap-v0.md`** — roadmap-level migration decision. Current binding destination is stateful coordination to BEAM, stateless computation in Python.
+- **`docs/proposals/archive/beam-wave-1-sentinel.md`** — executed Sentinel-on-BEAM Wave 1 RFC. Surface 1 cycle state, Surface 2 findings emission, and Surface 3 lease advisory are preserved as shipped provenance.
+- **`docs/proposals/active/beam-wave-3-handler-dispatch.md`** — handler dispatch, identity middleware, and dialectic resolution RFC. This is a single-writer identity/onboarding-adjacent surface; check open PRs before editing.
 
 This plan is the **integration-into-UNITARES framing** (R7 row in `docs/ontology/plan.md`); the RFCs are the **contract specs**. Neither subsumes the other. The original implementation skeleton (`db/postgres/migrations/024_lease_plane.sql`, `src/lease_plane/`, `tests/test_lease_plane_client.py`) was captured into the repo by commit `b5364d3` after both docs landed. The current Elixir/OTP apps live under `elixir/lease_plane/` and `elixir/sentinel/`.
 
@@ -274,7 +274,7 @@ The shipped schema is `lease_plane.*`, not the early ontology-draft `coordinatio
 
 - `db/postgres/migrations/024_lease_plane.sql` — first durable contract: `lease_plane.surface_leases`, `lease_plane.lease_plane_events`, active unique index, immutable holder/TTL checks, and event outbox shape.
 - Later `lease_plane` migrations — surface-kind grammar, deprecation catalog, earned-status guard, substrate-state columns and CHECK constraints.
-- `docs/proposals/surface-lease-plane-v0.md` — semantic contract for the schema and typed absence.
+- `docs/proposals/active/surface-lease-plane-v0.md` — semantic contract for the schema and typed absence.
 
 V1 uses application-level expiry checks plus a periodic reaper. Do not rely on partial index uniqueness alone; expired rows must transition out of the active set.
 

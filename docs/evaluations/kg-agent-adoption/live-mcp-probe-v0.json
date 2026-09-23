@@ -346,7 +346,7 @@
           "id": "2026-06-30T21:55:51.545601+00:00",
           "type": "note",
           "status": "open",
-          "summary": "EISV maths rework has a canonical live source: docs/proposals/eisv-maths-roadmap-v0.md (in unitares repo). Read it before reasoning about EISV internals. The governance-fundamentals skill + legacy EIS",
+          "summary": "EISV maths rework has a canonical live source: docs/proposals/active/eisv-maths-roadmap-v0.md (in unitares repo). Read it before reasoning about EISV internals. The governance-fundamentals skill + legacy EIS",
           "tags": [
             "source-claude-memory",
             "mem-memory",

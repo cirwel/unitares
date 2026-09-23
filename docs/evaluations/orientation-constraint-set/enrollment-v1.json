@@ -2,7 +2,7 @@
   "schema": "unitares.orientation-constraint-set.enrollment.v0",
   "enrolled_at": "2026-08-24T23:45:09.921588Z",
   "protocol": {
-    "path": "docs/proposals/orientation-constraint-set-preregistration-v0.md",
+    "path": "docs/proposals/registered/orientation-constraint-set-preregistration-v0.md",
     "commit": "d6dc0c79fc401f09e737010fbe646660c2dc7036",
     "sha256": "1c4be9628f773fc01847fb060b397526d4d6d187c8d0248cc9d25a3f75866595",
     "governed_review_session": "20ae6cbd2cf02a5c"

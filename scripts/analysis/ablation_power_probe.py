@@ -26,7 +26,7 @@ power because power depends on the full joint distribution.
 
 What this is not: it is not a read of production data, does not query any
 database, and does not touch the pre-registered 2026-12-01 confirmatory read in
-`docs/proposals/eisv-outcome-grounding-stop-rule-v0.md`. It changes no threshold,
+`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`. It changes no threshold,
 date, or PASS condition there. It characterises the instrument that read will
 use, so a FAIL can be reported as "no effect detected at power X" instead of the
 stronger "no effect".

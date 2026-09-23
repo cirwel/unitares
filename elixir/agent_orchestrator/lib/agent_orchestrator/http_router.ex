@@ -2,7 +2,7 @@ defmodule AgentOrchestrator.HTTPRouter do
   @moduledoc """
   HTTP control surface for the ephemeral-agent orchestrator — the "spawn / list
   / stop agents from outside BEAM" capability deferred in
-  `docs/proposals/agent-orchestrator-beam-v0.md`.
+  `docs/proposals/active/agent-orchestrator-beam-v0.md`.
 
   Without this, the only way to drive the orchestrator was to BE Elixir code
   running inside the same VM. This surface lets a Python/TS/shell caller (the

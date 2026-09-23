@@ -2,7 +2,7 @@
 
 Covers src/mcp_transport.py: the pinned typed-unavailable body, the
 numerator-emission middleware, the sliding-window aggregator math, and the
-default-inert flag gating. Spec: docs/proposals/beam-wave-3-handler-dispatch.md
+default-inert flag gating. Spec: docs/proposals/active/beam-wave-3-handler-dispatch.md
 §3.2 step 3.
 """
 

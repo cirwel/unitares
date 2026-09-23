@@ -5,7 +5,7 @@ deployment that has not opted out: ``GOVERNANCE_VERIFICATION_FLOOR_SHADOW``
 defaults to true while ``GOVERNANCE_VERIFICATION_FLOOR`` defaults to false. Shadow
 mode exists to accumulate the false-positive/recall record the proposal's own
 acceptance gate requires before the floor is enabled
-(``docs/proposals/verification-weighted-verdict-v0.md``).
+(``docs/proposals/active/verification-weighted-verdict-v0.md``).
 
 Until this module existed, a shadow firing was written onto the result dict
 returned by ``process_update`` and onto ``_last_governance_result``, and nowhere

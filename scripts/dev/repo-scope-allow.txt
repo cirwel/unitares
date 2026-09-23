@@ -8,17 +8,17 @@
 # council/live-verifier review process inline and are frozen technical records,
 # not living product docs. Allowlisted so status-header refreshes can land
 # without a gutting rewrite (2026-06-28).
-docs/proposals/resolved/beam-wave-1-sentinel.md
-docs/proposals/resolved/beam-wave-3a-read-only-handlers.md
-docs/proposals/beam-wave-3-handler-dispatch.md
-docs/proposals/beam-wave-3-gamma-hybrid-v0.md
+docs/proposals/archive/beam-wave-1-sentinel.md
+docs/proposals/archive/beam-wave-3a-read-only-handlers.md
+docs/proposals/active/beam-wave-3-handler-dispatch.md
+docs/proposals/archive/beam-wave-3-gamma-hybrid-v0.md
 
 # Frozen decision-record proposals whose SUBJECT is the review process itself
 # (same class as the BEAM Wave RFCs above) — allowlisted 2026-07-01 so the
 # stranded post-merge amendments (parked-behind-demand note, gate reframe)
 # could re-land without a gutting rewrite.
-docs/proposals/operator-decision-packet-v0.md
-docs/proposals/2026-06-24-wave-3-gate-framing.md
+docs/proposals/archive/operator-decision-packet-v0.md
+docs/proposals/archive/2026-06-24-wave-3-gate-framing.md
 
 # The ontology ledger — chronological record whose HISTORICAL entries (S15-c,
 # S21-b, S10, R1, R2; all pre-dating the 2026-08-13 guard tightening) document
@@ -37,4 +37,4 @@ docs/ontology/plan.md
 # body performed the audit the gate depends on. Allowlisted 2026-09-13 so a
 # status-header refresh could land without a gutting rewrite of someone else's
 # record. Exempts the file, not the practice.
-docs/proposals/wave-3-section-5-2-boundary-audit-summary.md
+docs/proposals/active/wave-3-section-5-2-boundary-audit-summary.md

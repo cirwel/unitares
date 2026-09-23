@@ -439,7 +439,7 @@ def build_resolution_outcome_args(
     First exogenous ground-truth channel for an EISV-bearing resident (every
     baselined agent's outcomes are otherwise self-referential/self-attested, so
     the EISV signal is structurally unfalsifiable for them —
-    docs/proposals/eisv-maths-roadmap-v0.md Appendix B). The handler auto-snapshots
+    docs/proposals/active/eisv-maths-roadmap-v0.md Appendix B). The handler auto-snapshots
     EISV by ``agent_id``, so attribute to Watcher's UUID.
     """
     confirmed = status == "confirmed"

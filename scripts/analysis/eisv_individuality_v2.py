@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """EISV individuality test v2 — pre-registered, fresh-data-only.
 
-Spec: docs/proposals/eisv-individuality-v2-preregistration.md. Read it before
+Spec: docs/proposals/archive/eisv-individuality-v2-preregistration.md. Read it before
 touching thresholds — they are FROZEN as of 2026-07-02; edits after
 post-registration data exists invalidate the pre-registration.
 
@@ -464,7 +464,7 @@ def build_report(res: dict, labels: dict[str, str]) -> str:
     a.append("# EISV individuality v2 — pre-registered read\n")
     a.append(f"Registration: `{res['registration_ts']}` — only rows recorded "
              "after this instant are counted. Spec: "
-             "`docs/proposals/eisv-individuality-v2-preregistration.md` "
+             "`docs/proposals/archive/eisv-individuality-v2-preregistration.md` "
              "(thresholds frozen; do not reinterpret).\n")
     a.append("## Per-agent")
     a.append(f"| Agent | states | moved | eligible | leg A (VR{VR_HORIZON} "

@@ -14,7 +14,7 @@ paused agent's api_key), this process:
   * after a disagreement, stays alive for a bounded window to evaluate the
     paused agent's response under the SAME reviewer identity before exiting.
 
-Design: docs/proposals/orchestrated-dialectic-reviewer-v0.md
+Design: docs/proposals/active/orchestrated-dialectic-reviewer-v0.md
 
 The verdict-derivation (`parse_reviewer_verdict`) and prompt-construction
 (`build_review_prompt`) are PURE functions so the independence-critical behavior

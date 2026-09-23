@@ -220,7 +220,7 @@ class TestArmingIsIndependentOfIntegrationDt:
     Enforcement ("was this agent absent?") and integration ("is this step
     numerically stable?") were one test. They are now two, so the operator-owned
     threshold can move without rescaling the ODE's notion of time. See
-    docs/proposals/gap-recovery-arming-semantics-v0.md.
+    docs/proposals/active/gap-recovery-arming-semantics-v0.md.
     """
 
     def test_default_reproduces_the_legacy_derived_boundary(self):

@@ -433,7 +433,7 @@ async def _fingerprint_hijack_check(
     (legacy-cache backward-compat contract).
 
     Extracted so PATH 2 can run the identical check on the PG-mirror binding's
-    bind_ip_ua. Redis-retirement Phase 1A — docs/proposals/redis-retirement-phase-1-plan.md.
+    bind_ip_ua. Redis-retirement Phase 1A — docs/proposals/archive/redis-retirement-phase-1-plan.md.
     """
     from config.governance_config import (
         session_fingerprint_check_mode,

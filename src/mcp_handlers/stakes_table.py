@@ -31,7 +31,7 @@ no asyncio/anyio/DB. Two reasons:
 As of this commit the table is INERT: no gate consults it. It ships as the
 durable, port-survivable artifact while the gate mechanism is parked pending
 the BEAM-port sequencing (or real demand). See
-docs/proposals/stakes-keyed-gating-775.md.
+docs/proposals/archive/stakes-keyed-gating-775.md.
 
 Resolution contract (`get_action_stakes`):
   - exact (tool, action) entry wins, else

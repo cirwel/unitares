@@ -71,7 +71,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SCENARIOS = REPO_ROOT / "tests/orientation_constraint_set/scenarios-v0.json"
 DEFAULT_PROTOCOL = (
     REPO_ROOT
-    / "docs/proposals/orientation-constraint-set-preregistration-v0.md"
+    / "docs/proposals/registered/orientation-constraint-set-preregistration-v0.md"
 )
 CORE_PATH = REPO_ROOT / "scripts/eval/orientation_constraint_set.py"
 RUNNER_PATH = Path(__file__).resolve()

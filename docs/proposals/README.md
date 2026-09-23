@@ -1,219 +1,62 @@
-# Proposals — RFC Index
+# Proposals and decision history
 
-Active and resolved RFCs that don't (yet) belong in [`docs/ontology/`](../ontology/README.md). **Each doc's body carries its own resolution status and is canonical — this index is a map.** Dated docs are point-in-time records and deliberately preserve references as they were at writing (the doc-health dead-ref check exempts this folder for that reason).
+Start with the [product definition](../PRODUCT_DEFINITION.md),
+[architecture](../UNIFIED_ARCHITECTURE.md), [interface](../INTERFACE_CONTRACT.md),
+and [evidence and limits](../EVIDENCE_AND_LIMITS.md) for the current system.
+This directory holds the research and engineering record behind it.
 
-Several of these are **single-writer surfaces** (see the shared contract in `AGENTS.md` / `CLAUDE.md`): the hot Plexus / lease-plane / BEAM thread gets restructured in flight. If another session has an open PR touching one, branch from its head rather than starting a parallel edit.
+## Choose a reading path
 
-## Disposition at a glance (2026-09-03)
-
-Every row in the thread tables below now leads with one of five dispositions, so
-"what is alive here" has a one-word answer per doc. The doc's own status line stays
-canonical; the tag is a reading of it under the rule stated here, and a wrong tag is
-fixed by editing the row. The thread tables keep their grouping by subject, so a
-thread can hold Closed and Parked rows beside Active ones.
-
-| Tag | Rule |
+| You need | Start here |
 |---|---|
-| **Built** | The status line says shipped, implemented, landed, or wired, in whole or in part. *(dormant)* = built but flag-off or unwired; *(partial)* = a named phase shipped and the rest did not. |
-| **Registered** | A frozen or pre-registered protocol. Its stop rule binds the analyst, not the feature; it is never re-run, refreshed, or weakened. |
-| **Active** | Design or measurement work touched by a commit in the 30 days before 2026-09-03, or named by a signed gate as in progress. |
-| **Parked** | Design-only or deferred by its own status line and untouched since before 2026-08-04. The date is the last commit that touched the doc. |
-| **Closed** | A recorded decision, a refutation, a superseded draft, a negative result, or a dated record. Retained as provenance. |
+| Current designs, open decisions, and operative contracts | [Current proposals and contracts](active/README.md) |
+| Frozen experiments, registered protocols, and stop rules | [Registered protocols](registered/README.md) |
+| Completed work, parked ideas, negative results, and historical decisions | [Proposal archive](archive/README.md) |
 
-The 30-day line is a choice, not a measurement: it separates "someone is working
-this" from "nobody has touched this" and claims nothing else. Current counts:
+Each document's body states its own status and is authoritative. Folder placement
+expresses a reading purpose; it changes no decision, authorization, registration,
+or scientific result. Current contracts stay in `active/` even when an
+implementation is Built. The archive includes Parked questions that may resume.
+
+## Dispositions
+
+The child indexes preserve the disposition reading taken on **2026-09-03**,
+plus subsequently added rows. The tags are not a current work queue or permission
+to build. In particular, an Active row can be blocked or already partly built.
+Read its body and linked implementation before choosing work.
+
+| Tag | Meaning in the index |
+|---|---|
+| **Built** | The status says shipped, implemented, landed, or wired, in whole or part. Dormant means built but flag-off or unwired; partial means a named phase shipped. |
+| **Registered** | A frozen or pre-registered protocol. Its stop rule binds the analyst and is never re-run, refreshed, or weakened. |
+| **Active** | Design or measurement work touched in the 30 days before 2026-09-03, or named by a signed gate as in progress. This was a chosen sorting rule. |
+| **Parked** | Design-only or deferred by its status and untouched since before 2026-08-04 at the tagging read. The row retains its recorded date. |
+| **Closed** | A recorded decision, refutation, superseded draft, negative result, or dated record retained as provenance. |
+
+Current counts:
 Built 21 · Registered 7 · Active 29 · Parked 24 · Closed 14
-(top-level docs; the `resolved/` subfolder is not re-tagged).
 
-These counts are **live, not a snapshot**, and `scripts/dev/check_proposals_index.py`
-fails if they stop matching the rows below. They used to be a snapshot — "counts at
-tagging", 2026-09-03 — and within ten days they were wrong: the line still read
-`Active 21` after [#2156](https://github.com/CIRWEL/unitares/pull/2156) added a row,
-and the tagging count was itself one short. Nothing caught it, because nothing was
-checking. Add a row, change the number in the same commit.
+These counts cover the tagged entries across all three indexes. The archive
+also preserves the 19 older records previously indexed under `resolved/`, and
+one supporting JSON artifact. The counts are mechanically checked; the tags
+remain a dated reading. Protocols that register at merge can appear in
+`registered/` while retaining their original Active tag and DRAFT header.
 
-The guard checks this index against itself and the filesystem — coverage, dead links,
-count arithmetic, and whether each doc states a status. It does **not** decide whether
-a tag is *right*: the 30-day line above is a choice, and re-deriving tags in a script
-would make the script the tagging authority and stop this file being canonical for its
-own rule. A doc tagged **Active** that nobody has touched in a year passes the check;
-saying so is this index's job, and revising it is a human's.
+`scripts/dev/check_proposals_index.py` checks recursive coverage, one row per
+document, links, status fields and count arithmetic. It does not judge readiness,
+re-tag work, or turn archival into a decision about value.
 
-**So be precise about what is live here and what is not.** The *counts* are live and
-enforced. The *tags* are a dated reading, last taken 2026-09-03, and nothing re-derives
-them — which means this index answers "what was judged alive on that date, and is every
-doc still accounted for," **not** "what is alive right now." A review
-(dialectic `490c7cf515b89a6e`, 2026-09-13) named the earlier wording a contradiction:
-it claimed the first while only checking the second. Re-tag deliberately when the
-picture changes; do not read an untouched **Active** row as current evidence.
+## Working on a proposal
 
-## Active threads
+The live lease-plane and BEAM contracts remain single-writer surfaces under
+[`AGENTS.md`](../../AGENTS.md). Check open PRs and claim the surface before editing.
+Preserve registered instruments and their authorization boundaries.
 
-### Plexus / surface lease plane
-
-| Doc | Status |
-|---|---|
-| [`plexus-scope.md`](plexus-scope.md) | **Built** · Active boundary name over the live Surface Lease Plane; Plexus Zero retained as manual fallback |
-| [`surface-lease-plane-v0.md`](surface-lease-plane-v0.md) | **Built (partial)** · The lease-plane RFC, v0.11+. Phase A shipped 2026-05-03 (PR #305); Phase B promotion window opened 2026-05-16; `resident` enforcement shipped (PR #476) |
-| [`surface-lease-plane-phase-a-plan.md`](surface-lease-plane-phase-a-plan.md) | **Built** · COMPLETE — Phase A execution plan, shipped with PR #305; retained here as the current PR-by-PR sequencing ledger cited by the BEAM roadmap and coordination kernel |
-| [`worktree-isolation-vs-lease-default.md`](worktree-isolation-vs-lease-default.md) | **Parked (since 2026-06-28)** · v0.2 counter-note / companion to the lease-plane RFC (not a replacement) |
-| [`lease-lifecycle-declaration-v0.md`](lease-lifecycle-declaration-v0.md) | **Closed** · **REFUTED as written.** The permanent-strand diagnosis stands; the proposed TTL-only fix would break execution exclusion. Retained as a negative design record and prerequisite warning for any fence/lifecycle follow-up |
-| [`lease-plane-phase-a-latency-2026-05-20.md`](lease-plane-phase-a-latency-2026-05-20.md) | **Closed** · First latency measurement anchoring the substrate-tax gate from the BEAM roadmap |
-
-### BEAM footprint (substrate migration waves)
-
-| Doc | Status |
-|---|---|
-| [`2026-06-24-wave-3-gate-framing.md`](2026-06-24-wave-3-gate-framing.md) | **Closed** · **Read first for the gate.** Framing note (2026-06-22) — two separate decisions: (A) freeze the orchestrator cluster (demand empty) vs (B) Wave-3 dispatch on its own merits. Measured 2026-06-22: p50 floor closed, but p99 coordination tail LIVE (`process_agent_update` p99 4740ms, math ~1.3%) |
-| [`beam-footprint-roadmap-v0.md`](beam-footprint-roadmap-v0.md) | **Active** · v0.4 — destination A′ committed (operator decision 2026-05-05); Wave 3 committed to proceed 2026-06-25 and signed GO-WITH-REDUCED-SCOPE 2026-08-22 (go-decision row below). Read the V0.4 RESOLUTION block first |
-| [`beam-wave-3-handler-dispatch.md`](beam-wave-3-handler-dispatch.md) | **Active** · COMMITTED AND OPEN, no active implementation — the commitment stands (V0.4, 2026-06-25); the (γ) narrow cut at `process_agent_update` was set aside 2026-06-28. Read the V0.5 STATUS CORRECTION and V0.6 SCOPE blocks before resuming |
-| [`agent-channel-wake-gate-v0.md`](agent-channel-wake-gate-v0.md) | **Active** · v0 — UNSIGNED disconfirmer gate for cross-vendor agent-channel wake; explicitly NOT under Wave 3's authorization |
-| [`agent-orchestrator-beam-v0.md`](agent-orchestrator-beam-v0.md) | **Built (dormant)** · v0 thin slice — council-reviewed library + smoke, not merged to any running surface |
-| [`beam-governed-effects-dossier-2026-06-18.md`](beam-governed-effects-dossier-2026-06-18.md) | **Parked (since 2026-06-19)** · Draft dossier + phased plan — narrows current evidence to BEAM as dual-mode record/execute governed-effect runtime custody, not whole-governance rewrite |
-| [`governed-effect-plane-v0.md`](governed-effect-plane-v0.md) | **Built (partial)** · Draft v0.3 — Phase-4 readiness; the Phase 2 protocol contract for the dossier (dual `custody_mode`, effect envelope, typed errors, idempotency/custody-TTL/payload holes closed). The record_only shadow is built (PR #866); the execute half is not cleared |
-| [`wave-3-section-5-2-boundary-audit-summary.md`](wave-3-section-5-2-boundary-audit-summary.md) | **Built** · CI-checkable §5.2 boundary-cost audit summary (2026-06-10), required before `elixir/handler_dispatch/` commits |
-| [`beam-proprioception-case-v0.md`](beam-proprioception-case-v0.md) | **Parked (since 2026-06-19)** · Draft v0.2 — conceptual companion behind A′ (council-folded). Epistemic claim: honest, provenance-tagged runtime introspection is privileged self-evidence (`external_signal`→`externally_verified`; #846 `harness_lane`); build governance on the layer that introspects honestly. Orthogonal to latency; non-relitigating; moves no boundary |
-| [`beam-verbs-as-contract-capabilities-v0.md`](beam-verbs-as-contract-capabilities-v0.md) | **Active** · Design-only. Accounting settled 2026-08-29: capabilities use their own key, never the tool aggregate. PR #2032 folded the 2026-08-30 review; #1998 source review (2026-09-07) proposes sender-scoped atomic idempotency, one-logical-receiver cursor inbox and bounded dispatch/maintenance provenance. Send is independent of inbox. Retry/admission bounds and acceptance evidence remain required; lease exposure stays deferred with strict ownership, status visibility and footprint gates |
-| [`attestation-issuance-scope-v0.md`](attestation-issuance-scope-v0.md) | **Active** · Design-only; exact per-mint-site method/path model ratified 2026-08-29. Source review 2026-09-07 preserves the presence exemption boundary and stages send-only scope first, inbox with its consumer. No global prefix widening or unused ack scope; implementation still requires the companion RFC gates |
-| [`wave-3-go-decision-2026-08-16.md`](wave-3-go-decision-2026-08-16.md) | **Closed** · SIGNED 2026-08-22 — GO-WITH-REDUCED-SCOPE. The decision record under which Wave 3 now proceeds |
-| [`wave-3-reduced-scope-gate-v0.md`](wave-3-reduced-scope-gate-v0.md) | **Active** · PROPOSED, unratified as a gate — the reduced-scope conditions under which the signed GO proceeds; §6.3 names the calendar items whose slip halts Wave 3 outright |
-| [`beam-wave-3-gamma-hybrid-v0.md`](beam-wave-3-gamma-hybrid-v0.md) | **Closed** · v0 wide cut REJECTED (§0a); the (γ) narrow cut was set aside 2026-06-28 per the handler-dispatch RFC. Retained as a negative design record |
-
-### Operator-vision delegation / identity hardening
-
-The ADR-001 thread: do not enable operator-vision delegation as first proposed; instead land Track A (strict-identity hardening) before Track B (scoped `operator_delegate` disclosure). Read [`ADR-001`](ADR-001-operator-vision-delegation.md) first — it frames the other docs.
-
-| Doc | Status |
-|---|---|
-| [`ADR-001-operator-vision-delegation.md`](ADR-001-operator-vision-delegation.md) | **Closed** · Accepted (2026-06-16) — do not enable as proposed; pursue Track A + Track B |
-| [`fleet-workload-identity-auth-audit-v0.md`](fleet-workload-identity-auth-audit-v0.md) | **Active** · Draft v0.2 (2026-08-24) - council-ratified and Claude-reviewed threat model/Lease Plane pilot specification; v0.2 adds OS-isolated workload bootstrap, canonical proofs, fixed replay/audit semantics, off-state parity tests, availability/capacity gates, and break-glass recovery; live auth remains blocked |
-| [`cedar-delegation-authz-v0.md`](cedar-delegation-authz-v0.md) | **Active** · Draft v0 (2026-08-21) — decision pending, deferred-by-default. Cedar as the family's shared policy engine (pre-dispatch authorize step + the governed-effect plane's unbuilt §6 veto), principals from explicit delegation carriers only (operator token, vouched bindings — never lineage), #1387 `(tool, action)` as the action vocabulary, `stakes_table.py` as seed policy, shadow-mode first |
-| [`track-a-strict-identity-hardening-runbook.md`](track-a-strict-identity-hardening-runbook.md) | **Parked (since 2026-06-17)** · Ready to execute — close the fingerprint-pin resume hole; prerequisite for any delegation |
-| [`track-b-operator-delegate-design.md`](track-b-operator-delegate-design.md) | **Parked (since 2026-06-16)** · Proposal (design-first) — scoped `operator_delegate` read-only disclosure; do not implement before Track A is enforced |
-| [`track-b-implementation-blueprint.md`](track-b-implementation-blueprint.md) | **Parked (since 2026-06-28)** · Ready to apply once Track A is enforced — implementation blueprint for the `operator_delegate` scope |
-| [`lineage-causal-only-semantics.md`](lineage-causal-only-semantics.md) | **Built** · IMPLEMENTED — the declaration-time parent-liveness gate shipped (see the doc's As-built section); cited from `src/mcp_handlers/lifecycle/helpers.py` |
-| [`uuid-keyed-identity-migration-v0.md`](uuid-keyed-identity-migration-v0.md) | **Parked (since 2026-06-30)** · v0 proposal / design-only (2026-06-14; council amendment 2026-06-30) — make the UUID the sole identity key, reconciling schema with the ontology. The 2026-06-30 simplification council ranked it the single architectural lever (root cause of the resolver band-aids) but **lowered urgency**: near-zero write-accountability blast radius today, BEAM may re-key it for free, Wave-3 gate still closed — hold at Phase 0, don't race BEAM |
-| [`discord-thread-identity-resume-v0.md`](discord-thread-identity-resume-v0.md) | **Built** · Reference decision record — Discord BEAM thread resume-per-thread plumbing; orchestrator + reference-hook side merged (#834), fail-closed/cross-repo follow-ups tracked separately |
-| [`principal-rollup-v0.md`](principal-rollup-v0.md) | **Built (partial)** · v0 proposal (2026-06-18) — count the **principal** (logical worker) not the process-instance; first-class form of identity.md research #3 ("identity as integral, not point-value"). Measurement shipped (`scripts/dev/octopus_rollup.py`); count/mint changes operator-gated. Sits atop `uuid-keyed-identity-migration` |
-| [`orchestrator-vouched-identity-v0.md`](orchestrator-vouched-identity-v0.md) | **Parked (since 2026-06-28)** · DESIGN-FIRST RFC, council-reviewed 2026-06-17 — earn a genuine `strong` tier for orchestrated headless children (the deferred follow-on to resume-per-thread). Gate artifact for the 2026-06-24 Wave-3 read; no live cutover |
-| [`genesis-baseline-aging-v0.md`](genesis-baseline-aging-v0.md) | **Parked (since 2026-06-29)** · Open question / design sketch (2026-06-30) — **no decision, no code change.** Surfaces template-aging risk against immutable-genesis-at-tier-2 (`store_genesis_signature`); recommends measure-first via R1 shadow-mode, then spike dual-anchor (immutable origin + bounded rolling reference) only if decay is real. Anti-laundering tension stated explicitly. From `docs/ontology/trajectory-identity-prior-art-2026-06.md` |
-| [`agent-identity-credential-aic-v0.md`](agent-identity-credential-aic-v0.md) | **Parked (since 2026-06-24)** · Prototype + design draft (2026-06-24); not wired into the live identity path |
-
-### Other active
-
-| Doc | Status |
-|---|---|
-| [`behavioral-running-hot-detector-v0.md`](behavioral-running-hot-detector-v0.md) | **Parked (since 2026-06-14)** · v0.1 plan, parked — pending council; unbuilt, blocked on the behavioral-EISV arm emitting signal |
-| [`continuous-verdict-blending-v0.md`](continuous-verdict-blending-v0.md) | **Parked (since 2026-06-27)** · v0.2 council-corrected design note — do not implement v0 blend as written; primary fix is verdict-gate hysteresis/dead-band |
-| [`dialectic-terminal-state-fidelity-v0.md`](dialectic-terminal-state-fidelity-v0.md) | **Active** · Decision packet, raised 2026-09-13 — `DialecticPhase.FAILED` is the terminal state for adjudication, exhaustion, reviewer non-completion and error alike, so the kernel's answer to its own "who challenged it?" question is unrecoverable once written. Options: a distinct terminal state (recommended), a structured reason field, or accept. Nothing implemented; companion to issue #2202 |
-| [`operator-decision-packet-v0.md`](operator-decision-packet-v0.md) | **Parked (since 2026-07-01)** · v1 design — making load-bearing taste/authority/irreversible calls cheap to answer (decision-packet output contract; review pass live, dialectic `ESCALATE`/`design_review` are latent unwired scaffolds). Reviewed to v1 2026-06-17; design-first, no code |
-| [`mirror-effectiveness-measurement-v0.md`](mirror-effectiveness-measurement-v0.md) | **Built (partial)** · Phases 0–1 landed (Phase 2 proposed) — deterministic, operator-funded-free measurement of whether a surfaced mirror signal changes agent behavior |
-| [`relay-substrate-relayering-v0.md`](relay-substrate-relayering-v0.md) | **Active** · Decision recorded (2026-09-17) on the 2026-09-16 packet, revised the same day after adversarial review — the NeMo Relay exporter and policy gate shipped as an optional SDK extra (`unitares_sdk.integrations.nemo_relay`); new host integrations default to Relay and the hook chain is held unchanged; upstream publication no longer waits on an external operator, a change in that item's governance role that owes the cohort protocol a dated clarification before recruitment; the execute half records **no decision** and its three options stay live and the commissioned design read is written ([`execute-plane-design-read-v0.md`](execute-plane-design-read-v0.md)) without deciding the row, which Wave 3 does not authorise building ahead of; the ninety-day evidence gate becomes a 2026-11-03 renew-or-stop process checkpoint that grades nothing |
-| [`execute-plane-design-read-v0.md`](execute-plane-design-read-v0.md) | **Active** · Pre-registration (2026-09-17) for the design read the Relay packet's row 3 commissions — states disconfirming conditions for all three execute-plane options before the comparative analysis, fixes the failure-mode and authority matrix the answer must fill, and bars any usage count from deciding the retire option. Carries no implementation authority and changes no option's status |
-| [`accountable-coordination-ablation-v0.md`](accountable-coordination-ablation-v0.md) | **Active** · DRAFT protocol registering a four-arm, task-family-clustered comparison of independent work, ephemeral messages, durable coordination, and full accountable coordination; no cohort enrolled, scored run scheduled, production bypass, or policy change authorized |
-| [`pcalm-primal-dual-governance-v0.md`](pcalm-primal-dual-governance-v0.md) | **Active** · Replay-first research design adapting PC-ALM's persistent-residual idea as non-authoritative constraint pressure; pure transition and synthetic invariants only, with no live wiring, selected real constraint, outcome read, or policy authority. The unwired primitive (`src/constraint_pressure.py`) is registered **KEEP-DORMANT** with its wake condition in `docs/operations/dormant-capability-registry.md` (Theme 7) |
-| [`kg-agent-adoption-pilot-v0.md`](kg-agent-adoption-pilot-v0.md) | **Active** · DRAFT / HOLD — offline fixture independently reviewed; production-plugin probe found the pinned root outside top five for five of six frozen queries, the one audit row required read-only decoder recovery, delayed auto-checkin falsified durable canary isolation, and live parity, scored runs, orchestration promotion, and live actuators remain unauthorized |
-| [`hosted-multi-tenant-endpoint-v0.md`](hosted-multi-tenant-endpoint-v0.md) | **Parked (since 2026-06-18)** · Scoping / not committed — hosted governance endpoint decision doc; recommends isolated-per-adopter hosting first and defers true multi-tenant SaaS |
-| [`inference-delegation-capability-registry-v0.md`](inference-delegation-capability-registry-v0.md) | **Parked (since 2026-06-29)** · v0 scoping proposal - design-first capability registry + provenance envelope for local, hosted, and operator-authorized subscription-backed inference delegation; recommends Phase 1 registry/provenance before Codex/Claude adapters |
-| [`harness-event-safety-policy-v0.md`](harness-event-safety-policy-v0.md) | **Parked (since 2026-06-20)** · Draft (2026-06-20) — cross-harness event envelope and fail-closed policy for synthetic/replayed/duplicate events before harness-specific implementation PRs |
-| [`beam-event-adapter-design-v0.md`](beam-event-adapter-design-v0.md) | **Parked (since 2026-06-28)** · Design note (2026-06-20) — how BEAM residents/supervisors would populate the harness-event-safety envelope (PR #957); design-only, deferred to the 2026-06-24 Wave-3 gate read |
-| [`monitor-delegated-liveness-v0.md`](monitor-delegated-liveness-v0.md) | **Parked (since 2026-06-21)** · v0 (2026-06-21) — design-only, **DO NOT BUILD YET.** Delegate process-liveness to the owning runtime monitor (OTP supervisor / `:DOWN`) instead of self-report heartbeat. Build-trigger = the agent-orchestrator de-inerting to become the live spawn path; zero live consumers today (`feasible ≠ needed`) |
-| [`verification-weighted-verdict-v0.md`](verification-weighted-verdict-v0.md) | **Built (dormant)** · v0 (2026-06-28) — Phases 1/1.5/2 landed: deterministic escalate-only detector (`governance_core/verification.py`) + local-model/Ollama backend (`src/verification_backend.py`) + opt-in eval harness + **default-off** actuator wiring (`apply_verification_floor`, `GOVERNANCE_VERIFICATION_FLOOR`); separates the self-report-dependence worked example 0.0 vs 0.96 and flips flag-on sabotage to pause. **Enabling the flag is council-gated.** Honors the one-sided Φ-floor constraint. Phase 2.5 (2026-09-18, #2169) gives the default-ON shadow a durable sink and a denominator — it had been computing a would-fire signal on every check-in and persisting none of it |
-| [`governed-effect-s7-strong-tier-recert.md`](governed-effect-s7-strong-tier-recert.md) | **Built** · Design v0.2, council-folded — strong-tier re-certification gate for governed-effect `execute agent_spawn`; implementation landed separately in the governed-effect track |
-| [`tool-surface-legibility-v0.md`](tool-surface-legibility-v0.md) | **Active** · Draft v0 (2026-08-29), design-only, unreviewed — what an agent sees at selection time: a lintable description contract (routing first line; deep lore moves to `describe_tool` detail), discriminator lines for the inference and shared-memory clusters, and a session-start orientation map. Builds on the friendly-verb promotion + #1994 and the consult facade; no removals, no renames, identity-surface edits deferred to that coupled surface |
-| [`harness-registry-v0.md`](harness-registry-v0.md) | **Parked (since 2026-06-28)** · v0 (2026-06-28) — design-only, **DO NOT BUILD YET.** Authoritative catalog of harness *types* (not identity; instances stay observed in the census). Resolves the type-vs-instance open question by splitting declared-type authority from observed-instance telemetry. Build-trigger = harness-census evidence (PR #1153) crosses the §6 promotion thresholds; conforms to plan.md Track D |
-| [`orchestrated-dialectic-reviewer-v0.md`](orchestrated-dialectic-reviewer-v0.md) | **Built (dormant)** · Implemented behind opt-in gates — standalone reviewer, governed-first spawn path, model-derived `agrees` including `False`, local/Codex/Claude backend routing, fallback behavior and provenance tests are present; operator rollout is a separate step from merge |
-| [`bridge-dispatch-v0.md`](bridge-dispatch-v0.md) | **Parked (since 2026-08-01)** · v0 draft (2026-08-01), pre-review and not an implementation gate — move the operator from transport bottleneck to evidence-backed exception handler |
-| [`thread-trajectory-stitching-v0.md`](thread-trajectory-stitching-v0.md) | **Parked (since 2026-06-29)** · v0 proposal, demoted to a metrics-layer backstop — keep genuine cross-instance deaths legible without forging identity continuity |
-| [`relational-calibration-pilot-v0.md`](relational-calibration-pilot-v0.md) | **Registered** · v0.2 specification and adversarial threat model only — adds temporal/instrument validity, experimental-principal accounting, dyadic inference, and a frozen exposure/horizon contract; runtime collection remains explicitly blocked |
-| [`relational-calibration-maturity-capacity-v0.md`](relational-calibration-maturity-capacity-v0.md) | **Closed** · Immutable v0 capacity preregistration, superseded for protocol v0.2; retained as design history and not a current implementation gate |
-| [`relational-calibration-maturity-capacity-v1.md`](relational-calibration-maturity-capacity-v1.md) | **Registered** · Frozen, one-time aggregate instrument-supply read with temporal and same-row consistency gates; process UUID counts explicitly do not establish participant or federation capacity |
-| [`accountable-testbed-metrics-preregistration-v0.md`](accountable-testbed-metrics-preregistration-v0.md) | **Registered** · Frozen evaluation pre-registration for the accountable multi-principal testbed |
-| [`accountable-testbed-metrics-preregistration-v1.md`](accountable-testbed-metrics-preregistration-v1.md) | **Registered** · Frozen v1.1 evaluation contract for future headline, ablation, and scale-sweep runs; the document merge did not execute those runs |
-| [`accountable-testbed-preliminary-trace.md`](accountable-testbed-preliminary-trace.md) | **Closed** · Preliminary deployed-system trace exercising the federation primitives; explicitly not a multi-host or multi-organization result |
-| [`dialectic-resolution-receipt-v0.md`](dialectic-resolution-receipt-v0.md) | **Built (dormant)** · Wired and dormant: deployment-countersigned dialectic resolution record (Ed25519, `drr.v1`) a peer verifies offline with the pinned public key; mints only when an attestation key exists, and names the custody, key-history and second-principal preconditions before enabling is honest; issuer-level, never party-level, non-repudiation |
-| [`orientation-constraint-set-preregistration-v0.md`](orientation-constraint-set-preregistration-v0.md) | **Registered** · Frozen protocol candidate for a paired, information-matched test of a temporary read-only diagnostic constraint set; no durable self-schema or runtime surface is authorized |
-| [`eisv-effort-profile-channel-v0.md`](eisv-effort-profile-channel-v0.md) | **Closed** · SEPARATED AND REFUTED 2026-08-26 (see the doc's status block) — written as a reopening premise for the outcome-grounding stop rule; retained as a negative design record |
-| [`outcome-fixture-conflation-decision-packet-v0.md`](outcome-fixture-conflation-decision-packet-v0.md) | **Closed** · **Decision packet (2026-09-02), resolved by delegated selection.** A row whose confidence the server had to scrape is stamped `calibration_excluded`, and that flag is also a standalone fixture marker, so the discrimination instruments (ablation matrix, skeptic report, coherence dependency shadow) dropped every instrument-visible trusted `external_signal` row written after the frozen 2026-08-09 cutoff (951 of 951 at the 2026-09-02 read; rows posted with a confidence, or through `record_result` with a resolvable prediction, are not stamped). One fork for the operator: what the registered 2026-12-01 read does with those rows (run as registered with a pre-declared sensitivity cohort, correct prospectively, correct retroactively, or re-register), plus two engineering items that need no decision. Council- and Codex-reviewed; **R1 selected 2026-09-02** under the operator's delegation ("best for federation"); E1/E2 and the pre-declared sensitivity cohort shipped in PR #2062; the follow-ups (corrected default for non-protocol instruments, protocol manifest, coherence-shadow v0.1) were decided in governed session `e4ebf589a1c79b9d` |
-| [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md) | **Active** · Seven open operator decisions: December-read interpretation and supplementary analysis, dashboard scope, review versus production authorization, doctor-check placement, and historical documentation enforcement. Includes non-binding Codex review recommendations and attributed read-only deployment observations, recorded 2026-09-10. No recommendation is recorded as operator-approved or implemented. |
-| [`agent-message-transport-v0.md`](agent-message-transport-v0.md) | **Built (dormant)** · Implemented, not deployed — migration 069 is unapplied on the maintainer deployment |
-| [`gap-recovery-arming-semantics-v0.md`](gap-recovery-arming-semantics-v0.md) | **Active** · Decision pending — operator call, not taken. Splits `GAP_RECOVERY_ARM_SECONDS` out of the `DT_MAX` Euler bound so "how long is an absence" can be set deliberately; default reproduces the legacy 150s boundary exactly, so no posture moves. Records what the 2026-08-06 audit (89.4% of pauses downgraded, 2.1% sleep-shaped) does and does not settle, and is the referent for the former dangling `task #7` comment |
-| [`consult-advisory-facade-v1.md`](consult-advisory-facade-v1.md) | **Active** · Implementation candidate for the consult advisory facade (2026-08-29) |
-| [`governed-effect-convergence-v0.md`](governed-effect-convergence-v0.md) | **Closed** · DECISION RECORDED 2026-06-28 — unite the governed-effect tracks; supersedes the split design |
-| [`governed-effect-unitares-profile-v0.md`](governed-effect-unitares-profile-v0.md) | **Built** · Profile + runtime mapper implemented; companion to the governed-effect plane contract |
-| [`governed-effect-effect-binding-v0.md`](governed-effect-effect-binding-v0.md) | **Parked (since 2026-06-28)** · Design v0.2 — per-effect authorization, successor to the §7 strong-tier re-certification; demand-gated, build only when its §8 trigger fires |
-| [`governed-reviewer-spawn-v0.md`](governed-reviewer-spawn-v0.md) | **Built (dormant)** · Built, inert (flag off); activation is an operator step (§Activation) |
-| [`stakes-keyed-gating-775.md`](stakes-keyed-gating-775.md) | **Built (dormant)** · Classification artifact landed + inert; the gate mechanism is parked |
-| [`redis-retirement-v0.md`](redis-retirement-v0.md) | **Closed** · Scoping draft whose central claim was REFUTED by live verification 2026-06-27 and corrected in place; Redis remains the de-facto primary session store (Stack section of the shared contract) |
-| [`redis-retirement-phase-1-plan.md`](redis-retirement-phase-1-plan.md) | **Parked (since 2026-07-01)** · Implementation plan v1.1 (revised 2026-06-27); not applied |
-
-### EISV maths, coherence, and outcome grounding
-
-The measurement thread: derivations, ablations, and the registered reads. The stop-rule and shadow-contract rows are pre-registered instruments and are exempt from the usage-count rules in the shared contract; `unitares-eisv-maths` is the working discipline for touching any of them.
-
-| Doc | Status |
-|---|---|
-| [`eisv-maths-roadmap-v0.md`](eisv-maths-roadmap-v0.md) | **Active** · Design-intent roadmap (not a change); captures the direction, each step lands separately |
-| [`eisv-grounding-next-move-v0.md`](eisv-grounding-next-move-v0.md) | **Active** · Design-intent roadmap for the next grounding move (not a change) |
-| [`eisv-general-solution-v0.md`](eisv-general-solution-v0.md) | **Active** · Derivation + numerical verification; no deployed behaviour or flag |
-| [`eisv-grounded-coherence-rederivation-v0.md`](eisv-grounded-coherence-rederivation-v0.md) | **Active** · Design proposal, whiteboard candidate; not deployed |
-| [`eisv-fixed-point-calibration-gap-v0.md`](eisv-fixed-point-calibration-gap-v0.md) | **Parked (since 2026-06-25)** · Finding / proposal, not yet a change |
-| [`coherence-proprioceptive-thresholds-v0.md`](coherence-proprioceptive-thresholds-v0.md) | **Active** · Proposal; changes no deployed behaviour. Blocked: the coherence signal is frozen (#1572) and nothing here is actionable until that is repaired |
-| [`exponential-growth-dynamics-v0.md`](exponential-growth-dynamics-v0.md) | **Built** · Site B (cohort priors) fully wired — the pure primitive merged in PR #1334 |
-| [`eisv-stage0-bridge-b-label-routing.md`](eisv-stage0-bridge-b-label-routing.md) | **Built (partial)** · Half (a) shipped in PR #1210; half (b) remains an active routing and population specification |
-| [`substrate-portability-checkin-v0.md`](substrate-portability-checkin-v0.md) | **Built** · Canaries only; changes no math |
-| [`eisv-core-boundary-v0.md`](eisv-core-boundary-v0.md) | **Active** · DRAFT proposal (2026-09-17) — a neutral checkpoint spine keyed by `checkpoint_id` owns identity, ordering, provenance, claims, evidence, objections, outcomes and artifact links; EISV becomes a versioned, path-dependent subscriber producing advisory assessments; enforcement separately opt-in. Documentation only; authorizes at most a default-off observational seam and out-of-process shadow replay, first issue an instrument-preservation harness; governed architecture review rejection (sequencing before the read) stands as an operator decision; ownership move and authority posture wait for the 2026-12-01 read's preservation horizon |
-| [`eisv-outcome-grounding-stop-rule-v0.md`](eisv-outcome-grounding-stop-rule-v0.md) | **Registered** · Registered 2026-12-01 read (proposed 2026-07-31; evidence-scope correction 2026-08-17). The fixture-rule decision packet above governs what the read does with post-cutoff rows. Never re-run or refreshed |
-| [`eisv-individuality-v2-preregistration.md`](eisv-individuality-v2-preregistration.md) | **Closed** · PRE-REGISTERED 2026-07-02 and executed on schedule; consumed by the result row below |
-| [`eisv-individuality-v2-result.md`](eisv-individuality-v2-result.md) | **Closed** · Registered verdict FAIL; inference status UNTESTED AS DEPLOYED. The individuality axiom is retired for raw behavioral EISV as currently measured; a further attempt must change the measurement and pre-register before any of its data exists |
-| [`eisv-incremental-value-ablation-v1.md`](eisv-incremental-value-ablation-v1.md) | **Active** · Draft preregistration (protocol 0.3.0); no cohort enrolled and no experiment scheduled |
-| [`legacy-coherence-dependency-ablation-v0.md`](legacy-coherence-dependency-ablation-v0.md) | **Registered** · Prospective shadow contract, 2026-08-12; a distinct v0.1 shadow with the corrected fixture rule was registered beside it 2026-09-02 |
-| [`legacy-coherence-identity-ablation-v0.md`](legacy-coherence-identity-ablation-v0.md) | **Active** · Measurement-only proposal |
-| [`independent-operator-cohort-preregistration-v0.md`](independent-operator-cohort-preregistration-v0.md) | **Active** · DRAFT protocol that registers at the merge commit of its PR; amended 2026-09-02 before any enrollment |
-| [`independent-operator-cohort-enrollments.md`](independent-operator-cohort-enrollments.md) | **Active** · Append-only enrollment ledger for the cohort protocol; entries are added by PR and never edited |
-| [`self-improvement-loop-evaluation-v0.md`](self-improvement-loop-evaluation-v0.md) | **Active** · DRAFT protocol that registers at the merge commit of its PR |
-
-## Resolved — relocated to [`resolved/`](resolved/)
-
-Shipped, council-passed, closed-by-result, and dated point-in-time records live in
-the [`resolved/`](resolved/) subfolder, keeping this index focused on active
-threads. Each doc still carries its own status in its body; the links below point
-into `resolved/`. (The subfolder is still under `proposals/`, so the doc-health
-dead-ref exemption continues to apply to these point-in-time records.)
-
-### Shipped / resolved
-
-| Doc | Resolution |
-|---|---|
-| [`onboard-bootstrap-checkin.md`](resolved/onboard-bootstrap-checkin.md) | SHIPPED — Phase 5 landed via PR #188 |
-| [`onboard-bootstrap-checkin.filter-audit.md`](resolved/onboard-bootstrap-checkin.filter-audit.md) | SHIPPED — retained as historical control surface for the parent doc |
-| [`refined-phase-5-evidence-contract.md`](resolved/refined-phase-5-evidence-contract.md) | SHIPPED — paired with `onboard-bootstrap-checkin.md` (PR #188) |
-| [`path1-sync-fingerprint-check.md`](resolved/path1-sync-fingerprint-check.md) | SHIPPED — `sync_fingerprint` lives in `src/mcp_handlers/identity/shared.py` |
-| [`s19-attestation-mechanism.md`](resolved/s19-attestation-mechanism.md) | Mechanism selection council-passed 2026-04-25; implementation correctness gated separately |
-| [`section-129-measurement-fix-2026-06-03.md`](resolved/section-129-measurement-fix-2026-06-03.md) | Council-passed fix restoring the Wave 1 condition-1 measurement gate |
-| [`eisv-basin-health-gating-v0.md`](resolved/eisv-basin-health-gating-v0.md) | SHIPPED — PR #696 (issue #689), 2026-06-14; absolute-basin-health gating for self-relative risk, refined by #699 |
-| [`dashboard-hero-severity-rollup.md`](resolved/dashboard-hero-severity-rollup.md) | SHIPPED (Phase 1) — PR #875; hero reflects all severity sources + "needs attention" band; `computeFleetSeverity` + 12 tests; verified live 2026-06-22 |
-| [`docs-consolidation-v0.md`](resolved/docs-consolidation-v0.md) | SHIPPED — contested-claim lint, audience-split index, shorter README, and thin compatibility/manual routes landed by 2026-08-11 |
-| [`beam-wave-1-sentinel.md`](resolved/beam-wave-1-sentinel.md) | SHIPPED — Wave 1 executed RFC; active follow-on work belongs to later waves; compatibility stub retained at the old path |
-| [`beam-wave-3a-read-only-handlers.md`](resolved/beam-wave-3a-read-only-handlers.md) | DEPLOYED — Wave 3a read-only listener execution record; compatibility stub retained at the old path |
-
-### Closed by negative result
-
-| Doc | Resolution |
-|---|---|
-| [`eisv-distributional-signal-probe-v0.md`](resolved/eisv-distributional-signal-probe-v0.md) | **Probe A did not greenlight the build (2026-06-22); KILL inference withdrawn 2026-08-22.** The objective scope could not exercise the probe and the task-scope point estimate does not identify the observation-versus-representation bottleneck. See the correction and Run result blocks. |
-
-### Dated evaluation / measurement / lifecycle records
-
-Point-in-time records (now under `resolved/`); superseded analysis is preserved
-as-written by design.
-
-| Doc | What it captured |
-|---|---|
-| [`wave-0-step-2-call-site-scoping.md`](resolved/wave-0-step-2-call-site-scoping.md) | Coordination-failure call-site scoping (v0.3, post-2A-pivot; earlier prescriptions superseded by PR #345) |
-| [`wave-1-window-evaluation-2026-05-18.md`](resolved/wave-1-window-evaluation-2026-05-18.md) | Wave 1 exit-condition evaluation of the T+0=2026-05-05 → T+13 window |
-| [`wave-1-window-evaluation-T0-2026-05-19.md`](resolved/wave-1-window-evaluation-T0-2026-05-19.md) | Sibling re-anchor: next evaluation window under the prior doc's falsifier |
-| [`ode-profile-decomposition-2026-05-20.md`](resolved/ode-profile-decomposition-2026-05-20.md) | ODE profile decomposition + persistence — the BEAM roadmap's load-bearing unknown |
-| [`wave-1-completion-status-2026-06-14.md`](resolved/wave-1-completion-status-2026-06-14.md) | Read-only status roll-up across the Wave 1 surfaces + four exit conditions, consolidating the close decision into one ledger |
-| [`wave-1-condition-2-alarm-parity-audit-2026-06-14.md`](resolved/wave-1-condition-2-alarm-parity-audit-2026-06-14.md) | Alarm-rule parity audit (BEAM vs Python Sentinel) for Wave 1 exit condition 2 |
-| [`demotion-review-2026-08-16.md`](resolved/demotion-review-2026-08-16.md) | Lifecycle review of all 20 issue #1605 advisory candidates, including explicit reasons for every retained current contract or active proposal |
+The [migration record](../dev/proposals-layout-2347.md) records the inventory,
+placement exceptions, reference checks, and compatibility limits for #2347.
+The existing Wave 1/Wave 3a locators, the published outcome-grounding
+stop-rule locator, and paths embedded in historical SQL migrations remain.
+The legacy `resolved/` directory contains only a migration compatibility pointer.
+GitHub does not redirect other
+moved `blob/master` links; the inventory's source commit preserves every original
+document. Frozen and historical prose changed only where reference paths moved.

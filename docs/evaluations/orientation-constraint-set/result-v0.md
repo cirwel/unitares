@@ -8,7 +8,7 @@ rate, or per-family treatment effect exists for this cohort.
 
 ## Frozen inputs
 
-- Protocol: [`orientation-constraint-set-preregistration-v0.md`](../../proposals/orientation-constraint-set-preregistration-v0.md), commit `d6dc0c79`
+- Protocol: [`orientation-constraint-set-preregistration-v0.md`](../../proposals/registered/orientation-constraint-set-preregistration-v0.md), commit `d6dc0c79`
 - Enrollment: [`enrollment-v0.json`](enrollment-v0.json), commit `e1d76782`
 - Enrollment digest: `c861c91917c3168f3ec681bce8d89a05f032b238b4e01c138e9557e129daccd7`
 - Implementation commit: `dac9113fc5483962f57705a8140e385cfc985ad0`
