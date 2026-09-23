@@ -147,16 +147,22 @@ restored. Findings stop routing: another model cannot erase an inconvenient
 review. Separate output directories preserve each attempt.
 
 Native Codex is an optional default for an operator who has enabled GitHub
-code review. On this operator's UNITARES repo, the 2026-09-23 pilot used
-**Review team PRs / Every push**, with exhaustive review and credit overage
-left off. The trigger was then reduced to **On PR open**: base updates had
-started another review that finished after #2352 merged. Authors still run
-`review.sh` for changed diffs, so review completion stays part of delivery.
-Enable the author/sweep integration in the shared local repository:
+code review. On this operator's UNITARES repo, native requests are owned by
+the author/sweep workflow: repository auto review is **Follow personal**, and
+the shared account's personal **Auto review is off**. Explicit native review
+requests remain available, with exhaustive review and credit overage off.
+Enable this integration in the shared local repository:
 
 ```bash
 git config review.native true
 ```
+
+The 2026-09-23 pilot exposed overlapping triggers: **Every push** reviewed
+base updates and finished after #2352 merged; **On PR open** then started
+another review when #2353 was marked ready, even though that exact commit
+had already passed native review. The command-owned request avoids both
+retriggers. Authors run `review.sh` for changed diffs as part of delivery;
+the operator does not need to request reviews or chase their comments.
 
 `review.sh` first reads native completion evidence for the current commit. If
 nothing has started after 30 seconds, it posts one `@codex review` request
@@ -182,13 +188,16 @@ read existing native findings even when native dispatch is off. If GitHub review
 history is unreadable, CI preserves its previous check and the author command
 reports incomplete evidence; it never substitutes a partial clean result.
 Reviewer availability and evidence availability are separate failures. A final
-head-and-diff check prevents a concurrent push or retarget from being handed
-back as reviewed.
+head-and-diff check runs after publishing any completion receipt, so a push
+during that write also reaches the author as UNREVIEWED.
 
 Joining a native clean result publishes a diff-bound review record once. This
 triggers CI even when the clean reaction arrived after the activity comment's
 workflow finished; reactions themselves have no workflow event. The quiet-PR
-sweep also records completed native clean reviews. Local review commands stop
+sweep also records completed native clean reviews. Published evidence renders
+incidental bot mentions as plain names: copying a native footer's example
+commands otherwise starts another cloud task from the author's account.
+Local review commands stop
 on closed or merged PRs and check again before publishing results. Native
 cloud reviews already in flight can still finish after merge; triage any valid
 late findings in a follow-up change rather than reopening the merged PR.
