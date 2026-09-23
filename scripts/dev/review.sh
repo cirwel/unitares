@@ -3,8 +3,8 @@
 # status check reads. The review-side counterpart of test-cache.sh: one
 # command, keyed on the diff, a no-op when this diff already has a record.
 #
-#   ./scripts/dev/review.sh                     # review HEAD's PR diff (foreground)
-#   ./scripts/dev/review.sh --background        # same, detached; ship.sh does this
+#   ./scripts/dev/review.sh                     # start or join review; ship.sh does this
+#   ./scripts/dev/review.sh --background        # explicitly detach; join before readiness
 #   ./scripts/dev/review.sh --fresh             # re-review even if recorded
 #   ./scripts/dev/review.sh --reviewer claude   # override (default: the other model)
 #   ./scripts/dev/review.sh record FILE --reviewer-name NAME   # a council/human review
