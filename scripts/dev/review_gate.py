@@ -34,7 +34,7 @@ access. The latest record whose key matches the head decides the status:
     CLEAN                          -> success
     FINDINGS(n) with dispositions  -> success
     FINDINGS(n) without            -> pending   (fix, or `dispose`)
-    FAILED                         -> failure   (the reviewer did not finish)
+    FAILED                         -> pending   (UNREVIEWED: reviewer unavailable)
     no matching record             -> pending   (run the review)
 
 A failed or expired run is recorded as FAILED, never as clean: absence of
@@ -69,6 +69,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +79,8 @@ STATUS_CONTEXT = "review"
 CACHE_DIR = ".review-cache"
 DEFAULT_BASE = "origin/master"
 DEFAULT_BUDGET_S = 1800  # pipeline skill: clean codex completions ran 1-21 min
+PROVIDER_COOLDOWN_S = 3600
+UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 
@@ -156,6 +159,7 @@ class Record:
     disposed: bool
     reviewer: str
     url: str = ""
+    text: str = ""
 
     def status(self) -> tuple[str, str]:
         if self.verdict == "CLEAN":
@@ -164,7 +168,7 @@ class Record:
             return "success", f"{self.findings} finding(s) disposed ({self.reviewer})"
         if self.verdict == "FINDINGS":
             return "pending", f"{self.findings} finding(s) need fixes or dispositions"
-        return "failure", f"review did not finish ({self.reviewer}); retry or record an independent review"
+        return "pending", f"UNREVIEWED: {self.reviewer} unavailable; author must retry or hand off explicitly"
 
 
 def render_marker(r: Record) -> str:
@@ -207,6 +211,7 @@ def latest_matching(comments: list[dict], key: str) -> Record | None:
             if rec.disposed and not dispositions_complete(body, rec.findings):
                 rec.disposed = False
             rec.url = c.get("html_url", "")
+            rec.text = body
             found = rec
             if rec.verdict == "FINDINGS":
                 # A disposition answers ONE findings record — the most recent
@@ -267,8 +272,49 @@ def current_pr() -> dict | None:
 
 
 def default_reviewer(branch: str) -> str:
-    # Heterogeneous by construction: a model does not review its own work.
+    # Prefer diversity, but independence is a fresh reviewer context, not a
+    # provider name. A quota outage must not prohibit the available reviewer.
     return "claude" if branch.startswith("codex/") else "codex"
+
+
+def provider_state_path(reviewer: str) -> Path:
+    common = Path(git("rev-parse", "--git-common-dir").strip()).resolve()
+    return common / "review-gate" / f"{reviewer}-availability.json"
+
+
+def provider_cooldown(reviewer: str) -> str | None:
+    try:
+        state = json.loads(provider_state_path(reviewer).read_text())
+        if float(state["retry_after"]) > time.time():
+            return str(state["reason"])
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def remember_unavailable(reviewer: str, text: str, note: str) -> None:
+    """Back off account/startup failures across diffs and worktrees.
+
+    Only classified infrastructure errors impose an hour's cooldown. An
+    incomplete/model-generated answer isn't proof the provider is unavailable.
+    """
+    message = (text + "\n" + note).lower()
+    reasons = {
+        "quota": ("weekly limit", "usage limit", "rate limit", "rate_limit", "quota"),
+        "authentication": ("not logged in", "authentication failed", "unauthorized", "login required"),
+        "startup": ("could not start",),
+    }
+    reason = next((name for name, matches in reasons.items()
+                   if any(term in message for term in matches)), None)
+    if reason is None:
+        return
+    path = provider_state_path(reviewer)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic per-provider file; concurrent reviews of other diffs cannot
+    # clobber another provider's cooldown or observe partially written JSON.
+    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as f:
+        json.dump({"retry_after": time.time() + PROVIDER_COOLDOWN_S, "reason": reason}, f)
+    os.replace(f.name, path)
 
 
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tuple[str, str]:
@@ -396,9 +442,6 @@ class review_lock:
 def cmd_review(args) -> int:
     pr, repo, key, branch = _resolve(args)
     reviewer = args.reviewer or default_reviewer(branch)
-    if branch.startswith(f"{reviewer}/"):
-        raise SystemExit(f"review_gate: {reviewer} does not review its own {branch} — "
-                         "the review is by the other model")
     deadline = time.monotonic() + args.budget
     joined = False
     while True:
@@ -406,25 +449,68 @@ def cmd_review(args) -> int:
             if lock.held:
                 # Re-read AFTER acquiring: a ship/sweep review may have posted
                 # while we waited. Joining it must return its actual result.
+                comments = pr_comments(repo, pr)
                 existing = (None if args.fresh and not joined else
-                            latest_matching(pr_comments(repo, pr), key))
+                            latest_matching(comments, key))
                 if existing and (joined or existing.verdict != "FAILED"):
                     state, desc = existing.status()
                     print(f"[review] already recorded for this diff: {desc}\n{existing.url}")
+                    print(existing.text)
+                    if existing.verdict == "FAILED":
+                        return UNREVIEWED
                     return 0 if state == "success" else 1
-                return _review_locked(args, pr, key, reviewer)
+                args.failed_providers = {p for p in ("claude", "codex")
+                                         if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
+                return review_with_fallback(args, pr, key, reviewer)
         if not joined:
             print("[review] joining the review already running for this diff…", flush=True)
             joined = True
         if time.monotonic() >= deadline:
             print("[review] still running; no completed review joined. "
                   "Run scripts/dev/review.sh again before marking ready.")
-            return 1
+            return UNREVIEWED
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
+def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
+    """At most two independent attempts, sharing one wall-clock budget.
+
+    Findings stop routing: trying another model must never erase a review we
+    dislike. An explicit --reviewer retries that provider despite cooldown.
+    """
+    providers = [preferred, "codex" if preferred == "claude" else "claude"]
+    deadline = time.monotonic() + args.budget
+    available = []
+    for provider in providers:
+        if (provider in getattr(args, "failed_providers", set())
+                and getattr(args, "reviewer", None) != provider):
+            print(f"[review] {provider} exhausted retries for this diff; "
+                  f"use --reviewer {provider} to explicitly retry")
+            continue
+        reason = provider_cooldown(provider)
+        if reason and getattr(args, "reviewer", None) != provider:
+            print(f"[review] skipping {provider}: {reason} cooldown; "
+                  f"use --reviewer {provider} to retry after restoring access")
+        else:
+            available.append(provider)
+    for i, provider in enumerate(available):
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            break
+        attempt = argparse.Namespace(**vars(args))
+        attempt.budget = max(1, remaining // (len(available) - i))
+        result = _review_locked(attempt, pr, key, provider)
+        if result != UNREVIEWED:
+            return result
+        print(f"[review] {provider} did not complete; checking remaining reviewers", flush=True)
+    print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
+          "this blocker and next action; retry scripts/dev/review.sh or record "
+          "an independent code review with record <file> --reviewer-name <who>.")
+    return UNREVIEWED
+
+
 def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
-    out_dir = Path(CACHE_DIR) / key
+    out_dir = Path(CACHE_DIR) / key / reviewer
     out_dir.mkdir(parents=True, exist_ok=True)
     diff_path = (out_dir / "diff.txt").resolve()
     diff_path.write_text(diff_text(args.base, "HEAD"))
@@ -437,10 +523,12 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     minutes = (time.monotonic() - t0) / 60
     parsed = parse_verdict(text) if note == "exit 0" else None
     if parsed is None:
+        remember_unavailable(reviewer, text, note)
         rec = Record(key, "FAILED", 0, False, reviewer)
         heading = f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})"
     else:
         verdict, n = parsed
+        provider_state_path(reviewer).unlink(missing_ok=True)
         rec = Record(key, verdict, n, False, reviewer)
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
     heading += f" · {minutes:.1f} min"
@@ -451,21 +539,21 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         print(text.strip())  # the working agent needs the findings, not just a count
     else:
         print(text.strip()[-2000:])  # expose quota/auth/startup failures to the author
-        print("[review] retry when available, or use independent consult/council/human "
-              "review and record it: scripts/dev/review.sh record <file> --reviewer-name <who>")
+        print("[review] independent code reviews can also be recorded with: "
+              "scripts/dev/review.sh record <file> --reviewer-name <who>")
     state, desc = rec.status()
     print(f"[review] {desc}")
     if rec.verdict == "FINDINGS":
         print("[review] fix and push (the next run reviews the new diff), or record "
               "dispositions: scripts/dev/review.sh dispose <file>")
-    return 0 if state == "success" else 1
+    return UNREVIEWED if parsed is None else (0 if state == "success" else 1)
 
 
 def cmd_record(args) -> int:
     pr, repo, key, branch = _resolve(args)
-    if branch.startswith(f"{args.reviewer_name}/"):
-        raise SystemExit(f"review_gate: {args.reviewer_name} authored {branch}; its own "
-                         "record is not a review")
+    if not args.independent:
+        raise SystemExit("review_gate: record requires --independent to attest that a "
+                         "separate reviewer examined this diff. Consult advice alone is not a code review.")
     text = Path(args.file).read_text()
     parsed = parse_verdict(text)
     if parsed is None:
@@ -499,13 +587,14 @@ SWEEP_MAX_FAILED = 3  # a FAILED review is retried, but not forever
 SWEEP_HOLD_LABEL = "no-auto-review"
 
 
-def failed_runs(comments: list[dict], key: str) -> int:
+def failed_runs(comments: list[dict], key: str, reviewer: str | None = None) -> int:
     n = 0
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
             continue
         rec = parse_record(c.get("body", ""))
-        n += bool(rec and rec.key == key and rec.verdict == "FAILED")
+        n += bool(rec and rec.key == key and rec.verdict == "FAILED"
+                  and (reviewer is None or rec.reviewer == reviewer))
     return n
 
 
@@ -555,8 +644,9 @@ def cmd_sweep(args) -> int:
         key = diff_key(f"origin/{base}", head)
         comments = pr_comments(repo, n)
         rec = latest_matching(comments, key)
-        if rec is not None and not (rec.verdict == "FAILED"
-                                    and failed_runs(comments, key) < SWEEP_MAX_FAILED):
+        if rec is not None and not (rec.verdict == "FAILED" and any(
+                failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
+                for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":
                 print(f"[sweep] PR #{n}: author follow-up needed — {rec.status()[1]} {rec.url}")
             continue  # report findings/retry exhaustion rather than silently skipping
@@ -631,6 +721,8 @@ def main(argv: list[str] | None = None) -> int:
     rc = sub.add_parser("record", help="post an externally performed review")
     rc.add_argument("file")
     rc.add_argument("--reviewer-name", required=True)
+    rc.add_argument("--independent", action="store_true",
+                    help="attest this is a separate review of the current diff, not the author's self-check")
 
     d = sub.add_parser("dispose", help="post dispositions for a FINDINGS record")
     d.add_argument("file")

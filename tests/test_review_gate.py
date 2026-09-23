@@ -122,7 +122,7 @@ def test_untrusted_authors_cannot_post_a_record():
     ("CLEAN", False, "success"),
     ("FINDINGS", True, "success"),
     ("FINDINGS", False, "pending"),
-    ("FAILED", False, "failure"),
+    ("FAILED", False, "pending"),
 ])
 def test_status_mapping(verdict, disposed, state):
     assert rg.Record("k", verdict, 1, disposed, "codex").status()[0] == state
@@ -280,7 +280,7 @@ def test_sweep_covers_quiet_drafts_but_respects_trust_and_explicit_holds():
     assert got == [1, 2, 3]
 
 
-@pytest.mark.parametrize("verdict,expected", [("CLEAN", 0), ("FINDINGS", 1), ("FAILED", 1)])
+@pytest.mark.parametrize("verdict,expected", [("CLEAN", 0), ("FINDINGS", 1), ("FAILED", 2)])
 def test_foreground_joins_running_review_and_returns_its_result(repo, monkeypatch, verdict, expected):
     key = "k" * 64
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "owner/repo", key, "codex/change"))
@@ -303,7 +303,7 @@ def test_join_timeout_does_not_claim_review_completion(repo, monkeypatch, capsys
     key = "k" * 64
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "owner/repo", key, "codex/change"))
     with rg.review_lock(key):
-        assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=0)) == 1
+        assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=0)) == rg.UNREVIEWED
     assert "no completed review joined" in capsys.readouterr().out
 
 
@@ -327,7 +327,7 @@ def test_failed_reviewer_exposes_cause_and_an_alternative(tmp_path, monkeypatch,
     monkeypatch.setattr(rg, "run_reviewer", lambda *args: ("Weekly limit reached", "exit 1"))
     records = []
     monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
-    assert rg._review_locked(SimpleNamespace(base="master", budget=10), 1, "k", "claude") == 1
+    assert rg._review_locked(SimpleNamespace(base="master", budget=10), 1, "k", "claude") == rg.UNREVIEWED
     output = capsys.readouterr().out
     assert "Weekly limit reached" in output and "record <file>" in output
     assert records[0][1].verdict == "FAILED"
@@ -388,3 +388,78 @@ def test_failed_runs_counts_only_failed_records_for_the_key():
         _comment(rg.Record(k, "FAILED", 0, False, "codex"), association="NONE"),
     ]
     assert rg.failed_runs(comments, k) == 2
+    assert rg.failed_runs(comments, k, "claude") == 0
+
+
+def test_quota_failure_falls_back_then_skips_provider_across_diffs(repo, monkeypatch, capsys):
+    calls, records = [], []
+    def reviewer(provider, prompt, out_dir, budget):
+        calls.append(provider)
+        return (("You've hit your weekly limit", "exit 1") if provider == "claude"
+                else ("Independent review complete.\nVERDICT: CLEAN", "exit 0"))
+    monkeypatch.setattr(rg, "run_reviewer", reviewer)
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args[1]))
+    args = SimpleNamespace(base="master", budget=30, reviewer=None)
+    assert rg.review_with_fallback(args, 1, "first", "claude") == 0
+    assert calls == ["claude", "codex"]
+    assert [rec.verdict for rec in records] == ["FAILED", "CLEAN"]
+    calls.clear()
+    assert rg.review_with_fallback(args, 2, "second", "claude") == 0
+    assert calls == ["codex"]
+    assert "skipping claude: quota cooldown" in capsys.readouterr().out
+
+
+def test_findings_stop_fallback(repo, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rg, "_review_locked", lambda *args: calls.append(args[-1]) or 1)
+    assert rg.review_with_fallback(SimpleNamespace(budget=30), 1, "k", "claude") == 1
+    assert calls == ["claude"]
+
+
+def test_exhaustion_of_one_provider_does_not_block_the_other(repo, monkeypatch):
+    calls = []
+    monkeypatch.setattr(rg, "_review_locked", lambda *args: calls.append(args[-1]) or 0)
+    args = SimpleNamespace(budget=30, failed_providers={"claude"})
+    assert rg.review_with_fallback(args, 1, "k", "claude") == 0
+    assert calls == ["codex"]
+
+
+def test_both_unavailable_return_explicit_unreviewed(repo, monkeypatch, capsys):
+    for provider in ("claude", "codex"):
+        rg.remember_unavailable(provider, "rate limit", "exit 1")
+    monkeypatch.setattr(rg, "_review_locked", lambda *args: pytest.fail("ignored cooldown"))
+    assert rg.review_with_fallback(SimpleNamespace(budget=30), 1, "k", "claude") == 2
+    assert "UNREVIEWED" in capsys.readouterr().out
+
+
+def test_explicit_provider_retry_recovers_and_clears_cooldown(repo, monkeypatch):
+    rg.remember_unavailable("codex", "weekly limit", "exit 1")
+    calls = []
+    def reviewer(provider, *args):
+        calls.append(provider)
+        return "VERDICT: CLEAN", "exit 0"
+    monkeypatch.setattr(rg, "run_reviewer", reviewer)
+    monkeypatch.setattr(rg, "post_record", lambda *args: None)
+    args = SimpleNamespace(base="master", budget=30, reviewer="codex")
+    assert rg.review_with_fallback(args, 1, "k", "codex") == 0
+    assert calls == ["codex"] and rg.provider_cooldown("codex") is None
+
+
+def test_provider_cooldown_expires(repo, monkeypatch):
+    monkeypatch.setattr(rg.time, "time", lambda: 100)
+    rg.remember_unavailable("claude", "weekly limit", "exit 1")
+    monkeypatch.setattr(rg.time, "time", lambda: 100 + rg.PROVIDER_COOLDOWN_S)
+    assert rg.provider_cooldown("claude") is None
+
+
+def test_same_model_fresh_review_is_allowed(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer="codex", budget=30, fresh=False)) == 0
+
+
+def test_record_requires_explicit_independence(monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
+    with pytest.raises(SystemExit, match="--independent"):
+        rg.cmd_record(SimpleNamespace(independent=False))

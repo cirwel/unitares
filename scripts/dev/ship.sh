@@ -446,12 +446,19 @@ case "$DELIVERY" in
         # Joining is part of shipping: a detached reviewer can finish after
         # its author exits, leaving findings nobody handles and a draft stuck.
         if [[ "${SHIP_NO_REVIEW:-0}" != "1" ]]; then
-            if ! ./scripts/dev/review.sh; then
+            if ./scripts/dev/review.sh; then
+                echo "[ship] review joined; check CI and mark your own PR ready when validation passes."
+            else
+                review_rc=$?
+                if [[ "$review_rc" == "2" ]]; then
+                    echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
+                    echo "[ship] report the blocker and next action explicitly; keep the PR draft."
+                    exit 2
+                fi
                 echo "[ship] branch pushed and PR opened; review needs author follow-up."
                 echo "[ship] address the result above, then run ./scripts/dev/review.sh before marking ready."
                 exit 1
             fi
-            echo "[ship] review joined; check CI and mark your own PR ready when validation passes."
         else
             echo "[ship] review explicitly deferred; author must run ./scripts/dev/review.sh before marking ready."
         fi

@@ -93,9 +93,10 @@ review in the body, some in a comment, most in neither, and nothing could tell
 which. It is now a command and a status check, the way `test-cache.sh` made
 the test run one.
 
-- `./scripts/dev/review.sh` reviews the PR diff for `HEAD` with the *other*
-  model (Codex reviews `claude/*` and everything else, Claude reviews
-  `codex/*`), read-only, on a 30-minute budget, and posts a **review record**
+- `./scripts/dev/review.sh` reviews the PR diff for `HEAD` in a fresh
+  reviewer session, preferring the other model (Claude for `codex/*`, Codex
+  otherwise) and falling back to the available provider, read-only, within a
+  shared 30-minute budget, and posts a **review record**
   comment. `ship.sh` now waits for it on every PR push and prints the
   findings to its caller. After pushing another way, the **authoring agent**
   runs the same command without waiting for an operator prompt. If a review
@@ -108,10 +109,14 @@ the test run one.
   never clean.
 - Findings: fix and push (the new diff is reviewed), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
-- Any independent review can be the record: consult, council, a human, another model —
-  `./scripts/dev/review.sh record <file> --reviewer-name <who>`, where the file
-  ends with `VERDICT: CLEAN` or `VERDICT: FINDINGS(n)`. The gate needs no model
-  and no paid key; CI only reads comments.
+- A separate human or model code review of the actual diff can be recorded
+  with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
+  where the file ends with `VERDICT: CLEAN` or `VERDICT: FINDINGS(n)`. The flag
+  attests a separate reviewer examined this diff; it is not authentication.
+  Consult remains advisory; do not turn advice into a verdict by adding a
+  marker. Council/dialectic is optional escalation for consequential design
+  choices or disagreement. Routine PRs need one completed code review. The
+  gate needs no model and no paid key; CI only reads review evidence.
 - The record is keyed on the diff (path + blob of every changed file against
   the merge base), not the commit, so a base merge that leaves the PR's files
   alone — including `draft-base-refresh.yml`'s — keeps it.
@@ -128,15 +133,23 @@ the test run one.
   automatic review of intentionally unfinished work. Outside contributors'
   PRs get a human first. A lock in the git common dir keeps the sweep and an
   author's review from running the same diff twice. Failed runs retry at most
-  three times per diff; unresolved findings and exhausted retries are reported
+  three times per provider per diff; unresolved findings and exhausted retries are reported
   as author follow-up in the sweep log, never silently treated as clean.
+
+Quota, authentication, and startup failures put that provider on a one-hour
+cooldown shared across worktrees; the other provider is tried immediately.
+`--reviewer codex` or `--reviewer claude` explicitly retries after access is
+restored. Findings stop routing: another model cannot erase an inconvenient
+review. Separate output directories preserve each attempt.
 
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
 (`review.sh --background`) is useful while the agent does other work, but the
 agent must call `review.sh` again to join before leaving. `SHIP_NO_REVIEW=1`
 explicitly defers this step and prints the author's next action. If review
-cannot finish, report the blocker and the exact command to resume. The sweep
+cannot finish, exit 2 distinguishes an **UNREVIEWED** handoff from findings
+(exit 1). Report the blocker and the exact command to resume; keep the draft.
+The sweep
 supplies a missing review; it does not fix code, declare readiness, or merge.
 
 The fallback needs an actual scheduler installation. On the operator's Mac:
