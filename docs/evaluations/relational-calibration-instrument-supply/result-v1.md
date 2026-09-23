@@ -6,6 +6,10 @@ stop rule this closes the attempt: no maturity, duration, hour-bucket, alpha,
 value, timestamp or ID check is loosened, and the query is not repeated. A later
 supply read needs a new version, a new future cutoff and a stated new premise.
 
+One pre-read query is disclosed below as a deviation for adjudication; if it is
+ruled disqualifying, the status becomes `contract_unreadable`, which also
+closes the read, without a supply conclusion.
+
 This is a count of instrument supply only. It says nothing about participant,
 principal or federation capacity, which the contract never measured.
 
@@ -47,12 +51,16 @@ identity or distribution was retained beyond these aggregates.
   had never run.
 - **Retention.** The query reads rows present at execution. Retention on
   `core.agent_state` removes old rows without an archive, so any deletion
-  between the cutoff and execution could only lower counts. The window
-  (2026-08-18 to 2026-09-17) held 29,601 rows when checked earlier the same
-  day; the observed retention loss has been in months-old history, not the
-  most recent month. Deletion inside the window cannot be ruled out from the
-  database alone, but it would take the loss of temporally established runs
-  for at least 200 identities, against 38 that reached behavioral maturity, to
-  change the classification.
-- **No `contract_unreadable` condition was found.** The query failed closed at
-  the temporal stage as specified; it did not error.
+  between the cutoff and execution could only lower counts. Deletion inside
+  the window cannot be ruled out from the database alone.
+- **Deviation for adjudication: a pre-read row count.** Earlier on the same
+  day, while assessing whether retention threatened this read, an audit ran a
+  single raw row count of `core.agent_state` over the frozen window. It
+  evaluated none of the funnel predicates and no identity-level or per-stage
+  quantity, and its figure is not reported here because the result packet
+  does not permit it. It is nonetheless a query outside the registered read,
+  so this result does not claim a strictly clean one-time execution. Whether
+  that check makes the result `contract_unreadable` is left to the operator
+  and the independent reviewer named by the contract.
+- **No other `contract_unreadable` condition was found.** The query failed
+  closed at the temporal stage as specified; it did not error.
