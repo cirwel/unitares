@@ -3,7 +3,7 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-09-21"
+last_verified: "2026-09-23"
 freshness_days: 21
 source_files:
   - unitares/src/knowledge_authority.py
@@ -32,7 +32,7 @@ source_digests:
   unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"
   unitares/src/knowledge_graph.py: "5e29c9483595cb70"
   unitares/src/knowledge_graph_lifecycle.py: "3d943c8664beedd6"
-  unitares/src/storage/knowledge_graph_age.py: "0541b46146c6084c"
+  unitares/src/storage/knowledge_graph_age.py: "b4dd7ab8f35309ba"
   unitares/src/storage/knowledge_graph_postgres.py: "47ea4d27622e7318"
   unitares/src/db/mixins/knowledge_graph.py: "f3f00b0381c5fa10"
 ---

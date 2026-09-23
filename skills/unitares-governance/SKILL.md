@@ -51,7 +51,7 @@ source_digests:
   unitares/src/schema_brief.py: "401bbce563c30439"
   unitares/skills/governance-lifecycle/SKILL.md: "d4e545c93f577c06"
   unitares/skills/governance-fundamentals/SKILL.md: "346c2bea05c70d45"
-  unitares/skills/knowledge-graph/SKILL.md: "4bfc2bcc994fb083"
+  unitares/skills/knowledge-graph/SKILL.md: "b9a30ba5f3e2af00"
   unitares/skills/dialectic-reasoning/SKILL.md: "ff52ebbe467bc7f7"
   unitares/skills/discord-bridge/SKILL.md: "7ce6a8f491281f46"
   unitares/skills/unitares-dashboard/SKILL.md: "b8398fd2f2fb82c1"
