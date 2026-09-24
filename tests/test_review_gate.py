@@ -1145,7 +1145,7 @@ def test_a_push_after_a_fix_verification_gets_a_full_review():
     verified = _comment(rg.Record("k4", "CLEAN", 0, False, "fix-verify:ollama:m"))
     verified["created_at"] = "2026-09-23T04:00:00Z"
     rounds = rg.codex_rounds([verified], reviews, inline)
-    assert rounds.count == 3 and rounds.verified_since and not rounds.capped()
+    assert rounds.count == 3 and rounds.answered_since and not rounds.capped()
     # A verification older than the last round does not lift the next cap.
     verified["created_at"] = "2026-09-23T02:30:00Z"
     assert rg.codex_rounds([verified], reviews, inline).capped()
@@ -1178,3 +1178,24 @@ def test_an_unlabelled_local_finding_is_severe():
     assert rg.CodexRounds(3, "", [{"body": "1. loses data on retry"}]).last_severe
     assert rg.CodexRounds(3, "", [{"body": "1. [P3] typo"}]).capped()
     assert "[P0] or [P1]" in rg.REVIEW_PROMPT
+
+
+def test_a_disposed_round_is_answered_and_not_another_round():
+    # PR #2401, round 5: after disposing round 3, unrelated work needs a full
+    # review, and the disposition record is not itself a local round.
+    reviews, inline = _rounds(*[(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z", ["P2"]) for i in (1, 2, 3)])
+    disposed = _comment(rg.Record("k3", "FINDINGS", 1, True, "codex-native"), text="1. deferred to #9")
+    disposed["created_at"] = "2026-09-23T04:00:00Z"
+    rounds = rg.codex_rounds([disposed], reviews, inline)
+    assert rounds.count == 3 and rounds.answered_since and not rounds.capped()
+    local = _comment(rg.Record("k5", "FINDINGS", 1, True, "codex"), text="1. rebutted")
+    local["created_at"] = "2026-09-23T05:00:00Z"
+    assert rg.codex_rounds([local], [], []).count == 0
+
+
+@pytest.mark.parametrize("body", ['{"choices": []}', '{"message": null}', '{"message": {"content": null}}', "[]"])
+def test_a_malformed_verifier_reply_is_an_outage(monkeypatch, body):
+    backend = "hf:m" if "choices" in body else "ollama:m"
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=body, stderr=""))
+    with pytest.raises(RuntimeError):
+        rg.ask_verifier(backend, "prompt")

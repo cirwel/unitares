@@ -322,7 +322,7 @@ class CodexRounds:
     count: int = 0
     last_head: str = ""          # as Codex printed it; may be abbreviated
     last_findings: list[dict] = field(default_factory=list)  # inline comments
-    verified_since: bool = False  # a fix verification already answered the last round
+    answered_since: bool = False  # a disposition or fix verification answered the last round
 
     @property
     def last_severe(self) -> bool:
@@ -337,10 +337,10 @@ class CodexRounds:
         A clean last round is not a fix loop: a push after it is new work and
         gets a full review. Neither is a P0/P1: its fix always gets one.
         """
-        # One fix verification per round: a push after it may be new work,
-        # and new work gets a full review (PR #2401 review).
+        # Once the round is answered (disposed, or fixes verified once), a
+        # push may be new work, and new work gets a full review (PR #2401).
         return (self.count >= ROUND_CAP and bool(self.last_findings)
-                and not self.last_severe and not self.verified_since)
+                and not self.last_severe and not self.answered_since)
 
 
 LOCAL_REVIEWERS = {"codex", "claude"}  # review.sh's fallbacks, which spend the same quota
@@ -401,13 +401,14 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         replies_only = posted and not findings and not (review.get("body") or "").strip()
         if not replies_only:
             seen(review["commit_id"], review.get("submitted_at", ""), findings)
-    verified_at = 0.0
+    answered_at = 0.0
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
             continue
         rec = parse_record(c.get("body", ""))
-        if rec and rec.reviewer.startswith("fix-verify:"):
-            verified_at = max(verified_at, timestamp(c.get("created_at", "")))
+        if rec and (rec.disposed or rec.reviewer.startswith("fix-verify:")):
+            answered_at = max(answered_at, timestamp(c.get("created_at", "")))
+            continue  # an answer to a round, never a run of its own
         if rec and rec.reviewer in LOCAL_REVIEWERS and rec.verdict in {"CLEAN", "FINDINGS"}:
             # No commit is named and no per-finding structure exists, so a
             # capped local round can be disposed but not fix-verified.
@@ -416,7 +417,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     if not runs:
         return CodexRounds()
     last_at, last, findings = max(runs.values(), key=lambda r: r[0])
-    return CodexRounds(len(runs), last, findings, verified_since=verified_at > last_at)
+    return CodexRounds(len(runs), last, findings, answered_since=answered_at > last_at)
 
 
 def native_records(comments: list[dict], reviews: list[dict], inline: list[dict],
@@ -977,8 +978,14 @@ def ask_verifier(verifier: str, prompt: str) -> str:
         raise RuntimeError(f"{verifier} unavailable: cannot run curl: {exc}") from exc
     if proc.returncode:
         raise RuntimeError(f"{verifier} unavailable: {(proc.stderr or proc.stdout).strip()[:200]}")
-    reply = json.loads(proc.stdout)
-    return reply["message"]["content"] if backend == "ollama" else reply["choices"][0]["message"]["content"]
+    try:
+        reply = json.loads(proc.stdout)
+        text = reply["message"]["content"] if backend == "ollama" else reply["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"{verifier} returned an unexpected response: {proc.stdout[:200]}") from exc
+    if not isinstance(text, str):
+        raise RuntimeError(f"{verifier} returned no text")
+    return text
 
 
 def verify_fix(verifier: str, finding: str, diff: str) -> bool:
