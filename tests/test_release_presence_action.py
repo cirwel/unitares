@@ -265,3 +265,51 @@ async def test_release_presence_retires_bindings_when_the_lease_is_already_gone(
     assert body["reason"] == "no_live_lease"
     assert retired == ["caller-uuid"]
     assert "retryable" not in body
+
+
+@pytest.mark.asyncio
+async def test_binding_insert_stalled_past_the_suppression_window_is_retired(monkeypatch):
+    """The insert waits on the database; the identity releases meanwhile, and
+    the insert lands only after the release's suppression tombstone expired.
+    The row it wrote must still be retired, or the exited parent reads live."""
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.identity import process_binding
+
+    clock = [1000.0]
+    monkeypatch.setattr(apl.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(apl, "_make_client", lambda: None)
+    statements = []
+
+    class _Conn:
+        async def execute(self, sql, *args):
+            statements.append(sql.split()[0])
+            if sql.split()[0] == "INSERT":
+                # The exit lands while the insert is stalled, then time passes.
+                await apl.release_agent_presence("caller-uuid", ("sess-1",))
+                clock[0] += apl._RELEASE_SUPPRESS_S + 60
+            return "UPDATE 1"
+
+        async def fetch(self, *a):
+            return []
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("src.db.get_db", lambda: SimpleNamespace(acquire=lambda: _Acquire()))
+    fp = SimpleNamespace(host_id="h", pid=1, pid_start_time=1.0, transport="stdio",
+                         ppid=None, tty=None, anchor_path_hash=None)
+    try:
+        await process_binding.record_binding_bg("caller-uuid", fp, "sess-1")
+    finally:
+        for state in (apl._released_at, apl._released_sessions, apl._lease_sessions,
+                      apl._touched, apl._locks, apl._lease_ids):
+            state.pop("caller-uuid", None)
+
+    assert statements == ["INSERT", "UPDATE"]
+    assert "caller-uuid" not in apl._binding_inserts_in_flight
+    assert "caller-uuid" not in apl._released_during_insert

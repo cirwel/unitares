@@ -95,6 +95,15 @@ def _recently_released(agent_id: str) -> bool:
         return False
 
 
+def _presence_module():
+    try:
+        from src.mcp_handlers.identity import agent_presence_lease
+
+        return agent_presence_lease
+    except Exception:  # pragma: no cover - never let the guard break recording
+        return None
+
+
 async def record_binding_bg(
     agent_id: str,
     fp: ProcessFingerprint,
@@ -119,6 +128,11 @@ async def record_binding_bg(
     """
     if _recently_released(agent_id):
         return
+    # Open an in-flight window: the suppression tombstone expires after a
+    # bounded time, but this insert can stall on the database for longer, and
+    # its post-write check must still see a release that landed meanwhile.
+    presence = _presence_module()
+    opened = presence.begin_binding_insert(agent_id) if presence else None
     try:
         from src.db import get_db
 
@@ -160,8 +174,13 @@ async def record_binding_bg(
             # The identity may have exited while this insert was waiting on the
             # database. The release sets its marker before it retires bindings,
             # so re-checking after the write closes that interleaving: this row
-            # is retired here if the retirement already ran.
-            if _recently_released(agent_id):
+            # is retired here if the retirement already ran, however long the
+            # write stalled.
+            if (
+                presence.released_after(agent_id, opened)
+                if presence
+                else _recently_released(agent_id)
+            ):
                 await conn.execute(
                     """
                     UPDATE core.agent_process_bindings
@@ -203,6 +222,9 @@ async def record_binding_bg(
 
     except Exception as e:  # pragma: no cover — defensive
         logger.debug(f"[PROCESS_BINDING] record_binding_bg failed (non-fatal): {e}")
+    finally:
+        if presence:
+            presence.end_binding_insert(agent_id)
 
 
 def _emit_concurrent_binding_event(agent_id: str, live_rows: List[Any]) -> None:

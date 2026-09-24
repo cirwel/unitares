@@ -89,6 +89,42 @@ def recently_released(agent_uuid: Optional[str]) -> bool:
     return agent_uuid in _released_at
 
 
+# uuid -> process-binding inserts in flight, and the time of the latest release
+# that landed while one was. The suppression tombstone expires after
+# _RELEASE_SUPPRESS_S, but an insert can stall on the database for longer; its
+# post-write check must still see a release that happened while it waited.
+# Both entries are dropped when the identity's last in-flight insert finishes,
+# so they are bounded by the inserts actually running.
+_binding_inserts_in_flight: dict[str, int] = {}
+_released_during_insert: dict[str, float] = {}
+
+
+def begin_binding_insert(agent_uuid: str) -> float:
+    """Mark one process-binding insert for ``agent_uuid`` as in flight.
+
+    Returns the time it opened, for ``released_after``. Every call must be
+    paired with ``end_binding_insert``."""
+    _binding_inserts_in_flight[agent_uuid] = _binding_inserts_in_flight.get(agent_uuid, 0) + 1
+    return time.monotonic()
+
+
+def released_after(agent_uuid: str, opened: float) -> bool:
+    """True when the identity released its presence after ``opened`` (however
+    long ago), or is still inside its suppression window: a binding row
+    written in between must be retired."""
+    marked = _released_during_insert.get(agent_uuid)
+    return (marked is not None and marked >= opened) or recently_released(agent_uuid)
+
+
+def end_binding_insert(agent_uuid: str) -> None:
+    remaining = _binding_inserts_in_flight.get(agent_uuid, 1) - 1
+    if remaining > 0:
+        _binding_inserts_in_flight[agent_uuid] = remaining
+    else:
+        _binding_inserts_in_flight.pop(agent_uuid, None)
+        _released_during_insert.pop(agent_uuid, None)
+
+
 def _expire_tombstone(agent_uuid: str, now: float) -> None:
     released = _released_at.get(agent_uuid)
     if released is not None and now - released > _RELEASE_SUPPRESS_S:
@@ -477,6 +513,8 @@ async def release_agent_presence(
             _released_at.pop(stale, None)
             _released_sessions.pop(stale, None)
         _released_at[agent_uuid] = now
+        if _binding_inserts_in_flight.get(agent_uuid):
+            _released_during_insert[agent_uuid] = now
         sessions = _released_sessions.setdefault(agent_uuid, set())
         sessions.update(session_ids)
 
