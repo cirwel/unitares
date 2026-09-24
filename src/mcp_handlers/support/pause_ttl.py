@@ -286,8 +286,9 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
     if expires_at:
         re_evaluation = (
             f"After {expires_at} the next check-in or new shared-memory entry is let "
-            "through and the pause lifts; a check-in whose reading still trips "
-            "pauses again on that same call."
+            "through and the pause lifts. The first check-ins after so long a gap "
+            "are gap-suppressed, so a reading that still trips pauses again from "
+            "about the third check-in."
         )
     else:
         re_evaluation = "No re-evaluation time is recorded for this pause."

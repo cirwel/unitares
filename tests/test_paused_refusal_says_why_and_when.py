@@ -57,7 +57,11 @@ def test_expiry_is_described_as_re_evaluation_not_release():
     paused_at = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
     recovery = paused_refusal_recovery(_meta(paused_at=paused_at.isoformat()))
     assert "the pause lifts" in recovery["other_exits"]
-    assert "pauses again on that same call" in recovery["other_exits"]
+    # Gap suppression (GAP_RECOVERY_CYCLES after a >150s gap) turns the first
+    # post-expiry pause verdicts into proceed; the text must not promise an
+    # immediate re-pause.
+    assert "gap-suppressed" in recovery["other_exits"]
+    assert "on that same call" not in recovery["other_exits"]
 
 
 def test_an_earlier_pauses_reason_is_never_presented_as_current():
