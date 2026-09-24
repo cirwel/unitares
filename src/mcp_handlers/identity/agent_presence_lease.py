@@ -50,11 +50,14 @@ _PRESENCE_TTL_S = 600
 # the source of truth.
 _lease_ids: dict[str, str] = {}
 
-# uuid -> monotonic time of the agent's own clean-exit release. A heartbeat
-# scheduled before that moment belongs to the session that just ended and must
-# not re-acquire the lease it released; one scheduled after it (a resumed
-# session under the same identity) proceeds normally.
+# uuid -> monotonic time of the agent's own clean-exit release, and the
+# client_session_id(s) that released it. A heartbeat from the releasing session
+# never re-acquires, however late it lands (a host's final check-in can reach
+# the server after its session-end release); nor does any heartbeat scheduled
+# before the release. A different session resuming the same identity after the
+# release proceeds normally.
 _released_at: dict[str, float] = {}
+_released_sessions: dict[str, set[str]] = {}
 
 # Guarded SDK imports: unavailable in isolated test/CI envs and in deploys
 # without the lease-plane boundary. When absent the module loads and every entry
@@ -91,12 +94,18 @@ def _make_client():
         return None
 
 
-def _released_since(agent_uuid: str, scheduled_at: Optional[float]) -> bool:
-    """True when the agent released its presence after this heartbeat was scheduled."""
-    if scheduled_at is None:
-        return False
+def _released_since(
+    agent_uuid: str,
+    scheduled_at: Optional[float],
+    client_session_id: Optional[str] = None,
+) -> bool:
+    """True when this heartbeat belongs to a session that has already exited."""
     released = _released_at.get(agent_uuid)
-    return released is not None and released >= scheduled_at
+    if released is None:
+        return False
+    if client_session_id and client_session_id in _released_sessions.get(agent_uuid, ()):
+        return True
+    return scheduled_at is not None and released >= scheduled_at
 
 
 async def heartbeat_agent_presence(
@@ -107,7 +116,7 @@ async def heartbeat_agent_presence(
     """Keep the ``agent:/<uuid>`` presence lease fresh. Fire-and-forget; never raises."""
     if not agent_uuid:
         return
-    if _released_since(agent_uuid, scheduled_at):
+    if _released_since(agent_uuid, scheduled_at, client_session_id):
         return
     client = _make_client()
     if client is None:
@@ -168,7 +177,7 @@ async def _refresh_presence(
     # AcquireOk carries lease_id; failure variants (held_by_other, etc.) do not.
     new_id = getattr(result, "lease_id", None)
     if new_id:
-        if _released_since(agent_uuid, scheduled_at):
+        if _released_since(agent_uuid, scheduled_at, client_session_id):
             # The session ended while this acquire was in flight: hand the
             # lease straight back instead of leaving it live for a full TTL.
             await _release_lease(client, agent_uuid, str(new_id))
@@ -259,7 +268,9 @@ async def _release_lease(client, agent_uuid: str, lease_id: str) -> bool:
     return bool(getattr(result, "ok", False))
 
 
-async def release_agent_presence(agent_uuid: Optional[str]) -> dict:
+async def release_agent_presence(
+    agent_uuid: Optional[str], client_session_ids: tuple[str, ...] = ()
+) -> dict:
     """Release the agent's own presence lease on a clean exit.
 
     Without this, an exited agent reads as live for up to ``_PRESENCE_TTL_S``,
@@ -271,8 +282,11 @@ async def release_agent_presence(agent_uuid: Optional[str]) -> dict:
         return {"released": False, "reason": "no_identity"}
     now = time.monotonic()
     _released_at[agent_uuid] = now
+    sessions = _released_sessions.setdefault(agent_uuid, set())
+    sessions.update(s for s in client_session_ids if s)
     for stale in [u for u, at in _released_at.items() if now - at > 2 * _PRESENCE_TTL_S]:
         _released_at.pop(stale, None)
+        _released_sessions.pop(stale, None)
 
     client = _make_client()
     if client is None:

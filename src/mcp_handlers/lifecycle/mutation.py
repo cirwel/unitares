@@ -478,8 +478,15 @@ async def handle_release_presence(arguments: Dict[str, Any]) -> Sequence[TextCon
             error_code="IDENTITY_REQUIRED",
         )]
 
+    # The releasing session's own id, in both the context and argument forms,
+    # so its late final check-in cannot re-acquire what it just released.
+    from ..context import get_context_client_session_id
+    session_ids = tuple(
+        {str(s) for s in (get_context_client_session_id(), arguments.get("client_session_id")) if s}
+    )
+
     from ..identity.agent_presence_lease import release_agent_presence
-    result = await release_agent_presence(agent_uuid)
+    result = await release_agent_presence(agent_uuid, session_ids)
     return success_response({
         "action": "release_presence",
         "agent_id": agent_uuid,

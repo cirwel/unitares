@@ -18,9 +18,11 @@ from src.mcp_handlers.identity import agent_presence_lease as apl
 def _clear_cache():
     apl._lease_ids.clear()
     apl._released_at.clear()
+    apl._released_sessions.clear()
     yield
     apl._lease_ids.clear()
     apl._released_at.clear()
+    apl._released_sessions.clear()
 
 
 def _fake_req(**kw):
@@ -252,4 +254,18 @@ async def test_acquire_in_flight_during_release_is_handed_back(monkeypatch):
     await apl.heartbeat_agent_presence("uuid-1", "sess-1", scheduled_at)
 
     assert [r.lease_id for r in client.releases] == ["lease-123"]
+    assert "uuid-1" not in apl._lease_ids
+
+
+@pytest.mark.asyncio
+async def test_late_checkin_from_the_releasing_session_does_not_reacquire(monkeypatch):
+    """The host's final check-in can reach the server after its session-end
+    release; that session must not resurrect the lease."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.release_agent_presence("uuid-1", ("sess-1",))
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-1", apl.time.monotonic())
+
+    assert client.acquired == []
     assert "uuid-1" not in apl._lease_ids
