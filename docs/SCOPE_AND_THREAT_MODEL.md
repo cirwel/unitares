@@ -50,9 +50,10 @@ the agent's *own* running history rather than only a one-size-fits-all threshold
 Absolute safety floors still apply on top of that.
 
 **Before the behavioral channel reaches confidence 0.3** (check-ins 1–2), the
-verdict comes from the Φ cold-start prior: computed mostly
-from server-derived signals (complexity divergence, coherence, calibration), with
-the independent behavioral signal telemetry-only. On MCP check-ins a
+verdict comes from the Φ cold-start prior: computed by the
+server from its own state and the drift vector, whose complexity-divergence and
+calibration components also depend on the complexity and confidence the agent
+reports, with the independent behavioral signal telemetry-only. On MCP check-ins a
 self-reported `ethical_drift` does not currently enter the drift vector, Φ, or the
 verdict in any phase: the handler passes the vector as an array that the capped
 30% blend's type check rejects (found 2026-09-23). Direct callers of the Python

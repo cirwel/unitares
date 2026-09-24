@@ -109,3 +109,17 @@ def test_simulated_blended_update_does_not_mark_the_monitor():
         {**base, "ethical_drift": np.array([0.0, 0.0, 0.0])}, confidence=0.7
     )["risk_attribution"]["note"]
     assert "independent behavioral assessment" in note
+
+
+def test_drift_vector_provenance_is_described_as_mixed():
+    # Even when the ethical_drift self-report is rejected (MCP ndarray path),
+    # complexity divergence and calibration error still depend on the
+    # caller's reported complexity and confidence, so the vector must not be
+    # labelled purely server-derived.
+    attribution = _attribution(np.array([1.0, 1.0, 1.0]))
+    description = attribution["sources"]["phi_drift"]["description"]
+    assert "mixed provenance" in description
+    assert "reported complexity" in description
+    assert "It is server-derived" not in description
+    assert "server-derived signals" not in attribution["note"]
+    assert "complexity and confidence you report" in attribution["note"]
