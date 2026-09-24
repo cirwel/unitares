@@ -1033,115 +1033,60 @@ class UNITARESMonitor:
     def simulate_update(self, agent_state: Dict, confidence: Optional[float] = None) -> Dict:
         """
         Dry-run governance cycle: Returns decision without persisting state.
-        
+
         Useful for testing decisions before committing. Does NOT modify state.
-        
-        Optimized: Uses shallow copy + selective deep copy instead of full deepcopy.
-        Only deep copies mutable collections (history lists) and nested dataclasses.
-        This is 10-100x faster for agents with long histories.
-        
+
+        Runs process_update() on a deep copy of this monitor, so nothing it
+        mutates can reach the real one. This replaced a hand-maintained list of
+        per-attribute saves and restores, which covered the GovernanceState
+        swap and a few scalars but missed most of what process_update()
+        mutates. Measured 2026-09-23: one simulated update permanently changed
+        the behavioral EMA and its baseline, the adaptive governor's controller
+        state, the continuity layer's memory, _prev_E/I/S/V, the last drift
+        vector and more, so every MCP simulate_update call shifted the agent's
+        real verdict state. The copy costs about 1 ms at 200 updates of history.
+
+        One piece of state lives outside the monitor: this agent's entry in the
+        governance_core drift-baseline cache, which process_update() updates in
+        place. It is snapshotted and put back here.
+
         Args:
             agent_state: Agent state dict with parameters, ethical_drift, response_text, complexity
             confidence: Confidence level [0, 1] for this update. If None (default),
                         confidence is derived from observed outcomes + EISV uncertainty.
-        
+
         Returns:
             Same format as process_update, but state is NOT modified
         """
         import copy
-        
-        # Save current state (shallow copy is sufficient for reference)
-        saved_state = self.state
-        saved_prev_params = self.prev_parameters
-        saved_last_update = self.last_update
-        saved_prev_verdict = self._prev_verdict_action
-        saved_prev_norm = self._prev_drift_norm
-        saved_prev_conf = self._prev_confidence
-        saved_prev_checkin_time = self._prev_checkin_time
-        saved_last_prediction_id = self._last_prediction_id
-        saved_open_predictions = copy.deepcopy(self._open_predictions)
-        saved_process_local_updates = self._process_local_updates
-        saved_cold_start_previous = self._cold_start_confirmation_previous
-        saved_simulation_active = self._simulation_active
-        saved_last_governance_result = self._last_governance_result
-        # The novelty gate for the mirror's complexity line mutates during
-        # result building (monitor_result._complexity_divergence_novel); a
-        # simulation must not consume the agent's first real surfacing.
-        saved_last_gap = self._last_surfaced_complexity_gap
-        # The risk the last REAL verdict was made from. process_update() sets it
-        # unconditionally, so without this a dry run would overwrite it and the
-        # read path would then serve a simulated number under
-        # risk_score_source="resolved" — the label that exists to mean "a real
-        # verdict produced this". That is the same dashboard-disagrees-with-the-
-        # record bug #1646 fixed, reintroduced through the simulation door.
-        saved_last_resolved_risk = getattr(self, "_last_resolved_risk", None)
-        saved_last_resolved_verdict = getattr(self, "_last_resolved_verdict", None)
-        saved_last_behavioral_verdict = getattr(self, "_last_behavioral_verdict", None)
-        saved_last_absolute_floor_observation = getattr(
-            self,
-            "_last_absolute_floor_observation",
-            None,
+
+        from governance_core.ethical_drift import (
+            clear_baseline,
+            get_baseline_or_none,
+            set_agent_baseline,
         )
-        
+
+        saved_drift_baseline = get_baseline_or_none(self.agent_id)
+        drift_baseline_copy = copy.deepcopy(saved_drift_baseline)
+        clone = copy.deepcopy(self)
+        clone._simulation_active = True
+        if saved_drift_baseline is not None:
+            # The clone must update a copy, not the live cache entry.
+            set_agent_baseline(self.agent_id, drift_baseline_copy)
         try:
-            # OPTIMIZED: Shallow copy + selective deep copy
-            # Shallow copy the state object (fast)
-            temp_state = copy.copy(self.state)
-            
-            # Deep copy only mutable collections (history lists) - these get appended to
-            temp_state.E_history = copy.deepcopy(self.state.E_history)
-            temp_state.I_history = copy.deepcopy(self.state.I_history)
-            temp_state.S_history = copy.deepcopy(self.state.S_history)
-            temp_state.V_history = copy.deepcopy(self.state.V_history)
-            temp_state.coherence_history = copy.deepcopy(self.state.coherence_history)
-            temp_state.risk_history = copy.deepcopy(self.state.risk_history)
-            temp_state.decision_history = copy.deepcopy(self.state.decision_history)
-            temp_state.timestamp_history = copy.deepcopy(self.state.timestamp_history)
-            temp_state.lambda1_history = copy.deepcopy(self.state.lambda1_history)
-            
-            # Deep copy nested dataclasses (they get modified during update_dynamics)
-            temp_state.unitaires_state = copy.deepcopy(self.state.unitaires_state)
-            temp_state.unitaires_theta = copy.deepcopy(self.state.unitaires_theta)
-            
-            # Shallow copy prev_parameters (it's a simple dict or None)
-            temp_prev_params = copy.deepcopy(self.prev_parameters) if self.prev_parameters is not None else None
-            
-            # Swap to temporary state
-            self.state = temp_state
-            self.prev_parameters = temp_prev_params
-            self._simulation_active = True
-            
-            # Run full governance cycle (modifies temp_state) with confidence
-            result = self.process_update(agent_state, confidence=confidence)
-            
+            result = clone.process_update(agent_state, confidence=confidence)
+
             # Mark as simulation
             result['simulation'] = True
             result['note'] = 'This was a simulation - state was not modified'
-            
+
             return result
         finally:
-            # Always restore original state, even if error occurred
-            self.state = saved_state
-            self.prev_parameters = saved_prev_params
-            self.last_update = saved_last_update
-            self._prev_verdict_action = saved_prev_verdict
-            self._prev_drift_norm = saved_prev_norm
-            self._prev_confidence = saved_prev_conf
-            self._prev_checkin_time = saved_prev_checkin_time
-            self._last_prediction_id = saved_last_prediction_id
-            self._open_predictions = saved_open_predictions
-            self._process_local_updates = saved_process_local_updates
-            self._cold_start_confirmation_previous = saved_cold_start_previous
-            self._simulation_active = saved_simulation_active
-            self._last_governance_result = saved_last_governance_result
-            self._last_surfaced_complexity_gap = saved_last_gap
-            self._last_resolved_risk = saved_last_resolved_risk
-            self._last_resolved_verdict = saved_last_resolved_verdict
-            self._last_behavioral_verdict = saved_last_behavioral_verdict
-            self._last_absolute_floor_observation = (
-                saved_last_absolute_floor_observation
-            )
-    
+            if saved_drift_baseline is None:
+                clear_baseline(self.agent_id)
+            else:
+                set_agent_baseline(self.agent_id, saved_drift_baseline)
+
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
         """
         Complete governance cycle: Update → Adapt → Decide
