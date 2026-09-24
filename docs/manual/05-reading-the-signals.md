@@ -70,7 +70,7 @@ provenance and keep high-stakes outcome channels outside the agent's authority.
 
 When an agent is paused, recovery is a structured escalation:
 
-1. **Self-recovery** — `self_recovery(action="check")` reports which path the current state allows. `self_recovery(action="quick")` resumes without reflection when risk is low and no void is active; when risk is moderate, `self_recovery(action="review", reflection=...)` resumes after the agent states what went wrong and what it will change. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
+1. **Self-recovery** — `self_recovery(action="check")` reports which path the current state allows. A paused agent cannot write the check-in that would lower its risk, so self-recovery succeeds only when the reading that paused it is already under the gate below; most pauses end through the dialectic, an operator, or re-evaluation at expiry. `self_recovery(action="quick")` resumes without reflection when risk is low and no void is active; when risk is moderate, `self_recovery(action="review", reflection=...)` resumes after the agent states what went wrong and what it will change. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
 2. **LLM-assisted dialectic** — a configured reviewer model supplies an
    antithesis for single-agent reflection; the default reference path supports a
    local model.

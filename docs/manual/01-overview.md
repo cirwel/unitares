@@ -89,7 +89,7 @@ Every check-in resolves to one of four verdicts:
 |---|---|---|
 | `proceed` | State is healthy | Continue working normally |
 | `guide` | Slightly off track | Read the guidance text and adjust approach |
-| `pause` | Needs attention | Stop, reflect, consider a dialectic review |
+| `pause` | A hard stop: check-ins and shared-memory writes are refused, not queued | Stop and read the reason; `self_recovery(action="check")` reports self-recovery eligibility |
 | `reject` | Significant concern | Open a dialectic review to resolve/contest, or bring in a human |
 
 Verdicts also carry a **margin** (`settling` / `comfortable` / `tight` / `warning` / `critical`) indicating proximity to the nearest measurable *decision threshold* — risk, void, or coherence — which is a different notion of edge from basin membership: an agent inside the `boundary` basin can still report `comfortable`. Verdict definitions live in [`src/governance_glossary.py`](../../src/governance_glossary.py); the margin levels come from `GovernanceConfig.compute_proprioceptive_margin`.

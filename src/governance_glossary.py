@@ -16,8 +16,8 @@ Pattern:
     >>> explain_verdict("pause")
     {
       "value": "pause",
-      "meaning": "Needs attention.",
-      "next_action": "Stop current work, reflect, ..."
+      "meaning": "A hard stop: check-ins and shared-memory writes are refused, not queued.",
+      "next_action": "Stop and read the reason and guidance. ..."
     }
 
 The wrapper preserves the original value at "value" so existing consumers
@@ -111,8 +111,13 @@ VERDICTS: Dict[str, Dict[str, str]] = {
         "next_action": "Read the guidance text and adjust approach.",
     },
     "pause": {
-        "meaning": "Needs attention.",
-        "next_action": "Stop current work, reflect, consider dialectic review.",
+        "meaning": "A hard stop: check-ins and shared-memory writes are refused, not queued.",
+        "next_action": (
+            "Stop and read the reason and guidance. "
+            "self_recovery(action='check') reports self-recovery eligibility; "
+            "a dialectic review opened for the pause is found with "
+            "dialectic(action='get', agent_id=...)."
+        ),
     },
     "reject": {
         "meaning": "Significant concern.",
