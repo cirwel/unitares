@@ -1420,7 +1420,7 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
     non-attribution fields; attribution returns as label+identity, identity
     alone, or not at all, and an identity that survives is exact."""
     saw_labels, saw_ids_only, saw_none = False, False, False
-    for n in range(0, 2600, 10):
+    for n in range(0, 2600, 2):
         extra = {"total_count": n_results, "confidence_note": "c" * n, "success": True}
         # Whole-envelope size is not asserted here: master already overshoots
         # 3,000 bytes in a narrow window, independent of attribution.
@@ -1463,6 +1463,33 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
             else:
                 saw_none = True
     assert saw_labels and saw_ids_only and saw_none
+
+
+def test_a_short_identity_is_restored_where_the_marker_cannot_fit():
+    """Review on #2386 (round 7): with less room than the withheld-marker
+    needs (~36 bytes), a short legacy identity (16 bytes) must still be
+    restored rather than dropped unmarked. Sweeps the free space across that
+    window; wherever the identity alone fits, it is present."""
+    base = {"success": True, "results": [{"id": "d1", "summary": "s", "agent_id": "a1"}],
+            "total_count": 1}
+    exercised = False
+    for n in range(1050, 1200):
+        payload = {**base, "confidence_note": "c" * n}
+        bare = build_experience_envelope(
+            "search_shared_memory", "knowledge",
+            {**payload, "results": [{"id": "d1", "summary": "s"}]})
+        env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+        bare_size = len(json.dumps(bare, ensure_ascii=False).encode("utf-8"))
+        digest = (env.get("memory_suggestions") or [None])[0]
+        if digest is None or bare_size > 3_000:
+            continue
+        if bare_size + len(', "agent_id": "a1"') <= 3_000:
+            assert digest.get("agent_id") == "a1", (n, bare_size)
+            if bare_size + 36 > 3_000:
+                exercised = True
+        elif "agent_id" not in digest and bare_size + 36 <= 3_000:
+            assert env.get("digest_attribution_omitted") is True, n
+    assert exercised  # the marker-cannot-fit window was actually swept
 
 
 def test_search_projection_budget_omits_pathological_identity_explicitly():

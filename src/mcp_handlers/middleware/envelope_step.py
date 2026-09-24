@@ -1053,37 +1053,51 @@ def _restore_digest_attribution(
     envelope: Dict[str, Any], set_aside: List[Dict[str, Any]], wire_bytes
 ) -> None:
     """Give each surviving digest back as much attribution as fits, in rank
-    order; reserve and keep the withheld-marker only when something was
-    withheld."""
-    suggestions = envelope.get("memory_suggestions")
-    if isinstance(suggestions, list) and any(set_aside[: len(suggestions)]):
-        # Reserve the withheld-marker's room first, so that whenever
-        # attribution is withheld the marker says so. Removing it at the end
-        # when nothing was withheld only frees space.
-        envelope["digest_attribution_omitted"] = True
-        if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
-            # Not even the marker fits, so no attribution can; stay exactly
-            # as the attribution-free payload would.
-            envelope.pop("digest_attribution_omitted", None)
-        else:
-            withheld = False
-            for item, snap in zip(suggestions, set_aside):
-                if not snap or not isinstance(item, dict):
-                    continue
-                identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
-                for attempt in (snap, identity):
-                    if not attempt:
-                        continue
-                    item.update(attempt)
-                    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-                        break
-                    for key in attempt:
-                        item.pop(key, None)
-                if any(key not in item for key in snap):
-                    withheld = True
-            if not withheld:
-                envelope.pop("digest_attribution_omitted", None)
+    order: label and identity, else the identity alone, else neither.
 
+    First without the withheld-marker: if everything fits, no marker is
+    needed and its room is not taken from attribution. Only if something must
+    be withheld is the restore redone with the marker's room reserved, so the
+    marker says so. If the marker itself does not fit, the marker-free restore
+    stands; only then can a digest lose attribution unmarked, and only when
+    not even the marker's ~36 bytes were free."""
+    suggestions = envelope.get("memory_suggestions")
+    if not isinstance(suggestions, list) or not any(set_aside[: len(suggestions)]):
+        return
+
+    def strip() -> None:
+        for item in suggestions:
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    item.pop(key, None)
+
+    def restore() -> bool:
+        withheld = False
+        for item, snap in zip(suggestions, set_aside):
+            if not snap or not isinstance(item, dict):
+                continue
+            identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
+            for attempt in (snap, identity):
+                if not attempt:
+                    continue
+                item.update(attempt)
+                if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                    break
+                for key in attempt:
+                    item.pop(key, None)
+            if any(key not in item for key in snap):
+                withheld = True
+        return withheld
+
+    if not restore():
+        return
+    strip()
+    envelope["digest_attribution_omitted"] = True
+    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+        restore()
+        return
+    envelope.pop("digest_attribution_omitted", None)
+    restore()
 
 def build_experience_envelope(
     friendly_name: str,
