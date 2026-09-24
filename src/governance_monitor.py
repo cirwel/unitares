@@ -510,6 +510,16 @@ class UNITARESMonitor:
             # Persist last_update so cross-restart gaps integrate against the real
             # prior check-in time, not the lazy-init wall-clock.
             state_data['last_update_iso'] = self.last_update.isoformat()
+            # Open check-in forecasts, matching the live writer
+            # (agent_monitor_state._attach_monitor_transients).
+            if self._open_predictions:
+                from src.monitor_prediction import serialize_open_predictions
+
+                open_rows = serialize_open_predictions(
+                    self._open_predictions, float(self._prediction_ttl_seconds)
+                )
+                if open_rows:
+                    state_data['open_predictions'] = open_rows
             # Atomic write: write to temp file, then rename to prevent corruption
             tmp_fd, tmp_path = tempfile.mkstemp(dir=state_file.parent, suffix='.tmp')
             try:

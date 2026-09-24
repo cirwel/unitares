@@ -141,6 +141,7 @@ class TestLiveWriterPersistsTransients:
         """
         monitor = UNITARESMonitor(agent_id="transients_parity", load_state=False)
         _update(monitor)
+        monitor.register_tactical_prediction(0.6)
 
         ams.save_monitor_state("transients_parity", monitor)
         live = _saved(isolated_data_dir, "transients_parity")
@@ -150,7 +151,7 @@ class TestLiveWriterPersistsTransients:
 
         for key in ("sensor_divergence", "sensor_divergence_history",
                     "created_at_iso", "last_update_iso", "resolved_risk",
-                    "resolved_verdict"):
+                    "resolved_verdict", "open_predictions"):
             assert (key in live) == (key in legacy), f"writers disagree on {key}"
 
     @pytest.mark.asyncio
