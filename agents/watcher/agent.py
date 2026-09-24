@@ -1659,71 +1659,96 @@ def p008_actually_fires(file_path: str, line: int) -> bool:
     return False
 
 
-# Log methods that do not count as the handler "doing something". A handler
-# whose only action is debug-level logging is invisible at the default level,
-# which is exactly the swallow P006 exists for.
-_P006_SILENT_LOG_METHODS = frozenset({"debug"})
+# P006 positive evidence. A handler counts as reacting to the failure only
+# when its body shows a `raise`, a `return` with a non-None value, or a logging
+# call at one of these levels. Anything else (debug-only logging, `return
+# None`, `x = None`, collecting the error) keeps the finding.
+_P006_LOUD_LOG_METHODS = frozenset(
+    {"info", "warning", "warn", "error", "exception", "critical", "fatal"}
+)
+_P006_LOUD_LOG_LEVELS = frozenset(
+    {"INFO", "WARNING", "WARN", "ERROR", "CRITICAL", "FATAL"}
+)
 
 
-def _p006_stmt_is_silent(stmt: Any) -> bool:
-    """True when ``stmt`` has no observable effect for P006 purposes.
+def _p006_is_loud_log_call(node: Any) -> bool:
+    """``<x>.info/warning/error/exception/critical(...)`` or ``<x>.log(LEVEL, ...)``
+    with LEVEL at INFO or above."""
+    import ast
 
-    Silent: ``pass``, ``continue``, ``break``, a bare ``return`` (no value),
-    ``...`` or any other bare constant (a docstring-style string), and a call
-    to ``<x>.debug(...)`` or ``<x>.log(logging.DEBUG, ...)``. Everything else
-    — info/warning/error/exception logging, ``raise``, returning or assigning
-    a value (``None`` included, as a fallback), any other call — is the
-    handler reacting to the failure.
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    method = node.func.attr
+    if method in _P006_LOUD_LOG_METHODS:
+        return True
+    if method == "log" and node.args:
+        level = node.args[0]
+        if isinstance(level, ast.Attribute):
+            return level.attr in _P006_LOUD_LOG_LEVELS
+        if isinstance(level, ast.Name):
+            return level.id in _P006_LOUD_LOG_LEVELS
+        if isinstance(level, ast.Constant) and isinstance(level.value, int):
+            return level.value >= 20  # logging.INFO
+    return False
+
+
+def _p006_handler_reacts(handler: Any) -> bool:
+    """True when ``handler``'s body, nested blocks included, has positive
+    evidence of reacting: a ``raise``, a logging call at info level or above,
+    or a ``return`` whose value is not ``None``.
+
+    Nested function, lambda and class bodies are skipped: code there does not
+    run when the handler does.
     """
     import ast
 
-    if isinstance(stmt, (ast.Pass, ast.Continue, ast.Break)):
-        return True
-    if isinstance(stmt, ast.Return) and stmt.value is None:
-        return True
-    if not isinstance(stmt, ast.Expr):
-        return False
-    value = stmt.value
-    if isinstance(value, ast.Constant):
-        return True
-    if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
-        return False
-    method = value.func.attr
-    if method in _P006_SILENT_LOG_METHODS:
-        return True
-    if method == "log" and value.args:
-        level = value.args[0]
-        if isinstance(level, ast.Attribute) and level.attr == "DEBUG":
+    scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+    stack = list(handler.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, scope_nodes):
+            continue
+        if isinstance(node, ast.Raise):
             return True
+        if isinstance(node, ast.Return) and not (
+            node.value is None
+            or (isinstance(node.value, ast.Constant) and node.value.value is None)
+        ):
+            return True
+        if _p006_is_loud_log_call(node):
+            return True
+        stack.extend(ast.iter_child_nodes(node))
     return False
 
 
 def p006_actually_fires(file_path: str, line: int) -> bool:
     """AST post-filter for P006 (silent exception swallow).
 
-    Where the line falls is a chosen standard, not a measured threshold: the
-    rule fires only when the governing handler's body is entirely silent (see
-    ``_p006_stmt_is_silent``), and returning or assigning a value (``None``
-    included) or any other call counts as reacting. It came from a manual triage of the unresolved queue on
-    2026-09-24: P006 was 50 of 93 unresolved rows (rows, not distinct sites;
-    the queue held the same code once per worktree and per line shift), and
-    about 40 flagged handlers that already log at warning or above, re-raise,
-    or return an error. The handlers the triager judged real were all
-    ``pass``-only or ``logger.debug``-only. Those are triage calls, not
-    recorded verdicts: the lifetime record still has 0 confirmed P006
-    findings (see the #2396 comment above ``_P006_EXCEPT_CLAUSE``).
+    A positive-evidence rule, and a chosen standard rather than a measured
+    threshold: the finding is dropped only when every handler on the path from
+    the flagged line outward shows positive evidence of reacting (see
+    ``_p006_handler_reacts``). In every other case it is kept. It came from a
+    manual triage of the unresolved queue on 2026-09-24: P006 was 50 of 93
+    unresolved rows (rows, not distinct sites; the queue held the same code
+    once per worktree and per line shift), and about 40 flagged handlers that
+    already log at warning or above, re-raise, or return an error. Those are
+    triage calls, not recorded verdicts: the lifetime record still has 0
+    confirmed P006 findings (see the #2396 comment above
+    ``_P006_EXCEPT_CLAUSE``).
 
-    The governing handler is the innermost ``except`` whose span contains the
-    flagged line. When the model cites a line of the ``try`` body instead, the
-    innermost enclosing ``try`` counts, and the finding survives if any of its
-    handlers is silent.
+    The handlers on the path are, for every ``try`` whose span holds the line:
+    the handler the line sits in, or all of the try's handlers when the line
+    sits in the ``try`` block itself (the ``try:`` line included). A line in an
+    ``else``/``finally`` block adds none of that try's handlers. So a flag in
+    an inner try body under ``except KeyError: logger.warning(...)`` is still
+    kept when an outer ``except Exception: pass`` would catch anything else.
 
-    Conservative on errors, like ``p008_actually_fires``: a line inside no
-    ``try`` at all (a miscited or comment line), an unreadable, non-Python or
-    unparseable file all return True so the finding is kept.
+    Kept (returns True) whenever the check cannot show a reaction: no handler
+    on the path (a line inside no try, or only in try/finally), an unreadable,
+    non-Python or unparseable file.
 
     Returns True  → possible real swallow; keep it
-    Returns False → verified false positive; suppress it
+    Returns False → every governing handler reacts; suppress it
     """
     import ast
 
@@ -1735,41 +1760,28 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
         return True
 
-    def _span(node: Any) -> tuple[int, int]:
-        start = getattr(node, "lineno", 0)
-        return start, getattr(node, "end_lineno", start) or start
+    def _within(node: Any, start: int) -> bool:
+        end = getattr(node, "end_lineno", None) or getattr(node, "lineno", 0)
+        return start <= line <= end
 
-    def _silent(handler: Any) -> bool:
-        return all(_p006_stmt_is_silent(stmt) for stmt in handler.body)
-
-    handler_hit: Any = None
-    try_hit: Any = None
+    try_types = tuple(
+        t for t in (ast.Try, getattr(ast, "TryStar", None)) if t is not None
+    )
+    on_path: list[Any] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ExceptHandler):
-            start, end = _span(node)
-            if start <= line <= end and (
-                handler_hit is None or start >= _span(handler_hit)[0]
-            ):
-                handler_hit = node
-        elif (
-            isinstance(node, ast.Try) or type(node).__name__ == "TryStar"
-        ) and node.handlers:
-            # A try/finally has no handlers and cannot swallow anything; the
-            # enclosing try that does have handlers governs its body.
-            start, end = _span(node)
-            if start <= line <= end and (
-                try_hit is None or start >= _span(try_hit)[0]
-            ):
-                try_hit = node
+        if not isinstance(node, try_types) or not node.handlers:
+            continue
+        if not _within(node, node.lineno):
+            continue
+        body_end = getattr(node.body[-1], "end_lineno", None) or node.body[-1].lineno
+        if node.lineno <= line <= body_end:
+            on_path.extend(node.handlers)
+            continue
+        on_path.extend(h for h in node.handlers if _within(h, h.lineno))
 
-    # A handler nested inside the innermost try is more specific than it.
-    if handler_hit is not None and (
-        try_hit is None or _span(handler_hit)[0] >= _span(try_hit)[0]
-    ):
-        return _silent(handler_hit)
-    if try_hit is not None:
-        return any(_silent(h) for h in try_hit.handlers)
-    return True
+    if not on_path:
+        return True
+    return not all(_p006_handler_reacts(h) for h in on_path)
 
 
 def parse_findings(
@@ -1916,8 +1928,8 @@ def parse_findings(
             )
             continue
 
-        # P006 post-filter: a handler that logs at info or above, re-raises,
-        # returns, or assigns is not a silent swallow. Verify with an AST scan.
+        # P006 post-filter: drop only when every handler that governs the
+        # line re-raises, logs at info or above, or returns a non-None value.
         # Only a line the model actually cited can be checked; the
         # region_start fallback for a missing line is not one.
         if (
@@ -1927,7 +1939,7 @@ def parse_findings(
         ):
             log(
                 f"suppressing P006 false-positive at {file_path}:{line} "
-                f"(governing except body is not silent)",
+                f"(every governing handler re-raises, logs, or returns a value)",
                 "debug",
             )
             continue
@@ -2731,7 +2743,7 @@ def _is_inside_get_or_create_monitor(
 
 # P006: the `except` clause that governs a flagged line, and the two ways its
 # author can show the swallow is deliberate or absent. patterns.md defines
-# P006 as an effectively silent handler, and ruff's BLE001 is the broad-except
+# P006 as a handler with no sign of reacting, and ruff's BLE001 is the broad-except
 # rule, so `# noqa: BLE001` (or a bare `# noqa`) on the clause is the author
 # recording that decision. False-positive sweep 2026-09-24: of 39 lifetime P006
 # findings none was confirmed, and three flagged clauses already carried

@@ -194,15 +194,28 @@ acquisitions without a paired release in a `finally:` or `async with` context.
 
 ### P006 — Silent exception swallow (severity: medium, violation_class: VOI)
 
-An exception handler (`except`, `catch`) whose body is effectively silent:
-it does nothing (`pass`, `...`, an empty block, a bare `return`), only
-continues or breaks the loop, or only logs at debug level (`logger.debug(...)`, `console.debug(...)`). Hides
-real bugs and makes debugging impossible.
+An exception handler (`except`, `catch`) that shows no sign of reacting to
+the failure. A handler reacts only if its body, nested blocks included,
+contains at least one of:
 
-Not P006: a handler that logs at info/warning/error, re-raises or rethrows,
-returns, or assigns an error/fallback value. Those react to the failure. For
-Python files a deterministic AST check also drops P006 findings on such
-handlers; for other languages this definition is the only filter.
+- a `raise` / `throw`
+- a logging call at info, warning, error, exception or critical level
+- a `return` with a value other than `None` / `null` / `undefined`
+
+Everything else is P006: `pass`, `...`, an empty block, `continue`, `break`,
+a bare `return` or `return None`, assigning `None` or another fallback,
+collecting the error, or logging only at debug level (`logger.debug(...)`,
+`console.debug(...)`). Hides real bugs and makes debugging impossible.
+
+When handlers are nested, every handler that could catch the exception must
+react. An inner `except KeyError: logger.warning(...)` inside an outer
+`except Exception: pass` is still P006, because the outer handler silently
+swallows every other exception.
+
+For Python files a deterministic AST check drops P006 findings only when
+every governing handler shows one of the three reactions above; for other
+languages this definition is the only filter. The check never adds a
+finding, so the optional side-effect exemption below is still your call.
 
 **SAFE — DO NOT FLAG:**
 ```python
@@ -220,7 +233,7 @@ primary logic path does NOT depend on its result — it is intentional.
 Only flag when the swallow is on the main logic path or could mask a
 failure the caller needs to know about.
 
-**Hint template:** `silent swallow — log at info or above, re-raise, or handle the failure`
+**Hint template:** `silent swallow — log at info or above, re-raise, or return an error value`
 
 <!-- P007 has been demoted to the EXPERIMENTAL section below.
      Detecting it requires reasoning about temporal flow (which pool was

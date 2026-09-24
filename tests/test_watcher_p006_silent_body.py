@@ -1,19 +1,22 @@
-"""P006 fires only on a handler whose body is effectively silent.
+"""P006 is dropped only on positive evidence that the handler reacts.
 
 A manual triage of the unresolved queue on 2026-09-24 found P006 on 50 of 93
 rows (rows, not distinct sites: the same code appeared once per worktree and
 per line shift). About 40 flagged handlers that already log at warning or
-above, re-raise, or return an error; the ones the triager judged real were all
-``pass``-only or ``logger.debug``-only. Those are triage calls, not recorded
+above, re-raise, or return an error. Those are triage calls, not recorded
 verdicts (the lifetime record has 0 confirmed P006, see
-test_watcher_noise_narrowing.py). The silent/reacting split below is the
-chosen standard that ``p006_actually_fires`` encodes; ``parse_findings``
-applies it.
+test_watcher_noise_narrowing.py).
+
+``p006_actually_fires`` drops a finding only when every handler on the path
+from the flagged line outward contains, anywhere in its body, a ``raise``, a
+logging call at info level or above, or a ``return`` with a non-None value.
+Every other case keeps it; ``parse_findings`` applies the rule.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -41,6 +44,7 @@ def _handler(body: str) -> str:
     )
 
 
+# No positive evidence: the finding is kept.
 SILENT_BODIES = [
     "pass",
     "...",
@@ -48,28 +52,51 @@ SILENT_BODIES = [
     "logging.debug('skipped')",
     "self.log.debug('skipped')",
     "logger.log(logging.DEBUG, 'skipped')",
+    "logger.log(10, 'skipped')",
+    "logger.log(level, 'unknown level')",
     "'''Deliberately ignored.'''\npass",
     "logger.debug('a')\npass",
     "return",
-    "logger.debug('x')\nreturn",
+    "return None",
+    "logger.debug('x')\nreturn None",
+    "result = None",
+    "self.error = exc",
+    "errors.append(exc)",
+    "print(exc)",
+    # Compound bodies are not evidence by themselves (open review finding 2).
+    "if VERBOSE:\n    logger.debug('x')",
+    "with lock:\n    pass",
+    "for item in items:\n    logger.debug(item)",
+    "try:\n    cleanup()\nexcept OSError:\n    pass",
+    # Code in a nested scope does not run when the handler does.
+    "def later():\n    raise RuntimeError('x')\npass",
+    "callback = lambda: logger.error('x')",
+    "class Err:\n    def f(self):\n        return 1",
 ]
 
+# Positive evidence somewhere in the body: the finding is dropped.
 LOUD_BODIES = [
     "logger.info(f'skipped: {exc}')",
     "logger.warning(f'skipped: {exc}')",
+    "logger.warn('deprecated alias')",
     "logger.error('failed')",
     "logger.exception('failed')",
+    "logger.critical('failed')",
     "logging.warning('failed')",
     "logger.log(logging.WARNING, 'failed')",
+    "logger.log(logging.INFO, 'failed')",
+    "logger.log(40, 'failed')",
     "raise",
     "raise RuntimeError('wrapped') from exc",
-    "return None",
     "return {'success': False, 'error': str(exc)}",
-    "result = None",
-    "self.error = exc",
-    "logger.debug('x')\nreturn None",
+    "return False",
     "logger.debug('x')\nlogger.warning('y')",
-    "errors.append(exc)",
+    "result = None\nlogger.warning('fallback')",
+    # Evidence inside a nested block counts.
+    "if VERBOSE:\n    logger.warning('x')",
+    "if retryable(exc):\n    return retry()\nraise",
+    "with lock:\n    raise",
+    "try:\n    cleanup()\nexcept OSError:\n    logger.error('cleanup failed')",
 ]
 
 
@@ -126,7 +153,7 @@ def test_any_silent_handler_of_the_try_keeps_it(tmp_path):
     assert p006_actually_fires(str(path), 6) is True
 
 
-def test_innermost_handler_governs(tmp_path):
+def test_silent_handler_nested_in_a_reacting_one_is_kept(tmp_path):
     source = (
         "def f():\n"
         "    try:\n"
@@ -142,6 +169,93 @@ def test_innermost_handler_governs(tmp_path):
     assert p006_actually_fires(str(path), 4) is False
     assert p006_actually_fires(str(path), 8) is True
     assert p006_actually_fires(str(path), 9) is True
+
+
+def _nested(outer_body: str) -> str:
+    """Inner ``except KeyError: logger.warning`` inside an outer handler.
+
+    Line 4 is the inner try body, 5 the inner clause, 6 its body, 7 the outer
+    clause, 8 the outer body.
+    """
+    return (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            work()\n"
+        "        except KeyError:\n"
+        "            logger.warning('missing')\n"
+        "    except Exception:\n"
+        f"        {outer_body}\n"
+    )
+
+
+@pytest.mark.parametrize("flagged", [3, 4, 5, 6])
+def test_outer_silent_handler_is_not_masked_by_an_inner_logging_one(tmp_path, flagged):
+    # Open review finding 1: a non-KeyError from `work()` reaches the outer
+    # `except Exception: pass` and is swallowed, whichever inner line is cited.
+    path = _write(tmp_path, _nested("pass"))
+    assert p006_actually_fires(str(path), flagged) is True
+    assert p006_actually_fires(str(path), 7) is True
+
+
+@pytest.mark.parametrize("flagged", [3, 4, 5, 6, 7])
+def test_nested_handlers_that_all_react_are_dropped(tmp_path, flagged):
+    path = _write(tmp_path, _nested("logger.error('failed')"))
+    assert p006_actually_fires(str(path), flagged) is False
+
+
+def test_outer_silent_handler_with_nested_try_in_its_body_is_kept(tmp_path):
+    # The outer handler is judged on its own evidence: a warning inside a
+    # nested try's handler counts, a bare `pass` does not.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        try:\n"
+        "            cleanup()\n"
+        "        except OSError:\n"
+        "            pass\n"
+    )
+    path = _write(tmp_path, source)
+    for flagged in (3, 4, 5, 6, 7, 8):
+        assert p006_actually_fires(str(path), flagged) is True
+
+
+def test_flag_on_the_try_line_uses_its_handlers(tmp_path):
+    silent = _write(tmp_path, _handler("pass"), "silent.py")
+    loud = _write(tmp_path, _handler("raise"), "loud.py")
+    # Line 4 is `try:`.
+    assert p006_actually_fires(str(silent), 4) is True
+    assert p006_actually_fires(str(loud), 4) is False
+
+
+@pytest.mark.parametrize("block", ["else", "finally"])
+def test_else_and_finally_lines_are_not_governed_by_the_try(tmp_path, block):
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        raise\n"
+        f"    {block}:\n"
+        "        tidy()\n"
+    )
+    path = _write(tmp_path, source)
+    # No handler catches an exception from `tidy()`: nothing shows a reaction.
+    assert p006_actually_fires(str(path), 7) is True
+    assert p006_actually_fires(str(path), 3) is False
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="except* needs 3.11")
+@pytest.mark.parametrize("body, expected", [("pass", True), ("raise", False)])
+def test_except_star_handlers(tmp_path, body, expected):
+    source = (
+        f"def f():\n    try:\n        work()\n    except* ValueError:\n        {body}\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 3) is expected
+    assert p006_actually_fires(str(path), 5) is expected
 
 
 def test_try_finally_defers_to_the_enclosing_handlers(tmp_path):
@@ -184,7 +298,16 @@ def test_missing_file_keeps_the_finding(tmp_path):
 
 def _model_reply(line: int) -> str:
     return json.dumps(
-        {"findings": [{"pattern": "P006", "line": line, "hint": "silent swallow", "evidence": ""}]}
+        {
+            "findings": [
+                {
+                    "pattern": "P006",
+                    "line": line,
+                    "hint": "silent swallow",
+                    "evidence": "",
+                }
+            ]
+        }
     )
 
 
@@ -205,4 +328,12 @@ def test_parse_findings_keeps_p006_without_a_cited_line(tmp_path):
     path = _write(tmp_path, _handler("logger.warning('x')"))
     assert p006_actually_fires(str(path), 6) is False
     reply = json.dumps({"findings": [{"pattern": "P006", "hint": "silent swallow"}]})
-    assert [f.pattern for f, _ in parse_findings(reply, str(path), "test", 6)] == ["P006"]
+    assert [f.pattern for f, _ in parse_findings(reply, str(path), "test", 6)] == [
+        "P006"
+    ]
+
+
+def test_parse_findings_keeps_p006_on_an_outer_silent_handler(tmp_path):
+    path = _write(tmp_path, _nested("pass"))
+    parsed = parse_findings(_model_reply(4), str(path), "test", 1)
+    assert [(f.pattern, f.line) for f, _ in parsed] == [("P006", 4)]
