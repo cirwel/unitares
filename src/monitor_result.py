@@ -180,9 +180,8 @@ def _build_risk_attribution(
     demoted to telemetry (the default, ``UNITARES_PHI_TELEMETRY_ONLY=1``), the
     post-warmup verdict IS the independent behavioral assessment (z-scores vs
     the agent's own baseline + absolute floors); the Φ path — fed by an
-    ethical-drift vector the server computes, two of whose four components
-    also depend on the agent's reported complexity and confidence — is
-    telemetry.
+    ethical-drift vector the server computes, part of which can depend on the
+    agent's reported complexity and confidence — is telemetry.
     Pre-warmup (behavioral confidence < 0.3) the verdict falls back to the Φ
     cold-start prior. The decomposition lets a reader see *what* drove the
     verdict and how much of it is self-attested vs measured (dogfood
@@ -217,12 +216,15 @@ def _build_risk_attribution(
         "provenance": "computed",
         "description": (
             "Norm of the ethical-drift vector that feeds the Φ telemetry. The "
-            "server computes it, but its inputs are of mixed provenance: "
-            "coherence deviation and decision-consistency come from server "
-            "state, while complexity divergence (the gap between the server's "
-            "complexity estimate and the agent's reported complexity) and "
-            "calibration error also depend on the complexity and confidence "
-            "the agent reports, when it reports them. "
+            "server computes it, but its inputs are of mixed provenance. "
+            "Coherence deviation and decision-consistency come from this "
+            "agent's server-side state. Complexity divergence is the gap "
+            "between the server's complexity estimate and the complexity the "
+            "agent reports. Calibration error comes from the server-wide "
+            "record of stated confidence against graded outcomes (all agents, "
+            "not this one alone) once that record has enough samples; until "
+            "then it compares the confidence this agent reports with its own "
+            "running baseline. "
             + (
                 "The agent's self-reported ethical_drift was blended in at a "
                 "capped 30% on this check-in. "
@@ -318,14 +320,15 @@ def _build_risk_attribution(
         note = (
             "Behavioral baseline not yet warm (confidence < 0.3): the verdict uses "
             "the Φ cold-start prior, computed from server state and the drift "
-            "vector, whose complexity-divergence and calibration components "
-            "also depend on the complexity and confidence you report. "
+            "vector described under phi_drift, whose complexity-divergence "
+            "component depends on the complexity you report and whose "
+            "calibration component can depend on the confidence you report. "
             + (
                 "Your self-reported ethical_drift was blended in at a capped 30%; "
                 if self_report_blended
                 else "Your self-reported ethical_drift did not enter it; "
             )
-            + "the independent behavioral signal is not yet weighted."
+            + "the behavioral signal is not yet weighted."
         )
 
     attribution = {

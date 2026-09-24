@@ -113,13 +113,32 @@ def test_simulated_blended_update_does_not_mark_the_monitor():
 
 def test_drift_vector_provenance_is_described_as_mixed():
     # Even when the ethical_drift self-report is rejected (MCP ndarray path),
-    # complexity divergence and calibration error still depend on the
-    # caller's reported complexity and confidence, so the vector must not be
-    # labelled purely server-derived.
+    # complexity divergence depends on the caller's reported complexity, so
+    # the vector must not be labelled purely server-derived.
     attribution = _attribution(np.array([1.0, 1.0, 1.0]))
     description = attribution["sources"]["phi_drift"]["description"]
     assert "mixed provenance" in description
-    assert "reported complexity" in description
+    assert "the complexity the agent reports" in description
     assert "It is server-derived" not in description
     assert "server-derived signals" not in attribution["note"]
-    assert "complexity and confidence you report" in attribution["note"]
+    assert "depends on the complexity you report" in attribution["note"]
+
+
+def test_calibration_source_is_not_attributed_to_the_agent_alone():
+    # Once the tactical record is populated, calibration error comes from the
+    # process-wide calibration checker (all agents), not this caller's
+    # confidence; the fallback compares this agent's confidence with its own
+    # baseline. The description has to name both.
+    description = _attribution(np.array([0.0, 0.0, 0.0]))["sources"]["phi_drift"]["description"]
+    assert "server-wide record" in description
+    assert "not this one alone" in description
+    assert "its own running baseline" in description
+
+
+def test_cold_start_blended_note_does_not_call_behavioral_independent():
+    # A blended list report reaches the behavioral inputs via the ODE during
+    # check-ins 1-2 too, so the cold-start note must not call it independent.
+    attribution = _attribution([1.0, 1.0, 1.0])
+    assert attribution["primary_driver"] != "behavioral_assessment"
+    assert "was blended in at a capped 30%" in attribution["note"]
+    assert "independent behavioral signal" not in attribution["note"]
