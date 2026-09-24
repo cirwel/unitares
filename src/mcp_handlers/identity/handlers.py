@@ -3273,8 +3273,10 @@ async def _r2_pre_check_and_declare(
                 )
         except Exception as e:
             # Fail open: the liveness check below falls back to the raw
-            # parent_id.
-            logger.warning(
+            # parent_id. Debug, not warning: get_identity returns an
+            # IdentityRecord (no .get), so this raises on every explicit
+            # handoff today; the fallback is the same value either way.
+            logger.debug(
                 f"[R2] parent uuid lookup failed for {parent_id[:8]}..., "
                 f"using raw parent_id: {e}"
             )
