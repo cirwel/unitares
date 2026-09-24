@@ -224,6 +224,51 @@ async def test_release_without_a_live_lease_reports_it(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_release_reports_a_failed_lookup_as_retryable_not_absent(monkeypatch):
+    """After a restart the cache is empty; a database failure during the lookup
+    says nothing about whether a lease is live, so it must not read as
+    no_live_lease (which the handler treats as a clean exit)."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    attempts = []
+
+    def _get_db():
+        attempts.append(True)
+        raise ConnectionError("pool unavailable")
+
+    monkeypatch.setattr("src.db.get_db", _get_db)
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-x",))
+
+    assert result == {"released": False, "reason": "lease_lookup_failed", "retryable": True}
+    assert len(attempts) == 2  # one retry before reporting
+    assert client.releases == []
+    # The exiting session stays suppressed, so its late check-in cannot
+    # re-acquire before the client retries.
+    assert "sess-x" in apl._released_sessions["uuid-1"]
+
+
+@pytest.mark.asyncio
+async def test_release_retries_a_transient_lookup_failure(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    calls = []
+
+    async def _lookup(agent_uuid):
+        calls.append(agent_uuid)
+        if len(calls) == 1:
+            raise apl.LeaseLookupFailed("transient")
+        return "lease-from-db", "sess-x"
+
+    monkeypatch.setattr(apl, "_lookup_live_lease", _lookup)
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-x",))
+
+    assert result == {"released": True, "reason": "released"}
+    assert [r.lease_id for r in client.releases] == ["lease-from-db"]
+
+
+@pytest.mark.asyncio
 async def test_release_without_identity_is_a_no_op():
     assert await apl.release_agent_presence(None, ("sess-x",)) == {
         "released": False,

@@ -371,13 +371,19 @@ def _persisted_holder(record) -> Optional[str]:
     return getattr(record, "audit_session", None) or _HOLDER_UNKNOWN
 
 
+class LeaseLookupFailed(Exception):
+    """The live-lease lookup could not run, so whether a lease exists is unknown."""
+
+
 async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[str]]:
     """Find the agent's unreleased presence lease when the in-process cache lost
     it (a server restart since the acquire), with the session known to hold it.
 
     The row records the acquiring session, but a renewal does not update it, so
     once the lease has been renewed its current holder is unknown and the
-    caller must leave it to the TTL. Returns (None, None) on any error."""
+    caller must leave it to the TTL. Returns (None, None) only when no live row
+    exists; raises LeaseLookupFailed when the lookup itself fails, because a
+    failed read is not evidence that no lease is live."""
     try:
         from src.db import get_db
 
@@ -403,9 +409,9 @@ async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[s
         # named, so it counts as an unknown live holder, as a renewal does.
         holder = _HOLDER_UNKNOWN if row["renewed"] else (row["audit_session"] or _HOLDER_UNKNOWN)
         return str(row["lease_id"]), holder
-    except Exception as e:  # pragma: no cover - defensive
-        logger.debug(f"[AGENT_PRESENCE] live lease lookup failed (non-fatal): {e}")
-        return None, None
+    except Exception as e:
+        logger.debug(f"[AGENT_PRESENCE] live lease lookup failed: {e}")
+        raise LeaseLookupFailed(str(e)) from e
 
 
 async def _release_lease(client, agent_uuid: str, lease_id: str) -> bool:
@@ -471,7 +477,16 @@ async def release_agent_presence(
             return {"released": False, "reason": "lease_plane_unavailable"}
         lease_id = _lease_ids.get(agent_uuid)
         if not lease_id:
-            lease_id, db_holder = await _lookup_live_lease(agent_uuid)
+            try:
+                try:
+                    lease_id, db_holder = await _lookup_live_lease(agent_uuid)
+                except LeaseLookupFailed:
+                    lease_id, db_holder = await _lookup_live_lease(agent_uuid)  # one retry
+            except LeaseLookupFailed:
+                # Unknown is not absent: a live lease may remain, so the caller
+                # must neither treat this as a clean exit nor retire bindings.
+                # The releasing session stays tombstoned; a retry is safe.
+                return {"released": False, "reason": "lease_lookup_failed", "retryable": True}
             if db_holder and db_holder not in sessions:
                 holders[db_holder] = now
         if not lease_id:

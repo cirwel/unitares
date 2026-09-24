@@ -192,3 +192,40 @@ async def test_release_presence_reports_a_failed_binding_retirement(monkeypatch)
     assert len(attempts) == 2
     assert body["binding_retirement_failed"] is True
     assert body["bindings_retired"] is None
+
+
+@pytest.mark.asyncio
+async def test_release_presence_keeps_bindings_when_the_lease_lookup_fails(monkeypatch):
+    """A failed lease lookup is not proof that no lease is live: the handler
+    must not retire bindings or report a clean exit, and must say to retry."""
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.identity import process_binding
+
+    retired = []
+
+    async def _retire(agent_id):
+        retired.append(agent_id)
+        return 1
+
+    def _get_db():
+        raise ConnectionError("pool unavailable")
+
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    monkeypatch.setattr(apl, "_make_client", lambda: SimpleNamespace())
+    monkeypatch.setattr("src.db.get_db", _get_db)
+    monkeypatch.setattr(process_binding, "retire_bindings", _retire)
+    apl._lease_ids.pop("caller-uuid", None)  # cold cache, as after a restart
+    try:
+        body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
+    finally:
+        for state in (apl._released_at, apl._released_sessions, apl._lease_sessions,
+                      apl._touched, apl._locks):
+            state.pop("caller-uuid", None)
+
+    assert retired == []
+    assert body["released"] is False
+    assert body["reason"] == "lease_lookup_failed"
+    assert body["retryable"] is True
+    assert body["bindings_retired"] == 0
