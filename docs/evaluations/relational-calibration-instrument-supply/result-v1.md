@@ -63,10 +63,11 @@ identity or distribution was retained beyond these aggregates.
   scheduled or scripted path could have removed a row in the window before
   the read. A manual, ad-hoc deletion cannot be excluded from the catalog; it
   is disclosed here as a residual rather than adjudicated. The contract permits
-  the read at or after the cutoff against the live database, and defines
-  `contract_unreadable` only for missing or mistyped fields, unversioned
-  semantic drift and a missed merge deadline, so adding a new disqualifying
-  condition after the counts were seen would itself breach the registration.
+  the read at or after the cutoff against the live database. Its whole-read
+  `contract_unreadable` conditions are unversioned semantic drift and a missed
+  merge deadline (a missing or mistyped field fails only that row), so adding
+  a new disqualifying condition after the counts were seen would itself breach
+  the registration.
 - **Deviation, ruled harmless: a pre-read row count.** Earlier on the same
   day, while assessing whether retention threatened this read, an audit ran a
   single raw row count of `core.agent_state` over the frozen window. It
