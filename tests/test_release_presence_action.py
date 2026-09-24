@@ -85,8 +85,8 @@ async def test_release_presence_retires_the_sessions_bindings(monkeypatch):
     async def _release(agent_uuid, session_ids=()):
         return {"released": True, "reason": "released"}
 
-    async def _retire(agent_id, session_ids):
-        retired.append((agent_id, session_ids))
+    async def _retire(agent_id):
+        retired.append(agent_id)
         return 1
 
     monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
@@ -96,7 +96,7 @@ async def test_release_presence_retires_the_sessions_bindings(monkeypatch):
 
     body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
 
-    assert retired == [("caller-uuid", ("sess-1",))]
+    assert retired == ["caller-uuid"]
     assert body["bindings_retired"] == 1
 
 
@@ -109,7 +109,7 @@ async def test_release_presence_keeps_bindings_while_another_session_holds(monke
     async def _release(agent_uuid, session_ids=()):
         return {"released": False, "reason": "held_by_other_session"}
 
-    async def _retire(agent_id, session_ids):
+    async def _retire(agent_id):
         retired.append(agent_id)
         return 1
 
@@ -122,3 +122,47 @@ async def test_release_presence_keeps_bindings_while_another_session_holds(monke
 
     assert retired == []
     assert body["bindings_retired"] == 0
+
+
+
+@pytest.mark.asyncio
+async def test_release_presence_retires_bindings_without_a_lease_plane(monkeypatch):
+    from src.mcp_handlers.identity import process_binding
+
+    retired = []
+
+    async def _release(agent_uuid, session_ids=()):
+        return {"released": False, "reason": "lease_plane_unavailable"}
+
+    async def _retire(agent_id):
+        retired.append(agent_id)
+        return 1
+
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    monkeypatch.setattr(apl, "release_agent_presence", _release)
+    monkeypatch.setattr(process_binding, "retire_bindings", _retire)
+
+    body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
+
+    assert retired == ["caller-uuid"]
+    assert body["bindings_retired"] == 1
+
+
+@pytest.mark.asyncio
+async def test_binding_insert_after_a_clean_exit_is_skipped(monkeypatch):
+    from src.mcp_handlers.identity import process_binding
+
+    apl._released_at["caller-uuid"] = apl.time.monotonic()
+    try:
+        called = []
+
+        def _get_db():
+            called.append(True)
+            raise AssertionError("must not touch the database")
+
+        monkeypatch.setattr("src.db.get_db", _get_db)
+        await process_binding.record_binding_bg("caller-uuid", object(), "sess-1")
+        assert called == []
+    finally:
+        apl._released_at.pop("caller-uuid", None)

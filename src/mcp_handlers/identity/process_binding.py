@@ -103,7 +103,18 @@ async def record_binding_bg(
          (live = stale_at IS NULL AND last_seen within LIVE_WINDOW_SECONDS).
       3. If count >= 2 and agent.allow_concurrent_contexts is false, emit
          an `identity_concurrent_binding` broadcaster event. No force-new.
+
+    Skipped when the identity has just released its presence on a clean exit:
+    a queued insert landing after that release would otherwise re-create the
+    live binding the release retired, and block an immediate successor.
     """
+    try:
+        from src.mcp_handlers.identity.agent_presence_lease import recently_released
+
+        if recently_released(agent_id):
+            return
+    except Exception:  # pragma: no cover - never let the guard break recording
+        pass
     try:
         from src.db import get_db
 
@@ -263,15 +274,18 @@ async def sweep_stale_bindings() -> int:
         return 0
 
 
-async def retire_bindings(agent_id: str, client_session_ids: tuple[str, ...]) -> int:
-    """Mark this session's live bindings stale on a clean exit.
+async def retire_bindings(agent_id: str) -> int:
+    """Mark the identity's live bindings stale on a clean exit.
 
     The lineage gate counts a live binding as a running parent for
     LIVE_WINDOW_SECONDS, so an exit that only released its presence lease would
-    still block an immediate successor. Scoped to the exiting session's own
-    client_session_id. Returns the number of rows retired; 0 on any error.
+    still block an immediate successor. Scoped to the identity, not a session
+    id: a fresh start_session records its binding before its client_session_id
+    exists, and one live process per identity is the contract. The caller
+    retires only when the exiting session was the identity's last live holder.
+    Returns the number of rows retired; 0 on any error.
     """
-    if not agent_id or not client_session_ids:
+    if not agent_id:
         return 0
     try:
         from src.db import get_db
@@ -283,10 +297,8 @@ async def retire_bindings(agent_id: str, client_session_ids: tuple[str, ...]) ->
                 SET stale_at = NOW()
                 WHERE agent_id = $1
                   AND stale_at IS NULL
-                  AND client_session_id = ANY($2::text[])
                 """,
                 agent_id,
-                list(client_session_ids),
             )
         try:
             return int((updated or "UPDATE 0").split()[-1])

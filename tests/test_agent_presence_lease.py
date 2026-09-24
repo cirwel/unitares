@@ -625,3 +625,15 @@ async def test_failed_release_keeps_its_lease_through_a_sweep(monkeypatch):
     apl._sweep(apl.time.monotonic() + apl._SWEEP_INTERVAL_S + 1)
 
     assert apl._lease_ids["uuid-1"] == "lease-123"
+
+
+@pytest.mark.asyncio
+async def test_no_lease_plane_still_reports_another_live_holder(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.heartbeat_agent_presence("uuid-1", "sess-b", apl.time.monotonic())
+    monkeypatch.setattr(apl, "_make_client", lambda: None)
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-a",))
+
+    assert result == {"released": False, "reason": "held_by_other_session"}

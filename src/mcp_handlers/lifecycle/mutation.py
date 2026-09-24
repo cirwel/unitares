@@ -492,9 +492,9 @@ async def handle_release_presence(arguments: Dict[str, Any]) -> Sequence[TextCon
     # last onboard, so retire this session's bindings too. Only when this
     # session was the last holder: never while another session keeps presence.
     bindings_retired = 0
-    if result["released"] or result["reason"] == "no_live_lease":
+    if result["released"] or result["reason"] in {"no_live_lease", "lease_plane_unavailable"}:
         from ..identity.process_binding import retire_bindings
-        bindings_retired = await retire_bindings(agent_uuid, session_ids)
+        bindings_retired = await retire_bindings(agent_uuid)
 
     return success_response({
         "action": "release_presence",

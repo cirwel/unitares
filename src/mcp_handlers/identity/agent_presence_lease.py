@@ -81,6 +81,14 @@ _released_sessions: dict[str, set[str]] = {}
 _RELEASE_SUPPRESS_S = 120.0
 
 
+def recently_released(agent_uuid: Optional[str]) -> bool:
+    """True while the identity is inside its clean-exit suppression window."""
+    if not agent_uuid:
+        return False
+    _expire_tombstone(agent_uuid, time.monotonic())
+    return agent_uuid in _released_at
+
+
 def _expire_tombstone(agent_uuid: str, now: float) -> None:
     released = _released_at.get(agent_uuid)
     if released is not None and now - released > _RELEASE_SUPPRESS_S:
@@ -450,9 +458,15 @@ async def release_agent_presence(
         for session_id in session_ids:
             holders.pop(session_id, None)
 
+        others = {s for s, seen in holders.items() if now - seen <= _PRESENCE_TTL_S}
+        if others:
+            reason = "holder_unknown" if others == {_HOLDER_UNKNOWN} else "held_by_other_session"
+            return {"released": False, "reason": reason}
+
         client = _make_client()
         if client is None:
-            # Keep the cached lease id so a retry can still release it.
+            # No lease plane: nothing to release, and this session was the
+            # last live holder we know of. Keep the cached id for a retry.
             return {"released": False, "reason": "lease_plane_unavailable"}
         lease_id = _lease_ids.get(agent_uuid)
         if not lease_id:
