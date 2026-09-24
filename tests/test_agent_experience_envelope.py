@@ -1389,9 +1389,11 @@ def test_search_lean_projection_worst_case_attribution_holds_wire_budget(id_len)
     assert (env.get("digest_attribution_omitted") is True) == withheld
     if id_len == 400:
         assert withheld  # the omission path must actually be exercised
-        if "by" in digest:
-            assert digest["by_truncated"] is True
-            assert len(digest["by"]) == 64
+    labelled = [digest for digest in suggestions if "by" in digest]
+    assert labelled  # the label assertions below must actually run
+    for digest in labelled:
+        assert digest["by_truncated"] is True
+        assert len(digest["by"]) == 64
 
 
 _ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
@@ -1442,6 +1444,12 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
         if not withheld:
             assert "digest_attribution_omitted" not in env, n
         assert len(env_d) >= len(bare_d), n
+        # Envelope-level parity too: attribution alone never triggers the
+        # truncation path (flags, dropped coaching, the full-mode pointer).
+        for key in ("projection_truncated", "expand_with", "response_options",
+                    "discovery_retrieval_options"):
+            assert env.get(key) == bare.get(key), (n, key)
+        assert env.get("state_summary") == bare.get("state_summary"), n
         for got, want in zip(env_d, bare_d):
             assert {k: v for k, v in got.items() if k not in _ATTRIBUTION_KEYS} == want, n
         for i, got in enumerate(env_d):

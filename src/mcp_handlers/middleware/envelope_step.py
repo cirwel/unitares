@@ -970,9 +970,31 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     def wire_bytes() -> int:
         return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
 
-    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-        return
+    # Attribution never costs a result or its fields. Set it aside, run the
+    # budget steps exactly as for an attribution-free payload (which decides
+    # which digests and fields survive), then give each survivor back as much
+    # attribution as still fits, in rank order: label and identity, else the
+    # identity alone, else neither. An identity is only ever whole. One
+    # envelope-level marker says something was withheld, if it fits.
+    suggestions = envelope.get("memory_suggestions")
+    set_aside: List[Dict[str, Any]] = []
+    if isinstance(suggestions, list):
+        for item in suggestions:
+            snap = {}
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    if key in item:
+                        snap[key] = item.pop(key)
+            set_aside.append(snap)
 
+    if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+        _truncate_search_projection(envelope, wire_bytes)
+    _restore_digest_attribution(envelope, set_aside, wire_bytes)
+
+
+def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
+    """The budget steps proper, run on the attribution-free envelope: drop
+    optional coaching, then lower-ranked digests, then compact the last."""
     envelope["projection_truncated"] = True
     envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
     envelope.pop("response_options", None)
@@ -988,22 +1010,6 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
             envelope["discovery_retrieval_options"] = keep
 
     suggestions = envelope.get("memory_suggestions")
-    # Attribution never costs a result or its fields. Set it aside, run the
-    # budget steps exactly as for an attribution-free payload (which decides
-    # which digests and fields survive), then give each survivor back as much
-    # attribution as still fits, in rank order: label and identity, else the
-    # identity alone, else neither. An identity is only ever whole. One
-    # envelope-level marker says something was withheld, if it fits.
-    set_aside: List[Dict[str, Any]] = []
-    if isinstance(suggestions, list):
-        for item in suggestions:
-            snap = {}
-            if isinstance(item, dict):
-                for key in _DIGEST_ATTRIBUTION_KEYS:
-                    if key in item:
-                        snap[key] = item.pop(key)
-            set_aside.append(snap)
-
     while (
         isinstance(suggestions, list)
         and suggestions
@@ -1042,6 +1048,14 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
         state["results_shown_in_digest"] = len(suggestions)
         state["result_set_truncated"] = True
 
+
+def _restore_digest_attribution(
+    envelope: Dict[str, Any], set_aside: List[Dict[str, Any]], wire_bytes
+) -> None:
+    """Give each surviving digest back as much attribution as fits, in rank
+    order; reserve and keep the withheld-marker only when something was
+    withheld."""
+    suggestions = envelope.get("memory_suggestions")
     if isinstance(suggestions, list) and any(set_aside[: len(suggestions)]):
         # Reserve the withheld-marker's room first, so that whenever
         # attribution is withheld the marker says so. Removing it at the end
