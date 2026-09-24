@@ -224,9 +224,10 @@ round is one completed review run:
   records cover, because it spends the same quota.
 
 These don't count: a reply inside an existing thread, the receipt that records
-a native result, and a fix verification. A base change resets the count,
-because the gate discards the pre-retarget evidence for the same reason. The
-`review` check shows the count ("review round 2 of 3").
+a native result, a disposition, and a fix verification. A base change resets
+the count, and after it only local rounds count: the gate stops trusting
+native evidence then, because a native run does not say which base it
+reviewed. The `review` check shows the count ("review round 2 of 3").
 
 Why: every run spends the same subscription quota that authoring does. In the
 first ~14 hours of native review (2026-09-23/24) there were 137 Codex runs

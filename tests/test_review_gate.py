@@ -1104,7 +1104,12 @@ def test_a_retarget_resets_the_round_count():
     events = [{"event": "base_ref_changed", "created_at": "2026-09-23T03:30:00Z"}]
     assert rg.codex_rounds([], reviews, inline, events).count == 0
     later, more = _codex_review(4, "4" * 40, "2026-09-23T04:00:00Z", findings=["P2"])
-    assert rg.codex_rounds([], reviews + [later], inline + more, events).count == 1
+    # Native runs after a retarget do not count either: one could have started
+    # before it (PR #2401, round 6). Local rounds after it do.
+    assert rg.codex_rounds([], reviews + [later], inline + more, events).count == 0
+    local = _comment(rg.Record("k5", "FINDINGS", 1, False, "codex"), text="1. [P2] x")
+    local["created_at"] = "2026-09-23T05:00:00Z"
+    assert rg.codex_rounds([local], reviews + [later], inline + more, events).count == 1
 
 
 def test_plain_text_severity_labels_are_severe():
@@ -1199,3 +1204,17 @@ def test_a_malformed_verifier_reply_is_an_outage(monkeypatch, body):
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=body, stderr=""))
     with pytest.raises(RuntimeError):
         rg.ask_verifier(backend, "prompt")
+
+
+def test_the_hf_token_never_reaches_argv(monkeypatch, tmp_path):
+    # PR #2401, round 6: argv is visible to other local users for the call.
+    monkeypatch.setenv("HF_TOKEN", "hf_secret")
+    seen = {}
+    def run(argv, **kwargs):
+        seen["argv"], seen["stdin"] = argv, kwargs.get("input", "")
+        seen["body"] = Path(argv[argv.index("--data-binary") + 1][1:]).read_text()
+        return SimpleNamespace(returncode=0, stdout='{"choices":[{"message":{"content":"ADDRESSED"}}]}', stderr="")
+    monkeypatch.setattr(rg.subprocess, "run", run)
+    assert rg.ask_verifier("hf:m", "prompt") == "ADDRESSED"
+    assert not any("hf_secret" in a for a in seen["argv"])
+    assert "Authorization: Bearer hf_secret" in seen["stdin"] and '"prompt"' in seen["body"]

@@ -354,8 +354,8 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     Native findings arrive as a submitted review; a clean result as a comment
     naming the commit or an activity row marked Completed. Heads are compared
     on seven hex digits, the shortest form Codex prints. A base change resets
-    the count: native_records discards the same evidence, because it does not
-    name the base it reviewed.
+    the count, and native runs stop counting at all: native_records discards
+    the same evidence, because it does not name the base it reviewed.
     """
     runs: dict[str, tuple[float, str, list[dict]]] = {}
     since = max((timestamp(e.get("created_at", "")) for e in events
@@ -363,7 +363,9 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
 
     def seen(commit: str, when: str, findings: list[dict], run: str = "") -> None:
         t = timestamp(when)
-        if t <= since:
+        # After any base change, native runs never count: like native_records,
+        # a run cannot say which base it reviewed, even one finishing later.
+        if t <= since or (since and not run):
             return
         run = run or commit[:7]
         prior = runs.get(run)
@@ -957,7 +959,7 @@ def ask_verifier(verifier: str, prompt: str) -> str:
         url = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/") + "/api/chat"
         payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
                    "stream": False, "options": {"temperature": 0, "num_ctx": 16384}}
-        headers: list[str] = []
+        headers = []
     elif backend == "hf":
         url = "https://router.huggingface.co/v1/chat/completions"
         token = os.environ.get("HF_TOKEN", "")
@@ -966,16 +968,21 @@ def ask_verifier(verifier: str, prompt: str) -> str:
             token = token_file.read_text().strip()
         payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
                    "temperature": 0, "max_tokens": 800}
-        headers = ["-H", f"Authorization: Bearer {token}"]
+        headers = [f"Authorization: Bearer {token}"]
     else:
         raise ValueError(f"unknown verifier backend {backend!r} (use ollama:<model> or hf:<model>)")
-    try:
-        proc = subprocess.run(["curl", "-sS", "--fail-with-body", "--max-time", str(VERIFY_TIMEOUT_S),
-                               "-H", "Content-Type: application/json", *headers,
-                               "--data-binary", "@-", url],
-                              input=json.dumps(payload), text=True, capture_output=True)
-    except OSError as exc:  # no curl: an outage (UNREVIEWED), never findings
-        raise RuntimeError(f"{verifier} unavailable: cannot run curl: {exc}") from exc
+    # Headers (the HF token) go through stdin and the body through a private
+    # file, so no secret is in argv for other local users to read.
+    with tempfile.NamedTemporaryFile("w", suffix=".json") as body:
+        json.dump(payload, body)
+        body.flush()
+        try:
+            proc = subprocess.run(["curl", "-sS", "--fail-with-body", "--max-time", str(VERIFY_TIMEOUT_S),
+                                   "-H", "Content-Type: application/json", "-H", "@-",
+                                   "--data-binary", f"@{body.name}", url],
+                                  input="\n".join(headers) + "\n", text=True, capture_output=True)
+        except OSError as exc:  # no curl: an outage (UNREVIEWED), never findings
+            raise RuntimeError(f"{verifier} unavailable: cannot run curl: {exc}") from exc
     if proc.returncode:
         raise RuntimeError(f"{verifier} unavailable: {(proc.stderr or proc.stdout).strip()[:200]}")
     try:
