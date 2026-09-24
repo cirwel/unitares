@@ -85,6 +85,37 @@ def _review_risk_limit() -> float:
         return 0.65
 
 
+def _operator_resume_limit() -> float:
+    """operator_resume_agent's hard risk limit (refuses above it, force or not)."""
+    try:
+        from src.mcp_handlers.lifecycle.self_recovery import OPERATOR_RESUME_HARD_RISK_LIMIT
+
+        return float(OPERATOR_RESUME_HARD_RISK_LIMIT)
+    except Exception:  # pragma: no cover - defensive; the constant is 0.80
+        return 0.80
+
+
+def _stopped_recovery_route(risk: Optional[float], review_limit: float, *, paused: bool) -> str:
+    """Exits for a stop above the review gate, each one that will not refuse.
+
+    Pausing auto-initiates a dialectic session by default, and request_review
+    then answers SESSION_EXISTS, so the open session is named first. Operator
+    resume refuses above its hard limit or with a void active.
+    """
+    text = (
+        f"{_review_refusal_phrase(review_limit)}. If a dialectic review of this "
+        "pause is open, dialectic(action='get', agent_id=<your agent UUID>) "
+        "finds it and your thesis answers it; otherwise request_review opens one."
+    )
+    operator_limit = _operator_resume_limit()
+    if risk is not None and risk > operator_limit:
+        text += f" Operator resume refuses above risk {operator_limit:.2f}"
+        text += ", so the other exit is the pause's expiry." if paused else "."
+    else:
+        text += " An operator can resume you unless a void is active."
+    return text
+
+
 def _review_refusal_phrase(limit: float) -> str:
     """State the review gate without overclaiming it.
 
@@ -540,9 +571,7 @@ def _recovery_hint(
             # this risk, so do not send a stopped agent there.
             return (
                 "Working state looks degraded - pause this line of work. "
-                f"{_review_refusal_phrase(review_limit)}, so "
-                "open a dialectic review with request_review; an operator can "
-                "also resume you."
+                + _stopped_recovery_route(risk, review_limit, paused=stopped)
             )
         return (
             "Working state looks degraded - pause and call "
@@ -1422,9 +1451,7 @@ def build_experience_envelope(
                 # Reviewed recovery records the reflection, then refuses here.
                 next_action = (
                     "Paused - stop this line of work and do not continue it. "
-                    f"{_review_refusal_phrase(review_limit)}, "
-                    "so open a dialectic review with request_review; an "
-                    "operator can also resume you."
+                    + _stopped_recovery_route(risk, review_limit, paused=True)
                 )
             else:
                 next_action = (

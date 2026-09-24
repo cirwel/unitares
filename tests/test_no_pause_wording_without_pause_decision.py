@@ -357,6 +357,25 @@ def test_empty_history_does_not_claim_a_resume():
     assert ES._decision_action(env_payload) == "not_paused"
 
 
+def test_above_gate_route_names_only_exits_that_accept_the_agent():
+    """Operator resume refuses above its hard limit (force or not), and a
+    pause auto-initiates a dialectic session by default, so request_review
+    answers SESSION_EXISTS; the route names the open session first."""
+    from src.mcp_handlers.lifecycle.self_recovery import OPERATOR_RESUME_HARD_RISK_LIMIT
+
+    limit = OPERATOR_RESUME_HARD_RISK_LIMIT
+    paused = {"decision": {"action": "pause"}}
+    under = ES._recovery_hint(paused, None, limit)
+    over = ES._recovery_hint(paused, None, limit + 0.05)
+    for hint in (under, over):
+        assert "dialectic(action='get', agent_id=" in hint
+        assert hint.index("dialectic(action='get'") < hint.index("request_review")
+    assert "An operator can resume you unless a void is active" in under
+    assert "An operator can resume" not in over
+    assert f"Operator resume refuses above risk {limit:.2f}" in over
+    assert "expiry" in over
+
+
 def test_review_refusal_names_the_legacy_exception():
     hint = ES._recovery_hint({"decision": {"action": "pause"}}, None, 0.79)
     assert "legacy cold-start trap" in hint
