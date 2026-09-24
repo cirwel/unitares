@@ -10,7 +10,7 @@ verdict's voice anyway:
   guided agent "Paused - stop this line of work";
 - `_recovery_hint` treated risk >= 0.7 as severe whatever the decision, so it
   said "pause and call self_recovery", and reviewed recovery then refused the
-  agent (it refuses above risk 0.65) after recording its reflection;
+  agent (it refuses at risk 0.65 and above) after recording its reflection;
 - the glossary's high-risk next_action says "Pause, reflect, ...", and a
   metrics read wraps that verdict with no decision at all.
 
@@ -148,7 +148,7 @@ def test_low_risk_cold_start_hint_does_not_threaten_a_pause():
 
 def test_high_risk_continue_decision_is_not_told_to_pause_or_routed_past_the_gate():
     """Not paused: the hint must not say pause, and must not route the agent
-    to a review that refuses above MAX_RISK_FOR_SELF_RECOVERY after recording
+    to a review that refuses at or above MAX_RISK_FOR_SELF_RECOVERY after recording
     the reflection (27 refused reflections in 60 days, 2026-09-24). Below
     the gate a guide decision gets the same conditional advice as a proceed."""
     below = ES._recovery_hint({"decision": {"action": "guide"}}, None, 0.55)
@@ -161,17 +161,27 @@ def test_high_risk_continue_decision_is_not_told_to_pause_or_routed_past_the_gat
 
 
 def test_review_gate_boundary_matches_self_recovery():
-    """Review refuses only when risk EXCEEDS the limit (strict >)."""
+    """handle_self_recovery_review admits only risk < 0.65, so it refuses AT
+    the limit; the hint must not route there at exactly the limit."""
     from src.mcp_handlers.lifecycle.self_recovery import MAX_RISK_FOR_SELF_RECOVERY
 
     limit = MAX_RISK_FOR_SELF_RECOVERY
     decision = {"decision": {"action": "guide"}}
+    under = ES._recovery_hint(decision, None, limit - 0.01)
     at = ES._recovery_hint(decision, None, limit)
-    over = ES._recovery_hint(decision, None, limit + 0.01)
-    assert "only if work stalls" in at
-    assert "refuses above risk" not in at
-    assert f"refuses above risk {limit:.2f}" in over
-    assert "self_recovery(" not in over
+    assert "only if work stalls" in under
+    assert "refuses at risk" not in under
+    assert f"refuses at risk {limit:.2f} and above" in at
+    assert "self_recovery(" not in at
+
+
+def test_unrecognised_action_above_the_gate_is_not_routed_to_review():
+    """A bare "high-risk" verdict (a read with no decision, e.g. a
+    waiting_input agent) between the gate and 0.7 is not severe, and fell
+    through to "otherwise self_recovery(action='review')"."""
+    hint = ES._recovery_hint({"verdict": "high-risk", "risk_score": 0.68}, None, 0.68)
+    assert "self_recovery(" not in hint
+    assert "request_review" in hint
 
 
 def test_production_guide_shape_at_refusal_risk_is_not_routed_to_self_recovery():
@@ -241,14 +251,14 @@ def test_a_real_pause_keeps_its_stop_and_recovery_directives():
 
 
 def test_a_stopped_agent_is_routed_to_review_only_below_its_gate():
-    """Review records the reflection and then refuses above
+    """Review records the reflection and then refuses at or above
     MAX_RISK_FOR_SELF_RECOVERY; a stop below that limit keeps the directive."""
     from src.mcp_handlers.lifecycle.self_recovery import MAX_RISK_FOR_SELF_RECOVERY
 
     limit = MAX_RISK_FOR_SELF_RECOVERY
     paused = {"decision": {"action": "pause"}}
-    below = ES._recovery_hint(paused, None, limit)
-    above = ES._recovery_hint(paused, None, limit + 0.01)
+    below = ES._recovery_hint(paused, None, limit - 0.01)
+    above = ES._recovery_hint(paused, None, limit)
     assert "self_recovery(action='review'" in below
     assert "self_recovery(" not in above
     assert "request_review" in above
