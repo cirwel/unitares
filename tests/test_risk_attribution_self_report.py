@@ -153,3 +153,13 @@ def test_threat_model_scopes_direct_blend_to_the_norm_threshold():
     flat = " ".join(doc.split())
     assert "who pass a list or tuple do get the blend" not in flat
     assert "with a norm above 0.01 do get the blend" in flat
+
+
+def test_omitted_confidence_and_complexity_defaults_are_disclosed():
+    # With no confidence, compute_drift_vector substitutes 0.6; with no
+    # complexity, the MCP schema fills 0.5 and a direct call gets a fixed 0.2
+    # divergence. The description must not present those as agent reports.
+    description = _attribution(np.array([0.0, 0.0, 0.0]))["sources"]["phi_drift"]["description"]
+    assert "a fixed 0.6 when it reports none" in description
+    assert "omits it is read as 0.5" in description
+    assert "fixed divergence of 0.2" in description

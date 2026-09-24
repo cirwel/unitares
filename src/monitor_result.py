@@ -220,11 +220,13 @@ def _build_risk_attribution(
             "Coherence deviation and decision-consistency come from this "
             "agent's server-side state. Complexity divergence is the gap "
             "between the server's complexity estimate and the complexity the "
-            "agent reports. Calibration error comes from the server-wide "
-            "record of stated confidence against graded outcomes (all agents, "
-            "not this one alone) once that record has enough samples; until "
-            "then it compares the confidence this agent reports with its own "
-            "running baseline. "
+            "agent reports (an MCP check-in that omits it is read as 0.5; a "
+            "direct call that omits it gets a fixed divergence of 0.2). "
+            "Calibration error comes from the server-wide record of stated "
+            "confidence against graded outcomes (all agents, not this one "
+            "alone) once that record has enough samples; until then it "
+            "compares the confidence this agent reports (a fixed 0.6 when it "
+            "reports none) with its own running baseline. "
             + (
                 "The agent's self-reported ethical_drift was blended in at a "
                 "capped 30% on this check-in. "
@@ -322,7 +324,8 @@ def _build_risk_attribution(
             "the Φ cold-start prior, computed from server state and the drift "
             "vector described under phi_drift, whose complexity-divergence "
             "component depends on the complexity you report and whose "
-            "calibration component can depend on the confidence you report. "
+            "calibration component can depend on the confidence you report "
+            "(see phi_drift for the defaults used when you omit either). "
             + (
                 "Your self-reported ethical_drift was blended in at a capped 30%; "
                 if self_report_blended
