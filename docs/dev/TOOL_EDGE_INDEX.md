@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (53 actions) · 70 aliases.**
+**43 registered tools · 8 consolidated (54 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -166,6 +166,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `delete` | `src/mcp_handlers/lifecycle/mutation.py handle_delete_agent` | — |
 | `get` | `src/mcp_handlers/lifecycle/query.py handle_get_agent_metadata` | — |
 | `list` | `src/mcp_handlers/lifecycle/query.py handle_list_agents` | — |
+| `release_presence` | `src/mcp_handlers/lifecycle/mutation.py handle_release_presence` | — |
 | `resume` | `src/mcp_handlers/lifecycle/operations.py handle_resume_agent` | — |
 | `update` | `src/mcp_handlers/lifecycle/mutation.py handle_update_agent_metadata` | — |
 

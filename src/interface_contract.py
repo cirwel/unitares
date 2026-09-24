@@ -92,7 +92,10 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # Every full-catalog capability remains discoverable through list_tools,
 # inspectable through describe_tool and callable through use_tool; full schema
 # advertisement remains available with UNITARES_TOOL_ADVERTISEMENT=full.
-INTERFACE_CONTRACT_VERSION = "1.13.0"
+# 1.14.0 (2026-09-24): agent gains action="release_presence", which releases
+# the caller's own presence lease at a clean exit. Nothing is removed or
+# renamed; agent's input_schema_sha256 and the surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.14.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
