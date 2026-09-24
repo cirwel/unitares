@@ -1391,9 +1391,39 @@ def test_search_lean_projection_worst_case_attribution_holds_wire_budget():
             assert len(digest["by"]) == 64
 
 
+def test_a_crowded_envelope_sheds_the_label_before_the_identity():
+    """Review on #2386: a long envelope field (here `confidence_note`) can
+    leave too little room even for a normal UUID plus label. The label goes
+    first; the exact identity stays while it still fits."""
+    uuid = "5b0c1f7e-1a2b-4c3d-8e9f-000000000001"
+    base = {
+        "success": True,
+        "results": [{"id": "d1", "by": "backup-investigator-" + "x" * 40,
+                     "_agent_id": uuid, "summary": "short"}],
+        "total_count": 1,
+    }
+    kept_label = kept_id_only = False
+    for n in range(0, 2400, 5):
+        env = build_experience_envelope("search_shared_memory", "knowledge",
+                                        {**base, "confidence_note": "c" * n})
+        # Whole-envelope size is not asserted here: master already overshoots
+        # 3,000 bytes in a narrow window (the response-size block is added
+        # after the budget check), independent of attribution.
+        digest = env.get("memory_suggestions") or []
+        if not digest:
+            continue
+        first = digest[0]
+        assert "agent_id" not in first or first["agent_id"] == uuid  # never a prefix
+        if "by" in first:
+            kept_label = True
+        elif first.get("agent_id") == uuid and first.get("attribution_label_omitted"):
+            kept_id_only = True
+    assert kept_label and kept_id_only
+
+
 def test_search_projection_budget_omits_pathological_identity_explicitly():
-    """An identifier too large for the budget on its own is withheld with a
-    marker, not cut to a prefix; the handle that opens the record remains."""
+    """An identifier that cannot fit is withheld with a marker, not cut to a
+    prefix; the handle that opens the record remains."""
     payload = {
         "success": True,
         "results": [

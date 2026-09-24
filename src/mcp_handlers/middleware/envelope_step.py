@@ -1021,14 +1021,21 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
             }
             compact.update(attribution)
             suggestions[0] = compact
-            # Only a pathological legacy identifier could still overflow here.
-            # Say that attribution was withheld (the discovery_id still opens
-            # the full record) instead of dropping the whole digest or
-            # emitting a prefix.
+            # This can still overflow: other envelope fields (a long
+            # confidence_note, say) can fill the budget so that even a normal
+            # UUID does not fit, and a pathological legacy identifier never
+            # does. Shed the display label first and keep the identity; if
+            # that is not enough, withhold attribution with a marker (the
+            # discovery_id still opens the full record) instead of dropping
+            # the whole digest or emitting a prefix.
             if attribution and wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
-                for key in attribution:
+                for key in ("by", "by_truncated"):
                     compact.pop(key, None)
-                compact["attribution_omitted"] = True
+                if "agent_id" in compact and wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                    compact["attribution_label_omitted"] = True
+                else:
+                    compact.pop("agent_id", None)
+                    compact["attribution_omitted"] = True
         else:
             suggestions[0] = {"summary": str(item)[:96]}
 
