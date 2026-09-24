@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**176 flags.**
+**178 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -70,13 +70,13 @@ index; that one is the curated decision record.
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'420'` (agents/dialectic_reviewer/host_backends.py) | Run Claude safely and return exact provider-reported model provenance | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `str(DEFAULT_VERDICT_TIMEOUT_S)` (src/mcp_handlers/dialectic/wait_assessment.py); `'420'` (agents/dialectic_reviewer/reviewer.py) | Seconds a reviewer model call may take before the wait is unusual | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/dialectic/wait_assessment.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_CONTINUATION_POLL_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `DEFAULT_CONTINUATION_POLL_S` (agents/dialectic_reviewer/reviewer.py) | Run bounded objection → response → reconsideration rounds | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
-| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:84); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:154); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:84); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:167); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `None (no reader fallback)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY` | `''` | Default variable holding the external reviewer's API key | agents/dialectic_reviewer/host_backends.py |
-| `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
-| `UNITARES_DIALECTIC_EXTERNAL_BASE_URL` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
-| `UNITARES_DIALECTIC_EXTERNAL_MODEL` | `''` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
-| `UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S` | `'180'` | Run the review on an operator-configured OpenAI-compatible endpoint | agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_DIALECTIC_EXTERNAL_BASE_URL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_DIALECTIC_EXTERNAL_MODEL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'180'` (agents/dialectic_reviewer/host_backends.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_GOVERNED_SPAWN` | `'0'` | Opt-in gate (default OFF) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` | `'0'` | Opt-in gate for routing reviews through the orchestrator (default OFF) | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
 | `UNITARES_DIALECTIC_RECUSAL` | `None (no reader fallback)` | ``enforce`` (default), ``flag``, or ``off`` | src/mcp_handlers/dialectic/recusal.py |
@@ -142,6 +142,8 @@ index; that one is the curated decision record.
 | `UNITARES_METADATA_WRITE_JSON_SNAPSHOT` | `'0'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
+| `UNITARES_MODEL_ADJUDICATION_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
+| `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |

@@ -6,7 +6,7 @@ related (similarity) neighbours. This is the "history" the dashboard can't show
 for the KG yet (dialectic transcripts and agent EISV history already ship).
 
 This is an **exposure** task, not a graph-modeling one. The links already exist;
-the read API just doesn't return them.
+the dashboard's read path just doesn't surface them.
 
 > **Correction note (2026-06-21).** An earlier draft of this handoff specced the
 > wrong columns. It claimed lineage lived in `response_to_id` / `response_type`
@@ -53,8 +53,11 @@ Implications for whoever picks this up:
 
 The redesign discovery cards (`dashboard/redesign/sections/discoveries.js`)
 surface summary, provenance, details, and tags, but the *links between*
-discoveries are invisible because `knowledge(action="search")` strips relation
-fields from its result.
+discoveries are invisible: `knowledge(action="search")` drops `related_to` from
+its result, and the `discoveries` accessor in `dashboard/redesign/data.js` drops
+the supersession fields search does attach to a superseded row (`superseded`,
+`superseded_warning`, and, on the AGE backend when a `SUPERSEDES` edge exists,
+`superseded_by`).
 
 ## The data model (verified)
 
@@ -64,15 +67,15 @@ fields from its result.
 `response_to_id` / `response_type` (both 100% NULL — unused).
 
 Supersession is a **graph edge**, created by `KnowledgeGraphAGE.supersede_discovery`
-(`src/storage/knowledge_graph_age.py:2449`, via `create_supersedes_edge(new_id, old_id)`):
+(`src/storage/knowledge_graph_age.py`, via `create_supersedes_edge(new_id, old_id)`):
 
 ```
 (newer:Discovery)-[:SUPERSEDES]->(older:Discovery)
 ```
 
 The edge points **from the newer discovery to the one it replaces**. The
-connectivity scorer already reads it (`knowledge_graph_age.py:2029`,
-`OPTIONAL MATCH (newer)-[s:SUPERSEDES]->(d) ... count(...) as superseded_by`) —
+connectivity scorer already reads it (`KnowledgeGraphAGE.get_connectivity_scores_batch`,
+`OPTIONAL MATCH (newer:Discovery)-[s:SUPERSEDES]->(d) ... count(DISTINCT newer) as superseded_by`) —
 copy that read shape.
 
 So a discovery `d`'s lineage is:
@@ -124,7 +127,7 @@ returns:
 
 - `supersedes` = ancestors `(d)-[:SUPERSEDES]->older`; `superseded_by` =
   descendants `newer-[:SUPERSEDES]->(d)`. Run the bounded SUPERSEDES read against
-  AGE (copy the `knowledge_graph_age.py:2029` cypher shape via the same
+  AGE (copy the `get_connectivity_scores_batch` cypher shape via the same
   graph_query path it uses; the wrapper was hardened in #794). Hydrate ids →
   summaries from `knowledge.discoveries` in one relational `WHERE id = ANY(...)`
   (avoid N+1).
@@ -152,7 +155,8 @@ Do the same here:
   than the related list.
 
 To decide whether to show the expander without a probe, thread a lightweight
-flag through the `discoveries` accessor (currently dropped): `related_to`
+flag through the `discoveries` accessor (currently dropped: `related_to` by
+search itself, the supersession flags by the accessor): `related_to`
 non-empty is already known relationally; for supersession, expose a boolean
 `has_supersession` (cheap: `status='superseded'` OR the id appears as a
 SUPERSEDES endpoint). Otherwise the endpoint can return `{empty:true}` and the
@@ -187,8 +191,8 @@ expander hides after a probe (worse UX).
 
 ## Surfaces
 
-- backend: `src/http_api.py` (endpoint + `register_http_routes`),
-  `src/storage/knowledge_graph_age.py` (SUPERSEDES read shape at :2029), `tests/`
+- backend: a handler module under `src/http_routes/` (endpoint), `src/http_api.py` (`register_http_routes`),
+  `src/storage/knowledge_graph_age.py` (SUPERSEDES read shape in `get_connectivity_scores_batch`), `tests/`
 - frontend: `dashboard/redesign/sections/discoveries.js`, `dashboard/redesign/data.js`
-- patterns to copy: agent-history endpoint (#935, `http_api.py:1025`),
+- patterns to copy: agent-history endpoint (#935, `http_agent_history` in `src/http_routes/overview.py`),
   dialectic transcript lazy-load (#981)

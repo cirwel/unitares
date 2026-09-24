@@ -12,7 +12,34 @@ From the repo root:
 ./scripts/ops/start_with_deps.sh
 ```
 
-This ensures PostgreSQL is reachable at `DB_POSTGRES_URL`, then launches the governance server on port `8767`.
+This probes a hardcoded `localhost:5432` with the Homebrew `postgresql@17`
+binaries, runs `brew services start postgresql@17` if nothing answers, then
+launches the governance server on port `8767`. Note that it does **not** read
+`DB_POSTGRES_URL`: if you point that variable at another host, port or
+container, this script still checks and starts the local Homebrew instance.
+To verify the database the server actually uses, run
+`./scripts/diagnostics/check_health.sh` below, with one caveat. It reads
+`DB_POSTGRES_URL` only from the shell environment and falls back to localhost.
+It does not load `.env`, which `start_server.sh` does. If the URL is set only in
+`.env`, load it into a subshell with the same loop `start_server.sh` uses, so
+the check sees exactly what the server sees:
+
+```bash
+(
+  # Same parsing as scripts/ops/start_server.sh: skip comments and blank
+  # lines, trim whitespace around the key, keep everything after the first "=".
+  while IFS='=' read -r key value; do
+    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
+    key=$(echo "$key" | xargs); [[ -z "$key" ]] && continue
+    export "$key=$value"
+  done < .env
+  ./scripts/diagnostics/check_health.sh
+)
+```
+
+A hand-written `grep` for the variable is not a substitute. It misses forms the
+server accepts, such as whitespace around the key, and an empty result makes
+the check fall back to localhost without saying so.
 
 If you already know dependencies are ready and only want the server:
 
@@ -49,7 +76,7 @@ The `health_check()` tool now also returns `operator_summary`:
 
 Use `first_action` as the initial remediation hint instead of reading every component block first.
 
-For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis such as Redis, calibration DB, knowledge graph, and Pi connectivity.
+For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis, such as Redis, calibration DB, the knowledge graph and the lease plane. It does **not** report Pi connectivity — the Mac→Pi coupling was retired by operator decision (#2189). The authoritative list is whatever `get_health_check_data` in `src/services/runtime_queries.py` assembles into `checks[...]`; read it there rather than trusting an enumeration in prose.
 
 ## Status at a Glance
 
@@ -195,11 +222,29 @@ Fix:
 ./scripts/ops/start_with_deps.sh
 ```
 
-If that still fails, inspect:
+If that still fails, read the server's log. Where it is depends on how the
+server was started:
 
 ```bash
-tail -f /tmp/unitares.log
+make logs        # LaunchAgent deployment — tails data/logs/mcp_server.log
+make logs-err    # ... and data/logs/mcp_server_error.log
 ```
+
+Those are the paths `scripts/ops/com.unitares.governance-mcp.plist` sets via
+`StandardOutPath` / `StandardErrorPath`, so they are the right ones whenever the
+server runs under launchd — which is the deployment the install steps prescribe.
+
+If instead you started it by hand with `start_with_deps.sh`, there is no log
+file: that path execs `start_server.sh`, which execs `python3 src/mcp_server.py`
+with no redirection, so output goes to that terminal. Capture it when you start:
+
+```bash
+./scripts/ops/start_with_deps.sh 2>&1 | tee /tmp/unitares-debug.log
+```
+
+`/tmp/unitares.log` is written by `./scripts/ops/start_unitares.sh` only. If the
+server was last started any other way, that file is absent or stale — do not
+diagnose from it.
 
 ### Knowledge graph degraded
 

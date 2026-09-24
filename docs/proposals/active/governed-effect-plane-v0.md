@@ -4,6 +4,14 @@
 
 **Created:** 2026-06-18 · **Status:** Draft v0.3 — Phase-4 readiness, council-corrected. Adds rollback/reversibility (§5b), execute build sequencing (§12), first-execute-surface revised to `file_write` (§10).
 
+> **Status re-read 2026-09-23 (proposals audit):** the execute half is no longer
+> blocked on its prerequisites. The §6 veto endpoint exists (`/v1/effect-veto`,
+> `src/http_api.py`; #1073, merged 2026-06-25), `FileWriteExecutor` landed dry-run first
+> (#1199), and the maintainer deployment's lease-plane plist sets
+> `UNITARES_GOVERNED_EFFECT_EXECUTE_AGENT_SPAWN`, `…_EXECUTE_FILE_WRITE` and
+> `…_EXECUTE_FILE_WRITE_COMMIT` to `1`. The "does not exist yet" warnings in §6 and
+> the gate list above record the 2026-06-25 state.
+
 > **What v0.2→v0.3 changes (Phase 4 enablement, 2026-06-25):** §1–§9 of the contract are otherwise as v0.1. The record_only durable-recording path of §8 is now **shipped + live** (#1065 — `audit.events` + `effect_lane`, idempotency). This revision adds the things that gate the *execute* half: a rollback/reversibility contract (§5b, the named-but-unwritten prerequisite of §2), a dry-run-first build sequencing (§12), and an operator revision of the first live-execute surface from `agent_spawn` to `file_write` (§10) on blast-radius grounds.
 
 ## Council revision log (v0.2 → v0.3, Phase-4 pass)

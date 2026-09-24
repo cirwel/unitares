@@ -342,8 +342,11 @@ def make_doctor(doc_mod, io_overrides, dry_run=False):
                    or {"success": True},
         "pi_restart_services": lambda admin: calls.__setitem__(
             "restart", calls["restart"] + 1) or ["tailscaled: ok", "anima: ok"],
-        "post_finding": lambda sev, fp, msg, token: calls["findings"].append((sev, fp, msg)),
+        "post_finding": lambda sev, fp, msg, token: calls["findings"].append((sev, fp, msg))
+                        or True,
     }
+    # Default: whatever was posted became durable.
+    io["recovery_persisted"] = lambda fp: any(f == fp for _, f, _ in calls["findings"])
     io.update(io_overrides)
     return doc_mod.Doctor(io=io, dry_run=dry_run), calls
 
@@ -478,3 +481,158 @@ def test_dry_run_diagnoses_but_never_acts(doc_mod):
     }, dry_run=True)
     assert doctor.run_once() == doc_mod.C2_DNS_FREEZE
     assert calls["restart"] == 0 and calls["findings"] == []
+
+
+# ------------------------------------------------------------ recovery notice
+#
+# unitares_doctor's finding_producer_live reads a fail-only producer's healthy
+# silence as death unless its last word was an info all-clear.
+
+def _frozen_then_fresh(doc_mod, clock_state):
+    def central():
+        if clock_state["frozen"]:
+            return {"status": "active", "last_update": iso(NOW - 4000)}
+        return {"status": "active", "last_update": iso(NOW - 60)}
+    return central
+
+
+def test_recovery_after_critical_posts_one_info_all_clear(doc_mod):
+    state = {"frozen": True}
+    doctor, calls = make_doctor(doc_mod, {"central_agent": _frozen_then_fresh(doc_mod, state)})
+    assert doctor.run_once() == doc_mod.UNKNOWN
+    assert [sev for sev, _, _ in calls["findings"]] == ["critical"]
+
+    state["frozen"] = False
+    assert doctor.run_once() == doc_mod.HEALTHY
+    sev, fp, msg = calls["findings"][-1]
+    assert sev == "info" and fp.startswith("lumen-checkin-recovered-")
+    assert msg.startswith("RECOVERED:")
+
+    doctor.run_once()
+    assert len(calls["findings"]) == 2  # said once, then silent again
+
+
+def test_recovery_notice_survives_a_fresh_process(doc_mod):
+    """The job is one process per tick, so the open incident lives on disk."""
+    state = {"frozen": True}
+    overrides = {"central_agent": _frozen_then_fresh(doc_mod, state)}
+    doctor, _ = make_doctor(doc_mod, overrides)
+    doctor.run_once()
+    state["frozen"] = False
+    doctor2, calls2 = make_doctor(doc_mod, overrides)
+    doctor2.run_once()
+    assert [(sev, fp.rsplit("-", 1)[0]) for sev, fp, _ in calls2["findings"]] == [
+        ("info", "lumen-checkin-recovered")]
+
+
+def test_info_only_incident_needs_no_recovery_notice(doc_mod):
+    """A restart gap's last word is already info — nothing to clear."""
+    state = {"frozen": True}
+    doctor, calls = make_doctor(doc_mod, {
+        "central_agent": _frozen_then_fresh(doc_mod, state),
+        "pi_anima_uptime_s": lambda: 400.0,
+    })
+    assert doctor.run_once() == doc_mod.RESTART_GAP
+    state["frozen"] = False
+    doctor.run_once()
+    assert [sev for sev, _, _ in calls["findings"]] == ["info"]
+    assert "recovered" not in calls["findings"][0][1]
+
+
+def test_pre_upgrade_state_with_an_open_critical_recovers_once(doc_mod, tmp_path):
+    """Live state written before severities were recorded: the last alert was
+    a critical `unknown`, so the first healthy tick after deploy says so."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {
+        "unknown": NOW - 86400, "host_sleep_gap": NOW - 90000}}))
+    doctor, calls = make_doctor(doc_mod, {})
+    doctor.run_once()
+    doctor.run_once()
+    assert [fp for _, fp, _ in calls["findings"]] == [
+        f"lumen-checkin-recovered-{int(NOW - 86400)}"]
+
+
+def test_pre_upgrade_state_with_only_info_alerts_stays_silent(doc_mod, tmp_path):
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {
+        "restart_gap": NOW - 86400, "host_sleep_gap": NOW - 90000}}))
+    doctor, calls = make_doctor(doc_mod, {})
+    doctor.run_once()
+    assert calls["findings"] == []
+
+
+def test_dry_run_never_posts_recovery(doc_mod, tmp_path):
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 60}}))
+    doctor, calls = make_doctor(doc_mod, {}, dry_run=True)
+    doctor.run_once()
+    assert calls["findings"] == []
+
+
+def test_undelivered_recovery_is_retried_not_marked_done(doc_mod, tmp_path):
+    """A swallowed POST failure must not close the incident: the critical
+    would stay the last durable word and finding_producer_live warns again."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    attempts = []
+    doctor, _ = make_doctor(doc_mod, {
+        "post_finding": lambda sev, fp, msg, token: attempts.append(fp) and False})
+    doctor.run_once()
+    doctor2, calls2 = make_doctor(doc_mod, {})
+    doctor2.run_once()
+    assert attempts == [f"lumen-checkin-recovered-{int(NOW - 600)}"]
+    assert [fp for _, fp, _ in calls2["findings"]] == attempts
+
+
+def test_back_to_back_incidents_get_distinct_recovery_fingerprints(doc_mod):
+    """Governance dedups a repeated fingerprint for 30 min WITHOUT storing it,
+    so two recoveries inside that window must not share one."""
+    state = {"frozen": True}
+    clock = [NOW]
+    doctor, calls = make_doctor(doc_mod, {
+        "central_agent": _frozen_then_fresh(doc_mod, state),
+        "now": lambda: clock[0],
+    })
+    doctor.run_once()                       # incident 1: critical
+    state["frozen"] = False; doctor.run_once()   # recovered
+    clock[0] += 600
+    doctor.state["alerts"] = {}             # past the per-class cooldown
+    state["frozen"] = True; doctor.run_once()    # incident 2: critical
+    state["frozen"] = False; doctor.run_once()   # recovered again
+    recovered = [fp for _, fp, _ in calls["findings"] if "recovered" in fp]
+    assert len(recovered) == 2 and recovered[0] != recovered[1]
+
+
+def test_acked_but_unpersisted_recovery_stays_open_and_reposts(doc_mod, tmp_path):
+    """/api/findings acks before a persist that swallows DB errors: an ack
+    alone must not close the incident."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    doctor, calls = make_doctor(doc_mod, {"recovery_persisted": lambda fp: False})
+    doctor.run_once()
+    doctor.run_once()
+    assert len(calls["findings"]) == 2           # retried, not closed
+    assert "recovered_at" not in doctor.state
+
+
+def test_persisted_recovery_closes_without_reposting(doc_mod, tmp_path):
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    doctor, calls = make_doctor(doc_mod, {})
+    doctor.run_once()                            # posts
+    doctor.run_once()                            # reads it back, closes
+    doctor.run_once()                            # nothing left to say
+    assert len(calls["findings"]) == 1
+    assert doctor.state["recovered_at"] > 0
+
+
+def test_unavailable_readback_keeps_the_incident_open(doc_mod, tmp_path):
+    """An ack is also what a failed persist returns, so an unverifiable
+    recovery stays open; governance's dedup window bounds the reposts."""
+    import json
+    (tmp_path / "state.json").write_text(json.dumps({"alerts": {"unknown": NOW - 600}}))
+    doctor, calls = make_doctor(doc_mod, {"recovery_persisted": lambda fp: None})
+    doctor.run_once()
+    doctor.run_once()
+    assert len(calls["findings"]) == 2
+    assert "recovered_at" not in doctor.state

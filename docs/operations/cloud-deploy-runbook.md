@@ -5,7 +5,7 @@
 (laptop, desktop, home server) that can go offline — travel, relocation, power
 loss, hardware failure — and who want the governance stack reachable anyway.
 
-The root `docker-compose.yml` already packages the full stack (Postgres 17 +
+The root `docker-compose.yml` already packages the full stack (Postgres 18 +
 AGE + pgvector, Redis, lease plane, governance MCP server), so a cloud
 deployment is a hosting decision, not a build project. This runbook covers
 choosing a host, hardening the Compose defaults, exposing the server, keeping

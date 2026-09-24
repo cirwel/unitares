@@ -4,7 +4,7 @@ description: >
   Compatibility umbrella skill for the UNITARES governance framework. Use this
   as the entrypoint when you need the overall model and route into the split
   governance skills.
-last_verified: "2026-09-23"
+last_verified: "2026-09-24"
 freshness_days: 35
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -34,27 +34,6 @@ source_files:
   - unitares/skills/dialectic-reasoning/SKILL.md
   - unitares/skills/discord-bridge/SKILL.md
   - unitares/skills/unitares-dashboard/SKILL.md
-source_digests:
-  unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "d82070a0d97f2830"
-  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "f5c881194d51f538"
-  unitares/src/mcp_handlers/middleware/identity_step.py: "f50ccc2629ef7832"
-  unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/tool_modes.py: "60fb261244c59d3a"
-  unitares/src/mcp_handlers/introspection/tool_introspection.py: "0ffd2f7bc93fba79"
-  unitares/src/mcp_handlers/identity/session.py: "cc60f281b7fc3276"
-  unitares/src/mcp_handlers/schemas/identity.py: "6a02e1c69d225e98"
-  unitares/src/identity/lineage_semantics.py: "a6613f2493f6b97c"
-  unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
-  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/schema_brief.py: "401bbce563c30439"
-  unitares/skills/governance-lifecycle/SKILL.md: "d4e545c93f577c06"
-  unitares/skills/governance-fundamentals/SKILL.md: "346c2bea05c70d45"
-  unitares/skills/knowledge-graph/SKILL.md: "4bfc2bcc994fb083"
-  unitares/skills/dialectic-reasoning/SKILL.md: "ff52ebbe467bc7f7"
-  unitares/skills/discord-bridge/SKILL.md: "7ce6a8f491281f46"
-  unitares/skills/unitares-dashboard/SKILL.md: "b8398fd2f2fb82c1"
 ---
 
 # UNITARES Governance
