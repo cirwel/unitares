@@ -536,3 +536,18 @@ def test_dry_run_does_not_need_the_write_credential(adj, monkeypatch):
     monkeypatch.setattr(adj, "run_once", lambda **k: ran.append(k) or 0)
     assert adj.main(["--dry-run"]) == 0
     assert ran == [{"dry_run": True}]
+
+
+def test_oversized_producer_fields_are_bounded_in_the_prompt(adj):
+    """/api/findings has no size limit; the prompt is one argv element."""
+    huge = "x" * 5_000_000
+    item = {"fingerprint": huge, "message": huge, "agent_name": huge,
+            "evidence": {"blob": huge}}
+    prompt = adj.build_prompt(item, "h", None)
+    assert len(prompt) < 20_000
+    assert "[truncated, 5000000 chars]" in prompt
+
+
+def test_normal_fields_pass_through_untouched(adj):
+    prompt = adj.build_prompt(ITEM, "h", None)
+    assert "redis outdated" in prompt and "truncated" not in prompt

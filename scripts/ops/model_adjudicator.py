@@ -387,12 +387,29 @@ DEFAULT_IO: dict[str, Callable[..., Any]] = {
 
 # ------------------------------------------------------------------- judging
 
+# Producer-controlled fields are unbounded at ingest (/api/findings has no size
+# limit), and the prompt travels as one argv element. Cap every field so an
+# oversized finding can neither exceed ARG_MAX (OSError before the CLI starts,
+# then retried every run) nor flood the model's context.
+MESSAGE_MAX_CHARS = 4000
+FIELD_MAX_CHARS = 300
+EVIDENCE_MAX_CHARS = 3000
+
+
+def _clip(value: Any, limit: int) -> Any:
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else json.dumps(value, default=str)
+    return text if len(text) <= limit else text[:limit] + f"… [truncated, {len(text)} chars]"
+
+
 def build_prompt(item: dict, history: str, doctor_evidence: Optional[str] = None) -> str:
-    finding = {k: item.get(k) for k in (
+    finding = {k: _clip(item.get(k), FIELD_MAX_CHARS) for k in (
         "fingerprint", "severity", "finding_type", "violation_class",
-        "agent_name", "timestamp", "message")}
+        "agent_name", "timestamp")}
+    finding["message"] = _clip(item.get("message"), MESSAGE_MAX_CHARS)
     if item.get("evidence"):
-        finding["evidence"] = item["evidence"]
+        finding["evidence"] = _clip(item["evidence"], EVIDENCE_MAX_CHARS)
     extra = f"\n{doctor_evidence}\n" if doctor_evidence else ""
     return f"""Judge this finding from the UNITARES governance server.
 
