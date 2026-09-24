@@ -1136,3 +1136,16 @@ def test_a_capped_local_round_is_disposed_not_fix_verified(repo, monkeypatch, ca
     _git(repo, "config", "review.verifier", "ollama:m")
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
     assert "names no commit" in capsys.readouterr().out
+
+
+def test_a_push_after_a_fix_verification_gets_a_full_review():
+    # PR #2401 review round 2: re-verifying the same old fixes on a later
+    # push would pass new lines no reviewer read.
+    reviews, inline = _rounds(*[(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z", ["P2"]) for i in (1, 2, 3)])
+    verified = _comment(rg.Record("k4", "CLEAN", 0, False, "fix-verify:ollama:m"))
+    verified["created_at"] = "2026-09-23T04:00:00Z"
+    rounds = rg.codex_rounds([verified], reviews, inline)
+    assert rounds.count == 3 and rounds.verified_since and not rounds.capped()
+    # A verification older than the last round does not lift the next cap.
+    verified["created_at"] = "2026-09-23T02:30:00Z"
+    assert rg.codex_rounds([verified], reviews, inline).capped()

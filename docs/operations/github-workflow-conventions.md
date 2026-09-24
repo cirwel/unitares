@@ -253,7 +253,9 @@ The rule is for fix loops only:
     judges unaddressed stay open as `FINDINGS(n)` for fixing or disposing.
     It checks the fixes only, not the new lines for new problems, and the
     record says so. A local round names no commit, so its findings are
-    disposed rather than fix-verified. With no verifier configured, a push past the cap is
+    disposed rather than fix-verified. A round gets **one** fix verification:
+    any push after it may be new work and gets a full review.
+    With no verifier configured, a push past the cap is
     UNREVIEWED. The author says so and disposes, or deliberately spends a
     round.
 - `review.sh --reviewer codex` (or `claude`) deliberately spends a round past
