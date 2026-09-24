@@ -112,6 +112,31 @@ defmodule UnitaresSentinel.SentinelRefocusTest do
       assert hd(capped).id == "old-2"
     end
 
+    test "fresh findings beyond the per-tick cap are stamped and survive a full queue" do
+      down = [findings_opts: [http_post: fn _, _, _, _ -> {:error, :down} end]]
+      # Stamps are BEAM monotonic milliseconds (often negative); queue the old
+      # ones a minute ago on that same clock.
+      t0 = System.monotonic_time(:millisecond) - 60_000
+
+      old =
+        for i <- 1..200,
+            do: %{type: "t", severity: "high", summary: "old-#{i}", queued_ms: t0 + i}
+
+      fresh = for i <- 1..6, do: %{type: "t", severity: "high", summary: "fresh-#{i}"}
+
+      {[], undelivered} = Findings.deliver_bounded(fresh ++ old, 5, down, "test")
+      capped = Findings.cap_queue(undelivered, 200)
+      kept = MapSet.new(capped, & &1.summary)
+
+      for i <- 1..6, do: assert("fresh-#{i}" in kept)
+      refute "old-1" in kept
+    end
+
+    test "an unstamped item counts as newest whatever the clock's sign" do
+      old = for i <- 1..3, do: %{id: "old-#{i}", severity: "high", queued_ms: 1_000_000 + i}
+      assert [_, _, %{id: "new"}] = Findings.cap_queue(old ++ [%{id: "new", severity: "high"}], 3)
+    end
+
     test "lower severity goes first, whatever its age" do
       queue = [
         %{id: "old-high", severity: "high", queued_ms: 1},

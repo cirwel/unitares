@@ -655,7 +655,12 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
         Findings.post_alarm_result(alarm, findings_opts) in [:accepted, :deduped]
       end)
 
-    Logic.order_for_delivery(rest, Enum.map(failed, &Findings.stamp_queued/1))
+    # Stamp everything that stays queued, attempted or not, so eviction by age
+    # never mistakes a fresh unattempted alarm for the oldest.
+    Logic.order_for_delivery(
+      Enum.map(rest, &Findings.stamp_queued/1),
+      Enum.map(failed, &Findings.stamp_queued/1)
+    )
   end
 
   defp load_cursor_from_state do

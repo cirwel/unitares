@@ -126,7 +126,9 @@ defmodule UnitaresSentinel.Findings do
   def deliver_bounded(findings, max, opts, source) when is_list(findings) do
     {attempt, rest} = Enum.split(findings, max)
     {delivered, failed} = Enum.split_with(attempt, &deliver(&1, opts, source))
-    {delivered, rest ++ Enum.map(failed, &stamp_queued/1)}
+    # Stamp everything that stays queued, attempted or not: an unstamped fresh
+    # item would read as the oldest and be the first evicted by cap_queue/2.
+    {delivered, Enum.map(rest ++ failed, &stamp_queued/1)}
   end
 
   @doc """
@@ -149,9 +151,12 @@ defmodule UnitaresSentinel.Findings do
     keep =
       queue
       |> Enum.with_index()
-      |> Enum.sort_by(fn {item, _i} ->
-        {-UnitaresSentinel.ReAlert.rank(Map.get(item, :severity)), -Map.get(item, :queued_ms, 0)}
-      end)
+      |> Enum.sort_by(
+        fn {item, _i} ->
+          {UnitaresSentinel.ReAlert.rank(Map.get(item, :severity)), queue_age_key(item)}
+        end,
+        :desc
+      )
       |> Enum.take(max)
       |> MapSet.new(fn {_item, i} -> i end)
 
@@ -159,6 +164,15 @@ defmodule UnitaresSentinel.Findings do
     |> Enum.with_index()
     |> Enum.filter(fn {_item, i} -> MapSet.member?(keep, i) end)
     |> Enum.map(fn {item, _i} -> item end)
+  end
+
+  # Newer sorts higher. An item with no stamp has only just entered the queue,
+  # so it counts as the newest, whatever sign the monotonic clock has.
+  defp queue_age_key(item) do
+    case Map.get(item, :queued_ms) do
+      nil -> {1, 0}
+      queued_ms -> {0, queued_ms}
+    end
   end
 
   @doc """
