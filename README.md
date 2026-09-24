@@ -49,7 +49,7 @@ the process the identity its writes are recorded under.
 | Start here | You get | Tools |
 |---|---|---|
 | **1. Remember** | Every process has a name, and what it finds survives restarts and handoffs. | `start_session`, `store_finding`, `search_shared_memory` |
-| **2. Challenge** | Another agent reviews the work, and the disagreement stays on record. | `request_review` |
+| **2. Challenge** | Open a review on the record. A peer agent or a reviewer model you configure answers it, and any disagreement stays with the work. | `request_review` |
 | **3. Steer** | Check-ins return proceed, guide, or pause with a reason, and outcomes are recorded against them. | `sync_state`, `record_result` |
 
 ## What UNITARES is
