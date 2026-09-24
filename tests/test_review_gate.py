@@ -1114,7 +1114,7 @@ def test_plain_text_severity_labels_are_severe():
 
 
 def test_local_fallback_rounds_count_toward_the_cap():
-    comments = [_comment(rg.Record(f"k{i}", "FINDINGS", 1, False, reviewer), text="1. bug")
+    comments = [_comment(rg.Record(f"k{i}", "FINDINGS", 1, False, reviewer), text="1. [P2] bug")
                 for i, reviewer in enumerate(["codex", "claude", "codex"])]
     for i, c in enumerate(comments):
         c["created_at"] = f"2026-09-23T0{i + 1}:00:00Z"
@@ -1129,7 +1129,7 @@ def test_local_fallback_rounds_count_toward_the_cap():
 def test_a_capped_local_round_is_disposed_not_fix_verified(repo, monkeypatch, capsys):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/change"))
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
-    rounds = rg.CodexRounds(3, "", [{"body": "1. bug"}])
+    rounds = rg.CodexRounds(3, "", [{"body": "1. [P2] bug"}])
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], rounds=rounds))
     monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("spent a local run past the cap"))
     monkeypatch.setattr(rg, "ask_verifier", lambda *args: pytest.fail("verified without a reviewed commit"))
@@ -1158,3 +1158,23 @@ def test_a_host_without_curl_is_a_verifier_outage(monkeypatch):
     monkeypatch.setattr(rg.subprocess, "run", no_curl)
     with pytest.raises(RuntimeError, match="cannot run curl"):
         rg.ask_verifier("ollama:m", "prompt")
+
+
+def test_a_later_activity_row_does_not_erase_that_runs_findings():
+    # PR #2401, round 4: the Completed row is stamped seconds after the review
+    # and is read first; the round then looked clean and escaped the cap.
+    reviews, inline = _rounds(*[(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z", ["P2"]) for i in (1, 2, 3)])
+    row = {"user": _bot(), "created_at": "2026-09-23T00:00:00Z", "updated_at": "2026-09-23T03:00:05Z",
+           "body": "<!-- codex-pull-request-review-summary -->\n"
+                   '| 📝 **Code Review** | ✅ **Completed** <relative-time datetime="2026-09-23T03:00:04Z">t'
+                   "</relative-time> | `3333333` | New commits |"}
+    rounds = rg.codex_rounds([row], reviews, inline)
+    assert rounds.count == 3 and len(rounds.last_findings) == 1 and rounds.capped()
+
+
+def test_an_unlabelled_local_finding_is_severe():
+    # PR #2401, round 4: local reviewers wrote prose; a severe defect must not
+    # be routed to fix verification because it carried no label.
+    assert rg.CodexRounds(3, "", [{"body": "1. loses data on retry"}]).last_severe
+    assert rg.CodexRounds(3, "", [{"body": "1. [P3] typo"}]).capped()
+    assert "[P0] or [P1]" in rg.REVIEW_PROMPT

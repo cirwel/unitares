@@ -95,6 +95,7 @@ NATIVE_WAIT_S = 600
 ROUND_CAP = 3
 # Codex renders severity as an image badge; plain `[P1]` titles occur too.
 SEVERE_BADGE_RE = re.compile(r"!\[P[01] Badge\]|\[P[01]\]")
+SEVERITY_LABEL_RE = re.compile(r"!\[P[0-3] Badge\]|\[P[0-3]\]")
 
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
@@ -112,6 +113,9 @@ that is wrong, a claim in a doc or comment that the code contradicts, a test
 that cannot fail, an error path that reports success, a change that breaks a
 caller elsewhere in the repo. Cite file:line for every finding and say what
 input or state makes it go wrong. Do not report style preferences.
+Start every finding with its severity: [P0] or [P1] for a defect that must be
+fixed before merge (wrong behaviour, data loss, security), [P2] or [P3] for
+the rest. An unlabelled finding is treated as [P1].
 
 The repository's house rules are in AGENTS.md; a violation of one is a finding.
 
@@ -322,7 +326,10 @@ class CodexRounds:
 
     @property
     def last_severe(self) -> bool:
-        return any(SEVERE_BADGE_RE.search(c.get("body") or "") for c in self.last_findings)
+        # Unlabelled counts as severe: a local review can report data loss in
+        # prose, and the cap must never route that fix around a full run.
+        return any(SEVERE_BADGE_RE.search(c.get("body") or "")
+                   or not SEVERITY_LABEL_RE.search(c.get("body") or "") for c in self.last_findings)
 
     def capped(self) -> bool:
         """Past the cap, a findings round is answered without another Codex run.
@@ -360,8 +367,13 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             return
         run = run or commit[:7]
         prior = runs.get(run)
-        if prior is None or t >= prior[0]:
-            runs[run] = (t, commit, findings or (prior[2] if prior else []))
+        # One run leaves several artifacts (review, activity row) seconds
+        # apart, in any order: keep its findings whichever arrives first.
+        if prior is None:
+            runs[run] = (t, commit, findings)
+        else:
+            runs[run] = (max(t, prior[0]), commit if t >= prior[0] else prior[1],
+                         findings or prior[2])
 
     for c in comments:
         if not is_codex_bot(c):
