@@ -157,10 +157,12 @@ identity of EISV itself.
   `UNITARES_FLOOR_BREACH_CAUTION_APPLY` floor (issue #1995): a row whose
   behavioral verdict it raised to `caution` is labelled
   `measurement_role: verdict_floor`, `policy_effect: behavioral_verdict_raised`.
-  The label records only that the floor raised the behavioral verdict. The
-  row cannot say whether the final decision changed: earlier decision branches
-  (the pauses, the boundary-basin guide) can decide regardless, Φ's own verdict
-  is not kept, and the audit row stores only the binary action. Zero-breach rows remain present so the audit
+  The label records only that the floor raised the behavioral verdict. Whether
+  the final decision changed is read from the rest of the same `auto_attest`
+  audit row: `details.reason` names the deciding branch ("Proceeding mindfully"
+  for a caution verdict) and `details.unitares_verdict` is the final verdict.
+  Two things it cannot settle: Φ's own verdict under a `phi_floor` source is
+  not kept, and the CIRS soft-dampen and fast-trip paths are ambiguous. Zero-breach rows remain present so the audit
   has a denominator, failed evaluation is `evaluated: false` (unknown, not
   zero), and dry-run rows use `measurement_scope: simulation` with
   `eligible_for_production_counter: false`. A production count therefore

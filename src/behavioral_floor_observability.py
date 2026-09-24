@@ -110,13 +110,13 @@ def build_absolute_floor_observation(
         observation["floor_breach_caution"] = dict(assessment.floor_breach_caution)
         if assessment.floor_breach_caution.get("applied"):
             # The floor raised this row's behavioral verdict. Whether that
-            # changed the final decision is settled later and elsewhere, and
-            # this row cannot see it: earlier decision branches (the pauses,
-            # the boundary-basin guide) decide regardless, a phi_floor source
-            # takes the worse of Φ and this verdict, and the warmup grace reads
-            # it in every source. So the row records only what the floor did.
-            # The default "none" would drop exactly the rows the floor
-            # changed.
+            # changed the final decision is settled after this row is built
+            # (earlier decision branches can decide regardless, a phi_floor
+            # source takes the worse of Φ and this verdict, and the warmup
+            # grace reads it in every source), so the row records only what
+            # the floor did; the audit row's reason and final verdict carry
+            # the rest. The default "none" would drop exactly the rows the
+            # floor changed.
             observation["measurement_role"] = "verdict_floor"
             observation["policy_effect"] = "behavioral_verdict_raised"
     return observation
