@@ -67,6 +67,10 @@ _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
+# Bound on a digest's `by` display label. `agent_id` is never bounded: it is
+# the identity key a reader passes back as `agent_id_filter`, so a prefix of it
+# would silently name nobody (or the wrong writer).
+_MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
@@ -79,6 +83,7 @@ _ACTION_ALIASES = {
     "safe": ("proceed", None),
     "caution": ("proceed", "guide"),
     "guide": ("proceed", "guide"),
+    "resumed": ("proceed", "resumed"),
     "block": ("pause", "block"),
     "high-risk": ("pause", "high-risk"),
     "reject": ("pause", "reject"),
@@ -184,6 +189,7 @@ def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
         (decision or {}).get("action"),
         enforced_pause,
         *(v.get("decision_action") for v in verdicts),
+        payload.get("last_decision_action"),
         policy.get("action") if isinstance(policy, dict) else None,
     ]
     for value in decided:
@@ -216,6 +222,33 @@ def _verdict_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(evidence, dict):
             return evidence
     return {}
+
+
+def _is_cold_start(payload: Dict[str, Any]) -> bool:
+    """True only while the verdict is owned by the cold-start prior.
+
+    Narrower than a "provisional" verdict: that grade also covers a
+    behavioral reading that is not yet baselined (check-ins 3-24), which is a
+    measurement of the agent, not the prior.
+    """
+    attribution = payload.get("risk_attribution")
+    attribution = attribution if isinstance(attribution, dict) else {}
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    primary_source = metrics.get("primary_eisv_source") or payload.get(
+        "primary_eisv_source"
+    )
+    driver = attribution.get("primary_driver")
+    basis = _verdict_evidence(payload).get("basis")
+    if driver in {"behavioral_assessment", "independent_verification_floor"} or (
+        primary_source == "behavioral"
+    ):
+        return False
+    return (
+        driver == "phi_cold_start"
+        or primary_source in {"ode_fallback", "phi_cold_start"}
+        or basis in {"ode_fallback", "phi_cold_start"}
+    )
 
 
 def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
@@ -285,6 +318,12 @@ def _action_summary(
         or policy.get("sub_action")
         or inferred_sub_action
     )
+    if not sub_action and inferred_action == "proceed":
+        # recent_decisions stores the bare action ("proceed"); a guided
+        # verdict ("caution"/"guide") still carries the guide sub_action.
+        verdict_sub = _ACTION_ALIASES.get(str(_verdict_value(payload) or "").lower())
+        if verdict_sub and verdict_sub[0] == "proceed" and verdict_sub[1]:
+            sub_action = verdict_sub[1]
 
     verdict_obj = payload.get("verdict")
     if not isinstance(verdict_obj, dict):
@@ -428,7 +467,11 @@ def _recovery_hint(
     # recording its reflection in shared memory.
     decided_to_continue = action in {
         "proceed", "continue", "approve", "ok", "healthy", "safe", "guide",
+        "resumed",
     }
+    # Reviewed recovery refuses at this risk (and self_recovery lifts pauses);
+    # an agent that is not paused must not be routed to it here.
+    recovery_refused = risk is not None and risk >= 0.65
     severe = stopped or (
         not decided_to_continue and risk is not None and risk >= 0.7
     )
@@ -461,7 +504,7 @@ def _recovery_hint(
             "Working state looks degraded - pause and call "
             "self_recovery(action='review', reflection='...') before continuing."
         )
-    if decided_to_continue and _verdict_assurance(payload)[0] == "provisional":
+    if decided_to_continue and _is_cold_start(payload):
         # A cold-start reading is the prior, not a measurement of the agent.
         # This decision did not block, but the non-authored cold-start guard
         # does not cover the agent's own reports: until behavioral confidence
@@ -470,7 +513,9 @@ def _recovery_hint(
         # pauses at cold start, so say it rather than "keep working".
         hint = (
             "Cold start: this risk is the prior, not a measurement of your "
-            "behavior, and this decision does not block."
+            "behavior, and "
+            + ("nothing blocks you now." if action == "resumed"
+               else "this decision does not block.")
         )
         if risk is not None and risk >= 0.7:
             hint += (
@@ -478,15 +523,25 @@ def _recovery_hint(
                 "same prior and can pause at this risk."
             )
         return hint
+    if risky and decided_to_continue and recovery_refused:
+        return (
+            "Risk is elevated but "
+            + ("nothing blocks you now" if action == "resumed"
+               else "this decision does not block")
+            + " - keep scope tight and sync_state after your next substantial "
+            "step. self_recovery is for lifting a pause."
+        )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
     if risky and decided_to_continue:
         # Not paused: self_recovery has nothing to lift, and review refuses at
         # risk >= 0.65 after recording the reflection.
         return (
-            "Risk is elevated but this decision does not block - keep scope tight "
-            "and sync_state after your next substantial step. self_recovery is "
-            "for lifting a pause."
+            "Risk is elevated but "
+            + ("nothing blocks you now" if action == "resumed"
+               else "this decision does not block")
+            + " - keep scope tight and sync_state after your next substantial "
+            "step. self_recovery is for lifting a pause."
         )
     if risky:
         return (
@@ -573,6 +628,10 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_UNKNOWN_WRITER = "unknown"
+_DIGEST_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -586,7 +645,9 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     """
     payload = _harvest_payload(payload)
     candidates = normalize_discovery_list(payload.get("relevant_discoveries"))
+    from_prior_work = False
     if not candidates:
+        from_prior_work = bool(payload.get("relevant_prior_work"))
         candidates = (
             payload.get("relevant_prior_work")
             or payload.get("results")
@@ -607,6 +668,30 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
             discovery_id = item.get("discovery_id") or item.get("id")
             if discovery_id is not None:
                 suggestion["discovery_id"] = discovery_id
+
+            # Attribution survives the digest: the canonical result leads with
+            # `by` (the write-time label) and carries `_agent_id` (the
+            # identity), and a lean reader asking who wrote a finding must not
+            # need a second, full-mode call to learn it. The identity is
+            # copied whole; only the display label is bounded, and a bounded
+            # label says so rather than posing as the complete value.
+            # `relevant_prior_work` rows are the one exception: the mirror
+            # formatter writes the writer's id into `by` (response_formatter
+            # `_format_mirror`), so there `by` is the identity, not a label.
+            # "unknown" is the producers' placeholder for a missing id and is
+            # neither a label nor an identity.
+            by = item.get("by")
+            agent_id = item.get("_agent_id") or item.get("agent_id")
+            if from_prior_work and not agent_id:
+                agent_id, by = by, None
+            if isinstance(by, str) and by and by != _UNKNOWN_WRITER:
+                if len(by) > _MEMORY_BY_LABEL_CHARS:
+                    suggestion["by"] = by[: _MEMORY_BY_LABEL_CHARS - 1] + "…"
+                    suggestion["by_truncated"] = True
+                else:
+                    suggestion["by"] = by
+            if agent_id and str(agent_id) != _UNKNOWN_WRITER:
+                suggestion["agent_id"] = str(agent_id)
 
             summary = item.get("summary")
             if isinstance(summary, str):
@@ -1004,9 +1089,31 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     def wire_bytes() -> int:
         return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
 
-    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-        return
+    # Attribution never costs a result or its fields. Set it aside, run the
+    # budget steps exactly as for an attribution-free payload (which decides
+    # which digests and fields survive), then give each survivor back as much
+    # attribution as still fits, in rank order: label and identity, else the
+    # identity alone, else neither. An identity is only ever whole. One
+    # envelope-level marker says something was withheld, if it fits.
+    suggestions = envelope.get("memory_suggestions")
+    set_aside: List[Dict[str, Any]] = []
+    if isinstance(suggestions, list):
+        for item in suggestions:
+            snap = {}
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    if key in item:
+                        snap[key] = item.pop(key)
+            set_aside.append(snap)
 
+    if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+        _truncate_search_projection(envelope, wire_bytes)
+    _restore_digest_attribution(envelope, set_aside, wire_bytes)
+
+
+def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
+    """The budget steps proper, run on the attribution-free envelope: drop
+    optional coaching, then lower-ranked digests, then compact the last."""
     envelope["projection_truncated"] = True
     envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
     envelope.pop("response_options", None)
@@ -1052,11 +1159,64 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
 
+    # The digest set is final now, so its summary fields go in before any
+    # attribution is restored: they must be inside the budget the restore
+    # measures against, not appended after it.
     state = envelope.get("state_summary")
     if isinstance(state, dict) and isinstance(suggestions, list):
         state["results_shown_in_digest"] = len(suggestions)
         state["result_set_truncated"] = True
 
+
+def _restore_digest_attribution(
+    envelope: Dict[str, Any], set_aside: List[Dict[str, Any]], wire_bytes
+) -> None:
+    """Give each surviving digest back as much attribution as fits, in rank
+    order: label and identity, else the identity alone, else neither.
+
+    First without the withheld-marker: if everything fits, no marker is
+    needed and its room is not taken from attribution. Only if something must
+    be withheld is the restore redone with the marker's room reserved, so the
+    marker says so. If the marker itself does not fit, the marker-free restore
+    stands; only then can a digest lose attribution unmarked, and only when
+    not even the marker's ~36 bytes were free."""
+    suggestions = envelope.get("memory_suggestions")
+    if not isinstance(suggestions, list) or not any(set_aside[: len(suggestions)]):
+        return
+
+    def strip() -> None:
+        for item in suggestions:
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    item.pop(key, None)
+
+    def restore() -> bool:
+        withheld = False
+        for item, snap in zip(suggestions, set_aside):
+            if not snap or not isinstance(item, dict):
+                continue
+            identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
+            for attempt in (snap, identity):
+                if not attempt:
+                    continue
+                item.update(attempt)
+                if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                    break
+                for key in attempt:
+                    item.pop(key, None)
+            if any(key not in item for key in snap):
+                withheld = True
+        return withheld
+
+    if not restore():
+        return
+    strip()
+    envelope["digest_attribution_omitted"] = True
+    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+        restore()
+        return
+    envelope.pop("digest_attribution_omitted", None)
+    restore()
 
 def build_experience_envelope(
     friendly_name: str,

@@ -1164,6 +1164,32 @@ def test_search_envelope_compact_mode_keeps_memory_suggestions():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
+def test_search_lean_projection_keeps_attribution():
+    """A lean digest still says who wrote each finding: the write-time label
+    and the identity it was filed under."""
+    payload = {
+        "success": True,
+        "count": 1,
+        "discoveries": [
+            {
+                "by": "backup-investigator",
+                "summary": "the disk was full",
+                "id": "d1",
+                "_agent_id": "5b0c1f7e-0000-4000-8000-000000000001",
+            }
+        ],
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", payload, {"response_mode": "lean"}
+    )
+
+    first = env["memory_suggestions"][0]
+    assert first["by"] == "backup-investigator"
+    assert first["agent_id"] == "5b0c1f7e-0000-4000-8000-000000000001"
+    assert "_agent_id" not in first
+
+
 def test_search_lean_projection_bounds_historical_summaries_and_total_wire():
     payload = {
         "success": True,
@@ -1213,6 +1239,305 @@ def test_search_lean_projection_bounds_historical_summaries_and_total_wire():
     assert "similarity" not in first
     assert "_response_size" not in env
     assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+
+
+def test_search_projection_budget_compaction_keeps_attribution():
+    payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "by": "backup-investigator",
+                "_agent_id": "5b0c1f7e-0000-4000-8000-000000000001",
+                "title": "legacy-title-" + "x" * 2_600,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+    first = env["memory_suggestions"][0]
+    assert "title" not in first
+    assert first["by"] == "backup-investigator"
+    assert first["agent_id"] == "5b0c1f7e-0000-4000-8000-000000000001"
+
+
+def test_search_lean_projection_never_truncates_agent_id():
+    """`agent_id` is the key a reader passes back as `agent_id_filter`; a
+    legacy non-UUID writer id longer than the label bound must arrive whole,
+    in the lean digest and through budget compaction alike."""
+    legacy_id = "legacy-writer-" + "k" * 90
+    lean_payload = {
+        "success": True,
+        "discoveries": [{"id": "d1", "summary": "s", "_agent_id": legacy_id}],
+    }
+    compact_payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "agent_id": legacy_id,
+                "title": "legacy-title-" + "x" * 2_600,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    lean = build_experience_envelope(
+        "search_shared_memory", "knowledge", lean_payload, {"response_mode": "lean"}
+    )
+    compacted = build_experience_envelope(
+        "search_shared_memory", "knowledge", compact_payload
+    )
+
+    assert lean["memory_suggestions"][0]["agent_id"] == legacy_id
+    assert compacted["projection_truncated"] is True
+    assert "title" not in compacted["memory_suggestions"][0]
+    assert compacted["memory_suggestions"][0]["agent_id"] == legacy_id
+
+
+def test_search_lean_projection_flags_a_truncated_by_label():
+    """A write-time label longer than the bound is cut visibly (ellipsis plus
+    `by_truncated`), never returned as a prefix posing as the whole label,
+    and the flag survives budget compaction."""
+    long_label = "investigator-" + "q" * 200
+    agent_id = "5b0c1f7e-0000-4000-8000-000000000001"
+    lean_payload = {
+        "success": True,
+        "discoveries": [
+            {"id": "d1", "summary": "s", "by": long_label, "_agent_id": agent_id}
+        ],
+    }
+    compact_payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "by": long_label,
+                "_agent_id": agent_id,
+                "title": "legacy-title-" + "x" * 2_600,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    lean = build_experience_envelope(
+        "search_shared_memory", "knowledge", lean_payload, {"response_mode": "lean"}
+    )["memory_suggestions"][0]
+    compacted = build_experience_envelope(
+        "search_shared_memory", "knowledge", compact_payload
+    )["memory_suggestions"][0]
+
+    for first in (lean, compacted):
+        assert first["by_truncated"] is True
+        assert first["by"].endswith("…")
+        assert len(first["by"]) == 64
+        assert long_label.startswith(first["by"][:-1])
+        assert first["agent_id"] == agent_id
+
+    short = build_experience_envelope(
+        "search_shared_memory",
+        "knowledge",
+        {"success": True, "discoveries": [{"id": "d1", "by": "x" * 64}]},
+        {"response_mode": "lean"},
+    )["memory_suggestions"][0]
+    assert short["by"] == "x" * 64
+    assert "by_truncated" not in short
+
+
+@pytest.mark.parametrize("id_len", [120, 400])
+def test_search_lean_projection_worst_case_attribution_holds_wire_budget(id_len):
+    """Worst-case attribution on every digest: maximal labels, long legacy
+    writer ids, and summaries/tags at their own bounds. The whole envelope
+    stays inside 3,000 bytes; a surviving identity is exact, never a prefix,
+    and when any digest's identity is withheld the envelope says so."""
+    agent_ids = [f"legacy-writer-{i}-" + "z" * id_len for i in range(5)]
+    payload = {
+        "success": True,
+        "count": 5,
+        "discoveries": [
+            {
+                "id": f"d{i}",
+                "by": "label-🌱-" + "w" * 5_000,
+                "_agent_id": agent_ids[i],
+                "summary": "qualification-preserving context 🌱 " * 180,
+                "type": "experiment",
+                "status": "open",
+                "tags": [f"tag-{n}" for n in range(9)],
+                "fusion_score": 0.8,
+            }
+            for i in range(5)
+        ],
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", payload, {"response_mode": "lean"}
+    )
+
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+    suggestions = env["memory_suggestions"]
+    assert suggestions
+    for i, digest in enumerate(suggestions):
+        if "agent_id" in digest:
+            assert digest["agent_id"] == agent_ids[i]
+    withheld = any("agent_id" not in digest for digest in suggestions)
+    assert (env.get("digest_attribution_omitted") is True) == withheld
+    if id_len == 400:
+        assert withheld  # the omission path must actually be exercised
+    labelled = [digest for digest in suggestions if "by" in digest]
+    assert labelled  # the label assertions below must actually run
+    for digest in labelled:
+        assert digest["by_truncated"] is True
+        assert len(digest["by"]) == 64
+
+
+_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
+
+
+def _results(n_results, attributed):
+    rows = []
+    for i in range(n_results):
+        row = {"id": f"d{i + 1}", "title": f"Title {i + 1}", "type": "insight",
+               "status": "open", "tags": ["a", "b"], "fusion_score": 0.5 - i / 10,
+               "summary": ("finding " + str(i + 1) + " ") * 25}
+        if attributed:
+            row["by"] = "backup-investigator-session-label"
+            row["_agent_id"] = f"5b0c1f7e-1a2b-4c3d-8e9f-00000000000{i + 1}"
+        rows.append(row)
+    return rows
+
+
+@pytest.mark.parametrize("n_results", [1, 3])
+def test_attribution_never_costs_a_result_or_its_fields(n_results):
+    """Review on #2386: attribution never costs a result or its fields.
+    Swept over the envelope's free space: every digest an attribution-free
+    payload keeps, the attributed payload keeps with the same
+    non-attribution fields; attribution returns as label+identity, identity
+    alone, or not at all, and an identity that survives is exact."""
+    saw_labels, saw_ids_only, saw_none = False, False, False
+    for n in range(0, 2600, 2):
+        extra = {"total_count": n_results, "confidence_note": "c" * n, "success": True}
+        # Whole-envelope size is not asserted here: master already overshoots
+        # 3,000 bytes in a narrow window, independent of attribution.
+        bare = build_experience_envelope(
+            "search_shared_memory", "knowledge", {**extra, "results": _results(n_results, False)})
+        env = build_experience_envelope(
+            "search_shared_memory", "knowledge", {**extra, "results": _results(n_results, True)})
+        bare_d = bare.get("memory_suggestions") or []
+        env_d = env.get("memory_suggestions") or []
+        bare_size = len(json.dumps(bare, ensure_ascii=False).encode("utf-8"))
+        env_size = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
+        # Attribution adds no overshoot of its own (master's narrow window,
+        # where the attribution-free payload is already over, is not ours).
+        if bare_size <= 3_000:
+            assert env_size <= 3_000, (n, env_size)
+        # Every attributed row has a label and an identity, so anything
+        # missing from a digest was withheld (a dropped label included).
+        withheld = any("agent_id" not in d or "by" not in d for d in env_d)
+        if withheld and bare_size <= 3_000 - 40:
+            assert env.get("digest_attribution_omitted") is True, n
+        if not withheld:
+            assert "digest_attribution_omitted" not in env, n
+        assert len(env_d) >= len(bare_d), n
+        # Envelope-level parity too: attribution alone never triggers the
+        # truncation path (flags, dropped coaching, the full-mode pointer).
+        for key in ("projection_truncated", "expand_with", "response_options",
+                    "discovery_retrieval_options"):
+            assert env.get(key) == bare.get(key), (n, key)
+        assert env.get("state_summary") == bare.get("state_summary"), n
+        for got, want in zip(env_d, bare_d):
+            assert {k: v for k, v in got.items() if k not in _ATTRIBUTION_KEYS} == want, n
+        for i, got in enumerate(env_d):
+            if "agent_id" in got:
+                assert got["agent_id"] == f"5b0c1f7e-1a2b-4c3d-8e9f-00000000000{i + 1}"
+        for got in env_d:
+            if "by" in got:
+                saw_labels = True
+            elif "agent_id" in got:
+                saw_ids_only = True
+            else:
+                saw_none = True
+    assert saw_labels and saw_ids_only and saw_none
+
+
+def test_a_short_identity_is_restored_where_the_marker_cannot_fit():
+    """Review on #2386 (round 7): with less room than the withheld-marker
+    needs (~36 bytes), a short legacy identity (16 bytes) must still be
+    restored rather than dropped unmarked. Sweeps the free space across that
+    window; wherever the identity alone fits, it is present."""
+    base = {"success": True, "results": [{"id": "d1", "summary": "s", "agent_id": "a1"}],
+            "total_count": 1}
+    exercised = False
+    for n in range(1050, 1200):
+        payload = {**base, "confidence_note": "c" * n}
+        bare = build_experience_envelope(
+            "search_shared_memory", "knowledge",
+            {**payload, "results": [{"id": "d1", "summary": "s"}]})
+        env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+        bare_size = len(json.dumps(bare, ensure_ascii=False).encode("utf-8"))
+        digest = (env.get("memory_suggestions") or [None])[0]
+        if digest is None or bare_size > 3_000:
+            continue
+        if bare_size + len(', "agent_id": "a1"') <= 3_000:
+            assert digest.get("agent_id") == "a1", (n, bare_size)
+            if bare_size + 36 > 3_000:
+                exercised = True
+        elif "agent_id" not in digest and bare_size + 36 <= 3_000:
+            assert env.get("digest_attribution_omitted") is True, n
+    assert exercised  # the marker-cannot-fit window was actually swept
+
+
+def test_default_lean_search_carries_attribution_end_to_end():
+    """Review on #2386 (round 8): the default search_shared_memory path runs
+    the canonical result through _lean_search_payload before the envelope is
+    built, and that projection used to drop `by` and `_agent_id`, so no
+    attribution ever reached the default digest. Exercise that path."""
+    from src.mcp_handlers.knowledge.handlers import _lean_search_payload
+
+    writer = "5b0c1f7e-0000-4000-8000-00000000abcd"
+    canonical = {
+        "success": True,
+        "discoveries": [{"id": "d1", "by": "backup-investigator", "_agent_id": writer,
+                         "summary": "what was found", "type": "insight", "status": "open"}],
+        "similarity_scores": {"d1": 0.8},
+    }
+    lean = _lean_search_payload(canonical)
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", lean, {"response_mode": "lean"})
+    first = env["memory_suggestions"][0]
+    assert first["discovery_id"] == "d1"
+    assert first["by"] == "backup-investigator"
+    assert first["agent_id"] == writer
+
+
+def test_search_projection_budget_omits_pathological_identity_explicitly():
+    """An identifier that cannot fit is withheld with a marker, not cut to a
+    prefix; the handle that opens the record remains."""
+    payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "by": "backup-investigator",
+                "agent_id": "legacy-" + "k" * 4_000,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+    first = env["memory_suggestions"][0]
+    assert first["discovery_id"] == "d1"
+    assert env["digest_attribution_omitted"] is True
+    assert "agent_id" not in first and "by" not in first
 
 
 def test_search_projection_budget_drops_oversized_single_result():

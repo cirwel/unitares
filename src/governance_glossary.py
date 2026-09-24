@@ -413,6 +413,14 @@ _NON_STOP_HIGH_RISK_NEXT_ACTION = (
     "after your next substantial step."
 )
 
+# The agent was resumed after a pause and has not checked in since: no
+# check-in decided anything, so the text must not claim a decision.
+_RESUMED_HIGH_RISK_NEXT_ACTION = (
+    "The agent was resumed and nothing blocks it now. This reading predates "
+    "the resume and can still pause a later check-in; keep scope tight and "
+    "sync_state after your next substantial step."
+)
+
 # Says what was decided, not that a hold is in force: the decision and its
 # actuation (the circuit breaker) are separate steps, and self_recovery's check
 # is the authority on whether a hold exists.
@@ -460,7 +468,9 @@ def explain_verdict(
         action = str(decision_action).lower()
         wrapped["decision_action"] = action
         value = wrapped.get("value")
-        if action not in _STOP_ACTIONS and value == "high-risk":
+        if action == "resumed" and value == "high-risk":
+            wrapped["next_action"] = _RESUMED_HIGH_RISK_NEXT_ACTION
+        elif action not in _STOP_ACTIONS and value == "high-risk":
             wrapped["next_action"] = _NON_STOP_HIGH_RISK_NEXT_ACTION.format(
                 action=action
             )

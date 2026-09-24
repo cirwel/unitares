@@ -50,10 +50,19 @@ the agent's *own* running history rather than only a one-size-fits-all threshold
 Absolute safety floors still apply on top of that.
 
 **Before the behavioral channel reaches confidence 0.3** (check-ins 1–2), the
-verdict comes from the Φ cold-start prior: computed mostly
-from server-derived signals (complexity divergence, coherence, calibration), with
-any self-reported `ethical_drift` only a capped ≤30% blend and the independent
-behavioral signal telemetry-only. Described-behavior semantics don't fully register
+verdict comes from the Φ cold-start prior: computed by the
+server from its own state and the drift vector, whose complexity-divergence
+component depends on the complexity the agent reports and whose calibration
+component can depend on the confidence it reports (until the server-wide
+confidence-against-outcome record has enough graded samples), with the
+behavioral signal telemetry-only. On MCP check-ins a
+self-reported `ethical_drift` does not currently enter the drift vector, Φ, or the
+verdict in any phase: the handler passes the vector as an array that the capped
+30% blend's type check rejects (found 2026-09-23). Direct callers of the Python
+API (`UNITARESMonitor.process_update()`) who pass a list or tuple with a norm
+above 0.01 do get the blend (a `[0, 0, 0]` or near-zero report is skipped), and there it can affect the cold-start verdict and, once blended, later
+behavioral inputs. Whether self-reports should affect the decision at all is an
+open policy question, so the MCP path has deliberately not been repaired. Described-behavior semantics don't fully register
 until check-in 3; self-relative scoring still waits until check-in 25.
 
 State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral

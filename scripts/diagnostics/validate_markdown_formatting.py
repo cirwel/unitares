@@ -164,6 +164,11 @@ def should_skip_file(filepath: Path) -> bool:
     # Skip archive directories
     if any(part in ARCHIVE_DIRS for part in filepath.parts):
         return True
+
+    # Skip changelog fragments: CHANGELOG entries awaiting the release cut,
+    # exempt from date metadata like docs/CHANGELOG.md itself.
+    if rel_path.startswith('docs/changelog.d/'):
+        return True
     
     return False
 

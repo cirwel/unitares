@@ -154,6 +154,34 @@ def test_high_risk_continue_decision_does_not_route_to_self_recovery():
     assert "does not block" in hint
 
 
+def test_production_guide_shape_at_refusal_risk_is_not_routed_to_self_recovery():
+    """The monitor emits proceed + sub_action guide, which makes the attention
+    branch fire first; at risk >= 0.65 (review refuses) it must still not
+    advise self_recovery."""
+    payload = {"decision": {"action": "proceed", "sub_action": "guide"}}
+    for risk in (0.67, 0.75):
+        hint = ES._recovery_hint(payload, None, risk)
+        assert "self_recovery(" not in hint, risk
+        assert "does not block" in hint, risk
+    # Below the review gate the existing advisory wording stays.
+    assert "only if work stalls" in ES._recovery_hint(payload, None, 0.5)
+
+
+def test_never_checked_in_agent_is_not_reported_as_proceeding():
+    wrapped = explain_verdict(
+        "uninitialized", evidence_source="ode_fallback",
+        decision_action=_last_decision_action(_Meta("active", [], total_updates=0)),
+    )
+    assert "decision_action" not in wrapped
+    assert ES._decision_action({"verdict": wrapped}) == "uninitialized"
+
+
+def test_resumed_wording_claims_no_decision():
+    wrapped = explain_verdict("high-risk", decision_action="resumed")
+    assert "The decision was" not in wrapped["next_action"]
+    assert "resumed" in wrapped["next_action"]
+
+
 def test_a_real_pause_keeps_its_stop_and_recovery_directives():
     source = _guided_cold_start_check_in()
     source["decision"] = {"action": "pause", "sub_action": "risk_pause"}
@@ -182,9 +210,13 @@ def test_metrics_read_shape_follows_the_verdicts_decision_action():
 
 
 def test_mirror_shape_escalated_after_policy_evaluation_reports_the_pause():
-    """Anything that rewrites decision.action after policy_evaluation was built
-    leaves the policy record stale. Mirror mode drops the decision; the
-    verdict's decision_action carries the final one and must outrank it."""
+    """Priority of decision fields: anything that rewrites decision.action after
+    policy_evaluation was built leaves the policy record stale, and mirror mode
+    drops the decision, so the verdict's decision_action must outrank it.
+
+    The only such rewriter is the post-ODE dialectic escalation, which this
+    branch caps at guide, so a pause of this shape no longer arises from it.
+    The test pins the field priority, not the escalation."""
     source = _guided_cold_start_check_in()
     source["decision"] = {"action": "pause", "sub_action": "dialectic_condition"}
     # policy_evaluation still says proceed: it predates the escalation.
@@ -214,15 +246,21 @@ def test_decision_outranks_policy_evaluation_and_verdict():
 # --- the metrics read -------------------------------------------------------
 
 class _Meta:
-    def __init__(self, status="active", recent_decisions=None):
+    def __init__(self, status="active", recent_decisions=None, total_updates=None):
         self.status = status
         self.recent_decisions = recent_decisions
+        self.total_updates = (
+            len(recent_decisions or []) if total_updates is None else total_updates
+        )
 
 
 def test_last_decision_action_prefers_a_paused_lifecycle_status():
     assert _last_decision_action(_Meta("paused", ["proceed"])) == "pause"
     assert _last_decision_action(_Meta("active", ["pause", "proceed"])) == "proceed"
-    assert _last_decision_action(_Meta("active", [])) is None
+    # Never checked in: no decision, keep the "uninitialized" wording.
+    assert _last_decision_action(_Meta("active", [], total_updates=0)) is None
+    # Checked in before, history cleared by a resume path: resumed.
+    assert _last_decision_action(_Meta("active", [], total_updates=4)) == "resumed"
     assert _last_decision_action(None) is None
 
 
@@ -237,8 +275,8 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
     """Pause expiry and dialectic resolution set status=active but leave the
     last recorded decision at "pause". That stop is no longer in force; the
     agent proceeds, and the verdict wrap must not fall back to "Pause"."""
-    assert _last_decision_action(_Meta("active", ["proceed", "pause"])) == "proceed"
-    assert _last_decision_action(_Meta("active", ["reject"])) == "proceed"
+    assert _last_decision_action(_Meta("active", ["proceed", "pause"])) == "resumed"
+    assert _last_decision_action(_Meta("active", ["reject"])) == "resumed"
     wrapped = explain_verdict(
         "high-risk", decision_action=_last_decision_action(_Meta("active", ["pause"]))
     )
@@ -248,13 +286,19 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
 # --- the server instructions ------------------------------------------------
 
 def test_instructions_state_how_a_pause_actually_ends():
-    """Every exit, and the recovery cost, stated as they are: self_recovery is
-    not the only way out and not always available, and review's reflection is
-    recorded in shared memory."""
+    """The exits in the code, and the recovery cost, stated as they are:
+    self_recovery (not always available), dialectic resolution, an operator
+    or the automatic safety nets, and expiry. "Applied": a decided pause the breaker did not actuate holds
+    nothing. Review's reflection is recorded in shared memory."""
     text = build_server_instructions("progressive")
-    sentence = text[text.index("A pause is a hard stop"):]
-    assert sentence.index("self_recovery") < sentence.index("an operator resumes")
-    assert "or it expires" in sentence
+    sentence = text[text.index("An applied pause is a hard stop"):]
+    sentence = sentence[:sentence.index("expires.") + len("expires.")]
+    for exit_route in ("self_recovery", "request_review", "an operator",
+                       "automatic safety net", "or it expires"):
+        assert exit_route in sentence, exit_route
+    # agent(action='resume') has no ownership, risk or void gate and a paused
+    # agent can call it on itself; it must never be advertised to agents.
+    assert "agent(action='resume')" not in text
     assert "self_recovery refuses while risk stays high" in text
     assert "records your written reflection in shared memory" in text
 
@@ -292,3 +336,69 @@ def test_simulate_update_escalation_rewraps_the_nested_verdict():
     source = inspect.getsource(core.handle_simulate_update)
     escalation = source[source.index("escalated_decision is not decision"):]
     assert "_rewrap_behavioral_verdict(result, escalated_decision)" in escalation[:400]
+
+
+def test_resumed_agent_with_cleared_history_is_not_told_to_pause():
+    """Operator resume at risk 0.75 clears recent_decisions; the metrics read
+    must not fall back to "Pause, reflect"."""
+    action = _last_decision_action(_Meta("active", [], total_updates=3))
+    wrapped = explain_verdict("high-risk", decision_action=action)
+    assert not wrapped["next_action"].startswith("Pause")
+    hint = ES._recovery_hint({"verdict": wrapped}, None, 0.75)
+    assert "pause and call" not in hint
+
+
+def test_cold_start_hint_is_not_given_to_a_behavioral_reading():
+    """A non-baselined behavioral verdict (check-ins 3-24) is provisional but
+    not the prior; it must not be described as one."""
+    payload = {
+        "decision": {"action": "proceed", "sub_action": "guide"},
+        "metrics": {"risk_score": 0.79, "primary_eisv_source": "behavioral"},
+        "risk_attribution": {
+            "primary_driver": "behavioral_assessment",
+            "discriminability": {"non_discriminative": True},
+        },
+    }
+    hint = ES._recovery_hint(payload, None, 0.79)
+    assert not hint.startswith("Cold start")
+    assert "the prior" not in hint
+
+
+def test_resumed_agent_hints_claim_no_decision():
+    """No check-in decided anything after a resume: the hint must not say
+    'this decision'."""
+    wrapped = explain_verdict("high-risk", decision_action="resumed")
+    for risk in (0.55, 0.75):
+        hint = ES._recovery_hint({"verdict": wrapped}, None, risk)
+        assert "this decision" not in hint, (risk, hint)
+        assert "nothing blocks you now" in hint, (risk, hint)
+
+
+def test_verification_floor_verdict_is_not_called_the_prior():
+    payload = {
+        "decision": {"action": "proceed", "sub_action": "guide"},
+        "metrics": {"risk_score": 0.55, "primary_eisv_source": "ode_fallback"},
+        "risk_attribution": {"primary_driver": "independent_verification_floor"},
+    }
+    hint = ES._recovery_hint(payload, None, 0.55)
+    assert not hint.startswith("Cold start")
+    assert "the prior" not in hint
+
+
+def test_full_metrics_read_follows_the_last_decision():
+    """check_working_state(lite=false) keeps the raw verdict string; the
+    decision it rode on travels beside it and must win over the alias."""
+    payload = {"verdict": "high-risk", "risk_score": 0.79,
+               "primary_eisv_source": "ode_fallback",
+               "last_decision_action": "proceed"}
+    assert ES._decision_action(payload) == "proceed"
+    assert "pause and call" not in ES._recovery_hint(payload, None, 0.79)
+
+
+def test_default_metrics_read_keeps_the_guide_sub_action():
+    """recent_decisions stores a bare 'proceed'; a caution verdict still means
+    a guided proceed."""
+    payload = {"verdict": explain_verdict("caution", decision_action="proceed"),
+               "risk_score": 0.5}
+    summary = ES._action_summary(payload, 0.5)
+    assert (summary["action"], summary["sub_action"]) == ("proceed", "guide")

@@ -1,0 +1,24 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-09-24T18:57:25Z",
+  "verified_date": "2026-09-24",
+  "verifier": "Kenny Wang",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "b3cf7437056198f8",
+    "unitares/src/db/mixins/knowledge_graph.py": "f3f00b0381c5fa10",
+    "unitares/src/knowledge_authority.py": "14ca01da11026c91",
+    "unitares/src/knowledge_graph.py": "5e29c9483595cb70",
+    "unitares/src/knowledge_graph_lifecycle.py": "3d943c8664beedd6",
+    "unitares/src/mcp_handlers/consolidated.py": "1dceedc26c4a3144",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "4819b9d2300c851b",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "f33e76c5d5364ce9",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "9c39082b0155c223",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "6e16db988efa1d45",
+    "unitares/src/mcp_handlers/tool_stability.py": "9049a8db3938541a",
+    "unitares/src/storage/knowledge_graph_age.py": "b4dd7ab8f35309ba",
+    "unitares/src/storage/knowledge_graph_postgres.py": "47ea4d27622e7318",
+    "unitares/src/tool_descriptions.json": "7ab6c476fc6fed78"
+  },
+  "skill_digest": "49568211dd3bd6f6"
+}
