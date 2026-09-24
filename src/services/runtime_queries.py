@@ -219,10 +219,13 @@ def _last_decision_action(meta: Any) -> Optional[str]:
     The lifecycle status decides whether a stop is in force. Paused wins over
     the check-in history. When the agent is active, a recorded stop is stale:
     pause expiry (support/pause_ttl.py) and dialectic resolution set the status
-    back to active without touching `recent_decisions`. A resumed agent
-    proceeds until its next check-in decides, so that is reported as
-    "proceed"; reporting nothing would fall back to the glossary's "Pause,
-    reflect" and tell a resumed agent to pause. An empty history yields None.
+    back to active without touching `recent_decisions`, while every
+    _resume_with_persistence path (quick and reviewed self_recovery, operator
+    resume, agent(action='resume'), the automatic resumes) clears it. Either
+    way a resumed agent proceeds until its next check-in decides, so an active
+    agent with a stale stop or an empty history is reported as "proceed";
+    reporting nothing would fall back to the glossary's "Pause, reflect" and
+    tell a resumed agent to pause.
     Any status other than paused or active (archived, deleted, waiting_input)
     refuses or holds writes for its own reasons, so no decision is reported
     there.
@@ -236,7 +239,7 @@ def _last_decision_action(meta: Any) -> Optional[str]:
         return None
     recent_decisions = getattr(meta, "recent_decisions", None) or []
     if not recent_decisions:
-        return None
+        return "proceed"
     last = str(recent_decisions[-1]).lower()
     return "proceed" if last in {"pause", "reject"} else last
 
