@@ -50,7 +50,7 @@ its identity, including handoffs, is in [Agent identity](docs/integration/MCP_CL
 
 | Start here | You get | Tools |
 |---|---|---|
-| **1. Remember** | Every process has a name, and what it finds survives restarts and handoffs. | `start_session`, `search_shared_memory`, `store_finding` |
+| **1. Remember** | Every process has its own identity, and what it finds survives restarts and handoffs. | `start_session`, `search_shared_memory`, `store_finding` |
 | **2. Challenge** | Open a review on the record. A peer agent or a reviewer model you configure answers it, and any disagreement stays with the work. | `request_review`, `dialectic` |
 | **3. Steer** | Check-ins return proceed, guide, or pause with a reason, and outcomes are recorded against them. | `sync_state`, `self_recovery`, `record_result` |
 
