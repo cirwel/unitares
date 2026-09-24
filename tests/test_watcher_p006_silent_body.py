@@ -157,9 +157,10 @@ def test_try_finally_defers_to_the_enclosing_handlers(tmp_path):
     assert p006_actually_fires(str(path), 6) is True
 
 
-def test_line_outside_any_try_is_dropped(tmp_path):
+def test_line_outside_any_try_keeps_the_finding(tmp_path):
+    # Unverifiable (e.g. a trailing comment after `pass`): fail open.
     path = _write(tmp_path, "def f():\n    return work()\n")
-    assert p006_actually_fires(str(path), 2) is False
+    assert p006_actually_fires(str(path), 2) is True
 
 
 @pytest.mark.parametrize(
@@ -193,3 +194,9 @@ def test_parse_findings_keeps_p006_on_a_pass_handler(tmp_path):
     path = _write(tmp_path, _handler("pass"))
     parsed = parse_findings(_model_reply(6), str(path), "test", 1)
     assert [(f.pattern, f.line) for f, _ in parsed] == [("P006", 6)]
+
+
+def test_parse_findings_keeps_p006_without_a_cited_line(tmp_path):
+    path = _write(tmp_path, _handler("logger.warning('x')"))
+    reply = json.dumps({"findings": [{"pattern": "P006", "hint": "silent swallow"}]})
+    assert [f.pattern for f, _ in parse_findings(reply, str(path), "test", 1)] == ["P006"]

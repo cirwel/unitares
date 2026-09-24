@@ -220,7 +220,7 @@ primary logic path does NOT depend on its result — it is intentional.
 Only flag when the swallow is on the main logic path or could mask a
 failure the caller needs to know about.
 
-**Hint template:** `silent swallow — log and re-raise or narrow the except`
+**Hint template:** `silent swallow — log at info or above, re-raise, or handle the failure`
 
 <!-- P007 has been demoted to the EXPERIMENTAL section below.
      Detecting it requires reasoning about temporal flow (which pool was

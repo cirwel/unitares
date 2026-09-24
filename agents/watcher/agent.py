@@ -1713,11 +1713,11 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     The governing handler is the innermost ``except`` whose span contains the
     flagged line. When the model cites a line of the ``try`` body instead, the
     innermost enclosing ``try`` counts, and the finding survives if any of its
-    handlers is silent. A line with no enclosing ``try``/``except`` has nothing
-    for P006 to describe.
+    handlers is silent.
 
-    Conservative on errors, like ``p008_actually_fires``: unreadable,
-    non-Python or unparseable files return True so the finding is kept.
+    Conservative on errors, like ``p008_actually_fires``: a line inside no
+    ``try`` at all (a miscited or comment line), an unreadable, non-Python or
+    unparseable file all return True so the finding is kept.
 
     Returns True  → possible real swallow; keep it
     Returns False → verified false positive; suppress it
@@ -1766,7 +1766,7 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
         return _silent(handler_hit)
     if try_hit is not None:
         return any(_silent(h) for h in try_hit.handlers)
-    return False
+    return True
 
 
 def parse_findings(
@@ -1915,7 +1915,13 @@ def parse_findings(
 
         # P006 post-filter: a handler that logs at info or above, re-raises,
         # returns, or assigns is not a silent swallow. Verify with an AST scan.
-        if pattern == "P006" and not p006_actually_fires(file_path, line):
+        # Only a line the model actually cited can be checked; the
+        # region_start fallback for a missing line is not one.
+        if (
+            pattern == "P006"
+            and line_in_snippet > 0
+            and not p006_actually_fires(file_path, line)
+        ):
             log(
                 f"suppressing P006 false-positive at {file_path}:{line} "
                 f"(governing except body is not silent)",
