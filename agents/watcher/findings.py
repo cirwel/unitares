@@ -87,6 +87,34 @@ def is_auto_duplicate(row: dict[str, Any]) -> bool:
     )
 
 
+def live_auto_duplicate_fps(rows: list[dict[str, Any]]) -> set[str]:
+    """Fingerprints of auto-duplicates whose canonical finding is unresolved.
+
+    Such a copy still stands for live code in its own worktree, so the
+    consumers that act per worktree (scoped delivery, the ship trailer, the
+    commit scanner, compaction) treat it like an unresolved finding.
+    """
+    unresolved = {
+        row.get("fingerprint")
+        for row in rows
+        if row.get("status", "open") in _UNRESOLVED_STATUSES
+    }
+    return {
+        str(row.get("fingerprint"))
+        for row in rows
+        if is_auto_duplicate(row) and row.get("duplicate_of") in unresolved
+    }
+
+
+def _same_file(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return a == b
+
+
 def release_orphaned_duplicates(
     rows: list[dict[str, Any]], now: str | None = None
 ) -> tuple[list[dict[str, Any]], int]:
@@ -98,8 +126,9 @@ def release_orphaned_duplicates(
     other worktrees may still hold the bug, so the first copy is reopened as
     the new canonical finding and any others are re-pointed at it. A verdict
     about the code (``fp``/``wont_fix``/``out_of_scope``) settles the copies
-    too, and a canonical row that no longer exists (compacted) leaves them as
-    they are. Returns the new rows and how many copies were reopened.
+    too, as does any closure for a copy in the canonical's own file (that is
+    the same site after a line shift), and a canonical row that no longer
+    exists leaves them as they are. Returns the new rows and how many copies were reopened.
     """
     by_fp = {row.get("fingerprint"): row for row in rows if row.get("fingerprint")}
     promoted: dict[str, str] = {}
@@ -118,7 +147,9 @@ def release_orphaned_duplicates(
         if (
             canonical.get("status") == "dismissed"
             and canonical.get("resolution_reason") in _VERDICT_COVERS_DUPLICATES
-        ):
+        ) or _same_file(str(row.get("file") or ""), str(canonical.get("file") or "")):
+            # A verdict about the code, or a copy in the canonical's own file
+            # (a line shift): the closure already speaks for this copy.
             out.append(row)
             continue
         if canonical_fp in promoted:
@@ -426,8 +457,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
         dedup = sweep_stale_dedup(dedup)
         legacy_fingerprints: dict[tuple[str, str, int, str], list[str]] = {}
         existing_rows, released = release_orphaned_duplicates(_iter_findings_raw(), now)
-        if released:
-            _write_findings_atomic(existing_rows)
+        rewrite = bool(released)
         unresolved_fps: set[str] = set()
         dup_candidates: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for row in existing_rows:
@@ -494,6 +524,17 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                         dup_candidates.get((f.pattern, f.line_content_hash), []),
                     )
             if canonical is not None:
+                if _same_file(f.file, str(canonical.get("file") or "")):
+                    # Same site after an edit above it: keep the canonical
+                    # finding pointing at where the code is now. Its
+                    # fingerprint stays its lifecycle id; the first line is
+                    # kept for the record.
+                    canonical.setdefault("first_line", canonical.get("line"))
+                    canonical["line"] = f.line
+                    canonical["line_content"] = f.line_content
+                    if f.context_hash:
+                        canonical["context_hash"] = f.context_hash
+                    rewrite = True
                 auto_dups.append(_auto_duplicate_row(f, canonical, now))
                 log(
                     f"auto-dup {f.pattern} {f.file}:{f.line} ({f.fingerprint}) "
@@ -503,18 +544,24 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 continue
             fresh.append(f)
 
-        if fresh or auto_dups or dedup != original_dedup:
+        if rewrite:
+            # A release or a relocation changed existing rows: rewrite the
+            # whole file once, new rows included.
+            _write_findings_atomic(
+                existing_rows + [asdict(finding) for finding in fresh] + auto_dups
+            )
+        if fresh or auto_dups or rewrite or dedup != original_dedup:
             # Persist even if `fresh` is empty, so the sweep's pruning actually
             # lands on disk. Otherwise stale entries would rematerialize on the
             # next scan.
             STATE_DIR.mkdir(parents=True, exist_ok=True)
-            for finding in fresh:
-                _append_finding_row(finding)
-            if auto_dups:
-                FINDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-                with FINDINGS_FILE.open("a") as fh:
-                    for row in auto_dups:
-                        fh.write(json.dumps(row) + "\n")
+            if not rewrite:
+                for finding in fresh:
+                    _append_finding_row(finding)
+                if auto_dups:
+                    with FINDINGS_FILE.open("a") as fh:
+                        for row in auto_dups:
+                            fh.write(json.dumps(row) + "\n")
             save_dedup(dedup)
 
     for finding in fresh:
@@ -1425,10 +1472,13 @@ def compact_findings(max_age_days: int = 7, now: datetime | None = None) -> int:
 
     kept: list[dict[str, Any]] = []
     dropped = 0
+    live_copies = live_auto_duplicate_fps(findings)
     for f in findings:
         status = f.get("status", "open")
-        if status not in resolved_states:
-            # open/surfaced — always keep
+        if status not in resolved_states or f.get("fingerprint") in live_copies:
+            # open/surfaced — always keep. So is an auto-duplicate folded into
+            # a still-open finding: nobody resolved it, and it is its
+            # worktree's only record of the code.
             kept.append(f)
             continue
         ts = f.get("detected_at", "")

@@ -195,8 +195,23 @@ def test_block_shifted_by_an_edit_above_is_a_dup(worktrees):
     assert shifted.fingerprint != first.fingerprint
 
     assert F.persist_findings([shifted]) == []
-    assert [r["fingerprint"] for r in _unresolved()] == [first.fingerprint]
+    [canonical] = _unresolved()
+    assert canonical["fingerprint"] == first.fingerprint
+    # The one unresolved finding now points at where the code is.
+    assert (canonical["line"], canonical["first_line"]) == (10, 5)
     assert {r["fingerprint"]: r for r in _rows()}[shifted.fingerprint]["duplicate_of"] == first.fingerprint
+
+
+def test_resolving_a_shifted_finding_does_not_reopen_its_own_copy(worktrees):
+    main, _ = worktrees
+    path = main / "src" / "envelope_step.py"
+    first = _detect(path, 5)
+    F.persist_findings([first])
+    path.write_text("import os\n" * 5 + SOURCE)
+    F.persist_findings([_detect(path, 10)])
+    path.write_text("import os\n" * 5 + SOURCE.replace("        pass\n", "        raise\n"))
+    assert F.update_finding_status(first.fingerprint, "confirmed", emit_resolution_event=False) == 0
+    assert _unresolved() == []
 
 
 def test_second_identical_one_liner_elsewhere_is_not_a_dup(worktrees):
@@ -467,3 +482,66 @@ def test_same_relative_path_in_another_repo_is_not_a_dup(worktrees, tmp_path):
     F.persist_findings([first])
     assert F.persist_findings([stranger]) == [stranger]
     assert len(_unresolved()) == 2
+
+
+# ---------------------------------------------------------------------------
+# Per-worktree consumers treat a live copy as that worktree's record
+# ---------------------------------------------------------------------------
+
+
+def _fold(worktrees):
+    main, other = worktrees
+    first = _detect(main / "src" / "envelope_step.py", 5)
+    copy = _detect(other / "src" / "envelope_step.py", 5)
+    F.persist_findings([first])
+    F.persist_findings([copy])
+    return first, copy
+
+
+def _age_all(days_ago: str = "2026-01-01T00:00:00Z") -> None:
+    rows = _rows()
+    for r in rows:
+        r["detected_at"] = days_ago
+    F._write_findings_atomic(rows)
+
+
+def test_compaction_keeps_a_copy_while_its_original_is_open(worktrees, capsys):
+    first, copy = _fold(worktrees)
+    _age_all()
+    F.compact_findings(7)
+    assert {r["fingerprint"] for r in _rows()} == {first.fingerprint, copy.fingerprint}
+
+    F.update_finding_status(first.fingerprint, "dismissed", reason="fp", emit_resolution_event=False)
+    _age_all()
+    F.compact_findings(7)
+    capsys.readouterr()
+    assert _rows() == []
+
+
+def test_ship_trailer_cites_the_worktrees_own_copy(worktrees):
+    _first, copy = _fold(worktrees)
+    helper = Path(__file__).resolve().parents[1] / "scripts" / "dev" / "_ship_watcher_fingerprints.py"
+    proc = subprocess.run(
+        ["python3", str(helper), str(F.FINDINGS_FILE)],
+        input=copy.file,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == copy.fingerprint
+
+
+def test_commit_naming_a_copy_resolves_only_that_copy(worktrees, monkeypatch):
+    first, copy = _fold(worktrees)
+    monkeypatch.setattr(A, "_post_resolution_event", lambda *a, **k: None)
+
+    class _Log:
+        returncode = 0
+        stderr = ""
+        stdout = f"{'ab' * 20}\x00fix: handle it\x00Watcher-Findings: {copy.fingerprint}\x1e"
+
+    monkeypatch.setattr(A.subprocess, "run", lambda *a, **k: _Log())
+    assert A.scan_commits(since="14 days ago", repo_path=worktrees[1]) == 1
+    rows = {r["fingerprint"]: r for r in _rows()}
+    assert rows[copy.fingerprint]["status"] == "confirmed"
+    assert rows[first.fingerprint]["status"] == "open"

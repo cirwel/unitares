@@ -109,6 +109,7 @@ from agents.watcher.findings import (
     auto_duplicate_aliases,
     compact_findings,
     is_auto_duplicate,
+    live_auto_duplicate_fps,
     escalate,
     findings_state_lock,
     load_dedup,
@@ -2098,10 +2099,18 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
     # findings in the active queue — confirmed/dismissed/aged_out are
     # terminal and a coincidental hex match must NOT re-stamp confirmed_at
     # or re-emit a governance event on the next scan.
+    # An auto-duplicate folded into a live finding is its own worktree's
+    # record of the code (ship.sh cites it from that worktree), so a commit
+    # that names it resolves that copy.
+    live_copies = live_auto_duplicate_fps(findings)
     fp_state: dict[str, str] = {
         f.get("fingerprint", ""): f.get("status", "open")
         for f in findings
-        if f.get("fingerprint") and f.get("status", "open") in ("open", "surfaced")
+        if f.get("fingerprint")
+        and (
+            f.get("status", "open") in ("open", "surfaced")
+            or f.get("fingerprint") in live_copies
+        )
     }
     if not fp_state:
         return 0
@@ -2134,11 +2143,16 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
             reason = f"referenced in {sha[:8]}: {subject[:80]}"
             try:
                 with findings_state_lock():
+                    rows_now = _iter_findings_raw()
+                    live_now = live_auto_duplicate_fps(rows_now)
                     current = {
                         f.get("fingerprint", ""): f
-                        for f in _iter_findings_raw()
+                        for f in rows_now
                         if f.get("fingerprint")
-                        and f.get("status", "open") in ("open", "surfaced")
+                        and (
+                            f.get("status", "open") in ("open", "surfaced")
+                            or f.get("fingerprint") in live_now
+                        )
                     }
                     current_matches = [
                         fp for fp in current if fp.startswith(prefix)
