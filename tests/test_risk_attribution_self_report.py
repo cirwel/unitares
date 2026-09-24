@@ -93,3 +93,16 @@ def test_zero_report_after_a_blended_report_is_not_called_independent():
     assert "independent behavioral assessment" in update([0.0, 0.0, 0.0])["note"]
     assert "not independent of your report" in update([1.0, 1.0, 1.0])["note"]
     assert "not independent of your report" in update([0.0, 0.0, 0.0])["note"]
+
+
+def test_simulated_blended_update_does_not_mark_the_monitor():
+    monitor = UNITARESMonitor(f"test-attr-sim-{uuid.uuid4().hex[:12]}", load_state=False)
+    base = {"parameters": np.array([]), "response_text": TEXT, "complexity": 0.5}
+    for _ in range(5):
+        monitor.process_update({**base, "ethical_drift": [0.0, 0.0, 0.0]}, confidence=0.7)
+    monitor.simulate_update({**base, "ethical_drift": [1.0, 1.0, 1.0]}, confidence=0.7)
+    assert not getattr(monitor, "_self_report_ever_blended", False)
+    note = monitor.process_update(
+        {**base, "ethical_drift": np.array([0.0, 0.0, 0.0])}, confidence=0.7
+    )["risk_attribution"]["note"]
+    assert "independent behavioral assessment" in note
