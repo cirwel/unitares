@@ -21,12 +21,14 @@ def _clear_cache():
     apl._released_sessions.clear()
     apl._locks.clear()
     apl._lease_sessions.clear()
+    apl._last_sweep = 0.0
     yield
     apl._lease_ids.clear()
     apl._released_at.clear()
     apl._released_sessions.clear()
     apl._locks.clear()
     apl._lease_sessions.clear()
+    apl._last_sweep = 0.0
 
 
 def _fake_req(**kw):
@@ -577,3 +579,25 @@ async def test_release_suppression_expires_for_a_later_rebind(monkeypatch):
 
     assert len(client.acquired) == 1
     assert "uuid-1" not in apl._released_at
+
+
+def test_sweep_drops_state_for_identities_nothing_refreshes():
+    import asyncio
+
+    now = 10_000.0
+    stale = now - apl._PRESENCE_TTL_S - 1
+    apl._lease_sessions["gone"] = {"agent-gone": stale}
+    apl._lease_ids["gone"] = "lease-gone"
+    apl._locks["gone"] = asyncio.Lock()
+    apl._lease_sessions["live"] = {"agent-live": now}
+    apl._lease_ids["live"] = "lease-live"
+    apl._locks["live"] = asyncio.Lock()
+    apl._last_sweep = 0.0
+
+    apl._sweep(now)
+
+    assert "gone" not in apl._lease_sessions
+    assert "gone" not in apl._lease_ids
+    assert "gone" not in apl._locks
+    assert apl._lease_ids["live"] == "lease-live"
+    assert "live" in apl._locks

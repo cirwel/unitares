@@ -93,6 +93,39 @@ def _expire_tombstone(agent_uuid: str, now: float) -> None:
 _locks: dict[str, asyncio.Lock] = {}
 
 
+_SWEEP_INTERVAL_S = 60.0
+_last_sweep = 0.0
+
+
+def _sweep(now: float) -> None:
+    """Drop per-identity state nothing still refreshes.
+
+    Every fresh process mints a fresh identity, so without this the lock, holder
+    and cache maps grow for the life of the server. An identity whose holders
+    have all been silent past the TTL has an expired lease anyway; a later
+    heartbeat simply re-acquires. A lock is dropped only when nobody holds it
+    (an asyncio.Lock has no waiters unless it is held).
+    """
+    global _last_sweep
+    if now - _last_sweep < _SWEEP_INTERVAL_S:
+        return
+    _last_sweep = now
+    for agent_uuid, holders in list(_lease_sessions.items()):
+        if all(now - seen > _PRESENCE_TTL_S for seen in holders.values()):
+            _lease_sessions.pop(agent_uuid, None)
+            _lease_ids.pop(agent_uuid, None)
+    for agent_uuid in [u for u, at in _released_at.items() if now - at > _RELEASE_SUPPRESS_S]:
+        _released_at.pop(agent_uuid, None)
+        _released_sessions.pop(agent_uuid, None)
+    for agent_uuid, lock in list(_locks.items()):
+        if (
+            not lock.locked()
+            and agent_uuid not in _lease_sessions
+            and agent_uuid not in _released_at
+        ):
+            _locks.pop(agent_uuid, None)
+
+
 def _lock_for(agent_uuid: str) -> asyncio.Lock:
     lock = _locks.get(agent_uuid)
     if lock is None:
@@ -160,6 +193,7 @@ async def heartbeat_agent_presence(
     """Keep the ``agent:/<uuid>`` presence lease fresh. Fire-and-forget; never raises."""
     if not agent_uuid:
         return
+    _sweep(time.monotonic())
     if _released_since(agent_uuid, scheduled_at, client_session_id):
         return
     client = _make_client()
@@ -383,6 +417,7 @@ async def release_agent_presence(
     """
     if not agent_uuid:
         return {"released": False, "reason": "no_identity"}
+    _sweep(time.monotonic())
     session_ids = tuple(s for s in client_session_ids if s)
     if not session_ids:
         # Without the releasing session's id, a late final check-in from that
