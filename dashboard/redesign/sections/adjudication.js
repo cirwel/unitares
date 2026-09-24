@@ -119,6 +119,7 @@
           <h2>Adjudication <span class="src-badge" id="adj-src"></span></h2>
           <span id="adj-pending" class="pending"></span>
         </div>
+        <p id="adj-hidden" class="adj-blurb" hidden></p>
         <p class="adj-blurb">Your verdict on each finding becomes an external-truth
         label attributed to Sentinel — the ground truth the EISV falsifier needs.
         A few per day, on separate days, is the ideal cadence.</p>
@@ -181,6 +182,21 @@
     }
   }
 
+  // Items a model judged, or that someone abstained on, are hidden for a
+  // cooldown, never dropped. Say how many: otherwise an empty queue reads
+  // "Queue clear" while findings are merely out of view. A model's verdict is
+  // telemetry, not an operator label, so it is named as such here too.
+  function hiddenNote(data) {
+    const model = data.model_adjudicated_suppressed || 0;
+    const abstained = data.abstained_suppressed || 0;
+    const parts = [];
+    if (model) parts.push(model + " judged by a model (telemetry, not a verdict)");
+    if (abstained) parts.push(abstained + " abstained");
+    return parts.length
+      ? "Hidden for a cooldown, then back: " + parts.join(" · ") + "."
+      : "";
+  }
+
   async function load() {
     const mount = document.querySelector(mountSel);
     if (!mount) return;
@@ -194,6 +210,9 @@
     if (slot) slot.innerHTML = progressHtml(data.progress);
     const pending = document.querySelector("#adj-pending");
     if (pending) pending.textContent = (data.pending_total ?? 0) + " pending";
+    const note = hiddenNote(data);
+    const hidden = document.querySelector("#adj-hidden");
+    if (hidden) { hidden.textContent = note; hidden.hidden = !note; }
     const hint = document.querySelector("#adj-token-hint");
     if (hint) hint.hidden = !!window.DATA.operatorToken();
 
@@ -201,7 +220,10 @@
     if (!queueEl) return;
     const items = data.queue || [];
     if (!items.length) {
-      queueEl.innerHTML = `<div class="adj-empty">Queue clear — nothing awaiting a verdict.
+      queueEl.innerHTML = note
+        ? `<div class="adj-empty">Nothing awaiting a verdict right now, but the
+          queue is not clear: see the hidden count above.</div>`
+        : `<div class="adj-empty">Queue clear — nothing awaiting a verdict.
         New Sentinel findings land here as they fire. Come back tomorrow.</div>`;
       return;
     }
