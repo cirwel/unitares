@@ -325,7 +325,9 @@ async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[s
             )
         if not row or not row["lease_id"]:
             return None, None
-        holder = _HOLDER_UNKNOWN if row["renewed"] else row["audit_session"]
+        # A null audit_session was a nameless acquire: its caller cannot be
+        # named, so it counts as an unknown live holder, as a renewal does.
+        holder = _HOLDER_UNKNOWN if row["renewed"] else (row["audit_session"] or _HOLDER_UNKNOWN)
         return str(row["lease_id"]), holder
     except Exception as e:  # pragma: no cover - defensive
         logger.debug(f"[AGENT_PRESENCE] live lease lookup failed (non-fatal): {e}")
