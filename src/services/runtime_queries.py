@@ -658,6 +658,12 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         lite_metrics["_note"] = "Use lite=false for full diagnostics"
         return lite_metrics
 
+    # The full read keeps the raw verdict string (its contract), so the decision
+    # that verdict rode on travels beside it; the envelope reads it before the
+    # verdict value, which a guided "high-risk" would otherwise alias to pause.
+    if last_decision_action is not None:
+        standardized_metrics["last_decision_action"] = last_decision_action
+
     # Circuit breaker telemetry (full verbosity only)
     try:
         from src.agent_loop_detection import get_circuit_breaker_telemetry

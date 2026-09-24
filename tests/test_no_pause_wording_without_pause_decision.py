@@ -210,10 +210,14 @@ def test_metrics_read_shape_follows_the_verdicts_decision_action():
 
 
 def test_mirror_shape_escalated_after_policy_evaluation_reports_the_pause():
-    """Post-ODE dialectic enforcement escalates decision.action to pause after
-    policy_evaluation was built (updates/phases.py). Mirror mode drops the
-    decision; the verdict's decision_action carries the final one and must
-    outrank the stale policy record."""
+    """Priority of decision fields: anything that rewrites decision.action after
+    policy_evaluation was built leaves the policy record stale, and mirror mode
+    drops the decision, so the verdict's decision_action must outrank it.
+
+    The only such rewriter today is the post-ODE dialectic escalation, whose
+    pause is not actuated; #2415 caps that escalation at guide, after which
+    this pause shape no longer occurs. The test pins the field priority, not
+    the escalation."""
     source = _guided_cold_start_check_in()
     source["decision"] = {"action": "pause", "sub_action": "dialectic_condition"}
     # policy_evaluation still says proceed: it predates the escalation.
@@ -380,3 +384,22 @@ def test_verification_floor_verdict_is_not_called_the_prior():
     hint = ES._recovery_hint(payload, None, 0.55)
     assert not hint.startswith("Cold start")
     assert "the prior" not in hint
+
+
+def test_full_metrics_read_follows_the_last_decision():
+    """check_working_state(lite=false) keeps the raw verdict string; the
+    decision it rode on travels beside it and must win over the alias."""
+    payload = {"verdict": "high-risk", "risk_score": 0.79,
+               "primary_eisv_source": "ode_fallback",
+               "last_decision_action": "proceed"}
+    assert ES._decision_action(payload) == "proceed"
+    assert "pause and call" not in ES._recovery_hint(payload, None, 0.79)
+
+
+def test_default_metrics_read_keeps_the_guide_sub_action():
+    """recent_decisions stores a bare 'proceed'; a caution verdict still means
+    a guided proceed."""
+    payload = {"verdict": explain_verdict("caution", decision_action="proceed"),
+               "risk_score": 0.5}
+    summary = ES._action_summary(payload, 0.5)
+    assert (summary["action"], summary["sub_action"]) == ("proceed", "guide")
