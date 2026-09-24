@@ -58,7 +58,7 @@ def make_io(adj, answers, queue=(ITEM,)):
         "history": lambda fp: "fired 12 time(s)",
         "doctor_evidence": lambda item: "LIVE RE-RUN of `x`: WARN: still outdated",
         "run_model": run_model,
-        "post_verdict": lambda payload, tokens: calls["posted"].append(payload) or True,
+        "post_verdict": lambda payload, tokens: calls["posted"].append(payload) or "recorded",
     }
     return io, calls
 
@@ -334,10 +334,38 @@ def test_not_opted_in_runs_nothing(adj, monkeypatch, host):
     assert adj.main([]) == 0
 
 
-def test_failed_post_is_not_counted(adj):
-    io, calls = make_io(adj, {"fast": reply("confirmed")})
-    io["post_verdict"] = lambda payload, tokens: False
+def test_a_systemic_delivery_failure_stops_judging_and_fails_the_run(adj):
+    """A wrong token or a server that will not write refuses every item:
+    stop spending quota and exit nonzero so monitoring sees it."""
+    queue = [dict(ITEM, fingerprint=f"fp{i}") for i in range(3)]
+    io, calls = make_io(adj, {"fast": reply("confirmed")}, queue=queue)
+    io["post_verdict"] = lambda payload, tokens: calls["posted"].append(payload) or "failed"
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 1
+    assert calls["model"] == ["fast"]          # no model call after the refusal
+    assert len(calls["posted"]) == 1
+
+
+def test_an_item_specific_refusal_does_not_stop_the_run(adj):
+    queue = [dict(ITEM, fingerprint=f"fp{i}") for i in range(3)]
+    io, calls = make_io(adj, {"fast": reply("confirmed")}, queue=queue)
+    outcomes = iter(["skipped", "recorded", "recorded"])
+    io["post_verdict"] = lambda payload, tokens: next(outcomes)
     assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert calls["model"] == ["fast", "fast", "fast"]
+
+
+@pytest.mark.parametrize("code,expected", [
+    (404, "skipped"), (409, "skipped"), (401, "failed"), (403, "failed"),
+    (500, "failed"), (503, "failed"),
+])
+def test_http_refusals_are_classified(adj, monkeypatch, code, expected):
+    monkeypatch.setenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", "t")
+
+    def boom(*a, **k):
+        raise adj.urllib.error.HTTPError("http://x", code, "no", {}, _io.BytesIO())
+
+    monkeypatch.setattr(adj, "_http_json", boom)
+    assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) == expected
 
 
 def test_mcp_bearer_is_tried_before_the_http_token(adj, monkeypatch):
@@ -395,7 +423,7 @@ def test_verdicts_carry_the_adjudicator_credential(adj, monkeypatch):
         return {"success": True}
 
     monkeypatch.setattr(adj, "_http_json", fake_http)
-    assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) is True
+    assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) == "recorded"
     assert seen["headers"] == {"X-Unitares-Adjudicator": "adj-secret"}
 
 
@@ -403,7 +431,7 @@ def test_no_adjudicator_credential_means_no_post(adj, monkeypatch):
     monkeypatch.delenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", raising=False)
     monkeypatch.setattr(adj, "_http_json",
                         lambda *a, **k: pytest.fail("must not post without the credential"))
-    assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) is False
+    assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) == "failed"
 
 
 @pytest.mark.parametrize("raw", ["", "abc", "0", "1.5", "nan", "inf", "-0.2"])

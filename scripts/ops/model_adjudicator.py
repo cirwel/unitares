@@ -349,24 +349,31 @@ def io_run_claude(prompt: str, tier: Tier) -> Optional[tuple[str, Optional[str]]
     return str(out["result"]), (models[0] if len(models) == 1 else ",".join(models) or None)
 
 
-def io_post_verdict(payload: dict, tokens: list[str]) -> bool:
+RECORDED, SKIPPED, FAILED = "recorded", "skipped", "failed"
+# Refusals about THIS item: it left the queue (404) or an operator judged it
+# meanwhile (409). Anything else — auth, a server that will not write — would
+# refuse every item alike, so it is systemic.
+_ITEM_SPECIFIC_HTTP = {404, 409}
+
+
+def io_post_verdict(payload: dict, tokens: list[str]) -> str:
     # The route's own credential, on top of the transport bearer: a model
     # verdict hides a finding from the operator queue, so generic client auth
     # is not enough to write one.
     adjudicator = _load_secret("UNITARES_MODEL_ADJUDICATOR_TOKEN")
     if not adjudicator:
         log("UNITARES_MODEL_ADJUDICATOR_TOKEN unset — cannot record verdicts")
-        return False
+        return FAILED
     try:
         body = _http_json(f"{GOV_URL}/v1/sentinel/model-adjudicate", payload, tokens,
                           {"X-Unitares-Adjudicator": adjudicator})
     except urllib.error.HTTPError as exc:
         log(f"verdict for {payload['fingerprint']} refused: HTTP {exc.code}")
-        return False
+        return SKIPPED if exc.code in _ITEM_SPECIFIC_HTTP else FAILED
     except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
         log(f"verdict for {payload['fingerprint']} not delivered: {exc}")
-        return False
-    return body.get("success") is True
+        return FAILED
+    return RECORDED if body.get("success") is True else FAILED
 
 
 DEFAULT_IO: dict[str, Callable[..., Any]] = {
@@ -510,8 +517,16 @@ def run_once(io: dict | None = None, dry_run: bool = False,
             + f"{result.confidence:.2f} — {result.rationale[:160]}")
         if dry_run:
             continue
-        if io["post_verdict"](payload, tokens):
+        outcome = io["post_verdict"](payload, tokens)
+        if outcome == RECORDED:
             recorded += 1
+        elif outcome != SKIPPED:
+            # A systemic refusal would refuse every remaining item too:
+            # judging them anyway spends quota for nothing, and a clean exit
+            # would tell process monitoring the job is healthy.
+            log(f"{recorded} verdict(s) recorded; stopping — verdicts are not being "
+                "accepted, so further model calls would be wasted")
+            return 1
     log(f"{recorded} verdict(s) recorded" + (" (dry run)" if dry_run else ""))
     return 0
 
