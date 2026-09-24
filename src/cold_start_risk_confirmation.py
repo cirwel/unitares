@@ -764,11 +764,12 @@ def apply_non_authored_cold_start_guard(
     # keeps the overridden reason: that same reading on an agent-authored
     # check-in is not guarded and can pause, which is the one thing the agent
     # needs to know before its next sync_state.
+    # Kept under the envelope's 240-character reason line with a typical
+    # original reason: the facts that matter come first.
     guarded["reason"] = (
-        "Cold start: guidance only, because this check-in was not agent-authored "
-        f"and behavioral history is not yet authoritative (epistemic_class={epistemic_class}, "
-        f"behavioral_confidence={confidence:.3f}). The same reading on an "
-        f"agent-authored check-in can pause (was: {original_reason})"
+        f"Cold start, guidance only: not agent-authored, behavioral confidence "
+        f"{confidence:.1f} < 0.3. Your own report on this reading can pause "
+        f"(was: {original_reason})"
     )
     guarded["guidance"] = (
         "This estimate is the cold-start prior, not a measurement of this agent's "
