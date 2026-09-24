@@ -2263,6 +2263,10 @@ def _canary_sql(doctor, monkeypatch):
         ("agent_report", {"include_authored": False}, 0, 1),
         # authored, not risk-routed (no gate): an independent stop, counted
         ("agent_report", None, 1, 0),
+        # no recorded class, gate present (the guard failed closed on a
+        # missing class): authorship cannot be shown, so it counts
+        (None, {"applied": False}, 1, 0),
+        (None, {"include_authored": False}, 1, 0),
     ],
 )
 def test_cold_start_canary_sql_classifies_each_row_shape(
@@ -2278,21 +2282,30 @@ def test_cold_start_canary_sql_classifies_each_row_shape(
     policy = {"action": "pause", "inputs": {"verdict_source": "phi_cold_start"}}
     if gate is not None:
         policy["epistemic_gate"] = gate
-    row = json.dumps({"epistemic_class": eclass,
-                      "eisv_telemetry": {"policy_evaluation": policy}})
+    state = {"eisv_telemetry": {"policy_evaluation": policy}}
+    if eclass is not None:
+        state["epistemic_class"] = eclass
+    row = json.dumps(state)
     fake = (
         "WITH core_agent_state AS (SELECT now() AS recorded_at, "
         f"'{row}'::jsonb AS state_json) "
     )
     probe = fake + sql.replace("WITH d AS (", ", d AS (", 1).replace(
         "FROM core.agent_state", "FROM core_agent_state", 1)
+    # Same connection the rest of the suite uses (CI runs Postgres as a TCP
+    # service container; a bare socket connection would silently skip there).
+    from tests.test_db_utils import TEST_DB_URL as dsn
     try:
-        out = subprocess.run(["psql", "-d", "governance_test", "-Atc", probe],
+        out = subprocess.run(["psql", dsn, "-Atc", probe],
                              capture_output=True, text=True, timeout=20)
     except FileNotFoundError:
         pytest.skip("psql not available")
-    if out.returncode != 0:
-        pytest.skip(f"governance_test not reachable: {out.stderr[:120]}")
+    unreachable = ("could not connect", "connection to server", "does not exist",
+                   "password authentication failed", "Connection refused")
+    if out.returncode != 0 and any(m in out.stderr for m in unreachable):
+        pytest.skip(f"test database not reachable: {out.stderr[:120]}")
+    # Anything else (a syntax error in the canary query) must fail, not skip.
+    assert out.returncode == 0, out.stderr
     decisions, got_counted, got_uncounted = (int(x) for x in out.stdout.strip().split("|"))
     assert decisions == 1
     assert (got_counted, got_uncounted) == (counted, uncounted)

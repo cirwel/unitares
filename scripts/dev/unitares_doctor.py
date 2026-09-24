@@ -2551,11 +2551,12 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
         "    AND state_json ? 'eisv_telemetry')"
         "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
-        "                          AND NOT (eclass = 'agent_report' AND gated"
+        "                          AND NOT (eclass IS NOT DISTINCT FROM 'agent_report'"
+        "                                   AND gated"
         "                                   AND incl IS DISTINCT FROM 'true')),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
-        "                          AND eclass = 'agent_report' AND gated"
-        "                          AND incl IS DISTINCT FROM 'true')"
+        "                          AND eclass IS NOT DISTINCT FROM 'agent_report'"
+        "                          AND gated AND incl IS DISTINCT FROM 'true')"
         " FROM d"
     ))
     if row is None or len(row) < 3:
