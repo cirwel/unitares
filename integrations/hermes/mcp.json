@@ -3,7 +3,13 @@
   "mcpServers": {
     "unitares": {
       "type": "streamable-http",
-      "url": "http://127.0.0.1:8767/mcp/"
+      "url": "http://127.0.0.1:8767/mcp/",
+      "headers": {
+        "X-Unitares-Harness-Type": "hermes",
+        "X-Unitares-Harness-Source": "caller_declared",
+        "X-Unitares-Adapter-Type": "unitares-hermes-plugin",
+        "X-Unitares-Adapter-Version": "0.2.0"
+      }
     }
   }
 }

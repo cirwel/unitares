@@ -119,8 +119,28 @@ VERDICT: FINDINGS(<number of findings>)
 # git / gh plumbing
 
 
+class GhUnavailable(Exception):
+    """The `gh` CLI could not be launched, so nothing could be reviewed."""
+
+
+def _launch(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run, except that a missing `gh` binary raises GhUnavailable.
+
+    Every PR read and record post goes through gh. Without it nothing was
+    reviewed, which is infrastructure unavailable (exit 2), not findings
+    (exit 1). Only the launch of the gh executable itself is converted, so a
+    missing input file stays a FileNotFoundError even if it is named "gh".
+    """
+    try:
+        return subprocess.run(cmd, **kwargs)
+    except FileNotFoundError as exc:
+        if cmd[0] == "gh" and exc.filename == "gh":
+            raise GhUnavailable("the `gh` CLI is not installed or not on PATH") from exc
+        raise
+
+
 def _run(cmd: list[str], *, check: bool = True, cwd: str | None = None) -> str:
-    proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+    proc = _launch(cmd, cwd=cwd, text=True, capture_output=True)
     if check and proc.returncode != 0:
         raise SystemExit(f"review_gate: {' '.join(cmd[:3])}… failed: {proc.stderr.strip()}")
     return proc.stdout
@@ -356,6 +376,15 @@ def native_records(comments: list[dict], reviews: list[dict], inline: list[dict]
             continue
         findings = [c for c in inline if c.get("pull_request_review_id") == review["id"]
                     and is_codex_bot(c)]
+        # GitHub files a bot's answer inside an existing thread as a new review
+        # with an empty body, bound to the current head. That is conversation on
+        # an earlier finding, not a review of this diff; the formal re-review of
+        # the head decides it. Counting it blocked #2369 on Codex's own "no
+        # blocking findings" reply. A review with any top-level comment, a body,
+        # or no surviving comments at all still counts below.
+        if (findings and all(c.get("in_reply_to_id") for c in findings)
+                and not (review.get("body") or "").strip()):
+            continue
         clean = review.get("state") == "APPROVED" and not findings
         # A submitted/dismissed review with no explicit approval stays visible,
         # including when someone deleted its inline comments. Never infer clean.
@@ -427,8 +456,8 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
         if not snapshot.running and not snapshot.completed and not requested and time.monotonic() - started >= 30:
             body = (f"@codex review\n\nReview the current draft diff at `{head}`. "
                     "The author owns fixes and readiness.\n\n" + request_marker + "\n")
-            subprocess.run(["gh", "pr", "comment", str(pr), "--body-file", "-"],
-                           input=body, text=True, capture_output=True, check=True)
+            _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"],
+                    input=body, text=True, capture_output=True, check=True)
             requested = True
             print("[review] requested native review for this head and diff", flush=True)
         time.sleep(min(10, max(0, deadline - time.monotonic())))
@@ -468,9 +497,9 @@ def repo_slug() -> str:
 
 
 def current_pr() -> dict | None:
-    proc = subprocess.run(["gh", "pr", "view", "--json",
-                           "number,headRefOid,headRefName,baseRefName,state"],
-                          text=True, capture_output=True)
+    proc = _launch(["gh", "pr", "view", "--json",
+                    "number,headRefOid,headRefName,baseRefName,state"],
+                   text=True, capture_output=True)
     return json.loads(proc.stdout) if proc.returncode == 0 else None
 
 
@@ -564,8 +593,8 @@ def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     # Evidence is not a new bot command. Native footers include example
     # mentions that dispatch cloud tasks when copied by the author's account.
     body = re.sub(r"@codex\b", "Codex", body, flags=re.I)
-    subprocess.run(["gh", "pr", "comment", str(pr), "--body-file", "-"],
-                   input=body, text=True, check=True, capture_output=True)
+    _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"],
+            input=body, text=True, check=True, capture_output=True)
 
 
 def _resolve(args) -> tuple[int, str, str, str]:
@@ -1006,8 +1035,8 @@ def post_check(repo: str, pr: int, head: str, conclusion: str, description: str,
         endpoint += f"/{existing[0]['id']}"
         method = "PATCH"
         payload.pop("head_sha")
-    subprocess.run(["gh", "api", "--method", method, endpoint, "--input", "-"],
-                   input=json.dumps(payload), text=True, capture_output=True, check=True)
+    _launch(["gh", "api", "--method", method, endpoint, "--input", "-"],
+            input=json.dumps(payload), text=True, capture_output=True, check=True)
 
 
 # --------------------------------------------------------------------------
@@ -1092,6 +1121,14 @@ def main(argv: list[str] | None = None) -> int:
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")
         return 0
+    except GhUnavailable as exc:
+        # Nothing was reviewed: infrastructure unavailable (exit 2), not
+        # findings needing author action (exit 1), which is what the uncaught
+        # FileNotFoundError traceback used to report.
+        print(f"[review] UNREVIEWED: {exc}, so review evidence can be neither "
+              "read nor posted from here. Run review.sh where gh is available, "
+              "or hand off explicitly.")
+        return UNREVIEWED
 
 
 if __name__ == "__main__":

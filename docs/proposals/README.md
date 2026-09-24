@@ -21,7 +21,13 @@ implementation is Built. The archive includes Parked questions that may resume.
 ## Dispositions
 
 The child indexes preserve the disposition reading taken on **2026-09-03**,
-plus subsequently added rows. The tags are not a current work queue or permission
+plus subsequently added rows. A proposals audit on **2026-09-23** re-read the
+rows whose status the code, git history or the maintainer deployment had
+overturned (retagging 13 of them and annotating others), and, at the operator's
+selection that day, parked four Active rows whose documents are untouched for
+30 days and wait on nothing in flight, and retagged a fifth Built (partial)
+because its named phases had shipped; rows it
+did not flag keep the 2026-09-03 reading. The tags are not a current work queue or permission
 to build. In particular, an Active row can be blocked or already partly built.
 Read its body and linked implementation before choosing work.
 
@@ -29,18 +35,18 @@ Read its body and linked implementation before choosing work.
 |---|---|
 | **Built** | The status says shipped, implemented, landed, or wired, in whole or part. Dormant means built but flag-off or unwired; partial means a named phase shipped. |
 | **Registered** | A frozen or pre-registered protocol. Its stop rule binds the analyst and is never re-run, refreshed, or weakened. |
-| **Active** | Design or measurement work touched in the 30 days before 2026-09-03, or named by a signed gate as in progress. This was a chosen sorting rule. |
-| **Parked** | Design-only or deferred by its status and untouched since before 2026-08-04 at the tagging read. The row retains its recorded date. |
+| **Active** | Design or measurement work touched in the 30 days before the reading date (2026-09-03, or 2026-09-23 for rows re-read then), or named by a signed gate as in progress. This was a chosen sorting rule. |
+| **Parked** | Design-only or deferred by its status and untouched for 30 days at the reading date (before 2026-08-04 at the 2026-09-03 read; before 2026-08-24 at the 2026-09-23 re-read), with nothing in flight waiting on it. The row retains its recorded date. |
 | **Closed** | A recorded decision, refutation, superseded draft, negative result, or dated record retained as provenance. |
 
 Current counts:
-Built 21 · Registered 7 · Active 29 · Parked 24 · Closed 14
+Built 27 · Registered 8 · Active 19 · Parked 25 · Closed 16
 
 These counts cover the tagged entries across all three indexes. The archive
 also preserves the 19 older records previously indexed under `resolved/`, and
 one supporting JSON artifact. The counts are mechanically checked; the tags
-remain a dated reading. Protocols that register at merge can appear in
-`registered/` while retaining their original Active tag and DRAFT header.
+remain a dated reading. Protocols that register at merge are tagged
+Registered from their merge commit, even where the body keeps its DRAFT header.
 
 `scripts/dev/check_proposals_index.py` checks recursive coverage, one row per
 document, links, status fields and count arithmetic. It does not judge readiness,

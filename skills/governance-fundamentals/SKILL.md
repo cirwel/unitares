@@ -4,7 +4,7 @@ description: >
   Use when an agent needs to understand UNITARES governance concepts — EISV state vectors,
   basins, policy actions, coherence, calibration. Reference material for interpreting
   governance metrics as proprioceptive state estimation, not outcome judgment.
-last_verified: "2026-09-23"
+last_verified: "2026-09-24"
 freshness_days: 21
 source_files:
   - unitares/config/governance_config.py
@@ -30,30 +30,6 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
-source_digests:
-  unitares/config/governance_config.py: "eb8aa8754755729f"
-  unitares/governance_core/coherence.py: "ef819003ee72b388"
-  unitares/governance_core/parameters.py: "84bf47ca540bbc49"
-  unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
-  unitares/src/governance_monitor.py: "bf2ac268a3ecfec9"
-  unitares/src/monitor_calibration.py: "c99375f368dd98aa"
-  unitares/src/governance_glossary.py: "251e06209e038a13"
-  unitares/src/behavioral_state.py: "e214a51c1d7763c7"
-  unitares/src/behavioral_sensor.py: "fce77d62fbd7b472"
-  unitares/src/behavioral_assessment.py: "2cbeea287b81399e"
-  unitares/src/cold_start_risk_confirmation.py: "fccd80e216d63b6e"
-  unitares/src/monitor_decision.py: "c80f4e13511fe8ba"
-  unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/monitor_result.py: "9179435b91634583"
-  unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
-  unitares/src/confidence.py: "00cc04e1f54278b4"
-  unitares/src/eisv_telemetry.py: "24f1a47911850263"
-  unitares/src/services/runtime_queries.py: "f948bb168a59aad4"
-  unitares/src/mcp_handlers/response_formatter.py: "48ccdfafb0cdb8bb"
-  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
-  unitares/src/mcp_handlers/observability/outcome_events.py: "703e6a57b8e4f770"
 ---
 
 # Governance Fundamentals

@@ -212,6 +212,41 @@ start on the initial draft of #2352 during the pilot; the command-owned request
 is therefore necessary for this workflow. See the PR for subsequent push and
 fallback validation.
 
+#### Requesting review without local tooling
+
+`review.sh` needs the `gh` CLI and a local Codex or Claude CLI, so it cannot
+run in cloud sessions, sandboxed runtimes, or any environment without them.
+When native Codex review is enabled for the repository (it is on this
+operator's), the environment-independent path is a PR comment:
+
+1. Post `@codex review` as a top-level comment on the PR. Any agent that can
+   write a GitHub comment (through the `gh` CLI, a GitHub MCP connector, or
+   the REST API) can do this, and drafts are covered.
+2. The `review` check re-runs on the Codex bot's comment and reads its result
+   directly: a clean result becomes `clean (codex-native)`, and findings
+   appear as review threads.
+3. **Fixing** a finding also works without tooling. Push the fix, then post
+   `@codex review` again: native review here triggers on PR open, not on
+   every push, and the new diff needs its own result. **Rebutting** a finding
+   does not work without tooling. The gate keeps a native finding open until
+   a diff-bound disposition record exists, and only `review.sh dispose` writes
+   one; a thread reply is not read. So reply on the thread with the rebuttal,
+   keep the PR in draft, and hand the disposition to someone who can run
+   `review.sh dispose`, naming the thread. Do not assemble the disposition
+   record by hand either.
+4. If Codex replies "Something went wrong" (for example `Provided git ref …
+   does not exist` right after a push), post the request once more. That
+   error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
+   the retry succeeded. A second identical failure is an outage to report,
+   not something to loop on.
+
+Do not hand-build a `unitares-review v1` record in place of this. The gate
+trusts records from the owner's account, which every agent posts through, so
+a record assembled by the authoring session from its own subagents' reviews
+reads as independent when it is not (#2356 posted one and retracted it).
+`review.sh` remains the path when native review is not enabled, and the
+fallback when Codex is unavailable.
+
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
 (`review.sh --background`) is useful while the agent does other work, but the

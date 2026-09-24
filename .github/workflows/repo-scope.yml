@@ -47,7 +47,7 @@ jobs:
 
       # The guard above is VENDOR neutrality; this one is FLEET neutrality —
       # no operator's resident names hardcoded in shipped source. It reports
-      # the two known couplings on every run and fails only on a NEW one.
+      # the known couplings on every run and fails only on a NEW one.
       - name: Run fleet-identity guard
         run: python3 scripts/dev/check_fleet_identity_leak.py
 

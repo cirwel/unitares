@@ -3,10 +3,9 @@
 **Status:** v0 — **not enabled.** Phase 1 (detector) + Phase 1.5 (local-model backend) +
 Phase 2 (actuator wiring) have landed, but the wiring is behind a **default-off** flag
 (`GOVERNANCE_VERIFICATION_FLOOR`). The draft can merge as inert scaffolding; **enabling
-the flag in a live deployment is the gated act, and the gate is a conjunction: the
-owners' sign-off _and_ a review of the safety envelope**, as the safety-constraint
-section of `continuous-verdict-blending-v0.md` states it. The owners' sign-off has not
-been given, so the gate stands. For the Φ→telemetry / `resolve_verdict_risk` owners.
+the flag in a live deployment is the gated act.** What satisfies that gate is
+open — see D2 in [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md). For the
+Φ→telemetry / `resolve_verdict_risk` owners.
 **Author:** follow-up to the self-report-dependence worked example, 2026-06-28.
 **Why now:** the worked example
 ([`docs/operations/self-report-verdict-dependence-2026-06-28.md`](../../operations/self-report-verdict-dependence-2026-06-28.md))
@@ -119,7 +118,7 @@ reason the model backend exists.
 
 ---
 
-## Phase 2 — wiring (landed default-OFF; owner- and council-gated for *enable*, not for *merge*)
+## Phase 2 — wiring (landed default-OFF; gated for *enable*, not for *merge*)
 
 The actuator wiring is now in the branch, **inert until an operator sets the flag**.
 What shipped:
@@ -192,12 +191,12 @@ The floor's dormancy and its wake condition are recorded in
 (Theme 6), including the two cautions that apply to any number read out of the shadow
 record — the pronoun-free stratum, and unscored-is-not-cleared.
 
-**Still required before the flag is enabled in any live deployment** (this is the
-two-part gate — the draft can merge as inert scaffolding, but enabling is the deliberate
-act):
+**Still required before the flag is enabled in any live deployment** (the draft can
+merge as inert scaffolding, but enabling is the deliberate, gated act):
 
-- The owners' sign-off and a review of the safety envelope: the same two-part gate
-  `continuous-verdict-blending-v0.md` states for verdict-path changes.
+- Whatever satisfies the enable gate `continuous-verdict-blending-v0.md` states for
+  verdict-path changes. What that gate requires — one referent or two — is open; see
+  D2 in [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md).
 - A real false-positive-regression pass on a larger benign-coding corpus (the bundled
   eval corpus is small by design). Live shadow traffic is now recorded against a
   denominator and can serve as that corpus — see Phase 2.5. Recording it is not running
@@ -224,9 +223,9 @@ act):
 - [x] (Phase 2.5) the shadow's durable sink + denominator + reader
   (`src/verification_floor_shadow.py`, `scripts/analysis/verification_floor_shadow_read.py`),
   closing issue #2169 — the shadow ran default-on and persisted nowhere.
-- [ ] (Phase 2 enable) the owners' sign-off and a review of the safety envelope, plus a
-  larger false-positive-regression corpus, before the flag is turned on in any live
-  deployment.
+- [ ] (Phase 2 enable) the enable gate `continuous-verdict-blending-v0.md` states, once
+  D2 in `open-decisions-packet-v0.md` is decided, plus a larger
+  false-positive-regression corpus, before the flag is turned on in any live deployment.
 
 ## Relation to neighboring work
 

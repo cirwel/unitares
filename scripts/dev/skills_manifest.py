@@ -45,12 +45,23 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# Verification records (scripts/client/_check_freshness.py). Excluded so the
+# manifest moves only when skill content moves: new attestation files are
+# written by every stamping PR, and hashing them here would put every pair of
+# such PRs back into conflict on this file. The plugin's parity check excludes
+# the same directory.
+ATTESTATIONS_DIR = ".attestations"
+
+
 def _iter_skill_files() -> list[Path]:
-    """All files under skills/, sorted, excluding the manifest itself."""
+    """All files under skills/, sorted, excluding the manifest itself and
+    skills/.attestations/."""
     files = [
         p
         for p in SKILLS_DIR.rglob("*")
-        if p.is_file() and p.name != MANIFEST_NAME
+        if p.is_file()
+        and p.name != MANIFEST_NAME
+        and ATTESTATIONS_DIR not in p.relative_to(SKILLS_DIR).parts
     ]
     return sorted(files, key=lambda p: p.relative_to(SKILLS_DIR).as_posix())
 
