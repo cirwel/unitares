@@ -22,6 +22,7 @@ import pytest
 from src.mcp_handlers.identity import handlers
 from src.mcp_handlers.identity.session import (
     FOREIGN_DESTINATION_SOURCES,
+    FOREIGN_STABLE_SESSION_ID,
     UNDECLARED_DESTINATION_PROVENANCE,
     bind_destination_refusal,
 )
@@ -75,6 +76,14 @@ class TestThePredicate:
     def test_another_agents_stable_id_is_not_owned(self, agent_uuid):
         other = make_client_session_id(str(uuid.uuid4()))
         assert bind_destination_refusal(agent_uuid, other, None) == UNDECLARED_DESTINATION_PROVENANCE
+
+    @pytest.mark.parametrize("source", OWN_TRANSPORT_SOURCES)
+    def test_another_agents_stable_id_is_refused_under_any_declared_source(self, agent_uuid, source):
+        """A declared source does not make another agent's stable id the
+        caller's: an X-Session-ID header or explicit client_session_id can
+        carry `agent-<someone else's uuid12>`, which resolution maps to them."""
+        other = make_client_session_id(str(uuid.uuid4()))
+        assert bind_destination_refusal(agent_uuid, other, source) == FOREIGN_STABLE_SESSION_ID
 
     def test_a_foreign_source_is_refused_by_name(self, agent_uuid):
         assert bind_destination_refusal(agent_uuid, FOREIGN_KEY, "pinned_onboard_session") == "pinned_onboard_session"
@@ -218,6 +227,27 @@ class TestBindSessionEndToEnd:
         assert data["bound"] is False
         assert data["rebind_refused"] == "pinned_onboard_session"
         assert data["mcp_session_key"] is None
+        assert _nothing_written(writes)
+
+    @pytest.mark.asyncio
+    async def test_another_agents_stable_id_in_a_header_is_refused(self, agent_uuid, writes):
+        """The review's scenario: the caller resolves as itself, but the
+        ladder hands back `agent-<B12>` from an X-Session-ID header. Nothing
+        may be written onto B's stable key under the caller's identity."""
+        other = make_client_session_id(str(uuid.uuid4()))
+        with patch.object(handlers, "resolve_session_identity", AsyncMock(return_value=self._resolved(agent_uuid))), \
+             patch.object(handlers, "derive_session_key_with_source",
+                          AsyncMock(return_value=(other, "x_session_id"))):
+            data = parse_result(await handlers.handle_bind_session({
+                "client_session_id": make_client_session_id(agent_uuid),
+                "resume": True,
+            }))
+        assert data["success"] is True
+        assert data["bound"] is False
+        assert data["rebind_refused"] == FOREIGN_STABLE_SESSION_ID
+        assert data["mcp_session_key"] is None
+        assert "another agent's stable session id" in data["message"]
+        assert "User-Agent" not in data["message"]
         assert _nothing_written(writes)
 
     @pytest.mark.asyncio

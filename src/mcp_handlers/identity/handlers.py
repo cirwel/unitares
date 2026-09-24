@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 # --- identity_session (leaf) ---
 from .session import (
     FOREIGN_DESTINATION_SOURCES,
+    FOREIGN_STABLE_SESSION_ID,
     UNDECLARED_DESTINATION_PROVENANCE,
     bind_destination_refusal,
     derive_session_key,
@@ -1697,6 +1698,10 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
             f"bind this transport: the destination key's provenance was not "
             f"declared, so it cannot be shown to be yours. Your identity is unchanged."
             if rebind_refused == UNDECLARED_DESTINATION_PROVENANCE
+            else f"Resolved agent '{target_label or target_agent_id}', but declined to "
+            f"bind this transport: the destination key is another agent's stable "
+            f"session id, so it cannot be yours. Your identity is unchanged."
+            if rebind_refused == FOREIGN_STABLE_SESSION_ID
             else f"Resolved agent '{target_label or target_agent_id}', but declined to "
             f"bind this transport: the destination key resolved via "
             f"'{rebind_refused}', which is keyed on the User-Agent alone and can "

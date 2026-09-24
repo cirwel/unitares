@@ -500,6 +500,13 @@ FOREIGN_DESTINATION_SOURCES = frozenset({"pinned_onboard_session"})
 # source-label refusal without knowing the helper's internals.
 UNDECLARED_DESTINATION_PROVENANCE = "undeclared_provenance"
 
+# Refusal reason for a stable ``agent-{uuid12}`` key that is not the caller's
+# own. Resolution maps any ``agent-`` key to the identity whose uuid it
+# prefixes, so such a key belongs to that agent whatever ladder source
+# delivered it (an ``X-Session-ID`` header or an explicit client_session_id
+# can carry another agent's stable id).
+FOREIGN_STABLE_SESSION_ID = "foreign_stable_session_id"
+
 
 def bind_destination_refusal(
     agent_uuid: str,
@@ -520,8 +527,12 @@ def bind_destination_refusal(
       ``UNDECLARED_DESTINATION_PROVENANCE``. The #2142 bind reached its
       helper with exactly this shape, so an undeclared destination fails
       closed rather than repeating it.
+    - A key in stable-id shape (``agent-...``) that is not the caller's own
+      is refused as ``FOREIGN_STABLE_SESSION_ID`` whatever its declared
+      source: resolution maps it to the agent whose uuid it prefixes.
 
-    Any other declared ladder source names the caller's own transport.
+    Any other key under a declared ladder source is taken as the caller's own
+    transport key. This is a provenance check, not a live-owner lookup.
     """
     if session_key:
         from .shared import make_client_session_id
@@ -538,6 +549,8 @@ def bind_destination_refusal(
         return key_source
     if key_source is None:
         return UNDECLARED_DESTINATION_PROVENANCE
+    if session_key and session_key.startswith("agent-"):
+        return FOREIGN_STABLE_SESSION_ID
     return None
 
 
