@@ -194,13 +194,15 @@ acquisitions without a paired release in a `finally:` or `async with` context.
 
 ### P006 — Silent exception swallow (severity: medium, violation_class: VOI)
 
-An `except` whose body is effectively silent: only `pass`, `...`,
-`continue`, or debug-level logging (`logger.debug(...)`). Hides real bugs and
-makes debugging impossible.
+An exception handler (`except`, `catch`) whose body is effectively silent:
+it does nothing (`pass`, `...`, an empty block), only continues the loop, or
+only logs at debug level (`logger.debug(...)`, `console.debug(...)`). Hides
+real bugs and makes debugging impossible.
 
-Not P006: a handler that logs at info/warning/error/exception, re-raises,
-returns, or assigns an error/fallback value. Those react to the
-failure. A deterministic AST check drops P006 findings on such handlers.
+Not P006: a handler that logs at info/warning/error, re-raises or rethrows,
+returns, or assigns an error/fallback value. Those react to the failure. For
+Python files a deterministic AST check also drops P006 findings on such
+handlers; for other languages this definition is the only filter.
 
 **SAFE — DO NOT FLAG:**
 ```python
