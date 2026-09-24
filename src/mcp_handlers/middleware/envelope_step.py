@@ -509,6 +509,9 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_UNKNOWN_WRITER = "unknown"
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -522,7 +525,9 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     """
     payload = _harvest_payload(payload)
     candidates = normalize_discovery_list(payload.get("relevant_discoveries"))
+    from_prior_work = False
     if not candidates:
+        from_prior_work = bool(payload.get("relevant_prior_work"))
         candidates = (
             payload.get("relevant_prior_work")
             or payload.get("results")
@@ -550,15 +555,22 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
             # need a second, full-mode call to learn it. The identity is
             # copied whole; only the display label is bounded, and a bounded
             # label says so rather than posing as the complete value.
+            # `relevant_prior_work` rows are the one exception: the mirror
+            # formatter writes the writer's id into `by` (response_formatter
+            # `_format_mirror`), so there `by` is the identity, not a label.
+            # "unknown" is the producers' placeholder for a missing id and is
+            # neither a label nor an identity.
             by = item.get("by")
-            if isinstance(by, str) and by:
+            agent_id = item.get("_agent_id") or item.get("agent_id")
+            if from_prior_work and not agent_id:
+                agent_id, by = by, None
+            if isinstance(by, str) and by and by != _UNKNOWN_WRITER:
                 if len(by) > _MEMORY_BY_LABEL_CHARS:
                     suggestion["by"] = by[: _MEMORY_BY_LABEL_CHARS - 1] + "…"
                     suggestion["by_truncated"] = True
                 else:
                     suggestion["by"] = by
-            agent_id = item.get("_agent_id") or item.get("agent_id")
-            if agent_id:
+            if agent_id and str(agent_id) != _UNKNOWN_WRITER:
                 suggestion["agent_id"] = str(agent_id)
 
             summary = item.get("summary")
