@@ -6,7 +6,7 @@ description: >
   pattern (window.X = { load }), the live-or-snapshot data seam, theme-aware
   charts via design tokens, and the app.html wiring (nav / pane / lazyLoad /
   RELOAD / retheme). A repo-specific reference — not general dashboard advice.
-last_verified: "2026-09-21"
+last_verified: "2026-09-24"
 freshness_days: 30
 source_files:
   - unitares/dashboard/redesign/app.html
@@ -41,13 +41,13 @@ source_digests:
   unitares/dashboard/redesign/sections/discoveries.js: "987622e5448645e7"
   unitares/dashboard/redesign/sections/telemetry-health.js: "b6fed2a82727ddcb"
   unitares/dashboard/redesign/sections/risk.js: "d36e47793c9b31e4"
-  unitares/dashboard/redesign/sections/adjudication.js: "9b3ac40599eecc8d"
+  unitares/dashboard/redesign/sections/adjudication.js: "c54bd9f6eb859249"
   unitares/dashboard/redesign/sections/security.js: "a9ebbfd8c2186a21"
   unitares/dashboard/package.json: "ebf9c825a86eeccd"
   unitares/dashboard/tests/telemetry-health.test.js: "efbb8e0db3f89f6b"
-  unitares/src/http_api.py: "1c6b7f1e3d840fce"
+  unitares/src/http_api.py: "5abb17ed7c08df6b"
   unitares/src/http_routes/dashboard.py: "0fb5b075664dc0e6"
-  unitares/src/http_routes/sentinel.py: "1271247f44ae0389"
+  unitares/src/http_routes/sentinel.py: "4337d1b34bf9ffee"
   unitares/src/http_routes/telemetry.py: "a49c4c1b1c5fcaed"
   unitares/src/dashboard_auth.py: "4bfd1bf01b1b6b03"
 ---
