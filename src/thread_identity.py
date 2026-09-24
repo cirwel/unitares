@@ -112,7 +112,7 @@ def fork_honest_message(
     ``sibling_locus`` covers two cases the classification does not separate:
     a resumed UUID reoccupying its thread (the case R6 was written for), and
     a freshly minted UUID landing on a thread earlier, unrelated
-    process-instances already occupy (a shared IP:UA fingerprint). Only the
+    process-instances have occupied (a shared IP:UA fingerprint). Only the
     onboard caller knows which it is, so it passes ``minted_fresh`` as a
     bool. A caller that cannot tell (the thin check-in enrichment reads only
     ``ctx.meta``) passes ``None`` and gets text true in both cases.
