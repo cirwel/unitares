@@ -65,6 +65,69 @@ logger = get_logger(__name__)
 # and is deliberately absent from recovery guidance.
 _RECOVERY_RISK_CEILING = 0.40
 
+
+def _review_risk_limit() -> float:
+    """Reviewed self-recovery's risk gate: review passes only below it.
+
+    handle_self_recovery_review (lifecycle/operations.py) admits
+    ``risk_score < 0.65`` and so refuses AT the limit; the check action's
+    eligibility test uses ``>`` and disagrees on the boundary. Hints follow
+    the path that actually refuses, so callers compare with ``>=``.
+
+    Imported lazily: the lifecycle handler module pulls in storage and the
+    tool registry, which the middleware must not load at import time.
+    """
+    try:
+        from src.mcp_handlers.lifecycle.self_recovery import MAX_RISK_FOR_SELF_RECOVERY
+
+        return float(MAX_RISK_FOR_SELF_RECOVERY)
+    except Exception:  # pragma: no cover - defensive; the constant is 0.65
+        return 0.65
+
+
+def _operator_resume_limit() -> float:
+    """operator_resume_agent's hard risk limit (refuses above it, force or not)."""
+    try:
+        from src.mcp_handlers.lifecycle.self_recovery import OPERATOR_RESUME_HARD_RISK_LIMIT
+
+        return float(OPERATOR_RESUME_HARD_RISK_LIMIT)
+    except Exception:  # pragma: no cover - defensive; the constant is 0.80
+        return 0.80
+
+
+def _stopped_recovery_route(risk: Optional[float], review_limit: float, *, paused: bool) -> str:
+    """Exits for a stop above the review gate, each one that will not refuse.
+
+    Pausing auto-initiates a dialectic session by default, and request_review
+    then answers SESSION_EXISTS, so the open session is named first. Operator
+    resume refuses above its hard limit or with a void active.
+    """
+    text = (
+        f"{_review_refusal_phrase(review_limit)}. If a dialectic review of this "
+        "pause is open, dialectic(action='get', agent_id=<your agent UUID>) "
+        "finds it and your thesis answers it; otherwise request_review opens one."
+    )
+    operator_limit = _operator_resume_limit()
+    if risk is not None and risk > operator_limit:
+        text += f" Operator resume refuses above risk {operator_limit:.2f}"
+        text += ", so the other exit is the pause's expiry." if paused else "."
+    else:
+        text += " An operator can resume you unless a void is active."
+    return text
+
+
+def _review_refusal_phrase(limit: float) -> str:
+    """State the review gate without overclaiming it.
+
+    handle_self_recovery_review still admits an agent above the limit when
+    the persisted row proves the legacy non-authored cold-start trap, so the
+    refusal is not absolute.
+    """
+    return (
+        f"Reviewed self-recovery refuses at risk {limit:.2f} and above "
+        "(except where it finds the legacy cold-start trap)"
+    )
+
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
 # Bound on a digest's `by` display label. `agent_id` is never bounded: it is
@@ -84,6 +147,7 @@ _ACTION_ALIASES = {
     "caution": ("proceed", "guide"),
     "guide": ("proceed", "guide"),
     "resumed": ("proceed", "resumed"),
+    "not_paused": ("proceed", "not_paused"),
     "block": ("pause", "block"),
     "high-risk": ("pause", "high-risk"),
     "reject": ("pause", "reject"),
@@ -249,6 +313,27 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
         or primary_source in {"ode_fallback", "phi_cold_start"}
         or basis in {"ode_fallback", "phi_cold_start"}
     )
+
+
+def _cold_start_pause_deferred(payload: Dict[str, Any], risk: Optional[float]) -> bool:
+    """Whether this cold-start reading would have paused an authored report.
+
+    The pause comes from the high-risk verdict, not a risk number: task-type
+    adjustment can move risk_score below 0.7 while the verdict stays
+    high-risk. Read what the guard recorded, then the verdict (mirror mode
+    drops the decision), and fall back to the risk band only when neither
+    is present.
+    """
+    decision = payload.get("decision")
+    if isinstance(decision, dict) and (
+        decision.get("cold_start_epistemic_deferred")
+        or str(decision.get("original_action") or "").lower() == "pause"
+    ):
+        return True
+    verdict = _verdict_value(payload)
+    if verdict is not None:
+        return verdict == "high-risk"
+    return risk is not None and risk >= 0.7
 
 
 def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
@@ -463,15 +548,17 @@ def _recovery_hint(
     # High risk alone reads as severe only when no decision is known. Once the
     # policy has decided to continue (the cold-start guard, gap suppression),
     # "pause and call self_recovery" contradicts that decision, and reviewed
-    # recovery then refuses the agent anyway (it gates on risk < 0.65) after
-    # recording its reflection in shared memory.
+    # recovery then refuses the agent anyway (at or above
+    # MAX_RISK_FOR_SELF_RECOVERY) after recording its reflection in shared
+    # memory.
     decided_to_continue = action in {
         "proceed", "continue", "approve", "ok", "healthy", "safe", "guide",
-        "resumed",
+        "resumed", "not_paused",
     }
-    # Reviewed recovery refuses at this risk (and self_recovery lifts pauses);
-    # an agent that is not paused must not be routed to it here.
-    recovery_refused = risk is not None and risk >= 0.65
+    # Reviewed recovery refuses at or above this risk; no agent may be routed
+    # to a review that will refuse it.
+    review_limit = _review_risk_limit()
+    recovery_refused = risk is not None and risk >= review_limit
     severe = stopped or (
         not decided_to_continue and risk is not None and risk >= 0.7
     )
@@ -500,6 +587,13 @@ def _recovery_hint(
         "tight", "boundary", "near_edge"
     }
     if severe:
+        if recovery_refused:
+            # Reviewed recovery would record the reflection and then refuse at
+            # this risk, so do not send a stopped agent there.
+            return (
+                "Working state looks degraded - pause this line of work. "
+                + _stopped_recovery_route(risk, review_limit, paused=stopped)
+            )
         return (
             "Working state looks degraded - pause and call "
             "self_recovery(action='review', reflection='...') before continuing."
@@ -514,34 +608,44 @@ def _recovery_hint(
         hint = (
             "Cold start: this risk is the prior, not a measurement of your "
             "behavior, and "
-            + ("nothing blocks you now." if action == "resumed"
+            + ("nothing blocks you now." if action in {"resumed", "not_paused"}
                else "this decision does not block.")
         )
-        if risk is not None and risk >= 0.7:
+        if _cold_start_pause_deferred(payload, risk):
             hint += (
                 " Until your third check-in your own sync_state is scored on the "
-                "same prior and can pause at this risk."
+                "same prior and can pause on this reading."
             )
         return hint
     if risky and decided_to_continue and recovery_refused:
         return (
             "Risk is elevated but "
-            + ("nothing blocks you now" if action == "resumed"
+            + ("nothing blocks you now" if action in {"resumed", "not_paused"}
                else "this decision does not block")
             + " - keep scope tight and sync_state after your next substantial "
-            "step. self_recovery is for lifting a pause."
+            f"step. {_review_refusal_phrase(review_limit)}, so it is not a step here."
         )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
     if risky and decided_to_continue:
-        # Not paused: self_recovery has nothing to lift, and review refuses at
-        # risk >= 0.65 after recording the reflection.
+        # Not paused and below the review gate: same advice the attention
+        # branch gives a continuing agent, so two branches never disagree.
         return (
             "Risk is elevated but "
-            + ("nothing blocks you now" if action == "resumed"
+            + ("nothing blocks you now" if action in {"resumed", "not_paused"}
                else "this decision does not block")
-            + " - keep scope tight and sync_state after your next substantial "
-            "step. self_recovery is for lifting a pause."
+            + " - keep scope tight, sync_state after your next substantial "
+            "step, and use self_recovery(action='review', reflection='...') "
+            "only if work stalls."
+        )
+    if risky and recovery_refused:
+        # Unrecognised action (e.g. a bare "high-risk" verdict on a read):
+        # quick and reviewed recovery both refuse at this risk.
+        return (
+            "Risk is elevated - "
+            + _review_refusal_phrase(review_limit)[0].lower()
+            + _review_refusal_phrase(review_limit)[1:]
+            + "; if you are blocked, open a dialectic review with request_review."
         )
     if risky:
         return (
@@ -1363,11 +1467,19 @@ def build_experience_envelope(
         if state_summary.get("action") == "pause":
             # The generic continuation text below was emitted on pause verdicts
             # too, telling a paused agent to "keep working". Match recovery_hint.
-            next_action = (
-                "Paused - stop this line of work and do not continue it. Call "
-                "self_recovery(action='review', reflection='...') to request "
-                "resumption."
-            )
+            review_limit = _review_risk_limit()
+            if risk is not None and risk >= review_limit:
+                # Reviewed recovery records the reflection, then refuses here.
+                next_action = (
+                    "Paused - stop this line of work and do not continue it. "
+                    + _stopped_recovery_route(risk, review_limit, paused=True)
+                )
+            else:
+                next_action = (
+                    "Paused - stop this line of work and do not continue it. Call "
+                    "self_recovery(action='review', reflection='...') to request "
+                    "resumption."
+                )
         elif prediction_id:
             # The id already sits in the canonical payload; naming it here is
             # what makes registry-bound record_result discoverable — otherwise

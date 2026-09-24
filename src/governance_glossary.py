@@ -186,7 +186,7 @@ BASINS: Dict[str, Dict[str, Any]] = {
         },
     },
     "critical": {
-        "meaning": "Circuit breaker imminent. Pause and reassess.",
+        "meaning": "Risk in the critical band. Reassess; the policy decision, not this label, says whether the agent is stopped.",
         "thresholds": {
             "type": "operator_alert",
             "rule": "Used by higher-level diagnostics when risk/coherence guards are near breaker thresholds.",
@@ -421,6 +421,16 @@ _RESUMED_HIGH_RISK_NEXT_ACTION = (
     "sync_state after your next substantial step."
 )
 
+# Active, checked in before, but no decision is held in this server process:
+# a recovery/resume clears the history, and a record may carry none. Claim
+# only what the status establishes.
+_NOT_PAUSED_HIGH_RISK_NEXT_ACTION = (
+    "The agent is not paused and nothing blocks it now. No decision since "
+    "this reading is recorded, and a reading this high can still pause a "
+    "later check-in; keep scope tight and sync_state after your next "
+    "substantial step."
+)
+
 # Says what was decided, not that a hold is in force: the decision and its
 # actuation (the circuit breaker) are separate steps, and self_recovery's check
 # is the authority on whether a hold exists.
@@ -470,6 +480,8 @@ def explain_verdict(
         value = wrapped.get("value")
         if action == "resumed" and value == "high-risk":
             wrapped["next_action"] = _RESUMED_HIGH_RISK_NEXT_ACTION
+        elif action == "not_paused" and value == "high-risk":
+            wrapped["next_action"] = _NOT_PAUSED_HIGH_RISK_NEXT_ACTION
         elif action not in _STOP_ACTIONS and value == "high-risk":
             wrapped["next_action"] = _NON_STOP_HIGH_RISK_NEXT_ACTION.format(
                 action=action
