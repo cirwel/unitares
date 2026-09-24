@@ -7,7 +7,7 @@ computed metrics after the ODE step.
 
 Condition types:
 - complexity_limit: Caps input complexity before ODE (pre-ODE enforcement)
-- risk_target: Escalates verdict if risk exceeds target (post-ODE enforcement)
+- risk_target: Escalates to guide if risk exceeds target (post-ODE; never pauses)
 - coherence_target: Retired compatibility condition; never escalates
 - monitoring_duration: Time-bounds other conditions; expires them after duration
 """
@@ -119,12 +119,17 @@ def enforce_post_ode_conditions(
 
         if ctype == "risk_target":
             if risk_score > value:
-                overshoot = risk_score - value
-                # Severe overshoot (>50% of target) → pause; otherwise → guide
-                if overshoot > value * 0.5:
-                    new_action = _escalate(current_action, "pause")
-                else:
-                    new_action = _escalate(current_action, "guide")
+                # A resumption condition guides; it never pauses. It used to
+                # escalate a >50% overshoot to pause, but this runs after the
+                # circuit breaker, so that pause was reported and never
+                # actuated. Actuating it was rejected: the escalation bypasses
+                # the monitor's own evidence gates (gap suppression, the
+                # cold-start guard), the target is one reviewer's number with
+                # no calibration behind the 1.5x rule, the resume gates do not
+                # read the condition (pause/resume flapping), and conditions
+                # are memory-only (lost on reload). Guide is advisory by
+                # contract, so this is now what it is.
+                new_action = _escalate(current_action, "guide")
 
                 if new_action != current_action:
                     current_action = new_action
@@ -150,7 +155,14 @@ def enforce_post_ode_conditions(
 
     if escalated:
         decision = dict(decision)  # Shallow copy to avoid mutating original
-        decision["action"] = current_action
+        if current_action == "guide":
+            # The canonical guided-proceed shape: action proceed, sub_action
+            # guide. A bare action "guide" let an existing sub_action (e.g.
+            # "approve") summarize as proceed/approve despite the condition.
+            decision["action"] = "proceed"
+            decision["sub_action"] = "guide"
+        else:
+            decision["action"] = current_action
         original_reason = decision.get("reason", "")
         decision["reason"] = f"{original_reason} [escalated by dialectic conditions]"
         decision["dialectic_escalated"] = True

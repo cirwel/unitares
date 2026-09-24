@@ -182,10 +182,9 @@ def test_metrics_read_shape_follows_the_verdicts_decision_action():
 
 
 def test_mirror_shape_escalated_after_policy_evaluation_reports_the_pause():
-    """Post-ODE dialectic enforcement escalates decision.action to pause after
-    policy_evaluation was built (updates/phases.py). Mirror mode drops the
-    decision; the verdict's decision_action carries the final one and must
-    outrank the stale policy record."""
+    """Anything that rewrites decision.action after policy_evaluation was built
+    leaves the policy record stale. Mirror mode drops the decision; the
+    verdict's decision_action carries the final one and must outrank it."""
     source = _guided_cold_start_check_in()
     source["decision"] = {"action": "pause", "sub_action": "dialectic_condition"}
     # policy_evaluation still says proceed: it predates the escalation.
