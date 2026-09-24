@@ -113,14 +113,18 @@ def test_sync_client_reads_verdict_off_compact_envelope(shape: str):
 
 def test_compact_envelope_guidance_falls_back_to_next_action():
     """The compact envelope lifts no ``guidance``; on a pause ``next_action``
-    is the concrete instruction it carries instead (it names self_recovery)."""
+    is the concrete instruction it carries instead (it names the recovery
+    route: request_review above the self-recovery risk gate, self_recovery
+    below it)."""
     client = SyncGovernanceClient(transport="rest")
     client.call_tool = lambda tool_name, arguments, **kwargs: _compact_envelope("pause")
 
     result = client.checkin("test work")
 
     assert result.verdict == "pause"
-    assert result.guidance and "self_recovery" in result.guidance
+    assert result.guidance and (
+        "request_review" in result.guidance or "self_recovery(" in result.guidance
+    )
 
 
 def test_compact_guide_carries_the_servers_reason_not_the_continue_prompt():
