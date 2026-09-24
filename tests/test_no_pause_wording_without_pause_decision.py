@@ -359,3 +359,24 @@ def test_cold_start_hint_is_not_given_to_a_behavioral_reading():
     hint = ES._recovery_hint(payload, None, 0.79)
     assert not hint.startswith("Cold start")
     assert "the prior" not in hint
+
+
+def test_resumed_agent_hints_claim_no_decision():
+    """No check-in decided anything after a resume: the hint must not say
+    'this decision'."""
+    wrapped = explain_verdict("high-risk", decision_action="resumed")
+    for risk in (0.55, 0.75):
+        hint = ES._recovery_hint({"verdict": wrapped}, None, risk)
+        assert "this decision" not in hint, (risk, hint)
+        assert "nothing blocks you now" in hint, (risk, hint)
+
+
+def test_verification_floor_verdict_is_not_called_the_prior():
+    payload = {
+        "decision": {"action": "proceed", "sub_action": "guide"},
+        "metrics": {"risk_score": 0.55, "primary_eisv_source": "ode_fallback"},
+        "risk_attribution": {"primary_driver": "independent_verification_floor"},
+    }
+    hint = ES._recovery_hint(payload, None, 0.55)
+    assert not hint.startswith("Cold start")
+    assert "the prior" not in hint
