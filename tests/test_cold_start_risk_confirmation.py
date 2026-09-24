@@ -1316,3 +1316,145 @@ def test_monitor_path_defers_non_authored_cold_start_cirs_risk_block():
         result["enforcement"]["basis"]
         == NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
     )
+
+
+# --- COLD_START_GUARD_INCLUDE_AUTHORED (2026-09-24) --------------------------
+# The Phi cold-start prior owns the verdict for an agent's first check-ins
+# whoever wrote them, and was the only producer of pause verdicts in the
+# fleet. With include_authored the guard covers an agent's own report under
+# exactly the same maturity, provenance and risk-only conditions.
+
+
+def test_extended_guard_defers_an_authored_cold_start_pause():
+    guarded = apply_non_authored_cold_start_guard(
+        _decision_with_gate(),
+        epistemic_class="agent_report",
+        enabled=True,
+        include_authored=True,
+    )
+    assert (guarded["action"], guarded["sub_action"]) == ("proceed", "guide")
+    gate = guarded["cold_start_epistemic_gate"]
+    assert gate["applied"] is True
+    assert gate["agent_authored"] is True
+    assert gate["include_authored"] is True
+    # The text no longer claims an authored report can pause on the prior.
+    assert "risk-only cold-start estimate with complete provenance does not pause" in guarded["reason"]
+    assert "can pause at this risk" not in guarded["guidance"]
+    assert "was: UNITARES high-risk verdict" in guarded["reason"]
+
+
+def test_extended_guard_keeps_every_other_authority_boundary():
+    """include_authored relaxes authorship only. Each case below gets past the
+    authorship check (so its reason is never agent_authored_report) and is
+    stopped by a later gate, which proves the rest of the chain still runs for
+    an authored row."""
+    cases = {
+        "baselined": _decision_with_gate(is_baselined=True),
+        "behavioral_ready": _decision_with_gate(
+            behavioral_confidence=0.3,
+            primary_driver="behavioral_assessment",
+        ),
+        "independent_override": _decision_with_gate(
+            primary_driver="independent_verification_floor",
+            independent_override="independent_verification_floor",
+        ),
+    }
+    for label, decision in cases.items():
+        guarded = apply_non_authored_cold_start_guard(
+            decision, epistemic_class="agent_report", enabled=True, include_authored=True,
+        )
+        gate = guarded["cold_start_epistemic_gate"]
+        assert guarded["action"] == "pause", label
+        assert gate["applied"] is False, label
+        assert gate["ineligibility_reason"] != "agent_authored_report", label
+    disabled = apply_non_authored_cold_start_guard(
+        _decision_with_gate(), epistemic_class="agent_report",
+        enabled=False, include_authored=True,
+    )
+    assert disabled["cold_start_epistemic_gate"]["ineligibility_reason"] == "guard_disabled"
+
+
+def test_extended_guard_never_changes_an_authored_non_risk_pause():
+    decision = {
+        "action": "pause",
+        "sub_action": "void_pause",
+        "reason": "void active",
+        "cold_start_confirmation": _evaluate(),
+    }
+    guarded = apply_non_authored_cold_start_guard(
+        decision, epistemic_class="agent_report", enabled=True, include_authored=True,
+    )
+    assert guarded == decision
+
+
+def test_extended_guard_records_a_distinct_enforcement_basis():
+    from src.cold_start_risk_confirmation import AUTHORED_COLD_START_ENFORCEMENT_BASIS
+
+    authored = apply_non_authored_cold_start_guard(
+        _decision_with_gate(), epistemic_class="agent_report",
+        enabled=True, include_authored=True,
+    )
+    hook = apply_non_authored_cold_start_guard(
+        _decision_with_gate(), epistemic_class="substrate_interpretation",
+        enabled=True, include_authored=True,
+    )
+    assert authored["cold_start_epistemic_gate"]["enforcement_basis"] == (
+        AUTHORED_COLD_START_ENFORCEMENT_BASIS
+    )
+    assert hook["cold_start_epistemic_gate"]["enforcement_basis"] == (
+        NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
+    )
+
+
+@pytest.mark.parametrize("include_authored", [True, False])
+def test_monitor_path_follows_the_flag_for_an_authored_cold_start(include_authored):
+    """End to end through process_update: the monitor reads the flag and the
+    guard defers an agent's own cold-start risk pause only when it is on."""
+    from config.governance_config import GovernanceConfig
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor("cold-start-authored-guard", load_state=False)
+    monitor._cold_start_confirmation_lineage_status = "identity_genesis"
+    agent_state = {
+        "parameters": [0.1, 0.2],
+        "ethical_drift": [0.0, 0.0, 0.0],
+        "response_text": "Finished the refactor and ran the tests.",
+        "complexity": 0.9,
+        "task_type": "mixed",
+        "epistemic_class": "agent_report",
+    }
+    with (
+        patch.object(GovernanceConfig, "COLD_START_GUARD_INCLUDE_AUTHORED", include_authored),
+        patch.object(GovernanceConfig, "NON_AUTHORED_COLD_START_GUARD_ENABLED", True),
+        patch.object(monitor, "make_decision", return_value=_risk_pause()),
+        patch("src.governance_monitor.audit_logger._write_entry"),
+    ):
+        result = monitor.process_update(agent_state, confidence=0.5)
+
+    if include_authored:
+        assert (result["decision"]["action"], result["decision"]["sub_action"]) == (
+            "proceed", "guide")
+    else:
+        assert result["decision"]["action"] == "pause"
+
+
+def test_extended_guard_covers_the_cirs_risk_block_too():
+    guarded = apply_non_authored_cold_start_guard(
+        _decision_with_gate(_cirs_block()),
+        epistemic_class="agent_report",
+        enabled=True,
+        include_authored=True,
+    )
+    assert (guarded["action"], guarded["sub_action"]) == ("proceed", "guide")
+
+
+def test_include_authored_defaults_on_with_a_rollback_flag():
+    """Read, don't reload: reloading config would leave other modules holding a
+    stale GovernanceConfig class."""
+    import inspect
+
+    import config.governance_config as gc
+
+    source = inspect.getsource(gc)
+    block = source[source.index("COLD_START_GUARD_INCLUDE_AUTHORED = ("):][:200]
+    assert "'GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED', 'true'" in block

@@ -2200,7 +2200,7 @@ def test_cold_start_canary_warns_when_a_cold_start_pause_fires(doctor, monkeypat
     monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "3", "0"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.WARN
-    assert "3 non-authored phi_cold_start pause(s)" in result.message
+    assert "3 phi_cold_start pause(s)" in result.message
     # Deployment is the first thing to rule out: merged is not deployed.
     assert "DEPLOYED" in result.message
 
@@ -2218,45 +2218,92 @@ def test_cold_start_canary_passes_only_with_a_live_denominator(doctor, monkeypat
     monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["340", "0", "0"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.PASS
-    assert "0 pauses across 340 non-authored cold-start decisions" in result.message
+    assert "0 pauses across 340 cold-start decisions" in result.message
 
 
-def test_cold_start_canary_does_not_warn_on_agent_authored_pauses(doctor, monkeypatch):
-    """The guard leaves an agent's own report in force, so its pause is not a
-    guard failure. It is still named, so it is never silently dropped."""
+def test_cold_start_canary_does_not_warn_on_pre_extension_authored_pauses(doctor, monkeypatch):
+    """An authored pause from a row that predates the guard's extension to
+    authored reports (or a deployment with it off) is not a guard failure. It
+    is still named, so it is never silently dropped."""
     monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["367", "0", "1"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.PASS
     assert "1 agent-authored cold-start pause(s) not counted" in result.message
+    assert "predate the guard's extension" in result.message
 
 
 def test_cold_start_canary_warns_on_non_authored_even_beside_authored(doctor, monkeypatch):
     monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["367", "2", "1"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.WARN
-    assert "2 non-authored phi_cold_start pause(s)" in result.message
+    assert "2 phi_cold_start pause(s)" in result.message
     assert "1 agent-authored" in result.message
 
 
-def test_cold_start_canary_skips_when_only_authored_cold_starts_happened(doctor, monkeypatch):
-    """An all-authored window never exercised the guard: SKIP, not PASS."""
-    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["0", "0", "2"])
-    result = doctor.check_cold_start_pause_canary("postgresql:///x")
-    assert result.status is doctor.Status.SKIP
-    assert "2 agent-authored" in result.message
-
-
-def test_cold_start_canary_counts_rows_without_a_gate_as_non_authored(doctor, monkeypatch):
-    """Pre-guard rows cannot prove authorship; the SQL must not drop them."""
+def _canary_sql(doctor, monkeypatch):
     seen = {}
     monkeypatch.setattr(doctor, "_psql_row",
                         lambda url, sql, *a, **k: seen.setdefault("sql", sql) and None)
     doctor.check_cold_start_pause_canary("postgresql:///x")
-    # Both the denominator and the pause count keep gate-less rows.
-    assert seen["sql"].count("eclass IS DISTINCT FROM 'agent_report'") == 2
-    # Authorship comes from the field on every row, not the pause-only gate.
-    assert "state_json->>'epistemic_class'" in seen["sql"]
-    assert "epistemic_gate" not in seen["sql"]
+    return seen["sql"]
+
+
+@pytest.mark.parametrize(
+    ("eclass", "gate", "counted", "uncounted"),
+    [
+        # non-authored, risk-routed: the guard should have deferred it
+        ("substrate_interpretation", {"include_authored": True}, 1, 0),
+        # non-authored, no gate (pre-guard row or non-risk stop): counted
+        ("substrate_interpretation", None, 1, 0),
+        # authored, extended guard evaluated it and still paused: a failure
+        ("agent_report", {"include_authored": True}, 1, 0),
+        # authored, evaluated before the extension (key absent): uncounted
+        ("agent_report", {"applied": False}, 0, 1),
+        # authored, extension switched off: uncounted
+        ("agent_report", {"include_authored": False}, 0, 1),
+        # authored, not risk-routed (no gate): an independent stop, counted
+        ("agent_report", None, 1, 0),
+    ],
+)
+def test_cold_start_canary_sql_classifies_each_row_shape(
+    doctor, monkeypatch, eclass, gate, counted, uncounted
+):
+    """Run the canary's own SQL over one synthetic row per shape (a VALUES
+    CTE in place of core.agent_state), so the populations are checked by
+    Postgres semantics rather than by matching SQL text."""
+    import json
+    import subprocess
+
+    sql = _canary_sql(doctor, monkeypatch)
+    policy = {"action": "pause", "inputs": {"verdict_source": "phi_cold_start"}}
+    if gate is not None:
+        policy["epistemic_gate"] = gate
+    row = json.dumps({"epistemic_class": eclass,
+                      "eisv_telemetry": {"policy_evaluation": policy}})
+    fake = (
+        "WITH core_agent_state AS (SELECT now() AS recorded_at, "
+        f"'{row}'::jsonb AS state_json) "
+    )
+    probe = fake + sql.replace("WITH d AS (", ", d AS (", 1).replace(
+        "FROM core.agent_state", "FROM core_agent_state", 1)
+    try:
+        out = subprocess.run(["psql", "-d", "governance_test", "-Atc", probe],
+                             capture_output=True, text=True, timeout=20)
+    except FileNotFoundError:
+        pytest.skip("psql not available")
+    if out.returncode != 0:
+        pytest.skip(f"governance_test not reachable: {out.stderr[:120]}")
+    decisions, got_counted, got_uncounted = (int(x) for x in out.stdout.strip().split("|"))
+    assert decisions == 1
+    assert (got_counted, got_uncounted) == (counted, uncounted)
+
+
+def test_cold_start_canary_denominator_includes_authored_cold_starts(doctor, monkeypatch):
+    """The extended guard is exercised by authored cold starts too, so an
+    all-authored window must not SKIP as 'nothing to observe'."""
+    sql = _canary_sql(doctor, monkeypatch)
+    denominator = sql.split("count(*)")[1]
+    assert "agent_report" not in denominator.split("),")[0]
 
 
 def test_cold_start_canary_skips_when_db_unreachable(doctor, monkeypatch):

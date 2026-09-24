@@ -1737,9 +1737,10 @@ class UNITARESMonitor:
                     exc_info=True,
                 )
 
-        # Epistemic-authority guard: a non-agent-authored row cannot turn the
-        # non-discriminative Phi cold-start fallback into a hard pause before
-        # agent-authored or behaviorally authoritative evidence exists.  This is
+        # Epistemic-authority guard: the non-discriminative Phi cold-start
+        # fallback cannot turn into a hard pause before behaviorally
+        # authoritative evidence exists (agent-authored rows included unless
+        # COLD_START_GUARD_INCLUDE_AUTHORED is off).  This is
         # stateless and separate from the two-confirmation shadow above.  The raw
         # pause has already been recorded in audit/history; downstream runtime
         # enforcement receives the guarded proceed/guide decision.
@@ -1747,6 +1748,7 @@ class UNITARESMonitor:
             decision,
             epistemic_class=agent_state.get("epistemic_class"),
             enabled=GovConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED,
+            include_authored=GovConfig.COLD_START_GUARD_INCLUDE_AUTHORED,
         )
         cold_start_epistemic_gate = decision.get("cold_start_epistemic_gate")
         if (
