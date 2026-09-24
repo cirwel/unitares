@@ -2513,6 +2513,21 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     session's last recorded act. #1819 downgrades a *proven* risk-only
     cold-start hard stop to guidance, so the expected steady state is zero.
 
+    Only NON-authored decisions count. The guard is ineligible, by design,
+    when the check-in is the agent's own report (`epistemic_class =
+    'agent_report'`, `ineligibility_reason: agent_authored_report`): an agent
+    that tells governance it is high-risk keeps that verdict. Counting those
+    pauses made the canary warn for days on 2026-09-21's single pause, a
+    Codex session's self-authored second check-in with the guard deployed
+    and on. Authorship is read from the row's top-level `epistemic_class`,
+    the field the guard itself decides on, because it is on every decision;
+    the guard's own `epistemic_gate` block is attached to risk-routed pauses
+    only, so it cannot classify the denominator. A row whose class is absent
+    counts as non-authored, since authorship cannot be shown for it.
+    Authored pauses are still reported, uncounted. The denominator is
+    filtered the same way: a window whose cold starts were all
+    agent-authored never exercised the guard, so it SKIPs, never PASSes.
+
     Zero is also what this check sees when nothing is looking, which is the
     whole reason it exists. The denominator is cold-start *decisions* of any
     action: if no identity has been through cold start at all in the window,
@@ -2529,35 +2544,47 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     row = _psql_row(db_url, (
         "WITH d AS ("
         "  SELECT state_json->'eisv_telemetry'#>>'{policy_evaluation,action}' AS act,"
-        "         state_json->'eisv_telemetry'#>>'{policy_evaluation,inputs,verdict_source}' AS vsrc"
+        "         state_json->'eisv_telemetry'#>>'{policy_evaluation,inputs,verdict_source}' AS vsrc,"
+        "         state_json->>'epistemic_class' AS eclass"
         "  FROM core.agent_state"
         "  WHERE recorded_at > now() - interval '7 days'"
         "    AND state_json ? 'eisv_telemetry')"
-        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'),"
-        "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause')"
+        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'"
+        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
+        "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
+        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
+        "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
+        "                          AND eclass = 'agent_report')"
         " FROM d"
     ))
-    if row is None or len(row) < 2:
+    if row is None or len(row) < 3:
         return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
-    cold_starts, pauses = int(row[0]), int(row[1])
+    cold_starts, pauses, authored = int(row[0]), int(row[1]), int(row[2])
+    authored_note = (
+        f" ({authored} agent-authored cold-start pause(s) not counted: the "
+        "guard deliberately leaves an agent's own report in force)"
+        if authored else ""
+    )
     if cold_starts == 0:
         return CheckResult(
             name, mode, Status.SKIP,
-            "no phi_cold_start decisions in 7d — nothing to observe, so a zero "
-            "here would not mean the guard is working",
+            "no non-authored phi_cold_start decisions in 7d — nothing to "
+            "observe, so a zero here would not mean the guard is working"
+            + authored_note,
         )
     if pauses:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{pauses} phi_cold_start pause(s) in 7d across {cold_starts} "
-            "cold-start decisions — #1819 downgrades a proven risk-only cold "
-            "start to guidance, so check in order: is #1819 actually DEPLOYED "
-            "(compare the running build_sha, not master), is "
+            f"{pauses} non-authored phi_cold_start pause(s) in 7d across "
+            f"{cold_starts} non-authored cold-start decisions — #1819 downgrades a proven "
+            "risk-only cold start to guidance, so check in order: is #1819 "
+            "actually DEPLOYED (compare the running build_sha, not master), is "
             "GOVERNANCE_NON_AUTHORED_COLD_START_GUARD on, and did an "
-            "independent hard stop legitimately fire",
+            "independent hard stop legitimately fire" + authored_note,
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"0 pauses across {cold_starts} cold-start decisions in 7d")
+                       f"0 pauses across {cold_starts} non-authored cold-start "
+                       f"decisions in 7d" + authored_note)
 
 
 def check_label_join_overlap(db_url: str) -> CheckResult:
