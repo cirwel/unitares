@@ -38,7 +38,7 @@ sequenceDiagram
     A->>U: Searches "backup" (nothing yet), files "The disk was full." + logs, requests review
     B->>U: "Full disk, or a log that never rotated?"
     A->>U: "Checked. Rotation works. It was the disk."
-    Note over A: Session ends. Its context is gone.
+    Note over A: Session ends. Hours later, its presence has expired.
     S->>U: Starts with Agent A as its declared parent, then searches "backup" in full mode
     U->>S: The finding, filed under Agent A
 ```
