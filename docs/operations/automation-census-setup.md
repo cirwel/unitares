@@ -12,8 +12,16 @@ no dependencies). The operator's live install is a copy on `PATH`
 
 ## What shows up automatically
 
-Each collector degrades gracefully — absent sources produce a warning and zero
-items, never an error. So a host only "sees" the schedulers it actually has:
+Each collector degrades gracefully — an absent source yields zero items, never an
+error. Most collectors skip it silently. Three warn:
+
+- `crontab`, when its command is missing or `crontab -l` exits non-zero with a
+  message (including the usual `no crontab for <user>`)
+- `systemd`, when `systemctl` reports an error or, on Linux, is missing
+- `remote:<host>` (only when `UNITARES_CENSUS_REMOTE_HOST` is set), when the host
+  is unreachable or its remote `crontab -l` / `systemctl` call fails
+
+So a host only "sees" the schedulers it actually has:
 
 | Source | Discovers | Portable? |
 |---|---|---|
@@ -21,8 +29,10 @@ items, never an error. So a host only "sees" the schedulers it actually has:
 | `github-actions` | `.github/workflows/*` under `--projects-root` | any repo host |
 | `systemd` | `--user` + system timers via `systemctl list-timers` | **Linux** (see caveat) |
 | `launchd` | `~/Library/LaunchAgents/*` | macOS only |
-| `claude-tasks` | `~/.claude/tasks` | Claude Code users |
+| `claude` | `~/.claude/tasks` (scheduler `claude-tasks`) | Claude Code users |
 | `codex` / `hermes` | `~/.codex/automations`, `~/.hermes/cron/jobs.json` | those tools only |
+| `claude-hooks` | hook commands in `~/.claude/settings.json` / `settings.local.json` and installed Claude/Codex plugins' hook declarations, plus orphaned executables in `~/.claude/hooks` and plugin `hooks/` dirs | Claude Code / Codex plugin users |
+| `remote:<host>` | crontab + systemd timers on the ssh host named in `UNITARES_CENSUS_REMOTE_HOST` (opt-in; unset = skipped) | any host reachable by non-interactive `ssh` |
 | `external` | anything you declare by hand (see escape hatch) | any |
 
 Anything *not* in that list (Kubernetes CronJobs, Airflow DAGs, Jenkins, Temporal,
@@ -49,8 +59,11 @@ auto-discovered.
    ```
    Schedule it (cron / systemd timer / launchd) so the registry stays fresh; the
    dashboard shows the snapshot age and flags it stale.
-4. The dashboard endpoint (`/api/automations`) serves `last.json` — no per-user
-   wiring beyond the env vars above.
+4. The dashboard endpoint (`/api/automations`) serves `last.json` from its default
+   location (`~/.local/state/unitares-automations/last.json`). It does not read
+   `UNITARES_AUTOMATION_STATE_DIR`: if you moved the snapshot, set
+   `UNITARES_AUTOMATION_CENSUS_PATH` to that `last.json` in the governance
+   server's environment.
 
 ## The escape hatch — declare anything
 
@@ -88,8 +101,8 @@ not a customization to remove.
 
 `collect_systemd` uses `systemctl list-timers --output=json` (systemd 246+) and
 parses microsecond-epoch timestamps defensively. It is verified to **no-op
-cleanly on non-systemd hosts** (macOS emits one `systemctl not found` warning and
-zero items), but the discovery path itself has **not been smoke-tested against a
+cleanly on non-systemd hosts** (on macOS, which has no `systemctl`, it returns zero items and no warning;
+the one `systemctl not found` warning is emitted only on Linux), but the discovery path itself has **not been smoke-tested against a
 live systemd host**. First Linux operator to run it should sanity-check the timer
 list and open an issue if the `next`/`last`/`activates` fields need adjusting for
 their systemd version.

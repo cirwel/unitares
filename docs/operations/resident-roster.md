@@ -49,10 +49,13 @@ residents:
   — the SDK gates substrate-state emission on the resident's own name being in
   the roster.
 
-The checked-in plist + templates under `scripts/ops/` ship an **empty** roster;
-the canonical fleet (`Lumen,Vigil,Sentinel,Watcher,Chronicler`) appears
-only as a comment example. A deployment sets these to its own roster, or leaves
-them empty for a residentless install.
+The checked-in governance-server plist
+(`scripts/ops/com.unitares.governance-mcp.plist`) ships an **empty** roster;
+the canonical fleet (`Lumen,Vigil,Sentinel,Watcher,Chronicler`) appears there
+only as a comment example. The five per-resident `*.plist.template` files
+listed above do not: each ships that canonical fleet as its value. A
+deployment sets these to its own roster, or empties the resident templates to
+match the server's empty value for a residentless install.
 
 ### Non-obvious consequence: privileged tags
 
@@ -180,13 +183,20 @@ exists to catch.
 
 ## Calibration note
 
-Each named resident becomes its own N=1 calibration class. If you add a
-resident to the roster, it must also have class-conditional scale constants in
-`config/governance_config.py` (`DELTA_NORM_MAX_BY_CLASS`,
-`HEALTHY_OPERATING_POINT_BY_CLASS`, etc.) — `tests/test_grounding_scale_constants.py`
-enforces this. Residents with no constants fall back to fleet defaults via the
-`.get(agent_class, *_DEFAULT)` lookups, so an *unnamed* agent is always safe;
-the constraint only applies to names you place in the roster.
+Each named resident becomes its own N=1 calibration class: `classify_agent`
+checks the roster before any tag, so a rostered resident is keyed by its label
+rather than by `embodied` or `resident_persistent`. Its constants do **not** go
+in `config/governance_config.py`: `DELTA_NORM_MAX_BY_CLASS` and
+`HEALTHY_OPERATING_POINT_BY_CLASS` ship the generic tag classes plus `default`
+only, and `tests/test_grounding_scale_constants.py`
+(`test_public_dicts_are_user_agnostic_generic_classes_only`) fails if any other
+key is added. A deployment supplies per-resident values in a deployment-local
+JSON overlay named by `UNITARES_CLASS_CALIBRATION` (sections
+`healthy_operating_point`, `delta_norm_max`, `void_threshold`,
+`label_intervals`; see `_apply_class_calibration_overlay`). A resident with no
+overlay entry falls back to the fleet-wide `*_DEFAULT` values via the
+`.get(agent_class, *_DEFAULT)` lookups (not to its tag class, and not to the
+`default` entry) and keeps the standard void threshold.
 
 ## Resident-progress manifest (`UNITARES_RESIDENT_PROGRESS_MANIFEST`)
 
@@ -312,7 +322,7 @@ listing the same residents in each.
 
 Vigil's health checks are pluggable (`VIGIL_CHECK_PLUGINS`, see
 `agents/vigil/checks/registry.py`). The built-in checks are governance health,
-resident-tag hygiene, and plugin-hook liveness; the **Lumen/anima health check
+resident-tag hygiene, plugin-hook liveness, and stalled draft PRs (`StalledDraftPR`); the **Lumen/anima health check
 is an external plugin**, not shipped in this repo — a residentless install
 simply doesn't register it (Vigil reports Lumen as `not configured` and
 healthy, so nothing breaks).
@@ -320,8 +330,14 @@ healthy, so nothing breaks).
 Any health check a deployment registers — its own `redis`, `gateway`, etc. —
 now gets full per-service bookkeeping (`{svc}_healthy` / `_detail` /
 `_up_cycles` / `_down_streak`) and outage/recovery/sustained-outage change
-notes, the same treatment governance and Lumen get. No service names are
-hardcoded into the change-detection path.
+notes, the same treatment Lumen gets. `detect_changes` in `agents/vigil/agent.py`
+discovers services from the `{svc}_healthy` keys rather than listing them; the
+one service key it names is in its exclusion set `CONDITION_SERVICE_KEYS`
+(`github`, the stalled-draft-PR check's key). That flag records a condition
+rather than a reachable service, so it keeps the bookkeeping but gets no
+outage, recovery or sustained-outage notes. Governance keeps its own keys
+(`gov_up_cycles`, and no `_down_streak`), so it gets outage/recovery notes but
+never a sustained-outage note.
 
 ## Cross-package contract
 
