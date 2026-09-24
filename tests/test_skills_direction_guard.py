@@ -408,3 +408,48 @@ def test_matching_attestations_do_not_block(pair):
     _attest(src, "a", "20260924T000000000000Z-cccccccc.json")
     _attest(dst, "a", "20260924T000000000000Z-cccccccc.json")
     assert regressions(src, dst) == []
+
+
+def _record(root: Path, skill: str, name: str, *, skill_md: Path, digests: dict) -> None:
+    import hashlib
+    import json
+
+    adir = root / ".attestations" / skill
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / name).write_text(json.dumps({
+        "verified_date": "2026-09-24",
+        "skill_digest": hashlib.sha256(skill_md.read_bytes()).hexdigest()[:16],
+        "source_digests": digests,
+    }))
+
+
+def test_an_older_mirror_only_record_that_still_vouches_blocks(pair):
+    # The mirror's older record certified the CURRENT text and is the only one
+    # carrying the external source's digest; canonical's newer stamp was made
+    # where that source was absent and left it unrecorded. Deleting the older
+    # record would drop evidence that still vouches.
+    src, dst = pair
+    _skill(src, "a", date="2026-09-01", body="same")
+    _skill(dst, "a", date="2026-09-01", body="same")
+    md = src / "a" / "SKILL.md"
+    _record(dst, "a", "20260920T000000000000Z-aaaaaaaa.json", skill_md=md,
+            digests={"elsewhere/bot.py": "1111", "unitares/x.py": "2222"})
+    _record(src, "a", "20260924T000000000000Z-cccccccc.json", skill_md=md,
+            digests={"unitares/x.py": "2222"})
+    _record(dst, "a", "20260924T000000000000Z-cccccccc.json", skill_md=md,
+            digests={"unitares/x.py": "2222"})
+    [reason] = regressions(src, dst)
+    assert "20260920T000000000000Z-aaaaaaaa.json" in reason
+    assert "only record of elsewhere/bot.py" in reason
+
+
+def test_an_older_mirror_only_record_fully_covered_by_canonical_does_not_block(pair):
+    src, dst = pair
+    _skill(src, "a", date="2026-09-01", body="same")
+    _skill(dst, "a", date="2026-09-01", body="same")
+    md = src / "a" / "SKILL.md"
+    _record(dst, "a", "20260920T000000000000Z-aaaaaaaa.json", skill_md=md,
+            digests={"unitares/x.py": "2222"})
+    _record(src, "a", "20260924T000000000000Z-cccccccc.json", skill_md=md,
+            digests={"unitares/x.py": "2222"})
+    assert regressions(src, dst) == []
