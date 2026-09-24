@@ -38,7 +38,7 @@ class TestRiskTarget:
 
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
-        assert result["action"] == "guide"
+        assert (result["action"], result["sub_action"]) == ("proceed", "guide")
         assert result["dialectic_escalated"] is True
         assert len(warnings) == 1
         assert "risk" in warnings[0]
@@ -54,15 +54,26 @@ class TestRiskTarget:
         assert result is decision  # Same object, not copied
         assert len(warnings) == 0
 
-    def test_severe_overshoot_escalates_to_pause(self):
+    def test_severe_overshoot_guides_and_never_pauses(self):
+        """A condition escalation runs after the circuit breaker, so a pause
+        from it would be reported and never actuated. It caps at guide."""
         conditions = [{"type": "risk_target", "value": 0.3, "applied_at": _now_iso()}]
-        # Overshoot > 0.3 * 0.5 = 0.15, so risk > 0.45
+        # Overshoot 0.3 > 0.3 * 0.5: this used to escalate to pause.
         metrics = _make_metrics(risk_score=0.6)
         decision = _make_decision("proceed")
 
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
-        assert result["action"] == "pause"
+        assert result["action"] == "proceed"
+        assert result["sub_action"] == "guide"
+        assert result["dialectic_escalated"] is True
+        assert warnings
+
+    def test_guide_escalation_replaces_an_approve_sub_action(self):
+        conditions = [{"type": "risk_target", "value": 0.3, "applied_at": _now_iso()}]
+        decision = {**_make_decision("proceed"), "sub_action": "approve"}
+        result, _ = enforce_post_ode_conditions(conditions, _make_metrics(risk_score=0.4), decision)
+        assert (result["action"], result["sub_action"]) == ("proceed", "guide")
 
     def test_does_not_downgrade_existing_pause(self):
         conditions = [{"type": "risk_target", "value": 0.4, "applied_at": _now_iso()}]
@@ -155,7 +166,7 @@ class TestMonitoringDuration:
 
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
-        assert result["action"] == "guide"
+        assert (result["action"], result["sub_action"]) == ("proceed", "guide")
         assert len(warnings) == 1
 
     def test_monitoring_duration_propagates_to_siblings(self):
@@ -265,7 +276,7 @@ class TestCombinedConditions:
 
         result, warnings = enforce_post_ode_conditions(conditions, metrics, decision)
 
-        assert result["action"] == "pause"  # risk target alone owns this escalation
+        assert result["sub_action"] == "guide"  # risk target alone owns this escalation
         assert len(warnings) == 2
 
     def test_no_conditions_passthrough(self):

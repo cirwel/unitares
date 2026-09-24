@@ -351,4 +351,4 @@ by the transcript either way.
 - **Proposing impossible conditions**: promising a metric target without checking the live state first.
 - **Being defensive instead of analytical**: "The system is wrong" vs. "My entropy spiked because of X, and here is how I address it."
 - **Treating dialectic as adversarial**: It is collaborative problem-solving with structure, not a trial. Both sides benefit from honest resolution.
-- **Rushing synthesis**: Agreeing to conditions you cannot meet just to get unpaused guarantees a future pause.
+- **Rushing synthesis**: Agreeing to conditions you cannot meet just to get unpaused leaves the reading that paused you in place, so the next check-in can pause again. An unmet condition itself only guides.
