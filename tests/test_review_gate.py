@@ -949,3 +949,13 @@ def test_other_missing_files_still_raise(monkeypatch):
     monkeypatch.setattr(rg, "cmd_review", missing)
     with pytest.raises(FileNotFoundError):
         rg.main(["review"])
+
+
+def test_input_file_named_gh_is_not_mistaken_for_the_cli(monkeypatch, tmp_path):
+    # A missing input FILE called "gh" raises FileNotFoundError with filename
+    # "gh" too. Only the launch of the gh executable is reclassified, so this
+    # must stay an input error rather than be reported as UNREVIEWED.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "branch"))
+    with pytest.raises(FileNotFoundError):
+        rg.main(["record", "gh", "--reviewer-name", "someone", "--independent"])
