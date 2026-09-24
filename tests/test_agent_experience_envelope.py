@@ -1410,6 +1410,13 @@ def test_a_crowded_envelope_sheds_the_label_before_the_identity():
         # 3,000 bytes in a narrow window (the response-size block is added
         # after the budget check), independent of attribution.
         digest = env.get("memory_suggestions") or []
+        # Parity with an attribution-free row: wherever that keeps a digest,
+        # attribution must not cost the reader the record's handle.
+        bare = build_experience_envelope(
+            "search_shared_memory", "knowledge",
+            {**base, "results": [{"id": "d1", "summary": "short"}], "confidence_note": "c" * n})
+        if bare.get("memory_suggestions"):
+            assert digest and digest[0]["discovery_id"] == "d1", n
         if not digest:
             continue
         first = digest[0]

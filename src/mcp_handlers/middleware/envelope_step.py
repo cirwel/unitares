@@ -1029,13 +1029,24 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
             # discovery_id still opens the full record) instead of dropping
             # the whole digest or emitting a prefix.
             if attribution and wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
-                for key in ("by", "by_truncated"):
-                    compact.pop(key, None)
-                if "agent_id" in compact and wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-                    compact["attribution_label_omitted"] = True
-                else:
-                    compact.pop("agent_id", None)
-                    compact["attribution_omitted"] = True
+                # Each step is re-measured with its marker; a marker that does
+                # not fit is dropped before anything else, and the last step is
+                # exactly the attribution-free digest master emitted, so
+                # attribution never costs the reader the record's handle.
+                base = {k: v for k, v in compact.items() if k not in attribution}
+                steps = []
+                if attribution.get("agent_id"):
+                    steps += [
+                        {"agent_id": attribution["agent_id"], "attribution_label_omitted": True},
+                        {"agent_id": attribution["agent_id"]},
+                    ]
+                steps += [{"attribution_omitted": True}, {}]
+                for extra in steps:
+                    compact.clear()
+                    compact.update(base)
+                    compact.update(extra)
+                    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                        break
         else:
             suggestions[0] = {"summary": str(item)[:96]}
 
