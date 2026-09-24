@@ -93,7 +93,9 @@ defmodule UnitaresSentinel.ReAlert do
           entry
           | next_ok_ms: now_ms + interval,
             interval_ms: interval,
-            rank: max(rank, entry.rank),
+            # The severity this emission carries, so a later rise from it is
+            # an escalation even if an earlier emission was higher.
+            rank: rank,
             last_seen_ms: now_ms,
             emitted: entry.emitted + 1,
             suppressed: 0

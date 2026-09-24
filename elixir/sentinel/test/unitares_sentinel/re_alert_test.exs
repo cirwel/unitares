@@ -30,6 +30,12 @@ defmodule UnitaresSentinel.ReAlertTest do
     assert emissions(120, fn m -> if m < 20, do: 2, else: 3 end) == [0, 20, 80]
   end
 
+  test "a rise after a lower-severity scheduled re-alert is an escalation" do
+    # high at 0, medium from 5 (re-alert due at 60 goes out as medium), high again at 65.
+    rank_at = fn m -> if m == 0 or m >= 65, do: 3, else: 2 end
+    assert emissions(70, rank_at) == [0, 60, 65]
+  end
+
   test "a de-escalation does not emit early" do
     assert emissions(50, fn m -> if m < 20, do: 3, else: 2 end) == [0]
   end
