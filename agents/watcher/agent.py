@@ -106,10 +106,7 @@ from agents.watcher.findings import (
     _sweep_stale_quiet,
     _sweep_token_drift_quiet,
     _write_findings_atomic,
-    auto_duplicate_aliases,
     compact_findings,
-    is_auto_duplicate,
-    live_auto_duplicate_fps,
     escalate,
     findings_state_lock,
     load_dedup,
@@ -753,11 +750,6 @@ def _build_checkin_summary() -> tuple[str, float, float]:
     by_status: dict[str, int] = {}
     by_severity: dict[str, int] = {}
     for f in findings:
-        # An automatic duplicate was never adjudicated. Counting it as a
-        # dismissal would pull Watcher's reported confidence down for every
-        # worktree that happens to hold the same code.
-        if is_auto_duplicate(f):
-            continue
         status = f.get("status", "open")
         by_status[status] = by_status.get(status, 0) + 1
         if status in ("open", "surfaced"):
@@ -2103,18 +2095,10 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
     # findings in the active queue — confirmed/dismissed/aged_out are
     # terminal and a coincidental hex match must NOT re-stamp confirmed_at
     # or re-emit a governance event on the next scan.
-    # An auto-duplicate folded into a live finding is its own worktree's
-    # record of the code (ship.sh cites it from that worktree), so a commit
-    # that names it resolves that copy.
-    live_copies = live_auto_duplicate_fps(findings)
     fp_state: dict[str, str] = {
         f.get("fingerprint", ""): f.get("status", "open")
         for f in findings
-        if f.get("fingerprint")
-        and (
-            f.get("status", "open") in ("open", "surfaced")
-            or f.get("fingerprint") in live_copies
-        )
+        if f.get("fingerprint") and f.get("status", "open") in ("open", "surfaced")
     }
     if not fp_state:
         return 0
@@ -2147,16 +2131,11 @@ def _scan_commits_inner(since: str, repo_root: Path) -> int:
             reason = f"referenced in {sha[:8]}: {subject[:80]}"
             try:
                 with findings_state_lock():
-                    rows_now = _iter_findings_raw()
-                    live_now = live_auto_duplicate_fps(rows_now)
                     current = {
                         f.get("fingerprint", ""): f
-                        for f in rows_now
+                        for f in _iter_findings_raw()
                         if f.get("fingerprint")
-                        and (
-                            f.get("status", "open") in ("open", "surfaced")
-                            or f.get("fingerprint") in live_now
-                        )
+                        and f.get("status", "open") in ("open", "surfaced")
                     }
                     current_matches = [
                         fp for fp in current if fp.startswith(prefix)
@@ -2281,19 +2260,16 @@ def surface_pending(
             f for f in all_findings if f.get("status", "open") == "open"
         ]
     else:
-        active_findings = [
-            f for f in all_findings if f.get("status", "open") in ("open", "surfaced")
-        ]
-        in_scope, _out_of_scope = _partition_findings_by_scope(
-            active_findings,
-            scope_root,
-            auto_duplicate_aliases(all_findings),
-        )
-        # Receipts are checked after scoping: an in-scope entry may be this
-        # worktree's own auto-duplicate copy, which carries its own receipts.
         pending_findings = [
-            f for f in in_scope if audience not in _surface_receipts(f)
+            f
+            for f in all_findings
+            if f.get("status", "open") in ("open", "surfaced")
+            and audience not in _surface_receipts(f)
         ]
+        pending_findings, _out_of_scope = _partition_findings_by_scope(
+            pending_findings,
+            scope_root,
+        )
 
     if audience is None:
         header = (
@@ -3139,25 +3115,6 @@ def _verify_finding_against_source(
     return True
 
 
-# Lines either side of a flagged line that ``_context_hash`` covers.
-_CONTEXT_RADIUS = 3
-
-
-def _context_hash(line: int, snippet_lines_by_num: dict[int, str]) -> str:
-    """Hash of the flagged line and its neighbours, for insert-time dedupe.
-
-    Distinguishes two sites whose flagged line is identical (``pass``,
-    ``except Exception:``) while staying equal when the block only moved.
-    Lines outside the scanned window hash as absent; a scan whose window cut
-    the context differently just fails to match, which leaves the finding new.
-    """
-    window = [
-        snippet_lines_by_num[n].strip() if n in snippet_lines_by_num else "\x00"
-        for n in range(line - _CONTEXT_RADIUS, line + _CONTEXT_RADIUS + 1)
-    ]
-    return hash_line_content("\n".join(window))
-
-
 def scan_file(
     file_path: str,
     region: str | None = None,
@@ -3262,7 +3219,6 @@ def scan_file(
         # snapshot is what lets the sweep retain it. Truncated because this
         # is evidence for a human reading a chime, not a source of truth.
         f.line_content = source_line.strip()[:SNAPSHOT_MAX_CHARS]
-        f.context_hash = _context_hash(f.line, snippet_lines_by_num)
         f.fingerprint = f.compute_fingerprint()
         findings.append(f)
     if persist:

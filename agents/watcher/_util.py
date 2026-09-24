@@ -251,39 +251,6 @@ def repo_relative_path(file_path: str) -> str:
     return rel.as_posix()
 
 
-_REPO_ID_CACHE: dict[str, str] = {}
-
-
-def repo_identity(file_path: str) -> str:
-    """The shared git directory of the repository holding ``file_path``.
-
-    Every linked worktree of one repository reports the same common dir, and
-    two different repositories never do, so this tells "the same file in
-    another worktree" apart from "a file at the same relative path in another
-    repo". Empty when the path is not in a git repository or git fails.
-    Cached per directory, like ``repo_relative_path``.
-    """
-    if not file_path or not Path(file_path).is_absolute():
-        return ""
-    parent_key = str(Path(file_path).parent)
-    cached = _REPO_ID_CACHE.get(parent_key)
-    if cached is not None:
-        return cached
-    try:
-        result = subprocess.run(
-            ["git", "-C", parent_key, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        common = result.stdout.strip() if result.returncode == 0 else ""
-        identity = Path(common).resolve().as_posix() if common else ""
-    except (OSError, subprocess.SubprocessError):
-        identity = ""
-    _REPO_ID_CACHE[parent_key] = identity
-    return identity
-
-
 def hash_line_content(source_line: str | None) -> str:
     """Stable hash of a source line for content-aware fingerprinting.
 
