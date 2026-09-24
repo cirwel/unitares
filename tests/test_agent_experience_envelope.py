@@ -1350,12 +1350,13 @@ def test_search_lean_projection_flags_a_truncated_by_label():
     assert "by_truncated" not in short
 
 
-def test_search_lean_projection_worst_case_attribution_holds_wire_budget():
+@pytest.mark.parametrize("id_len", [120, 400])
+def test_search_lean_projection_worst_case_attribution_holds_wire_budget(id_len):
     """Worst-case attribution on every digest: maximal labels, long legacy
     writer ids, and summaries/tags at their own bounds. The whole envelope
-    stays inside 3,000 bytes, and every surviving digest carries either the
-    exact identity or an explicit omission marker, never a prefix."""
-    agent_ids = [f"legacy-writer-{i}-" + "z" * 120 for i in range(5)]
+    stays inside 3,000 bytes; a surviving identity is exact, never a prefix,
+    and when any digest's identity is withheld the envelope says so."""
+    agent_ids = [f"legacy-writer-{i}-" + "z" * id_len for i in range(5)]
     payload = {
         "success": True,
         "count": 5,
@@ -1384,8 +1385,10 @@ def test_search_lean_projection_worst_case_attribution_holds_wire_budget():
     for i, digest in enumerate(suggestions):
         if "agent_id" in digest:
             assert digest["agent_id"] == agent_ids[i]
-        else:
-            assert digest.get("attribution_omitted") is True
+    withheld = any("agent_id" not in digest for digest in suggestions)
+    assert (env.get("digest_attribution_omitted") is True) == withheld
+    if id_len == 400:
+        assert withheld  # the omission path must actually be exercised
         if "by" in digest:
             assert digest["by_truncated"] is True
             assert len(digest["by"]) == 64
@@ -1425,6 +1428,19 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
             "search_shared_memory", "knowledge", {**extra, "results": _results(n_results, True)})
         bare_d = bare.get("memory_suggestions") or []
         env_d = env.get("memory_suggestions") or []
+        bare_size = len(json.dumps(bare, ensure_ascii=False).encode("utf-8"))
+        env_size = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
+        # Attribution adds no overshoot of its own (master's narrow window,
+        # where the attribution-free payload is already over, is not ours).
+        if bare_size <= 3_000:
+            assert env_size <= 3_000, (n, env_size)
+        # Every attributed row has a label and an identity, so anything
+        # missing from a digest was withheld (a dropped label included).
+        withheld = any("agent_id" not in d or "by" not in d for d in env_d)
+        if withheld and bare_size <= 3_000 - 40:
+            assert env.get("digest_attribution_omitted") is True, n
+        if not withheld:
+            assert "digest_attribution_omitted" not in env, n
         assert len(env_d) >= len(bare_d), n
         for got, want in zip(env_d, bare_d):
             assert {k: v for k, v in got.items() if k not in _ATTRIBUTION_KEYS} == want, n

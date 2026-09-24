@@ -1034,31 +1034,41 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
 
-    if isinstance(suggestions, list):
-        withheld = False
-        for item, snap in zip(suggestions, set_aside):
-            if not snap or not isinstance(item, dict):
-                continue
-            identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
-            for attempt in (snap, identity):
-                if not attempt:
-                    continue
-                item.update(attempt)
-                if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-                    break
-                for key in attempt:
-                    item.pop(key, None)
-            if any(key not in item for key in snap):
-                withheld = True
-        if withheld:
-            envelope["digest_attribution_omitted"] = True
-            if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
-                envelope.pop("digest_attribution_omitted", None)
-
+    # The digest set is final now, so its summary fields go in before any
+    # attribution is restored: they must be inside the budget the restore
+    # measures against, not appended after it.
     state = envelope.get("state_summary")
     if isinstance(state, dict) and isinstance(suggestions, list):
         state["results_shown_in_digest"] = len(suggestions)
         state["result_set_truncated"] = True
+
+    if isinstance(suggestions, list) and any(set_aside[: len(suggestions)]):
+        # Reserve the withheld-marker's room first, so that whenever
+        # attribution is withheld the marker says so. Removing it at the end
+        # when nothing was withheld only frees space.
+        envelope["digest_attribution_omitted"] = True
+        if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+            # Not even the marker fits, so no attribution can; stay exactly
+            # as the attribution-free payload would.
+            envelope.pop("digest_attribution_omitted", None)
+        else:
+            withheld = False
+            for item, snap in zip(suggestions, set_aside):
+                if not snap or not isinstance(item, dict):
+                    continue
+                identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
+                for attempt in (snap, identity):
+                    if not attempt:
+                        continue
+                    item.update(attempt)
+                    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                        break
+                    for key in attempt:
+                        item.pop(key, None)
+                if any(key not in item for key in snap):
+                    withheld = True
+            if not withheld:
+                envelope.pop("digest_attribution_omitted", None)
 
 
 def build_experience_envelope(
