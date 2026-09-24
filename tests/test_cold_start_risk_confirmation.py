@@ -838,8 +838,8 @@ def test_non_authored_phi_cold_start_pause_becomes_advisory_guidance():
     # Agent-facing text leads with why this check-in did not pause, and keeps
     # the overridden reason: the same reading on an agent-authored check-in is
     # not guarded and can pause.
-    assert guarded["reason"].startswith("Cold start: guidance only")
-    assert "agent-authored check-in can pause" in guarded["reason"]
+    assert guarded["reason"].startswith("Cold start, guidance only")
+    assert "Your own report on this reading can pause" in guarded["reason"]
     assert "was: UNITARES high-risk verdict" in guarded["reason"]
     assert "can pause at this risk" in guarded["guidance"]
     original = guarded["cold_start_epistemic_gate"]["original_decision"]
@@ -1336,7 +1336,7 @@ def test_extended_guard_defers_an_authored_cold_start_pause():
     assert gate["agent_authored"] is True
     assert gate["include_authored"] is True
     # The text no longer claims an authored report can pause on the prior.
-    assert "risk-only cold-start estimate with complete provenance does not pause" in guarded["reason"]
+    assert "so a risk-only cold-start estimate does not pause" in guarded["reason"]
     assert "can pause at this risk" not in guarded["guidance"]
     assert "was: UNITARES high-risk verdict" in guarded["reason"]
 
@@ -1456,3 +1456,19 @@ def test_include_authored_defaults_on_with_a_rollback_flag():
     source = inspect.getsource(gc)
     block = source[source.index("COLD_START_GUARD_INCLUDE_AUTHORED = ("):][:200]
     assert "'GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED', 'true'" in block
+
+def test_guard_reason_fits_the_envelope_reason_line():
+    """envelope_step._one_line caps action_summary.reason at 240 chars; the
+    'can pause' fact and the original reason must survive it."""
+    from src.mcp_handlers.middleware.envelope_step import _one_line
+
+    decision = _decision_with_gate()
+    decision["reason"] = (
+        "UNITARES high-risk verdict (risk_score=0.79) - safety pause suggested"
+    )
+    guarded = apply_non_authored_cold_start_guard(
+        decision, epistemic_class="substrate_interpretation", enabled=True,
+    )
+    line = _one_line(guarded["reason"])
+    assert "can pause" in line
+    assert "safety pause suggested" in line

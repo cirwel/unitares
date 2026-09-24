@@ -788,13 +788,13 @@ def apply_non_authored_cold_start_guard(
     guarded["action"] = "proceed"
     guarded["sub_action"] = "guide"
     # Agent-facing text: why this check-in did not pause, what can still pause,
-    # and the overridden reason verbatim.
+    # and the overridden reason. Kept under the envelope's 240-character reason
+    # line with a typical original reason: the facts that matter come first.
     if include_authored:
         guarded["reason"] = (
-            "Cold start: guidance only, because behavioral history is not yet "
-            f"authoritative (epistemic_class={epistemic_class}, behavioral_confidence="
-            f"{confidence:.3f}). A risk-only cold-start estimate with complete "
-            f"provenance does not pause (was: {original_reason})"
+            f"Cold start, guidance only: behavioral confidence {confidence:.1f} "
+            f"< 0.3, so a risk-only cold-start estimate does not pause "
+            f"(was: {original_reason})"
         )
         guarded["guidance"] = (
             "This estimate is the cold-start prior, not a measurement of this "
@@ -805,10 +805,8 @@ def apply_non_authored_cold_start_guard(
         )
     else:
         guarded["reason"] = (
-            "Cold start: guidance only, because this check-in was not "
-            "agent-authored and behavioral history is not yet authoritative "
-            f"(epistemic_class={epistemic_class}, behavioral_confidence="
-            f"{confidence:.3f}). The same reading on an agent-authored check-in "
+            f"Cold start, guidance only: not agent-authored, behavioral "
+            f"confidence {confidence:.1f} < 0.3. Your own report on this reading "
             f"can pause (was: {original_reason})"
         )
         guarded["guidance"] = (

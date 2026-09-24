@@ -303,7 +303,9 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     public_agent_id, unique_handle, display_name = _resolve_agent_identity_view(
         agent_id, meta
     )
-    last_decision_action = _last_decision_action(meta)
+    # An uninitialized monitor (no state, or a lost state file the DB could
+    # not hydrate) has no decision to report, whatever meta's history says.
+    last_decision_action = None if is_uninitialized else _last_decision_action(meta)
     # `agent_id` carries the public structured handle, never the claimed label.
     # A label is caller-asserted and has no uniqueness constraint, so feeding it
     # back as a target selector resolves through find_agent_by_label(), which
