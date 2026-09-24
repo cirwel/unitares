@@ -427,6 +427,16 @@ class UNITARESMonitor:
                 # GovernanceState.from_dict does not see an unknown key).
                 self._last_sensor_divergence = data.pop('sensor_divergence', None)
                 # Restore bounded divergence trend history (pop for the same reason).
+                open_rows = data.pop('open_predictions', None)
+                if open_rows:
+                    from src.monitor_prediction import restore_open_predictions
+
+                    self._open_predictions.update(
+                        restore_open_predictions(
+                            open_rows,
+                            float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
+                        )
+                    )
                 div_hist = data.pop('sensor_divergence_history', None)
                 if div_hist:
                     self._sensor_divergence_history = deque(
