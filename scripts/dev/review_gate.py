@@ -606,7 +606,9 @@ def _resolve_offline(args) -> str:
     """Diff key for HEAD without gh, for `--emit`. Refuses an unpushed HEAD.
 
     CI keys the PR head against its base, so the emitted record is only valid
-    if HEAD is exactly what the branch's upstream holds. The caller posts the
+    if HEAD is exactly what `<remote>/<current branch>` holds, read live with
+    ls-remote. `@{upstream}` is deliberately not consulted: it may track the
+    base or be stale. The caller posts the
     body through whatever GitHub client it has (an MCP connector, the REST
     API); the gate then reads it like any other record.
     """
