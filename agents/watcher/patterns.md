@@ -195,8 +195,8 @@ acquisitions without a paired release in a `finally:` or `async with` context.
 ### P006 — Silent exception swallow (severity: medium, violation_class: VOI)
 
 An exception handler (`except`, `catch`) whose body is effectively silent:
-it does nothing (`pass`, `...`, an empty block), only continues the loop, or
-only logs at debug level (`logger.debug(...)`, `console.debug(...)`). Hides
+it does nothing (`pass`, `...`, an empty block, a bare `return`), only
+continues or breaks the loop, or only logs at debug level (`logger.debug(...)`, `console.debug(...)`). Hides
 real bugs and makes debugging impossible.
 
 Not P006: a handler that logs at info/warning/error, re-raises or rethrows,

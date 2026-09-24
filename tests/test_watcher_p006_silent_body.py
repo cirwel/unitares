@@ -50,6 +50,8 @@ SILENT_BODIES = [
     "logger.log(logging.DEBUG, 'skipped')",
     "'''Deliberately ignored.'''\npass",
     "logger.debug('a')\npass",
+    "return",
+    "logger.debug('x')\nreturn",
 ]
 
 LOUD_BODIES = [
@@ -86,14 +88,15 @@ def test_reacting_body_is_dropped(tmp_path, body, flagged):
     assert p006_actually_fires(str(path), flagged) is False
 
 
-def test_continue_in_loop_is_silent(tmp_path):
+@pytest.mark.parametrize("body", ["continue", "break"])
+def test_loop_control_is_silent(tmp_path, body):
     source = (
         "def f(items):\n"
         "    for item in items:\n"
         "        try:\n"
         "            use(item)\n"
         "        except ValueError:\n"
-        "            continue\n"
+        f"            {body}\n"
     )
     path = _write(tmp_path, source)
     assert p006_actually_fires(str(path), 5) is True
@@ -197,6 +200,9 @@ def test_parse_findings_keeps_p006_on_a_pass_handler(tmp_path):
 
 
 def test_parse_findings_keeps_p006_without_a_cited_line(tmp_path):
+    # region_start lands on a logging handler, which the filter would drop if
+    # it treated the fallback line as one the model cited.
     path = _write(tmp_path, _handler("logger.warning('x')"))
+    assert p006_actually_fires(str(path), 6) is False
     reply = json.dumps({"findings": [{"pattern": "P006", "hint": "silent swallow"}]})
-    assert [f.pattern for f, _ in parse_findings(reply, str(path), "test", 1)] == ["P006"]
+    assert [f.pattern for f, _ in parse_findings(reply, str(path), "test", 6)] == ["P006"]

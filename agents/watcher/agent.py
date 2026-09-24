@@ -1668,15 +1668,18 @@ _P006_SILENT_LOG_METHODS = frozenset({"debug"})
 def _p006_stmt_is_silent(stmt: Any) -> bool:
     """True when ``stmt`` has no observable effect for P006 purposes.
 
-    Silent: ``pass``, ``continue``, ``...`` or any other bare constant (a
-    docstring-style string), and a call to ``<x>.debug(...)`` or
-    ``<x>.log(logging.DEBUG, ...)``. Everything else — info/warning/error/
-    exception logging, ``raise``, ``return``, assignments, any other call —
-    is the handler reacting to the failure.
+    Silent: ``pass``, ``continue``, ``break``, a bare ``return`` (no value),
+    ``...`` or any other bare constant (a docstring-style string), and a call
+    to ``<x>.debug(...)`` or ``<x>.log(logging.DEBUG, ...)``. Everything else
+    — info/warning/error/exception logging, ``raise``, returning or assigning
+    a value (``None`` included, as a fallback), any other call — is the
+    handler reacting to the failure.
     """
     import ast
 
-    if isinstance(stmt, (ast.Pass, ast.Continue)):
+    if isinstance(stmt, (ast.Pass, ast.Continue, ast.Break)):
+        return True
+    if isinstance(stmt, ast.Return) and stmt.value is None:
         return True
     if not isinstance(stmt, ast.Expr):
         return False
@@ -1700,8 +1703,8 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
 
     Where the line falls is a chosen standard, not a measured threshold: the
     rule fires only when the governing handler's body is entirely silent (see
-    ``_p006_stmt_is_silent``), and any return, assignment or other call counts
-    as reacting. It came from a manual triage of the unresolved queue on
+    ``_p006_stmt_is_silent``), and returning or assigning a value (``None``
+    included) or any other call counts as reacting. It came from a manual triage of the unresolved queue on
     2026-09-24: P006 was 50 of 93 unresolved rows (rows, not distinct sites;
     the queue held the same code once per worktree and per line shift), and
     about 40 flagged handlers that already log at warning or above, re-raise,
