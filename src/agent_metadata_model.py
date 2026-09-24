@@ -62,16 +62,18 @@ def _joinable_audit_agent_id(agent_id: str | None) -> tuple[str | None, str | No
     since 2026-08-06 resolved to exactly one identity this way (5 by key, 9 by
     time). The time fallback can mis-attribute two pauses in the same second.
 
-    Worse than losing the attribution is what the handle does to readers. Such a
-    row is the ONLY row that identifier ever produces, so "the paused agent went
+    Worse than obscuring the attribution is what the handle does to readers. In
+    the `audit.events.agent_id` column, such a row is the ONLY row that
+    identifier ever produces, so "the paused agent went
     silent afterwards" is true of the schema and says nothing about the agent. A
     pause-compliance conclusion was drawn from exactly that and was wrong.
 
     So: emit the UUID when there is one, otherwise NULL plus the handle in the
     payload. This follows the rule already stated for the tool-usage recorder —
     "a UUID clamp alone would only make a forged value JOINABLE, which is worse
-    than NULL". An honestly unattributed event is recoverable by a human reading
-    the payload; a plausible-looking key that joins to nothing is not.
+    than NULL". An honestly unattributed event tells its reader to do the
+    recovery join above; a plausible-looking key invites a direct join that
+    matches no UUID, or through the handle matches the wrong agent or several.
     """
     candidate = (agent_id or "").strip()
     if _UUID_RE.match(candidate):

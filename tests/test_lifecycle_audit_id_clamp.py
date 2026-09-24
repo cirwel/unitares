@@ -8,11 +8,12 @@ on these rows were shared by 2 to 37 identities each). Those rows can still be a
 `circuit_breaker_trip` event the pause path emits with the UUID: by
 `actuation_id` from 2026-08-12 on, by timestamp before that.
 
-The reason this is worse than plain data loss: a handle-form row is the ONLY row
-that identifier ever produces. So "the paused agent went silent afterwards" is a
+The reason this matters beyond attribution: in the `audit.events.agent_id`
+column, a handle-form row is the ONLY row that identifier ever produces. So "the paused agent went silent afterwards" is a
 statement about the schema, and a pause-compliance conclusion drawn from it was
 wrong. A NULL says "unattributed" and cannot be mistaken for evidence; a
-plausible key that joins to nothing invites exactly that mistake.
+plausible key invites a direct join that matches no UUID, or through the handle
+matches the wrong agent or several.
 
 Same rule the tool-usage recorder already states: a UUID clamp alone would only
 make a forged value joinable, which is worse than NULL.
