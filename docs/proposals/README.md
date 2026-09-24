@@ -51,6 +51,8 @@ Registered from their merge commit, even where the body keeps its DRAFT header.
 `scripts/dev/check_proposals_index.py` checks recursive coverage, one row per
 document, links, status fields and count arithmetic. It does not judge readiness,
 re-tag work, or turn archival into a decision about value.
+`scripts/dev/check_proposals_length.py` caps `active/` documents at 800 lines,
+with a shrink-only baseline for the few already longer. It checks length only.
 
 ## Working on a proposal
 
