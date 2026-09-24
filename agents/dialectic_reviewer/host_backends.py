@@ -224,6 +224,14 @@ async def call_claude_backend(prompt: str) -> HostReviewResult:
 # --------------------------------------------------------------------------- #
 
 EXTERNAL_HOST_ID = "external:openai-compatible"
+
+# Output budget for the external host. The shared 1024 default suits the local
+# completion model, but a hosted reasoning model counts its thinking against the
+# same budget and spends 1024 before it reaches the verdict: session
+# 17ca66285f91e61e (2026-09-24, gemini-3.8-flash) was cut off at 1024 with no
+# JSON and fell back to the local model (#2379). A verdict is a few hundred
+# tokens, so the rest is thinking room; the cap bounds cost, not length.
+DEFAULT_EXTERNAL_MAX_TOKENS = 8192
 _DEFAULT_KEY_ENV = "UNITARES_DIALECTIC_EXTERNAL_API_KEY"
 
 # Thinking-mode models (Gemini 3, DeepSeek-R1, Qwen, gemma4 …) put reasoning in
@@ -258,6 +266,9 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
         holding the key (default ``UNITARES_DIALECTIC_EXTERNAL_API_KEY``). The
         key itself never appears in a flag value, a log line, or provenance.
       * ``UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S`` — default 180.
+      * ``UNITARES_DIALECTIC_EXTERNAL_MAX_TOKENS`` — default
+        ``DEFAULT_EXTERNAL_MAX_TOKENS``. Separate from the local model's
+        ``UNITARES_DIALECTIC_REVIEW_MAX_TOKENS`` on purpose; see the constant.
 
     Returns provenance from the provider's own response — ``model`` and token
     usage as reported — so the verdict is attributable to an exact model rather
@@ -295,9 +306,14 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
     timeout_s = max(1.0, timeout_s)
 
     try:
-        max_tokens = int(os.getenv("UNITARES_DIALECTIC_REVIEW_MAX_TOKENS", "1024"))
+        max_tokens = int(
+            os.getenv(
+                "UNITARES_DIALECTIC_EXTERNAL_MAX_TOKENS",
+                str(DEFAULT_EXTERNAL_MAX_TOKENS),
+            )
+        )
     except (TypeError, ValueError):
-        max_tokens = 1024
+        max_tokens = DEFAULT_EXTERNAL_MAX_TOKENS
 
     started = time.monotonic()
     try:
@@ -350,8 +366,8 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
         # say which one it was so the fallback warning is actionable.
         if finish_reason == "length":
             reason = (
-                "External reviewer was truncated at "
-                "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS before emitting a verdict"
+                f"External reviewer was truncated at {max_tokens} tokens "
+                "(UNITARES_DIALECTIC_EXTERNAL_MAX_TOKENS) before emitting a verdict"
             )
         else:
             reason = "External reviewer returned no parseable dialectic verdict"

@@ -525,7 +525,9 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**{len(flags)} flags.**
+<!-- No flag count here: a count line changes in every flag-adding PR, so any
+two of them conflicted on it. Rows are one per line, sorted, so separate
+additions merge cleanly. -->
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|

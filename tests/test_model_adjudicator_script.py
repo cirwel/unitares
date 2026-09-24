@@ -333,6 +333,69 @@ def test_history_passes_the_fingerprint_as_a_psql_variable(adj, monkeypatch):
     assert out.startswith("fired 3 time(s)")
 
 
+LEGACY_FP = "legacy-" + "x" * 300
+
+
+def _history_sql(adj, monkeypatch) -> str:
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["input"] = kw["input"]
+        return Proc("0||")
+
+    # adj.subprocess IS the subprocess module: scope the patch to this call.
+    with monkeypatch.context() as m:
+        m.setattr(adj.subprocess, "run", fake_run)
+        adj.io_history("fp")
+    return seen["input"]
+
+
+def test_history_also_matches_the_legacy_raw_form_of_a_digest(adj, monkeypatch):
+    """A recurrence is stored as the digest of a legacy over-long fingerprint;
+    its history must still count the legacy raw rows, bounded like the server."""
+    sql = _history_sql(adj, monkeypatch)
+    assert "sha256(convert_to(payload->>'fingerprint', 'UTF8'))" in sql
+    assert f"length(payload->>'fingerprint') > {adj.FINGERPRINT_MAX_CHARS}" in sql
+
+
+def _psql_reachable(url: str) -> bool:
+    import shutil
+    import subprocess
+    if not shutil.which("psql"):
+        return False
+    try:
+        return subprocess.run(["psql", "-X", "-At", "-d", url, "-c", "SELECT 1"],
+                              capture_output=True, text=True, timeout=5).stdout.strip() == "1"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def test_history_sql_digest_equals_the_server_digest(adj, monkeypatch):
+    """Parity against a real Postgres: the SQL digest of a legacy row must equal
+    the digest the server stores its recurrence under, or the legacy rows are
+    silently dropped from the count. Reads no table (the rows are a VALUES
+    list), so it is safe against any reachable database; skipped without one."""
+    import subprocess
+    from src.http_routes.sentinel import _bounded_fingerprint
+    if not _psql_reachable(adj.DB_URL):
+        pytest.skip("no reachable Postgres for the SQL parity check")
+    digest = _bounded_fingerprint(LEGACY_FP)[0]
+    rows = ", ".join(
+        f"('doctor_check_finding', timestamp '2026-09-0{i}', "
+        f"jsonb_build_object('fingerprint', '{fp}'))"
+        for i, fp in enumerate([LEGACY_FP, digest, "other-fp"], start=1)
+    )
+    sql = _history_sql(adj, monkeypatch).replace(
+        "FROM audit.events", f"FROM (VALUES {rows}) AS e(event_type, ts, payload)")
+    out = subprocess.run(
+        ["psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-d", adj.DB_URL,
+         "-v", f"fp={digest}", "-f", "-"],
+        input=sql, capture_output=True, text=True, timeout=20)
+    assert out.returncode == 0, out.stderr
+    count, first, last = out.stdout.strip().split("|")
+    assert (count, first, last) == ("2", "2026-09-01 00:00:00", "2026-09-02 00:00:00")
+
+
 # ---------------------------------------------------------------------- rails
 
 def test_dry_run_judges_but_posts_nothing(adj):
@@ -556,3 +619,46 @@ def test_oversized_producer_fields_are_bounded_in_the_prompt(adj):
 def test_normal_fields_pass_through_untouched(adj):
     prompt = adj.build_prompt(ITEM, "h", None)
     assert "redis outdated" in prompt and "truncated" not in prompt
+
+
+def test_legacy_over_long_fingerprint_is_skipped_before_any_model_call(adj):
+    """Persisted before the ingest bound: the verdict route would 400 it."""
+    queue = [dict(ITEM, fingerprint="L" * 300), dict(ITEM, fingerprint="ok")]
+    io, calls = make_io(adj, {"fast": reply("confirmed")}, queue=queue)
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert calls["model"] == ["fast"]                     # only the postable item
+    assert [p["fingerprint"] for p in calls["posted"]] == ["ok"]
+
+
+def test_a_queue_of_only_legacy_fingerprints_is_not_a_judge_failure(adj):
+    io, calls = make_io(adj, {"fast": reply("confirmed")},
+                        queue=[dict(ITEM, fingerprint="L" * 300)])
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert calls["model"] == []
+
+
+def test_the_bound_matches_the_server(adj):
+    from src.http_routes.sentinel import _FINGERPRINT_MAX_CHARS
+    assert adj.FINGERPRINT_MAX_CHARS == _FINGERPRINT_MAX_CHARS
+
+
+def test_skipped_legacy_rows_do_not_starve_judgeable_findings(adj, monkeypatch):
+    """MAX_ITEMS caps what is judged, not what is fetched."""
+    monkeypatch.setattr(adj, "MAX_ITEMS", 2)
+    queue = ([dict(ITEM, fingerprint="L" * 300 + str(i)) for i in range(5)]
+             + [dict(ITEM, fingerprint=f"ok{i}") for i in range(4)])
+    io, calls = make_io(adj, {"fast": reply("confirmed")}, queue=queue)
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert [p["fingerprint"] for p in calls["posted"]] == ["ok0", "ok1"]
+
+
+def test_the_queue_is_fetched_postable_only(adj, monkeypatch):
+    """The server filters unpostable rows before its limit, so they can never
+    fill the window."""
+    seen = {}
+    monkeypatch.setattr(adj, "_http_json",
+                        lambda url, payload, tokens, extra_headers=None:
+                        seen.setdefault("url", url) and {"success": True, "queue": []})
+    adj.io_fetch_queue(["t"])
+    for part in ("postable_only=1", "exclude_model_abstained=1", f"limit={adj.MAX_ITEMS}"):
+        assert part in seen["url"]
