@@ -57,6 +57,11 @@ def _skip_scan_dir(path: Path) -> bool:
 # Files to skip (historical records — dead refs are expected)
 SKIP_FILES = {"docs/CHANGELOG.md", "CHANGELOG.md"}
 
+# Changelog fragments are CHANGELOG.md content awaiting the release cut, which
+# folds them in and deletes them, so they are skipped for the same reason. Each
+# would otherwise also read as an index orphan: nothing links a fragment.
+SKIP_DIRS_EXACT = {Path("docs") / "changelog.d"}
+
 # --- Check 1: Dead file references ---
 
 # Patterns that look like file paths in docs
@@ -1060,7 +1065,8 @@ def check_pitch_vocabulary(md_files: list[Path]) -> list[str]:
 def collect_md_files() -> list[Path]:
     md_files = []
     for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if not _skip_scan_dir(Path(root) / d)]
+        dirs[:] = [d for d in dirs if not _skip_scan_dir(Path(root) / d)
+                   and (Path(root) / d).relative_to(REPO_ROOT) not in SKIP_DIRS_EXACT]
         for f in files:
             if f.endswith(".md") and f not in SKIP_FILES:
                 md_files.append(Path(root) / f)

@@ -256,3 +256,9 @@ docs/superpowers/
 
 # ephemeral session scratch (not for commit)
 .scratch/
+
+# Skills fingerprint: DERIVED data, generated where it is consumed (written into
+# the plugin mirror by scripts/dev/sync-plugin-skills.sh, or printed on demand
+# by scripts/dev/skills_manifest.py). Committing it made any two PRs that
+# touched any two SKILL.md files conflict on its aggregate line (#2361/#2363).
+/skills/SKILLS_MANIFEST.sha256

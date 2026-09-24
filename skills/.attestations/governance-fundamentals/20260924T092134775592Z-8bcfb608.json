@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-fundamentals",
+  "verified_at": "2026-09-24T09:21:34Z",
+  "verified_date": "2026-09-24",
+  "verifier": "claude-pr-queue (PR 2376 r4091955388: phi_drift text now discloses the 0.6 confidence and 0.5/0.2 complexity defaults; skill line 60 'mostly server-derived' \u03a6 cold-start claim re-checked, still holds as a qualified claim)",
+  "source_digests": {
+    "unitares/config/governance_config.py": "eb8aa8754755729f",
+    "unitares/governance_core/coherence.py": "ef819003ee72b388",
+    "unitares/governance_core/parameters.py": "84bf47ca540bbc49",
+    "unitares/src/auto_ground_truth.py": "c17109cf5c18f2a4",
+    "unitares/src/behavioral_assessment.py": "2cbeea287b81399e",
+    "unitares/src/behavioral_sensor.py": "fce77d62fbd7b472",
+    "unitares/src/behavioral_state.py": "e214a51c1d7763c7",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/cold_start_risk_confirmation.py": "fccd80e216d63b6e",
+    "unitares/src/confidence.py": "00cc04e1f54278b4",
+    "unitares/src/eisv_telemetry.py": "24f1a47911850263",
+    "unitares/src/governance_glossary.py": "251e06209e038a13",
+    "unitares/src/governance_monitor.py": "e6122a72dbd2694c",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "135a7345ad47d5bf",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/observability/outcome_events.py": "703e6a57b8e4f770",
+    "unitares/src/mcp_handlers/response_formatter.py": "48ccdfafb0cdb8bb",
+    "unitares/src/mcp_handlers/tool_stability.py": "9049a8db3938541a",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/monitor_decision.py": "c80f4e13511fe8ba",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/monitor_result.py": "ffe6527157232671",
+    "unitares/src/services/runtime_queries.py": "f948bb168a59aad4"
+  }
+}

@@ -1,0 +1,1 @@
+- **identity:** `agent(action="release_presence")` releases the caller's own presence lease at a clean exit, so a successor that declares it as parent is no longer refused as co-located for up to ten minutes. It needs the releasing session's `client_session_id`; a crash still falls back to the lease TTL. The interface contract advances to 1.14.0.

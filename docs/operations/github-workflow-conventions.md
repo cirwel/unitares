@@ -316,6 +316,9 @@ guards keep concurrent sessions from clobbering each other:
   `docs/dev/CANONICAL_SOURCES.md` so `check_doc_health.py` blocks the stale
   wording from reappearing. Corrections that land in one doc and drift in the
   others were the entire defect class of the 2026-07-02 coherence audit.
+- **Changelog entries**: add a `docs/changelog.d/` fragment, never edit
+  `docs/CHANGELOG.md` directly in an ordinary PR; the format is in
+  [`docs/changelog.d/README.md`](../changelog.d/README.md).
 - **Branch hygiene**: stale and superseded branches are swept per
   `docs/operations/branch-hygiene-runbook.md`. Branches with unique local work
   (`git cherry master <branch>` showing `+`) are held for review, never auto-
