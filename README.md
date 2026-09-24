@@ -46,7 +46,7 @@ sequenceDiagram
 ## Start with one thing
 
 Start with the first layer and add the next when you need it. Each process calls
-`start_session(force_new=true)` once and reuses its `client_session_id` after that; a session that continues earlier work also passes `parent_agent_id`.
+`start_session(force_new=true)` once and reuses its `client_session_id` after that; a session that takes over finished work also passes `parent_agent_id` and `spawn_reason="explicit"`.
 
 | Start here | You get | Tools |
 |---|---|---|
