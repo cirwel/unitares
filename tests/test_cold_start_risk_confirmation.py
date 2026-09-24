@@ -835,8 +835,6 @@ def test_non_authored_phi_cold_start_pause_becomes_advisory_guidance():
         guarded["cold_start_epistemic_gate"]["enforcement_basis"]
         == NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
     )
-    # Agent-facing text reads as cold start, not as an overridden pause; the
-    # original reason survives verbatim in the gate record.
     # Agent-facing text leads with why this check-in did not pause, and keeps
     # the overridden reason: the same reading on an agent-authored check-in is
     # not guarded and can pause.

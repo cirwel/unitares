@@ -218,6 +218,31 @@ def _verdict_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def _is_cold_start(payload: Dict[str, Any]) -> bool:
+    """True only while the verdict is owned by the cold-start prior.
+
+    Narrower than a "provisional" verdict: that grade also covers a
+    behavioral reading that is not yet baselined (check-ins 3-24), which is a
+    measurement of the agent, not the prior.
+    """
+    attribution = payload.get("risk_attribution")
+    attribution = attribution if isinstance(attribution, dict) else {}
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    primary_source = metrics.get("primary_eisv_source") or payload.get(
+        "primary_eisv_source"
+    )
+    driver = attribution.get("primary_driver")
+    basis = _verdict_evidence(payload).get("basis")
+    if driver == "behavioral_assessment" or primary_source == "behavioral":
+        return False
+    return (
+        driver == "phi_cold_start"
+        or primary_source in {"ode_fallback", "phi_cold_start"}
+        or basis in {"ode_fallback", "phi_cold_start"}
+    )
+
+
 def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
     """Describe verdict maturity without inventing a confidence probability."""
     attribution = payload.get("risk_attribution")
@@ -461,7 +486,7 @@ def _recovery_hint(
             "Working state looks degraded - pause and call "
             "self_recovery(action='review', reflection='...') before continuing."
         )
-    if decided_to_continue and _verdict_assurance(payload)[0] == "provisional":
+    if decided_to_continue and _is_cold_start(payload):
         # A cold-start reading is the prior, not a measurement of the agent.
         # This decision did not block, but the non-authored cold-start guard
         # does not cover the agent's own reports: until behavioral confidence

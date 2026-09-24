@@ -223,7 +223,8 @@ class _Meta:
 def test_last_decision_action_prefers_a_paused_lifecycle_status():
     assert _last_decision_action(_Meta("paused", ["proceed"])) == "pause"
     assert _last_decision_action(_Meta("active", ["pause", "proceed"])) == "proceed"
-    assert _last_decision_action(_Meta("active", [])) is None
+    # _resume_with_persistence clears the history: still proceeding.
+    assert _last_decision_action(_Meta("active", [])) == "proceed"
     assert _last_decision_action(None) is None
 
 
@@ -249,15 +250,16 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
 # --- the server instructions ------------------------------------------------
 
 def test_instructions_state_how_a_pause_actually_ends():
-    """The four exits in the code, and the recovery cost, stated as they are:
-    self_recovery (not always available), dialectic resolution
-    (dialectic/resolution.py sets the agent active), agent(action='resume'),
-    and expiry; review's reflection is recorded in shared memory."""
+    """The exits in the code, and the recovery cost, stated as they are:
+    self_recovery (not always available), dialectic resolution, resumes by
+    agent(action='resume'), operator tools or the automatic safety nets, and
+    expiry. "Applied": a decided pause the breaker did not actuate holds
+    nothing. Review's reflection is recorded in shared memory."""
     text = build_server_instructions("progressive")
-    sentence = text[text.index("A pause is a hard stop"):]
-    sentence = sentence[:sentence.index(".") + 1]
+    sentence = text[text.index("An applied pause is a hard stop"):]
+    sentence = sentence[:sentence.index("expires.") + len("expires.")]
     for exit_route in ("self_recovery", "request_review", "agent(action='resume')",
-                       "or it expires"):
+                       "automatic safety net", "or it expires"):
         assert exit_route in sentence, exit_route
     assert "self_recovery refuses while risk stays high" in text
     assert "records your written reflection in shared memory" in text
@@ -296,3 +298,29 @@ def test_simulate_update_escalation_rewraps_the_nested_verdict():
     source = inspect.getsource(core.handle_simulate_update)
     escalation = source[source.index("escalated_decision is not decision"):]
     assert "_rewrap_behavioral_verdict(result, escalated_decision)" in escalation[:400]
+
+
+def test_resumed_agent_with_cleared_history_is_not_told_to_pause():
+    """Operator resume at risk 0.75 clears recent_decisions; the metrics read
+    must not fall back to "Pause, reflect"."""
+    action = _last_decision_action(_Meta("active", []))
+    wrapped = explain_verdict("high-risk", decision_action=action)
+    assert not wrapped["next_action"].startswith("Pause")
+    hint = ES._recovery_hint({"verdict": wrapped}, None, 0.75)
+    assert "pause and call" not in hint
+
+
+def test_cold_start_hint_is_not_given_to_a_behavioral_reading():
+    """A non-baselined behavioral verdict (check-ins 3-24) is provisional but
+    not the prior; it must not be described as one."""
+    payload = {
+        "decision": {"action": "proceed", "sub_action": "guide"},
+        "metrics": {"risk_score": 0.79, "primary_eisv_source": "behavioral"},
+        "risk_attribution": {
+            "primary_driver": "behavioral_assessment",
+            "discriminability": {"non_discriminative": True},
+        },
+    }
+    hint = ES._recovery_hint(payload, None, 0.79)
+    assert not hint.startswith("Cold start")
+    assert "the prior" not in hint
