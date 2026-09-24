@@ -2327,6 +2327,8 @@ def test_cold_start_canary_skips_an_all_authored_window_under_rollback(doctor, m
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.SKIP
     assert "3 agent-authored" in result.message
+    # The lead must not deny the decisions the suffix reports.
+    assert "no watched phi_cold_start decisions" in result.message
 
 def test_cold_start_canary_skips_when_db_unreachable(doctor, monkeypatch):
     monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: None)

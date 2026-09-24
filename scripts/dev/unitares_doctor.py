@@ -2579,7 +2579,7 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     if cold_starts == 0:
         return CheckResult(
             name, mode, Status.SKIP,
-            "no phi_cold_start decisions in 7d — nothing to "
+            "no watched phi_cold_start decisions in 7d — nothing to "
             "observe, so a zero here would not mean the guard is working"
             + authored_note,
         )
