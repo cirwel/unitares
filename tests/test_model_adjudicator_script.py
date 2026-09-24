@@ -27,6 +27,8 @@ def adj(monkeypatch, tmp_path):
     mod = importlib.util.module_from_spec(spec)
     sys.modules["model_adjudicator"] = mod
     spec.loader.exec_module(mod)
+    # The cutoff is operator-set with no default; tests pick one explicitly.
+    mod.ESCALATE_BELOW = 0.7
     yield mod
     sys.modules.pop("model_adjudicator", None)
 
@@ -227,6 +229,34 @@ def test_doctor_evidence_ignores_findings_that_are_not_doctor_checks(adj):
     assert adj.io_doctor_evidence({"message": None}) is None
 
 
+def test_a_non_doctor_finding_named_like_a_check_gets_no_rerun(adj, monkeypatch):
+    """Message text is producer-controlled; only structured provenance counts."""
+    monkeypatch.setitem(adj._DOCTOR, "mod",
+                        _fake_doctor(lambda r, u: pytest.fail("must not re-run")))
+    item = {"event_type": "sentinel_finding",
+            "message": "cold_start_pause_canary: looks like a doctor finding"}
+    assert adj.io_doctor_evidence(item) is None
+
+
+def test_the_structured_check_field_wins_over_the_message(adj, monkeypatch):
+    ran = []
+
+    class Status:
+        name = "PASS"
+
+    class Result:
+        status, message, detail = Status(), "ok", ""
+
+    class Check:
+        name, fn = "cold_start_pause_canary", staticmethod(lambda: ran.append(1) or Result())
+
+    monkeypatch.setitem(adj._DOCTOR, "mod", _fake_doctor(lambda r, u: [Check()]))
+    adj.io_doctor_evidence({"event_type": "doctor_check_finding",
+                            "check": "cold_start_pause_canary",
+                            "message": "something_else: prose"})
+    assert ran
+
+
 def _fake_doctor(build):
     def check_cold_start_pause_canary(db_url):
         """the real logic"""
@@ -252,19 +282,22 @@ def test_doctor_evidence_is_a_rerun_plus_the_check_source(adj, monkeypatch):
     monkeypatch.setattr(adj, "DB_URL", "postgresql://h/producer")
     monkeypatch.setitem(adj._DOCTOR, "mod",
                         _fake_doctor(lambda root, url: urls.append(url) or [Check()]))
-    out = adj.io_doctor_evidence({"message": "cold_start_pause_canary: 1 pause"})
+    out = adj.io_doctor_evidence({"event_type": "doctor_check_finding",
+                                  "message": "cold_start_pause_canary: 1 pause"})
     # Same DSN as the history read: evidence from one deployment only.
     assert urls == ["postgresql://h/producer"]
     assert "LIVE RE-RUN of `cold_start_pause_canary`, done just now: PASS: 0 pauses" in out
     assert "SOURCE of the check" in out and "the real logic" in out
-    assert adj.io_doctor_evidence({"message": "no_such_check: x"}) is None
+    assert adj.io_doctor_evidence({"event_type": "doctor_check_finding",
+                                   "message": "no_such_check: x"}) is None
 
 
 def test_doctor_evidence_failure_is_reported_not_raised(adj, monkeypatch):
     def boom(root, url):
         raise RuntimeError("db down")
     monkeypatch.setitem(adj._DOCTOR, "mod", _fake_doctor(boom))
-    out = adj.io_doctor_evidence({"message": "some_check: y"})
+    out = adj.io_doctor_evidence({"event_type": "doctor_check_finding",
+                                  "message": "some_check: y"})
     assert out.startswith("LIVE RE-RUN failed: RuntimeError")
 
 
@@ -370,3 +403,27 @@ def test_no_adjudicator_credential_means_no_post(adj, monkeypatch):
     monkeypatch.setattr(adj, "_http_json",
                         lambda *a, **k: pytest.fail("must not post without the credential"))
     assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) is False
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "0", "1.5", "nan", "inf", "-0.2"])
+def test_no_valid_operator_cutoff_means_no_run(adj, monkeypatch, raw):
+    """The cutoff is a deciding standard: never defaulted, never guessed."""
+    monkeypatch.setenv("UNITARES_ADJUDICATOR_ESCALATE_BELOW", raw)
+    assert adj._escalate_below() is None
+    monkeypatch.setattr(adj, "HOST", "claude")
+    monkeypatch.setattr(adj, "ESCALATE_BELOW", None)
+    monkeypatch.setattr(adj, "run_once",
+                        lambda **k: pytest.fail("must not run without the operator's cutoff"))
+    assert adj.main([]) == 0
+
+
+@pytest.mark.parametrize("raw,expected", [("0.7", 0.7), ("1", 1.0), (" 0.55 ", 0.55)])
+def test_a_valid_operator_cutoff_is_read(adj, monkeypatch, raw, expected):
+    monkeypatch.setenv("UNITARES_ADJUDICATOR_ESCALATE_BELOW", raw)
+    assert adj._escalate_below() == expected
+
+
+def test_without_a_cutoff_nothing_counts_as_sure(adj, monkeypatch):
+    monkeypatch.setattr(adj, "ESCALATE_BELOW", None)
+    j = adj.parse_judgement(reply("confirmed", 1.0), tiers(adj)[0])
+    assert j.unsure()

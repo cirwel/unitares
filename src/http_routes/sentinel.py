@@ -944,6 +944,11 @@ async def http_sentinel_adjudication_queue(request):
             if len(queue) < limit:
                 item = {
                     "timestamp": e.get("timestamp"),
+                    # Structured provenance, so a consumer never has to infer
+                    # which producer (or which doctor check) raised this from
+                    # its prose — message text is producer-controlled.
+                    "event_type": e.get("event_type"),
+                    "check": details.get("check"),
                     "severity": severity,
                     "finding_type": details.get("finding_type") or details.get("alarm_kind"),
                     "violation_class": details.get("violation_class"),

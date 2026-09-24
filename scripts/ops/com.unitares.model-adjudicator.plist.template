@@ -22,7 +22,13 @@
     evidence itself (history, a fresh re-run of the doctor check, its source).
 
     Model tiers: FAST judges every item; STRONG sees only what FAST abstained
-    on or scored below UNITARES_ADJUDICATOR_ESCALATE_BELOW (default 0.7).
+    on or scored below UNITARES_ADJUDICATOR_ESCALATE_BELOW.
+
+    THE CUTOFF IS YOURS TO SET. UNITARES_ADJUDICATOR_ESCALATE_BELOW decides
+    when a model's answer stands (hiding the finding for a week) versus
+    escalating or abstaining, so it has no default: replace __ESCALATE_BELOW__
+    with a value in (0, 1]. Left as the placeholder, the job logs and exits
+    without judging anything.
     Values are Claude CLI --model names or aliases (e.g. haiku). Leave STRONG
     empty for the CLI's default model; set it to "off" to disable escalation.
 
@@ -64,11 +70,13 @@
       PYTHON_BIN        -> absolute path to a 3.14+ interpreter
       __HOME__          -> your home directory
       __USER__          -> your username
+      __ESCALATE_BELOW__ -> your confidence cutoff, 0 < x <= 1
 
     Example:
       sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
           -e "s|PYTHON_BIN|$(which python3)|g" \
           -e "s|__HOME__|$HOME|g" -e "s|__USER__|$USER|g" \
+          -e "s|__ESCALATE_BELOW__|<your cutoff>|g" \
           scripts/ops/com.unitares.model-adjudicator.plist.template \
           > ~/Library/LaunchAgents/com.unitares.model-adjudicator.plist
       launchctl load ~/Library/LaunchAgents/com.unitares.model-adjudicator.plist
@@ -97,6 +105,7 @@
         <key>UNITARES_MODEL_ADJUDICATOR_HOST</key><string>claude</string>
         <key>UNITARES_ADJUDICATOR_FAST_MODEL</key><string>haiku</string>
         <key>UNITARES_ADJUDICATOR_STRONG_MODEL</key><string></string>
+        <key>UNITARES_ADJUDICATOR_ESCALATE_BELOW</key><string>__ESCALATE_BELOW__</string>
     </dict>
     <key>StartInterval</key><integer>21600</integer>
     <key>RunAtLoad</key><false/>

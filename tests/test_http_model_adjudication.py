@@ -215,6 +215,13 @@ class TestQueueSuppression:
     VERDICTS = {"fp-confirmed": "confirmed", "fp-dismissed": "dismissed",
                 "fp-abstained": "abstain"}
 
+    def test_queue_items_carry_structured_provenance(self, client):
+        """So consumers never infer the producer or check from message prose."""
+        body = self._get(client, {})
+        item = body["queue"][0]
+        assert item["event_type"] == "doctor_check_finding"
+        assert "check" in item
+
     def test_model_verdicts_leave_the_queue_and_are_counted(self, client):
         body = self._get(client, self.VERDICTS)
         fps = [q["fingerprint"] for q in body["queue"]]

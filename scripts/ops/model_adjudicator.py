@@ -32,7 +32,8 @@ Model selection is by tier, not by vendor name in code:
 
   * **fast** judges every item first.
   * **strong** sees only what fast abstained on or was unsure about
-    (confidence below ``UNITARES_ADJUDICATOR_ESCALATE_BELOW``). If strong is
+    (confidence below ``UNITARES_ADJUDICATOR_ESCALATE_BELOW``, an operator-set
+    cutoff with no default: the job will not run without it). If strong is
     unsure too, the item is recorded as an abstention: an unsure verdict never
     takes a finding off the queue.
 
@@ -78,7 +79,21 @@ HOST = os.environ.get("UNITARES_MODEL_ADJUDICATOR_HOST", "").strip().lower()
 HOST_ID = "claude:host-adapter"
 MAX_ITEMS = int(os.environ.get("UNITARES_ADJUDICATOR_MAX_ITEMS", "5"))
 TIMEOUT_S = float(os.environ.get("UNITARES_ADJUDICATOR_TIMEOUT_S", "420"))
-ESCALATE_BELOW = float(os.environ.get("UNITARES_ADJUDICATOR_ESCALATE_BELOW", "0.7"))
+# The cutoff that decides whether a model's answer stands (and hides the
+# finding for a week) or escalates. It turns model output into an operational
+# decision, so it is the OPERATOR's standard to set — there is deliberately no
+# default, and the job refuses to run without a valid one (repo rule: a
+# deciding standard is chosen explicitly, never applied silently).
+def _escalate_below() -> Optional[float]:
+    raw = os.environ.get("UNITARES_ADJUDICATOR_ESCALATE_BELOW", "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if math.isfinite(value) and 0.0 < value <= 1.0 else None
+
+
+ESCALATE_BELOW = _escalate_below()
 HTTP_TIMEOUT_S = 15
 # ONE DSN for every evidence query, and it must be the producer's: the queue
 # comes over HTTP from the server, so a re-run or history read against any
@@ -128,7 +143,10 @@ class Judgement:
     model_used: Optional[str] = None
 
     def unsure(self) -> bool:
-        return self.verdict == "abstain" or self.confidence < ESCALATE_BELOW
+        # No operator cutoff = nothing counts as sure (main() refuses to run
+        # before this is reached; this keeps a direct caller fail-safe too).
+        cutoff = ESCALATE_BELOW if ESCALATE_BELOW is not None else float("inf")
+        return self.verdict == "abstain" or self.confidence < cutoff
 
 
 # ---------------------------------------------------------------- plumbing
@@ -245,10 +263,19 @@ def io_doctor_evidence(item: dict) -> Optional[str]:
     live state and of the detector's logic. None when the finding did not
     come from a doctor check.
     """
-    match = _CHECK_PREFIX.match(str(item.get("message") or ""))
-    if not match:
+    # Only for items the queue says a doctor raised. Message text is
+    # producer-controlled, so a Sentinel finding that merely starts with a
+    # check name must never pull that check's re-run in as its evidence.
+    if item.get("event_type") != "doctor_check_finding":
         return None
-    name = match.group(1)
+    name = item.get("check")
+    if not name:
+        # Doctor findings from before the structured `check` field carried
+        # the name only as a message prefix.
+        match = _CHECK_PREFIX.match(str(item.get("message") or ""))
+        if not match:
+            return None
+        name = match.group(1)
     try:
         doctor = _doctor_module()
         checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, DB_URL)}
@@ -486,6 +513,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if HOST != "claude":
         log("model adjudication not enabled (UNITARES_MODEL_ADJUDICATOR_HOST != claude)")
+        return 0
+    if ESCALATE_BELOW is None:
+        log("UNITARES_ADJUDICATOR_ESCALATE_BELOW unset or invalid (need 0 < x <= 1) — "
+            "the operator's cutoff is required; not running")
         return 0
     return run_once(dry_run=args.dry_run)
 
