@@ -281,7 +281,8 @@ verdict. A timeout sweep can eventually mark it failed, but that sweep outcome
 does not mean either side won.
 
 A session that stalls in SYNTHESIS while the move is its reviewer's (the first
-synthesis verdict is still owed, or the paused agent spoke last) raises the
+synthesis verdict is still owed, or the paused agent has
+answered its standing objection) raises the
 same request; the sweep does not reassign at that phase, because the protocol
 requires the same reviewer to revise its own verdict. Once raised, the request
 lets `dialectic(action="get", check_timeout=true)` replace a reviewer that is

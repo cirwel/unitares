@@ -136,7 +136,7 @@ def _describe_reap(
     Deliberately does NOT claim a verdict. The sweeper reads the transcript
     only to decide whether a SYNTHESIS stall is waiting on its reviewer
     (`_synthesis_reviewer_owes_reply`), and this text does not use that read:
-    who spoke last is not what the reviewer decided, and asserting a verdict
+    whose move it is says nothing about who was right, and asserting a verdict
     would trade one confident wrong sentence for another. It reports what it
     observed and points at the record that has the rest.
     """
@@ -569,7 +569,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # returning paused agent a machine-picked reviewer with authority
             # over the original verdict. So the transcript decides: the flag
             # goes up only when the reviewer owes the move (its first verdict
-            # is pending, or the paused agent spoke last). Otherwise the
+            # is pending, or the paused agent has answered its standing
+            # objection). Otherwise the
             # stall is the paused agent's own and the row keeps its prior
             # behaviour (reaped at the stuck threshold). The read is skipped
             # for rows already flagged, which the hold below handles.

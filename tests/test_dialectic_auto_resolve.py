@@ -555,7 +555,8 @@ async def test_synthesis_stall_owed_by_paused_agent_raises_no_flag():
     """At SYNTHESIS the flag means "the reviewer owes reconsideration":
     `check_reviewer_stuck` reads it that way, and any bound caller's
     get(check_timeout=true) then auto-replaces a stuck reviewer. When the
-    reviewer spoke last the paused agent owes the move, so raising the flag
+    reviewer's standing objection is the latest synthesis, the paused agent
+    owes the move, so raising the flag
     would hand the returning paused agent a machine-picked reviewer with
     authority over the original verdict. The row keeps its pre-#2202 path."""
     result, m = await _sweep_synthesis_row(
