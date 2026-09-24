@@ -81,39 +81,54 @@ _released_sessions: dict[str, set[str]] = {}
 _RELEASE_SUPPRESS_S = 120.0
 
 
-def recently_released(agent_uuid: Optional[str]) -> bool:
-    """True while the identity is inside its clean-exit suppression window."""
+# uuid -> monotonic time a clean exit retired the identity's process bindings.
+# A binding insert starting within _RELEASE_SUPPRESS_S of it (one the exiting
+# session queued) is skipped. Set only when the bindings are retired,
+# never when the release left the lease to another live holder, whose own
+# binding must keep refreshing.
+_bindings_retired_at: dict[str, float] = {}
+
+
+def recently_exited(agent_uuid: Optional[str]) -> bool:
+    """True within _RELEASE_SUPPRESS_S of a clean exit that retired the
+    identity's process bindings."""
     if not agent_uuid:
         return False
-    _expire_tombstone(agent_uuid, time.monotonic())
-    return agent_uuid in _released_at
+    retired = _bindings_retired_at.get(agent_uuid)
+    if retired is None:
+        return False
+    if time.monotonic() - retired > _RELEASE_SUPPRESS_S:
+        _bindings_retired_at.pop(agent_uuid, None)
+        return False
+    return True
 
 
-# uuid -> process-binding inserts in flight, and the time of the latest release
-# that landed while one was. The suppression tombstone expires after
-# _RELEASE_SUPPRESS_S, but an insert can stall on the database for longer; its
-# post-write check must still see a release that happened while it waited.
-# Both entries are dropped when the identity's last in-flight insert finishes,
-# so they are bounded by the inserts actually running.
+# uuid -> process-binding inserts in flight, and the time of the latest clean
+# exit that retired the identity's bindings while one was. The suppression
+# tombstone expires after _RELEASE_SUPPRESS_S, but an insert can stall on the
+# database for longer; its post-write check must still see an exit that
+# happened while it waited. Only an exit that retires bindings counts: a
+# release that left the lease to another live holder must not strip that
+# holder's binding. Both entries are dropped when the identity's last
+# in-flight insert finishes, so they are bounded by the inserts running.
 _binding_inserts_in_flight: dict[str, int] = {}
-_released_during_insert: dict[str, float] = {}
+_exited_during_insert: dict[str, float] = {}
 
 
 def begin_binding_insert(agent_uuid: str) -> float:
     """Mark one process-binding insert for ``agent_uuid`` as in flight.
 
-    Returns the time it opened, for ``released_after``. Every call must be
+    Returns the time it opened, for ``exited_after``. Every call must be
     paired with ``end_binding_insert``."""
     _binding_inserts_in_flight[agent_uuid] = _binding_inserts_in_flight.get(agent_uuid, 0) + 1
     return time.monotonic()
 
 
-def released_after(agent_uuid: str, opened: float) -> bool:
-    """True when the identity released its presence after ``opened`` (however
-    long ago), or is still inside its suppression window: a binding row
-    written in between must be retired."""
-    marked = _released_during_insert.get(agent_uuid)
-    return (marked is not None and marked >= opened) or recently_released(agent_uuid)
+def exited_after(agent_uuid: str, opened: float) -> bool:
+    """True when a clean exit retired the identity's bindings after ``opened``
+    (however long ago): a binding row written in between must be retired."""
+    marked = _exited_during_insert.get(agent_uuid)
+    return marked is not None and marked >= opened
 
 
 def end_binding_insert(agent_uuid: str) -> None:
@@ -122,7 +137,17 @@ def end_binding_insert(agent_uuid: str) -> None:
         _binding_inserts_in_flight[agent_uuid] = remaining
     else:
         _binding_inserts_in_flight.pop(agent_uuid, None)
-        _released_during_insert.pop(agent_uuid, None)
+        _exited_during_insert.pop(agent_uuid, None)
+
+
+def mark_bindings_retired(agent_uuid: str) -> None:
+    """Record that a clean exit is retiring the identity's bindings, so a
+    queued insert is skipped and one still in flight retires the row it
+    writes. Call before retiring."""
+    now = time.monotonic()
+    _bindings_retired_at[agent_uuid] = now
+    if _binding_inserts_in_flight.get(agent_uuid):
+        _exited_during_insert[agent_uuid] = now
 
 
 def _expire_tombstone(agent_uuid: str, now: float) -> None:
@@ -168,6 +193,10 @@ def _sweep(now: float) -> None:
     for agent_uuid in [u for u, at in _released_at.items() if now - at > _RELEASE_SUPPRESS_S]:
         _released_at.pop(agent_uuid, None)
         _released_sessions.pop(agent_uuid, None)
+    for agent_uuid in [
+        u for u, at in _bindings_retired_at.items() if now - at > _RELEASE_SUPPRESS_S
+    ]:
+        _bindings_retired_at.pop(agent_uuid, None)
     for agent_uuid, lock in list(_locks.items()):
         if (
             not lock.locked()
@@ -513,8 +542,6 @@ async def release_agent_presence(
             _released_at.pop(stale, None)
             _released_sessions.pop(stale, None)
         _released_at[agent_uuid] = now
-        if _binding_inserts_in_flight.get(agent_uuid):
-            _released_during_insert[agent_uuid] = now
         sessions = _released_sessions.setdefault(agent_uuid, set())
         sessions.update(session_ids)
 

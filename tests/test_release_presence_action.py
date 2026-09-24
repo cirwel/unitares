@@ -9,6 +9,15 @@ from src.mcp_handlers.identity import shared
 from src.mcp_handlers.lifecycle.mutation import handle_release_presence
 
 
+@pytest.fixture(autouse=True)
+def _clear_presence_state():
+    """The handler records exit markers in module state; keep tests isolated."""
+    yield
+    for state in (apl._bindings_retired_at, apl._binding_inserts_in_flight,
+                  apl._exited_during_insert):
+        state.clear()
+
+
 def _payload(result):
     return json.loads(result[0].text)
 
@@ -153,7 +162,7 @@ async def test_release_presence_retires_bindings_without_a_lease_plane(monkeypat
 async def test_binding_insert_after_a_clean_exit_is_skipped(monkeypatch):
     from src.mcp_handlers.identity import process_binding
 
-    apl._released_at["caller-uuid"] = apl.time.monotonic()
+    apl.mark_bindings_retired("caller-uuid")
     try:
         called = []
 
@@ -165,7 +174,7 @@ async def test_binding_insert_after_a_clean_exit_is_skipped(monkeypatch):
         await process_binding.record_binding_bg("caller-uuid", object(), "sess-1")
         assert called == []
     finally:
-        apl._released_at.pop("caller-uuid", None)
+        apl._bindings_retired_at.pop("caller-uuid", None)
 
 
 
@@ -267,26 +276,39 @@ async def test_release_presence_retires_bindings_when_the_lease_is_already_gone(
     assert "retryable" not in body
 
 
-@pytest.mark.asyncio
-async def test_binding_insert_stalled_past_the_suppression_window_is_retired(monkeypatch):
-    """The insert waits on the database; the identity releases meanwhile, and
-    the insert lands only after the release's suppression tombstone expired.
-    The row it wrote must still be retired, or the exited parent reads live."""
+def _stalled_insert_harness(monkeypatch, release_result):
+    """A binding insert that stalls on the database; while it waits, the
+    identity calls release_presence (stubbed to ``release_result``) and then
+    more than the suppression window passes before the insert returns."""
     from types import SimpleNamespace
 
     from src.mcp_handlers.identity import process_binding
 
     clock = [1000.0]
     monkeypatch.setattr(apl.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(apl, "_make_client", lambda: None)
     statements = []
+
+    async def _release(agent_uuid, session_ids=()):
+        return dict(release_result)
+
+    async def _retire(agent_id):
+        return 1
+
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    if release_result is None:
+        # Drive the real release: another session still holds the lease.
+        monkeypatch.setattr(apl, "_make_client", lambda: SimpleNamespace())
+        apl._lease_sessions["caller-uuid"] = {"sess-other": clock[0]}
+    else:
+        monkeypatch.setattr(apl, "release_agent_presence", _release)
+    monkeypatch.setattr(process_binding, "retire_bindings", _retire)
 
     class _Conn:
         async def execute(self, sql, *args):
             statements.append(sql.split()[0])
             if sql.split()[0] == "INSERT":
-                # The exit lands while the insert is stalled, then time passes.
-                await apl.release_agent_presence("caller-uuid", ("sess-1",))
+                await handle_release_presence({"client_session_id": "sess-1"})
                 clock[0] += apl._RELEASE_SUPPRESS_S + 60
             return "UPDATE 1"
 
@@ -303,13 +325,57 @@ async def test_binding_insert_stalled_past_the_suppression_window_is_retired(mon
     monkeypatch.setattr("src.db.get_db", lambda: SimpleNamespace(acquire=lambda: _Acquire()))
     fp = SimpleNamespace(host_id="h", pid=1, pid_start_time=1.0, transport="stdio",
                          ppid=None, tty=None, anchor_path_hash=None)
+
+    async def run():
+        try:
+            await process_binding.record_binding_bg("caller-uuid", fp, "sess-1")
+        finally:
+            for state in (apl._bindings_retired_at, apl._released_at, apl._released_sessions,
+                          apl._lease_sessions, apl._touched, apl._locks, apl._lease_ids):
+                state.pop("caller-uuid", None)
+        return statements
+
+    return run
+
+
+@pytest.mark.asyncio
+async def test_binding_insert_stalled_past_the_suppression_window_is_retired(monkeypatch):
+    """The identity exits while its insert waits on the database, and the insert
+    lands only after the suppression window. The row it wrote must still be
+    retired, or the exited parent reads live."""
+    run = _stalled_insert_harness(monkeypatch, {"released": True, "reason": "released"})
+
+    assert await run() == ["INSERT", "UPDATE"]
+    assert "caller-uuid" not in apl._binding_inserts_in_flight
+    assert "caller-uuid" not in apl._exited_during_insert
+
+
+@pytest.mark.asyncio
+async def test_release_that_leaves_another_holder_keeps_an_in_flight_binding(monkeypatch):
+    """A release that left the lease to another live session retires no
+    bindings, so a binding insert in flight keeps its row."""
+    run = _stalled_insert_harness(monkeypatch, None)
+
+    assert await run() == ["INSERT"]
+    assert "caller-uuid" not in apl._exited_during_insert
+
+
+@pytest.mark.asyncio
+async def test_release_that_leaves_another_holder_does_not_skip_later_inserts(monkeypatch):
+    from src.mcp_handlers.identity import process_binding
+
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    monkeypatch.setattr(apl, "_make_client", lambda: SimpleNamespace())
+    apl._lease_sessions["caller-uuid"] = {"sess-other": apl.time.monotonic()}
     try:
-        await process_binding.record_binding_bg("caller-uuid", fp, "sess-1")
+        body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
     finally:
         for state in (apl._released_at, apl._released_sessions, apl._lease_sessions,
-                      apl._touched, apl._locks, apl._lease_ids):
+                      apl._touched, apl._locks):
             state.pop("caller-uuid", None)
 
-    assert statements == ["INSERT", "UPDATE"]
-    assert "caller-uuid" not in apl._binding_inserts_in_flight
-    assert "caller-uuid" not in apl._released_during_insert
+    assert body["reason"] == "held_by_other_session"
+    assert process_binding._recently_exited("caller-uuid") is False

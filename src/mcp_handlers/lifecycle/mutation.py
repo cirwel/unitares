@@ -493,7 +493,10 @@ async def handle_release_presence(arguments: Dict[str, Any]) -> Sequence[TextCon
     # session was the last holder: never while another session keeps presence.
     bindings_retired: int | None = 0
     if result["released"] or result["reason"] in {"no_live_lease", "lease_plane_unavailable"}:
+        from ..identity.agent_presence_lease import mark_bindings_retired
         from ..identity.process_binding import retire_bindings
+        # Before retiring, so an insert still in flight retires its own row.
+        mark_bindings_retired(agent_uuid)
         bindings_retired = await retire_bindings(agent_uuid)
         if bindings_retired is None:
             bindings_retired = await retire_bindings(agent_uuid)  # one retry

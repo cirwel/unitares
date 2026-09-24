@@ -86,11 +86,11 @@ def validate_fingerprint(raw: Any) -> Optional[ProcessFingerprint]:
     )
 
 
-def _recently_released(agent_id: str) -> bool:
+def _recently_exited(agent_id: str) -> bool:
     try:
-        from src.mcp_handlers.identity.agent_presence_lease import recently_released
+        from src.mcp_handlers.identity.agent_presence_lease import recently_exited
 
-        return recently_released(agent_id)
+        return recently_exited(agent_id)
     except Exception:  # pragma: no cover - never let the guard break recording
         return False
 
@@ -122,11 +122,11 @@ async def record_binding_bg(
       3. If count >= 2 and agent.allow_concurrent_contexts is false, emit
          an `identity_concurrent_binding` broadcaster event. No force-new.
 
-    Skipped when the identity has just released its presence on a clean exit:
-    a queued insert landing after that release would otherwise re-create the
-    live binding the release retired, and block an immediate successor.
+    Skipped when a clean exit has just retired the identity's bindings: a
+    queued insert landing after that would otherwise re-create the live
+    binding the exit retired, and block an immediate successor.
     """
-    if _recently_released(agent_id):
+    if _recently_exited(agent_id):
         return
     # Open an in-flight window: the suppression tombstone expires after a
     # bounded time, but this insert can stall on the database for longer, and
@@ -175,11 +175,12 @@ async def record_binding_bg(
             # database. The release sets its marker before it retires bindings,
             # so re-checking after the write closes that interleaving: this row
             # is retired here if the retirement already ran, however long the
-            # write stalled.
+            # write stalled. Only an exit that retired bindings counts, so a
+            # release that left another live holder keeps this row.
             if (
-                presence.released_after(agent_id, opened)
+                presence.exited_after(agent_id, opened)
                 if presence
-                else _recently_released(agent_id)
+                else _recently_exited(agent_id)
             ):
                 await conn.execute(
                     """

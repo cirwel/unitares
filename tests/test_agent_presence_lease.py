@@ -23,6 +23,7 @@ def _clear_cache():
     apl._lease_sessions.clear()
     apl._last_sweep = 0.0
     apl._touched.clear()
+    apl._bindings_retired_at.clear()
     yield
     apl._lease_ids.clear()
     apl._released_at.clear()
@@ -31,6 +32,7 @@ def _clear_cache():
     apl._lease_sessions.clear()
     apl._last_sweep = 0.0
     apl._touched.clear()
+    apl._bindings_retired_at.clear()
 
 
 def _fake_req(**kw):
