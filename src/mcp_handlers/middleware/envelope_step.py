@@ -189,6 +189,7 @@ def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
         (decision or {}).get("action"),
         enforced_pause,
         *(v.get("decision_action") for v in verdicts),
+        payload.get("last_decision_action"),
         policy.get("action") if isinstance(policy, dict) else None,
     ]
     for value in decided:
@@ -317,6 +318,12 @@ def _action_summary(
         or policy.get("sub_action")
         or inferred_sub_action
     )
+    if not sub_action and inferred_action == "proceed":
+        # recent_decisions stores the bare action ("proceed"); a guided
+        # verdict ("caution"/"guide") still carries the guide sub_action.
+        verdict_sub = _ACTION_ALIASES.get(str(_verdict_value(payload) or "").lower())
+        if verdict_sub and verdict_sub[0] == "proceed" and verdict_sub[1]:
+            sub_action = verdict_sub[1]
 
     verdict_obj = payload.get("verdict")
     if not isinstance(verdict_obj, dict):
