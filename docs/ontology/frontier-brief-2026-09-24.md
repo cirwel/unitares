@@ -53,11 +53,13 @@ must be re-opened before anyone cites it elsewhere.
    routed through the governed-effect plane. The server has no single tool that
    reconstructs an artifact's provenance. Scope both claims down before they
    appear in any assurance case (§2).
-4. **The oversight summary is the one item that is actually new, but its first
-   term cannot be computed.** "Action coverage" needs to know how many actions
-   happened in total. Anthropic knows that because every action on its platform
-   passes through an inline monitor. UNITARES sees only the check-ins and effects
-   that are sent to it (§1).
+4. **The oversight summary is the one item that is actually new, but two of its
+   four terms cannot be computed today.** "Action coverage" needs to know how
+   many actions happened in total. Anthropic knows that because every action on
+   its platform passes through an inline monitor. UNITARES sees only the
+   check-ins and effects that are sent to it. "Human-resolution status" needs a
+   recorded human-or-model resolver class, which exists only on the Sentinel
+   adjudication path (§1).
 
 ---
 
@@ -91,7 +93,8 @@ must be re-opened before anyone cites it elsewhere.
 **Where it converges.** Two things match: messages and artifacts are attributed
 to an agent identity, and every action is checked before it runs. The first
 matches UNITARES's attributed writes. The second matches the governed-effect
-veto. Anthropic's pipeline, where 100,000 transcripts are flagged, about 50 go to
+veto only in part: the veto checks effects routed through the governed-effect
+plane, and ordinary harness actions can bypass that plane entirely. Anthropic's pipeline, where 100,000 transcripts are flagged, about 50 go to
 humans, and roughly 1 in 47,000 actions is blocked, is a working example of the
 "record everything, escalate little" shape.
 
@@ -118,11 +121,15 @@ does not answer it.
 broken down per agent, campaign, model version and effect class. The terms are
 not equally available:
 
-- *Review latency, escalation rate, and human-resolution status* can be derived
-  from records UNITARES already keeps: dialectic sessions, review records, and
-  outcome events. A search of `src/` for `review_latency`, `escalation_rate` and
+- *Review latency and escalation rate* can be derived from records UNITARES
+  already keeps: dialectic sessions, review records, and outcome events. A search of `src/` for `review_latency`, `escalation_rate` and
   `oversight` found no existing rollup. A name search can miss a rollup built
   under other terms, so treat this as "not found", not as "absent".
+- *Human-resolution status* is not derivable today. Dialectic sessions keep a
+  `reviewer_agent_id` and a terminal resolution, but nothing records whether the
+  resolver was a human or a model. Operator versus model adjudication is recorded
+  only on the Sentinel path (`src/http_routes/sentinel.py`, #2378). This term
+  needs a recorded resolver class before it can be reported.
 - *Action coverage* has no denominator. UNITARES observes what adapters and hooks
   submit. It does not see the harness actions that bypass it. A coverage figure
   computed as reported ÷ reported is always 100% and means nothing. The honest
