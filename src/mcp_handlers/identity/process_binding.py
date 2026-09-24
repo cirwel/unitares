@@ -86,6 +86,15 @@ def validate_fingerprint(raw: Any) -> Optional[ProcessFingerprint]:
     )
 
 
+def _recently_released(agent_id: str) -> bool:
+    try:
+        from src.mcp_handlers.identity.agent_presence_lease import recently_released
+
+        return recently_released(agent_id)
+    except Exception:  # pragma: no cover - never let the guard break recording
+        return False
+
+
 async def record_binding_bg(
     agent_id: str,
     fp: ProcessFingerprint,
@@ -108,13 +117,8 @@ async def record_binding_bg(
     a queued insert landing after that release would otherwise re-create the
     live binding the release retired, and block an immediate successor.
     """
-    try:
-        from src.mcp_handlers.identity.agent_presence_lease import recently_released
-
-        if recently_released(agent_id):
-            return
-    except Exception:  # pragma: no cover - never let the guard break recording
-        pass
+    if _recently_released(agent_id):
+        return
     try:
         from src.db import get_db
 
@@ -152,6 +156,21 @@ async def record_binding_bg(
                 fp.anchor_path_hash,
                 client_session_id,
             )
+
+            # The identity may have exited while this insert was waiting on the
+            # database. The release sets its marker before it retires bindings,
+            # so re-checking after the write closes that interleaving: this row
+            # is retired here if the retirement already ran.
+            if _recently_released(agent_id):
+                await conn.execute(
+                    """
+                    UPDATE core.agent_process_bindings
+                    SET stale_at = NOW()
+                    WHERE agent_id = $1 AND stale_at IS NULL
+                    """,
+                    agent_id,
+                )
+                return
 
             live_rows = await conn.fetch(
                 f"""

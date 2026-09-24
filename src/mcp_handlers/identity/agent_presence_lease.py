@@ -256,8 +256,9 @@ async def _refresh_presence(
                 return
         except Exception:
             pass
-        # Expired, reaped, refused, or unknown lease_id — drop and re-acquire.
-        _lease_ids.pop(agent_uuid, None)
+        # Expired, reaped, refused, or a transport error: re-acquire. The old id
+        # stays cached until an acquire succeeds, so an indeterminate failure
+        # of both calls does not lose the only id a clean exit could release.
 
     if AcquireRequest is None:
         return

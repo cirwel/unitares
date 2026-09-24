@@ -637,3 +637,20 @@ async def test_no_lease_plane_still_reports_another_live_holder(monkeypatch):
     result = await apl.release_agent_presence("uuid-1", ("sess-a",))
 
     assert result == {"released": False, "reason": "held_by_other_session"}
+
+
+@pytest.mark.asyncio
+async def test_failed_heartbeat_and_reacquire_keep_the_cached_id(monkeypatch):
+    client = _FakeClient()
+    client.heartbeat_should_fail = True
+
+    def _acquire_fails(req, *, identity_proof=None):
+        raise RuntimeError("transport down")
+
+    client.acquire = _acquire_fails
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "lease-live"
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-1", apl.time.monotonic())
+
+    assert apl._lease_ids["uuid-1"] == "lease-live"
