@@ -751,8 +751,10 @@ async def handle_cleanup_stale_locks(arguments: Dict[str, Any]) -> Sequence[Text
         max_age = arguments.get('max_age_seconds', 300.0)
         dry_run = arguments.get('dry_run', False)
         
-        project_root = Path(__file__).parent.parent.parent
-        result = cleanup_stale_state_locks(project_root=project_root, max_age_seconds=max_age, dry_run=dry_run)
+        # No project_root: sweep the directory StateLockManager writes to.
+        # (Deriving it from this file resolved to src/, a directory no lock
+        # is ever written to.)
+        result = cleanup_stale_state_locks(max_age_seconds=max_age, dry_run=dry_run)
         
         return success_response({
             "cleaned": result['cleaned'],

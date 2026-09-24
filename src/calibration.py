@@ -80,8 +80,9 @@ def resolve_calibration_status(is_calibrated: bool, metrics: Dict[str, Any]) -> 
     return "calibrated" if is_calibrated else "miscalibrated"
 
 
-# Module-level so the test suite can redirect it (tests/conftest.py).
-DEFAULT_STATE_FILE = Path(__file__).parent.parent / "data" / "calibration_state.json"
+# Module-level so the test suite can redirect it (tests/conftest.py); the
+# env var does the same for subprocess-spawned servers.
+DEFAULT_STATE_FILE = Path(os.environ.get("UNITARES_CALIBRATION_STATE") or Path(__file__).parent.parent / "data" / "calibration_state.json")
 
 
 class CalibrationChecker:

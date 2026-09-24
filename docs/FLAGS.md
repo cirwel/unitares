@@ -53,6 +53,7 @@ additions merge cleanly. -->
 | `UNITARES_BUILD_SHA` | `''` | Best-effort short commit SHA of the running build (``git rev-parse``) | src/versioning.py |
 | `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
+| `UNITARES_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/calibration.py |
 | `UNITARES_CALL_MODEL_TIMEOUT` | `None (no reader fallback)` | Wall-clock budget for one call_model round-trip | src/mcp_handlers/support/model_inference.py |
 | `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py |
 | `UNITARES_CLAUDE_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py) | Return the operator-pinned CLI path for a known adapter, if any. | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py |

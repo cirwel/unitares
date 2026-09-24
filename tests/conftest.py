@@ -472,10 +472,12 @@ def _isolate_repo_data_writers(tmp_path_factory):
 
     # Subprocess-spawned servers (test_unitares_cli_script.py) import fresh
     # and never see the patches below; the env vars reach them instead.
+    cal_file = root / "calibration_state.json"
     seq_file = root / "sequential_calibration_state.json"
     mp.setenv("UNITARES_AUDIT_LOG", str(audit_file))
     mp.setenv("UNITARES_PROCESS_DIR", str(pid_dir))
     mp.setenv("UNITARES_LOCK_DIR", str(lock_dir))
+    mp.setenv("UNITARES_CALIBRATION_STATE", str(cal_file))
     mp.setenv("UNITARES_SEQUENTIAL_CALIBRATION_STATE", str(seq_file))
 
     import src.audit_log as audit_log
@@ -496,7 +498,7 @@ def _isolate_repo_data_writers(tmp_path_factory):
         mp.setattr(apm.lock_manager, "lock_dir", lock_dir)
 
     import src.calibration as calibration
-    mp.setattr(calibration, "DEFAULT_STATE_FILE", root / "calibration_state.json")
+    mp.setattr(calibration, "DEFAULT_STATE_FILE", cal_file)
     mp.setattr(calibration, "_calibration_checker_instance", None)
 
     import src.sequential_calibration as sequential_calibration
