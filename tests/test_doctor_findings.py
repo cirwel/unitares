@@ -110,6 +110,92 @@ def test_open_condition_is_suppressed_by_cooldown():
     assert posted == []
 
 
+HOUR = 3600.0
+
+
+def _open_state(check, status, *, ago_h, alerts=None):
+    """State with one open finding last posted ``ago_h`` hours ago."""
+    import time
+    rec = {"check": check, "status": status, "first_seen": 0,
+           "last_alert": time.time() - ago_h * HOUR}
+    if alerts is not None:
+        rec["alerts"] = alerts
+    return {"open": {df.fingerprint(check, status): rec}}
+
+
+def test_open_condition_is_not_reposted_after_six_hours():
+    # The flat 6h cooldown re-posted every open condition four times a day:
+    # 356 findings from 8 fingerprints in 30d (2026-09-24). State written
+    # before the backoff has no "alerts" count and must start at the base.
+    posted: list = []
+    state = _open_state("signal_degeneracy", "warn", ago_h=7)
+    make([FakeResult("signal_degeneracy", WARN, "still degenerate")], posted,
+         state=state).run()
+    assert posted == []
+
+
+def test_open_condition_reposts_after_the_base_interval_and_counts_it():
+    posted: list = []
+    state = _open_state("signal_degeneracy", "warn", ago_h=25, alerts=1)
+    d = make([FakeResult("signal_degeneracy", WARN, "still degenerate")], posted,
+             state=state)
+    d.run()
+    assert len(posted) == 1
+    fp = df.fingerprint("signal_degeneracy", "warn")
+    assert d.state["open"][fp]["alerts"] == 2
+
+
+def test_each_repeat_doubles_the_quiet_period():
+    posted: list = []
+    held = _open_state("signal_degeneracy", "warn", ago_h=25, alerts=2)
+    make([FakeResult("signal_degeneracy", WARN, "x")], posted, state=held).run()
+    assert posted == []  # second repeat waits 48h, not 24h
+
+    due = _open_state("signal_degeneracy", "warn", ago_h=49, alerts=2)
+    make([FakeResult("signal_degeneracy", WARN, "x")], posted, state=due).run()
+    assert len(posted) == 1
+
+
+def test_backoff_is_capped_so_a_stuck_condition_still_resurfaces():
+    posted: list = []
+    state = _open_state("signal_degeneracy", "warn", ago_h=7 * 24 + 1, alerts=40)
+    make([FakeResult("signal_degeneracy", WARN, "x")], posted, state=state).run()
+    assert len(posted) == 1
+
+
+def test_realert_interval_sequence():
+    assert df.realert_interval(1) == df.COOLDOWN_SECONDS
+    assert df.realert_interval(2) == 2 * df.COOLDOWN_SECONDS
+    assert df.realert_interval(0) == df.COOLDOWN_SECONDS
+    assert df.realert_interval(10_000) == max(df.MAX_COOLDOWN_SECONDS,
+                                              df.COOLDOWN_SECONDS)
+
+
+def test_first_post_starts_the_count_at_one():
+    posted: list = []
+    d = make([FakeResult("immortal_lease", WARN, "2 leases")], posted)
+    d.run()
+    fp = df.fingerprint("immortal_lease", "warn")
+    assert d.state["open"][fp]["alerts"] == 1
+
+
+def test_a_new_condition_posts_while_others_are_held():
+    posted: list = []
+    state = _open_state("signal_degeneracy", "warn", ago_h=1, alerts=1)
+    make([FakeResult("signal_degeneracy", WARN, "held"),
+          FakeResult("immortal_lease", WARN, "new")], posted, state=state).run()
+    assert [p["extra"]["check"] for p in posted] == ["immortal_lease"]
+
+
+def test_escalation_to_fail_posts_despite_a_fresh_warn():
+    posted: list = []
+    state = _open_state("checkin_stream_live", "warn", ago_h=1, alerts=1)
+    make([FakeResult("checkin_stream_live", FAIL, "fleet dark")], posted,
+         state=state).run()
+    assert len(posted) == 1
+    assert posted[0]["severity"] == "critical"
+
+
 def test_recovery_closes_the_open_finding():
     posted: list = []
     fp = df.fingerprint("immortal_lease", "warn")

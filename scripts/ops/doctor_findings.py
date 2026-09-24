@@ -70,10 +70,21 @@ except Exception:
 FINDING_KIND = "doctor_check_finding"
 PRODUCER = "doctor-findings"
 
-# Re-alert cooldown. A condition that stays true should not re-notify hourly --
-# the finding is already open. Long enough to stay quiet across a working day,
-# short enough that a genuinely stuck condition resurfaces.
-COOLDOWN_SECONDS = int(os.environ.get("DOCTOR_FINDINGS_COOLDOWN", 6 * 3600))
+# Re-alert backoff. A condition that stays true should not re-notify hourly --
+# the finding is already open. The first repeat waits COOLDOWN_SECONDS, and each
+# repeat after it doubles the wait up to MAX_COOLDOWN_SECONDS, so a stuck
+# condition keeps resurfacing about weekly instead of disappearing.
+#
+# A flat 6h cooldown is what this replaced. Measured 2026-09-24: 356 findings in
+# 30d from 8 fingerprints (44.5x repeat), gaps between repeats exactly 6.01h, and
+# signal_degeneracy re-posted four times a day for 46 days. None of those
+# repeats said anything the first post had not. A NEW condition is unaffected:
+# its fingerprint has no open entry, so it posts on the first tick. So is
+# escalation: status is part of the fingerprint, so warn -> fail posts at once.
+COOLDOWN_SECONDS = int(os.environ.get("DOCTOR_FINDINGS_COOLDOWN", 24 * 3600))
+MAX_COOLDOWN_SECONDS = int(
+    os.environ.get("DOCTOR_FINDINGS_MAX_COOLDOWN", 7 * 24 * 3600)
+)
 
 STATE_FILE = os.path.expanduser(
     os.environ.get("DOCTOR_FINDINGS_STATE", "~/.unitares/doctor-findings.state.json")
@@ -143,6 +154,18 @@ def fingerprint(name: str, status: str) -> str:
     per failing check is the unit an operator actually acts on.
     """
     return hashlib.sha256(f"{name}:{status}".encode()).hexdigest()[:16]
+
+
+def realert_interval(alerts: int) -> float:
+    """Seconds an open finding stays quiet after its ``alerts``-th post.
+
+    ``alerts`` counts posts so far, including the first. State written before
+    the backoff existed has no count and is read as 1, so a long-open
+    condition starts at the base interval rather than jumping to the cap.
+    """
+    doublings = min(max(alerts, 1) - 1, 16)  # 2**16 days is past any cap
+    return min(COOLDOWN_SECONDS * 2 ** doublings,
+               max(MAX_COOLDOWN_SECONDS, COOLDOWN_SECONDS))
 
 
 def severity_for(status: str) -> str:
@@ -253,7 +276,8 @@ class DoctorFindings:
     def _escalate(self, r: Any, fp: str, open_findings: Dict[str, Any]) -> None:
         now = time.time()
         prev = open_findings.get(fp)
-        if prev and (now - prev.get("last_alert", 0)) < COOLDOWN_SECONDS:
+        if prev and (now - prev.get("last_alert", 0)) < realert_interval(
+                prev.get("alerts", 1)):
             log(f"  finding suppressed (cooldown active for {r.name})")
             return
         if self.dry_run:
@@ -288,6 +312,7 @@ class DoctorFindings:
             "status": r.status.value,
             "first_seen": (prev or {}).get("first_seen", now),
             "last_alert": now,
+            "alerts": (prev or {}).get("alerts", 1 if prev else 0) + 1,
         }
 
 
