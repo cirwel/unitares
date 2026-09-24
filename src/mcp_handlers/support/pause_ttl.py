@@ -231,11 +231,13 @@ def _parse_utc(value: Any) -> Optional[datetime]:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-# A pause's lifecycle event is stamped a moment after paused_at in memory
-# (add_lifecycle_event takes its own clock) and exactly at paused_at when
-# persisted. Two pauses of one agent cannot fall this close together: a paused
-# agent's writes are refused.
-_PAUSE_EVENT_MATCH_SECONDS = 5.0
+# A pause's lifecycle event is stamped at or after paused_at: exactly at it when
+# persisted, and after it in memory (add_lifecycle_event takes its own clock,
+# after at least one database round trip). An older pause's event is always
+# before the current paused_at, since a later pause moves paused_at forward.
+# So the current pause's event is the latest "paused" event not earlier than
+# paused_at; the slack only absorbs sub-second clock and serialization noise.
+_PAUSE_EVENT_EARLY_SLACK_SECONDS = 1.0
 
 
 def paused_refusal_recovery(meta: Any) -> dict:
@@ -263,7 +265,9 @@ def paused_refusal_recovery(meta: Any) -> dict:
             if not (isinstance(event, dict) and event.get("event") == "paused"):
                 continue
             event_dt = _parse_utc(event.get("timestamp"))
-            if event_dt is not None and abs((event_dt - paused_dt).total_seconds()) <= _PAUSE_EVENT_MATCH_SECONDS:
+            if event_dt is not None and (
+                (event_dt - paused_dt).total_seconds() >= -_PAUSE_EVENT_EARLY_SLACK_SECONDS
+            ):
                 reason = event.get("reason")
                 break
     expires_at = None

@@ -98,3 +98,19 @@ def test_the_dialectic_lookup_is_callable_as_written():
     """dialectic(action='get') errors without session_id or agent_id."""
     recovery = paused_refusal_recovery(_meta(agent_id="a-123"))
     assert "dialectic(action='get', agent_id='a-123')" in recovery["other_exits"]
+
+
+def test_a_slow_event_write_still_matches_the_current_pause():
+    """The in-memory event is stamped after a database round trip; a slow one
+    (well over 5s) must still be recognised as this pause's reason."""
+    paused_at = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
+    meta = _meta(
+        paused_at=paused_at.isoformat(),
+        lifecycle_events=[
+            {"event": "paused", "reason": "older pause",
+             "timestamp": (paused_at - timedelta(days=1)).isoformat()},
+            {"event": "paused", "reason": "current pause",
+             "timestamp": (paused_at + timedelta(seconds=30)).isoformat()},
+        ],
+    )
+    assert paused_refusal_recovery(meta)["why"] == "current pause"
