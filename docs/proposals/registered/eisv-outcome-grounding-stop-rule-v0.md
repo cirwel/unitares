@@ -302,22 +302,28 @@ automatically.
 Do not adjust these thresholds after seeing the read. The point of writing them
 down now is that they were chosen before the data existed.
 
-### Pre-data clarification — 2026-09-23: what condition 4's "family" means
+### Pre-read clarification — drafted 2026-09-23, effective at merge: what condition 4's "family" means
 
 PASS condition 4 above says the winning candidate must be "the same family as
 at this read's other lead slice". The word "family" appears nowhere else in
-this document and is mapped onto the candidate set in no code, test, or
-document (#2154). This block defines it before the registered cohort exists.
+this document, and no code, test, or document partitions the candidates into
+families (#2154). The one other document that reads the term,
+`independent-operator-cohort-preregistration-v0.md`, adopted the condition and
+read "family" as the whole registered candidate set; under that reading the
+compared object is the same candidate set at both leads, so condition 4 could
+not fail on the argmax flip its own rationale names. That document is amended
+alongside this block so its reading agrees with this one. This block defines
+the term before the registered cohort exists.
 It is a clarification of an undefined term, not a change to any threshold,
 cohort, cutoff, date, estimator, or command.
 
 **Definition.** For this read, condition 4 is met if and only if the
 `Best EISV/prior model` cell of the task / 365 d / lead 0 row is
 byte-identical to the `Best EISV/prior model` cell of the task / 365 d /
-lead 30 row in the matrix output of the single registered read
-(`--read-id eisv-outcome-grounding-2026-12-01`, or the one `-retry-<n>` id
-whose receipt the report discloses as the attempt that completed), and
-neither cell is `-`. "Family" therefore means the candidate's name as
+lead 30 row in the matrix output of the single registered read, which is
+the first attempt, in receipt order, that printed the matrix (under
+`--read-id eisv-outcome-grounding-2026-12-01` or one of its `-retry-<n>`
+forms; the report names which), and neither cell is `-`. "Family" therefore means the candidate's name as
 `scripts/analysis/eisv_ablation_matrix.py` prints it; two candidates are in
 the same family only when they are the same candidate. Nothing else is
 compared: not the feature a candidate reads, not its delta, not its
@@ -348,8 +354,9 @@ choice exists at read time, and the definition needs no knowledge of which
 candidates exist or were fitted: it reads the same under any candidate
 tuple. Whether the read may *run* under a changed tuple is a separate
 question, answered by the pin described below. (4) It is the most
-conservative reading available: every coarser partition admits winners the
-rationale would call unstable.
+conservative reading available against a false PASS: every coarser
+partition admits winners the rationale would call unstable. It is not
+conservative against a false closure; the disclosure below states that cost.
 
 **Candidate set at the time of this clarification, and the pin.** The
 winner is drawn from `EISV_PRIOR_STATE_MODELS` in
@@ -384,8 +391,12 @@ freezes, stated exactly: the candidate tuple as written and the dispersion
 feature name. The comparison is exact tuple equality, so a reordering of
 the tuple also refuses; that is a conservative choice of comparison, not a
 claim that the tuple's order selects. What it does not freeze: the
-tie-break order, which is the construction order in `build_model_scores`
-and is not recorded anywhere, and what any candidate computes. The model
+tie-break order, which is the construction order in `build_model_scores`,
+and what any candidate computes. The tie-break order is recorded above and
+guarded by a CI canary test (`test_build_model_scores_construction_order_is_the_recorded_tie_break`
+in `tests/test_eisv_ablation_matrix.py`), which fails if a change to
+`master` reorders it, so a reordering cannot reach the read unnoticed; the
+canary is a CI check, not a refusal inside the read. The model
 constructors in `build_model_scores`, their binning,
 `min_feature_rows` (30), `MIN_DISPERSION_SNAPSHOTS` (5) and
 `DISPERSION_WINDOW_MINUTES` (90.0) remain governed only by the registered
@@ -413,40 +424,62 @@ rule above governs failures after a receipt exists and is not triggered.
 The refusal message names both the recorded and the live values; if a
 refusal occurs, the December report discloses it.
 
-**Disclosure of what was known when this was written.** The frozen
-2026-08-09 descriptive matrix was public when this block was written. On
-its two task-scope lead 0 / lead 30 pairs (30 d and 90 d windows, neither
-the registered 365 d window) the winning names differ
-(`prior_risk_binned` / `previous_bad_plus_dispersion` at 30 d;
-`prior_risk_binned` / `prior_s_binned` at 90 d), so this definition would
-have been unmet on every recorded pair. It is written with that fact in
-view and is not presented as chosen in ignorance of it. It was written
-before any access to the registered cohort; no live outcome read was
-performed to prepare it. A coarser feature-axis partition was considered
-and rejected (decision record:
+**Disclosure of what was known when this was written.** Five lead 0 /
+lead 30 winner pairs are recorded in this repository, none of them the
+registered task / 365 d cohort. The frozen 2026-08-09 descriptive matrix
+(`docs/operations/eisv-ablation-frozen-2026-08-09.md`) has four, in the
+task and strict scopes at 30 d and 90 d: `prior_risk_binned` /
+`previous_bad_plus_dispersion` at 30 d and `prior_risk_binned` /
+`prior_s_binned` at 90 d, in both scopes. The 2026-06-16 record
+(`docs/operations/ablation-initiates-finding-2026-06-16.md`) has one,
+task / 90 d: `previous_bad_plus_prior_risk` / `prior_s_binned`. The winning
+names differ on all five, so this definition would have been unmet on every
+recorded pair. In addition, the ablation watchdog completed 42 runs after
+the frozen cutoff whose live matrices exposed selected candidates
+(`docs/ontology/falsification-design-system-audit-2026-08-23.md`); their
+winners were not recorded and are not known to this block. It is written
+with those facts in view: it is a pre-read choice, not a pre-evidence one.
+It was written before any access to the registered cohort; no live outcome
+read was performed to prepare it. A coarser feature-axis partition was
+considered and rejected (decision record:
 `docs/proposals/active/open-decisions-packet-v0.md`, item D4; audit: #2154);
 the adversarial design review of that packet split between the two
 readings, and the operator selected winner-name identity. The feature-axis
 partition would also have been unmet on every recorded pair, so the choice
 between the two readings changed no recorded verdict.
 
+**Named cost.** Condition 4 binds only on the branch where conditions 1–3
+all pass, and on that branch this reading is the condition most likely to
+produce FAIL, which closes the scheduled read track (not EISV; "What
+continues regardless" below governs that). The operator accepts that
+trade: a stable-argmax requirement that may not be met, rather than one
+that cannot fail.
+
 **Smallest relevant effect.** The power-characterisation correction above
 records that no beta, AUC delta, or equivalent effect size fills the
 "predeclared smallest relevant effect" slot, and that the operator must
 declare one before any further live outcome-discrimination access. The
 operator's declaration, made 2026-09-23 before any access to the registered
-cohort, is that **no smallest relevant effect is set for this read**. That
+cohort, is that **no smallest relevant effect is set for this read**. The
+2026-09-02 interim access disclosed above ran a discrimination script after
+the 2026-08-23 correction and before this declaration existed; it returned 0
+eligible outcomes and computed no discrimination result. That
 is a choice, not an omission, and it is recorded here as the declaration
 the correction asks for. Three reasons, each checkable against this
 repository: the record contains no relevance anchor for this estimand (every
 candidate value in it is a detectability figure, a runtime report label, or
 the withdrawn 0.05 bound that this gate bars by name); the only claim a
-power-qualified `REFUTED` could refute is rework prediction, because the bad
-class has never carried a violation, harm, or concealment row; and a value
+power-qualified `REFUTED` could refute is rework prediction, because in the
+dated inventory of 2026-09-02
+(`docs/proposals/archive/outcome-fixture-conflation-decision-packet-v0.md`,
+21-day window) every `is_bad` row is `test_failed` or
+`watcher_finding_dismissed`, and no recorded measurement shows a bad row of a
+violation, harm, or concealment type; and a value
 chosen now so that `REFUTED` becomes reachable would be derived from what the
 read can detect, which the gate forbids. Consequences: the December read
 runs as registered; the operational stop rule decides PASS or FAIL
-unchanged; on any non-PASS branch the scientific inference is `INCONCLUSIVE`
+unchanged; the database-free power probe still runs as registered and is
+reported descriptively, not at a declared effect; on any non-PASS branch the scientific inference is `INCONCLUSIVE`
 by declaration, exactly as the gate already provides; and `REFUTED` is
 unreachable for this read. The slot is not closed for the future: a later
 read under a new premise carries its own declaration. No agent-chosen value
@@ -463,9 +496,9 @@ candidate tuple and `DISPERSION_FEATURE` in
 `REGISTERED_READ_MANIFEST` is a separate, disclosed code change made
 alongside this clarification, and the rule above does not depend on it. It
 does not change `independent-operator-cohort-preregistration-v0.md`'s
-protocol; that document's "adopted verbatim" sentence is amended alongside
-this clarification so its reading of "family" agrees with this one, while
-its enrollment ledger is empty. It does not resolve the condition 1 →
+protocol; the sentences in that document that read "family" as the whole
+candidate set are amended alongside this clarification so its reading agrees
+with this one, while its enrollment ledger is empty. It does not resolve the condition 1 →
 condition 2 redundancy at 400 resamples (#2154 §2) or the agent-stratified
 null question (#2154 §3).
 
