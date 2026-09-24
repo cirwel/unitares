@@ -2513,6 +2513,21 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     session's last recorded act. #1819 downgrades a *proven* risk-only
     cold-start hard stop to guidance, so the expected steady state is zero.
 
+    Only NON-authored decisions count. The guard is ineligible, by design,
+    when the check-in is the agent's own report (`epistemic_class =
+    'agent_report'`, `ineligibility_reason: agent_authored_report`): an agent
+    that tells governance it is high-risk keeps that verdict. Counting those
+    pauses made the canary warn for days on 2026-09-21's single pause, a
+    Codex session's self-authored second check-in with the guard deployed
+    and on. Authorship is read from the row's top-level `epistemic_class`,
+    the field the guard itself decides on, because it is on every decision;
+    the guard's own `epistemic_gate` block is attached to risk-routed pauses
+    only, so it cannot classify the denominator. A row whose class is absent
+    counts as non-authored, since authorship cannot be shown for it.
+    Authored pauses are still reported, uncounted. The denominator is
+    filtered the same way: a window whose cold starts were all
+    agent-authored never exercised the guard, so it SKIPs, never PASSes.
+
     Zero is also what this check sees when nothing is looking, which is the
     whole reason it exists. The denominator is cold-start *decisions* of any
     action: if no identity has been through cold start at all in the window,
@@ -2529,35 +2544,47 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     row = _psql_row(db_url, (
         "WITH d AS ("
         "  SELECT state_json->'eisv_telemetry'#>>'{policy_evaluation,action}' AS act,"
-        "         state_json->'eisv_telemetry'#>>'{policy_evaluation,inputs,verdict_source}' AS vsrc"
+        "         state_json->'eisv_telemetry'#>>'{policy_evaluation,inputs,verdict_source}' AS vsrc,"
+        "         state_json->>'epistemic_class' AS eclass"
         "  FROM core.agent_state"
         "  WHERE recorded_at > now() - interval '7 days'"
         "    AND state_json ? 'eisv_telemetry')"
-        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'),"
-        "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause')"
+        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'"
+        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
+        "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
+        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
+        "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
+        "                          AND eclass = 'agent_report')"
         " FROM d"
     ))
-    if row is None or len(row) < 2:
+    if row is None or len(row) < 3:
         return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
-    cold_starts, pauses = int(row[0]), int(row[1])
+    cold_starts, pauses, authored = int(row[0]), int(row[1]), int(row[2])
+    authored_note = (
+        f" ({authored} agent-authored cold-start pause(s) not counted: the "
+        "guard deliberately leaves an agent's own report in force)"
+        if authored else ""
+    )
     if cold_starts == 0:
         return CheckResult(
             name, mode, Status.SKIP,
-            "no phi_cold_start decisions in 7d — nothing to observe, so a zero "
-            "here would not mean the guard is working",
+            "no non-authored phi_cold_start decisions in 7d — nothing to "
+            "observe, so a zero here would not mean the guard is working"
+            + authored_note,
         )
     if pauses:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{pauses} phi_cold_start pause(s) in 7d across {cold_starts} "
-            "cold-start decisions — #1819 downgrades a proven risk-only cold "
-            "start to guidance, so check in order: is #1819 actually DEPLOYED "
-            "(compare the running build_sha, not master), is "
+            f"{pauses} non-authored phi_cold_start pause(s) in 7d across "
+            f"{cold_starts} non-authored cold-start decisions — #1819 downgrades a proven "
+            "risk-only cold start to guidance, so check in order: is #1819 "
+            "actually DEPLOYED (compare the running build_sha, not master), is "
             "GOVERNANCE_NON_AUTHORED_COLD_START_GUARD on, and did an "
-            "independent hard stop legitimately fire",
+            "independent hard stop legitimately fire" + authored_note,
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"0 pauses across {cold_starts} cold-start decisions in 7d")
+                       f"0 pauses across {cold_starts} non-authored cold-start "
+                       f"decisions in 7d" + authored_note)
 
 
 def check_label_join_overlap(db_url: str) -> CheckResult:
@@ -2741,6 +2768,45 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
 # The contrast is the point: watcher_finding ran 2 confirmed / 55 dismissed over
 # the same channel, so a ~96% dismissal rate is what a healthy family looks like
 # here and 0-of-17 is not small-sample noise.
+def _operator_adjudication_declared_off() -> bool:
+    """True when this deployment DECLARES it has no human adjudicator.
+
+    Declared, never inferred: "no operator verdicts lately" is also what a
+    broken dashboard or a busy week looks like, and inferring absence from it
+    would switch these checks off exactly when they are needed.
+    """
+    return os.environ.get("UNITARES_OPERATOR_ADJUDICATION", "").strip().lower() in (
+        "off", "none", "0", "false", "no",
+    )
+
+
+def _no_operator_adjudicator(name: str, mode: str, db_url: str) -> CheckResult:
+    """SKIP for a queue-feed check whose subject cannot exist on this deployment.
+
+    adjudication_feedstock asks whether the queue is fed for the OPERATOR to
+    judge. With no operator nothing is judged by construction, so its WARN
+    could never clear and would repeat every sweep forever. Not used by
+    anchor_all_positive_generator, which audits labels already recorded. Model verdicts (finding_model_adjudicated)
+    are named here as the reason the queue still drains, and deliberately NOT
+    counted as the channel's verdicts: they are telemetry, not anchors.
+    """
+    row = _psql_row(db_url, (
+        "SELECT count(*) FROM audit.events "
+        "WHERE event_type = 'finding_model_adjudicated' "
+        "  AND ts > now() - interval '7 days'"
+    ))
+    model_note = (
+        f"; {row[0]} model verdict(s) in 7d (telemetry, never anchors)"
+        if row else ""
+    )
+    return CheckResult(
+        name, mode, Status.SKIP,
+        "operator adjudication declared off (UNITARES_OPERATOR_ADJUDICATION) — "
+        "no operator verdicts reach the anchor channel on this deployment, so "
+        "there is nothing for this check to judge" + model_note,
+    )
+
+
 ALL_POSITIVE_MIN_N = 10   # below this, "no dismissals yet" is cadence, not shape
 
 
@@ -2763,6 +2829,9 @@ def check_anchor_all_positive_generator(db_url: str) -> CheckResult:
     wrong lever.
     """
     name, mode = "anchor_all_positive_generator", "operator"
+    # Deliberately NOT skipped under UNITARES_OPERATOR_ADJUDICATION=off: this
+    # audits labels ALREADY in the anchor channel (every family, not only the
+    # queue's), and declaring no future adjudicator does not remove them.
     rows = _psql_rows(db_url, (
         "SELECT regexp_replace(outcome_type, '_(confirmed|dismissed)$', '') AS family, "
         "count(*) FILTER (WHERE outcome_type LIKE '%_confirmed') AS confirmed, "
@@ -3224,6 +3293,8 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
     lever retired" — which is a decision, not a defect.
     """
     name, mode = "adjudication_feedstock", "operator"
+    if _operator_adjudication_declared_off():
+        return _no_operator_adjudicator(name, mode, db_url)
 
     eligible_sql = _adjudicable_predicate_sql()
 
@@ -3389,6 +3460,8 @@ FORCED_TRANSFORM_FINGERPRINT_PREFIX = "forced_release:ad_hoc:"
 FORCED_TRANSFORM_TEST_SURFACE_PREFIXES = (
     "td:/test/",
     "td:/force-release-contract-test-",
+    "dialectic:/test_elixir_",
+    "resident:/test_elixir_",
 )
 FORCED_TRANSFORM_DAYS = 30        # lookback for the ABSENCE arm
 FORCED_TRANSFORM_LATENCY_DAYS = 7  # lookback for the LATENCY arm (see docstring)

@@ -53,10 +53,23 @@ stdout, one per line, so the caller can print them.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
 import sys
+
+# Which attestations vouch for a skill's text is decided in one place, shared
+# with the freshness checker and the server's skills tool.
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from src.skill_attestations import (  # noqa: E402
+    certified_attestations,
+    load_attestations,
+    skill_text_digest,
+)
 
 _LAST_VERIFIED = re.compile(r'^last_verified:\s*"?([\d-]+)"?', re.M)
 
@@ -174,9 +187,81 @@ def is_past_canonical_state(canon: pathlib.Path, mirror: pathlib.Path) -> bool:
     return canon_oldest < mirror_newest
 
 
+def _pairs(record: dict) -> set[tuple[str, str]]:
+    digests = record.get("source_digests")
+    if not isinstance(digests, dict):
+        return set()
+    return {(str(k), str(v)) for k, v in digests.items()}
+
+
+def attestation_regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
+    """Mirror-side verifications the sync would delete.
+
+    Re-verification is recorded as new files under ``.attestations/<skill>/``
+    and never edits SKILL.md (scripts/client/_check_freshness.py), so the
+    SKILL.md comparison below cannot see a verification committed in the
+    mirror, and ``rsync --delete`` would erase it silently. A mirror-only
+    attestation blocks when either holds:
+
+      * it is NEWER than canonical's newest record for that skill (names lead
+        with a microsecond UTC timestamp, so name order is time order);
+      * it certified canonical's CURRENT skill text (its `skill_digest`
+        matches canonical's SKILL.md) and records a source digest that no
+        canonical record for that text records. Every record for the current
+        text vouches (src/skill_attestations.py), so such a record is
+        evidence the mirror would lose, whatever its age: e.g. the only record
+        of an external source's digest, which a later canonical stamp made
+        where that source was absent left unrecorded.
+
+    Other older mirror-only files are ones canonical has since pruned, or ones
+    for text canonical no longer carries, and deleting them is the sync doing
+    its job.
+    """
+    blocked: list[str] = []
+    mirror_root = dst / ".attestations"
+    if not mirror_root.is_dir():
+        return blocked
+    for adir in sorted(p for p in mirror_root.iterdir() if p.is_dir()):
+        canon_dir = src / ".attestations" / adir.name
+        canon_names = {p.name for p in canon_dir.glob("*.json")} if canon_dir.is_dir() else set()
+        canon_newest = max(canon_names, default="")
+        canon_md = src / adir.name / "SKILL.md"
+        try:
+            current = skill_text_digest(canon_md) if canon_md.is_file() else None
+        except OSError:
+            current = None
+        covered: set[tuple[str, str]] = set()
+        for record in certified_attestations(load_attestations(src, adir.name), current):
+            covered |= _pairs(record)
+        for mirror_file in sorted(adir.glob("*.json")):
+            if mirror_file.name in canon_names:
+                continue
+            if mirror_file.name > canon_newest:
+                blocked.append(
+                    f"{adir.name}: mirror attestation {mirror_file.name} is newer than any "
+                    f"canonical record"
+                )
+                continue
+            if current is None:
+                continue
+            try:
+                record = json.loads(mirror_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(record, dict) or record.get("skill_digest") != current:
+                continue
+            lost = sorted(src_name for src_name, _ in _pairs(record) - covered)
+            if lost:
+                blocked.append(
+                    f"{adir.name}: mirror attestation {mirror_file.name} certifies the current "
+                    f"skill text and is the only record of {', '.join(lost)}"
+                )
+    return blocked
+
+
 def regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
     """Reasons the mirror must not be overwritten, one per drifted skill."""
-    blocked: list[str] = []
+    blocked: list[str] = attestation_regressions(src, dst)
     for mirror in sorted(dst.glob("*/SKILL.md")):
         canon = src / mirror.parent.name / "SKILL.md"
         if not canon.exists():

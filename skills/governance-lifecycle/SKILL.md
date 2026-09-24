@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-23"
+last_verified: "2026-09-24"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -38,24 +38,6 @@ source_files:
   # descriptions are abridged and names describe_tool as where the full text
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
-source_digests:
-  unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "d82070a0d97f2830"
-  unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
-  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "f5c881194d51f538"
-  unitares/src/mcp_handlers/middleware/identity_step.py: "f50ccc2629ef7832"
-  unitares/src/mcp_handlers/updates/phases.py: "d8d32bccff74956b"
-  unitares/src/governance_monitor.py: "bf2ac268a3ecfec9"
-  unitares/src/monitor_calibration.py: "c99375f368dd98aa"
-  unitares/src/mcp_handlers/updates/enrichments.py: "0aec78c062f4af99"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "2b6f70a94a7361f5"
-  unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
-  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "60fb261244c59d3a"
-  unitares/src/tool_mode_listing.py: "7f50ce631689ce55"
-  unitares/src/mcp_handlers/introspection/tool_introspection.py: "0ffd2f7bc93fba79"
-  unitares/src/schema_brief.py: "401bbce563c30439"
 ---
 
 # Agent Lifecycle
@@ -233,7 +215,7 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 
 - UUID is an identity anchor, not proof that the current process owns that identity
 - Session binding can happen via transport session, `client_session_id`, or short-lived continuity token
-- Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. Your identity is unchanged; retry from a client that sends its own session identifier.
+- Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. A destination that is another agent's stable `agent-...` session id (for example one sent in an `X-Session-ID` header) is refused the same way, as `rebind_refused: "foreign_stable_session_id"`, whichever transport header carried it. Your identity is unchanged; retry from a client that sends its own session identifier.
 - When continuity seems unclear, call `identity(client_session_id="<your client_session_id>")`. Do not call it with no arguments: a call carrying no proof signal at all is gated to a fresh mint (`[FRESH_INSTANCE]`, S13), so it answers with a newly created identity rather than reporting on yours, and leaves a spurious record behind. The gate is what keeps the unauthenticated read off the User-Agent pin path; passing your own `client_session_id` is what makes the answer about you.
 - Trust the answer only when `identity_assurance.caller_proven` is true; a `weak` tier with `proof_origin: "server_inferred"` means the server guessed.
 - Inspect:

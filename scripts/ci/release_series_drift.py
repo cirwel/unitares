@@ -6,7 +6,9 @@ the Python SDK under `agents/sdk/` has its own `sdk-v*` tags and its own PyPI
 version, and `skills/` is mirrored byte-for-byte into the separately tagged
 `unitares-governance-plugin`.
 
-`version_manager.py` guards the server version across seven files, thoroughly.
+`version_manager.py` guards the server version thoroughly, checking
+source-version references against `VERSION` and published-release pins
+against `PUBLISHED_VERSION`.
 Nothing watched the other series. So `agents/sdk/` accumulated four commits and
 a new public method across two server releases while PyPI still served 0.1.0,
 and the skills bundle shipped guidance the server had already changed. Neither
@@ -76,8 +78,9 @@ SERIES = [
         "version_file": None,
         "consumer": "unitares-governance-plugin",
         "resolution": (
-            "re-run scripts/dev/skills_manifest.py, mirror skills/ plus the "
-            "manifest into the plugin, and cut a plugin release carrying it"
+            "run scripts/dev/sync-plugin-skills.sh (mirrors skills/ and writes "
+            "the fingerprint manifest into the plugin), and cut a plugin release "
+            "carrying it"
         ),
     },
 ]

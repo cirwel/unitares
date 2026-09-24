@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Model adjudicator.
+
+    Every 6h, judges the adjudication queue with a model and records each
+    verdict through /v1/sentinel/model-adjudicate. For deployments where nobody
+    adjudicates: without it the queue fills, never drains, and its two doctor
+    checks warn forever.
+
+    A MODEL VERDICT IS TELEMETRY, NEVER AN OPERATOR LABEL. It lands in
+    audit.events as finding_model_adjudicated and never in outcome_events, so
+    it cannot reach is_bad, the EISV anchor channel or the registered outcome
+    read. Installing this does not make anyone an adjudicator.
+
+    Installing this plist IS the opt-in (execution-cost policy): it sets
+    UNITARES_MODEL_ADJUDICATOR_HOST=claude, which spends Claude-subscription
+    quota through the Claude CLI. No metered API key is involved.
+
+    THE JUDGE HAS NO TOOLS. It runs as `claude --safe-mode --tools ""` in an
+    empty temp dir: finding text is untrusted, and a judge with a shell can be
+    talked into reading a secrets file to the provider. The job gathers all
+    evidence itself (history, a fresh re-run of the doctor check, its source).
+
+    Model tiers: FAST judges every item; STRONG sees only what FAST abstained
+    on or scored below UNITARES_ADJUDICATOR_ESCALATE_BELOW.
+
+    THE CUTOFF IS YOURS TO SET. UNITARES_ADJUDICATOR_ESCALATE_BELOW decides
+    when a model's answer stands (hiding the finding for a week) versus
+    escalating or abstaining, so it has no default: replace __ESCALATE_BELOW__
+    with a value in (0, 1]. Left as the placeholder, the job logs and exits
+    without judging anything.
+    Values are Claude CLI --model names or aliases (e.g. haiku). Leave STRONG
+    empty for the CLI's default model; set it to "off" to disable escalation.
+
+    If this deployment has NO human adjudicator, set
+      UNITARES_OPERATOR_ADJUDICATION=off
+    on the doctor-findings job, so adjudication_feedstock SKIPs with the
+    reason instead of warning about a queue nobody can judge. Declared, never
+    inferred: leave it unset wherever a human does adjudicate.
+
+    THIS JOB MUST CARRY THE SAME DECLARATION (it is set below). It re-runs
+    the doctor check that raised a finding as live evidence, in THIS job's
+    environment; if the two disagree, a check the doctor now SKIPs re-runs
+    here as WARN and the judge is handed false evidence. Keep every doctor
+    setting in sync with the doctor-findings job the same way.
+
+    AUTH: the job reads UNITARES_MCP_BEARER_TOKEN, then UNITARES_HTTP_API_TOKEN,
+    from the environment or ~/.config/cirwel/secrets.env (UNITARES_SECRETS_ENV
+    overrides). A server in strict REST posture (UNITARES_MCP_BEARER_TOKENS
+    set) accepts ONLY an MCP bearer, so put one in the secrets file there; the
+    HTTP token is the local-posture fallback, tried on a 401.
+
+    ADJUDICATOR CREDENTIAL: the verdict route also requires its own shared
+    secret, because a model verdict hides a finding from the operator queue.
+    Generate one (openssl rand -hex 32) and set it as
+    UNITARES_MODEL_ADJUDICATOR_TOKEN in BOTH the governance-mcp plist (the
+    server; unset there = the route answers 503) and the secrets file this
+    job reads. Keep it out of this plist.
+
+    DATABASE: GOVERNANCE_DATABASE_URL must be the SAME value the
+    doctor-findings job uses (that is the variable it reads; the value below
+    is the default), naming the database the governance server writes. The
+    queue comes over HTTP from the server, while the evidence (history, the
+    doctor-check re-run) is read straight from Postgres; pointed at another
+    database, the judge would be handed a different deployment's evidence.
+    (DB_POSTGRES_URL, the server's name for it, is the fallback.)
+
+    TWO ENVIRONMENT REQUIREMENTS:
+      PATH must hold the keg-only postgresql@17 bin dir (the job re-runs the
+      finding's doctor check and reads its history with psql) and the dir
+      holding `claude` (or set UNITARES_CLAUDE_CLI). launchd's minimal PATH
+      has neither.
+      HOME and USER must be set: the Claude CLI reads its login from HOME, and
+      a subscription CLI under launchd without USER reports "not logged in".
+
+    Before installing, substitute the placeholders:
+      __UNITARES_ROOT__ -> absolute path to the deploy checkout
+      PYTHON_BIN        -> absolute path to a 3.14+ interpreter
+      __HOME__          -> your home directory
+      __USER__          -> your username
+      __ESCALATE_BELOW__ -> your confidence cutoff, 0 < x <= 1
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          -e "s|PYTHON_BIN|$(which python3)|g" \
+          -e "s|__HOME__|$HOME|g" -e "s|__USER__|$USER|g" \
+          -e "s|__ESCALATE_BELOW__|<your cutoff>|g" \
+          scripts/ops/com.unitares.model-adjudicator.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.model-adjudicator.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.model-adjudicator.plist
+
+    Verify first, posting nothing:
+      UNITARES_MODEL_ADJUDICATOR_HOST=claude PYTHON_BIN \
+          scripts/ops/model_adjudicator.py (pass the dry-run flag)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.unitares.model-adjudicator</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>PYTHON_BIN</string>
+        <string>__UNITARES_ROOT__/scripts/ops/model_adjudicator.py</string>
+    </array>
+    <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key><string>__HOME__</string>
+        <key>USER</key><string>__USER__</string>
+        <key>UNITARES_OPERATOR_ADJUDICATION</key><string>off</string>
+        <key>GOVERNANCE_DATABASE_URL</key><string>postgresql://postgres:postgres@localhost:5432/governance</string>
+        <key>UNITARES_MODEL_ADJUDICATOR_HOST</key><string>claude</string>
+        <key>UNITARES_ADJUDICATOR_FAST_MODEL</key><string>haiku</string>
+        <key>UNITARES_ADJUDICATOR_STRONG_MODEL</key><string></string>
+        <key>UNITARES_ADJUDICATOR_ESCALATE_BELOW</key><string>__ESCALATE_BELOW__</string>
+    </dict>
+    <key>StartInterval</key><integer>21600</integer>
+    <key>RunAtLoad</key><false/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>__UNITARES_ROOT__/data/logs/model-adjudicator.log</string>
+    <key>StandardErrorPath</key><string>__UNITARES_ROOT__/data/logs/model-adjudicator.err</string>
+</dict>
+</plist>

@@ -62,7 +62,9 @@ def compute_drift_vector(
 
     Returns (drift_vector, agent_drift_norm).
     """
-    agent_baseline = get_agent_baseline(monitor.agent_id)
+    # A simulation clone carries a private baseline copy so it never touches
+    # the shared LRU cache (see UNITARESMonitor.simulate_update).
+    agent_baseline = getattr(monitor, '_simulation_baseline', None) or get_agent_baseline(monitor.agent_id)
 
     # Get calibration error (tactical confidence-outcome mismatch) if available.
     calibration_error = None
@@ -103,6 +105,18 @@ def compute_drift_vector(
     else:
         agent_drift_norm = 0.0
 
+    # Whether the self-report actually entered the vector on THIS check-in, so
+    # risk_attribution can say what happened rather than what was intended.
+    # On the MCP check-in path the value arrives as an ndarray, which the
+    # list/tuple test above rejects, so this is False there (see #2372).
+    monitor._last_self_report_blended = agent_drift_norm > 0.01
+    # Sticky for this monitor: once blended, the vector reaches the behavioral
+    # assessment through several inputs (behavioral S, ODE-derived auxiliaries)
+    # and persists in its EMA, so attribution stops calling it independent.
+    # In-process only; unreachable from the MCP path, which never blends.
+    # Not during simulate_update(), which promises not to change monitor state.
+    if monitor._last_self_report_blended and not getattr(monitor, '_simulation_active', False):
+        monitor._self_report_ever_blended = True
     if agent_drift_norm > 0.01:
         ad = list(agent_drift_raw) + [0.0] * max(0, 3 - len(agent_drift_raw))
         blend = 0.3

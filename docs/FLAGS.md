@@ -19,7 +19,9 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**174 flags.**
+<!-- No flag count here: a count line changes in every flag-adding PR, so any
+two of them conflicted on it. Rows are one per line, sorted, so separate
+additions merge cleanly. -->
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -96,6 +98,8 @@ index; that one is the curated decision record.
 | `UNITARES_ENABLE_RERANKER` | varies: `False` (src/reranker.py); `''` (agents/vigil/agent.py) | True when the reranker should run | src/reranker.py, agents/vigil/agent.py |
 | `UNITARES_FINDINGS_URL` | `'http://localhost:8767/api/findings'` | — | agents/common/findings.py |
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
+| `UNITARES_FLOOR_BREACH_CAUTION_APPLY` | `''` | Whether a baselined absolute-floor breach forces at least "caution" (UNITARES_FLOOR_BREACH_CAUTION_APPLY) | src/behavioral_assessment.py |
+| `UNITARES_FLOOR_BREACH_CAUTION_SHADOW` | `''` | Whether to record what the baselined floor-breach verdict floor would do (UNITARES_FLOOR_BREACH_CAUTION_SHADOW) | src/behavioral_assessment.py |
 | `UNITARES_GATEWAY_ALLOWED_HOSTS` | varies: `None (no reader fallback)` (src/mcp_listen_config.py:127); `[] (via split_csv_env)` (src/mcp_listen_config.py:128) | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOW_NULL_ORIGIN` | `False` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
@@ -140,6 +144,8 @@ index; that one is the curated decision record.
 | `UNITARES_METADATA_WRITE_JSON_SNAPSHOT` | `'0'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
+| `UNITARES_MODEL_ADJUDICATION_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
+| `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
@@ -197,3 +203,4 @@ index; that one is the curated decision record.
 | `UNITARES_TRACEMALLOC_FRAMES` | `'5'` | — | src/mcp_server.py |
 | `UNITARES_UDS_SOCKET` | `None (no reader fallback)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py (+2 more) |
 | `UNITARES_WATCHER_DATA_DIR` | `None (no reader fallback)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
+| `UNITARES_WATCHER_LOG_FILE` | `None (no reader fallback)` | read by log() | agents/watcher/_util.py |

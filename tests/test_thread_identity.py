@@ -47,9 +47,33 @@ class TestInferSpawnReason:
         )
         assert reason == "explicit"
 
-    def test_claude_code_with_existing_nodes(self):
+    def test_claude_code_with_existing_nodes_and_parent(self):
         reason = infer_spawn_reason(
-            {"client_hint": "claude-code"},
+            {"client_hint": "claude-code", "parent_agent_id": "some-uuid"},
+            existing_nodes=[{"agent_id": "prev"}],
+        )
+        assert reason == "compaction"
+
+    @pytest.mark.parametrize("client_hint", ["claude-code", "claude_code", "claude-code-web"])
+    def test_claude_code_without_parent_is_not_lineage(self, client_hint):
+        # Co-located thread nodes are not a declaration: without a declared
+        # parent, inference must not return a lineage reason, or the fork is
+        # reported and persisted as a context continuation nobody declared.
+        reason = infer_spawn_reason(
+            {"client_hint": client_hint},
+            existing_nodes=[{"agent_id": "prev"}],
+        )
+        assert reason == "new_session"
+        assert classify_episode_fork(2, "fresh", None, reason) == (
+            "sibling_locus",
+            False,
+        )
+
+    def test_explicit_lineage_reason_without_parent_is_kept(self):
+        # A declared reason is a declaration even with no parent: the
+        # no-parent short-circuit must not swallow it.
+        reason = infer_spawn_reason(
+            {"spawn_reason": "compaction", "client_hint": "claude-code"},
             existing_nodes=[{"agent_id": "prev"}],
         )
         assert reason == "compaction"
@@ -225,6 +249,57 @@ class TestBuildForkContext:
         )
         assert "position_note" not in ctx
 
+    def test_fresh_mint_on_shared_thread_gets_fresh_sibling_message(self):
+        """A force_new mint on a co-occupied thread is sibling_locus, but it
+        did get a fresh UUID: the message must not claim a shared one."""
+        nodes = [
+            {"agent_id": "unrelated", "thread_position": 1},
+            {"agent_id": "fresh", "thread_position": 2},
+        ]
+        ctx = build_fork_context(
+            thread_id="t-shared",
+            position=2,
+            parent_uuid=None,
+            spawn_reason="new_session",
+            all_nodes=nodes,
+            agent_uuid="fresh",
+            minted_fresh=True,
+        )
+        assert ctx["episode_fork_kind"] == "sibling_locus"
+        assert "a fresh UUID" in ctx["honest_message"]
+        assert "they are not your predecessors" in ctx["honest_message"]
+        assert "share a registry UUID" not in ctx["honest_message"]
+        assert "no child UUID minted" not in ctx["honest_message"]
+
+    def test_minted_fresh_does_not_change_a_lineage_fork_message(self):
+        ctx = build_fork_context(
+            thread_id="t-lineage",
+            position=2,
+            parent_uuid="parent",
+            spawn_reason="explicit",
+            all_nodes=[
+                {"agent_id": "parent", "thread_position": 1},
+                {"agent_id": "child", "thread_position": 2},
+            ],
+            agent_uuid="child",
+            minted_fresh=True,
+        )
+        assert ctx["episode_fork_kind"] == "identity_lineage"
+        assert "declared parent parent" in ctx["honest_message"]
+        assert "they are not your predecessors" not in ctx["honest_message"]
+
+    def test_resumed_uuid_keeps_r6_sibling_message(self):
+        ctx = build_fork_context(
+            thread_id="t-resumed",
+            position=3,
+            parent_uuid=None,
+            spawn_reason=None,
+            all_nodes=[{"agent_id": "same", "thread_position": 3}],
+            agent_uuid="same",
+        )
+        assert ctx["episode_fork_kind"] == "sibling_locus"
+        assert "share a registry UUID" in ctx["honest_message"]
+
     def test_handler_call_site_signature_contract(self):
         """Pin exact kwargs handlers.py:1946 passes after the 2026-05-02 fix.
 
@@ -252,6 +327,7 @@ class TestBuildForkContext:
             spawn_reason="subagent",
             all_nodes=all_nodes,
             agent_uuid="uuid-2",
+            minted_fresh=True,
         )
         assert ctx["thread_id"] == "t-abc123def456ab"
         assert ctx["position"] == 2

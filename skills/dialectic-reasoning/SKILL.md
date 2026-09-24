@@ -21,19 +21,6 @@ source_files:
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/mcp_handlers/identity/operator.py
   - unitares/src/mcp_handlers/lifecycle/query.py
-source_digests:
-  unitares/src/dialectic_protocol.py: "51d15277f4cdf825"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "2b6f70a94a7361f5"
-  unitares/src/mcp_handlers/dialectic/auth.py: "e6bcc28d7e2a4260"
-  unitares/src/mcp_handlers/dialectic/session.py: "eb5ed22eb5684038"
-  unitares/src/mcp_handlers/dialectic/responses.py: "87cd7dbc224dc325"
-  unitares/src/mcp_handlers/dialectic/auto_resolve.py: "68d95e6c1d757c33"
-  unitares/src/mcp_handlers/dialectic/reviewer.py: "183603f3918b1896"
-  unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
-  unitares/src/mcp_handlers/schemas/dialectic.py: "79d37cf9418094b7"
-  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/mcp_handlers/identity/operator.py: "cc2698ddc37a4091"
-  unitares/src/mcp_handlers/lifecycle/query.py: "776439b33c67a397"
 ---
 
 # Dialectic Reasoning
@@ -292,6 +279,19 @@ If no eligible reviewer remains, the session may report
 `awaiting_facilitation`. This is a paused request for human help, not a reviewer
 verdict. A timeout sweep can eventually mark it failed, but that sweep outcome
 does not mean either side won.
+
+A session that stalls in SYNTHESIS while the move is its reviewer's (the first
+synthesis verdict is still owed, or the paused agent has
+answered its standing objection) raises the
+same request; the sweep does not reassign at that phase, because the protocol
+requires the same reviewer to revise its own verdict. Once raised, the request
+lets `dialectic(action="get", check_timeout=true)` replace a reviewer that is
+paused or missing, as it already can after a standing objection; a reviewer
+whose status still reads active waits for an operator `reassign`. A SYNTHESIS
+stall where the paused agent owes the next move when the sweep finds it raises
+no request and is failed at the stuck threshold. A request is not withdrawn
+when the reviewer later answers, so a session flagged while the reviewer owed
+the move stays on the 4h hold after the move passes back.
 
 Reviewer reassignment is privileged:
 
