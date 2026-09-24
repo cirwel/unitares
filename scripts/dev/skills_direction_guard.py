@@ -174,9 +174,38 @@ def is_past_canonical_state(canon: pathlib.Path, mirror: pathlib.Path) -> bool:
     return canon_oldest < mirror_newest
 
 
+def attestation_regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
+    """Mirror-side verifications the sync would delete.
+
+    Re-verification is recorded as new files under ``.attestations/<skill>/``
+    and never edits SKILL.md (scripts/client/_check_freshness.py), so the
+    SKILL.md comparison below cannot see a verification committed in the
+    mirror, and ``rsync --delete`` would erase it silently. A mirror-only
+    attestation blocks only when it is NEWER than canonical's newest record
+    for that skill (names lead with a microsecond UTC timestamp, so name order
+    is time order). Older mirror-only files are ones canonical has since
+    pruned, and deleting them is the sync doing its job.
+    """
+    blocked: list[str] = []
+    mirror_root = dst / ".attestations"
+    if not mirror_root.is_dir():
+        return blocked
+    for adir in sorted(p for p in mirror_root.iterdir() if p.is_dir()):
+        canon_dir = src / ".attestations" / adir.name
+        canon_names = {p.name for p in canon_dir.glob("*.json")} if canon_dir.is_dir() else set()
+        canon_newest = max(canon_names, default="")
+        for mirror_file in sorted(adir.glob("*.json")):
+            if mirror_file.name not in canon_names and mirror_file.name > canon_newest:
+                blocked.append(
+                    f"{adir.name}: mirror attestation {mirror_file.name} is newer than any "
+                    f"canonical record"
+                )
+    return blocked
+
+
 def regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
     """Reasons the mirror must not be overwritten, one per drifted skill."""
-    blocked: list[str] = []
+    blocked: list[str] = attestation_regressions(src, dst)
     for mirror in sorted(dst.glob("*/SKILL.md")):
         canon = src / mirror.parent.name / "SKILL.md"
         if not canon.exists():

@@ -120,6 +120,7 @@ if [[ "$GUARD_STATUS" == 4 ]]; then
     echo "[sync-plugin-skills] Syncing would revert a verification that already happened." >&2
     echo "[sync-plugin-skills] Forward-port into canonical first, then re-run:" >&2
     echo "[sync-plugin-skills]   cp $DST/<skill>/SKILL.md $SRC/<skill>/SKILL.md" >&2
+    echo "[sync-plugin-skills]   cp $DST/.attestations/<skill>/<file>.json $SRC/.attestations/<skill>/   # for an attestation" >&2
     echo "[sync-plugin-skills]   python3 scripts/dev/skills_manifest.py" >&2
     exit 4
 fi
