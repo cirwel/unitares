@@ -5,8 +5,8 @@ Streamable HTTP MCP can connect to a local governance server at
 `http://localhost:8767/mcp/`; clients without native HTTP support can usually
 bridge through stdio. Claude is one example client family, not a server-side
 assumption. Codex, Hermes, other MCP-capable editors and agent CLIs, hosted
-connectors, and custom hosts
-can use the same server when they expose MCP or go through a thin adapter.
+connectors, and custom hosts can use the same server when they expose MCP or go
+through a thin adapter.
 
 ## Streamable HTTP clients
 

@@ -87,7 +87,7 @@ The decision engine (`src/monitor_decision.py`) returns one of two actions, `pro
 | `guide` | `proceed` with guidance — slightly off track or at a basin boundary | Read guidance, adjust approach |
 | `pause` | Needs attention | Stop, reflect, consider `self_recovery` or dialectic review |
 
-`reject` is no longer emitted; it survives only as a legacy input alias that normalizes to `pause`.
+`reject` is no longer an action: it appears as a `sub_action` of `pause` on the risk-threshold path, and is accepted as a legacy input alias that normalizes to `pause`.
 
 Responses include `margin` indicating proximity to basin boundaries: `comfortable` / `tight`, `warning` (a threshold just crossed, < 0.1 past), `critical` (≥ 0.1 past), or `settling` (fewer than 3 check-ins of history). See `config/governance_config.py`.
 
@@ -111,7 +111,7 @@ Agents and operators interact through several bound services. All bind to `127.0
 |---|---|---|---|
 | Governance MCP | `8767` | `/mcp/` (Streamable HTTP), `/v1/tools/call` (REST), `/dashboard` (HTML), `/ws/eisv` (WebSocket event stream) | Primary agent surface — check-ins, queries, verdicts |
 | Gateway MCP | `8768` | `/mcp/` | Reduced surface for weak external clients |
-| Wave 3A handlers | `8770` | — | BEAM-hosted handlers (`src/wave3a_routing.py`) |
+| Wave 3A handlers | `8770` | — | BEAM-hosted handlers (`src/wave3a_routing.py`); routing table empty by default, so tools reach it only after an explicit cutover |
 | Lease plane + governed-effect plane | `8788` | `/v1/lease/*`, `/v1/effects`, `/v1/dialectic/*`, `/v1/msg/*` (bearer-auth, fail-closed) | Elixir/OTP coordination layer for single-writer surfaces, governed effects, and agent messaging — runbook in [`operations/lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) |
 | Agent orchestrator | `8789` | — | BEAM orchestrator used for dialectic reviewer dispatch (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
 | Dialectic-live | `8790` | — | Phoenix/LiveView view of dialectic sessions |
@@ -125,9 +125,10 @@ The authoritative port registry is [`operations/DEFINITIVE_PORTS.md`](operations
 When an agent is paused, recovery follows a structured protocol:
 
 1. **Self-recovery** — `self_recovery(action="quick")` if risk ≤ 0.40 and no void is active; `self_recovery(action="review")` with a reflection up to risk 0.65. Legacy `C(V)` is diagnostic context only
-2. **LLM-assisted dialectic** — an in-process local-LLM antithesis for single-agent reflection. It always agrees, so it is a reflection aid, not an independent reviewer
-3. **Orchestrated dialectic reviewer** — a separate reviewer process with its own identity (`agents/dialectic_reviewer/`, local/Codex/Claude backends) that can disagree. Default-off in code (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW`); see [`proposals/active/orchestrated-dialectic-reviewer-v0.md`](proposals/active/orchestrated-dialectic-reviewer-v0.md)
-4. **Peer dialectic** — another agent reviews (thesis -> antithesis -> synthesis)
+2. **Dialectic review** (`request_review`; thesis -> antithesis -> synthesis). The reviewer is one of:
+   - **Orchestrated reviewer** — a separate process with its own identity (`agents/dialectic_reviewer/`; local, Codex, Claude or external backends). When `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` is on (default off in code) it is the first choice; see [`proposals/active/orchestrated-dialectic-reviewer-v0.md`](proposals/active/orchestrated-dialectic-reviewer-v0.md)
+   - **In-process synthetic reviewer** — the default, and the fallback when orchestration is on. Its verdict is binding (it approves only a RESUME synthesis whose antithesis does not dispute), but it runs in the caller's process under a synthetic reviewer id, so it is not an independent reviewer
+   - **Peer agent** — another agent takes the antithesis role
 
 See [dev/CIRCUIT_BREAKER_DIALECTIC.md](dev/CIRCUIT_BREAKER_DIALECTIC.md) for the full protocol.
 
@@ -263,7 +264,8 @@ anyio isolation (Redis guards, sync blocking I/O, performance caches):
 | `src/mcp_server.py` | MCP server entry point |
 | `src/mcp_handlers/core.py` | `process_agent_update` handler |
 | `src/mcp_handlers/lifecycle/stuck.py` | Stuck detection, auto-recovery (`lifecycle/handlers.py` re-exports) |
-| `src/mcp_handlers/lifecycle/self_recovery.py` | `self_recovery` quick/review paths |
+| `src/mcp_handlers/lifecycle/self_recovery.py` | `self_recovery` dispatcher and quick path |
+| `src/mcp_handlers/lifecycle/operations.py` | `self_recovery` review path (`handle_self_recovery_review`) |
 | `src/mcp_handlers/dialectic/handlers.py` | Thesis/antithesis/synthesis |
 | `src/calibration.py` | Confidence -> correctness mapping |
 | `src/mcp_handlers/cirs/` | CIRS v2 protocol (7 message types) |
@@ -284,7 +286,7 @@ Several long-lived governance agents run alongside the server. They consume the 
 | **Dialectic reviewer** | on dispatch | Orchestrated external reviewer (see Recovery above) |
 | **Triage scribe** | on demand | Local-model anomaly summarizer |
 
-Which residents a deployment runs is configuration (`UNITARES_RESIDENTS`, empty by default; see [`operations/resident-roster.md`](operations/resident-roster.md)). `agents/local_resident/` is the shared runner. See [`agents/README.md`](../agents/README.md) for the reference implementations. The residents are reference patterns, **not** load-bearing governance internals — the public contract lives in `agents/sdk/`.
+Which residents a deployment runs is configuration (`UNITARES_RESIDENTS`, empty by default; see [`operations/resident-roster.md`](operations/resident-roster.md)). `agents/local_resident/` is the shared runner for local-model residents (currently the triage scribe). See [`agents/README.md`](../agents/README.md) for the reference implementations. The residents are reference patterns, **not** load-bearing governance internals — the public contract lives in `agents/sdk/`.
 
 ## Threat model and security posture
 
@@ -293,7 +295,7 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 - All services bind to `127.0.0.1` by default — public exposure is an operator decision (env-var gated)
 - The lease plane fails closed if `LEASE_PLANE_BEARER_TOKEN` is unset
 - Agent identity is bearer-token-based with intentional retention of the symmetric stack (asymmetric DPoP considered, shelved 2026-04-19 — see [`ontology/s1-continuity-token-retirement.md`](ontology/s1-continuity-token-retirement.md))
-- Dashboard auth is passkey/WebAuthn sessions, deliberately separate from MCP authentication (`src/dashboard_auth.py`)
+- Dashboard browser sign-in uses passkey/WebAuthn sessions (`src/dashboard_auth.py`), which MCP auth never consults. HTTP routes also accept the trusted-network bypass or `UNITARES_HTTP_API_TOKEN` in local posture, or an MCP bearer in strict posture (`src/http_routes/access.py`)
 
 Multi-tenant or public-facing deployment will benefit from a harder auth posture than the current defaults. Vulnerability reports: [`SECURITY.md`](../.github/SECURITY.md).
 
