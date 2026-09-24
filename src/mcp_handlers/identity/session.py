@@ -503,8 +503,10 @@ UNDECLARED_DESTINATION_PROVENANCE = "undeclared_provenance"
 # Refusal reason for a stable ``agent-{uuid12}`` key that is not the caller's
 # own. Resolution maps any ``agent-`` key to the identity whose uuid it
 # prefixes, so such a key belongs to that agent whatever ladder source
-# delivered it (an ``X-Session-ID`` header or an explicit client_session_id
-# can carry another agent's stable id).
+# delivered it (for bind_session, whose destination is derived from transport
+# signals only, an ``X-Session-ID`` header can carry another agent's stable
+# id). This guards the bind DESTINATION only; it does not govern which
+# identity a caller resolves to.
 FOREIGN_STABLE_SESSION_ID = "foreign_stable_session_id"
 
 

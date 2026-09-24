@@ -1451,10 +1451,11 @@ async def _perform_session_bind(
     refusal = bind_destination_refusal(agent_uuid, session_key, key_source)
     if refusal:
         logger.warning(
-            "[%s] refused bind: destination key resolved via %s, "
+            "[%s] refused bind (%s): destination key resolved via %s, "
             "which is not this caller's own session key",
             source,
             refusal,
+            key_source or "undeclared source",
         )
         return {"bound": False, "session_key": None, "bind_refused": refusal}
 
@@ -1656,12 +1657,15 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
             mcp_key_source,
         )
     elif mcp_session_key:
-        # The helper applies the same predicate itself (#2147). The two differ
-        # on corners neither live caller reaches: the guard above is stricter
-        # on the agent's own stable id when it resolved via a foreign source
-        # (the helper owns it by construction), the helper is stricter on an
-        # undeclared source (the ladder always names one). Whichever refuses
-        # must surface as a refusal rather than fall through to `bound: True`.
+        # The helper applies the same predicate itself (#2147), and the two
+        # differ. The guard above is stricter on the agent's own stable id
+        # when it resolved via a foreign source (the helper owns it by
+        # construction). The helper is stricter on an undeclared source (not
+        # reachable here: the ladder always names one) and on another agent's
+        # stable `agent-...` id under any declared source, which IS reachable:
+        # an X-Session-ID header carrying it passes the guard above and is
+        # refused only here. Whichever refuses must surface as a refusal
+        # rather than fall through to `bound: True`.
         bound_info = await _perform_session_bind(
             target_uuid,
             mcp_session_key,
