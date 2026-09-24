@@ -334,9 +334,10 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
         "delete": (
                 "confirm",
         ),
+        "release_presence": (),
     }
-    action: Literal["list", "get", "update", "archive", "resume", "delete"] = Field(..., description="Operation to perform (alias: op)")
-    op: Optional[Literal["list", "get", "update", "archive", "resume", "delete"]] = Field(None, description="Alias for action. Use action or op.")
+    action: Literal["list", "get", "update", "archive", "resume", "delete", "release_presence"] = Field(..., description="Operation to perform (alias: op)")
+    op: Optional[Literal["list", "get", "update", "archive", "resume", "delete", "release_presence"]] = Field(None, description="Alias for action. Use action or op.")
     agent_id: Optional[str] = Field(None, description="Target agent ID (for get, update, archive, delete)")
     tags: Optional[List[Any]] = Field(None, description="Tags to set (for action=update)")
     notes: Optional[str] = Field(None, description="Notes to set (for action=update)")

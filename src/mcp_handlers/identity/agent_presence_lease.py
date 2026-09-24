@@ -31,6 +31,7 @@ import asyncio
 import hashlib
 import json
 import os
+import time
 from typing import Optional
 
 from src.logging_utils import get_logger
@@ -49,17 +50,28 @@ _PRESENCE_TTL_S = 600
 # the source of truth.
 _lease_ids: dict[str, str] = {}
 
+# uuid -> monotonic time of the agent's own clean-exit release. A heartbeat
+# scheduled before that moment belongs to the session that just ended and must
+# not re-acquire the lease it released; one scheduled after it (a resumed
+# session under the same identity) proceeds normally.
+_released_at: dict[str, float] = {}
+
 # Guarded SDK imports: unavailable in isolated test/CI envs and in deploys
 # without the lease-plane boundary. When absent the module loads and every entry
 # point no-ops. Tests monkeypatch these module attributes with fakes.
 try:  # pragma: no cover - import availability is environment-dependent
     from src.lease_plane import LeasePlaneClient, LeasePlaneClientConfig
-    from unitares_sdk.lease_plane.models import AcquireRequest, HeartbeatRequest
+    from unitares_sdk.lease_plane.models import (
+        AcquireRequest,
+        HeartbeatRequest,
+        ReleaseRequest,
+    )
 except Exception:  # pragma: no cover
     LeasePlaneClient = None  # type: ignore
     LeasePlaneClientConfig = None  # type: ignore
     AcquireRequest = None  # type: ignore
     HeartbeatRequest = None  # type: ignore
+    ReleaseRequest = None  # type: ignore
 
 
 def _make_client():
@@ -79,22 +91,39 @@ def _make_client():
         return None
 
 
+def _released_since(agent_uuid: str, scheduled_at: Optional[float]) -> bool:
+    """True when the agent released its presence after this heartbeat was scheduled."""
+    if scheduled_at is None:
+        return False
+    released = _released_at.get(agent_uuid)
+    return released is not None and released >= scheduled_at
+
+
 async def heartbeat_agent_presence(
-    agent_uuid: Optional[str], client_session_id: Optional[str] = None
+    agent_uuid: Optional[str],
+    client_session_id: Optional[str] = None,
+    scheduled_at: Optional[float] = None,
 ) -> None:
     """Keep the ``agent:/<uuid>`` presence lease fresh. Fire-and-forget; never raises."""
     if not agent_uuid:
+        return
+    if _released_since(agent_uuid, scheduled_at):
         return
     client = _make_client()
     if client is None:
         return
     try:
-        await _refresh_presence(client, agent_uuid, client_session_id)
+        await _refresh_presence(client, agent_uuid, client_session_id, scheduled_at)
     except Exception as e:  # pragma: no cover - best-effort; must never affect check-in
         logger.debug(f"[AGENT_PRESENCE] heartbeat_agent_presence failed (non-fatal): {e}")
 
 
-async def _refresh_presence(client, agent_uuid: str, client_session_id: Optional[str]) -> None:
+async def _refresh_presence(
+    client,
+    agent_uuid: str,
+    client_session_id: Optional[str],
+    scheduled_at: Optional[float] = None,
+) -> None:
     """Heartbeat the cached lease, or (re)acquire one. Manages the lease_id cache."""
     loop = asyncio.get_running_loop()
 
@@ -139,6 +168,11 @@ async def _refresh_presence(client, agent_uuid: str, client_session_id: Optional
     # AcquireOk carries lease_id; failure variants (held_by_other, etc.) do not.
     new_id = getattr(result, "lease_id", None)
     if new_id:
+        if _released_since(agent_uuid, scheduled_at):
+            # The session ended while this acquire was in flight: hand the
+            # lease straight back instead of leaving it live for a full TTL.
+            await _release_lease(client, agent_uuid, str(new_id))
+            return
         _lease_ids[agent_uuid] = str(new_id)
 
 
@@ -178,8 +212,78 @@ def schedule_agent_presence_heartbeat(
         from src.background_tasks import create_tracked_task
 
         create_tracked_task(
-            heartbeat_agent_presence(agent_uuid, client_session_id),
+            heartbeat_agent_presence(agent_uuid, client_session_id, time.monotonic()),
             name="agent_presence_lease",
         )
     except Exception as e:  # pragma: no cover - scheduling must never affect callers
         logger.debug(f"[AGENT_PRESENCE] scheduling skipped: {e}")
+
+
+async def _lookup_live_lease_id(agent_uuid: str) -> Optional[str]:
+    """Find the agent's unreleased presence lease when the in-process cache lost it
+    (a server restart since the acquire). Returns None on any error."""
+    try:
+        from src.db import get_db
+
+        db = get_db()
+        async with db.acquire() as conn:
+            lease_id = await conn.fetchval(
+                """
+                SELECT lease_id::text FROM lease_plane.surface_leases
+                WHERE surface_id = $1
+                  AND released_at IS NULL
+                  AND expires_at > NOW()
+                ORDER BY expires_at DESC
+                LIMIT 1
+                """,
+                f"agent:/{agent_uuid}",
+            )
+        return str(lease_id) if lease_id else None
+    except Exception as e:  # pragma: no cover - defensive
+        logger.debug(f"[AGENT_PRESENCE] live lease lookup failed (non-fatal): {e}")
+        return None
+
+
+async def _release_lease(client, agent_uuid: str, lease_id: str) -> bool:
+    if ReleaseRequest is None:
+        return False
+    loop = asyncio.get_running_loop()
+    release_request = ReleaseRequest(lease_id=lease_id, release_reason="normal")
+    identity_proof = _mint_presence_attestation(
+        agent_uuid, "/v1/lease/release", release_request
+    )
+    result = await loop.run_in_executor(
+        None,
+        lambda: client.release(release_request, identity_proof=identity_proof),
+    )
+    return bool(getattr(result, "ok", False))
+
+
+async def release_agent_presence(agent_uuid: Optional[str]) -> dict:
+    """Release the agent's own presence lease on a clean exit.
+
+    Without this, an exited agent reads as live for up to ``_PRESENCE_TTL_S``,
+    and a successor that declares it as parent inside that window is refused as
+    co-located (``lineage_coincidental_rejected``). A crash still falls back to
+    the TTL. Never raises; the result says what happened.
+    """
+    if not agent_uuid:
+        return {"released": False, "reason": "no_identity"}
+    now = time.monotonic()
+    _released_at[agent_uuid] = now
+    for stale in [u for u, at in _released_at.items() if now - at > 2 * _PRESENCE_TTL_S]:
+        _released_at.pop(stale, None)
+
+    client = _make_client()
+    if client is None:
+        _lease_ids.pop(agent_uuid, None)
+        return {"released": False, "reason": "lease_plane_unavailable"}
+    lease_id = _lease_ids.pop(agent_uuid, None) or await _lookup_live_lease_id(agent_uuid)
+    if not lease_id:
+        return {"released": False, "reason": "no_live_lease"}
+    try:
+        ok = await _release_lease(client, agent_uuid, lease_id)
+    except Exception as e:  # noqa: BLE001 - best-effort; the TTL remains the backstop
+        logger.debug(f"[AGENT_PRESENCE] release failed (non-fatal): {e}")
+        ok = False
+    return {"released": ok, "reason": "released" if ok else "release_refused"}

@@ -17,8 +17,10 @@ from src.mcp_handlers.identity import agent_presence_lease as apl
 @pytest.fixture(autouse=True)
 def _clear_cache():
     apl._lease_ids.clear()
+    apl._released_at.clear()
     yield
     apl._lease_ids.clear()
+    apl._released_at.clear()
 
 
 def _fake_req(**kw):
@@ -33,9 +35,13 @@ class _FakeClient:
         self.heartbeat_ok = True
         self.acquire_lease_id = "lease-123"
         self.identity_proofs = []
+        self.releases = []
+        self.on_acquire = None
 
     def acquire(self, req, *, identity_proof=None):
         self.acquired.append(req)
+        if self.on_acquire is not None:
+            self.on_acquire()
         self.identity_proofs.append(identity_proof)
         return SimpleNamespace(lease_id=self.acquire_lease_id)
 
@@ -46,11 +52,17 @@ class _FakeClient:
         self.identity_proofs.append(identity_proof)
         return SimpleNamespace(ok=self.heartbeat_ok)
 
+    def release(self, req, *, identity_proof=None):
+        self.releases.append(req)
+        self.identity_proofs.append(identity_proof)
+        return SimpleNamespace(ok=True)
+
 
 def _patch_models(monkeypatch, client):
     monkeypatch.setattr(apl, "_make_client", lambda: client)
     monkeypatch.setattr(apl, "AcquireRequest", _fake_req)
     monkeypatch.setattr(apl, "HeartbeatRequest", _fake_req)
+    monkeypatch.setattr(apl, "ReleaseRequest", _fake_req)
     monkeypatch.setattr(
         apl,
         "_mint_presence_attestation",
@@ -139,4 +151,105 @@ async def test_never_raises_on_client_error(monkeypatch):
     monkeypatch.setattr(apl, "HeartbeatRequest", _fake_req)
     # Must swallow everything — a lease failure can never break a check-in.
     await apl.heartbeat_agent_presence("uuid-1")
+    assert "uuid-1" not in apl._lease_ids
+
+
+# --- clean-exit release -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_release_hands_back_the_cached_lease(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "lease-abc"
+
+    result = await apl.release_agent_presence("uuid-1")
+
+    assert result == {"released": True, "reason": "released"}
+    assert [r.lease_id for r in client.releases] == ["lease-abc"]
+    assert client.releases[0].release_reason == "normal"
+    assert client.identity_proofs[-1] == "lat.v1.uuid-1.release"
+    assert "uuid-1" not in apl._lease_ids
+
+
+@pytest.mark.asyncio
+async def test_release_finds_the_lease_after_a_server_restart(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+
+    async def _lookup(agent_uuid):
+        return "lease-from-db"
+
+    monkeypatch.setattr(apl, "_lookup_live_lease_id", _lookup)
+
+    result = await apl.release_agent_presence("uuid-1")
+
+    assert result["released"] is True
+    assert [r.lease_id for r in client.releases] == ["lease-from-db"]
+
+
+@pytest.mark.asyncio
+async def test_release_without_a_live_lease_reports_it(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+
+    async def _lookup(agent_uuid):
+        return None
+
+    monkeypatch.setattr(apl, "_lookup_live_lease_id", _lookup)
+
+    assert await apl.release_agent_presence("uuid-1") == {
+        "released": False,
+        "reason": "no_live_lease",
+    }
+    assert client.releases == []
+
+
+@pytest.mark.asyncio
+async def test_release_without_identity_is_a_no_op():
+    assert await apl.release_agent_presence(None) == {
+        "released": False,
+        "reason": "no_identity",
+    }
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_scheduled_before_release_does_not_reacquire(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    scheduled_at = apl.time.monotonic()
+    await apl.release_agent_presence("uuid-1")
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-1", scheduled_at)
+
+    assert client.acquired == []
+    assert "uuid-1" not in apl._lease_ids
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_scheduled_after_release_proceeds(monkeypatch):
+    """A later session resuming the same identity keeps its presence."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.release_agent_presence("uuid-1")
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-2", apl.time.monotonic())
+
+    assert len(client.acquired) == 1
+    assert apl._lease_ids["uuid-1"] == "lease-123"
+
+
+@pytest.mark.asyncio
+async def test_acquire_in_flight_during_release_is_handed_back(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    scheduled_at = apl.time.monotonic()
+    # The session ends while this heartbeat's acquire is on the wire.
+    client.on_acquire = lambda: apl._released_at.__setitem__(
+        "uuid-1", apl.time.monotonic()
+    )
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-1", scheduled_at)
+
+    assert [r.lease_id for r in client.releases] == ["lease-123"]
     assert "uuid-1" not in apl._lease_ids

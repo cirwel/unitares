@@ -453,3 +453,36 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
         "archived": backup_path is not None,
         "backup_path": backup_path
     })
+
+
+@mcp_tool("release_agent_presence", timeout=10.0, register=False)
+async def handle_release_presence(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Release the caller's own presence lease on a clean exit.
+
+    Scoped to the bound identity only: there is no agent_id to target, so one
+    agent cannot mark another as exited. A host's session-end hook calls this so
+    a successor can declare this agent as its parent right away instead of
+    waiting out the lease TTL. A crash never reaches here, and the TTL remains
+    the backstop.
+    """
+    from ..identity.shared import require_write_permission, get_bound_agent_id
+    allowed, write_error = require_write_permission(arguments=arguments)
+    if not allowed:
+        return [write_error]
+
+    agent_uuid = get_bound_agent_id(arguments=arguments)
+    if not agent_uuid:
+        return [error_response(
+            "release_presence needs a bound session: pass the client_session_id "
+            "from start_session.",
+            error_code="IDENTITY_REQUIRED",
+        )]
+
+    from ..identity.agent_presence_lease import release_agent_presence
+    result = await release_agent_presence(agent_uuid)
+    return success_response({
+        "action": "release_presence",
+        "agent_id": agent_uuid,
+        "released": result["released"],
+        "reason": result["reason"],
+    })
