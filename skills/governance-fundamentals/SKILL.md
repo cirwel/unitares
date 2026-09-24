@@ -44,7 +44,7 @@ source_digests:
   unitares/src/cold_start_risk_confirmation.py: "fccd80e216d63b6e"
   unitares/src/monitor_decision.py: "c80f4e13511fe8ba"
   unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/monitor_result.py: "ee4882b7694afa9e"
+  unitares/src/monitor_result.py: "e60ab49d75484dbc"
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/confidence.py: "00cc04e1f54278b4"
   unitares/src/eisv_telemetry.py: "24f1a47911850263"
