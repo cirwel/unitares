@@ -16,6 +16,12 @@ It runs only on a release: a tree whose VERSION has no corresponding tag yet.
 Once `v<VERSION>` exists the same tree is a normal post-release state and the
 check stands down, so ordinary PRs never pay for it.
 
+Entries now arrive as fragments under `docs/changelog.d/` and are folded into
+the changelog by `scripts/dev/changelog_assemble.py` as the first step of the
+release cut. A release tree that still holds a fragment forgot that step: the
+fragment's entry is not in the release entry this script reads, so the tree
+fails here whatever the citation count says.
+
 Escape hatch, because a real release will have deliberate omissions (the
 release PR itself, internal workflow notes): an HTML comment inside the entry,
 
@@ -68,6 +74,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHANGELOG = REPO_ROOT / "docs" / "CHANGELOG.md"
 VERSION_FILE = REPO_ROOT / "VERSION"
+FRAGMENT_DIR = REPO_ROOT / "docs" / "changelog.d"
+# The fragment directory's own documentation, never folded in.
+FRAGMENT_DIR_DOCS = {"README.md"}
 
 # A merge whose own subject is the release bookkeeping. It cannot appear in the
 # entry it creates, so requiring it would make every release permanently red.
@@ -261,6 +270,19 @@ def is_ancestor(commit: str, of: str) -> bool:
     ).returncode == 0
 
 
+def pending_fragments() -> list[str]:
+    """Files still waiting in docs/changelog.d/, which a release must not carry.
+
+    Every file except the directory's README counts, a malformed one included:
+    the assembler refuses to fold an invalid fragment, so it is as unshipped as
+    a valid one that was never assembled.
+    """
+    if not FRAGMENT_DIR.is_dir():
+        return []
+    return sorted(p.relative_to(REPO_ROOT).as_posix() for p in FRAGMENT_DIR.iterdir()
+                  if p.is_file() and p.name not in FRAGMENT_DIR_DOCS)
+
+
 def cited_prs(section: str) -> set[int]:
     return {int(n) for n in PR_REF.findall(section)}
 
@@ -304,6 +326,19 @@ def main() -> int:
         # Standing down on the name alone would let it switch the gate off.
         print(f"[changelog-coverage] v{version} exists but is not an ancestor of "
               f"HEAD ({tagged[:8]}) — treating this as an unreleased tree",
+              file=sys.stderr)
+
+    # A leftover fragment is an entry this release would not ship. Reported
+    # before anything else so an early return below cannot hide it.
+    leftovers = pending_fragments()
+    if leftovers:
+        print(f"[changelog-coverage] {len(leftovers)} changelog fragment(s) are "
+              "still in docs/changelog.d/, so their entries are missing from the "
+              "release entry:", file=sys.stderr)
+        for path in leftovers:
+            print(f"  {path}", file=sys.stderr)
+        print("Run `python3 scripts/dev/changelog_assemble.py` before writing the "
+              "version header (docs/operations/RELEASE_PROCESS.md, step 2).",
               file=sys.stderr)
 
     section = entry_section(version)
@@ -370,7 +405,7 @@ def main() -> int:
           f"{len(held)} dependency bump(s) held to a citation, "
           f"{len(exempt)} declared exempt)")
 
-    failed = False
+    failed = bool(leftovers)
 
     if unattributed:
         failed = True

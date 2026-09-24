@@ -49,6 +49,7 @@ class SemanticDriftValidator:
         'scripts/validate_all.py',  # Contains deprecated terms in config by design
         'scripts/sync_bridge_with_mcp.py',  # Syncs deprecated → current terms
         'docs/CHANGELOG.md',
+        'docs/changelog.d/',  # CHANGELOG entries awaiting the release cut
         'docs/archive/',
     }
 
