@@ -1597,9 +1597,10 @@ class UNITARESMonitor:
         # verdict and primary policy decision have already been computed.  This
         # observation is telemetry-only, zero-inclusive, and fail-open: building
         # it, and any instrumentation failure, alters no risk, verdict, or
-        # enforcement.  (A breach can change the verdict only through the
-        # default-off UNITARES_FLOOR_BREACH_CAUTION_APPLY floor, which runs in
-        # the assessment above; the row then labels itself accordingly.)  Import lazily so an optional-instrument refactor cannot
+        # enforcement.  (A breach reaches the verdict elsewhere, in the
+        # assessment above: always through its risk component, and, with the
+        # default-off UNITARES_FLOOR_BREACH_CAUTION_APPLY floor, directly; the
+        # row labels a verdict that floor raised.)  Import lazily so an optional-instrument refactor cannot
         # prevent the governance monitor itself from loading.
         measurement_scope = "simulation" if self._simulation_active else "live"
         try:

@@ -134,7 +134,7 @@ def floor_breach_caution_apply_enabled() -> bool:
     LIVE-AFFECTING when on: the behavioral verdict is authoritative post-warmup
     under UNITARES_PHI_TELEMETRY_ONLY, and monitor_decision maps "caution" to
     sub_action "guide". It can also keep a pause: the warmup structural grace
-    (governance_monitor `_apply_warmup_structural_grace`) lifts a cold-start
+    (governance_monitor `_maybe_warmup_structural_suppress`) lifts a cold-start
     void/coherence/basin/cirs pause only when the behavioral verdict is
     "safe", and reads it whatever the verdict source (even with
     GOVERNANCE_BEHAVIORAL_VERDICT off), so after a restart a baselined agent
