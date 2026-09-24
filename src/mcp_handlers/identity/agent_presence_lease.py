@@ -376,31 +376,35 @@ async def release_agent_presence(
             _released_at.pop(stale, None)
             _released_sessions.pop(stale, None)
 
+        # The releasing session is gone whatever happens below.
+        holders = _lease_sessions.setdefault(agent_uuid, {})
+        for session_id in session_ids:
+            holders.pop(session_id, None)
+
         client = _make_client()
         if client is None:
-            _lease_ids.pop(agent_uuid, None)
+            # Keep the cached lease id so a retry can still release it.
             return {"released": False, "reason": "lease_plane_unavailable"}
         lease_id = _lease_ids.get(agent_uuid)
-        holders = _lease_sessions.setdefault(agent_uuid, {})
         if not lease_id:
             lease_id, db_holder = await _lookup_live_lease(agent_uuid)
-            if db_holder:
+            if db_holder and db_holder not in sessions:
                 holders[db_holder] = now
         if not lease_id:
             return {"released": False, "reason": "no_live_lease"}
-        for session_id in session_ids:
-            holders.pop(session_id, None)
         others = {s for s, seen in holders.items() if now - seen <= _PRESENCE_TTL_S}
         if others:
             # Another session under this identity is still refreshing the
             # lease (or one we cannot name is); its presence stays.
             reason = "holder_unknown" if others == {_HOLDER_UNKNOWN} else "held_by_other_session"
             return {"released": False, "reason": reason}
-        _lease_ids.pop(agent_uuid, None)
-        _lease_sessions.pop(agent_uuid, None)
         try:
             ok = await _release_lease(client, agent_uuid, lease_id)
         except Exception as e:  # noqa: BLE001 - best-effort; the TTL remains the backstop
             logger.debug(f"[AGENT_PRESENCE] release failed (non-fatal): {e}")
             ok = False
+        if ok:
+            _lease_ids.pop(agent_uuid, None)
+            _lease_sessions.pop(agent_uuid, None)
+        # On a refused release the cached id stays for a retry.
         return {"released": ok, "reason": "released" if ok else "release_refused"}

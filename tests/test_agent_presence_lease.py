@@ -544,3 +544,21 @@ async def test_cold_reacquire_does_not_revive_a_session_that_already_exited(monk
     await apl.heartbeat_agent_presence("uuid-1", "sess-b", apl.time.monotonic())
 
     assert set(apl._lease_sessions["uuid-1"]) == {"sess-b"}
+
+
+@pytest.mark.asyncio
+async def test_release_during_a_lease_plane_outage_can_be_retried(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.heartbeat_agent_presence("uuid-1", "sess-a", apl.time.monotonic())
+    monkeypatch.setattr(apl, "_make_client", lambda: None)
+
+    first = await apl.release_agent_presence("uuid-1", ("sess-a",))
+
+    assert first == {"released": False, "reason": "lease_plane_unavailable"}
+    assert apl._lease_ids["uuid-1"] == "lease-123"
+    assert "sess-a" not in apl._lease_sessions["uuid-1"]
+
+    monkeypatch.setattr(apl, "_make_client", lambda: client)
+    second = await apl.release_agent_presence("uuid-1", ("sess-a",))
+    assert second == {"released": True, "reason": "released"}
