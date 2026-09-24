@@ -315,6 +315,27 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
     )
 
 
+def _cold_start_pause_deferred(payload: Dict[str, Any], risk: Optional[float]) -> bool:
+    """Whether this cold-start reading would have paused an authored report.
+
+    The pause comes from the high-risk verdict, not a risk number: task-type
+    adjustment can move risk_score below 0.7 while the verdict stays
+    high-risk. Read what the guard recorded, then the verdict (mirror mode
+    drops the decision), and fall back to the risk band only when neither
+    is present.
+    """
+    decision = payload.get("decision")
+    if isinstance(decision, dict) and (
+        decision.get("cold_start_epistemic_deferred")
+        or str(decision.get("original_action") or "").lower() == "pause"
+    ):
+        return True
+    verdict = _verdict_value(payload)
+    if verdict is not None:
+        return verdict == "high-risk"
+    return risk is not None and risk >= 0.7
+
+
 def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
     """Describe verdict maturity without inventing a confidence probability."""
     attribution = payload.get("risk_attribution")
@@ -590,10 +611,10 @@ def _recovery_hint(
             + ("nothing blocks you now." if action in {"resumed", "not_paused"}
                else "this decision does not block.")
         )
-        if risk is not None and risk >= 0.7:
+        if _cold_start_pause_deferred(payload, risk):
             hint += (
                 " Until your third check-in your own sync_state is scored on the "
-                "same prior and can pause at this risk."
+                "same prior and can pause on this reading."
             )
         return hint
     if risky and decided_to_continue and recovery_refused:

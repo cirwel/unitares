@@ -138,9 +138,28 @@ def test_guided_cold_start_hint_warns_the_next_authored_check_in_can_pause():
     assert "your own sync_state is scored on the same prior and can pause" in hint
 
 
+def test_cold_start_warning_follows_the_verdict_not_the_risk_band():
+    """Task-type adjustment (exploration/introspection subtract 0.08) can put
+    risk_score below 0.7 while the verdict stays high-risk; the guard still
+    deferred a pause, so the warning must still appear."""
+    source = _guided_cold_start_check_in()
+    source["metrics"]["risk_score"] = 0.64
+    hint = _envelope(source, "auto")["recovery_hint"]
+    assert hint.startswith("Cold start")
+    assert "can pause on this reading" in hint
+
+
 def test_low_risk_cold_start_hint_does_not_threaten_a_pause():
+    """A cold start that never produced a pause: caution verdict, nothing
+    deferred by the guard."""
     source = _guided_cold_start_check_in()
     source["metrics"]["risk_score"] = 0.45
+    source["metrics"]["verdict"] = "caution"
+    source["policy_evaluation"]["inputs"] = {"verdict": "caution", "risk_score": 0.45}
+    for key in ("original_action", "original_sub_action", "cold_start_epistemic_deferred"):
+        source["decision"].pop(key)
+    source["status"] = source["health_status"] = "caution"
+    source["metrics"]["health_status"] = "caution"
     hint = _envelope(source, "auto")["recovery_hint"]
     assert hint.startswith("Cold start")
     assert "can pause" not in hint
@@ -404,21 +423,27 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
 # --- the server instructions ------------------------------------------------
 
 def test_instructions_state_how_a_pause_actually_ends():
-    """The exits in the code, and the recovery cost, stated as they are:
-    self_recovery (not always available), dialectic resolution, an operator
-    or the automatic safety nets, and expiry. "Applied": a decided pause the breaker did not actuate holds
-    nothing. Review's reflection is recorded in shared memory."""
+    """The exits in the code, stated as they are: self_recovery (not at high
+    risk), dialectic resolution, an operator or the automatic safety nets,
+    and expiry."""
     text = build_server_instructions("progressive")
-    sentence = text[text.index("An applied pause is a hard stop"):]
+    sentence = text[text.index("a pause holds governed writes"):]
     sentence = sentence[:sentence.index("expires.") + len("expires.")]
-    for exit_route in ("self_recovery", "request_review", "an operator",
-                       "automatic safety net", "or it expires"):
+    for exit_route in ("self_recovery (not at high risk)", "dialectic",
+                       "an operator", "a safety net", "or it expires"):
         assert exit_route in sentence, exit_route
     # agent(action='resume') has no ownership, risk or void gate and a paused
     # agent can call it on itself; it must never be advertised to agents.
     assert "agent(action='resume')" not in text
-    assert "self_recovery refuses while risk stays high" in text
-    assert "records your written reflection in shared memory" in text
+
+
+def test_instructions_paragraph_stays_inside_the_client_cutoff():
+    """Claude Code truncates MCP server instructions at 2048 characters.
+    Before this change the reading-paths sentence ended at 2016; the pause
+    sentence must not push it past the cutoff."""
+    text = build_server_instructions("progressive")
+    marker = "Core workflow and advanced capabilities are reading paths, not tool filters."
+    assert text.index(marker) + len(marker) <= 2048
 
 
 # --- the nested behavioral verdict (response_mode='full') ---------------------
