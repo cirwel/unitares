@@ -55,9 +55,20 @@ RESERVED_TEST_SURFACE_PREFIX = "td:/test/"
 # daemon still on old code that's just been restarted onto this build — must
 # also treat them as fixtures, not operator force-releases. Suppress both the
 # new reserved prefix and this legacy one.
+#
+# The Elixir lease-plane suite (elixir/lease_plane/test) runs against the
+# governance DB by default and mints `dialectic:/test_elixir_<label>_<hex>`
+# (LeaseTestHelpers.unique_surface_id) and `resident:/test_elixir_*` surfaces.
+# Its force-release tests paged as three HIGH alarms on 2026-08-26 — 3 of the
+# 4 high alarms in the following 30 days. Suppress that namespace too.
+# ⛔ Deliberately NOT a blanket `<scheme>:/test_*` rule: Sentinel's own
+# poller integration tests mint `dialectic:/test_sentinel_*` surfaces and
+# EXPECT them to alarm.
 _SUPPRESSED_TEST_SURFACE_PREFIXES = (
     RESERVED_TEST_SURFACE_PREFIX,
     "td:/force-release-contract-test-",
+    "dialectic:/test_elixir_",
+    "resident:/test_elixir_",
 )
 
 

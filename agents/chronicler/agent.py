@@ -8,22 +8,26 @@ scrape loop, checks in to governance via `process_agent_update` so
 Chronicler appears as a first-class resident with its own EISV
 trajectory alongside Vigil/Sentinel/Watcher.
 
-It also writes one KG digest per run naming what moved. That is not
-decoration. For its first four months Chronicler wrote 14 numbers a day
-into a chart and said nothing anywhere an operator reads, so the only
-available reading of a healthy resident was "it isn't doing anything" —
-104 unbroken daily points and 4 KG entries, none since 2026-05-31. A
-scraper whose output nobody encounters is indistinguishable from a dead
-one, and the fix belongs here rather than in whoever is expected to go
-looking.
+Its check-in names what moved. That is not decoration. For its first four
+months Chronicler wrote 14 numbers a day into a chart and said nothing
+anywhere an operator reads, so the only available reading of a healthy
+resident was "it isn't doing anything" — 104 unbroken daily points and 4 KG
+entries, none since 2026-05-31. A scraper whose output nobody encounters is
+indistinguishable from a dead one.
+
+The first fix (#1662) wrote one KG digest per run. Measured 2026-09-24: 20
+digests in 30 days, 0 detail reads, 11 search hits — the digest became a
+second unread channel, and every one of them joined the stale backlog Vigil
+sweeps. The digest is now opt-in; the movement line rides on the check-in,
+which `/v1/residents` and the resident strip already surface daily.
 
 Environment:
     UNITARES_METRICS_URL        base URL (default http://127.0.0.1:8767)
     UNITARES_HTTP_API_TOKEN     bearer token; optional if running locally
                                 (trusted-network bypass handles 127.0.0.1)
     CHRONICLER_REPO_ROOT        repo to scrape (default: working directory)
-    CHRONICLER_KG_DIGEST        set to 0 to suppress the per-run KG digest
-                                (default on — see above for why)
+    CHRONICLER_KG_DIGEST        set to 1 to also write the per-run KG digest
+                                (default off — see above for why)
     UNITARES_FIRST_RUN          set to 1 once to mint Chronicler's identity;
                                 subsequent runs resume via the anchor
 
@@ -305,16 +309,43 @@ def visibly_moved(value: float, prior: float) -> bool:
     return round(value, DISPLAY_DP) != round(prior, DISPLAY_DP)
 
 
+def moved_metrics(report: ScrapeReport) -> list:
+    """Metrics with a prior reading that visibly moved, sorted by name."""
+    return sorted(
+        (
+            m for m in report.movements
+            if m.prior_status == PRIOR_READ and visibly_moved(m.value, m.prior)
+        ),
+        key=lambda m: m.name,
+    )
+
+
+# How many moved metric names the check-in spells out before summarising.
+CHECKIN_MOVED_NAMES = 5
+
+
+def movement_clause(report: ScrapeReport) -> str:
+    """The check-in's ", N moved (a, b, …)" clause; empty when nothing moved.
+
+    Pure, so the wording is testable. Names are capped so a day where every
+    series moves stays one readable line.
+    """
+    moved = moved_metrics(report)
+    if not moved:
+        return ""
+    names = [m.name for m in moved[:CHECKIN_MOVED_NAMES]]
+    more = len(moved) - len(names)
+    listed = ", ".join(names) + (f", +{more} more" if more else "")
+    return f", {len(moved)} moved ({listed})"
+
+
 def format_digest(report: ScrapeReport) -> tuple[str, str]:
     """Render a run as the (summary, details) of a KG entry.
 
     Pure — no server, no clock — so the wording is testable on its own.
     """
     read = [m for m in report.movements if m.prior_status == PRIOR_READ]
-    moved = sorted(
-        (m for m in read if visibly_moved(m.value, m.prior)),
-        key=lambda m: m.name,
-    )
+    moved = moved_metrics(report)
     flat = sorted(m.name for m in read if not visibly_moved(m.value, m.prior))
     first = sorted(
         m.name for m in report.movements if m.prior_status == PRIOR_ABSENT
@@ -439,6 +470,7 @@ class ChroniclerAgent(GovernanceAgent):
 
         total = successes + failures
         summary = f"Chronicler: {successes}/{total} scrapers ok"
+        summary += movement_clause(report)
         # Clean runs are routine + deterministic (low complexity, high
         # confidence); any failure bumps both dimensions to reflect the
         # transient-vs-persistent uncertainty.
@@ -482,8 +514,8 @@ class ChroniclerAgent(GovernanceAgent):
         the scrape. It is reported on the check-in instead — swallowed is not
         the same as hidden.
         """
-        if os.getenv("CHRONICLER_KG_DIGEST", "1").strip().lower() in (
-            "0", "false", "no",
+        if os.getenv("CHRONICLER_KG_DIGEST", "0").strip().lower() not in (
+            "1", "true", "yes",
         ):
             return DIGEST_DISABLED
 
