@@ -469,7 +469,9 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
          patch(f"{AUTO_RESOLVE}.emit_reviewer_reassigned", mock_emit_reassigned), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
          patch(f"{AUTO_RESOLVE}.get_session_async",
-               new_callable=AsyncMock, return_value=_transcript("silent-reviewer", "a1")), \
+               new_callable=AsyncMock, return_value=_transcript(("a1", "thesis"), ("silent-reviewer", "antithesis"),
+                                             ("silent-reviewer", "synthesis", False),
+                                             ("a1", "synthesis", True))), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer", mock_select):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
@@ -495,16 +497,24 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
         "action": "awaiting_facilitation",
         "stuck_reviewer": "silent-reviewer",
     }]
-    # The note says whose move it was: the paused agent spoke last.
+    # The note says whose move it was.
     note = mock_add_msg.await_args.kwargs["reasoning"]
     assert "SYNTHESIS" in note and "silent-reviewer" in note
-    assert "paused agent spoke last" in note
+    assert "the move is the reviewer's" in note
     assert "unresponsive" not in note
 
 
-def _transcript(*speakers):
-    """A get_session_async row whose messages were posted by `speakers`, in order."""
-    return {"messages": [{"agent_id": who, "message_type": "synthesis"} for who in speakers]}
+def _transcript(*messages):
+    """A get_session_async row. Each message is ``(agent_id, message_type)``
+    or ``(agent_id, message_type, agrees)``, in order."""
+    rows = []
+    for message in messages:
+        who, kind, *rest = message
+        row = {"agent_id": who, "message_type": kind}
+        if rest:
+            row["agrees"] = rest[0]
+        rows.append(row)
+    return {"messages": rows}
 
 
 async def _sweep_synthesis_row(*, paused, reviewer, transcript):
@@ -549,7 +559,8 @@ async def test_synthesis_stall_owed_by_paused_agent_raises_no_flag():
     would hand the returning paused agent a machine-picked reviewer with
     authority over the original verdict. The row keeps its pre-#2202 path."""
     result, m = await _sweep_synthesis_row(
-        paused="a1", reviewer="r1", transcript=_transcript("a1", "r1"))
+        paused="a1", reviewer="r1",
+        transcript=_transcript(("a1", "thesis"), ("r1", "antithesis"), ("r1", "synthesis", False)))
     assert result["facilitation_count"] == 0
     m["mark"].assert_not_awaited()
     m["emit"].assert_not_awaited()
@@ -557,10 +568,24 @@ async def test_synthesis_stall_owed_by_paused_agent_raises_no_flag():
 
 
 @pytest.mark.asyncio
+async def test_synthesis_stall_awaiting_first_reviewer_verdict_raises_the_flag():
+    """`submit_antithesis` enters SYNTHESIS before the reviewer's first
+    verdict, and the paused agent cannot move until it lands. So a reviewer
+    that went silent right after its antithesis owes the move even though it
+    spoke last: the #2202 case in its most common form."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1",
+        transcript=_transcript(("a1", "thesis"), ("r1", "antithesis")))
+    assert result["facilitation_count"] == 1
+    m["mark"].assert_awaited_once_with("s1")
+    m["update_status"].assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_synthesis_self_review_stall_raises_no_flag():
     """Paused agent == reviewer: there is no separate reviewer to wait on."""
     result, m = await _sweep_synthesis_row(
-        paused="a1", reviewer="a1", transcript=_transcript("a1"))
+        paused="a1", reviewer="a1", transcript=_transcript(("a1", "thesis")))
     assert result["facilitation_count"] == 0
     m["mark"].assert_not_awaited()
 

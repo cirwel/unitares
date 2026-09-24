@@ -214,9 +214,12 @@ async def _synthesis_reviewer_owes_reply(
 ) -> bool:
     """True when a SYNTHESIS session is waiting on its REVIEWER.
 
-    Reads the transcript and finds the last message from either party
-    (system notes are skipped). The reviewer owes the move only when the
-    paused agent spoke last. A self-review (paused agent == reviewer) or a
+    Two states put the move on the reviewer, matching `whose_move` in the
+    handlers: its FIRST synthesis verdict is pending (an independent
+    antithesis and no verdict yet — `submit_antithesis` enters SYNTHESIS
+    before that verdict, and the paused agent cannot move until it lands),
+    or the paused agent spoke last (the reviewer owes a reconsideration).
+    System notes are skipped. A self-review (paused agent == reviewer) or a
     transcript with no party message has no reviewer to wait on.
 
     Never raises. A failed read answers False, which leaves the row on its
@@ -231,7 +234,15 @@ async def _synthesis_reviewer_owes_reply(
             f"Could not read transcript for SYNTHESIS stall {session_id[:16]}: {exc}"
         )
         return False
-    for message in reversed((row or {}).get("messages") or []):
+    row = dict(row or {})
+    row.setdefault("paused_agent_id", paused_agent_id)
+    row.setdefault("reviewer_agent_id", reviewer_agent_id)
+    # Function-local, like the select_reviewer import in the sweeper:
+    # handlers is heavy and reaches reviewer.py, which imports this module.
+    from .handlers import _reviewer_verdict_pending_in_session_data
+    if _reviewer_verdict_pending_in_session_data(row):
+        return True
+    for message in reversed(row.get("messages") or []):
         speaker = message.get("agent_id")
         if speaker == paused_agent_id:
             return True
@@ -555,7 +566,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # it on a row where the PAUSED agent owes the move would hand the
             # returning paused agent a machine-picked reviewer with authority
             # over the original verdict. So the transcript decides: the flag
-            # goes up only when the paused agent spoke last. Otherwise the
+            # goes up only when the reviewer owes the move (its first verdict
+            # is pending, or the paused agent spoke last). Otherwise the
             # stall is the paused agent's own and the row keeps its prior
             # behaviour (reaped at the stuck threshold). The read is skipped
             # for rows already flagged, which the hold below handles.
@@ -571,7 +583,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 facilitation_reason = "synthesis_stalled"
                 facilitation_note = (
                     f"Session stalled in SYNTHESIS awaiting reviewer '{reviewer_agent_id}' "
-                    "(the paused agent spoke last; no reply past the stuck threshold). "
+                    "(the move is the reviewer's; no reply past the stuck threshold). "
                     "Awaiting human facilitation."
                 )
 
