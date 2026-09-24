@@ -130,6 +130,9 @@ def _latest_attestation_date(skills_root: Path, name: str) -> Optional[str]:
     lexically last file assumed file-name order is date order; reading every
     record makes the answer independent of that. This tool reports calendar
     staleness only; source-digest freshness is the CI checker's.
+
+    Display-only, and intentionally NOT scoped to the current skill text
+    (`skill_digest`): the CI checker's AGING gate is the authority on that.
     """
     adir = skills_root / ".attestations" / name
     if not adir.is_dir():

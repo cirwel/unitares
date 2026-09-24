@@ -273,6 +273,22 @@ def test_an_uncertified_skill_edit_falls_back_to_the_newest_record(layout: Layou
     assert layout.run().returncode == 0
 
 
+def test_a_newer_stamp_of_other_skill_text_does_not_reset_aging(layout: Layout):
+    # The current text was last certified 45 days ago. A stale branch then
+    # stamped DIFFERENT skill text yesterday. Nobody re-verified the text on
+    # disk, so it is still 45 days old and AGING.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(60), digest=None, freshness_days=14)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(45), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")},
+            skill_digest="0123456789abcdef")
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    assert "AGING" in result.stdout
+    assert "verified 45 days ago" in result.stdout
+
+
 def test_stamp_records_the_skill_text_it_certified(layout: Layout):
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(1), digest=None)

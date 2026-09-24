@@ -58,9 +58,10 @@ v2: if v1 was stamped against source X, v2 against Y, and the source reverts
 to X, v2 was never reviewed against X; nor does a v1 stamp from a concurrent
 branch vouch for v2 because its file happens to sort newest.
 
-The effective verified date, which drives AGING, is the newest one on record:
-the latest `verified_date` across the attestations, or the frontmatter
-`last_verified` if later. `.attestations/` is excluded from the skills
+The effective verified date, which drives AGING, comes from the same records
+that vouch for source digests: the latest `verified_date` among them, or the
+frontmatter `last_verified` if later. A newer stamp of different skill text
+does not reset AGING for the text on disk. `.attestations/` is excluded from the skills
 fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
 when skill content moves. Old attestations can be removed with `--prune`;
 deleting a file never conflicts with another PR adding one, but a pruned file
@@ -220,21 +221,24 @@ def effective_record(skills_dir: Path, name: str, meta: dict,
         not yet re-stamped, or records older than `skill_digest`), and the
         newest attestation alone vouches, the rule before 2026-09-24.
     The legacy frontmatter block, which lives inside the current SKILL.md,
-    always counts. The date is the newest on record, across every
-    attestation and the frontmatter `last_verified`.
+    always counts.
+
+    The date comes from the SAME records: the newest `verified_date` among
+    the vouching attestations, or the frontmatter `last_verified` if later.
+    A stale branch stamping different skill text more recently must not reset
+    AGING for the text actually on disk, since nobody re-verified that text.
     """
     accepted: dict[str, set[str]] = {}
     for src, digest in meta["source_digests"].items():
         accepted.setdefault(src, set()).add(digest)
     date = meta["last_verified"]
     records = load_attestations(skills_dir, name)
-    for att in records:
-        att_date = att.get("verified_date")
-        if isinstance(att_date, str) and att_date > date:
-            date = att_date
     certified = [a for a in records
                  if skill_digest is not None and a.get("skill_digest") == skill_digest]
     for att in certified or records[:1]:
+        att_date = att.get("verified_date")
+        if isinstance(att_date, str) and att_date > date:
+            date = att_date
         for src, digest in att["source_digests"].items():
             accepted.setdefault(str(src), set()).add(str(digest))
     return date, accepted
