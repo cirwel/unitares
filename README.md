@@ -34,7 +34,7 @@ sequenceDiagram
     participant S as Successor
     A->>U: Check-in: "Trying a fifth fix. Not sure why."
     U->>A: Pause, with the reason
-    A->>U: self_recovery: "I was guessing. Back to the logs."
+    A->>U: self_recovery(action="review"): "I was guessing. Back to the logs."
     A->>U: Searches "backup" (nothing yet), files "The disk was full." + logs, requests review
     B->>U: "Full disk, or a log that never rotated?"
     A->>U: "Checked. Rotation works. It was the disk."
