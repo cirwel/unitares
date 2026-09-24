@@ -343,31 +343,30 @@ class CodexRounds:
                 and not self.last_severe and not self.answered_since)
 
 
-LOCAL_REVIEWERS = {"codex", "claude"}  # review.sh's fallbacks, which spend the same quota
-
-
 def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
                  events: list[dict] = ()) -> CodexRounds:
-    """Count completed review runs: native Codex by the distinct commits it
-    names, local fallbacks by the distinct diffs their records key.
+    """Count completed native Codex runs by the distinct commits they name.
+
+    Local fallback records are not counted: they name no commit, no start
+    time and no per-finding severity, so each attempt to count them opened a
+    stale-base or severity gap (PR #2401 rounds 4-7). The cap still stops a
+    capped PR from starting a local run, and the fallback only runs when
+    native review is unavailable.
 
     Native findings arrive as a submitted review; a clean result as a comment
     naming the commit or an activity row marked Completed. Heads are compared
-    on seven hex digits, the shortest form Codex prints. A base change resets
-    the count, and native runs stop counting at all: native_records discards
-    the same evidence, because it does not name the base it reviewed.
+    on seven hex digits, the shortest form Codex prints. After any base change
+    nothing counts and the cap never applies: native_records discards the same
+    evidence, because a native run does not name the base it reviewed.
     """
     runs: dict[str, tuple[float, str, list[dict]]] = {}
-    since = max((timestamp(e.get("created_at", "")) for e in events
-                 if e.get("event") in {"base_ref_changed", "base_ref_force_pushed"}), default=0)
+    retargeted = any(e.get("event") in {"base_ref_changed", "base_ref_force_pushed"} for e in events)
 
-    def seen(commit: str, when: str, findings: list[dict], run: str = "") -> None:
+    def seen(commit: str, when: str, findings: list[dict]) -> None:
         t = timestamp(when)
-        # After any base change, native runs never count: like native_records,
-        # a run cannot say which base it reviewed, even one finishing later.
-        if t <= since or (since and not run):
+        if retargeted:
             return
-        run = run or commit[:7]
+        run = commit[:7]
         prior = runs.get(run)
         # One run leaves several artifacts (review, activity row) seconds
         # apart, in any order: keep its findings whichever arrives first.
@@ -411,11 +410,6 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         if rec and (rec.disposed or rec.reviewer.startswith("fix-verify:")):
             answered_at = max(answered_at, timestamp(c.get("created_at", "")))
             continue  # an answer to a round, never a run of its own
-        if rec and rec.reviewer in LOCAL_REVIEWERS and rec.verdict in {"CLEAN", "FINDINGS"}:
-            # No commit is named and no per-finding structure exists, so a
-            # capped local round can be disposed but not fix-verified.
-            findings = [{"body": c.get("body", "")}] if rec.verdict == "FINDINGS" else []
-            seen("", c.get("created_at", ""), findings, run=f"local:{rec.key}")
     if not runs:
         return CodexRounds()
     last_at, last, findings = max(runs.values(), key=lambda r: r[0])
@@ -1018,8 +1012,7 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
     last = git("rev-parse", "--verify", "--quiet", f"{rounds.last_head}^{{commit}}", check=False).strip()
     if not verifier or not last:
         why = ("no verifier configured (git config review.verifier ollama:gemma4:latest)"
-               if not verifier else "the last round was a local review, which names no commit"
-               if not rounds.last_head else f"last reviewed commit {rounds.last_head} is not in this clone")
+               if not verifier else f"last reviewed commit {rounds.last_head} is not in this clone")
         print(f"[review] UNREVIEWED: {why}. Past the cap, answer findings with "
               "`review.sh dispose` on the reviewed diff instead of pushing fixes, or spend "
               "a round deliberately with `review.sh --reviewer codex`.")

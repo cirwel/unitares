@@ -216,18 +216,16 @@ fallback validation.
 #### Round cap
 
 A PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
-round is one completed review run:
-- **Native Codex:** counted by the distinct commits Codex names. Codex can post
-  a result three ways: a submitted review, a clean comment, or a completed
-  activity row. All three count.
-- **Local `codex`/`claude` fallback:** counted by the distinct diffs its
-  records cover, because it spends the same quota.
-
-These don't count: a reply inside an existing thread, the receipt that records
-a native result, a disposition, and a fix verification. A base change resets
-the count, and after it only local rounds count: the gate stops trusting
-native evidence then, because a native run does not say which base it
-reviewed. The `review` check shows the count ("review round 2 of 3").
+round is one completed native Codex run, counted by the distinct commits
+Codex names. Codex can post a result three ways: a submitted review, a clean
+comment, or a completed activity row. All three count. These don't count: a
+reply inside an existing thread, the receipt that records a native result, a
+disposition, a fix verification, and a local fallback record. A local record
+names no commit, no start time and no per-finding severity, and counting it
+opened a new gap each time it was tried on #2401. After any base change the
+cap no longer applies: the gate stops trusting native evidence then, because
+a native run does not say which base it reviewed. The `review` check shows
+the count ("review round 2 of 3").
 
 Why: every run spends the same subscription quota that authoring does. In the
 first ~14 hours of native review (2026-09-23/24) there were 137 Codex runs
@@ -243,7 +241,9 @@ The rule is for fix loops only:
 - A **clean** last round is not a fix loop. A push after it is new work, and
   new work gets a full review.
 - Past the cap, with only P2s open, `review.sh` does not request Codex and
-  does not start the local fallback, which spends the same quota. Answer the
+  does not start the local fallback, which spends the same quota. The
+  fallback runs only when native review is unavailable, and its own rounds are
+  bounded by the review budget, not by this cap. Answer the
   remaining findings in one batch:
   - **Don't push:** dispose them on the reviewed diff with
     `review.sh dispose` (fixed later in #N, or rebutted). This costs no model
@@ -253,8 +253,7 @@ The rule is for fix loops only:
     a diff-bound record with the reviewer `fix-verify:<model>`. Findings it
     judges unaddressed stay open as `FINDINGS(n)` for fixing or disposing.
     It checks the fixes only, not the new lines for new problems, and the
-    record says so. A local round names no commit, so its findings are
-    disposed rather than fix-verified. A round is answered once it is disposed
+    record says so. A round is answered once it is disposed
     or its fixes are verified, and it gets only **one** answer: any push after
     that may be new work and gets a full review.
     With no verifier configured, a push past the cap is
