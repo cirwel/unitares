@@ -49,9 +49,9 @@ def _joinable_audit_agent_id(agent_id: str | None) -> tuple[str | None, str | No
     7 held a structured handle like `Gpt_5_20260810`. `core.identities.agent_id`
     holds UUIDs; the handle is a presentation construct returned by onboard. It
     is stored as `public_agent_id` (identity metadata, `core.session_bindings`),
-    but it is not unique: on 2026-09-24 one handle matched between 1 and 37
-    identities, so a join on it attributes a row to the wrong agent or to
-    several.
+    but it is not unique: on 2026-09-24, 8 of the 11 distinct handles on these
+    rows were shared by 2 to 37 identities each, so a join on it can attribute
+    a row to the wrong agent or to several.
 
     Those rows are still attributable, through the `circuit_breaker_trip` event
     the pause path in `agent_loop_detection` broadcasts with the UUID. Pauses
