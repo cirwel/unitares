@@ -356,3 +356,12 @@ def test_template_renders_to_a_plist_python_can_parse():
             + "\n  ".join(offenders or ["<none found; different cause>"])
         ) from exc
     assert parsed.get("Label") == "com.unitares.doctor-findings"
+
+
+def test_template_documents_the_shipped_cooldown_defaults():
+    # The template's install notes are what an operator tunes against; they
+    # said 6h for a month after the default could have moved without them.
+    text = TEMPLATE_PATH.read_text()
+    assert f"default {df.COOLDOWN_SECONDS} " in text
+    assert f"default {df.MAX_COOLDOWN_SECONDS} " in text
+    assert "DOCTOR_FINDINGS_MAX_COOLDOWN" in text
