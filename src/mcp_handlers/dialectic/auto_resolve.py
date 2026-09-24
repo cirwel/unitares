@@ -133,11 +133,12 @@ def _describe_reap(
     the wrong causal story, and the row is the only artifact that outlives the
     session.
 
-    Deliberately does NOT claim a verdict. The sweeper does not load the
-    transcript, so it cannot know whether the reviewer rejected or the parties
-    simply stopped; asserting either would trade one confident wrong sentence
-    for another. It reports what it observed and points at the record that has
-    the rest.
+    Deliberately does NOT claim a verdict. The sweeper reads the transcript
+    only to decide whether a SYNTHESIS stall is waiting on its reviewer
+    (`_synthesis_reviewer_owes_reply`), and this text does not use that read:
+    who spoke last is not what the reviewer decided, and asserting a verdict
+    would trade one confident wrong sentence for another. It reports what it
+    observed and points at the record that has the rest.
     """
     idle = ""
     if idle_seconds is not None and idle_seconds >= 0:
@@ -524,11 +525,18 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # that has a thesis to that phase.
             #
             # ⛔NOT reusing the reassignment path above. The protocol requires
-            # the SAME reviewer to revise its own verdict; a replacement chosen
-            # by the sweeper carries a new identity that never formed the
-            # objection, and letting it revise the verdict writes a completed
-            # review that no reviewer completed. Handing that authority over is
-            # an operator's act, so the sweeper raises the request and stops.
+            # the SAME reviewer to revise its own verdict; a replacement the
+            # sweeper chose would carry a new identity that never formed the
+            # objection. So the sweeper raises the request and stops.
+            #
+            # What the flag then enables is the existing SYNTHESIS design, not
+            # an operator-only gate: `check_reviewer_stuck` treats a flagged
+            # row whose reviewer is PAUSED or MISSING as stuck, and a bound
+            # caller's `get(check_timeout=true)` may then auto-replace it —
+            # exactly as it already can after a standing objection raises the
+            # same flag. A reviewer whose stored status reads active (the
+            # #2202 case) is not stuck by that test, so its session waits for
+            # an operator `reassign` inside the window.
             #
             # Deliberately NOT gated on the reviewer's stored status. That field
             # is what `reviewer_status` reports and it read "active" on the live
