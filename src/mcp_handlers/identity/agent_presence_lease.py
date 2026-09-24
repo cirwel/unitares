@@ -50,10 +50,12 @@ _PRESENCE_TTL_S = 600
 # the source of truth.
 _lease_ids: dict[str, str] = {}
 
-# uuid -> client_session_id that last acquired or refreshed the cached lease.
-# A release from one session must not free a lease another live session under
-# the same identity (a resume) has since taken over.
-_lease_sessions: dict[str, str] = {}
+# uuid -> {client_session_id: monotonic time of its last acquire/refresh} for
+# the cached lease. Several sessions can share one identity's lease (a resume
+# overlapping a slow exit); a release removes only the releasing session and
+# frees the lease only when no other session has refreshed it within the TTL.
+# A refresh without a session id is recorded under _HOLDER_UNKNOWN.
+_lease_sessions: dict[str, dict[str, float]] = {}
 
 # uuid -> monotonic time of the agent's own clean-exit release, and the
 # client_session_id(s) that released it. A heartbeat from the releasing session
@@ -176,7 +178,9 @@ async def _refresh_presence(
             if getattr(result, "ok", False):
                 # A nameless refresh proves someone is live without saying who,
                 # so no session's release may free it.
-                _lease_sessions[agent_uuid] = client_session_id or _HOLDER_UNKNOWN
+                _lease_sessions.setdefault(agent_uuid, {})[
+                    client_session_id or _HOLDER_UNKNOWN
+                ] = time.monotonic()
                 return
         except Exception:
             pass
@@ -209,7 +213,10 @@ async def _refresh_presence(
             await _release_lease(client, agent_uuid, str(new_id))
             return
         _lease_ids[agent_uuid] = str(new_id)
-        _lease_sessions[agent_uuid] = client_session_id or _HOLDER_UNKNOWN
+        # A fresh lease starts a fresh holder set; the old one expired with it.
+        _lease_sessions[agent_uuid] = {
+            client_session_id or _HOLDER_UNKNOWN: time.monotonic()
+        }
 
 
 def _mint_presence_attestation(agent_uuid: str, path: str, request: object) -> str | None:
@@ -343,19 +350,21 @@ async def release_agent_presence(
             _lease_ids.pop(agent_uuid, None)
             return {"released": False, "reason": "lease_plane_unavailable"}
         lease_id = _lease_ids.get(agent_uuid)
-        holder = _lease_sessions.get(agent_uuid)
+        holders = _lease_sessions.setdefault(agent_uuid, {})
         if not lease_id:
-            lease_id, holder = await _lookup_live_lease(agent_uuid)
+            lease_id, db_holder = await _lookup_live_lease(agent_uuid)
+            if db_holder:
+                holders[db_holder] = now
         if not lease_id:
             return {"released": False, "reason": "no_live_lease"}
-        if holder == _HOLDER_UNKNOWN:
-            # Renewed since a server restart, by a session we can no longer
-            # name: leave it to the TTL rather than risk freeing a live one.
-            return {"released": False, "reason": "holder_unknown"}
-        if holder and holder not in session_ids:
-            # Another session under this identity refreshed the lease after
-            # this one; it is still live, so its presence stays.
-            return {"released": False, "reason": "held_by_other_session"}
+        for session_id in session_ids:
+            holders.pop(session_id, None)
+        others = {s for s, seen in holders.items() if now - seen <= _PRESENCE_TTL_S}
+        if others:
+            # Another session under this identity is still refreshing the
+            # lease (or one we cannot name is); its presence stays.
+            reason = "holder_unknown" if others == {_HOLDER_UNKNOWN} else "held_by_other_session"
+            return {"released": False, "reason": reason}
         _lease_ids.pop(agent_uuid, None)
         _lease_sessions.pop(agent_uuid, None)
         try:

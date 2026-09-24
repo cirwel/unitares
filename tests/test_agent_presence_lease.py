@@ -414,3 +414,23 @@ async def test_nameless_refresh_blocks_an_earlier_sessions_release(monkeypatch):
 
     assert result == {"released": False, "reason": "holder_unknown"}
     assert client.releases == []
+
+
+@pytest.mark.asyncio
+async def test_release_keeps_a_lease_while_another_session_is_live_in_either_order(monkeypatch):
+    """B refreshes, then A's delayed heartbeat lands, then A exits: B is still
+    live, so the shared lease stays."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.heartbeat_agent_presence("uuid-1", "sess-a", apl.time.monotonic())
+    await apl.heartbeat_agent_presence("uuid-1", "sess-b", apl.time.monotonic())
+    await apl.heartbeat_agent_presence("uuid-1", "sess-a", apl.time.monotonic())
+
+    first = await apl.release_agent_presence("uuid-1", ("sess-a",))
+    assert first == {"released": False, "reason": "held_by_other_session"}
+    assert client.releases == []
+
+    # When B exits too, nobody is left and the lease is freed.
+    second = await apl.release_agent_presence("uuid-1", ("sess-b",))
+    assert second == {"released": True, "reason": "released"}
+    assert [r.lease_id for r in client.releases] == ["lease-123"]
