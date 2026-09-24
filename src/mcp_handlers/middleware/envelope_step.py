@@ -67,6 +67,10 @@ _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
+# Bound on a digest's `by` display label. `agent_id` is never bounded: it is
+# the identity key a reader passes back as `agent_id_filter`, so a prefix of it
+# would silently name nobody (or the wrong writer).
+_MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
@@ -577,6 +581,10 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_UNKNOWN_WRITER = "unknown"
+_DIGEST_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -590,7 +598,9 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     """
     payload = _harvest_payload(payload)
     candidates = normalize_discovery_list(payload.get("relevant_discoveries"))
+    from_prior_work = False
     if not candidates:
+        from_prior_work = bool(payload.get("relevant_prior_work"))
         candidates = (
             payload.get("relevant_prior_work")
             or payload.get("results")
@@ -611,6 +621,30 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
             discovery_id = item.get("discovery_id") or item.get("id")
             if discovery_id is not None:
                 suggestion["discovery_id"] = discovery_id
+
+            # Attribution survives the digest: the canonical result leads with
+            # `by` (the write-time label) and carries `_agent_id` (the
+            # identity), and a lean reader asking who wrote a finding must not
+            # need a second, full-mode call to learn it. The identity is
+            # copied whole; only the display label is bounded, and a bounded
+            # label says so rather than posing as the complete value.
+            # `relevant_prior_work` rows are the one exception: the mirror
+            # formatter writes the writer's id into `by` (response_formatter
+            # `_format_mirror`), so there `by` is the identity, not a label.
+            # "unknown" is the producers' placeholder for a missing id and is
+            # neither a label nor an identity.
+            by = item.get("by")
+            agent_id = item.get("_agent_id") or item.get("agent_id")
+            if from_prior_work and not agent_id:
+                agent_id, by = by, None
+            if isinstance(by, str) and by and by != _UNKNOWN_WRITER:
+                if len(by) > _MEMORY_BY_LABEL_CHARS:
+                    suggestion["by"] = by[: _MEMORY_BY_LABEL_CHARS - 1] + "…"
+                    suggestion["by_truncated"] = True
+                else:
+                    suggestion["by"] = by
+            if agent_id and str(agent_id) != _UNKNOWN_WRITER:
+                suggestion["agent_id"] = str(agent_id)
 
             summary = item.get("summary")
             if isinstance(summary, str):
@@ -1008,9 +1042,31 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     def wire_bytes() -> int:
         return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
 
-    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-        return
+    # Attribution never costs a result or its fields. Set it aside, run the
+    # budget steps exactly as for an attribution-free payload (which decides
+    # which digests and fields survive), then give each survivor back as much
+    # attribution as still fits, in rank order: label and identity, else the
+    # identity alone, else neither. An identity is only ever whole. One
+    # envelope-level marker says something was withheld, if it fits.
+    suggestions = envelope.get("memory_suggestions")
+    set_aside: List[Dict[str, Any]] = []
+    if isinstance(suggestions, list):
+        for item in suggestions:
+            snap = {}
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    if key in item:
+                        snap[key] = item.pop(key)
+            set_aside.append(snap)
 
+    if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+        _truncate_search_projection(envelope, wire_bytes)
+    _restore_digest_attribution(envelope, set_aside, wire_bytes)
+
+
+def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
+    """The budget steps proper, run on the attribution-free envelope: drop
+    optional coaching, then lower-ranked digests, then compact the last."""
     envelope["projection_truncated"] = True
     envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
     envelope.pop("response_options", None)
@@ -1056,11 +1112,64 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
 
+    # The digest set is final now, so its summary fields go in before any
+    # attribution is restored: they must be inside the budget the restore
+    # measures against, not appended after it.
     state = envelope.get("state_summary")
     if isinstance(state, dict) and isinstance(suggestions, list):
         state["results_shown_in_digest"] = len(suggestions)
         state["result_set_truncated"] = True
 
+
+def _restore_digest_attribution(
+    envelope: Dict[str, Any], set_aside: List[Dict[str, Any]], wire_bytes
+) -> None:
+    """Give each surviving digest back as much attribution as fits, in rank
+    order: label and identity, else the identity alone, else neither.
+
+    First without the withheld-marker: if everything fits, no marker is
+    needed and its room is not taken from attribution. Only if something must
+    be withheld is the restore redone with the marker's room reserved, so the
+    marker says so. If the marker itself does not fit, the marker-free restore
+    stands; only then can a digest lose attribution unmarked, and only when
+    not even the marker's ~36 bytes were free."""
+    suggestions = envelope.get("memory_suggestions")
+    if not isinstance(suggestions, list) or not any(set_aside[: len(suggestions)]):
+        return
+
+    def strip() -> None:
+        for item in suggestions:
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    item.pop(key, None)
+
+    def restore() -> bool:
+        withheld = False
+        for item, snap in zip(suggestions, set_aside):
+            if not snap or not isinstance(item, dict):
+                continue
+            identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
+            for attempt in (snap, identity):
+                if not attempt:
+                    continue
+                item.update(attempt)
+                if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                    break
+                for key in attempt:
+                    item.pop(key, None)
+            if any(key not in item for key in snap):
+                withheld = True
+        return withheld
+
+    if not restore():
+        return
+    strip()
+    envelope["digest_attribution_omitted"] = True
+    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+        restore()
+        return
+    envelope.pop("digest_attribution_omitted", None)
+    restore()
 
 def build_experience_envelope(
     friendly_name: str,

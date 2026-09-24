@@ -229,9 +229,27 @@ class ChangelogGenerator:
         lines.append("---\n\n")
         return ''.join(lines)
 
+    def pending_fragments(self) -> List[Path]:
+        """docs/changelog.d/ fragments not yet folded in (the README is not one)."""
+        fragment_dir = self.repo_path / "docs" / "changelog.d"
+        if not fragment_dir.is_dir():
+            return []
+        return sorted(p for p in fragment_dir.rglob("*")
+                      if p.is_file() and p.relative_to(fragment_dir).as_posix() != "README.md")
+
     def update_changelog(self, dry_run: bool = False):
         """Update CHANGELOG.md with new commits."""
         changelog_path = self.repo_path / "docs" / "CHANGELOG.md"
+
+        # Entries written by hand arrive as docs/changelog.d/ fragments. An
+        # entry generated from commits while fragments wait would sit beside
+        # them, not include them, and the fragments would never ship.
+        pending = self.pending_fragments()
+        if pending and not dry_run:
+            print(f"❌ {len(pending)} changelog fragment(s) in docs/changelog.d/ "
+                  "are not folded in yet.")
+            print("   Run: python3 scripts/dev/changelog_assemble.py")
+            raise SystemExit(1)
 
         # Get commits since last tag/version
         commit_lines = self.parser.get_commits_since_tag()

@@ -1,0 +1,27 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-09-24T12:02:18Z",
+  "verified_date": "2026-09-24",
+  "verifier": "claude-pr-queue (#2386 after master merge: legacy attestations masked newer source digests; envelope_step.py change verified by the PR's author)",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "58f2df22f1a31112",
+    "unitares/src/mcp_handlers/admin/handlers.py": "47a6f753b0ed1132",
+    "unitares/src/mcp_handlers/core.py": "ee90a3f276b48b99",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "2b6f70a94a7361f5",
+    "unitares/src/mcp_handlers/identity/handlers.py": "ce2c320c8073f510",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "0ffd2f7bc93fba79",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "8997fbde709169e0",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "ee0af17f0ad9a218",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "f50ccc2629ef7832",
+    "unitares/src/mcp_handlers/tool_stability.py": "9049a8db3938541a",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "0aec78c062f4af99",
+    "unitares/src/mcp_handlers/updates/phases.py": "d8d32bccff74956b",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "703dd2ca10000c92"
+  },
+  "skill_digest": "510a5f3782f138f3"
+}
