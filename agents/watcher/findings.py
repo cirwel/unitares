@@ -143,7 +143,7 @@ def _reopen_copy(row: dict[str, Any], stamp: str) -> dict[str, Any]:
 
 def release_orphaned_duplicates(
     rows: list[dict[str, Any]], now: str | None = None
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Reopen automatic duplicates whose canonical finding closed.
 
     Folding a copy into a canonical finding is only sound while that finding
@@ -155,12 +155,16 @@ def release_orphaned_duplicates(
     settles the copies too. So does any closure for a copy in the canonical's
     own file (the same site after a line shift) until the code is detected
     again, and a canonical row that no longer exists leaves them as they are;
-    ``persist_findings`` reopens such a copy on re-detection. Returns the new rows and how many copies were reopened.
+    ``persist_findings`` reopens such a copy on re-detection.
+
+    Returns the new rows and the reopened ones. The caller mirrors the
+    reopened rows with ``_emit_released`` after writing, as it would a new
+    finding: the copy is now the only open record of that code.
     """
     by_fp = {row.get("fingerprint"): row for row in rows if row.get("fingerprint")}
     promoted: dict[str, str] = {}
     stamp = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    released = 0
+    released: list[dict[str, Any]] = []
     out: list[dict[str, Any]] = []
     for row in rows:
         if not is_auto_duplicate(row):
@@ -182,11 +186,32 @@ def release_orphaned_duplicates(
             out.append({**row, "duplicate_of": promoted[canonical_fp]})
             continue
         promoted[canonical_fp] = str(row.get("fingerprint") or "")
-        released += 1
-        out.append(_reopen_copy(row, stamp))
+        reopened = _reopen_copy(row, stamp)
+        released.append(reopened)
+        out.append(reopened)
     if released:
-        log(f"released {released} auto-duplicate finding(s) whose canonical finding closed")
+        log(f"released {len(released)} auto-duplicate finding(s) whose canonical finding closed")
     return out, released
+
+
+def _emit_released(rows: list[dict[str, Any]]) -> None:
+    """Mirror reopened copies to the event stream, like new findings."""
+    for row in rows:
+        try:
+            finding = Finding(
+                pattern=str(row.get("pattern") or ""),
+                file=str(row.get("file") or ""),
+                line=int(row.get("line") or 0),
+                hint=str(row.get("hint") or ""),
+                severity=str(row.get("severity") or ""),
+                detected_at=str(row.get("detected_at") or ""),
+                model_used=str(row.get("model_used") or ""),
+                fingerprint=str(row.get("fingerprint") or ""),
+                violation_class=str(row.get("violation_class") or ""),
+            )
+        except (TypeError, ValueError):
+            continue
+        _emit_persisted_finding(finding)
 
 
 def findings_state_lock(wait_s: float = 2.0):
@@ -601,6 +626,7 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                             fh.write(json.dumps(row) + "\n")
             save_dedup(dedup)
 
+    _emit_released(released)
     for finding in fresh:
         _emit_persisted_finding(finding)
     return fresh
@@ -865,8 +891,9 @@ def update_finding_status(
             f = merged
             updated_target = merged
         updated.append(f)
-    updated, _released = release_orphaned_duplicates(updated)
+    updated, released = release_orphaned_duplicates(updated)
     _write_findings_atomic(updated)
+    _emit_released(released)
     if updated_finding_sink is not None and updated_target is not None:
         updated_finding_sink.append(updated_target)
     log(f"update_finding_status: {target_fp[:8]} → {new_status}")
@@ -1052,8 +1079,9 @@ def _sweep_token_drift_quiet() -> int:
     if aged == 0:
         return 0
 
-    out, _released = release_orphaned_duplicates(out)
+    out, released = release_orphaned_duplicates(out)
     _write_findings_atomic(out)
+    _emit_released(released)
     log(
         f"sweep_token_drift (auto): aged out {aged} finding(s) whose flagged "
         f"line no longer carries the pattern's required token"

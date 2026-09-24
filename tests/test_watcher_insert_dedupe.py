@@ -108,7 +108,7 @@ def _detect(path: Path, line: int, pattern: str = "P006", severity: str = "mediu
         line=line,
         hint="silent swallow",
         severity=severity,
-        detected_at="2026-09-24T00:00:00Z",
+        detected_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         model_used="test",
     )
     finding.line_content_hash = hash_line_content(lines.get(line, ""))
@@ -330,6 +330,16 @@ def test_high_severity_dup_is_not_mirrored_or_resolved(worktrees, no_outcomes):
     assert no_outcomes == ["post_finding"]
 
 
+def test_a_released_high_severity_copy_is_mirrored(worktrees, no_outcomes):
+    main, other = worktrees
+    first = _detect(main / "src" / "envelope_step.py", 5, severity="high")
+    F.persist_findings([first])
+    F.persist_findings([_detect(other / "src" / "envelope_step.py", 5, severity="high")])
+    assert no_outcomes == ["post_finding"]
+    F.update_finding_status(first.fingerprint, "confirmed", emit_resolution_event=False)
+    assert no_outcomes == ["post_finding", "post_finding"]
+
+
 def test_auto_dup_is_not_a_dismissal_in_checkin_confidence(worktrees):
     main, other = worktrees
     F.persist_findings([_detect(main / "src" / "envelope_step.py", 5)])
@@ -346,11 +356,12 @@ def test_auto_dup_carries_no_precision_signal(worktrees):
     now = datetime.now(timezone.utc)
     assert precision_by_pattern_and_class(_rows(), now=now) == {}
     summary = _watcher_summary_from_rows(_rows(), now=now)
-    assert summary["by_status"] == {"open": 1, "dismissed": 1}
+    assert summary["by_status"] == {"open": 1}
+    assert (summary["total"], summary["auto_duplicates"]) == (1, 1)
     [p006] = summary["patterns"]
     assert (p006["surfaced"], p006["dismissed"], p006["other"]) == (1, 0, 0)
     assert sum(day["dismissed"] for day in summary["timeline"]) == 0
-    assert sum(day["detected"] for day in summary["timeline"]) <= 1
+    assert sum(day["detected"] for day in summary["timeline"]) == 1
 
 
 # ---------------------------------------------------------------------------

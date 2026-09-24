@@ -46,6 +46,7 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
     from datetime import datetime, timedelta, timezone
 
     by_status = Counter()
+    auto_duplicates = 0
     by_severity = Counter()   # open-only (surfaced + open) — the actionable queue
     by_pattern = defaultdict(
         lambda: {"surfaced": 0, "confirmed": 0, "dismissed": 0, "dismissed_fp": 0, "other": 0}
@@ -77,19 +78,20 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
         status = str(row.get("status", "surfaced"))
         pattern = str(row.get("pattern") or "?")
         severity = str(row.get("severity") or "?")
-        by_status[status] += 1
-
         # Watcher records a finding that repeats an unresolved one (same code
         # in another worktree, or at a shifted line) as dismissed/dup with
         # resolved_by "watcher_auto_dedup". Nobody adjudicated it, so it must
-        # not inflate a pattern's dismiss ratio or the detection timeline.
+        # not inflate the finding/dismissal totals, a pattern's dismiss ratio
+        # or the detection timeline. Counted on its own instead.
         if (
             status == "dismissed"
             and row.get("resolution_reason") == "dup"
             and row.get("resolved_by") == "watcher_auto_dedup"
             and row.get("duplicate_of")
         ):
+            auto_duplicates += 1
             continue
+        by_status[status] += 1
 
         bucket = by_pattern[pattern]
         if status in ("confirmed", "dismissed"):
@@ -150,6 +152,7 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
     return {
         "total": sum(by_status.values()),
         "by_status": dict(by_status),
+        "auto_duplicates": auto_duplicates,
         "by_severity_open": dict(by_severity),
         "patterns": patterns_out,
         "timeline": timeline,
