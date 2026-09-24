@@ -143,6 +143,31 @@ defmodule UnitaresSentinel.ForcedReleasePoller.LogicTest do
     assert new_cursor == ts_real
   end
 
+  test "lease-plane suite namespace is suppressed; sentinel's own fixtures still alarm" do
+    # The lease-plane suite mints dialectic:/test_elixir_<label>_<hex> against
+    # the governance DB; three of its forced releases paged HIGH on 2026-08-26.
+    ts1 = dt("2026-08-26T23:00:00Z")
+    ts2 = dt("2026-08-26T23:01:00Z")
+    ts3 = dt("2026-08-26T23:02:00Z")
+    ts4 = dt("2026-08-26T23:03:00Z")
+
+    rows = [
+      ad_hoc_row(event_id: "evt-dia", ts: ts1, surface_id: "dialectic:/test_elixir_http_402d753bd15e"),
+      ad_hoc_row(event_id: "evt-res", ts: ts2, surface_id: "resident:/test_elixir_substrate_renew_7"),
+      ad_hoc_row(event_id: "evt-real", ts: ts3, surface_id: "resident:/steward_eisv_sync"),
+      ad_hoc_row(event_id: "evt-own", ts: ts4, surface_id: "dialectic:/test_sentinel_3c_abc")
+    ]
+
+    {alarms, new_cursor} = Logic.build_alarms(rows, nil)
+
+    assert Enum.map(alarms, & &1.extra.surface_id) == [
+             "resident:/steward_eisv_sync",
+             "dialectic:/test_sentinel_3c_abc"
+           ]
+
+    assert new_cursor == ts4
+  end
+
   test "conflict_batch on a reserved test surface is suppressed but advances the cursor" do
     ts = dt("2026-05-05T04:00:00Z")
 

@@ -3,7 +3,7 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-09-24"
+last_verified: "2026-09-21"
 freshness_days: 21
 source_files:
   - unitares/src/knowledge_authority.py
@@ -20,21 +20,6 @@ source_files:
   - unitares/src/storage/knowledge_graph_age.py
   - unitares/src/storage/knowledge_graph_postgres.py
   - unitares/src/db/mixins/knowledge_graph.py
-source_digests:
-  unitares/src/knowledge_authority.py: "14ca01da11026c91"
-  unitares/src/mcp_handlers/knowledge/handlers.py: "8fba909430c84d99"
-  unitares/src/mcp_handlers/knowledge/synthesis.py: "f33e76c5d5364ce9"
-  unitares/src/mcp_handlers/schemas/knowledge.py: "9c39082b0155c223"
-  unitares/src/alias_schema.py: "b3cf7437056198f8"
-  unitares/src/mcp_handlers/consolidated.py: "1dceedc26c4a3144"
-  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/tool_descriptions.json: "de0d77c5131f184b"
-  unitares/src/mcp_handlers/support/param_normalization.py: "6e16db988efa1d45"
-  unitares/src/knowledge_graph.py: "5e29c9483595cb70"
-  unitares/src/knowledge_graph_lifecycle.py: "3d943c8664beedd6"
-  unitares/src/storage/knowledge_graph_age.py: "0541b46146c6084c"
-  unitares/src/storage/knowledge_graph_postgres.py: "47ea4d27622e7318"
-  unitares/src/db/mixins/knowledge_graph.py: "f3f00b0381c5fa10"
 ---
 
 # Knowledge Graph

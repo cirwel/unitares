@@ -45,6 +45,15 @@ sys.path.insert(0, str(project_root))
 
 from src.storage.knowledge_graph import KnowledgeGraphAGE
 from src.knowledge_graph import DiscoveryNode, ResponseTo
+import src.storage.knowledge_graph_age as kg_age_module
+
+
+@pytest.fixture(autouse=True)
+def _reset_embedding_skip_warned(monkeypatch):
+    """The embedding-skip warning (#2293) is a module-global once-flag. Reset it
+    per test so any test that reaches the skip branch sees WARNING regardless of
+    what ran before it."""
+    monkeypatch.setattr(kg_age_module, "_embedding_skip_warned", False)
 
 
 # ============================================================================
@@ -457,6 +466,118 @@ class TestAddDiscovery:
 
         # The DELETE always runs; the INSERT must not.
         assert conn.executemany.await_count == 0
+
+    @staticmethod
+    def _embedding_skip_records(caplog, level: int) -> list:
+        import logging
+        import src.storage.knowledge_graph_age as kg_age_module
+        # Both the WARNING and the DEBUG form start "Embedding <op> skipped for".
+        return [
+            rec for rec in caplog.records
+            if rec.name == kg_age_module.__name__
+            and rec.levelno == level
+            and rec.getMessage().startswith("Embedding ")
+            and " skipped for " in rec.getMessage()
+        ]
+
+    @pytest.mark.asyncio
+    async def test_add_discovery_warns_once_when_embeddings_unavailable(
+        self, caplog, monkeypatch
+    ):
+        """Regression for #2293: a write that skips the pgvector row because
+        sentence-transformers is missing must say so — once per process at
+        WARNING, naming the consequence and the backfill — and at DEBUG after.
+        Before the fix the unavailable branch logged nothing at any level.
+        """
+        import logging
+        import src.embeddings as embeddings_module
+
+        monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
+
+        kg, _ = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=True)
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg.add_discovery(make_discovery(discovery_id="disc-a"))
+            await kg.add_discovery(make_discovery(discovery_id="disc-b"))
+
+        warnings = self._embedding_skip_records(caplog, logging.WARNING)
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+        msg = warnings[0].getMessage()
+        assert "disc-a" in msg
+        assert "semantic search will not find this entry" in msg
+        # --only-missing: a bare run rewrites every existing vector (#2364).
+        assert "reembed_corpus.py --only-missing" in msg
+        assert "UNITARES_EMBEDDING_MODEL" in msg
+        # The command must paste into a POSIX shell as-is: `VAR=<model>` is a
+        # redirection from a file named "model", not a placeholder.
+        assert "=<" not in msg
+
+        debugs = self._embedding_skip_records(caplog, logging.DEBUG)
+        assert len(debugs) == 1, [r.getMessage() for r in caplog.records]
+        assert "disc-b" in debugs[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_refresh_embedding_warns_once_when_embeddings_unavailable(
+        self, caplog, monkeypatch
+    ):
+        """The update_finding path (_refresh_embedding) warns once, then logs
+        at DEBUG, and its warning names the stale-vector backfill caveat."""
+        import logging
+        import src.embeddings as embeddings_module
+
+        monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
+
+        kg, _ = make_kg_with_mock_db()
+        kg._pgvector_available = AsyncMock(return_value=True)
+        kg.get_discovery = AsyncMock()
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg._refresh_embedding("disc-r1")
+            await kg._refresh_embedding("disc-r2")
+
+        warnings = self._embedding_skip_records(caplog, logging.WARNING)
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+        msg = warnings[0].getMessage()
+        assert "disc-r1" in msg
+        # A skipped refresh leaves the OLD vector in place, so --only-missing
+        # skips this row on backfill; the warning must say so.
+        assert "old vector" in msg
+        assert "--only-missing will not rewrite" in msg
+        assert len(self._embedding_skip_records(caplog, logging.DEBUG)) == 1
+        # The skip returns before the discovery is ever fetched.
+        kg.get_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_and_refresh_share_one_skip_warning(
+        self, caplog, monkeypatch
+    ):
+        """Both skip paths go through one once-flag: a skipped store followed
+        by a skipped refresh yields one WARNING total (naming the store), and
+        the refresh drops to DEBUG. A per-path flag would log two WARNINGs."""
+        import logging
+        import src.embeddings as embeddings_module
+
+        monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
+
+        kg, _ = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=True)
+        kg.get_discovery = AsyncMock()
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg.add_discovery(make_discovery(discovery_id="disc-s"))
+            await kg._refresh_embedding("disc-s-refresh")
+
+        warnings = self._embedding_skip_records(caplog, logging.WARNING)
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+        assert "disc-s" in warnings[0].getMessage()
+        assert "disc-s-refresh" not in warnings[0].getMessage()
+
+        debugs = self._embedding_skip_records(caplog, logging.DEBUG)
+        assert len(debugs) == 1, [r.getMessage() for r in caplog.records]
+        assert "disc-s-refresh" in debugs[0].getMessage()
 
     @pytest.mark.asyncio
     async def test_add_discovery_with_tags(self):
