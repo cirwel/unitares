@@ -20,6 +20,12 @@
           > ~/Library/LaunchAgents/com.unitares.lumen-doctor.plist
       launchctl load ~/Library/LaunchAgents/com.unitares.lumen-doctor.plist
 
+    PATH must include the keg-only postgresql@17 bin dir, which launchd's
+    minimal PATH omits: the recovery readback and the session-row probe both
+    shell out to `psql`. Without it the readback always answers "unknown",
+    a RECOVERED notice never closes, and it reposts every dedup window.
+    Confirm with `command -v psql` and put THAT directory first.
+
     Secrets (UNITARES_HTTP_API_TOKEN, ANIMA_ADMIN_SECRET) are read from
     ~/.config/cirwel/secrets.env by the script itself — none in this plist.
 -->
@@ -39,6 +45,12 @@
 
     <key>WorkingDirectory</key>
     <string>__UNITARES_ROOT__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
 
     <key>StartInterval</key>
     <integer>600</integer>

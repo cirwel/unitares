@@ -498,6 +498,8 @@ live service (`scripts/ops/com.unitares.wave3a-handlers.plist.template`) with a 
 (`src/wave3a_beam_proxy.py`), and **zero** CI references — every other app under `elixir/` has a
 job. That is precisely the drift gap `elixir-tests.yml`'s own header says it was written to close.
 ⛔Recorded here as a finding, not fixed here: it is a CI change, not a gate document's business.
+**Re-read 2026-09-23 (proposals audit):** since fixed — #2043 (merged 2026-08-30) added
+`wave3a_handlers` to `elixir-tests.yml`.
 
 **§6.5 Scope: path (1) only, or (1) and (2)? — ⏸️ DEFERRED, with a named reopen condition.**
 _(operator, 2026-08-29)_ ⛔**Not answered, and deliberately not sent to council either.** §6.6's

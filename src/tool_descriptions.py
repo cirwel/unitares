@@ -168,8 +168,9 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "For a bound caller get with check_timeout=true becomes a write that "
         "can flag the session for facilitation or flip its phase to FAILED. "
         "UNITARES_DIALECTIC_REVIEWER_HOST picks the orchestrated reviewer "
-        "backend (local, codex or claude); a failure there degrades to "
-        "local inference and records the fallback. request_review is the "
+        "backend (local, codex, claude, or external, alias gemini); a "
+        "failure there degrades to local inference and records the "
+        "fallback. request_review is the "
         "one-call alias for request; consult advises without opening a "
         "record."
     ),

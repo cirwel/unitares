@@ -595,6 +595,28 @@ def test_native_findings_survive_later_clean_until_disposed(repo):
     assert snapshot.records[0].verdict == "FINDINGS"
 
 
+def test_native_thread_reply_is_not_a_new_finding(repo):
+    head = _git(repo, "rev-parse", "HEAD")
+    bot = {"login": rg.CODEX_BOT, "type": "Bot"}
+    reply_review = {"id": 21, "user": bot, "commit_id": head, "state": "COMMENTED",
+                    "submitted_at": "2026-09-23T21:03:07Z", "body": "",
+                    "html_url": "reply-review-url"}
+    reply = {"user": bot, "pull_request_review_id": 21, "in_reply_to_id": 7,
+             "path": "a.md", "line": 3, "body": "No blocking findings.", "html_url": "reply-url"}
+    snapshot = rg.native_records([_native_comment(head)], [reply_review], [reply], [], "k", head)
+    rec = rg.latest_matching([], "k", snapshot.records)
+    assert rec.verdict == "CLEAN" and rec.status()[0] == "success"
+
+    # A top-level comment in the same review is a finding again.
+    top_level = {**reply, "in_reply_to_id": None, "body": "[P1] still wrong", "html_url": "new-url"}
+    snapshot = rg.native_records([], [reply_review], [reply, top_level], [], "k", head)
+    assert [r.verdict for r in snapshot.records] == ["FINDINGS"]
+
+    # So is a reply-only review that carries its own review body.
+    snapshot = rg.native_records([], [{**reply_review, "body": "Codex Review"}], [reply], [], "k", head)
+    assert [r.verdict for r in snapshot.records] == ["FINDINGS"]
+
+
 def test_fresh_does_not_reroll_unresolved_findings(repo, monkeypatch):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [_comment(rg.Record("k", "FINDINGS", 1, False, "claude"))])
@@ -903,3 +925,37 @@ def test_check_publication_updates_its_own_run_with_neutral_warning(monkeypatch)
     assert "PATCH" in cmd and "repos/o/r/check-runs/4" in cmd
     payload = json.loads(kwargs["input"])
     assert payload["conclusion"] == "neutral" and "head_sha" not in payload
+
+
+@pytest.mark.parametrize("argv", [
+    ["review"],
+    ["record", "review.txt", "--reviewer-name", "someone", "--independent"],
+])
+def test_missing_gh_is_unreviewed_not_findings(monkeypatch, tmp_path, capsys, argv):
+    # Exit 1 means "findings need author action". A machine without `gh`
+    # reviewed nothing, so it must report UNREVIEWED (2), not a traceback
+    # whose exit status reads as findings. Empty PATH gives the real error.
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert rg.main(argv) == rg.UNREVIEWED
+    out = capsys.readouterr().out
+    assert "UNREVIEWED" in out and "`gh` CLI" in out
+
+
+def test_other_missing_files_still_raise(monkeypatch):
+    # Only the missing `gh` executable is reclassified; a missing input file
+    # is a real error and must not be reported as an unavailable reviewer.
+    def missing(_args):
+        raise FileNotFoundError(2, "No such file or directory", "review.txt")
+    monkeypatch.setattr(rg, "cmd_review", missing)
+    with pytest.raises(FileNotFoundError):
+        rg.main(["review"])
+
+
+def test_input_file_named_gh_is_not_mistaken_for_the_cli(monkeypatch, tmp_path):
+    # A missing input FILE called "gh" raises FileNotFoundError with filename
+    # "gh" too. Only the launch of the gh executable is reclassified, so this
+    # must stay an input error rather than be reported as UNREVIEWED.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "branch"))
+    with pytest.raises(FileNotFoundError):
+        rg.main(["record", "gh", "--reviewer-name", "someone", "--independent"])

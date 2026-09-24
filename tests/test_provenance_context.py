@@ -1,4 +1,7 @@
+import json
 from types import SimpleNamespace
+
+import pytest
 
 from src.mcp_handlers.context import (
     SessionSignals,
@@ -73,6 +76,58 @@ def test_build_s22_write_context_uses_transport_context_defaults():
 
     assert context["transport"] == "mcp"
     assert context["harness_type"] == "claude_code"
+
+
+def test_knowledge_write_prefers_transport_harness_header_over_ua_and_body():
+    """KG writes skip the runtime envelope but must honour the same precedence.
+
+    A Hermes process on the openai-codex provider, whose MCP calls arrive with
+    a Codex User-Agent, still declares harness "hermes" in its plugin headers.
+    """
+    token = set_session_signals(
+        SessionSignals(
+            transport="mcp",
+            client_hint="chatgpt",
+            reported_harness_type="hermes",
+            harness_provenance_source="caller_declared",
+        )
+    )
+    try:
+        context = build_s22_write_context(
+            {"provenance_context": {"harness_type": "openai-codex"}},
+            context_source="knowledge.store",
+        )
+    finally:
+        reset_session_signals(token)
+
+    assert context["harness_type"] == "hermes"
+
+
+@pytest.mark.parametrize(
+    "bad_header",
+    ["sk-ant-api03-AAAAAAAAAAAAAAAA", "https://evil.example/x", "h" * 500],
+)
+@pytest.mark.parametrize(
+    ("context_source", "include_runtime_provenance"),
+    [("knowledge.store", False), ("process_agent_update", True)],
+)
+def test_rejected_harness_header_neither_persists_nor_displaces_body(
+    bad_header, context_source, include_runtime_provenance
+):
+    token = set_session_signals(
+        SessionSignals(transport="mcp", reported_harness_type=bad_header)
+    )
+    try:
+        context = build_s22_write_context(
+            {"provenance_context": {"harness_type": "claude-code"}},
+            context_source=context_source,
+            include_runtime_provenance=include_runtime_provenance,
+        )
+    finally:
+        reset_session_signals(token)
+
+    assert context["harness_type"] == "claude-code"
+    assert bad_header not in json.dumps(context)
 
 
 def test_build_s22_write_context_empty_without_signals_or_explicit_fields():

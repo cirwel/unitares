@@ -28,6 +28,7 @@ Transport adapters can report values with the following headers:
 | `X-Unitares-Model-Source` | `provider_reported` or `harness_reported` |
 | `X-Unitares-Harness-Type` | Harness family, such as `codex-cli` or `claude-code` |
 | `X-Unitares-Harness-Version` | Harness version, when exposed |
+| `X-Unitares-Harness-Source` | `harness_reported` (default when a harness header is present) or `caller_declared` for static package configuration |
 | `X-Unitares-Adapter-Type` | Integration that delivered the observation |
 | `X-Unitares-Adapter-Version` | Integration version |
 

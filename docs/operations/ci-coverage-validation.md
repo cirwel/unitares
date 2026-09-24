@@ -1,6 +1,7 @@
 # CI coverage validation after #2101
 
-The sys.monitoring coverage core and eight revised shards remain enabled.
+The sys.monitoring coverage core remains enabled. The eight revised shards
+were replaced on 2026-09-17 by four shards on a single Python 3.14 leg.
 The measured speedup is useful evidence for retaining the optimization.
 Full-suite tracer equivalence has not been established by the published CI
 comparison. This note corrects the original #2101 interpretation.
@@ -36,9 +37,9 @@ actual gained/lost line sets before attributing differences to timing.
 Use one unchanged checkout, interpreter, installed dependency set, database
 state and shard layout. Record the checkout SHA, Python and coverage.py
 versions, selected core, collected/passed/skipped counts and warnings. Execute
-all eight shard commands from `.github/workflows/tests.yml` under `ctrace`
+every shard command in `.github/workflows/tests.yml` under `ctrace`
 and `sysmon`, with separate `COVERAGE_FILE` paths for every core/shard pair.
-Keep output directories separate when combining each core's eight files.
+Keep output directories separate when combining each core's per-shard files.
 
 Generate `coverage json` reports after each combine. Compare file inventories,
 statement sets and per-file `executed_lines`, including both directions of

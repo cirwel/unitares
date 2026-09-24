@@ -27,8 +27,8 @@ rows — never one operator's live fleet, paths, or accountable principals.
   - `gate:human` — a person is the gate; fragile (amber).
   - `gate:ungated` — nothing verifies it; faith-based risk (red).
   - `gate:external` — third-party, not your accountability (grey).
-  - (no tag) — `github-actions` default to machine in the dashboard; everything
-    else reads as `unclassified`.
+  - (no tag) — `github-actions` and `claude` (Claude task-queue) rows default to
+    machine in the dashboard; everything else reads as `unclassified`.
 - `dashboard_priority` — lower floats higher; the un-inverted (ungated, then
   human) lead the table.
 - `description` / `surface_claims` / `expected_outputs` — discovery context.
