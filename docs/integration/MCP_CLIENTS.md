@@ -192,6 +192,8 @@ indefinitely, and that outage is not self-announcing, because the gateway's
 
 For a fresh process, call `start_session(force_new=true)`. If the process is taking over from a predecessor that has **exited**, call `start_session(force_new=true, parent_agent_id=<prior uuid>, spawn_reason="explicit")`. Sharing a workspace with a still-running agent is co-location, not lineage: a succession claim naming a live parent is rejected (`lineage_coincidental_rejected`) and cleared.
 
+Keep the returned `client_session_id` and pass it on every later call from the same process. Without it, writes fall back to a weak transport-fingerprint binding that can merge or split co-resident sessions.
+
 Use raw `onboard(...)` instead when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift
 `agent_uuid`, `client_session_id`, and `next_action`. Read aliases default to a
