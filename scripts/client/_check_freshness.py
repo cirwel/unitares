@@ -64,8 +64,8 @@ frontmatter `last_verified` if later. A newer stamp of different skill text
 does not reset AGING for the text on disk. `.attestations/` is excluded from the skills
 fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
 when skill content moves. Old attestations can be removed with `--prune`,
-which keeps the newest N per skill plus any record the current SKILL.md text
-and cited sources still need; deleting a file never conflicts with another PR
+which keeps the newest N per skill plus every record that still vouches for
+the current SKILL.md text with a source digest no other kept record carries; deleting a file never conflicts with another PR
 adding one.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
@@ -425,30 +425,39 @@ def migrate_skills(root: str) -> int:
         if not meta or not meta["source_digests"]:
             continue
         verified_at = datetime.strptime(meta["last_verified"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        stripped = strip_frontmatter_digests(content)
-        skill_file.write_text(stripped)
+        # Persist the attestation FIRST, then strip SKILL.md: if the record
+        # cannot be written, the frontmatter digests survive. The digest is of
+        # the stripped bytes, computed in memory, which are the bytes written.
+        stripped = strip_frontmatter_digests(content).encode("utf-8")
+        stripped_digest = hashlib.sha256(stripped).hexdigest()[:DIGEST_HEX]
         path = write_attestation(skills_dir, skill_dir.name, meta["source_digests"],
                                  verified_at, "migrated from SKILL.md frontmatter",
-                                 skill_text_digest(skill_file))
+                                 stripped_digest)
+        skill_file.write_bytes(stripped)
         print(f"  migrated {skill_dir.name}: {len(meta['source_digests'])} digest(s) -> {path.relative_to(Path(root))}")
         moved += 1
     print(f"  {moved} skill(s) migrated")
     return 0
 
 
-def prune_attestations(root: str, projects_root: str, keep: int) -> int:
-    """Delete all but the newest `keep` attestations per skill, never one the
-    current checkout still needs.
+def _pairs(record: dict) -> set[tuple[str, str]]:
+    return {(str(k), str(v)) for k, v in record.get("source_digests", {}).items()}
+
+
+def prune_attestations(root: str, keep: int) -> int:
+    """Delete all but the newest `keep` attestations per skill, never one
+    that still vouches for the current skill text.
 
     While a record for the SKILL.md on disk exists, every such record vouches
     and no other does (src/skill_attestations.py), so file-name recency alone
-    is not a safe pruning key. Beyond the newest `keep`, pruning also retains:
-      * the newest record that certified the current text, so the check cannot
-        fall back to a newer concurrent stamp for different text;
-      * for each cited source visible here, a current-text record carrying its
-        current digest, when no retained record does, so pruning never turns
-        an unchanged checkout STALE.
-    Everything else is history the current text and sources do not need.
+    is not a safe pruning key. Beyond the newest `keep`, pruning retains the
+    newest record that certified the current text, and every current-text
+    record carrying a (source, digest) pair no retained current-text record
+    carries. What goes is history for other skill text and current-text
+    records whose every pair is covered elsewhere. That set is exactly what
+    the mirror sync's direction guard (scripts/dev/skills_direction_guard.py)
+    lets `rsync --delete` remove, so a prune never leaves the sync refusing,
+    and a source whose digest is not visible here keeps its voucher too.
     """
     skills_dir = Path(root) / "skills"
     base = skills_dir / ATTESTATIONS_DIR
@@ -456,43 +465,36 @@ def prune_attestations(root: str, projects_root: str, keep: int) -> int:
     removed = retained = 0
     if base.is_dir():
         for adir in sorted(p for p in base.iterdir() if p.is_dir()):
-            skill_dir = skills_dir / adir.name
-            skill_md = skill_dir / "SKILL.md"
+            skill_md = skills_dir / adir.name / "SKILL.md"
             paths = sorted(adir.glob("*.json"), reverse=True)
-            records: dict[Path, dict] = {}
-            for path in paths:
-                try:
-                    data = json.loads(path.read_text())
-                except (OSError, ValueError):
-                    continue
-                if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
-                    records[path] = data
             kept = set(paths[:keep])
             if skill_md.is_file():
                 current = skill_text_digest(skill_md)
-                certified = [p for p in paths if records.get(p, {}).get("skill_digest") == current]
-                if certified:
-                    kept.add(certified[0])
-                    meta = parse_frontmatter(skill_md.read_text())
-                    for src in load_source_files(skill_dir, meta.get("source_files", []) if meta else []):
-                        full_path = resolve_source(root, projects_root, src)
-                        if not full_path.exists():
-                            continue
-                        digest = content_digest(full_path)
-                        if any(records.get(p, {}).get("source_digests", {}).get(src) == digest
-                               for p in kept):
-                            continue
-                        for p in certified:
-                            if records[p]["source_digests"].get(src) == digest:
-                                kept.add(p)
-                                break
+                certified: list[tuple[Path, dict]] = []
+                for path in paths:
+                    try:
+                        data = json.loads(path.read_text())
+                    except (OSError, ValueError):
+                        continue
+                    if (isinstance(data, dict) and isinstance(data.get("source_digests"), dict)
+                            and data.get("skill_digest") == current):
+                        certified.append((path, data))
+                if certified and not any(path in kept for path, _ in certified):
+                    kept.add(certified[0][0])
+                covered: set[tuple[str, str]] = set()
+                for path, data in certified:
+                    if path in kept:
+                        covered |= _pairs(data)
+                for path, data in certified:
+                    if _pairs(data) - covered:
+                        kept.add(path)
+                        covered |= _pairs(data)
             for path in paths:
-                if path in kept:
-                    continue
-                path.unlink()
-                removed += 1
-            retained += max(0, len(kept & set(paths)) - min(keep, len(paths)))
-    note = f"; kept {retained} older record(s) the current text still needs" if retained else ""
+                if path not in kept:
+                    path.unlink()
+                    removed += 1
+            retained += max(0, len(kept) - min(keep, len(paths)))
+    note = f"; kept {retained} older record(s) that still vouch for the current text" if retained else ""
     print(f"  pruned {removed} attestation(s), kept the newest {keep} per skill{note}")
     return 0
 
@@ -516,7 +518,7 @@ def main(argv: list[str]) -> int:
     if args.migrate:
         return migrate_skills(args.root)
     if args.prune is not None:
-        return prune_attestations(args.root, args.projects_root, args.prune)
+        return prune_attestations(args.root, args.prune)
     return check_skills(args.root, args.projects_root)
 
 

@@ -409,33 +409,71 @@ def test_prune_keeps_the_newest_record_for_the_current_skill_text(layout: Layout
     assert layout.run().returncode == 0
     result = layout.run("--prune", "1")
     assert result.returncode == 0
-    assert "kept 1 older record(s) the current text still needs" in result.stdout
+    assert "kept 1 older record(s) that still vouch for the current text" in result.stdout
     names = [p.name for p in _attestations(layout)]
     assert names == ["20260101T000000000000Z-aaaaaaaa.json", "20260103T000000000000Z-cccccccc.json"]
     assert layout.run().returncode == 0
 
 
-def test_prune_keeps_the_current_text_record_that_covers_a_source(layout: Layout):
-    # Two records certify the current text with different digests for the
-    # source; it currently matches only the OLDER one. Pruning to one record
-    # must not turn this unchanged checkout STALE.
-    src = "unitares/src/thing.py"
+def test_prune_keeps_every_current_text_record_with_a_unique_digest(layout: Layout):
+    # Records for the current text vouch as a union: the source currently
+    # matches only an OLDER one, and another carries the only digest of a
+    # source not visible here. Both stay; a fully covered duplicate and a
+    # record for other skill text go.
+    src, ext = "unitares/src/thing.py", "elsewhere/src/bot.py"
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(20), digest=None)
-    _attest(layout, "20251231T000000000000Z-99999999", _day(4), {src: _digest("x = 5\n")})
+    _attest(layout, "20251230T000000000000Z-88888888", _day(5), {src: _digest("x = 1\n")})
+    _attest(layout, "20251231T000000000000Z-99999999", _day(4), {ext: "e1"})
     _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
     _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 2\n")})
     _attest(layout, "20260103T000000000000Z-cccccccc", _day(1), {src: _digest("x = 0\n")},
             skill_digest="0123456789abcdef")
+    _attest(layout, "20251201T000000000000Z-77777777", _day(9), {src: _digest("x = 7\n")},
+            skill_digest="fedcba9876543210")
     assert layout.run().returncode == 0
     result = layout.run("--prune", "1")
     assert result.returncode == 0
-    assert "pruned 1 attestation(s)" in result.stdout      # the unneeded oldest
+    assert "pruned 2 attestation(s)" in result.stdout
     names = [p.name for p in _attestations(layout)]
-    assert names == ["20260101T000000000000Z-aaaaaaaa.json",
+    assert names == ["20251231T000000000000Z-99999999.json",
+                     "20260101T000000000000Z-aaaaaaaa.json",
                      "20260102T000000000000Z-bbbbbbbb.json",
                      "20260103T000000000000Z-cccccccc.json"]
     assert layout.run().returncode == 0
+
+
+def test_a_prune_never_leaves_the_mirror_sync_refusing(layout: Layout):
+    # Whatever --prune deletes, the direction guard must let rsync --delete
+    # delete from the mirror too; otherwise sync-plugin-skills.sh exits 4 on
+    # canonical's own intentional pruning, forever.
+    import shutil
+    sys.path.insert(0, str(REPO_ROOT / "scripts" / "dev"))
+    from skills_direction_guard import regressions
+
+    src, ext = "unitares/src/thing.py", "elsewhere/src/bot.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20251231T000000000000Z-99999999", _day(4), {ext: "e1", src: _digest("x = 5\n")})
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 1\n")})
+    _attest(layout, "20260103T000000000000Z-cccccccc", _day(1), {src: _digest("x = 0\n")},
+            skill_digest="0123456789abcdef")
+    mirror = layout.projects / "mirror"
+    shutil.copytree(layout.repo / "skills", mirror)
+    assert layout.run("--prune", "1").returncode == 0
+    assert regressions(layout.repo / "skills", mirror) == []
+
+
+def test_migrate_keeps_the_frontmatter_when_the_attestation_cannot_be_written(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(3), digest=_digest("x = 1\n"))
+    before = layout.skill_file.read_bytes()
+    blocker = layout.repo / "skills" / ".attestations"
+    blocker.write_text("not a directory\n")      # mkdir of .attestations/demo fails
+    result = layout.run("--migrate")
+    assert result.returncode != 0
+    assert layout.skill_file.read_bytes() == before
 
 
 def test_this_repo_sources_resolve_in_a_checkout_not_named_unitares(tmp_path: Path):
