@@ -51,9 +51,10 @@ must be re-opened before anyone cites it elsewhere.
 3. **Only two of the brief's four proposed assessable claims hold today without
    narrowing:** identical retries return one canonical outcome, and conflicting
    reuse of a key is rejected. "No governed mutation without a current permit"
-   holds only when `UNITARES_GOVERNED_EFFECT_BINDING` or a per-type flag is on,
-   and only for effects routed through the governed-effect plane. Complete provenance
-   reconstruction is unmeasured, not disproven: clients assemble it across
+   holds only when `UNITARES_GOVERNED_EFFECT_BINDING` is on, or the per-type
+   flag for that effect type is, and only for effects routed through the
+   governed-effect plane. Complete provenance reconstruction is unmeasured,
+   not disproven: clients assemble it across
    retention boundaries, and the claim names no window or record set. Scope
    both claims down before they appear in any assurance case (§2).
 4. **The oversight summary is the one item that is actually new, but only one
@@ -61,9 +62,10 @@ must be re-opened before anyone cites it elsewhere.
    coverage" needs to know how many actions happened in total. Anthropic
    knows that because every action on its platform passes through an inline
    monitor. UNITARES sees only the check-ins and effects that are sent to it.
-   "Human-resolution status" needs a "human" resolver value: review verdicts
-   already record agent versus model reviewers, but not humans, except on the
-   Sentinel adjudication path. "Escalation rate" has no single stream: the stored
+   "Human-resolution status" needs an authenticated resolver class: review
+   verdicts can carry an optional, self-declared reviewer stamp with no
+   `human` value, and only the Sentinel adjudication path records operator
+   versus model through an operator-authenticated route. "Escalation rate" has no single stream: the stored
    `escalated` status has no writers, and pauses split into four populations
    with different denominators (§1).
 
@@ -142,16 +144,22 @@ not equally available:
 - *The proposed breakdowns are not all available.* The dialectic schema has no
   campaign, model-version, or effect-class column, so reporting per campaign,
   model version, or effect class needs those dimensions recorded first.
-- *Human-resolution status* is not derivable today, but it is closer than it
-  looks. Antithesis and synthesis messages already carry a per-verdict
-  `reviewer_provenance` with `reviewer_kind` (`agent_submitted`,
-  `external_consult`, or `orchestrated`) and `model_used`
-  (`src/mcp_handlers/schemas/dialectic.py`). Sessions also carry an
-  `awaiting_facilitation` flag (migration 053). What is missing is a `human`
-  value and a session-level resolver field. Operator versus model adjudication
-  is recorded only on the Sentinel path (`src/http_routes/sentinel.py`, #2378).
-  A `human` value is evidence only if it comes from the authentication tier,
-  as on the Sentinel path, not from self-declaration.
+- *Human-resolution status* is not derivable today. Antithesis and synthesis
+  messages *can* carry a reviewer stamp (`observed_metrics.reviewer_backend`),
+  set from the optional `reviewer_provenance` argument or by the synthetic
+  and orchestrated reviewers. It holds a `reviewer_kind` (`agent_submitted`,
+  `external_consult`, `orchestrated`, or `in_process_synthetic`) and
+  `model_used` (`src/mcp_handlers/dialectic/handlers.py`). Verdicts submitted
+  without the argument carry no stamp, and the code calls the stamp
+  "descriptive provenance, not identity proof". It records the submission
+  route as declared by the caller, not who resolved the session. So it is a
+  place a resolver class could live, not evidence of one, and adding a
+  `human` value to it would not close the gap. What is missing is a
+  session-level resolver class set only by an operator-authenticated route
+  (an operator credential or passkey session), as the Sentinel adjudication
+  endpoint already requires (`src/http_routes/sentinel.py`, #2378). The
+  `awaiting_facilitation` flag (migration 053) marks sessions waiting on a
+  facilitator; it does not record who resolved them.
 - *Action coverage* has no denominator. UNITARES observes what adapters and hooks
   submit. It does not see the harness actions that bypass it. A coverage figure
   computed as reported ÷ reported is always 100% and means nothing. The honest
@@ -170,7 +178,7 @@ The brief suggests four candidate claims. Here is where each one stands:
 |---|---|---|
 | Identical retries yield one canonical outcome | Prediction-bound `outcome_event` is exactly-once per `(agent_id, prediction_id)` while the binding is retained. Identical retries return the canonical outcome. (#2246, `docs/CHANGELOG.md`) | Yes, **within the binding retention window**. An expired prediction ID can start a new canonical submission. |
 | Conflicting idempotency-key reuse is rejected | Outcome binding returns `PREDICTION_REUSE_CONFLICT`. Orchestrator spawns fail closed when a key is reused with a different spec, and reservations persist (#1939, #1942, #1953; migration 068) | Yes, for those two surfaces. It is not a platform-wide property. |
-| No governed mutation occurs without a current permit | Content-bound, single-use, short-TTL effect grant (`src/effect_grant.py`), verified and nonce-consumed in `src/http_routes/effects.py` | **Only when `UNITARES_GOVERNED_EFFECT_BINDING` (or a per-type flag) is on, and only for effects routed through the governed-effect plane.** Minting is off by default and returns `501 binding_not_enabled`. |
+| No governed mutation occurs without a current permit | Content-bound, single-use, short-TTL effect grant (`src/effect_grant.py`), verified and nonce-consumed in `src/http_routes/effects.py` | **Only when `UNITARES_GOVERNED_EFFECT_BINDING` is on (or the per-type flag for that effect type), and only for effects routed through the governed-effect plane.** Minting is off by default and returns `501 binding_not_enabled`. |
 | Every multi-agent artifact has reconstructible identity and provenance | Attributed writes, lineage, review records, export history | **Unmeasured, not disproven.** The server has no single reconstruction tool by design: clients assemble records across retention and authorization boundaries. `PRODUCT_DEFINITION.md` records complete reconstruction as unmeasured. As worded, the claim is underspecified; it has to name a retention window and a record set before it can be assessed. |
 
 **Recommendation.** Make the first assurance case the outcome-binding claim. It
