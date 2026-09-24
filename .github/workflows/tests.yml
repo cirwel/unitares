@@ -67,10 +67,11 @@ jobs:
         python scripts/dev/check_glossary_drift.py
 
     - name: Validate skill freshness (cited sources unchanged since last verified)
-      # Two checks. STALE: a source the skill cites matches the content digest
-      # recorded for it in NO attestation under skills/.attestations/<skill>/
-      # (any one that recorded exactly this content counts, so a newer stamp
-      # from a branch cut before the change cannot mask a correct older one);
+      # Two checks. STALE: a source the skill cites matches no digest on record
+      # for the current skill text under skills/.attestations/<skill>/ (the
+      # newest attestation, or any older one that certified this exact
+      # SKILL.md, so a newer stamp from a branch cut before the change cannot
+      # mask a correct older one);
       # re-check the skill's claims, then `--stamp` it, which writes a NEW
       # attestation file and never edits SKILL.md, so concurrent stamping PRs
       # cannot conflict.

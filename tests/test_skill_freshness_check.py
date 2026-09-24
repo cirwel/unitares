@@ -173,15 +173,27 @@ def test_a_new_stamp_records_changed_content(layout: Layout):
     assert layout.run().returncode == 0          # now there is one
 
 
-def _attest(layout: "Layout", stem: str, verified_date: str, digests: dict) -> None:
-    """Write an attestation by hand, as a merged branch would have left it."""
+_CURRENT = object()
+
+
+def _attest(layout: "Layout", stem: str, verified_date: str, digests: dict,
+            skill_digest=_CURRENT) -> None:
+    """Write an attestation by hand, as a merged branch would have left it.
+
+    By default it certifies the skill text currently on disk; pass a digest
+    for other text, or None for a record older than `skill_digest`."""
+    if skill_digest is _CURRENT:
+        skill_digest = hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
     adir = layout.repo / "skills" / ".attestations" / "demo"
     adir.mkdir(parents=True, exist_ok=True)
-    (adir / f"{stem}.json").write_text(json.dumps({
+    record = {
         "schema": "unitares.skill_attestation.v1", "skill": "demo",
         "verified_at": f"{verified_date}T00:00:00Z", "verified_date": verified_date,
         "verifier": "test", "source_digests": digests,
-    }))
+    }
+    if skill_digest is not None:
+        record["skill_digest"] = skill_digest
+    (adir / f"{stem}.json").write_text(json.dumps(record))
 
 
 def test_a_newer_attestation_with_an_old_digest_does_not_mask_a_matching_one(layout: Layout):
@@ -200,6 +212,45 @@ def test_a_newer_attestation_with_an_old_digest_does_not_mask_a_matching_one(lay
     assert "FRESH" in result.stdout
     # The age still comes from the newest verified date on record.
     assert "verified 1 days ago" in result.stdout
+
+
+def test_an_older_attestation_for_different_skill_text_does_not_vouch(layout: Layout):
+    # Skill v1 was stamped against source X, v2 against Y, and the source then
+    # reverted to X. v2 was never reviewed against X, so X is not fresh for it.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    v1 = hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")},
+            skill_digest=v1)
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 2\n")})
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    assert "no attestation records its current content" in result.stdout
+
+
+def test_an_older_attestation_without_a_skill_digest_vouches_only_as_newest(layout: Layout):
+    # Records written before `skill_digest` existed cannot say which skill text
+    # they certified, so they keep the old newest-only behaviour.
+    src = "unitares/src/thing.py"
+    layout.source("x = 2\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 2\n")},
+            skill_digest=None)
+    assert layout.run().returncode == 0                  # newest: still the record
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")},
+            skill_digest=None)
+    assert layout.run().returncode == 1                  # older and unscoped: no vouching
+
+
+def test_stamp_records_the_skill_text_it_certified(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    assert layout.run("--stamp", "demo").returncode == 0
+    [path] = _attestations(layout)
+    record = json.loads(path.read_text())
+    assert record["skill_digest"] == hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
 
 
 def test_a_source_whose_digest_is_in_no_attestation_is_stale(layout: Layout):
@@ -267,6 +318,8 @@ def test_migrate_moves_frontmatter_digests_into_an_attestation(layout: Layout):
     record = json.loads(path.read_text())
     assert record["verified_date"] == _day(3)
     assert record["source_digests"] == {"unitares/src/thing.py": _digest("x = 1\n")}
+    # The digest is of the migrated (stripped) text, the text now on disk.
+    assert record["skill_digest"] == hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
     assert layout.run().returncode == 0
 
 
