@@ -224,7 +224,7 @@ async def test_heartbeat_scheduled_before_release_does_not_reacquire(monkeypatch
     client = _FakeClient()
     _patch_models(monkeypatch, client)
     scheduled_at = apl.time.monotonic()
-    await apl.release_agent_presence("uuid-1", ("sess-x",))
+    await apl.release_agent_presence("uuid-1", ("sess-1",))
 
     await apl.heartbeat_agent_presence("uuid-1", "sess-1", scheduled_at)
 
@@ -251,9 +251,11 @@ async def test_acquire_in_flight_during_release_is_handed_back(monkeypatch):
     _patch_models(monkeypatch, client)
     scheduled_at = apl.time.monotonic()
     # The session ends while this heartbeat's acquire is on the wire.
-    client.on_acquire = lambda: apl._released_at.__setitem__(
-        "uuid-1", apl.time.monotonic()
-    )
+    def _session_ends():
+        apl._released_at["uuid-1"] = apl.time.monotonic()
+        apl._released_sessions["uuid-1"] = {"sess-1"}
+
+    client.on_acquire = _session_ends
 
     await apl.heartbeat_agent_presence("uuid-1", "sess-1", scheduled_at)
 
@@ -355,3 +357,45 @@ async def test_release_after_restart_respects_the_acquiring_session(monkeypatch)
 
     assert result["reason"] == "held_by_other_session"
     assert client.releases == []
+
+
+@pytest.mark.asyncio
+async def test_other_session_heartbeat_queued_before_release_still_proceeds(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    queued_at = apl.time.monotonic()
+    await apl.release_agent_presence("uuid-1", ("sess-old",))
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-new", queued_at)
+
+    assert len(client.acquired) == 1
+    assert apl._lease_ids["uuid-1"] == "lease-123"
+
+
+@pytest.mark.asyncio
+async def test_release_after_restart_leaves_a_renewed_lease_to_the_ttl(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+
+    async def _lookup(agent_uuid):
+        return "lease-from-db", apl._HOLDER_UNKNOWN
+
+    monkeypatch.setattr(apl, "_lookup_live_lease", _lookup)
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-old",))
+
+    assert result == {"released": False, "reason": "holder_unknown"}
+    assert client.releases == []
+
+
+@pytest.mark.asyncio
+async def test_sessionless_heartbeat_queued_before_release_is_dropped(monkeypatch):
+    """With no session id to judge by, the release timestamp decides."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    queued_at = apl.time.monotonic()
+    await apl.release_agent_presence("uuid-1", ("sess-1",))
+
+    await apl.heartbeat_agent_presence("uuid-1", None, queued_at)
+
+    assert client.acquired == []

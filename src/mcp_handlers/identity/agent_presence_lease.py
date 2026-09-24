@@ -120,8 +120,11 @@ def _released_since(
     released = _released_at.get(agent_uuid)
     if released is None:
         return False
-    if client_session_id and client_session_id in _released_sessions.get(agent_uuid, ()):
-        return True
+    if client_session_id:
+        # A heartbeat that names its session is judged by that alone: the
+        # releasing session is suppressed however late it lands, and any other
+        # session (a resume) proceeds even if it was queued before the release.
+        return client_session_id in _released_sessions.get(agent_uuid, ())
     return scheduled_at is not None and released >= scheduled_at
 
 
@@ -254,10 +257,17 @@ def schedule_agent_presence_heartbeat(
         logger.debug(f"[AGENT_PRESENCE] scheduling skipped: {e}")
 
 
+# Holder marker for a lease whose current session cannot be determined.
+_HOLDER_UNKNOWN = "\x00unknown"
+
+
 async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[str]]:
-    """Find the agent's unreleased presence lease, and the session that acquired
-    it, when the in-process cache lost it (a server restart since the acquire).
-    Returns (None, None) on any error."""
+    """Find the agent's unreleased presence lease when the in-process cache lost
+    it (a server restart since the acquire), with the session known to hold it.
+
+    The row records the acquiring session, but a renewal does not update it, so
+    once the lease has been renewed its current holder is unknown and the
+    caller must leave it to the TTL. Returns (None, None) on any error."""
     try:
         from src.db import get_db
 
@@ -265,7 +275,9 @@ async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[s
         async with db.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT lease_id::text AS lease_id, audit_session
+                SELECT lease_id::text AS lease_id, audit_session,
+                       (last_heartbeat_at IS NOT NULL
+                        AND last_heartbeat_at > acquired_at) AS renewed
                 FROM lease_plane.surface_leases
                 WHERE surface_id = $1
                   AND released_at IS NULL
@@ -277,7 +289,8 @@ async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[s
             )
         if not row or not row["lease_id"]:
             return None, None
-        return str(row["lease_id"]), row["audit_session"]
+        holder = _HOLDER_UNKNOWN if row["renewed"] else row["audit_session"]
+        return str(row["lease_id"]), holder
     except Exception as e:  # pragma: no cover - defensive
         logger.debug(f"[AGENT_PRESENCE] live lease lookup failed (non-fatal): {e}")
         return None, None
@@ -337,6 +350,10 @@ async def release_agent_presence(
             lease_id, holder = await _lookup_live_lease(agent_uuid)
         if not lease_id:
             return {"released": False, "reason": "no_live_lease"}
+        if holder == _HOLDER_UNKNOWN:
+            # Renewed since a server restart, by a session we can no longer
+            # name: leave it to the TTL rather than risk freeing a live one.
+            return {"released": False, "reason": "holder_unknown"}
         if holder and holder not in session_ids:
             # Another session under this identity refreshed the lease after
             # this one; it is still live, so its presence stays.
