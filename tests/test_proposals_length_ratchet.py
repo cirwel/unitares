@@ -116,3 +116,34 @@ def test_lower_ratchets_down_and_drops_but_never_adds_or_raises(root: Path):
     assert len(problems) == 2
     assert any("grown.md" in p for p in problems)
     assert any("unlisted.md" in p for p in problems)
+
+
+def test_baseline_entry_may_not_be_added_or_raised_against_base():
+    base = {"docs/proposals/active/big.md": CAP + 50}
+    assert mod.baseline_escalations(base, base) == []
+    assert mod.baseline_escalations(base, {"docs/proposals/active/big.md": CAP + 10}) == []
+    raised = mod.baseline_escalations(base, {"docs/proposals/active/big.md": CAP + 51})
+    assert len(raised) == 1 and "raised" in raised[0]
+    added = mod.baseline_escalations(base, {**base, "docs/proposals/active/new.md": CAP + 100})
+    assert len(added) == 1 and "added" in added[0]
+
+
+def test_base_comparison_rejects_a_pr_that_raises_its_own_entry(tmp_path: Path):
+    import subprocess
+
+    git = lambda *a: subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    rel = _doc(tmp_path, "big.md", CAP + 10)
+    _baseline(tmp_path, {rel: CAP + 10})
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    _doc(tmp_path, "big.md", CAP + 20)
+    _baseline(tmp_path, {rel: CAP + 20})
+    assert mod.main(["--root", str(tmp_path)]) == 0
+    assert mod.main(["--root", str(tmp_path), "--base", "HEAD"]) == 1
+
+
+def test_missing_base_baseline_is_skipped_not_failed(tmp_path: Path):
+    assert mod.read_base_baseline(tmp_path, "HEAD") is None

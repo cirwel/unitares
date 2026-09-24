@@ -14,6 +14,10 @@ The rule:
 - A listed file that has dropped to ``CAP`` or below, or left ``active/``, must
   have its entry removed, so the baseline cannot outlive its subject.
 
+With ``--base REF`` (CI passes the PR's diff base) the baseline itself is
+checked against its version at REF: an entry may not be added or raised, so a
+PR cannot absorb its own growth by editing the baseline in the same change.
+
 ``--lower`` rewrites the baseline to the current counts: it lowers entries that
 shrank and drops entries that no longer need one. It never adds an entry and
 never raises one, so it cannot be used to absorb growth.
@@ -26,12 +30,14 @@ an archive record, or a shorter rewrite, chosen by whoever owns it.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ACTIVE_REL = Path("docs") / "proposals" / "active"
 BASELINE_REL = Path("scripts") / "dev" / "proposals_length_baseline.txt"
+# Operator-chosen threshold (2026-09-24); see docs/proposals/README.md.
 CAP = 800
 
 
@@ -54,6 +60,45 @@ def read_baseline(path: Path) -> tuple[list[str], dict[str, int]]:
         count, _, rel = line.partition(" ")
         entries[rel.strip()] = int(count)
     return header, entries
+
+
+def parse_baseline_text(text: str) -> dict[str, int]:
+    entries: dict[str, int] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#"):
+            count, _, rel = line.partition(" ")
+            entries[rel.strip()] = int(count)
+    return entries
+
+
+def read_base_baseline(root: Path, ref: str) -> dict[str, int] | None:
+    """The baseline as of ``ref``, or None when it did not exist there."""
+    result = subprocess.run(
+        ["git", "-C", str(root), "show", f"{ref}:{BASELINE_REL.as_posix()}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return parse_baseline_text(result.stdout)
+
+
+def baseline_escalations(base: dict[str, int], head: dict[str, int]) -> list[str]:
+    """Entries added or raised relative to the base revision's baseline."""
+    problems: list[str] = []
+    for rel, n in sorted(head.items()):
+        before = base.get(rel)
+        if before is None:
+            problems.append(
+                f"baseline entry added for {rel} ({n}). The baseline may only shrink; "
+                "shorten the document instead."
+            )
+        elif n > before:
+            problems.append(
+                f"baseline entry for {rel} raised from {before} to {n}. The baseline may only shrink."
+            )
+    return problems
 
 
 def write_baseline(path: Path, header: list[str], entries: dict[str, int]) -> None:
@@ -121,12 +166,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
     parser.add_argument("--lower", action="store_true", help="lower the baseline to current counts")
+    parser.add_argument(
+        "--base",
+        metavar="REF",
+        help="also reject baseline entries added or raised relative to REF",
+    )
     args = parser.parse_args(argv)
 
     if args.lower:
         return lower(args.root)
 
     problems, notes = check(args.root)
+    if args.base:
+        base_entries = read_base_baseline(args.root, args.base)
+        if base_entries is None:
+            notes.append(f"no baseline at {args.base}; skipping the add/raise comparison")
+        else:
+            _, head_entries = read_baseline(args.root / BASELINE_REL)
+            problems.extend(baseline_escalations(base_entries, head_entries))
     print("🔍 Proposals length ratchet...")
     for note in notes:
         print(f"⚠️  {note}")

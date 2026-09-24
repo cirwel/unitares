@@ -63,9 +63,9 @@ jobs:
       # Active proposals are read before someone acts on them, and several had
       # grown past 1,000 lines. New files there are capped at 800 lines; files
       # already over it are listed in scripts/dev/proposals_length_baseline.txt
-      # and may shrink but not grow.
+      # and may shrink but not grow. --base stops a PR from raising its own entry.
       - name: Run proposals length ratchet
-        run: python3 scripts/dev/check_proposals_length.py
+        run: python3 scripts/dev/check_proposals_length.py --base "${{ steps.base.outputs.ref }}"
 
       # AGENTS.md and CLAUDE.md are adapter-specific preambles over one shared
       # contract block, and both files (plus docs/dev/DRIFT_LEDGER.md) state
