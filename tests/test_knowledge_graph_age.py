@@ -519,11 +519,11 @@ class TestAddDiscovery:
         assert "disc-b" in debugs[0].getMessage()
 
     @pytest.mark.asyncio
-    async def test_refresh_embedding_shares_skip_warning_flag(
+    async def test_refresh_embedding_warns_once_when_embeddings_unavailable(
         self, caplog, monkeypatch
     ):
-        """The update_finding path (_refresh_embedding) skips through the same
-        once-flag, so a store followed by a refresh yields one WARNING total."""
+        """The update_finding path (_refresh_embedding) warns once, then logs
+        at DEBUG, and its warning names the stale-vector backfill caveat."""
         import logging
         import src.embeddings as embeddings_module
 
@@ -548,6 +548,36 @@ class TestAddDiscovery:
         assert len(self._embedding_skip_records(caplog, logging.DEBUG)) == 1
         # The skip returns before the discovery is ever fetched.
         kg.get_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_and_refresh_share_one_skip_warning(
+        self, caplog, monkeypatch
+    ):
+        """Both skip paths go through one once-flag: a skipped store followed
+        by a skipped refresh yields one WARNING total (naming the store), and
+        the refresh drops to DEBUG. A per-path flag would log two WARNINGs."""
+        import logging
+        import src.embeddings as embeddings_module
+
+        monkeypatch.setattr(embeddings_module, "embeddings_available", lambda: False)
+
+        kg, _ = make_kg_with_mock_db()
+        kg._check_rate_limit = AsyncMock()
+        kg._pgvector_available = AsyncMock(return_value=True)
+        kg.get_discovery = AsyncMock()
+
+        with caplog.at_level(logging.DEBUG, logger=kg_age_module.__name__):
+            await kg.add_discovery(make_discovery(discovery_id="disc-s"))
+            await kg._refresh_embedding("disc-s-refresh")
+
+        warnings = self._embedding_skip_records(caplog, logging.WARNING)
+        assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
+        assert "disc-s" in warnings[0].getMessage()
+        assert "disc-s-refresh" not in warnings[0].getMessage()
+
+        debugs = self._embedding_skip_records(caplog, logging.DEBUG)
+        assert len(debugs) == 1, [r.getMessage() for r in caplog.records]
+        assert "disc-s-refresh" in debugs[0].getMessage()
 
     @pytest.mark.asyncio
     async def test_add_discovery_with_tags(self):
