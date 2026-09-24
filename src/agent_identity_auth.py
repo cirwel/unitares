@@ -23,7 +23,7 @@ def check_agent_status(agent_id: str) -> str | None:
     if agent_id in agent_metadata:
         meta = agent_metadata[agent_id]
         if meta.status == "paused":
-            return f"Agent '{agent_id}' is paused - check-ins and shared-memory writes are refused. self_recovery(action='check') reports self-recovery eligibility."
+            return f"Agent '{agent_id}' is paused - check-ins and new shared-memory entries are refused. self_recovery(action='check') reports self-recovery eligibility."
         elif meta.status == "archived":
             return f"Agent '{agent_id}' is archived. It must be restored before processing updates."
         elif meta.status == "deleted":

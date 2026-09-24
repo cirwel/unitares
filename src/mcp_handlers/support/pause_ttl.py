@@ -279,7 +279,7 @@ def paused_refusal_recovery(meta: Any) -> dict:
             expires_at = None
     if expires_at:
         re_evaluation = (
-            f"After {expires_at} the next check-in or shared-memory write is let "
+            f"After {expires_at} the next check-in or new shared-memory entry is let "
             "through and the pause lifts; a check-in whose reading still trips "
             "pauses again on that same call."
         )
@@ -292,7 +292,7 @@ def paused_refusal_recovery(meta: Any) -> dict:
     )
     recovery = {
         "action": (
-            "Check-ins (sync_state) and shared-memory writes are refused while "
+            "Check-ins (sync_state) and new shared-memory entries (store_finding, notes) are refused while "
             "paused and are not queued; resubmit them after the pause lifts. "
             "Dialectic moves are still accepted. self_recovery(action='check') "
             "reports self-recovery eligibility: self_recovery lifts a pause only "

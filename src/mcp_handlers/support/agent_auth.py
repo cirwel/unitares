@@ -187,7 +187,7 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
         if maybe_auto_expire_pause_sync(agent_uuid, meta):
             return None  # status now active; let caller proceed
         return error_response(
-            "Agent is paused - check-ins and shared-memory writes are refused",
+            "Agent is paused - check-ins and new shared-memory entries are refused",
             error_code="AGENT_PAUSED",
             error_category="state_error",
             details={

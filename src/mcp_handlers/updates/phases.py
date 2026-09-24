@@ -472,7 +472,7 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
             expired = await maybe_auto_expire_pause_async(ctx.agent_uuid, meta)
             if not expired:
                 return [error_response(
-                    "Agent is paused - check-ins and shared-memory writes are refused",
+                    "Agent is paused - check-ins and new shared-memory entries are refused",
                     error_code="AGENT_PAUSED",
                     details={
                         "agent_id": ctx.agent_uuid[:12],
@@ -691,7 +691,7 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
             recovery = paused_refusal_recovery(meta)
             recovery["related_tools"] = ["get_governance_metrics", "self_recovery"]
             return [error_response(
-                f"Agent '{agent_id}' is paused - check-ins and shared-memory writes are refused.",
+                f"Agent '{agent_id}' is paused - check-ins and new shared-memory entries are refused.",
                 recovery=recovery,
                 context={
                     "agent_id": agent_id,

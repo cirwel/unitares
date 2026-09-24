@@ -16,7 +16,7 @@ Pattern:
     >>> explain_verdict("pause")
     {
       "value": "pause",
-      "meaning": "A hard stop: check-ins and shared-memory writes are refused, not queued.",
+      "meaning": "A hard stop: check-ins and new shared-memory entries are refused, not queued.",
       "next_action": "Stop and read the reason and guidance. ..."
     }
 
@@ -111,7 +111,7 @@ VERDICTS: Dict[str, Dict[str, str]] = {
         "next_action": "Read the guidance text and adjust approach.",
     },
     "pause": {
-        "meaning": "A hard stop: check-ins and shared-memory writes are refused, not queued.",
+        "meaning": "A hard stop: check-ins and new shared-memory entries are refused, not queued.",
         "next_action": (
             "Stop and read the reason and guidance. "
             "self_recovery(action='check') reports self-recovery eligibility; "
