@@ -62,6 +62,12 @@ def _joinable_audit_agent_id(agent_id: str | None) -> tuple[str | None, str | No
     since 2026-08-06 resolved to exactly one identity this way (5 by key, 9 by
     time). The time fallback can mis-attribute two pauses in the same second.
 
+    The trip event itself only exists from 2026-04-16. The 55 non-UUID
+    `lifecycle_paused` rows before that (2026-04-09 to 04-11, all carrying the
+    task name `eisv-sync-task`) have no trip event and match neither join;
+    those are genuinely unattributable. Every non-UUID row after it, 23 of them
+    from 2026-05-30 through 2026-09-21, matched exactly one trip event.
+
     Worse than obscuring the attribution is what the handle does to readers. In
     the `audit.events.agent_id` column, such a row is the ONLY row that
     identifier ever produces, so "the paused agent went

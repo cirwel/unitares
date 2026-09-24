@@ -4,9 +4,11 @@ Measured 2026-08-12: of 12 `lifecycle_paused` rows in eleven days, 5 carried a
 UUID and 7 carried a structured handle like `Gpt_5_20260810`. That handle is
 not a key: `core.identities.agent_id` holds UUIDs, and the handle (stored as
 `public_agent_id`) is not unique (on 2026-09-24, 8 of the 11 distinct handles
-on these rows were shared by 2 to 37 identities each). Those rows can still be attributed through the
-`circuit_breaker_trip` event the pause path emits with the UUID: by
-`actuation_id` from 2026-08-12 on, by timestamp before that.
+on these rows were shared by 2 to 37 identities each). Those rows can still be
+attributed through the `circuit_breaker_trip` event the pause path emits with
+the UUID: by `actuation_id` from 2026-08-12 on, by timestamp before that. Trip
+events only exist from 2026-04-16, so the 55 earlier non-UUID rows (2026-04-09
+to 04-11, task name `eisv-sync-task`) are genuinely unattributable.
 
 The reason this matters beyond attribution: in the `audit.events.agent_id`
 column, a handle-form row is the ONLY row that identifier ever produces. So "the paused agent went silent afterwards" is a
