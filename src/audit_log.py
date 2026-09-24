@@ -529,6 +529,7 @@ class AuditLogger:
         token_agent_uuid_present: bool,
         client_hint: Optional[str] = None,
         model_type: Optional[str] = None,
+        suppressed_since_last: int = 0,
     ) -> None:
         """Record PATH 2 fail-closed misses as structured audit telemetry.
 
@@ -537,6 +538,10 @@ class AuditLogger:
         session. This event is intentionally separate from
         concurrent_session_binding_observed: a missing session row is not, by
         itself, evidence of a concurrent binding.
+
+        ``suppressed_since_last`` is how many identical misses (same session
+        key and reason) the resolver throttled since the previous row for that
+        key, so ``count(*) + sum(suppressed_since_last)`` recovers the total.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -553,6 +558,7 @@ class AuditLogger:
                 "token_agent_uuid_present": token_agent_uuid_present,
                 "client_hint": client_hint,
                 "model_type": model_type,
+                "suppressed_since_last": suppressed_since_last,
             },
         )
         self._write_entry(entry)

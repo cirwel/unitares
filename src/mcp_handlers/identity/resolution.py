@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 import uuid
 import re
+import time
 
 from src.logging_utils import get_logger
 from src.db import get_db
@@ -54,6 +55,45 @@ def _created_identity_outcome(*, force_new: bool, spawn_reason: Optional[str]) -
     return "minted_fresh"
 
 
+# Per-(session_key, reason) throttle for the fail-closed miss audit row.
+#
+# A long-lived client that keeps echoing a client_session_id whose binding is
+# gone misses on EVERY call, and read tools still succeed unbound, so nothing
+# tells the client to stop. Live 2026-09-16 → 09-24: one discord-bridge key
+# missed ~140k times/day (50 calls per 30s HUD cycle), >75% of all audit rows.
+# One row per key per window keeps the event queryable (first miss is always
+# written) and carries the count it stood in for, so totals stay recoverable.
+_RESOLVE_MISS_AUDIT_WINDOW_SECONDS = 600.0
+_RESOLVE_MISS_AUDIT_MAX_KEYS = 4096
+# (session_key, reason) -> [last_written_monotonic, suppressed_since_last]
+_resolve_miss_audit_state: Dict[tuple, list] = {}
+_resolve_miss_clock = time.monotonic
+
+
+def _reset_resolve_miss_audit_throttle() -> None:
+    """Test hook: forget all throttle state."""
+    _resolve_miss_audit_state.clear()
+
+
+def _resolve_miss_audit_admit(session_key: str, reason: str) -> Optional[int]:
+    """Return the suppressed count to attach if this miss should be written,
+    or None if it falls inside the window of an already-written miss."""
+    now = _resolve_miss_clock()
+    key = (session_key, reason)
+    state = _resolve_miss_audit_state.get(key)
+    if state is not None and now - state[0] < _RESOLVE_MISS_AUDIT_WINDOW_SECONDS:
+        state[1] += 1
+        return None
+    suppressed = state[1] if state is not None else 0
+    if state is None and len(_resolve_miss_audit_state) >= _RESOLVE_MISS_AUDIT_MAX_KEYS:
+        # Bounded memory: drop the stalest entry. Its pending suppressed
+        # count is lost, which only under-reports a key nobody is hitting.
+        oldest = min(_resolve_miss_audit_state, key=lambda k: _resolve_miss_audit_state[k][0])
+        del _resolve_miss_audit_state[oldest]
+    _resolve_miss_audit_state[key] = [now, 0]
+    return suppressed
+
+
 def _audit_session_resolve_miss(
     *,
     session_key: str,
@@ -64,6 +104,9 @@ def _audit_session_resolve_miss(
     client_hint: Optional[str],
     model_type: Optional[str],
 ) -> None:
+    suppressed = _resolve_miss_audit_admit(session_key, reason)
+    if suppressed is None:
+        return
     try:
         from src.audit_log import audit_logger as _audit
         try:
@@ -80,6 +123,7 @@ def _audit_session_resolve_miss(
             token_agent_uuid_present=bool(token_agent_uuid),
             client_hint=client_hint,
             model_type=model_type,
+            suppressed_since_last=suppressed,
         )
     except Exception as e:
         logger.debug(f"[PATH2_RESUME_MISS] audit write failed (non-fatal): {e}")
