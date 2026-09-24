@@ -43,9 +43,11 @@ must be re-opened before anyone cites it elsewhere.
    - What WorkWorlds adds is a gap in that protocol. It never states whether
      each arm's starting context is task-curated or the full state visible to
      the agent's role. WorkWorlds found that curation largely solves evidence
-     discovery in advance. If that holds here, curated context would push the
-     protocol's D-minus-B contrast toward zero. That is a choice for the
-     operator at enrollment (§3).
+     discovery in advance. If that holds here, curated context would hide
+     whatever C and D contribute to *initial* discovery. It would not remove
+     their handoff contribution, because the protocol's forced discontinuity
+     still requires carrying state a predecessor discovered. That is a choice
+     for the operator at enrollment (§3).
 3. **Only two of the brief's four proposed assessable claims hold today without
    narrowing:** identical retries return one canonical outcome, and conflicting
    reuse of a key is rejected. "No governed mutation without a current permit"
@@ -183,8 +185,15 @@ therefore came from discovery that curation had already done.
 
 Arms C and D add durable findings, handoff and reconstruction, which are
 discovery and transfer mechanisms. If every arm starts from curated context,
-that work is already done for all of them, and the primary D-minus-B contrast is
-pushed toward zero.
+the *initial* discovery is already done for all of them, so the contrast cannot
+show whether C and D help agents find evidence in the first place. Curation does
+not do the transfer work, though. Every task has a forced process
+discontinuity; arm B may not keep messages across it, while C and D carry
+findings and reconstruction through it. A curated starting bundle does not hold
+what the predecessor discovered, so that part of the D-minus-B contrast
+survives. Curation narrows what the primary contrast can show. It does not, on
+its own, push the contrast toward zero, and this note does not predict its
+size.
 
 This is a standard that decides the outcome, so under *Measurement authority* it
 is stated here as a choice rather than applied:
@@ -216,12 +225,18 @@ recovered`. Most of it already has a home:
   types, authority verdicts".
 - The governed-effect plane's veto produces `governance_blocked`.
 - Compensation is the plane's promotion requirement
-  (`docs/proposals/active/governed-effect-plane-v0.md` §5b).
+  (`docs/proposals/active/governed-effect-plane-v0.md` §5b), and it is already
+  recorded. The `file_write` executor restores the pre-image and calls
+  `EffectRepo.tombstone/1`, which sets `effects.payloads.rollback_state` to
+  `tombstoned`. A dirty surface is recorded as `quarantined` instead (migration
+  052, `elixir/lease_plane/lib/unitares_lease_plane/effect_repo.ex`).
 
-Two states have no recorded field today: **refused**, meaning the model declined
-before attempting, and **recovered**, meaning compensation was applied. Before
-proposing a new schema, map the ladder onto the existing receipt and verdict
-fields and name only those two gaps.
+One state has no recorded field today: **refused**, meaning the model declined
+before attempting. **Recovered** maps to `rollback_state = 'tombstoned'`. The
+gap there is only that the ablation receipt does not yet list rollback state
+among its effect fields. Before proposing a new schema, map the ladder onto
+these existing fields and name only those two gaps: no refused state, and
+rollback state missing from the receipt.
 
 The software-analogue experiment is not authorized by anything here. It would
 need its own registration, because it involves destructive operations even in a
