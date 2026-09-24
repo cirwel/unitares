@@ -23,23 +23,28 @@ An agent reports that its fix is done and the tests pass. By morning its
 session has restarted, its context is gone, and another process has taken over
 the task. Who said it? What supports it? Who challenged it? What happened?
 
-With UNITARES, the next agent asks the record and gets the answer:
+With UNITARES, the next agent asks the record and gets back who said what,
+what backs it up, and who checked it:
 
 ```mermaid
 sequenceDiagram
     participant A as Agent A
+    participant R as Reviewer
     participant U as UNITARES
     participant B as Agent B
-    A->>U: "Fixed the login bug. Tests pass."
-    Note over U: Filed under Agent A,<br/>with the test run as evidence
+    A->>U: "Fixed the login bug. Tests pass." + test run
+    Note over U: Filed under Agent A,<br/>with the test run attached
+    R->>U: "Checked the fix. I agree."
     Note over A: Session ends. Its context is gone.
     B->>U: "Was the login bug fixed? Who says so?"
-    U->>B: Fixed. Said by Agent A, backed by the test run,<br/>and a reviewer agreed.
+    U->>B: Agent A claimed it, attached the test run,<br/>and the reviewer agreed.
 ```
 
 ## Start with one thing
 
-You don't need all of UNITARES on day one. Each layer works on its own.
+You don't need all of UNITARES on day one. Start with the first layer and add
+the next when you need it. Every layer begins with `start_session`, which gives
+the process the identity its writes are recorded under.
 
 | Start here | You get | Tools |
 |---|---|---|
