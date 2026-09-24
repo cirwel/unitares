@@ -261,13 +261,16 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
 # --- the server instructions ------------------------------------------------
 
 def test_instructions_state_how_a_pause_actually_ends():
-    """Every exit, and the recovery cost, stated as they are: self_recovery is
-    not the only way out and not always available, and review's reflection is
-    recorded in shared memory."""
+    """The four exits in the code, and the recovery cost, stated as they are:
+    self_recovery (not always available), dialectic resolution
+    (dialectic/resolution.py sets the agent active), agent(action='resume'),
+    and expiry; review's reflection is recorded in shared memory."""
     text = build_server_instructions("progressive")
     sentence = text[text.index("A pause is a hard stop"):]
-    assert sentence.index("self_recovery") < sentence.index("an operator resumes")
-    assert "or it expires" in sentence
+    sentence = sentence[:sentence.index(".") + 1]
+    for exit_route in ("self_recovery", "request_review", "agent(action='resume')",
+                       "or it expires"):
+        assert exit_route in sentence, exit_route
     assert "self_recovery refuses while risk stays high" in text
     assert "records your written reflection in shared memory" in text
 
