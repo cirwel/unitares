@@ -7,7 +7,7 @@ carries the verdict at ``state_summary.action`` — while both SDK clients read
 top-level ``decision.action`` / ``metrics``, keys the envelope never has, so
 every verdict parsed as ``"proceed"`` and coherence/risk as ``None``.
 
-``tests/test_client.py`` and ``tests/test_sync_client.py`` feed canonical
+``agents/sdk/tests/test_client.py`` and ``agents/sdk/tests/test_sync_client.py`` feed canonical
 fixtures straight to the parser and ``test_agent_experience_envelope.py``
 never runs the SDK over its output, so the two shapes drifted with green
 tests on both sides. This module is the missing seam: it builds the envelope
