@@ -266,7 +266,9 @@ Codex usage limit left such sessions with no way to finish a PR (#2423).
    ```
 
    `--emit` needs no `gh`: it computes the diff key locally, refuses a HEAD
-   that differs from its pushed upstream, and prints the exact comment body.
+   that the remote branch of the same name does not hold, and prints the
+   exact comment body. It keys against `origin/master`; for a PR based on
+   another branch, add `--base origin/<base>` or CI will never match it.
 3. Post the printed body **verbatim** as a top-level PR comment through the
    connector. The `review` check reads it like any other record, and its
    description names the reviewer, so a same-session subagent review is

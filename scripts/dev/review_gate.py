@@ -89,6 +89,7 @@ CODEX_BOT = "chatgpt-codex-connector[bot]"
 NATIVE_REQUEST = "unitares-native-review v1"
 NATIVE_WAIT_S = 600
 
+REVIEWER_NAME_RE = re.compile(r"[A-Za-z0-9_.:@/+-]+")
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
     r"<!--\s*" + re.escape(MARKER) + r"\s+(?P<attrs>[^>]*?)\s*-->"
@@ -613,10 +614,17 @@ def _resolve_offline(args) -> str:
     remote, _, branch = base.partition("/")
     git("fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{base}", check=False)
     head = git("rev-parse", "HEAD").strip()
-    upstream = git("rev-parse", "--verify", "--quiet", "@{upstream}", check=False).strip()
-    if upstream != head:
-        raise SystemExit("review_gate: --emit needs HEAD pushed and equal to its upstream "
-                         "(git push -u first), or the record would describe a diff CI never sees")
+    # Compare against the remote branch of the same name, freshly fetched: a
+    # stale tracking ref, or one tracking the base, would pass a head CI never sees.
+    mine = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    git("fetch", "--quiet", remote, f"+refs/heads/{mine}:refs/remotes/{remote}/{mine}", check=False)
+    pushed = git("rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{mine}", check=False).strip()
+    if pushed != head:
+        raise SystemExit(f"review_gate: --emit needs HEAD pushed: {remote}/{mine} is "
+                         f"{pushed[:12] or 'missing'}, HEAD is {head[:12]}. Push first, or the "
+                         "record would describe a diff CI never sees")
+    print(f"[review] keyed against {base}; this must be the PR's base branch "
+          "(pass --base origin/<base> otherwise)", file=sys.stderr)
     return diff_key(base, head)
 
 
@@ -906,9 +914,9 @@ def cmd_record(args) -> int:
         raise SystemExit("review_gate: the review text needs a final "
                          "'VERDICT: CLEAN' or 'VERDICT: FINDINGS(n)' line")
     verdict, n = parsed
-    if re.search(r"\s", args.reviewer_name):
-        raise SystemExit("review_gate: --reviewer-name must not contain whitespace "
-                         "(it is a field in the record marker)")
+    if not REVIEWER_NAME_RE.fullmatch(args.reviewer_name):
+        raise SystemExit("review_gate: --reviewer-name must match [A-Za-z0-9_.:@/+-]+ "
+                         "(it is a field in the record marker; whitespace or '>' would break it)")
     heading = (f"{verdict if verdict == 'CLEAN' else f'FINDINGS({n})'} "
                f"(recorded, reviewed by {args.reviewer_name})")
     if args.emit:
@@ -1131,6 +1139,9 @@ def main(argv: list[str] | None = None) -> int:
     rc.add_argument("--reviewer-name", required=True)
     rc.add_argument("--independent", action="store_true",
                     help="attest this is a separate review of the current diff, not the author's self-check")
+    # SUPPRESS keeps the top-level --base when this one is not given.
+    rc.add_argument("--base", default=argparse.SUPPRESS,
+                    help="base ref for --emit's key (default origin/master); must be the PR's base")
     rc.add_argument("--emit", action="store_true",
                     help="print the record body instead of posting it (no gh needed); "
                          "post it verbatim with any GitHub client")

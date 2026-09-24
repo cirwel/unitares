@@ -999,11 +999,42 @@ def test_emit_refuses_an_unpushed_head(repo, tmp_path):
                  "--independent", "--emit"])
 
 
-def test_reviewer_name_with_whitespace_is_refused(tmp_path):
-    # The name is a whitespace-delimited marker field; a space would truncate it.
+@pytest.mark.parametrize("name", ["a b", "council:a->b"])
+def test_a_reviewer_name_that_breaks_the_marker_is_refused(tmp_path, name):
+    # Whitespace truncates the marker field; '>' ends the marker comment early.
     (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
-    with pytest.raises(SystemExit, match="whitespace"):
-        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "a b",
+    with pytest.raises(SystemExit, match="must match"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", name,
+                 "--independent", "--emit"])
+
+
+def test_emit_keys_against_a_non_master_base(repo, tmp_path, capsys):
+    # A stacked PR: CI keys against origin/<base_ref>, so --emit must too.
+    _git(repo, "checkout", "-q", "-b", "stack", "master")
+    (repo / "b.txt").write_text("b on stack\n")
+    _git(repo, "commit", "-q", "-am", "stack base")
+    _git(repo, "checkout", "-q", "feature")
+    _git(repo, "rebase", "-q", "stack")
+    _pushed(repo, tmp_path)
+    _git(repo, "push", "-q", "origin", "stack")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    assert rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                    "--independent", "--emit", "--base", "origin/stack"]) == 0
+    key = rg.parse_record(capsys.readouterr().out).key
+    assert key == rg.diff_key("origin/stack", "HEAD") != rg.diff_key("origin/master", "HEAD")
+
+
+def test_emit_refuses_a_head_the_remote_branch_does_not_hold(repo, tmp_path):
+    # A tracking ref pointing at the base (checkout -b x origin/master) must not
+    # stand in for the pushed PR head.
+    _pushed(repo, tmp_path)
+    _git(repo, "checkout", "-q", "-b", "untracked-push")
+    (repo / "a.txt").write_text("never pushed\n")
+    _git(repo, "commit", "-q", "-am", "local only")
+    _git(repo, "branch", "-q", "--set-upstream-to", "origin/feature")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="HEAD pushed"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
                  "--independent", "--emit"])
 
 
