@@ -7,6 +7,7 @@ The registry lives on the monitor and travels with its state snapshot
 orphaned entries are expired by TTL.
 """
 
+import math
 import time as _time
 import uuid
 from datetime import datetime
@@ -138,6 +139,13 @@ def restore_open_predictions(rows: Any, ttl_seconds: float = 3600.0) -> Dict[str
             confidence = float(row["confidence"])
             created_epoch = float(row["created_at_epoch"])
         except (KeyError, TypeError, ValueError):
+            continue
+        # float() accepts nan/inf; a restored forecast must be a real
+        # confidence minted at a real past moment, or it could bind after the
+        # restart and carry a non-finite value into calibration.
+        if not (math.isfinite(confidence) and 0.0 <= confidence <= 1.0):
+            continue
+        if not math.isfinite(created_epoch) or created_epoch > now_wall + 60.0:
             continue
         age = max(0.0, now_wall - created_epoch)
         if age > ttl_seconds:

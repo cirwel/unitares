@@ -227,3 +227,20 @@ class TestOpenForecastsSurviveARestart:
 
         assert set(restore_open_predictions(rows)) == {"ok"}
         assert restore_open_predictions(None) == {}
+
+
+    def test_non_finite_or_out_of_range_rows_are_skipped(self):
+        import time
+        from src.monitor_prediction import restore_open_predictions
+
+        now = time.time()
+        rows = [
+            {"prediction_id": "ok", "confidence": 0.5, "created_at_epoch": now},
+            {"prediction_id": "nan-conf", "confidence": float("nan"), "created_at_epoch": now},
+            {"prediction_id": "big-conf", "confidence": 1.5, "created_at_epoch": now},
+            {"prediction_id": "nan-epoch", "confidence": 0.5, "created_at_epoch": float("nan")},
+            {"prediction_id": "inf-epoch", "confidence": 0.5, "created_at_epoch": float("inf")},
+            {"prediction_id": "future", "confidence": 0.5, "created_at_epoch": now + 3600},
+        ]
+
+        assert set(restore_open_predictions(rows)) == {"ok"}
