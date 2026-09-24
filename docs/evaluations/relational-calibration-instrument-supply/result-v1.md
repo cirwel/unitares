@@ -1,17 +1,13 @@
 # Relational calibration instrument-supply read v1 — registered result
 
-**Status: provisional `instrument_supply_not_ready`, pending adjudication of one
-disclosed deviation.** The one authoritative read found
+**Status: `instrument_supply_not_ready`.** The one authoritative read found
 `strict_supply = 0`, below the frozen threshold of 200. Under the contract's
 stop rule this closes the attempt: no maturity, duration, hour-bucket, alpha,
 value, timestamp or ID check is loosened, and the query is not repeated. A later
 supply read needs a new version, a new future cutoff and a stated new premise.
 
-One pre-read query is disclosed below as a deviation for adjudication. If it is
-ruled harmless, the status is `instrument_supply_not_ready`; if disqualifying,
-it is `contract_unreadable`, which closes the read without a supply conclusion.
-Either way this attempt is closed and the query is not repeated; until the
-ruling, cite no supply conclusion from it.
+One pre-read query is disclosed below as a deviation; the operator ruled it
+harmless on 2026-09-23, so the status stands.
 
 This is a count of instrument supply only. It says nothing about participant,
 principal or federation capacity, which the contract never measured.
@@ -56,14 +52,15 @@ identity or distribution was retained beyond these aggregates.
   `core.agent_state` removes old rows without an archive, so any deletion
   between the cutoff and execution could only lower counts. Deletion inside
   the window cannot be ruled out from the database alone.
-- **Deviation for adjudication: a pre-read row count.** Earlier on the same
+- **Deviation, ruled harmless: a pre-read row count.** Earlier on the same
   day, while assessing whether retention threatened this read, an audit ran a
   single raw row count of `core.agent_state` over the frozen window. It
   evaluated none of the funnel predicates and no identity-level or per-stage
   quantity, and its figure is not reported here because the result packet
   does not permit it. It is nonetheless a query outside the registered read,
-  so this result does not claim a strictly clean one-time execution. Whether
-  that check makes the result `contract_unreadable` is left to the operator
-  and the independent reviewer named by the contract.
+  so this result does not claim a strictly clean one-time execution. The
+  operator adjudicated it on 2026-09-23 and ruled it harmless: it could not
+  select a cutoff, filter or snapshot, and it informed nothing in the frozen
+  query, which ran unchanged.
 - **No other `contract_unreadable` condition was found.** The query failed
   closed at the temporal stage as specified; it did not error.
