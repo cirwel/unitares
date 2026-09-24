@@ -111,3 +111,33 @@ class TestMirrorEntryCarriesAnId:
             }
         )
         assert {e["discovery_id"] for e in out["relevant_prior_work"]} == {"m1", "e1"}
+
+
+class TestPriorWorkAttribution:
+    """The mirror formatter writes the writer's id into `by`
+    (`_format_mirror`), so for `relevant_prior_work` the digest must carry it
+    as `agent_id`, the identity a reader passes back as `agent_id_filter`,
+    not as a display label. "unknown" is a producer placeholder, never either.
+    """
+
+    def test_prior_work_by_is_the_identity(self):
+        writer = "5b0c1f7e-0000-0000-0000-000000000001"
+        payload = {"relevant_prior_work": [
+            {"discovery_id": "d1", "summary": "s", "by": writer},
+            {"discovery_id": "d2", "summary": "t", "by": "unknown"},
+        ]}
+        got = _memory_suggestions(payload)
+        assert got[0]["agent_id"] == writer and "by" not in got[0]
+        assert "agent_id" not in got[1] and "by" not in got[1]
+
+    def test_formatter_output_round_trips_through_the_digest(self):
+        writer = "5b0c1f7e-0000-0000-0000-000000000002"
+        mirror = _format_mirror({"_mirror_kg_results": [
+            {"discovery_id": "m1", "summary": "mirror row", "agent_id": writer},
+        ]}, saved_trust_tier=None)
+        got = _memory_suggestions(mirror)
+        assert got[0]["agent_id"] == writer and "by" not in got[0]
+
+    def test_unknown_placeholder_is_not_an_identity_on_search_rows(self):
+        payload = {"discoveries": [{"discovery_id": "k1", "summary": "x", "agent_id": "unknown"}]}
+        assert "agent_id" not in _memory_suggestions(payload)[0]
