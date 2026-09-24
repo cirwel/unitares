@@ -1101,6 +1101,17 @@ def main(argv: list[str] | None = None) -> int:
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")
         return 0
+    except FileNotFoundError as exc:
+        # Every PR read and record post goes through the `gh` CLI. Without it,
+        # nothing was reviewed: that is infrastructure unavailable (exit 2),
+        # not findings needing author action (exit 1), which is what the
+        # uncaught traceback reported. Any other missing file is a real error.
+        if exc.filename != "gh":
+            raise
+        print("[review] UNREVIEWED: the `gh` CLI is not installed or not on PATH, "
+              "so review evidence can be neither read nor posted from here. "
+              "Run review.sh where gh is available, or hand off explicitly.")
+        return UNREVIEWED
 
 
 if __name__ == "__main__":
