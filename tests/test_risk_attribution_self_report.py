@@ -100,7 +100,10 @@ def test_simulated_blended_update_does_not_mark_the_monitor():
     base = {"parameters": np.array([]), "response_text": TEXT, "complexity": 0.5}
     for _ in range(5):
         monitor.process_update({**base, "ethical_drift": [0.0, 0.0, 0.0]}, confidence=0.7)
-    monitor.simulate_update({**base, "ethical_drift": [1.0, 1.0, 1.0]}, confidence=0.7)
+    preview = monitor.simulate_update({**base, "ethical_drift": [1.0, 1.0, 1.0]}, confidence=0.7)
+    # The preview itself blended, so it must not be called independent...
+    assert "not independent of your report" in preview["risk_attribution"]["note"]
+    # ...but the dry run leaves no mark on the monitor.
     assert not getattr(monitor, "_self_report_ever_blended", False)
     note = monitor.process_update(
         {**base, "ethical_drift": np.array([0.0, 0.0, 0.0])}, confidence=0.7
