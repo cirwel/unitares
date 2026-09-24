@@ -43,12 +43,20 @@ class _FakeClient:
         self.identity_proofs = []
         self.releases = []
         self.on_acquire = None
+        self.sdk_shape = False
+        self.idempotent = False
 
     def acquire(self, req, *, identity_proof=None):
         self.acquired.append(req)
         if self.on_acquire is not None:
             self.on_acquire()
         self.identity_proofs.append(identity_proof)
+        if self.sdk_shape:
+            return SimpleNamespace(
+                ok=True,
+                lease=SimpleNamespace(lease_id=self.acquire_lease_id),
+                idempotent=self.idempotent,
+            )
         return SimpleNamespace(lease_id=self.acquire_lease_id)
 
     def heartbeat(self, req, *, identity_proof=None):
@@ -434,3 +442,35 @@ async def test_release_keeps_a_lease_while_another_session_is_live_in_either_ord
     second = await apl.release_agent_presence("uuid-1", ("sess-b",))
     assert second == {"released": True, "reason": "released"}
     assert [r.lease_id for r in client.releases] == ["lease-123"]
+
+
+@pytest.mark.asyncio
+async def test_acquire_reads_the_sdk_nested_lease_id(monkeypatch):
+    """The real AcquireOk nests the id under .lease; it must still be cached so
+    later heartbeats renew instead of re-acquiring."""
+    client = _FakeClient()
+    client.sdk_shape = True
+    _patch_models(monkeypatch, client)
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-1", apl.time.monotonic())
+    await apl.heartbeat_agent_presence("uuid-1", "sess-1", apl.time.monotonic())
+
+    assert apl._lease_ids["uuid-1"] == "lease-123"
+    assert len(client.acquired) == 1
+    assert len(client.heartbeats) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotent_acquire_joins_the_existing_holders(monkeypatch):
+    client = _FakeClient()
+    client.sdk_shape = True
+    _patch_models(monkeypatch, client)
+    await apl.heartbeat_agent_presence("uuid-1", "sess-a", apl.time.monotonic())
+    apl._lease_ids.clear()  # e.g. a process that never cached it
+    client.idempotent = True
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-b", apl.time.monotonic())
+
+    assert set(apl._lease_sessions["uuid-1"]) == {"sess-a", "sess-b"}
+    result = await apl.release_agent_presence("uuid-1", ("sess-a",))
+    assert result == {"released": False, "reason": "held_by_other_session"}

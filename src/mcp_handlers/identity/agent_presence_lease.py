@@ -204,19 +204,29 @@ async def _refresh_presence(
         None,
         lambda: client.acquire(acquire_request, identity_proof=identity_proof),
     )
-    # AcquireOk carries lease_id; failure variants (held_by_other, etc.) do not.
-    new_id = getattr(result, "lease_id", None)
+    # The SDK's AcquireOk nests the id in its lease record (result.lease.lease_id);
+    # failure variants (held_by_other, etc.) carry none. Reading only a flat
+    # result.lease_id left the id uncached, so every heartbeat re-acquired.
+    new_id = getattr(result, "lease_id", None) or getattr(
+        getattr(result, "lease", None), "lease_id", None
+    )
     if new_id:
+        # Idempotent: the identity already held this lease, so other sessions
+        # may be sharing it.
+        idempotent = bool(getattr(result, "idempotent", False))
         if _released_since(agent_uuid, scheduled_at, client_session_id):
-            # The session ended while this acquire was in flight: hand the
-            # lease straight back instead of leaving it live for a full TTL.
-            await _release_lease(client, agent_uuid, str(new_id))
+            # The session ended while this acquire was in flight. Hand a lease
+            # it created straight back; never one another session shares.
+            if not idempotent:
+                await _release_lease(client, agent_uuid, str(new_id))
             return
         _lease_ids[agent_uuid] = str(new_id)
-        # A fresh lease starts a fresh holder set; the old one expired with it.
-        _lease_sessions[agent_uuid] = {
-            client_session_id or _HOLDER_UNKNOWN: time.monotonic()
-        }
+        holder = client_session_id or _HOLDER_UNKNOWN
+        if idempotent:
+            _lease_sessions.setdefault(agent_uuid, {})[holder] = time.monotonic()
+        else:
+            # A fresh lease starts a fresh holder set; the old one expired with it.
+            _lease_sessions[agent_uuid] = {holder: time.monotonic()}
 
 
 def _mint_presence_attestation(agent_uuid: str, path: str, request: object) -> str | None:
