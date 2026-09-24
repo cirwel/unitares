@@ -141,7 +141,8 @@ def floor_breach_caution_apply_enabled() -> bool:
     at a floor breach keeps a pause the grace would otherwise have lifted.
     It has no hysteresis: an agent oscillating across a floor flips
     safe/caution each check-in, and those flips count toward CIRS resonance
-    (adaptive_governor, 4 flips in a window of 10). Escalate-only and
+    (adaptive_governor, 4 flips in a window of 10); each resonant check-in
+    also persists a server-attested cirs_resonance outcome with is_bad=true. Escalate-only and
     baselined-only: never lowers a verdict, never fires before the agent's own baseline is warm. Implies the
     shadow record, with ``applied`` marking rows the floor actually changed.
     """
