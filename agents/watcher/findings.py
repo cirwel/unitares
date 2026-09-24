@@ -839,11 +839,189 @@ def _apply_floor_to_finding(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Display-time grouping of copies
+#
+# Watcher state is shared across worktrees and the fingerprint keeps the
+# absolute path and line, so the same code flagged in five worktrees, or at a
+# shifted line, is five rows. The listing groups those rows into one entry at
+# render time only: findings.jsonl, the fingerprint, dismissal, outcomes and
+# precision are untouched, and every copy's fingerprint stays on screen so
+# each row can still be resolved or dismissed on its own.
+# ---------------------------------------------------------------------------
+
+# ``{directory: (git common dir, worktree toplevel) or None}``, per render.
+GitCache = dict[str, "tuple[str, str] | None"]
+
+
+def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | None:
+    """Return ``(common_dir, toplevel)`` for an existing directory, or None.
+
+    The common dir identifies the repository across all of its worktrees; the
+    toplevel identifies the worktree. Bounded to 2s like the scope lookup,
+    because SessionStart latency is user-visible.
+    """
+    key = str(directory)
+    if key in cache:
+        return cache[key]
+    info: tuple[str, str] | None = None
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                key,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+                "--show-toplevel",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        result = None
+    if result is not None and result.returncode == 0:
+        lines = result.stdout.strip().splitlines()
+        if len(lines) == 2 and lines[0] and lines[1]:
+            try:
+                info = (
+                    Path(lines[0]).resolve().as_posix(),
+                    Path(lines[1]).resolve().as_posix(),
+                )
+            except OSError:
+                info = None
+    cache[key] = info
+    return info
+
+
+def _git_location(
+    file_path: str, cache: GitCache
+) -> tuple[str, str, str] | None:
+    """Return ``(common_dir, toplevel, repo_relative_path)`` for a finding's
+    file, or None when it cannot be placed in a git worktree.
+
+    Only absolute paths whose directory still exists are placed: a legacy
+    relative path has no known origin, and walking up from a removed worktree
+    would land in whatever repository happens to contain it.
+    """
+    if not file_path:
+        return None
+    path = Path(file_path)
+    if not path.is_absolute():
+        return None
+    try:
+        parent = path.parent.resolve()
+    except OSError:
+        return None
+    if not parent.is_dir():
+        return None
+    info = _git_worktree_of_dir(parent, cache)
+    if info is None:
+        return None
+    common_dir, toplevel = info
+    try:
+        rel = (parent / path.name).relative_to(Path(toplevel)).as_posix()
+    except ValueError:
+        return None
+    return common_dir, toplevel, rel
+
+
+def _group_copies(
+    findings: list[dict[str, Any]], cache: GitCache
+) -> list[list[dict[str, Any]]]:
+    """Group findings that are copies of the same flagged code.
+
+    Copies share the repository (git common dir), the repo-relative path, the
+    pattern and the line content hash. Findings with no content hash, or that
+    cannot be placed in a git worktree, stay on their own. Groups keep the
+    order of their first member, and members keep the input order.
+    """
+    groups: dict[Any, list[dict[str, Any]]] = {}
+    for index, f in enumerate(findings):
+        content_hash = str(f.get("line_content_hash") or "")
+        location = _git_location(str(f.get("file") or ""), cache)
+        if content_hash and location is not None:
+            key: Any = (location[0], location[2], f.get("pattern", ""), content_hash)
+        else:
+            key = ("single", index)
+        groups.setdefault(key, []).append(f)
+    return list(groups.values())
+
+
+def _format_finding_line(f: dict[str, Any]) -> list[str]:
+    sev = str(f.get("severity", "?")).upper()
+    pat = f.get("pattern", "?")
+    vcls = f.get("violation_class", "")
+    file = f.get("file", "?")
+    line_no = f.get("line", "?")
+    hint = f.get("hint", "")
+    fp = str(f.get("fingerprint", ""))[:8]
+    cls_tag = f"[{vcls}] " if vcls else ""
+    lines = [f"  [{sev}] {cls_tag}{pat} {file}:{line_no} — {hint}  (#{fp}){_status_marker(f)}"]
+    lines.extend(_retained_line(f))
+    return lines
+
+
+def _format_group_lines(group: list[dict[str, Any]], cache: GitCache) -> list[str]:
+    first = group[0]
+    sev = str(first.get("severity", "?")).upper()
+    pat = first.get("pattern", "?")
+    vcls = first.get("violation_class", "")
+    hint = first.get("hint", "")
+    cls_tag = f"[{vcls}] " if vcls else ""
+    location = _git_location(str(first.get("file") or ""), cache)
+    rel = location[2] if location else first.get("file", "?")
+    worktrees = {
+        loc[1]
+        for loc in (_git_location(str(f.get("file") or ""), cache) for f in group)
+        if loc is not None
+    }
+    # Only the flagged line is hashed, so distinct handlers that share the
+    # same line text (a bare `except Exception:`) in one file land in one
+    # group too. Each location stays listed, so say "locations", not copies.
+    where = f"{len(group)} locations, same line text, {len(worktrees)} worktree(s)"
+    lines = [f"  [{sev}] {cls_tag}{pat} {rel} — {hint}  ({where})"]
+    for f in group:
+        loc = _git_location(str(f.get("file") or ""), cache)
+        label = Path(loc[1]).name if loc else "?"
+        fp = str(f.get("fingerprint", ""))[:8]
+        lines.append(
+            f"    {label}: {f.get('file', '?')}:{f.get('line', '?')}  (#{fp}){_status_marker(f)}"
+        )
+    snapshot_source = next(
+        (f for f in group if f.get("path_gone") and f.get("line_content")), None
+    )
+    if snapshot_source is not None:
+        lines.extend(_retained_line(snapshot_source))
+    return lines
+
+
+def _status_marker(f: dict[str, Any]) -> str:
+    status = f.get("status", "open")
+    marker = "" if status == "open" else f" ({status})"
+    if f.get("path_gone"):
+        marker += " (path gone; snapshot retained)"
+    return marker
+
+
+def _retained_line(f: dict[str, Any]) -> list[str]:
+    if not (f.get("path_gone") and f.get("line_content")):
+        return []
+    # JSON quoting keeps a retained source line visibly data-shaped and
+    # escapes control characters before it enters an agent's context.
+    snapshot = str(f["line_content"]).strip()[:240]
+    return [f"    retained source line: {json.dumps(snapshot)}"]
+
+
 def _format_findings_block(
     findings: list[dict[str, Any]],
     *,
     header: str,
     out_of_scope_groups: dict[str, int] | None = None,
+    git_cache: GitCache | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
     """Render the <unitares-watcher-findings> block.
 
@@ -869,6 +1047,11 @@ def _format_findings_block(
         reserved for critical+high (keeps session context from drowning in
         medium-severity noise while still surfacing some)
       - low: never shown (file-only signal)
+
+    Copies of the same flagged code (see ``_group_copies``) render as one
+    entry that lists every copy's location and fingerprint. The display cap
+    counts entries, and ``shown`` holds every copy of every displayed entry,
+    since each copy's fingerprint was on screen.
 
     ``out_of_scope_groups`` is an optional ``{worktree_label: count}`` map
     of findings the caller is *not* surfacing in the body (typically:
@@ -907,11 +1090,17 @@ def _format_findings_block(
         ),
     )
 
-    critical_high = [f for f in findings if f.get("severity") in ("critical", "high")]
-    medium = [f for f in findings if f.get("severity") == "medium"]
-    shown = critical_high[:]
-    if len(shown) < 10:
-        shown += medium[: 10 - len(shown)]
+    cache: GitCache = {} if git_cache is None else git_cache
+    # Findings are sorted, so a group's first member is its most severe.
+    entries = _group_copies(findings, cache)
+    critical_high = [
+        g for g in entries if g[0].get("severity") in ("critical", "high")
+    ]
+    medium = [g for g in entries if g[0].get("severity") == "medium"]
+    shown_entries = critical_high[:]
+    if len(shown_entries) < 10:
+        shown_entries += medium[: 10 - len(shown_entries)]
+    shown = [f for group in shown_entries for f in group]
 
     out_of_scope_total = (
         sum(out_of_scope_groups.values()) if out_of_scope_groups else 0
@@ -927,27 +1116,20 @@ def _format_findings_block(
     lines.append("<unitares-watcher-findings>")
     lines.append(header)
     lines.append("")
-    for f in shown:
-        sev = str(f.get("severity", "?")).upper()
-        pat = f.get("pattern", "?")
-        vcls = f.get("violation_class", "")
-        file = f.get("file", "?")
-        line_no = f.get("line", "?")
-        hint = f.get("hint", "")
-        fp = str(f.get("fingerprint", ""))[:8]
-        status = f.get("status", "open")
-        marker = "" if status == "open" else f" ({status})"
-        if f.get("path_gone"):
-            marker += " (path gone; snapshot retained)"
-        cls_tag = f"[{vcls}] " if vcls else ""
-        lines.append(f"  [{sev}] {cls_tag}{pat} {file}:{line_no} — {hint}  (#{fp}){marker}")
-        if f.get("path_gone") and f.get("line_content"):
-            # JSON quoting keeps a retained source line visibly data-shaped and
-            # escapes control characters before it enters an agent's context.
-            snapshot = str(f["line_content"]).strip()[:240]
-            lines.append(f"    retained source line: {json.dumps(snapshot)}")
+    for group in shown_entries:
+        if len(group) == 1:
+            lines.extend(_format_finding_line(group[0]))
+        else:
+            lines.extend(_format_group_lines(group, cache))
     lines.append("")
-    lines.append(f"Total unresolved: {len(findings)} (showing {len(shown)})")
+    if len(shown_entries) == len(shown):
+        lines.append(f"Total unresolved: {len(findings)} (showing {len(shown)})")
+    else:
+        lines.append(
+            f"Total unresolved: {len(findings)} (showing {len(shown)} as "
+            f"{len(shown_entries)} entries; findings with the same pattern, "
+            "repo path and line text are grouped)"
+        )
     if out_of_scope_total:
         # Render groups in deterministic order (sorted by label) so the
         # footer stays stable across runs — easier to spot a real change
@@ -1003,12 +1185,13 @@ def _resolve_session_scope_root(cwd: Path | None = None) -> Path | None:
 def _partition_findings_by_scope(
     findings: list[dict[str, Any]],
     scope_root: Path | None,
+    git_cache: GitCache | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Split findings into ``(in_scope, out_of_scope_groups)``.
 
     A finding is in-scope when its ``file`` lives under ``scope_root``.
-    Out-of-scope findings are aggregated by their nearest ``.worktrees``
-    sibling label so the footer can summarize *where* the backlog is
+    Out-of-scope findings are aggregated by the worktree they live in (see
+    ``_worktree_label``) so the footer can summarize *where* the backlog is
     without listing every path.
 
     If ``scope_root`` is None, all findings are treated as in-scope —
@@ -1018,6 +1201,7 @@ def _partition_findings_by_scope(
     if scope_root is None:
         return list(findings), {}
 
+    cache: GitCache = {} if git_cache is None else git_cache
     in_scope: list[dict[str, Any]] = []
     out_groups: dict[str, int] = {}
     resolved_scope = scope_root.resolve()
@@ -1036,9 +1220,37 @@ def _partition_findings_by_scope(
                     in_scope.append(f)
                     continue
         label_path = str(resolved_file) if resolved_file is not None else file_path
-        label = _label_for_other_worktree(label_path)
+        label = _worktree_label(label_path, cache)
         out_groups[label] = out_groups.get(label, 0) + 1
     return in_scope, out_groups
+
+
+def _worktree_label(file_path: str, cache: GitCache) -> str:
+    """Name the worktree an out-of-scope finding lives in.
+
+    The worktree's own directory name when git can place the file. For a
+    path whose directory is gone, the nearest surviving ancestor decides: if
+    it is inside a worktree, that worktree's name; otherwise the first
+    missing directory below it, which is the removed worktree. Anything else
+    (legacy relative paths, files outside git) falls back to
+    ``_label_for_other_worktree``. Before this, a file under
+    ``<worktree>/tests/`` was counted as ``tests``, so one worktree's backlog
+    was split across its subdirectory names and different worktrees merged.
+    """
+    location = _git_location(file_path, cache)
+    if location is not None:
+        return Path(location[1]).name or "(root)"
+    path = Path(file_path) if file_path else None
+    if path is not None and path.is_absolute() and ".worktrees" not in path.parts:
+        missing = path.parent
+        while not missing.parent.is_dir() and missing.parent != missing:
+            missing = missing.parent
+        if not missing.is_dir() and missing.parent != missing:
+            info = _git_worktree_of_dir(missing.parent, cache)
+            if info is not None:
+                return Path(info[1]).name or "(root)"
+            return missing.name
+    return _label_for_other_worktree(file_path)
 
 
 def _label_for_other_worktree(file_path: str) -> str:
@@ -1088,7 +1300,10 @@ def print_unresolved(scope_root: Path | None = None) -> int:
             # removed. Mark only the display copy so SessionStart remains
             # strictly read-only; the next lifecycle sweep persists path_gone.
             findings.append({**finding, "path_gone": True})
-    in_scope, out_groups = _partition_findings_by_scope(findings, scope_root)
+    git_cache: GitCache = {}
+    in_scope, out_groups = _partition_findings_by_scope(
+        findings, scope_root, git_cache
+    )
 
     block, _shown = _format_findings_block(
         in_scope,
@@ -1098,6 +1313,7 @@ def print_unresolved(scope_root: Path | None = None) -> int:
             "are not noise. Investigate or explicitly --dismiss them."
         ),
         out_of_scope_groups=out_groups or None,
+        git_cache=git_cache,
     )
     if block is None:
         return 0

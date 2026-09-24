@@ -105,6 +105,7 @@ from agents.watcher.findings import (
     _resolve_session_scope_root,
     _sweep_stale_quiet,
     _sweep_token_drift_quiet,
+    _worktree_label,
     _write_findings_atomic,
     compact_findings,
     escalate,

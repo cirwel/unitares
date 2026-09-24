@@ -20,8 +20,10 @@ behavior" (see ~/.claude memory feedback_tests-with-fixes.md).
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -1015,7 +1017,13 @@ def _make_raw_entry(
     detected_at: str = "2026-04-11T00:00:00Z",
     severity: str = "high",
     hint: str = "mutation before persistence",
+    line_content_hash: str | None = None,
 ) -> dict:
+    # Distinct fingerprints get distinct content hashes by default. These
+    # fixtures share one file and line, so a shared hash would make every row
+    # a copy of the same code and the listing would group them into one entry.
+    if line_content_hash is None:
+        line_content_hash = hashlib.sha256(fingerprint.encode()).hexdigest()[:12]
     return {
         "pattern": pattern,
         "file": file,
@@ -1024,7 +1032,7 @@ def _make_raw_entry(
         "severity": severity,
         "detected_at": detected_at,
         "model_used": "gemma4:latest",
-        "line_content_hash": "0123456789ab",
+        "line_content_hash": line_content_hash,
         "fingerprint": fingerprint,
         "status": status,
     }
@@ -2130,6 +2138,258 @@ def test_label_for_other_worktree_falls_back_to_parent(watcher_module):
     # No `.worktrees` segment — fall back to deepest dir name.
     assert watcher_module._label_for_other_worktree("/var/log/app/main.py") == "app"
     assert watcher_module._label_for_other_worktree("") == "(unknown)"
+
+
+# --- Display-time grouping of copies ---------------------------------------
+#
+# The same code flagged in several worktrees, or at a shifted line, is several
+# rows. The listing shows one entry per group, keeps every copy's fingerprint
+# on screen, and never writes: findings.jsonl stays byte-identical.
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=watcher-test",
+            "-c",
+            "user.email=watcher-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            *args,
+        ],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _repo_with_worktrees(root: Path, *names: str) -> dict[str, Path]:
+    """A git repo at ``root/main`` plus linked worktrees ``root/wt/<name>``,
+    each holding ``pkg/mod.py`` and ``tests/test_mod.py``."""
+    main = root / "main"
+    main.mkdir(parents=True)
+    _git("init", "-q", cwd=main)
+    _git("commit", "-q", "--allow-empty", "--no-verify", "-m", "init", cwd=main)
+    trees = {"main": main}
+    for name in names:
+        _git("worktree", "add", "-q", "-b", name, str(root / "wt" / name), cwd=main)
+        trees[name] = root / "wt" / name
+    for tree in trees.values():
+        for rel in ("pkg/mod.py", "tests/test_mod.py"):
+            (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tree / rel).write_text("try:\n    work()\nexcept Exception:\n    pass\n")
+    return {name: tree.resolve() for name, tree in trees.items()}
+
+
+def _copy(fp: str, tree: Path, *, rel: str = "pkg/mod.py", line: int = 3, **kw) -> dict:
+    kw.setdefault("line_content_hash", "c0ffee000000")
+    kw.setdefault("pattern", "P006")
+    kw.setdefault("severity", "medium")
+    return _make_raw_entry(fp, file=str(tree / rel), line=line, **kw)
+
+
+def test_listing_groups_copies_across_worktrees(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+    findings = [
+        _copy("aaaa000000000001", trees["feat-a"]),
+        _copy("bbbb000000000002", trees["feat-b"], line=5),
+        _copy("cccc000000000003", trees["main"], status="surfaced"),
+        _copy("dddd000000000004", trees["feat-a"], line_content_hash="other0000000"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    entries = [line for line in block.splitlines() if line.startswith("  [")]
+    assert len(entries) == 2
+    grouped = next(line for line in entries if "locations" in line)
+    assert "P006 pkg/mod.py" in grouped
+    assert "(3 locations, same line text, 3 worktree(s))" in grouped
+    # Each copy stays individually addressable for --dismiss / --resolve.
+    for fp, tree, line in (
+        ("aaaa0000", "feat-a", 3),
+        ("bbbb0000", "feat-b", 5),
+        ("cccc0000", "main", 3),
+    ):
+        copy_line = next(l for l in block.splitlines() if f"(#{fp})" in l)
+        assert copy_line.startswith(f"    {tree}: ")
+        assert copy_line.split(": ", 1)[1].startswith(f"{trees[tree]}/pkg/mod.py:{line}")
+    assert "(#cccc0000) (surfaced)" in block
+    assert "(#dddd0000)" in block
+    assert "Total unresolved: 4 (showing 4 as 2 entries" in block
+    assert sorted(f["fingerprint"] for f in shown) == sorted(
+        f["fingerprint"] for f in findings
+    )
+
+
+def test_listing_groups_line_shifted_copies_in_one_worktree(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("aaaa000000000001", trees["main"], line=3),
+        _copy("bbbb000000000002", trees["main"], line=9),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "(2 locations, same line text, 1 worktree(s))" in block
+    assert len(shown) == 2
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"pattern": "P001"},
+        {"line_content_hash": "different000"},
+        {"rel": "tests/test_mod.py"},
+    ],
+)
+def test_listing_keeps_findings_that_differ_apart(watcher_module, tmp_path, change):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"]),
+        _copy("bbbb000000000002", trees["feat-a"], **change),
+    ]
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+    assert sum(1 for line in block.splitlines() if line.startswith("  [")) == 2
+
+
+def test_listing_does_not_group_across_repositories(watcher_module, tmp_path):
+    one = _repo_with_worktrees(tmp_path / "one")
+    two = _repo_with_worktrees(tmp_path / "two")
+    findings = [
+        _copy("aaaa000000000001", one["main"]),
+        _copy("bbbb000000000002", two["main"]),
+    ]
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+@pytest.mark.parametrize("content_hash", ["", None])
+def test_listing_does_not_group_without_a_content_hash(
+    watcher_module, tmp_path, content_hash
+):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"]),
+        _copy("bbbb000000000002", trees["feat-a"]),
+    ]
+    for f in findings:
+        if content_hash is None:
+            f.pop("line_content_hash")
+        else:
+            f["line_content_hash"] = content_hash
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+def test_listing_does_not_group_outside_git(watcher_module, tmp_path):
+    findings = []
+    for fp, name in (("aaaa000000000001", "x"), ("bbbb000000000002", "y")):
+        path = tmp_path / name / "pkg" / "mod.py"
+        path.parent.mkdir(parents=True)
+        path.write_text("pass\n")
+        findings.append(_copy(fp, tmp_path / name))
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+def test_display_cap_counts_entries_not_copies(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy(f"a{i:015d}", trees["main"], line=i + 1, line_content_hash="aaaa00000000")
+        for i in range(6)
+    ] + [
+        _copy(f"b{i:015d}", trees["main"], line=i + 1, line_content_hash="bbbb00000000")
+        for i in range(6)
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    # 12 medium rows would hit the 10-item cap; as 2 entries all of them show.
+    assert len(shown) == 12
+    assert "Total unresolved: 12 (showing 12 as 2 entries" in block
+
+
+def test_print_unresolved_groups_copies_without_writing(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    trees = _repo_with_worktrees(tmp_path / "repo", "feat-a")
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    monkeypatch.chdir(outside)  # no session scope: the whole queue is listed
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"]),
+            _copy("bbbb000000000002", trees["feat-a"]),
+        ],
+    )
+    before = watcher_module.FINDINGS_FILE.read_bytes()
+
+    assert watcher_module.print_unresolved() == 0
+
+    out = capsys.readouterr().out
+    assert "P006 pkg/mod.py" in out
+    assert "(2 locations, same line text, 2 worktree(s))" in out
+    assert "(#aaaa0000)" in out and "(#bbbb0000)" in out
+    assert watcher_module.FINDINGS_FILE.read_bytes() == before
+
+
+def test_surface_pending_marks_every_copy_of_a_shown_entry(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"], pattern="P011"),
+            _copy("bbbb000000000002", trees["feat-a"], pattern="P011"),
+        ],
+    )
+    assert watcher_module.surface_pending(check_in=False) == 0
+    statuses = {f["fingerprint"]: f["status"] for f in watcher_module._iter_findings_raw()}
+    assert statuses == {
+        "aaaa000000000001": "surfaced",
+        "bbbb000000000002": "surfaced",
+    }
+
+
+def test_other_worktree_tally_counts_by_worktree_not_parent_dir(
+    watcher_module, tmp_path, capsys
+):
+    trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+    removed = tmp_path / "wt" / "removed-wt" / "tests" / "test_gone.py"
+    gone = _copy("eeee000000000005", tmp_path, rel="wt/removed-wt/tests/test_gone.py")
+    gone["line_content"] = "except Exception: pass"
+    assert not removed.parent.exists()
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"]),
+            _copy("bbbb000000000002", trees["feat-a"], rel="tests/test_mod.py"),
+            _copy("cccc000000000003", trees["feat-a"], rel="pkg/mod.py"),
+            _copy("dddd000000000004", trees["feat-b"], rel="tests/test_mod.py"),
+            gone,
+        ],
+    )
+
+    assert watcher_module.print_unresolved(scope_root=trees["main"]) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        "Plus 4 finding(s) in other worktrees "
+        "(feat-a=2, feat-b=1, removed-wt=1)"
+    ) in out
+    assert "tests=" not in out and "pkg=" not in out
+
+
+def test_worktree_label_for_deleted_dir_inside_a_live_worktree(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    deleted = trees["feat-a"] / "newdir" / "sub" / "x.py"
+    assert watcher_module._worktree_label(str(deleted), {}) == "feat-a"
 
 
 # --- surface_pending (UserPromptSubmit hook, chime mode) -------------------
