@@ -59,8 +59,14 @@ identity or distribution was retained beyond these aggregates.
   execution. The only other deletion route is the `ON DELETE CASCADE` from
   `core.identities`; the one script that deletes identities
   (`scripts/migration/cleanup_ghost_agents.py`) deletes only identities with
-  no `agent_state` rows and is not scheduled anywhere. No row in the window
-  could have been removed before the read.
+  no `agent_state` rows and is not scheduled anywhere. So no retention,
+  scheduled or scripted path could have removed a row in the window before
+  the read. A manual, ad-hoc deletion cannot be excluded from the catalog; it
+  is disclosed here as a residual rather than adjudicated. The contract permits
+  the read at or after the cutoff against the live database, and defines
+  `contract_unreadable` only for missing or mistyped fields, unversioned
+  semantic drift and a missed merge deadline, so adding a new disqualifying
+  condition after the counts were seen would itself breach the registration.
 - **Deviation, ruled harmless: a pre-read row count.** Earlier on the same
   day, while assessing whether retention threatened this read, an audit ran a
   single raw row count of `core.agent_state` over the frozen window. It
