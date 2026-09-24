@@ -2263,17 +2263,19 @@ def surface_pending(
             f for f in all_findings if f.get("status", "open") == "open"
         ]
     else:
-        pending_findings = [
-            f
-            for f in all_findings
-            if f.get("status", "open") in ("open", "surfaced")
-            and audience not in _surface_receipts(f)
+        active_findings = [
+            f for f in all_findings if f.get("status", "open") in ("open", "surfaced")
         ]
-        pending_findings, _out_of_scope = _partition_findings_by_scope(
-            pending_findings,
+        in_scope, _out_of_scope = _partition_findings_by_scope(
+            active_findings,
             scope_root,
             auto_duplicate_aliases(all_findings),
         )
+        # Receipts are checked after scoping: an in-scope entry may be this
+        # worktree's own auto-duplicate copy, which carries its own receipts.
+        pending_findings = [
+            f for f in in_scope if audience not in _surface_receipts(f)
+        ]
 
     if audience is None:
         header = (

@@ -83,7 +83,12 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
         # in another worktree, or at a shifted line) as dismissed/dup with
         # resolved_by "watcher_auto_dedup". Nobody adjudicated it, so it must
         # not inflate a pattern's dismiss ratio or the detection timeline.
-        if row.get("resolved_by") == "watcher_auto_dedup" and row.get("duplicate_of"):
+        if (
+            status == "dismissed"
+            and row.get("resolution_reason") == "dup"
+            and row.get("resolved_by") == "watcher_auto_dedup"
+            and row.get("duplicate_of")
+        ):
             continue
 
         bucket = by_pattern[pattern]

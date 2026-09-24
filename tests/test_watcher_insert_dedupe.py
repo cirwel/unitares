@@ -12,6 +12,8 @@ pattern, same line hash, same repo-relative path) as dismissed/``dup`` with a
 ``duplicate_of`` pointer. The row is kept; it is never surfaced, escalated or
 mirrored; and because nobody adjudicated it, it emits no resolution outcome
 and does not count as a dismissal anywhere Watcher's precision is computed.
+The fold only lasts while the canonical finding is unresolved: closing it
+for any reason other than a verdict about the code reopens the copy.
 """
 
 from __future__ import annotations
@@ -344,20 +346,124 @@ def test_auto_dup_carries_no_precision_signal(worktrees):
 def test_each_worktree_still_sees_the_finding_at_its_own_path(worktrees, capsys):
     main, other = worktrees
     first = _detect(main / "src" / "envelope_step.py", 5)
+    copy = _detect(other / "src" / "envelope_step.py", 5)
     F.persist_findings([first])
-    F.persist_findings([_detect(other / "src" / "envelope_step.py", 5)])
+    F.persist_findings([copy])
 
     F.print_unresolved(scope_root=other)
     out = capsys.readouterr().out
     assert str(other / "src" / "envelope_step.py") in out
-    assert first.fingerprint[:8] in out
+    assert copy.fingerprint[:8] in out
+    assert first.fingerprint[:8] not in out
 
     A.surface_pending(audience="codex:other", scope_root=other, check_in=False)
     out = capsys.readouterr().out
     assert str(other / "src" / "envelope_step.py") in out
     stored = {r["fingerprint"]: r for r in _rows()}
-    assert "codex:other" in stored[first.fingerprint]["surface_receipts"]
+    assert "codex:other" in stored[copy.fingerprint]["surface_receipts"]
+    assert stored[copy.fingerprint]["status"] == "dismissed"  # still folded
+    # Delivered once per audience, like any other finding.
+    A.surface_pending(audience="codex:other", scope_root=other, check_in=False)
+    assert str(other / "src" / "envelope_step.py") not in capsys.readouterr().out
 
     A.surface_pending(audience="codex:main", scope_root=main, check_in=False)
     out = capsys.readouterr().out
     assert str(main / "src" / "envelope_step.py") in out
+    assert first.fingerprint[:8] in out
+
+
+# ---------------------------------------------------------------------------
+# The fold only lasts while the canonical finding is open
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "status, reason",
+    [("confirmed", None), ("aged_out", None), ("dismissed", "stale"), ("dismissed", "unclear")],
+)
+def test_closing_the_canonical_releases_the_copy(worktrees, capsys, status, reason):
+    main, other = worktrees
+    first = _detect(main / "src" / "envelope_step.py", 5)
+    copy = _detect(other / "src" / "envelope_step.py", 5)
+    F.persist_findings([first])
+    F.persist_findings([copy])
+
+    assert F.update_finding_status(
+        first.fingerprint, status, reason=reason, emit_resolution_event=False
+    ) == 0
+    capsys.readouterr()
+
+    [reopened] = _unresolved()
+    assert reopened["fingerprint"] == copy.fingerprint
+    assert reopened["released_from_duplicate_of"] == first.fingerprint
+    assert "duplicate_of" not in reopened and "resolved_by" not in reopened
+    F.print_unresolved(scope_root=other)
+    assert copy.fingerprint[:8] in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("reason", ["fp", "wont_fix", "out_of_scope"])
+def test_a_verdict_on_the_code_settles_the_copy(worktrees, reason):
+    main, other = worktrees
+    first = _detect(main / "src" / "envelope_step.py", 5)
+    copy = _detect(other / "src" / "envelope_step.py", 5)
+    F.persist_findings([first])
+    F.persist_findings([copy])
+    F.update_finding_status(first.fingerprint, "dismissed", reason=reason, emit_resolution_event=False)
+    assert _unresolved() == []
+    assert F.is_auto_duplicate({r["fingerprint"]: r for r in _rows()}[copy.fingerprint])
+
+
+def test_release_re_folds_the_remaining_copies(worktrees, tmp_path):
+    main, other = worktrees
+    third_wt = tmp_path / "wt-third"
+    _git(main, "worktree", "add", "-q", "-b", "third", str(third_wt))
+    first = _detect(main / "src" / "envelope_step.py", 5)
+    second = _detect(other / "src" / "envelope_step.py", 5)
+    third = _detect(third_wt / "src" / "envelope_step.py", 5)
+    for f in (first, second, third):
+        F.persist_findings([f])
+    F.update_finding_status(first.fingerprint, "confirmed", emit_resolution_event=False)
+    rows = {r["fingerprint"]: r for r in _rows()}
+    assert [r["fingerprint"] for r in _unresolved()] == [second.fingerprint]
+    assert rows[third.fingerprint]["duplicate_of"] == second.fingerprint
+
+
+def test_adjudicating_a_copy_leaves_the_canonical_open(worktrees):
+    main, other = worktrees
+    first = _detect(main / "src" / "envelope_step.py", 5)
+    copy = _detect(other / "src" / "envelope_step.py", 5)
+    F.persist_findings([first])
+    F.persist_findings([copy])
+    assert F.update_finding_status(copy.fingerprint, "confirmed", emit_resolution_event=False) == 0
+    rows = {r["fingerprint"]: r for r in _rows()}
+    assert rows[first.fingerprint]["status"] == "open"
+    assert rows[copy.fingerprint]["status"] == "confirmed"
+    assert rows[copy.fingerprint]["was_duplicate_of"] == first.fingerprint
+    assert not F.is_auto_duplicate(rows[copy.fingerprint])
+
+
+def test_redetection_after_ttl_stays_addressable(worktrees):
+    main, other = worktrees
+    first = _detect(main / "src" / "envelope_step.py", 5)
+    copy = _detect(other / "src" / "envelope_step.py", 5)
+    F.persist_findings([first])
+    F.persist_findings([copy])
+    F.update_finding_status(first.fingerprint, "dismissed", reason="fp", emit_resolution_event=False)
+    F.DEDUP_FILE.write_text("{}")
+    assert F.persist_findings([_detect(other / "src" / "envelope_step.py", 5)]) == []
+    assert [r["fingerprint"] for r in _rows()].count(copy.fingerprint) == 1
+    assert F.update_finding_status(copy.fingerprint, "dismissed", reason="fp", emit_resolution_event=False) == 0
+
+
+def test_same_relative_path_in_another_repo_is_not_a_dup(worktrees, tmp_path):
+    main, _ = worktrees
+    repo2 = tmp_path / "unrelated"
+    repo2.mkdir()
+    _git(repo2, "init", "-q", "-b", "main")
+    (repo2 / "src").mkdir()
+    (repo2 / "src" / "envelope_step.py").write_text(SOURCE)
+    first = _detect(main / "src" / "envelope_step.py", 5)
+    stranger = _detect(repo2 / "src" / "envelope_step.py", 5)
+    F.persist_findings([first])
+    assert F.persist_findings([stranger]) == [stranger]
+    assert len(_unresolved()) == 2

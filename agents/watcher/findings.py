@@ -24,6 +24,7 @@ from agents.watcher._util import (
     findings_state_lock as _findings_state_lock,
     hash_line_content,
     log,
+    repo_identity,
     repo_relative_path,
     watcher_state_dir,
 )
@@ -68,9 +69,77 @@ AUTO_DEDUP_RESOLVER = "watcher_auto_dedup"
 _UNRESOLVED_STATUSES = ("open", "surfaced")
 
 
+# Verdicts on a canonical finding that speak for the code itself, so they
+# also settle its automatic duplicates. Any other closure (confirmed = fixed
+# in that checkout, aged_out, or a dismissal that says nothing about the code)
+# releases the duplicates: the same code may still be live in their worktrees.
+_VERDICT_COVERS_DUPLICATES = frozenset({"fp", "wont_fix", "out_of_scope"})
+
+
 def is_auto_duplicate(row: dict[str, Any]) -> bool:
-    """True for a row persist_findings recorded as an automatic duplicate."""
-    return row.get("resolved_by") == AUTO_DEDUP_RESOLVER and bool(row.get("duplicate_of"))
+    """True for a row persist_findings recorded as an automatic duplicate
+    and that nobody has adjudicated since."""
+    return (
+        row.get("status") == "dismissed"
+        and row.get("resolution_reason") == "dup"
+        and row.get("resolved_by") == AUTO_DEDUP_RESOLVER
+        and bool(row.get("duplicate_of"))
+    )
+
+
+def release_orphaned_duplicates(
+    rows: list[dict[str, Any]], now: str | None = None
+) -> tuple[list[dict[str, Any]], int]:
+    """Reopen automatic duplicates whose canonical finding closed.
+
+    Folding a copy into a canonical finding is only sound while that finding
+    is unresolved. Once it is confirmed (fixed in its own checkout), aged out,
+    or dismissed for a reason that says nothing about the code, the copies in
+    other worktrees may still hold the bug, so the first copy is reopened as
+    the new canonical finding and any others are re-pointed at it. A verdict
+    about the code (``fp``/``wont_fix``/``out_of_scope``) settles the copies
+    too, and a canonical row that no longer exists (compacted) leaves them as
+    they are. Returns the new rows and how many copies were reopened.
+    """
+    by_fp = {row.get("fingerprint"): row for row in rows if row.get("fingerprint")}
+    promoted: dict[str, str] = {}
+    stamp = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    released = 0
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not is_auto_duplicate(row):
+            out.append(row)
+            continue
+        canonical_fp = str(row["duplicate_of"])
+        canonical = by_fp.get(canonical_fp)
+        if canonical is None or canonical.get("status", "open") in _UNRESOLVED_STATUSES:
+            out.append(row)
+            continue
+        if (
+            canonical.get("status") == "dismissed"
+            and canonical.get("resolution_reason") in _VERDICT_COVERS_DUPLICATES
+        ):
+            out.append(row)
+            continue
+        if canonical_fp in promoted:
+            out.append({**row, "duplicate_of": promoted[canonical_fp]})
+            continue
+        reopened = {
+            key: value
+            for key, value in row.items()
+            if key not in ("status", "dismissed_at", "resolved_by", "resolution_reason", "duplicate_of")
+        }
+        reopened.update(
+            status="open",
+            released_from_duplicate_of=canonical_fp,
+            released_at=stamp,
+        )
+        promoted[canonical_fp] = str(row.get("fingerprint") or "")
+        released += 1
+        out.append(reopened)
+    if released:
+        log(f"released {released} auto-duplicate finding(s) whose canonical finding closed")
+    return out, released
 
 
 def findings_state_lock(wait_s: float = 2.0):
@@ -119,6 +188,10 @@ class Finding:
     # finding can still be matched after its worktree is removed. NOT part of
     # the fingerprint either.
     repo_relpath: str = ""
+    # The repository's shared git dir (see ``repo_identity``), captured with
+    # ``repo_relpath``: identical relative paths in two different repos are
+    # not duplicates. NOT part of the fingerprint.
+    repo_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.fingerprint:
@@ -257,24 +330,24 @@ def _absolute_provenance_key(
     return pattern, canonical_path, normalized_line, line_content_hash
 
 
-def _row_repo_relpath(row: dict[str, Any]) -> str:
-    """Repo-relative path of a stored finding, for duplicate matching.
+def _row_code_location(row: dict[str, Any]) -> tuple[str, str]:
+    """``(repo_id, repo_relpath)`` of a stored finding, for duplicate matching.
 
-    Prefers the path captured at persist time. Older rows predate that field;
-    for them it is derived from ``file`` while the file still exists. An
+    Prefers the values captured at persist time. Older rows predate them; for
+    those they are derived from ``file`` while the file still exists. An
     absolute path that cannot be resolved is compared verbatim, which can only
     ever match the same file. A legacy relative path has no knowable worktree
-    or repo, so it matches nothing (empty string).
+    or repo, so it matches nothing (empty relpath).
     """
     stored = row.get("repo_relpath")
     if isinstance(stored, str) and stored:
-        return stored
+        return str(row.get("repo_id") or ""), stored
     file_path = str(row.get("file") or "")
     if not file_path or not Path(file_path).is_absolute():
-        return ""
+        return "", ""
     if Path(file_path).exists():
-        return repo_relative_path(file_path)
-    return file_path
+        return repo_identity(file_path), repo_relative_path(file_path)
+    return "", file_path
 
 
 def _find_duplicate_target(
@@ -285,7 +358,8 @@ def _find_duplicate_target(
     """The unresolved finding ``finding`` duplicates, or None.
 
     A duplicate is the same pattern on the same code (``line_content_hash``)
-    at the same repo-relative path, in another worktree or at a shifted line.
+    at the same repo-relative path of the same repository (``repo_id``), in
+    another worktree or at a shifted line.
     ``candidates`` are the unresolved rows already sharing pattern and line
     hash. The line hash alone is too weak for a shifted line: one-liners like
     ``pass`` or ``except Exception:`` repeat within a file. So a line shift is
@@ -298,8 +372,8 @@ def _find_duplicate_target(
     for row in candidates:
         if row.get("fingerprint") == finding.fingerprint:
             continue
-        row_relpath = _row_repo_relpath(row)
-        if not row_relpath or row_relpath != relpath:
+        row_repo, row_relpath = _row_code_location(row)
+        if not row_relpath or (row_repo, row_relpath) != (finding.repo_id, relpath):
             continue
         try:
             row_line = int(row.get("line") or 0)
@@ -345,12 +419,15 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
     mirrored to the event stream. Identical code in N worktrees, or the same
     block after an edit above it, stays one unresolved item.
     """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with findings_state_lock():
         dedup = load_dedup()
         original_dedup = dict(dedup)
         dedup = sweep_stale_dedup(dedup)
         legacy_fingerprints: dict[tuple[str, str, int, str], list[str]] = {}
-        existing_rows = _iter_findings_raw()
+        existing_rows, released = release_orphaned_duplicates(_iter_findings_raw(), now)
+        if released:
+            _write_findings_atomic(existing_rows)
         unresolved_fps: set[str] = set()
         dup_candidates: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for row in existing_rows:
@@ -363,13 +440,12 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                     dup_candidates.setdefault(
                         (str(row.get("pattern") or ""), line_hash), []
                     ).append(row)
-        # Auto-duplicates whose canonical finding is still unresolved: a
-        # re-detection after the dedup TTL must not append a second row.
-        live_auto_dup_fps = {
-            row.get("fingerprint")
-            for row in existing_rows
-            if is_auto_duplicate(row) and row.get("duplicate_of") in unresolved_fps
-        }
+        # A re-detection after the dedup TTL must not append a second row with
+        # the fingerprint of an existing auto-duplicate: either it is still
+        # folded into a live finding, or a verdict about the code settled it
+        # (a released copy is open again and already in unresolved_fps). A
+        # second row would also make --dismiss/--resolve on it ambiguous.
+        auto_dup_fps = {row.get("fingerprint") for row in existing_rows if is_auto_duplicate(row)}
         auto_dups: list[dict[str, Any]] = []
         for row in existing_rows:
             old_fingerprint = row.get("fingerprint")
@@ -382,7 +458,6 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             if key is not None and isinstance(old_fingerprint, str):
                 legacy_fingerprints.setdefault(key, []).append(old_fingerprint)
         fresh: list[Finding] = []
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         for f in new_findings:
             if f.fingerprint in dedup:
                 continue  # already flagged this one
@@ -404,13 +479,14 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 dedup[f.fingerprint] = max(prior_timestamps)
                 continue
             dedup[f.fingerprint] = now
-            if f.fingerprint in unresolved_fps or f.fingerprint in live_auto_dup_fps:
+            if f.fingerprint in unresolved_fps or f.fingerprint in auto_dup_fps:
                 # Already on record and still live; the dedup TTL lapsed.
                 continue
             canonical = None
             if Path(f.file).is_absolute():
                 if not f.repo_relpath:
                     f.repo_relpath = repo_relative_path(f.file)
+                    f.repo_id = repo_identity(f.file)
                 if f.line_content_hash:
                     canonical = _find_duplicate_target(
                         f,
@@ -685,7 +761,17 @@ def update_finding_status(
     updated_target: dict[str, Any] | None = None
     for f in findings:
         if f.get("fingerprint") == target_fp:
-            merged = {**f, "status": new_status}
+            base = f
+            if is_auto_duplicate(f):
+                # Someone adjudicated this copy directly. It stops being an
+                # automatic duplicate: the verdict is theirs, not the fold's.
+                base = {
+                    key: value
+                    for key, value in f.items()
+                    if key not in ("dismissed_at", "resolved_by", "resolution_reason", "duplicate_of")
+                }
+                base["was_duplicate_of"] = f["duplicate_of"]
+            merged = {**base, "status": new_status}
             if timestamp_field:
                 merged[timestamp_field] = now_iso
             if resolver_agent_id:
@@ -695,6 +781,7 @@ def update_finding_status(
             f = merged
             updated_target = merged
         updated.append(f)
+    updated, _released = release_orphaned_duplicates(updated)
     _write_findings_atomic(updated)
     if updated_finding_sink is not None and updated_target is not None:
         updated_finding_sink.append(updated_target)
@@ -881,6 +968,7 @@ def _sweep_token_drift_quiet() -> int:
     if aged == 0:
         return 0
 
+    out, _released = release_orphaned_duplicates(out)
     _write_findings_atomic(out)
     log(
         f"sweep_token_drift (auto): aged out {aged} finding(s) whose flagged "
@@ -1160,18 +1248,17 @@ def _resolve_session_scope_root(cwd: Path | None = None) -> Path | None:
 
 
 def auto_duplicate_aliases(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Map each canonical fingerprint to where its automatic duplicates live.
+    """Map each canonical fingerprint to its automatic-duplicate rows.
 
     Scoped delivery uses this so folding a worktree's copy into another
-    worktree's finding does not hide that finding from the first worktree:
-    the canonical finding is shown there, at that worktree's own path/line.
+    worktree's finding does not hide it from the first worktree: that
+    worktree is shown its own copy (own path, line and fingerprint), so a
+    ``--resolve``/``--dismiss`` there adjudicates that copy only.
     """
     out: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         if is_auto_duplicate(row) and row.get("file"):
-            out.setdefault(str(row["duplicate_of"]), []).append(
-                {"file": str(row["file"]), "line": row.get("line")}
-            )
+            out.setdefault(str(row["duplicate_of"]), []).append(row)
     return out
 
 
@@ -1196,9 +1283,8 @@ def _partition_findings_by_scope(
     A finding is in-scope when its ``file`` lives under ``scope_root``, or
     when one of its automatic duplicates does (``aliases``, keyed by
     fingerprint; see ``auto_duplicate_aliases``). In the second case the
-    in-scope entry is a display copy carrying the duplicate's path and line,
-    with the canonical fingerprint, so the reader sees their own checkout and
-    a dismiss or receipt still lands on the one unresolved finding.
+    in-scope entry is that duplicate row, shown with the canonical finding's
+    status, so the reader sees their own checkout and acts on their own copy.
     Out-of-scope findings are
     aggregated by their nearest ``.worktrees`` sibling label so the footer
     can summarize *where* the backlog is without listing every path.
@@ -1239,9 +1325,8 @@ def _partition_findings_by_scope(
         if local is not None:
             in_scope.append(
                 {
-                    **f,
-                    "file": local["file"],
-                    "line": local["line"],
+                    **local,
+                    "status": f.get("status", "open"),
                     "path_gone": not Path(local["file"]).exists(),
                 }
             )
