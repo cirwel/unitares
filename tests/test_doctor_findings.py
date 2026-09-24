@@ -365,3 +365,44 @@ def test_template_documents_the_shipped_cooldown_defaults():
     assert f"default {df.COOLDOWN_SECONDS} " in text
     assert f"default {df.MAX_COOLDOWN_SECONDS} " in text
     assert "DOCTOR_FINDINGS_MAX_COOLDOWN" in text
+
+
+def test_each_due_realert_carries_a_new_change_token():
+    # Governance drops a repeated change_token for a fingerprint with no time
+    # limit, and the default token hashes the message. A condition whose
+    # message never moves would be DEDUPED on every re-alert and never
+    # resurface, however long the backoff ran.
+    posted: list = []
+    r = FakeResult("host_binary_currency", WARN, "redis 8.10.1 -> 8.10.2")
+    d = make([r], posted)
+    d.run()
+    fp = df.fingerprint("host_binary_currency", "warn")
+    d.state["open"][fp]["last_alert"] -= 25 * HOUR
+    d.run()
+    assert len(posted) == 2
+    assert posted[0]["message"] == posted[1]["message"]
+    assert posted[0]["change_token"] != posted[1]["change_token"]
+
+
+def test_change_token_is_stable_across_retries_of_one_post():
+    posted: list = []
+    state = _open_state("signal_degeneracy", "warn", ago_h=25, alerts=1)
+    d = make([FakeResult("signal_degeneracy", WARN, "x")], posted, state=state)
+    d.io["post_finding"] = lambda payload: (posted.append(payload), df.FAILED)[1]
+    d.run()
+    d.run()
+    assert len(posted) == 2
+    assert posted[0]["change_token"] == posted[1]["change_token"]
+
+
+def test_a_recurrence_does_not_reuse_the_previous_incidents_token():
+    posted: list = []
+    warn = [FakeResult("immortal_lease", WARN, "2 leases")]
+    d = make(warn, posted)
+    d.run()
+    d.collect = lambda: [FakeResult("immortal_lease", PASS, "ok")]  # type: ignore[method-assign]
+    d.run()
+    d.collect = lambda: warn  # type: ignore[method-assign]
+    d.run()
+    assert len(posted) == 2
+    assert posted[0]["change_token"] != posted[1]["change_token"]

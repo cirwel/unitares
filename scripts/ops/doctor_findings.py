@@ -280,6 +280,24 @@ class DoctorFindings:
                 prev.get("alerts", 1)):
             log(f"  finding suppressed (cooldown active for {r.name})")
             return
+        # Which post this is: (incident, sequence). Governance suppresses a
+        # repeated change_token for a fingerprint with no time limit
+        # (EventDetector.record_event), and the default token hashes the
+        # message, so a condition whose message never moves would be DEDUPED
+        # on every due re-alert and never resurface. The token is therefore
+        # per scheduled post. It is stable across retries of that post, since
+        # neither number advances until governance holds it. The incident
+        # number survives resolution, so a condition that clears and recurs
+        # cannot collide with its previous incident's first post.
+        incidents: Dict[str, int] = self.state.setdefault("incidents", {})
+        if prev:
+            incident = prev.get("incident", incidents.get(fp, 0))
+            seq = prev.get("alerts", 1) + 1
+        else:
+            incident = incidents.get(fp, 0) + 1
+            seq = 1
+        change_token = hashlib.sha256(
+            f"{fp}:{incident}:{seq}".encode()).hexdigest()[:16]
         if self.dry_run:
             log(f"  dry-run: would post finding {fp}")
             return
@@ -291,6 +309,7 @@ class DoctorFindings:
             "severity": severity_for(r.status.value),
             "message": f"{r.name}: {message}",
             "fingerprint": fp,
+            "change_token": change_token,
             # Shared doctor-layer identity; PRODUCER stays the fallback and
             # the event_type below stays per-family (see findings.py note).
             "agent_id": doctor_layer_agent_id(PRODUCER),
@@ -312,8 +331,10 @@ class DoctorFindings:
             "status": r.status.value,
             "first_seen": (prev or {}).get("first_seen", now),
             "last_alert": now,
-            "alerts": (prev or {}).get("alerts", 1 if prev else 0) + 1,
+            "alerts": seq,
+            "incident": incident,
         }
+        incidents[fp] = incident
 
 
 def main() -> int:
