@@ -19,7 +19,7 @@ For *consequential, flag-gated capabilities* and their **wake conditions**, see
 `docs/operations/dormant-capability-registry.md` (Theme 6) — this file is the flat
 index; that one is the curated decision record.
 
-**178 flags.**
+**179 flags.**
 
 | Flag | Reader fallback(s) | Purpose | Read at |
 |---|---|---|---|
@@ -201,3 +201,4 @@ index; that one is the curated decision record.
 | `UNITARES_TRACEMALLOC_FRAMES` | `'5'` | — | src/mcp_server.py |
 | `UNITARES_UDS_SOCKET` | `None (no reader fallback)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py (+2 more) |
 | `UNITARES_WATCHER_DATA_DIR` | `None (no reader fallback)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
+| `UNITARES_WATCHER_LOG_FILE` | `None (no reader fallback)` | read by log() | agents/watcher/_util.py |
