@@ -55,6 +55,12 @@ _lease_ids: dict[str, str] = {}
 # overlapping a slow exit); a release removes only the releasing session and
 # frees the lease only when no other session has refreshed it within the TTL.
 # A refresh without a session id is recorded under _HOLDER_UNKNOWN.
+#
+# Boundary: client_session_id is derived from the identity, so two processes
+# live under one uuid at the same time share a key here and cannot be told
+# apart. The identity contract rules that state out (a fresh process mints a
+# fresh identity; a continuity_token rebind is same-live-process only), so this
+# bookkeeping does not try to separate them.
 _lease_sessions: dict[str, dict[str, float]] = {}
 
 # uuid -> monotonic time of the agent's own clean-exit release, and the
