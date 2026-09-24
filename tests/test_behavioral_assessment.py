@@ -1,5 +1,7 @@
 """Tests for behavioral assessment: risk thresholds, context sensitivity, verdict mapping."""
 
+from dataclasses import asdict
+
 import pytest
 from src.behavioral_state import BehavioralEISV, BOOTSTRAP_UPDATES
 from src.behavioral_assessment import (
@@ -8,6 +10,9 @@ from src.behavioral_assessment import (
     RISK_SAFE_THRESHOLD,
     RISK_CAUTION_THRESHOLD,
 )
+
+FLOOR_SHADOW_FLAG = "UNITARES_FLOOR_BREACH_CAUTION_SHADOW"
+FLOOR_APPLY_FLAG = "UNITARES_FLOOR_BREACH_CAUTION_APPLY"
 
 
 def _make_state(E=0.5, I=0.5, S=0.2, updates=20):
@@ -187,6 +192,124 @@ class TestAbsoluteFloorsBoundComponentsNotVerdict:
         assert result.verdict == "high-risk"
         assert result.risk == pytest.approx(0.60, abs=0.01)
         assert result.components["high_V"] == 0.0
+
+
+class TestBaselinedFloorBreachCautionFloor:
+    """Issue #1995 option 2, baselined-only form, behind default-OFF flags.
+
+    Wake condition 1 of the thread's 2026-09-02 stop rule fired 2026-09-13
+    (first baselined breach-and-safe rows). The candidate remedy: when the
+    baseline is warm AND an absolute floor is breached, the verdict is at
+    least "caution". Flag off must be byte-identical to the pre-flag result;
+    SHADOW records without changing; APPLY changes verdict only.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _flags_off(self, monkeypatch):
+        monkeypatch.delenv(FLOOR_SHADOW_FLAG, raising=False)
+        monkeypatch.delenv(FLOOR_APPLY_FLAG, raising=False)
+
+    def test_flags_off_is_unchanged_and_carries_no_record(self, monkeypatch):
+        # S alone is the one dimension whose floor is reachable in true
+        # isolation (see TestAbsoluteFloorsBoundComponentsNotVerdict).
+        state = _healthy_baseline_then_override(S=1.0)
+        assert state.is_baselined
+        result = assess_behavioral_state(state, rho=0.5)
+        assert result.verdict == "safe"
+        assert result.risk == pytest.approx(0.20, abs=0.01)
+        assert result.floor_breach_caution is None
+
+        # An explicit "off" value is the same as unset.
+        monkeypatch.setenv(FLOOR_SHADOW_FLAG, "0")
+        monkeypatch.setenv(FLOOR_APPLY_FLAG, "off")
+        assert asdict(assess_behavioral_state(state, rho=0.5)) == asdict(result)
+
+    def test_shadow_records_would_be_caution_without_changing_verdict(self, monkeypatch):
+        state = _healthy_baseline_then_override(S=1.0)
+        baseline = assess_behavioral_state(state, rho=0.5)
+
+        monkeypatch.setenv(FLOOR_SHADOW_FLAG, "1")
+        result = assess_behavioral_state(state, rho=0.5)
+
+        assert result.verdict == "safe"
+        assert result.risk == baseline.risk
+        assert result.health == baseline.health
+        assert result.components == baseline.components
+        assert result.floor_breach_caution == {
+            "mode": "shadow",
+            "floor": "caution",
+            "behavioral_baselined": True,
+            "breach_count": 1,
+            "eligible": True,
+            "unfloored_verdict": "safe",
+            "floored_verdict": "caution",
+            "would_change": True,
+            "applied": False,
+        }
+
+    def test_apply_baselined_breach_is_at_least_caution(self, monkeypatch):
+        state = _healthy_baseline_then_override(S=1.0)
+        baseline = assess_behavioral_state(state, rho=0.5)
+
+        monkeypatch.setenv(FLOOR_APPLY_FLAG, "1")
+        result = assess_behavioral_state(state, rho=0.5)
+
+        assert result.verdict == "caution"
+        # Verdict floor, not a reweight: risk/health/components are the
+        # arithmetic's, unchanged.
+        assert result.risk == baseline.risk
+        assert result.risk < RISK_SAFE_THRESHOLD
+        assert result.health == baseline.health
+        assert result.components == baseline.components
+        assert result.floor_breach_caution["mode"] == "apply"
+        assert result.floor_breach_caution["unfloored_verdict"] == "safe"
+        assert result.floor_breach_caution["floored_verdict"] == "caution"
+        assert result.floor_breach_caution["applied"] is True
+
+    def test_apply_unbaselined_breach_is_unchanged(self, monkeypatch):
+        # Pre-warmup the fixed-threshold path scores S=1.0 at 0.20 -> safe,
+        # and the floor must NOT fire: the thread's cold-start finding is
+        # that the harness's canned first check-ins breach |V| for every
+        # fresh agent, so an unbaselined floor manufactures a fleet-wide
+        # "guide" on no agent signal.
+        state = _make_state(E=0.7, I=0.7, S=0.15, updates=5)
+        state.S = 1.0
+        assert not state.is_baselined
+        baseline = assess_behavioral_state(state, rho=0.5)
+        assert baseline.verdict == "safe"
+
+        monkeypatch.setenv(FLOOR_APPLY_FLAG, "1")
+        result = assess_behavioral_state(state, rho=0.5)
+
+        assert result.verdict == "safe"
+        assert result.risk == baseline.risk
+        assert result.floor_breach_caution["behavioral_baselined"] is False
+        assert result.floor_breach_caution["breach_count"] == 1
+        assert result.floor_breach_caution["eligible"] is False
+        assert result.floor_breach_caution["would_change"] is False
+        assert result.floor_breach_caution["applied"] is False
+
+    def test_apply_baselined_no_breach_is_unchanged(self, monkeypatch):
+        state = _healthy_baseline_then_override()
+        monkeypatch.setenv(FLOOR_APPLY_FLAG, "1")
+        result = assess_behavioral_state(state, rho=0.5)
+
+        assert result.verdict == "safe"
+        assert result.floor_breach_caution["breach_count"] == 0
+        assert result.floor_breach_caution["eligible"] is False
+        assert result.floor_breach_caution["applied"] is False
+
+    def test_apply_never_lowers_an_already_worse_verdict(self, monkeypatch):
+        # Both floors fire -> 0.60 -> "high-risk"; the floor is one-sided.
+        state = _healthy_baseline_then_override(E=0.0, I=0.0)
+        monkeypatch.setenv(FLOOR_APPLY_FLAG, "1")
+        result = assess_behavioral_state(state, rho=0.5)
+
+        assert result.verdict == "high-risk"
+        assert result.floor_breach_caution["eligible"] is True
+        assert result.floor_breach_caution["floored_verdict"] == "high-risk"
+        assert result.floor_breach_caution["would_change"] is False
+        assert result.floor_breach_caution["applied"] is False
 
 
 class TestRhoSignals:
