@@ -356,6 +356,8 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
                 if escalated_decision is not decision:
                     result["decision"] = escalated_decision
                     result["dialectic_escalation"] = True
+                    from .updates.phases import _rewrap_behavioral_verdict
+                    _rewrap_behavioral_verdict(result, escalated_decision)
                 dialectic_warnings.extend(condition_warnings)
         except Exception as e:
             logger.warning(f"Could not enforce post-ODE dialectic conditions: {e}", exc_info=True)
@@ -411,6 +413,28 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
     return success_response(response)
 
 
+def _presence_session_id(ctx) -> Optional[str]:
+    """The caller's client_session_id for its presence heartbeat.
+
+    UpdateContext carries no client_session_id attribute; the id arrives in the
+    arguments (or the request context). Without it every check-in heartbeat
+    was nameless, so a session's own clean-exit release could never tell its
+    check-ins from an unnamed live caller's.
+    """
+    session_id = getattr(ctx, "client_session_id", None)
+    if not session_id:
+        arguments = getattr(ctx, "arguments", None) or {}
+        session_id = arguments.get("client_session_id")
+    if not session_id:
+        try:
+            from src.mcp_handlers.context import get_context_client_session_id
+
+            session_id = get_context_client_session_id()
+        except Exception:  # pragma: no cover - defensive
+            session_id = None
+    return str(session_id) if session_id else None
+
+
 def _schedule_agent_presence_heartbeat(ctx) -> None:
     """Fire-and-forget: keep this agent's agent:/<uuid> lease-plane presence lease fresh.
 
@@ -427,7 +451,7 @@ def _schedule_agent_presence_heartbeat(ctx) -> None:
 
         schedule_agent_presence_heartbeat(
             getattr(ctx, "agent_uuid", "") or "",
-            getattr(ctx, "client_session_id", None),
+            _presence_session_id(ctx),
         )
     except Exception as e:  # pragma: no cover - scheduling must never affect the check-in
         logger.debug(f"agent presence lease scheduling skipped: {e}")

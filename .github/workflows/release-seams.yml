@@ -8,9 +8,11 @@ name: Release Seams
 # outside VERSION's reach. Nothing owned a seam, so nothing reported one.
 #
 # The two release gates stand down unless the tree is a release (VERSION not yet
-# tagged), so ordinary PRs see them only as a quiet pass. The published-claims
-# check runs every time, because a public page can begin advertising an
-# unpublished version at any merge — and did, on 2026-08-21.
+# tagged), so ordinary PRs see them only as a quiet pass. The coverage gate also
+# fails a release tree that still holds unassembled docs/changelog.d/
+# fragments. The published-claims check runs every time, because a public page
+# can begin advertising an unpublished version at any merge — and did, on
+# 2026-08-21.
 
 # Deliberately NOT path-filtered. A filtered-out job never reports, and under
 # `strict` branch protection a required check that never reports leaves the PR
@@ -50,6 +52,21 @@ jobs:
 
       - name: Changelog covers the merge range
         run: python scripts/ci/changelog_coverage.py
+
+      # Every PR, cheap: a malformed fragment otherwise surfaces only at the
+      # release cut, when the assembler refuses to fold it in.
+      - name: Changelog fragments are well-formed
+        run: python scripts/dev/changelog_assemble.py --check
+
+      # Ordinary PRs add a docs/changelog.d/ fragment; an edit to the shared
+      # `## [Unreleased]` section conflicts with every other open PR that has
+      # one. Release trees and dependabot are exempt inside the script.
+      - name: Ordinary PRs add a changelog fragment, not an Unreleased edit
+        if: github.event_name == 'pull_request'
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.base_ref }}
+        run: python scripts/ci/changelog_direct_edit.py --base "origin/$BASE_REF"
 
       - name: Independently versioned series are level with their consumers
         run: python scripts/ci/release_series_drift.py

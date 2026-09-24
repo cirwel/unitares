@@ -65,8 +65,75 @@ logger = get_logger(__name__)
 # and is deliberately absent from recovery guidance.
 _RECOVERY_RISK_CEILING = 0.40
 
+
+def _review_risk_limit() -> float:
+    """Reviewed self-recovery's risk gate: review passes only below it.
+
+    handle_self_recovery_review (lifecycle/operations.py) admits
+    ``risk_score < 0.65`` and so refuses AT the limit; the check action's
+    eligibility test uses ``>`` and disagrees on the boundary. Hints follow
+    the path that actually refuses, so callers compare with ``>=``.
+
+    Imported lazily: the lifecycle handler module pulls in storage and the
+    tool registry, which the middleware must not load at import time.
+    """
+    try:
+        from src.mcp_handlers.lifecycle.self_recovery import MAX_RISK_FOR_SELF_RECOVERY
+
+        return float(MAX_RISK_FOR_SELF_RECOVERY)
+    except Exception:  # pragma: no cover - defensive; the constant is 0.65
+        return 0.65
+
+
+def _operator_resume_limit() -> float:
+    """operator_resume_agent's hard risk limit (refuses above it, force or not)."""
+    try:
+        from src.mcp_handlers.lifecycle.self_recovery import OPERATOR_RESUME_HARD_RISK_LIMIT
+
+        return float(OPERATOR_RESUME_HARD_RISK_LIMIT)
+    except Exception:  # pragma: no cover - defensive; the constant is 0.80
+        return 0.80
+
+
+def _stopped_recovery_route(risk: Optional[float], review_limit: float, *, paused: bool) -> str:
+    """Exits for a stop above the review gate, each one that will not refuse.
+
+    Pausing auto-initiates a dialectic session by default, and request_review
+    then answers SESSION_EXISTS, so the open session is named first. Operator
+    resume refuses above its hard limit or with a void active.
+    """
+    text = (
+        f"{_review_refusal_phrase(review_limit)}. If a dialectic review of this "
+        "pause is open, dialectic(action='get', agent_id=<your agent UUID>) "
+        "finds it and your thesis answers it; otherwise request_review opens one."
+    )
+    operator_limit = _operator_resume_limit()
+    if risk is not None and risk > operator_limit:
+        text += f" Operator resume refuses above risk {operator_limit:.2f}"
+        text += ", so the other exit is the pause's expiry." if paused else "."
+    else:
+        text += " An operator can resume you unless a void is active."
+    return text
+
+
+def _review_refusal_phrase(limit: float) -> str:
+    """State the review gate without overclaiming it.
+
+    handle_self_recovery_review still admits an agent above the limit when
+    the persisted row proves the legacy non-authored cold-start trap, so the
+    refusal is not absolute.
+    """
+    return (
+        f"Reviewed self-recovery refuses at risk {limit:.2f} and above "
+        "(except where it finds the legacy cold-start trap)"
+    )
+
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
+# Bound on a digest's `by` display label. `agent_id` is never bounded: it is
+# the identity key a reader passes back as `agent_id_filter`, so a prefix of it
+# would silently name nobody (or the wrong writer).
+_MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
@@ -79,6 +146,8 @@ _ACTION_ALIASES = {
     "safe": ("proceed", None),
     "caution": ("proceed", "guide"),
     "guide": ("proceed", "guide"),
+    "resumed": ("proceed", "resumed"),
+    "not_paused": ("proceed", "not_paused"),
     "block": ("pause", "block"),
     "high-risk": ("pause", "high-risk"),
     "reject": ("pause", "reject"),
@@ -152,10 +221,45 @@ def _verdict_value(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
+    """The action the policy decided, read before any verdict vocabulary.
+
+    Mirror mode drops `decision` and surfaces the behavioral verdict instead
+    (see `_agent_facing_verdict_raw`), and a metrics read carries no decision at
+    all. A guided proceed then arrives as verdict "high-risk", which
+    `_ACTION_ALIASES` maps to pause, so reading the verdict value first told an
+    agent that was never paused that its action was "pause". Order, most
+    authoritative first: the final `decision`; an applied runtime enforcement
+    (the agent IS paused); the final decision a wrapped verdict rode on
+    (`explain_verdict`'s `decision_action`); then `policy_evaluation`, which is
+    built before post-ODE dialectic enforcement can escalate the decision
+    (updates/phases.py) and so may be stale; then the verdict value.
+    """
     decision = payload.get("decision")
     if decision is not None and not isinstance(decision, dict):
         return str(decision).lower()
-    for container in (payload.get("decision"), payload.get("verdict"), payload):
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    verdicts = [
+        v for v in (payload.get("verdict"), metrics.get("verdict")) if isinstance(v, dict)
+    ]
+    enforcement = payload.get("enforcement")
+    enforced_pause = (
+        "pause"
+        if isinstance(enforcement, dict) and enforcement.get("applied") is True
+        else None
+    )
+    policy = payload.get("policy_evaluation")
+    decided = [
+        (decision or {}).get("action"),
+        enforced_pause,
+        *(v.get("decision_action") for v in verdicts),
+        payload.get("last_decision_action"),
+        policy.get("action") if isinstance(policy, dict) else None,
+    ]
+    for value in decided:
+        if value is not None:
+            return str(value).lower()
+    for container in (decision, payload.get("verdict"), payload):
         if not isinstance(container, dict):
             continue
         value = container.get("action") or container.get("value") or container.get("verdict")
@@ -182,6 +286,54 @@ def _verdict_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(evidence, dict):
             return evidence
     return {}
+
+
+def _is_cold_start(payload: Dict[str, Any]) -> bool:
+    """True only while the verdict is owned by the cold-start prior.
+
+    Narrower than a "provisional" verdict: that grade also covers a
+    behavioral reading that is not yet baselined (check-ins 3-24), which is a
+    measurement of the agent, not the prior.
+    """
+    attribution = payload.get("risk_attribution")
+    attribution = attribution if isinstance(attribution, dict) else {}
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    primary_source = metrics.get("primary_eisv_source") or payload.get(
+        "primary_eisv_source"
+    )
+    driver = attribution.get("primary_driver")
+    basis = _verdict_evidence(payload).get("basis")
+    if driver in {"behavioral_assessment", "independent_verification_floor"} or (
+        primary_source == "behavioral"
+    ):
+        return False
+    return (
+        driver == "phi_cold_start"
+        or primary_source in {"ode_fallback", "phi_cold_start"}
+        or basis in {"ode_fallback", "phi_cold_start"}
+    )
+
+
+def _cold_start_pause_deferred(payload: Dict[str, Any], risk: Optional[float]) -> bool:
+    """Whether this cold-start reading would have paused an authored report.
+
+    The pause comes from the high-risk verdict, not a risk number: task-type
+    adjustment can move risk_score below 0.7 while the verdict stays
+    high-risk. Read what the guard recorded, then the verdict (mirror mode
+    drops the decision), and fall back to the risk band only when neither
+    is present.
+    """
+    decision = payload.get("decision")
+    if isinstance(decision, dict) and (
+        decision.get("cold_start_epistemic_deferred")
+        or str(decision.get("original_action") or "").lower() == "pause"
+    ):
+        return True
+    verdict = _verdict_value(payload)
+    if verdict is not None:
+        return verdict == "high-risk"
+    return risk is not None and risk >= 0.7
 
 
 def _verdict_assurance(payload: Dict[str, Any]) -> tuple[str, Optional[str]]:
@@ -251,6 +403,12 @@ def _action_summary(
         or policy.get("sub_action")
         or inferred_sub_action
     )
+    if not sub_action and inferred_action == "proceed":
+        # recent_decisions stores the bare action ("proceed"); a guided
+        # verdict ("caution"/"guide") still carries the guide sub_action.
+        verdict_sub = _ACTION_ALIASES.get(str(_verdict_value(payload) or "").lower())
+        if verdict_sub and verdict_sub[0] == "proceed" and verdict_sub[1]:
+            sub_action = verdict_sub[1]
 
     verdict_obj = payload.get("verdict")
     if not isinstance(verdict_obj, dict):
@@ -386,8 +544,23 @@ def _recovery_hint(
     if not (risky or attention):
         return None
     action = _decision_action(payload) or _verdict_value(payload)
-    severe = action in {"pause", "reject", "block", "stop"} or (
-        risk is not None and risk >= 0.7
+    stopped = action in {"pause", "reject", "block", "stop"}
+    # High risk alone reads as severe only when no decision is known. Once the
+    # policy has decided to continue (the cold-start guard, gap suppression),
+    # "pause and call self_recovery" contradicts that decision, and reviewed
+    # recovery then refuses the agent anyway (at or above
+    # MAX_RISK_FOR_SELF_RECOVERY) after recording its reflection in shared
+    # memory.
+    decided_to_continue = action in {
+        "proceed", "continue", "approve", "ok", "healthy", "safe", "guide",
+        "resumed", "not_paused",
+    }
+    # Reviewed recovery refuses at or above this risk; no agent may be routed
+    # to a review that will refuse it.
+    review_limit = _review_risk_limit()
+    recovery_refused = risk is not None and risk >= review_limit
+    severe = stopped or (
+        not decided_to_continue and risk is not None and risk >= 0.7
     )
     # Kept in the signature for wire/caller compatibility. Recovery guidance
     # follows the decision and measured risk; the overloaded coherence scalar
@@ -414,12 +587,66 @@ def _recovery_hint(
         "tight", "boundary", "near_edge"
     }
     if severe:
+        if recovery_refused:
+            # Reviewed recovery would record the reflection and then refuse at
+            # this risk, so do not send a stopped agent there.
+            return (
+                "Working state looks degraded - pause this line of work. "
+                + _stopped_recovery_route(risk, review_limit, paused=stopped)
+            )
         return (
             "Working state looks degraded - pause and call "
             "self_recovery(action='review', reflection='...') before continuing."
         )
+    if decided_to_continue and _is_cold_start(payload):
+        # A cold-start reading is the prior, not a measurement of the agent.
+        # This decision did not block, but the non-authored cold-start guard
+        # does not cover the agent's own reports: until behavioral confidence
+        # reaches 0.3, an authored sync_state is scored on the same prior and
+        # can pause at a high reading. That is the one sequence that still
+        # pauses at cold start, so say it rather than "keep working".
+        hint = (
+            "Cold start: this risk is the prior, not a measurement of your "
+            "behavior, and "
+            + ("nothing blocks you now." if action in {"resumed", "not_paused"}
+               else "this decision does not block.")
+        )
+        if _cold_start_pause_deferred(payload, risk):
+            hint += (
+                " Until your third check-in your own sync_state is scored on the "
+                "same prior and can pause on this reading."
+            )
+        return hint
+    if risky and decided_to_continue and recovery_refused:
+        return (
+            "Risk is elevated but "
+            + ("nothing blocks you now" if action in {"resumed", "not_paused"}
+               else "this decision does not block")
+            + " - keep scope tight and sync_state after your next substantial "
+            f"step. {_review_refusal_phrase(review_limit)}, so it is not a step here."
+        )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
+    if risky and decided_to_continue:
+        # Not paused and below the review gate: same advice the attention
+        # branch gives a continuing agent, so two branches never disagree.
+        return (
+            "Risk is elevated but "
+            + ("nothing blocks you now" if action in {"resumed", "not_paused"}
+               else "this decision does not block")
+            + " - keep scope tight, sync_state after your next substantial "
+            "step, and use self_recovery(action='review', reflection='...') "
+            "only if work stalls."
+        )
+    if risky and recovery_refused:
+        # Unrecognised action (e.g. a bare "high-risk" verdict on a read):
+        # quick and reviewed recovery both refuse at this risk.
+        return (
+            "Risk is elevated - "
+            + _review_refusal_phrase(review_limit)[0].lower()
+            + _review_refusal_phrase(review_limit)[1:]
+            + "; if you are blocked, open a dialectic review with request_review."
+        )
     if risky:
         return (
             "Risk is elevated - if you feel stuck, self_recovery(action='quick') "
@@ -505,6 +732,10 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_UNKNOWN_WRITER = "unknown"
+_DIGEST_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -518,7 +749,9 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     """
     payload = _harvest_payload(payload)
     candidates = normalize_discovery_list(payload.get("relevant_discoveries"))
+    from_prior_work = False
     if not candidates:
+        from_prior_work = bool(payload.get("relevant_prior_work"))
         candidates = (
             payload.get("relevant_prior_work")
             or payload.get("results")
@@ -539,6 +772,30 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
             discovery_id = item.get("discovery_id") or item.get("id")
             if discovery_id is not None:
                 suggestion["discovery_id"] = discovery_id
+
+            # Attribution survives the digest: the canonical result leads with
+            # `by` (the write-time label) and carries `_agent_id` (the
+            # identity), and a lean reader asking who wrote a finding must not
+            # need a second, full-mode call to learn it. The identity is
+            # copied whole; only the display label is bounded, and a bounded
+            # label says so rather than posing as the complete value.
+            # `relevant_prior_work` rows are the one exception: the mirror
+            # formatter writes the writer's id into `by` (response_formatter
+            # `_format_mirror`), so there `by` is the identity, not a label.
+            # "unknown" is the producers' placeholder for a missing id and is
+            # neither a label nor an identity.
+            by = item.get("by")
+            agent_id = item.get("_agent_id") or item.get("agent_id")
+            if from_prior_work and not agent_id:
+                agent_id, by = by, None
+            if isinstance(by, str) and by and by != _UNKNOWN_WRITER:
+                if len(by) > _MEMORY_BY_LABEL_CHARS:
+                    suggestion["by"] = by[: _MEMORY_BY_LABEL_CHARS - 1] + "…"
+                    suggestion["by_truncated"] = True
+                else:
+                    suggestion["by"] = by
+            if agent_id and str(agent_id) != _UNKNOWN_WRITER:
+                suggestion["agent_id"] = str(agent_id)
 
             summary = item.get("summary")
             if isinstance(summary, str):
@@ -936,9 +1193,31 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     def wire_bytes() -> int:
         return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
 
-    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-        return
+    # Attribution never costs a result or its fields. Set it aside, run the
+    # budget steps exactly as for an attribution-free payload (which decides
+    # which digests and fields survive), then give each survivor back as much
+    # attribution as still fits, in rank order: label and identity, else the
+    # identity alone, else neither. An identity is only ever whole. One
+    # envelope-level marker says something was withheld, if it fits.
+    suggestions = envelope.get("memory_suggestions")
+    set_aside: List[Dict[str, Any]] = []
+    if isinstance(suggestions, list):
+        for item in suggestions:
+            snap = {}
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    if key in item:
+                        snap[key] = item.pop(key)
+            set_aside.append(snap)
 
+    if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+        _truncate_search_projection(envelope, wire_bytes)
+    _restore_digest_attribution(envelope, set_aside, wire_bytes)
+
+
+def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
+    """The budget steps proper, run on the attribution-free envelope: drop
+    optional coaching, then lower-ranked digests, then compact the last."""
     envelope["projection_truncated"] = True
     envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
     envelope.pop("response_options", None)
@@ -984,11 +1263,64 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
 
+    # The digest set is final now, so its summary fields go in before any
+    # attribution is restored: they must be inside the budget the restore
+    # measures against, not appended after it.
     state = envelope.get("state_summary")
     if isinstance(state, dict) and isinstance(suggestions, list):
         state["results_shown_in_digest"] = len(suggestions)
         state["result_set_truncated"] = True
 
+
+def _restore_digest_attribution(
+    envelope: Dict[str, Any], set_aside: List[Dict[str, Any]], wire_bytes
+) -> None:
+    """Give each surviving digest back as much attribution as fits, in rank
+    order: label and identity, else the identity alone, else neither.
+
+    First without the withheld-marker: if everything fits, no marker is
+    needed and its room is not taken from attribution. Only if something must
+    be withheld is the restore redone with the marker's room reserved, so the
+    marker says so. If the marker itself does not fit, the marker-free restore
+    stands; only then can a digest lose attribution unmarked, and only when
+    not even the marker's ~36 bytes were free."""
+    suggestions = envelope.get("memory_suggestions")
+    if not isinstance(suggestions, list) or not any(set_aside[: len(suggestions)]):
+        return
+
+    def strip() -> None:
+        for item in suggestions:
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    item.pop(key, None)
+
+    def restore() -> bool:
+        withheld = False
+        for item, snap in zip(suggestions, set_aside):
+            if not snap or not isinstance(item, dict):
+                continue
+            identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
+            for attempt in (snap, identity):
+                if not attempt:
+                    continue
+                item.update(attempt)
+                if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                    break
+                for key in attempt:
+                    item.pop(key, None)
+            if any(key not in item for key in snap):
+                withheld = True
+        return withheld
+
+    if not restore():
+        return
+    strip()
+    envelope["digest_attribution_omitted"] = True
+    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+        restore()
+        return
+    envelope.pop("digest_attribution_omitted", None)
+    restore()
 
 def build_experience_envelope(
     friendly_name: str,
@@ -1135,11 +1467,19 @@ def build_experience_envelope(
         if state_summary.get("action") == "pause":
             # The generic continuation text below was emitted on pause verdicts
             # too, telling a paused agent to "keep working". Match recovery_hint.
-            next_action = (
-                "Paused - stop this line of work and do not continue it. Call "
-                "self_recovery(action='review', reflection='...') to request "
-                "resumption."
-            )
+            review_limit = _review_risk_limit()
+            if risk is not None and risk >= review_limit:
+                # Reviewed recovery records the reflection, then refuses here.
+                next_action = (
+                    "Paused - stop this line of work and do not continue it. "
+                    + _stopped_recovery_route(risk, review_limit, paused=True)
+                )
+            else:
+                next_action = (
+                    "Paused - stop this line of work and do not continue it. Call "
+                    "self_recovery(action='review', reflection='...') to request "
+                    "resumption."
+                )
         elif prediction_id:
             # The id already sits in the canonical payload; naming it here is
             # what makes registry-bound record_result discoverable — otherwise
