@@ -230,14 +230,14 @@ def parse_record(body: str) -> Record | None:
 
 
 _NATIVE_DISPOSITION_RE = re.compile(
-    r"dispositions for FINDINGS\((\d+)\) — \S*#pullrequestreview-\d+")
+    r"dispositions for FINDINGS\((\d+)\) — (\S*#pullrequestreview-\d+)")
 
 
-def _answers_native_review(rec: Record) -> bool:
-    """A disposition whose heading cites a native Codex review with the same
-    number of findings (``post_record`` writes that heading in `dispose`)."""
+def _cited_native_review(rec: Record) -> str | None:
+    """The native review URL a disposition's heading cites, when the cited
+    count matches (``post_record`` writes that heading in `dispose`)."""
     m = _NATIVE_DISPOSITION_RE.search(getattr(rec, "text", "") or "")
-    return bool(m and int(m.group(1)) == rec.findings)
+    return m.group(2) if m and int(m.group(1)) == rec.findings else None
 
 
 def latest_matching(comments: list[dict], key: str,
@@ -270,17 +270,22 @@ def latest_matching(comments: list[dict], key: str,
             completed = rec
         if rec.verdict == "FINDINGS":
             # A disposition answers ONE findings record, not every earlier one.
+            cited = _cited_native_review(rec) if rec.disposed else None
             if not rec.disposed:
                 open_findings.append(rec)
+            elif cited:
+                # A disposition of a native review answers THAT review, found
+                # by URL, never another open finding with the same count.
+                match = [i for i, o in enumerate(open_findings) if o.url == cited]
+                if match:
+                    open_findings.pop(match[-1])
+                # Otherwise the review is no longer visible: native evidence
+                # is bound to the reviewed head commit, so a base merge that
+                # moves the head (keeping this diff key) drops it. The
+                # disposition names it, so it stays disposed and consumes
+                # nothing else.
             elif open_findings and open_findings[-1].findings == rec.findings:
                 open_findings.pop()
-            elif not open_findings and _answers_native_review(rec):
-                # The native review it answered is no longer visible: native
-                # evidence is bound to the reviewed head commit, so a base
-                # merge that moves the head (and keeps this diff key) drops
-                # it. The disposition itself names that review, so it stays
-                # disposed rather than reopening as an unanswered finding.
-                pass
             else:
                 rec.disposed = False
                 open_findings.append(rec)

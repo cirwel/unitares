@@ -627,6 +627,24 @@ def test_an_orphaned_disposition_that_names_no_matching_native_review_stays_open
     assert not got.disposed and got.status()[0] != "success"
 
 
+@pytest.mark.parametrize("native_visible", [True, False])
+def test_a_native_disposition_never_consumes_a_different_same_count_finding(native_visible):
+    # Codex P1 on #2407: an earlier local FINDINGS(1) plus a native
+    # FINDINGS(1); disposing the native one must leave the local one open,
+    # whether or not a base merge has since hidden the native evidence.
+    review_url = "https://github.com/cirwel/unitares/pull/9#pullrequestreview-77"
+    local = _comment(rg.Record("k", "FINDINGS", 1, False, "claude"), url="local")
+    local["created_at"] = "2026-09-24T08:00:00Z"
+    native = []
+    if native_visible:
+        native_rec = rg.Record("k", "FINDINGS", 1, False, "codex-native")
+        native_rec.url, native_rec.text, native_rec.created_at = review_url, "", "2026-09-24T08:30:00Z"
+        native = [native_rec]
+    d = _disposition(1, review_url)
+    got = rg.latest_matching([local, d], "k", native)
+    assert got.url == "local" and not got.disposed and got.status()[0] != "success"
+
+
 def test_a_new_finding_after_an_orphaned_native_disposition_still_opens():
     d = _disposition(1, "https://github.com/cirwel/unitares/pull/2361#pullrequestreview-5302128003")
     later = _comment(rg.Record("k", "FINDINGS", 1, False, "claude"), url="later")
