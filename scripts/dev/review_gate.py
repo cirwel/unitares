@@ -72,7 +72,7 @@ import sys
 import tempfile
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -88,6 +88,12 @@ COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 NATIVE_REQUEST = "unitares-native-review v1"
 NATIVE_WAIT_S = 600
+# Full Codex reviews per PR before the remaining findings are answered without
+# another run (conventions §Review workflow, "Round cap"). Each run spends the
+# same subscription quota authoring does, and past the third round most
+# findings are about text the previous fix added.
+ROUND_CAP = 3
+SEVERE_BADGE_RE = re.compile(r"!\[P[01] Badge\]")
 
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
@@ -302,6 +308,74 @@ class NativeReview:
     running: bool = False
     unavailable_reason: str = ""
     completed: bool = False
+    rounds: CodexRounds | None = None
+
+
+@dataclass
+class CodexRounds:
+    """Completed Codex reviews on the PR, across every head it has had."""
+    count: int = 0
+    last_head: str = ""          # as Codex printed it; may be abbreviated
+    last_findings: list[dict] = field(default_factory=list)  # inline comments
+
+    @property
+    def last_severe(self) -> bool:
+        return any(SEVERE_BADGE_RE.search(c.get("body") or "") for c in self.last_findings)
+
+    def capped(self) -> bool:
+        """Past the cap, a findings round is answered without another Codex run.
+
+        A clean last round is not a fix loop: a push after it is new work and
+        gets a full review. Neither is a P0/P1: its fix always gets one.
+        """
+        return self.count >= ROUND_CAP and bool(self.last_findings) and not self.last_severe
+
+
+def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict]) -> CodexRounds:
+    """Count completed Codex runs by the distinct commits they name.
+
+    Findings arrive as a submitted review; a clean result as a comment naming
+    the commit or an activity row marked Completed. Heads are compared on
+    seven hex digits, the shortest form Codex prints.
+    """
+    runs: dict[str, tuple[float, str, list[dict]]] = {}
+
+    def seen(commit: str, when: str, findings: list[dict]) -> None:
+        t = timestamp(when)
+        prior = runs.get(commit[:7])
+        if prior is None or t >= prior[0]:
+            runs[commit[:7]] = (t, commit, findings or (prior[2] if prior else []))
+
+    for c in comments:
+        if not is_codex_bot(c):
+            continue
+        body = c.get("body") or ""
+        commit = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]+)`", body, re.M)
+        if commit:
+            seen(commit[1], c.get("updated_at") or c.get("created_at", ""), [])
+        if "<!-- codex-pull-request-review-summary -->" in body:
+            for line in body.splitlines():
+                fields = line.split("|")
+                if len(fields) >= 5 and "**Code Review**" in fields[1] and "**Completed**" in fields[2]:
+                    row = re.search(r"`([0-9a-f]+)`", fields[3])
+                    done = re.search(r'<relative-time datetime="([^"]+)"', fields[2])
+                    if row:
+                        seen(row[1], done[1] if done else c.get("updated_at", ""), [])
+    for review in reviews:
+        if not is_codex_bot(review) or review.get("state") == "PENDING" or not review.get("commit_id"):
+            continue
+        posted = [c for c in inline if c.get("pull_request_review_id") == review["id"]
+                  and is_codex_bot(c)]
+        findings = [c for c in posted if not c.get("in_reply_to_id")]
+        # A reply filed inside an earlier thread is conversation, not a run
+        # (the same rule native_records applies).
+        replies_only = posted and not findings and not (review.get("body") or "").strip()
+        if not replies_only:
+            seen(review["commit_id"], review.get("submitted_at", ""), findings)
+    if not runs:
+        return CodexRounds()
+    _, last, findings = max(runs.values(), key=lambda r: r[0])
+    return CodexRounds(len(runs), last, findings)
 
 
 def native_records(comments: list[dict], reviews: list[dict], inline: list[dict],
@@ -404,7 +478,9 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     summary = any(is_codex_bot(c) and "<!-- codex-pull-request-review-summary -->"
                   in (c.get("body") or "") for c in comments)
     reactions = api_pages(f"repos/{repo}/issues/{pr}/reactions") if summary else []
-    return native_records(comments, reviews, inline, events, key, head, reactions)
+    snapshot = native_records(comments, reviews, inline, events, key, head, reactions)
+    snapshot.rounds = codex_rounds(comments, reviews, inline)
+    return snapshot
 
 
 def native_enabled() -> bool:
@@ -753,6 +829,12 @@ def cmd_review(args) -> int:
                     if existing.verdict == "FAILED":
                         return UNREVIEWED
                     return finish_record(repo, pr, key, head, existing, comments)
+                # The cap binds the local fallback too: it spends the same quota.
+                # An explicit --reviewer is the author choosing to spend a round.
+                if not args.reviewer:
+                    rounds = pr_rounds(repo, pr, key, head, comments)
+                    if rounds.capped():
+                        return capped_review(args, repo, pr, key, head, rounds)
                 args.failed_providers = {p for p in ("claude", "codex")
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
@@ -790,6 +872,124 @@ def cmd_review(args) -> int:
                   "Run scripts/dev/review.sh again before marking ready.")
             return UNREVIEWED
         time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
+def pr_rounds(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> CodexRounds:
+    return read_native(repo, pr, key, head, comments).rounds or CodexRounds()
+
+
+VERIFY_PROMPT = """\
+A code reviewer raised this finding on a pull request:
+
+<finding>
+{finding}
+</finding>
+
+The author says this commit fixes it:
+
+<diff>
+{diff}
+</diff>
+
+Does this diff actually address the specific problem in the finding? Judge only this finding. A change that touches the same code but fixes a different problem does NOT address it.
+Answer with exactly one word on the last line: ADDRESSED or NOT_ADDRESSED."""
+VERIFY_DIFF_LIMIT = 40000  # characters; keeps gemma4 inside a 16k-token context
+VERIFY_TIMEOUT_S = 300
+
+
+def finding_text(comment: dict) -> str:
+    body = re.sub(r"\*\*<sub><sub>!\[P\d Badge\][^\n]*?</sub></sub>\s*", "**", comment.get("body") or "")
+    body = body.split("\nUseful?")[0]
+    return f"{comment.get('path')}:{comment.get('line') or comment.get('original_line')}\n{body.strip()}"
+
+
+def ask_verifier(verifier: str, prompt: str) -> str:
+    """One chat completion from the configured verifier, via curl.
+
+    `ollama:<model>` uses the local server's native /api/chat (its /v1 shim
+    silently clamps prompts to 8K, cutting the front). `hf:<model>` is the
+    metered Hugging Face router, so it is opt-in only, never the default.
+    """
+    backend, _, model = verifier.partition(":")
+    if backend == "ollama":
+        url = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/") + "/api/chat"
+        payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                   "stream": False, "options": {"temperature": 0, "num_ctx": 16384}}
+        headers: list[str] = []
+    elif backend == "hf":
+        url = "https://router.huggingface.co/v1/chat/completions"
+        token = os.environ.get("HF_TOKEN", "")
+        token_file = Path.home() / ".cache" / "huggingface" / "token"
+        if not token and token_file.exists():
+            token = token_file.read_text().strip()
+        payload = {"model": model, "messages": [{"role": "user", "content": prompt}],
+                   "temperature": 0, "max_tokens": 800}
+        headers = ["-H", f"Authorization: Bearer {token}"]
+    else:
+        raise ValueError(f"unknown verifier backend {backend!r} (use ollama:<model> or hf:<model>)")
+    proc = subprocess.run(["curl", "-sS", "--fail-with-body", "--max-time", str(VERIFY_TIMEOUT_S),
+                           "-H", "Content-Type: application/json", *headers,
+                           "--data-binary", "@-", url],
+                          input=json.dumps(payload), text=True, capture_output=True)
+    if proc.returncode:
+        raise RuntimeError(f"{verifier} unavailable: {(proc.stderr or proc.stdout).strip()[:200]}")
+    reply = json.loads(proc.stdout)
+    return reply["message"]["content"] if backend == "ollama" else reply["choices"][0]["message"]["content"]
+
+
+def verify_fix(verifier: str, finding: str, diff: str) -> bool:
+    answer = re.findall(r"NOT_ADDRESSED|ADDRESSED", ask_verifier(
+        verifier, VERIFY_PROMPT.format(finding=finding, diff=diff[:VERIFY_DIFF_LIMIT])))
+    if not answer:
+        raise RuntimeError(f"{verifier} gave no ADDRESSED/NOT_ADDRESSED verdict")
+    return answer[-1] == "ADDRESSED"
+
+
+def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRounds) -> int:
+    """Answer the last round's findings without spending another Codex run.
+
+    Reached only when this diff has no record, i.e. fixes were pushed after
+    the last round. A configured verifier checks each finding against those
+    fix commits and posts a diff-bound record naming itself; it does not
+    review the new lines for new problems, and the record says so.
+    """
+    n = len(rounds.last_findings)
+    print(f"[review] Codex round cap reached ({rounds.count} of {ROUND_CAP}, "
+          f"last round {n} finding(s), no P0/P1): not requesting another run.")
+    verifier = git("config", "review.verifier", check=False).strip()
+    last = git("rev-parse", "--verify", "--quiet", f"{rounds.last_head}^{{commit}}", check=False).strip()
+    if not verifier or not last:
+        why = ("no verifier configured (git config review.verifier ollama:gemma4:latest)"
+               if not verifier else f"last reviewed commit {rounds.last_head} is not in this clone")
+        print(f"[review] UNREVIEWED: {why}. Past the cap, answer findings with "
+              "`review.sh dispose` on the reviewed diff instead of pushing fixes, or spend "
+              "a round deliberately with `review.sh --reviewer codex`.")
+        return UNREVIEWED
+    results = []
+    try:
+        for comment in rounds.last_findings:
+            diff = git("diff", last, head, "--", comment.get("path", ""), check=False)
+            diff = diff or git("diff", last, head, check=False)
+            results.append((comment, verify_fix(verifier, finding_text(comment), diff)))
+    except (RuntimeError, ValueError, json.JSONDecodeError, KeyError) as exc:
+        print(f"[review] UNREVIEWED: fix verification failed: {exc}")
+        return UNREVIEWED
+    open_ = [c for c, ok in results if not ok]
+    done = [c for c, ok in results if ok]
+    lines = [f"Codex round cap reached ({rounds.count} of {ROUND_CAP}). {verifier} checked each "
+             f"finding from the last Codex round (`{last[:10]}`) against the fixes pushed since "
+             f"(`{last[:10]}..{head[:10]}`). It checks the fixes only; it did not review the "
+             "new lines for new problems.", ""]
+    lines += [f"{i}. NOT ADDRESSED: {finding_text(c)}\n   {c.get('html_url', '')}"
+              for i, c in enumerate(open_, 1)]
+    lines += [f"- addressed: {finding_text(c).splitlines()[0]} {c.get('html_url', '')}" for c in done]
+    lines.append("")
+    lines.append("VERDICT: CLEAN" if not open_ else f"VERDICT: FINDINGS({len(open_)})")
+    rec = Record(key, "FINDINGS" if open_ else "CLEAN", len(open_), False, f"fix-verify:{verifier}")
+    post_record(pr, rec, f"{rec.verdict if not open_ else f'FINDINGS({len(open_)})'} "
+                "(fix verification past the round cap)", "\n".join(lines))
+    print("\n".join(lines))
+    return finish_record(repo, pr, key, head, rec, pr_comments(repo, pr))
 
 
 def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
@@ -1044,6 +1244,13 @@ def post_check(repo: str, pr: int, head: str, conclusion: str, description: str,
 # (this script) and fetches the PR head only as git objects to hash.
 
 
+def round_note(rounds: CodexRounds | None) -> str:
+    if not rounds or not rounds.count:
+        return ""
+    note = f" · Codex round {rounds.count} of {ROUND_CAP}"
+    return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
+
+
 def cmd_ci(args) -> int:
     repo, pr = args.repo, args.pr
     info = gh_json("api", f"repos/{repo}/pulls/{pr}")
@@ -1058,7 +1265,8 @@ def cmd_ci(args) -> int:
     key = diff_key(f"origin/{base_ref}", head)
     comments = pr_comments(repo, pr)
     try:
-        rec = current_record(repo, pr, key, head, comments)
+        snapshot = read_native(repo, pr, key, head, comments)
+        rec = latest_matching(comments, key, snapshot.records)
     except SystemExit as exc:
         print(f"::warning::Review evidence incomplete: {exc}. Existing review check preserved; "
               "retry this workflow when GitHub evidence is readable.")
@@ -1070,6 +1278,7 @@ def cmd_ci(args) -> int:
     else:
         url = rec.url
     conclusion, desc = review_check(rec)
+    desc += round_note(snapshot.rounds)
     print(f"PR #{pr} head {head[:12]} key {key[:12]}: {conclusion} — {desc}")
     if conclusion == "neutral":
         print(f"::warning::{desc}")
