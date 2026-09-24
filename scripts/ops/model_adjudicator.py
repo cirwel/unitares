@@ -234,11 +234,21 @@ def io_fetch_queue(tokens: list[str]) -> list[dict]:
 
 def io_history(fingerprint: str) -> str:
     """How long this fingerprint has been firing. psql variables quote it,
-    because a fingerprint is producer-supplied text."""
+    because a fingerprint is producer-supplied text.
+
+    Counts both forms of one finding: a row persisted before the ingest bound
+    keeps its raw over-long fingerprint, while its recurrences are stored as
+    the sha256 digest of it (the server's _canonical_fingerprint). Matching the
+    digest alone would drop every legacy occurrence and understate the
+    history the judge sees.
+    """
     sql = (
         "SELECT count(*), min(ts)::timestamp(0), max(ts)::timestamp(0) "
         "FROM audit.events WHERE event_type LIKE '%\\_finding' "
-        "AND payload->>'fingerprint' = :'fp';\n"
+        "AND (payload->>'fingerprint' = :'fp' "
+        f"OR (length(payload->>'fingerprint') > {FINGERPRINT_MAX_CHARS} "
+        "AND 'sha256:' || encode(sha256(convert_to(payload->>'fingerprint', 'UTF8')), 'hex')"
+        " = :'fp'));\n"
     )
     try:
         out = subprocess.run(

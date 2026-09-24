@@ -333,6 +333,69 @@ def test_history_passes_the_fingerprint_as_a_psql_variable(adj, monkeypatch):
     assert out.startswith("fired 3 time(s)")
 
 
+LEGACY_FP = "legacy-" + "x" * 300
+
+
+def _history_sql(adj, monkeypatch) -> str:
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["input"] = kw["input"]
+        return Proc("0||")
+
+    # adj.subprocess IS the subprocess module: scope the patch to this call.
+    with monkeypatch.context() as m:
+        m.setattr(adj.subprocess, "run", fake_run)
+        adj.io_history("fp")
+    return seen["input"]
+
+
+def test_history_also_matches_the_legacy_raw_form_of_a_digest(adj, monkeypatch):
+    """A recurrence is stored as the digest of a legacy over-long fingerprint;
+    its history must still count the legacy raw rows, bounded like the server."""
+    sql = _history_sql(adj, monkeypatch)
+    assert "sha256(convert_to(payload->>'fingerprint', 'UTF8'))" in sql
+    assert f"length(payload->>'fingerprint') > {adj.FINGERPRINT_MAX_CHARS}" in sql
+
+
+def _psql_reachable(url: str) -> bool:
+    import shutil
+    import subprocess
+    if not shutil.which("psql"):
+        return False
+    try:
+        return subprocess.run(["psql", "-X", "-At", "-d", url, "-c", "SELECT 1"],
+                              capture_output=True, text=True, timeout=5).stdout.strip() == "1"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def test_history_sql_digest_equals_the_server_digest(adj, monkeypatch):
+    """Parity against a real Postgres: the SQL digest of a legacy row must equal
+    the digest the server stores its recurrence under, or the legacy rows are
+    silently dropped from the count. Reads no table (the rows are a VALUES
+    list), so it is safe against any reachable database; skipped without one."""
+    import subprocess
+    from src.http_routes.sentinel import _bounded_fingerprint
+    if not _psql_reachable(adj.DB_URL):
+        pytest.skip("no reachable Postgres for the SQL parity check")
+    digest = _bounded_fingerprint(LEGACY_FP)[0]
+    rows = ", ".join(
+        f"('doctor_check_finding', timestamp '2026-09-0{i}', "
+        f"jsonb_build_object('fingerprint', '{fp}'))"
+        for i, fp in enumerate([LEGACY_FP, digest, "other-fp"], start=1)
+    )
+    sql = _history_sql(adj, monkeypatch).replace(
+        "FROM audit.events", f"FROM (VALUES {rows}) AS e(event_type, ts, payload)")
+    out = subprocess.run(
+        ["psql", "-X", "-At", "-v", "ON_ERROR_STOP=1", "-d", adj.DB_URL,
+         "-v", f"fp={digest}", "-f", "-"],
+        input=sql, capture_output=True, text=True, timeout=20)
+    assert out.returncode == 0, out.stderr
+    count, first, last = out.stdout.strip().split("|")
+    assert (count, first, last) == ("2", "2026-09-01 00:00:00", "2026-09-02 00:00:00")
+
+
 # ---------------------------------------------------------------------- rails
 
 def test_dry_run_judges_but_posts_nothing(adj):
