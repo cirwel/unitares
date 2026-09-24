@@ -49,11 +49,11 @@ def make_io(adj, answers, queue=(ITEM,)):
         return answers.get(tier.name)
 
     io = {
-        "fetch_queue": lambda token: list(queue),
+        "fetch_queue": lambda tokens: list(queue),
         "history": lambda fp: "fired 12 time(s)",
         "recheck": lambda item: "WARN: still outdated",
         "run_model": run_model,
-        "post_verdict": lambda payload, token: calls["posted"].append(payload) or True,
+        "post_verdict": lambda payload, tokens: calls["posted"].append(payload) or True,
     }
     return io, calls
 
@@ -236,5 +236,53 @@ def test_history_passes_the_fingerprint_as_a_psql_variable(adj, monkeypatch):
 
 def test_failed_post_is_not_counted(adj):
     io, calls = make_io(adj, {"fast": reply("confirmed")})
-    io["post_verdict"] = lambda payload, token: False
+    io["post_verdict"] = lambda payload, tokens: False
     assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+
+
+def test_mcp_bearer_is_tried_before_the_http_token(adj, monkeypatch):
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "mcp")
+    monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", "http")
+    assert adj._load_tokens() == ["mcp", "http"]
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKEN")
+    assert adj._load_tokens() == ["http"]
+
+
+def test_a_401_falls_back_to_the_next_token(adj, monkeypatch):
+    import io as _io
+    sent = []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"success": true}'
+
+    def fake_urlopen(req, timeout):
+        token = req.headers["Authorization"].split()[-1]
+        sent.append(token)
+        if token == "mcp":
+            raise adj.urllib.error.HTTPError(req.full_url, 401, "no", {}, _io.BytesIO())
+        return Resp()
+
+    monkeypatch.setattr(adj.urllib.request, "urlopen", fake_urlopen)
+    assert adj._http_json("http://x", None, ["mcp", "http"]) == {"success": True}
+    assert sent == ["mcp", "http"]
+
+
+def test_a_non_401_error_does_not_try_other_tokens(adj, monkeypatch):
+    import io as _io
+    sent = []
+
+    def fake_urlopen(req, timeout):
+        sent.append(req.headers["Authorization"])
+        raise adj.urllib.error.HTTPError(req.full_url, 500, "boom", {}, _io.BytesIO())
+
+    monkeypatch.setattr(adj.urllib.request, "urlopen", fake_urlopen)
+    with pytest.raises(adj.urllib.error.HTTPError):
+        adj._http_json("http://x", None, ["a", "b"])
+    assert len(sent) == 1

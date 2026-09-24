@@ -1209,7 +1209,7 @@ async def http_sentinel_model_adjudicate(request):
         import uuid as _uuid
         from src.db import get_db
         from src.db.base import AuditEvent
-        await get_db().append_audit_event(AuditEvent(
+        inserted = await get_db().append_audit_event(AuditEvent(
             ts=datetime.now(timezone.utc),
             event_id=str(_uuid.uuid4()),
             event_type=_MODEL_ADJUDICATION_EVENT_TYPE,
@@ -1226,6 +1226,15 @@ async def http_sentinel_model_adjudicate(request):
                          "adjudication and NOT an exogenous-truth label"),
             },
         ))
+        if not inserted:
+            # append_audit_event swallows DB errors and returns False. Saying
+            # success here would let the caller count a verdict that left no
+            # row and suppresses nothing.
+            return JSONResponse(
+                {"success": False, "error": "audit event not recorded",
+                 "fingerprint": fingerprint},
+                status_code=500,
+            )
         return JSONResponse({
             "success": True,
             "fingerprint": fingerprint,

@@ -106,6 +106,16 @@ class TestModelAdjudicateIsolation:
         appended.assert_not_awaited()
 
 
+    def test_a_failed_insert_is_not_reported_as_success(self, client):
+        """append_audit_event swallows DB errors and returns False."""
+        adjudicated, producer, recorder = _patches()
+        with adjudicated, producer, recorder, \
+                patch("src.db.get_db", return_value=_db(AsyncMock(return_value=False))):
+            r = _post(client)
+        assert r.status_code == 500
+        assert r.json()["success"] is False
+
+
 class TestModelAdjudicateValidation:
     def test_needs_bearer_auth(self, client):
         r = client.post("/v1/sentinel/model-adjudicate",

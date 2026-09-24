@@ -124,16 +124,35 @@ def _load_secret(name: str) -> str:
     return ""
 
 
-def _http_json(url: str, payload: dict | None, token: str) -> dict:
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode() if payload is not None else None,
-        headers={"Content-Type": "application/json",
-                 **({"Authorization": f"Bearer {token}"} if token else {})},
-        method="POST" if payload is not None else "GET",
-    )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
-        return json.loads(resp.read().decode())
+def _load_tokens() -> list[str]:
+    """Bearer candidates in order. Strict REST posture (UNITARES_MCP_BEARER_TOKENS
+    configured on the server) accepts ONLY an MCP bearer; local posture accepts
+    the HTTP API token. Try the MCP bearer first, fall back on 401."""
+    tokens: list[str] = []
+    for name in ("UNITARES_MCP_BEARER_TOKEN", "UNITARES_HTTP_API_TOKEN"):
+        value = _load_secret(name)
+        if value and value not in tokens:
+            tokens.append(value)
+    return tokens or [""]
+
+
+def _http_json(url: str, payload: dict | None, tokens: list[str]) -> dict:
+    for i, token in enumerate(tokens):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode() if payload is not None else None,
+            headers={"Content-Type": "application/json",
+                     **({"Authorization": f"Bearer {token}"} if token else {})},
+            method="POST" if payload is not None else "GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401 and i + 1 < len(tokens):
+                continue
+            raise
+    raise RuntimeError("unreachable")
 
 
 def resolve_codex_cli() -> Optional[str]:
@@ -148,9 +167,9 @@ def resolve_codex_cli() -> Optional[str]:
         return pinned or shutil.which("codex")
 
 
-def io_fetch_queue(token: str) -> list[dict]:
+def io_fetch_queue(tokens: list[str]) -> list[dict]:
     query = urllib.parse.urlencode({"limit": MAX_ITEMS, "exclude_model_abstained": 1})
-    body = _http_json(f"{GOV_URL}/v1/sentinel/adjudication-queue?{query}", None, token)
+    body = _http_json(f"{GOV_URL}/v1/sentinel/adjudication-queue?{query}", None, tokens)
     return list(body.get("queue") or []) if body.get("success") else []
 
 
@@ -236,9 +255,9 @@ def io_run_codex(prompt: str, tier: Tier) -> Optional[str]:
     return proc.stdout
 
 
-def io_post_verdict(payload: dict, token: str) -> bool:
+def io_post_verdict(payload: dict, tokens: list[str]) -> bool:
     try:
-        body = _http_json(f"{GOV_URL}/v1/sentinel/model-adjudicate", payload, token)
+        body = _http_json(f"{GOV_URL}/v1/sentinel/model-adjudicate", payload, tokens)
     except urllib.error.HTTPError as exc:
         log(f"verdict for {payload['fingerprint']} refused: HTTP {exc.code}")
         return False
@@ -358,9 +377,9 @@ def run_once(io: dict | None = None, dry_run: bool = False,
              tiers: list[Tier] | None = None) -> int:
     io = {**DEFAULT_IO, **(io or {})}
     tiers = tiers or tiers_from_env()
-    token = _load_secret("UNITARES_HTTP_API_TOKEN")
+    tokens = _load_tokens()
     try:
-        queue = io["fetch_queue"](token)
+        queue = io["fetch_queue"](tokens)
     except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
         log(f"queue unavailable: {exc}")
         return 1
@@ -391,7 +410,7 @@ def run_once(io: dict | None = None, dry_run: bool = False,
             + f" by {result.tier.name} at {result.confidence:.2f} — {result.rationale[:160]}")
         if dry_run:
             continue
-        if io["post_verdict"](payload, token):
+        if io["post_verdict"](payload, tokens):
             recorded += 1
     log(f"{recorded} verdict(s) recorded" + (" (dry run)" if dry_run else ""))
     return 0

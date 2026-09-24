@@ -28,6 +28,12 @@
     instead of warning about a channel nobody can feed. Declared, never
     inferred: leave it unset wherever a human does adjudicate.
 
+    AUTH: the job reads UNITARES_MCP_BEARER_TOKEN, then UNITARES_HTTP_API_TOKEN,
+    from the environment or ~/.config/cirwel/secrets.env (UNITARES_SECRETS_ENV
+    overrides). A server in strict REST posture (UNITARES_MCP_BEARER_TOKENS
+    set) accepts ONLY an MCP bearer, so put one in the secrets file there; the
+    HTTP token is the local-posture fallback, tried on a 401.
+
     TWO ENVIRONMENT REQUIREMENTS:
       PATH must hold the keg-only postgresql@17 bin dir (the job re-runs the
       finding's doctor check and reads its history with psql) and the dir
