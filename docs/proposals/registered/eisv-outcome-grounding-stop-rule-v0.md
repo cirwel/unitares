@@ -433,14 +433,26 @@ between the two readings changed no recorded verdict.
 **Smallest relevant effect.** The power-characterisation correction above
 records that no beta, AUC delta, or equivalent effect size fills the
 "predeclared smallest relevant effect" slot, and that the operator must
-declare one before any further live outcome-discrimination access. No
-declared value exists anywhere in this repository; this block records that
-slot as `[OPERATOR: declare value before any further live access]`. Until
-it is filled, the December read implements the operational stop rule and
-reports the scientific inference as `INCONCLUSIVE`, exactly as the gate
-already says; no agent-chosen value is substituted, and the unfilled slot
-bars any further live outcome-discrimination access until the operator
-declares one.
+declare one before any further live outcome-discrimination access. The
+operator's declaration, made 2026-09-23 before any access to the registered
+cohort, is that **no smallest relevant effect is set for this read**. That
+is a choice, not an omission, and it is recorded here as the declaration
+the correction asks for. Three reasons, each checkable against this
+repository: the record contains no relevance anchor for this estimand (every
+candidate value in it is a detectability figure, a runtime report label, or
+the withdrawn 0.05 bound that this gate bars by name); the only claim a
+power-qualified `REFUTED` could refute is rework prediction, because the bad
+class has never carried a violation, harm, or concealment row; and a value
+chosen now so that `REFUTED` becomes reachable would be derived from what the
+read can detect, which the gate forbids. Consequences: the December read
+runs as registered; the operational stop rule decides PASS or FAIL
+unchanged; on any non-PASS branch the scientific inference is `INCONCLUSIVE`
+by declaration, exactly as the gate already provides; and `REFUTED` is
+unreachable for this read. The slot is not closed for the future: a later
+read under a new premise carries its own declaration. No agent-chosen value
+is substituted. The wording of this declaration was drafted by the working
+agent after an adversarial design review of the alternatives and adopted by
+the operator, who ratifies it on merge.
 
 **What this block does not do.** It does not alter conditions 1–3, the 150
 block threshold, the 0.05 level, the 400-resample null, the cohort, the
