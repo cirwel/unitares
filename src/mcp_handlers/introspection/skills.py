@@ -25,6 +25,7 @@ import yaml
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
+from src.skill_attestations import load_attestations, skill_text_digest, vouching_date
 
 from ..decorators import mcp_tool
 from ..response_base import success_response
@@ -92,9 +93,13 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
     elif last_verified is not None:
         last_verified = str(last_verified)
     # Re-verifications are recorded as attestation files, not by editing
-    # SKILL.md (see scripts/client/_check_freshness.py). The effective date is
-    # the later of the two, the same rule the CI checker applies.
-    attested = _latest_attestation_date(skill_dir.parent, skill_dir.name)
+    # SKILL.md (see scripts/client/_check_freshness.py). The effective date
+    # comes only from the attestations that vouch for THIS text, or the
+    # frontmatter date if later: the CI checker's rule, shared through
+    # src/skill_attestations.py. It drives the served `last_verified`,
+    # `version` and `stale`, and through them `since_version` filtering and
+    # `registry_version`.
+    attested = _attested_date(skill_dir.parent, skill_dir.name, skill_md)
     if attested and (not last_verified or attested > last_verified):
         last_verified = attested
 
@@ -121,25 +126,17 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
     return skill
 
 
-def _latest_attestation_date(skills_root: Path, name: str) -> Optional[str]:
-    """`verified_date` of the newest attestation for a skill, if any.
-
-    Format and naming: scripts/client/_check_freshness.py. Files are named
-    `<YYYYMMDDTHHMMSSffffffZ>-<hex>.json`, so the lexically last readable one
-    is the newest.
+def _attested_date(skills_root: Path, name: str, skill_md: Path) -> Optional[str]:
+    """Newest `verified_date` among the attestations that vouch for the
+    served SKILL.md text (src/skill_attestations.py): those whose
+    `skill_digest` matches it, else the newest record alone. A newer stamp
+    for different skill text, e.g. from a stale branch, never refreshes it.
     """
-    adir = skills_root / ".attestations" / name
-    if not adir.is_dir():
-        return None
-    for path in sorted(adir.glob("*.json"), reverse=True):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        verified = data.get("verified_date") if isinstance(data, dict) else None
-        if isinstance(verified, str) and verified:
-            return verified
-    return None
+    try:
+        digest = skill_text_digest(skill_md)
+    except OSError:
+        digest = None
+    return vouching_date(load_attestations(skills_root, name), digest)
 
 
 def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
