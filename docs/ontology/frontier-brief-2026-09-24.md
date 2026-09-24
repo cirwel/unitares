@@ -52,16 +52,19 @@ must be re-opened before anyone cites it elsewhere.
    narrowing:** identical retries return one canonical outcome, and conflicting
    reuse of a key is rejected. "No governed mutation without a current permit"
    holds only when `UNITARES_GOVERNED_EFFECT_BINDING` is on, and only for effects
-   routed through the governed-effect plane. The server has no single tool that
-   reconstructs an artifact's provenance. Scope both claims down before they
-   appear in any assurance case (§2).
-4. **The oversight summary is the one item that is actually new, but two of its
-   four terms cannot be computed today.** "Action coverage" needs to know how
-   many actions happened in total. Anthropic knows that because every action on
+   routed through the governed-effect plane. Complete provenance
+   reconstruction is unmeasured, not disproven: clients assemble it across
+   retention boundaries, and the claim names no window or record set. Scope
+   both claims down before they appear in any assurance case (§2).
+4. **The oversight summary is the one item that is actually new, but only one
+   of its four terms, review latency, can be computed today.** "Action
+   coverage" needs to know how many actions happened in total. Anthropic knows that because every action on
    its platform passes through an inline monitor. UNITARES sees only the
    check-ins and effects that are sent to it. "Human-resolution status" needs a
    recorded human-or-model resolver class, which exists only on the Sentinel
-   adjudication path (§1).
+   adjudication path. "Escalation rate" has no single stream: the stored
+   `escalated` status has no writers, and pauses split into four populations
+   with different denominators (§1).
 
 ---
 
@@ -123,10 +126,21 @@ does not answer it.
 broken down per agent, campaign, model version and effect class. The terms are
 not equally available:
 
-- *Review latency and escalation rate* can be derived from records UNITARES
-  already keeps: dialectic sessions, review records, and outcome events. A search of `src/` for `review_latency`, `escalation_rate` and
-  `oversight` found no existing rollup. A name search can miss a rollup built
+- *Review latency* can be derived from records UNITARES already keeps:
+  dialectic sessions and review records. A search of `src/` for
+  `review_latency`, `escalation_rate` and `oversight` found no existing rollup. A name search can miss a rollup built
   under other terms, so treat this as "not found", not as "absent".
+- *Escalation rate* is a definition gap, not a query. The storable
+  `escalated` dialectic status is council-retired and has no writers
+  (`src/dialectic_db.py`). Migration 066 documents four distinct pause
+  populations — circuit-breaker trips, lifecycle pauses, review pauses, and
+  shadow evaluations that never actuate — each with its own denominator. It
+  warns that a rate with a shadow denominator reads as inert while the system
+  is intervening. The operator has to choose the stream and denominator before
+  the rate means anything.
+- *The proposed breakdowns are not all available.* The dialectic schema has no
+  campaign, model-version, or effect-class column, so reporting per campaign,
+  model version, or effect class needs those dimensions recorded first.
 - *Human-resolution status* is not derivable today. Dialectic sessions keep a
   `reviewer_agent_id` and a terminal resolution, but nothing records whether the
   resolver was a human or a model. Operator versus model adjudication is recorded
@@ -151,7 +165,7 @@ The brief suggests four candidate claims. Here is where each one stands:
 | Identical retries yield one canonical outcome | Prediction-bound `outcome_event` is exactly-once per `(agent_id, prediction_id)` while the binding is retained. Identical retries return the canonical outcome. (#2246, `docs/CHANGELOG.md`) | Yes, **within the binding retention window**. An expired prediction ID can start a new canonical submission. |
 | Conflicting idempotency-key reuse is rejected | Outcome binding returns `PREDICTION_REUSE_CONFLICT`. Orchestrator spawns fail closed when a key is reused with a different spec, and reservations persist (#1939, #1942, #1953; migration 068) | Yes, for those two surfaces. It is not a platform-wide property. |
 | No governed mutation occurs without a current permit | Content-bound, single-use, short-TTL effect grant (`src/effect_grant.py`), verified and nonce-consumed in `src/http_routes/effects.py` | **Only when `UNITARES_GOVERNED_EFFECT_BINDING` (or a per-type flag) is on, and only for effects routed through the governed-effect plane.** Minting is off by default and returns `501 binding_not_enabled`. |
-| Every multi-agent artifact has reconstructible identity and provenance | Attributed writes, lineage, review records, export history | **No.** By design, the server has no single reconstruction tool: clients assemble records across retention and authorization boundaries. The claim has to name a retention window and a record set before it can be assessed. |
+| Every multi-agent artifact has reconstructible identity and provenance | Attributed writes, lineage, review records, export history | **Unmeasured, not disproven.** The server has no single reconstruction tool by design: clients assemble records across retention and authorization boundaries. `PRODUCT_DEFINITION.md` records complete reconstruction as unmeasured. As worded, the claim is underspecified; it has to name a retention window and a record set before it can be assessed. |
 
 **Recommendation.** Make the first assurance case the outcome-binding claim. It
 combines the first two rows and is scoped to the retention window. The brief's
