@@ -49,6 +49,7 @@ class _FakeClient:
         self.on_acquire = None
         self.sdk_shape = False
         self.idempotent = False
+        self.release_result = SimpleNamespace(ok=True)
 
     def acquire(self, req, *, identity_proof=None):
         self.acquired.append(req)
@@ -73,7 +74,9 @@ class _FakeClient:
     def release(self, req, *, identity_proof=None):
         self.releases.append(req)
         self.identity_proofs.append(identity_proof)
-        return SimpleNamespace(ok=True)
+        if isinstance(self.release_result, Exception):
+            raise self.release_result
+        return self.release_result
 
 
 def _patch_models(monkeypatch, client):
@@ -269,6 +272,52 @@ async def test_release_retries_a_transient_lookup_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error", ["not_found", "expired", "already_released"])
+async def test_release_of_an_already_gone_lease_reads_as_no_live_lease(monkeypatch, error):
+    """A cached lease that was force-released or expired is gone: that is the
+    clean no_live_lease state (the handler retires bindings on it), not a refusal."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "lease-abc"
+    client.release_result = SimpleNamespace(ok=False, error=error)
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-x",))
+
+    assert result == {"released": False, "reason": "no_live_lease"}
+    assert "uuid-1" not in apl._lease_ids
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome",
+    [SimpleNamespace(ok=False, error="service_unavailable"), ConnectionError("refused")],
+)
+async def test_release_reports_an_unreachable_lease_plane_as_retryable(monkeypatch, outcome):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "lease-abc"
+    client.release_result = outcome
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-x",))
+
+    assert result == {"released": False, "reason": "release_unavailable", "retryable": True}
+    assert apl._lease_ids["uuid-1"] == "lease-abc"  # kept for the retry
+
+
+@pytest.mark.asyncio
+async def test_release_keeps_a_refusal_distinct(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "lease-abc"
+    client.release_result = SimpleNamespace(ok=False, error="not_holder")
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-x",))
+
+    assert result == {"released": False, "reason": "release_refused"}
+    assert apl._lease_ids["uuid-1"] == "lease-abc"
+
+
+@pytest.mark.asyncio
 async def test_release_without_identity_is_a_no_op():
     assert await apl.release_agent_presence(None, ("sess-x",)) == {
         "released": False,
@@ -365,7 +414,7 @@ async def test_resumed_session_heartbeat_waits_for_an_in_progress_release(monkey
     async def _slow_release(client_, agent_uuid, lease_id):
         order.append(("release", lease_id))
         await gate.wait()
-        return True
+        return "released"
 
     monkeypatch.setattr(apl, "_release_lease", _slow_release)
 
@@ -661,7 +710,7 @@ async def test_failed_release_keeps_its_lease_through_a_sweep(monkeypatch):
     await apl.heartbeat_agent_presence("uuid-1", "sess-a", apl.time.monotonic())
 
     async def _refused(client_, agent_uuid, lease_id):
-        return False
+        return "refused"
 
     monkeypatch.setattr(apl, "_release_lease", _refused)
     assert (await apl.release_agent_presence("uuid-1", ("sess-a",)))["reason"] == "release_refused"

@@ -229,3 +229,39 @@ async def test_release_presence_keeps_bindings_when_the_lease_lookup_fails(monke
     assert body["reason"] == "lease_lookup_failed"
     assert body["retryable"] is True
     assert body["bindings_retired"] == 0
+
+
+@pytest.mark.asyncio
+async def test_release_presence_retires_bindings_when_the_lease_is_already_gone(monkeypatch):
+    """A cached lease the lease plane reports not_found (force-released) is no
+    live presence; the exiting session's bindings must be retired."""
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.identity import process_binding
+
+    retired = []
+
+    async def _retire(agent_id):
+        retired.append(agent_id)
+        return 1
+
+    fake = SimpleNamespace(
+        release=lambda req, identity_proof=None: SimpleNamespace(ok=False, error="not_found")
+    )
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    monkeypatch.setattr(apl, "_make_client", lambda: fake)
+    monkeypatch.setattr(apl, "ReleaseRequest", lambda **kw: SimpleNamespace(**kw))
+    monkeypatch.setattr(apl, "_mint_presence_attestation", lambda *a, **k: None)
+    monkeypatch.setattr(process_binding, "retire_bindings", _retire)
+    apl._lease_ids["caller-uuid"] = "lease-gone"
+    try:
+        body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
+    finally:
+        for state in (apl._lease_ids, apl._released_at, apl._released_sessions,
+                      apl._lease_sessions, apl._touched, apl._locks):
+            state.pop("caller-uuid", None)
+
+    assert body["reason"] == "no_live_lease"
+    assert retired == ["caller-uuid"]
+    assert "retryable" not in body

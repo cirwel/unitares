@@ -506,8 +506,8 @@ async def handle_release_presence(arguments: Dict[str, Any]) -> Sequence[TextCon
         "bindings_retired": bindings_retired,
     }
     if result.get("retryable"):
-        # The server could not tell whether a lease is live (lease_lookup_failed),
-        # so nothing was released or retired; the same call may be repeated.
+        # A transient failure (lease_lookup_failed, release_unavailable): a
+        # lease may still be live, so no binding was retired; repeat the call.
         response["retryable"] = True
     if bindings_retired is None:
         # A live binding may remain, and it still reads as a running parent

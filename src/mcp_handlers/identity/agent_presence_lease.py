@@ -414,19 +414,40 @@ async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[s
         raise LeaseLookupFailed(str(e)) from e
 
 
-async def _release_lease(client, agent_uuid: str, lease_id: str) -> bool:
+# Release errors meaning the lease is no longer live: nothing is left to free.
+_RELEASE_ABSENT_ERRORS = frozenset({"not_found", "expired", "already_released"})
+
+
+async def _release_lease(client, agent_uuid: str, lease_id: str) -> str:
+    """Release one lease and classify the outcome.
+
+    Returns "released"; "absent" when the lease is already gone (force-released,
+    expired, released before); "unavailable" when the lease plane could not be
+    reached or answered service_unavailable, so a retry may succeed; or
+    "refused" for any other error."""
     if ReleaseRequest is None:
-        return False
+        return "refused"
     loop = asyncio.get_running_loop()
     release_request = ReleaseRequest(lease_id=lease_id, release_reason="normal")
     identity_proof = _mint_presence_attestation(
         agent_uuid, "/v1/lease/release", release_request
     )
-    result = await loop.run_in_executor(
-        None,
-        lambda: client.release(release_request, identity_proof=identity_proof),
-    )
-    return bool(getattr(result, "ok", False))
+    try:
+        result = await loop.run_in_executor(
+            None,
+            lambda: client.release(release_request, identity_proof=identity_proof),
+        )
+    except Exception as e:  # noqa: BLE001 - transport failure; the lease may be live
+        logger.debug(f"[AGENT_PRESENCE] release failed (non-fatal): {e}")
+        return "unavailable"
+    if getattr(result, "ok", False):
+        return "released"
+    error = getattr(result, "error", None)
+    if error in _RELEASE_ABSENT_ERRORS:
+        return "absent"
+    if error == "service_unavailable":
+        return "unavailable"
+    return "refused"
 
 
 async def release_agent_presence(
@@ -498,13 +519,21 @@ async def release_agent_presence(
             reason = "holder_unknown" if others == {_HOLDER_UNKNOWN} else "held_by_other_session"
             return {"released": False, "reason": reason}
         try:
-            ok = await _release_lease(client, agent_uuid, lease_id)
+            outcome = await _release_lease(client, agent_uuid, lease_id)
         except Exception as e:  # noqa: BLE001 - best-effort; the TTL remains the backstop
             logger.debug(f"[AGENT_PRESENCE] release failed (non-fatal): {e}")
-            ok = False
-        if ok:
+            outcome = "unavailable"
+        if outcome in ("released", "absent"):
             _lease_ids.pop(agent_uuid, None)
             _lease_sessions.pop(agent_uuid, None)
             _touched.pop(agent_uuid, None)
-        # On a refused release the cached id stays for a retry.
-        return {"released": ok, "reason": "released" if ok else "release_refused"}
+        if outcome == "released":
+            return {"released": True, "reason": "released"}
+        if outcome == "absent":
+            # Already gone (force-released or expired): nothing live remains,
+            # which is the same clean state as finding no lease at all.
+            return {"released": False, "reason": "no_live_lease"}
+        # Otherwise the cached id stays for a retry.
+        if outcome == "unavailable":
+            return {"released": False, "reason": "release_unavailable", "retryable": True}
+        return {"released": False, "reason": "release_refused"}
