@@ -31,7 +31,7 @@ sequenceDiagram
     participant A as Agent A
     participant U as UNITARES
     participant B as Agent B (other model)
-    participant A2 as Agent A, session 2
+    participant S as Successor
     A->>U: Check-in: "Trying a fifth fix. Not sure why."
     U->>A: Pause, with the reason
     A->>U: self_recovery: "I was guessing. Back to the logs."
@@ -39,8 +39,8 @@ sequenceDiagram
     B->>U: "Full disk, or a log that never rotated?"
     A->>U: "Checked. Rotation works. It was the disk."
     Note over A: Session ends. Its context is gone.
-    A2->>U: Starts with session 1 as its declared parent, then searches "backup"
-    U->>A2: The finding and its logs, filed under session 1
+    S->>U: Starts with Agent A as its declared parent, then searches "backup"
+    U->>S: The finding, filed under Agent A
 ```
 
 ## Start with one thing
