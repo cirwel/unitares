@@ -301,9 +301,43 @@ class TestS21APath2FailClosed:
         resolution._reset_resolve_miss_audit_throttle()
         monkeypatch.setattr(resolution, "_RESOLVE_MISS_AUDIT_MAX_KEYS", 3)
         for i in range(5):
-            assert resolution._resolve_miss_audit_admit(f"k{i}", "r") == 0
+            assert resolution._resolve_miss_audit_admit(f"k{i}", "r") == (0, [])
         assert len(resolution._resolve_miss_audit_state) == 3
         assert ("k0", "r") not in resolution._resolve_miss_audit_state
+        resolution._reset_resolve_miss_audit_throttle()
+
+    def test_pending_count_is_flushed_when_its_key_goes_quiet(self, monkeypatch):
+        """T3e: a burst that stops before its next window still gets counted.
+
+        The suppressed count must not wait for another miss on the SAME key:
+        once the window closes, the next miss on any key flushes it as its own
+        row. Eviction flushes too.
+        """
+        from src.mcp_handlers.identity import resolution
+
+        resolution._reset_resolve_miss_audit_throttle()
+        clock = [0.0]
+        monkeypatch.setattr(resolution, "_resolve_miss_clock", lambda: clock[0])
+        fields = {"resume": True, "client_hint": "discord-bridge"}
+
+        assert resolution._resolve_miss_audit_admit("burst", "r", fields) == (0, [])
+        for _ in range(7):
+            assert resolution._resolve_miss_audit_admit("burst", "r", fields) is None
+
+        # Inside the window, another key does not flush the burst yet.
+        assert resolution._resolve_miss_audit_admit("other", "r") == (0, [])
+
+        clock[0] += resolution._RESOLVE_MISS_AUDIT_WINDOW_SECONDS + 1
+        suppressed, flushes = resolution._resolve_miss_audit_admit("third", "r")
+        assert suppressed == 0
+        assert flushes == [("burst", "r", 7, fields)]
+        assert ("burst", "r") not in resolution._resolve_miss_audit_state
+
+        # Eviction flushes a pending count instead of dropping it.
+        monkeypatch.setattr(resolution, "_RESOLVE_MISS_AUDIT_MAX_KEYS", 1)
+        assert resolution._resolve_miss_audit_admit("third", "r") is None
+        _, flushes = resolution._resolve_miss_audit_admit("fourth", "r")
+        assert flushes == [("third", "r", 1, {})]
         resolution._reset_resolve_miss_audit_throttle()
 
     @pytest.mark.asyncio
