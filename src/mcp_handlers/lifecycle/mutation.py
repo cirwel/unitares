@@ -487,9 +487,19 @@ async def handle_release_presence(arguments: Dict[str, Any]) -> Sequence[TextCon
 
     from ..identity.agent_presence_lease import release_agent_presence
     result = await release_agent_presence(agent_uuid, session_ids)
+
+    # A process binding also reads as a live parent, for five minutes after its
+    # last onboard, so retire this session's bindings too. Only when this
+    # session was the last holder: never while another session keeps presence.
+    bindings_retired = 0
+    if result["released"] or result["reason"] == "no_live_lease":
+        from ..identity.process_binding import retire_bindings
+        bindings_retired = await retire_bindings(agent_uuid, session_ids)
+
     return success_response({
         "action": "release_presence",
         "agent_id": agent_uuid,
         "released": result["released"],
         "reason": result["reason"],
+        "bindings_retired": bindings_retired,
     })

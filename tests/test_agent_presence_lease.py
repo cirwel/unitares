@@ -22,6 +22,7 @@ def _clear_cache():
     apl._locks.clear()
     apl._lease_sessions.clear()
     apl._last_sweep = 0.0
+    apl._touched.clear()
     yield
     apl._lease_ids.clear()
     apl._released_at.clear()
@@ -29,6 +30,7 @@ def _clear_cache():
     apl._locks.clear()
     apl._lease_sessions.clear()
     apl._last_sweep = 0.0
+    apl._touched.clear()
 
 
 def _fake_req(**kw):
@@ -588,9 +590,11 @@ def test_sweep_drops_state_for_identities_nothing_refreshes():
     stale = now - apl._PRESENCE_TTL_S - 1
     apl._lease_sessions["gone"] = {"agent-gone": stale}
     apl._lease_ids["gone"] = "lease-gone"
+    apl._touched["gone"] = stale
     apl._locks["gone"] = asyncio.Lock()
     apl._lease_sessions["live"] = {"agent-live": now}
     apl._lease_ids["live"] = "lease-live"
+    apl._touched["live"] = now
     apl._locks["live"] = asyncio.Lock()
     apl._last_sweep = 0.0
 
@@ -601,3 +605,23 @@ def test_sweep_drops_state_for_identities_nothing_refreshes():
     assert "gone" not in apl._locks
     assert apl._lease_ids["live"] == "lease-live"
     assert "live" in apl._locks
+
+
+@pytest.mark.asyncio
+async def test_failed_release_keeps_its_lease_through_a_sweep(monkeypatch):
+    """A refused release empties the holder set while the lease is still live;
+    the sweep must not drop its cached id before a retry."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.heartbeat_agent_presence("uuid-1", "sess-a", apl.time.monotonic())
+
+    async def _refused(client_, agent_uuid, lease_id):
+        return False
+
+    monkeypatch.setattr(apl, "_release_lease", _refused)
+    assert (await apl.release_agent_presence("uuid-1", ("sess-a",)))["reason"] == "release_refused"
+
+    apl._last_sweep = 0.0
+    apl._sweep(apl.time.monotonic() + apl._SWEEP_INTERVAL_S + 1)
+
+    assert apl._lease_ids["uuid-1"] == "lease-123"

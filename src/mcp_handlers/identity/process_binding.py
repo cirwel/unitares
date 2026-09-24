@@ -263,6 +263,40 @@ async def sweep_stale_bindings() -> int:
         return 0
 
 
+async def retire_bindings(agent_id: str, client_session_ids: tuple[str, ...]) -> int:
+    """Mark this session's live bindings stale on a clean exit.
+
+    The lineage gate counts a live binding as a running parent for
+    LIVE_WINDOW_SECONDS, so an exit that only released its presence lease would
+    still block an immediate successor. Scoped to the exiting session's own
+    client_session_id. Returns the number of rows retired; 0 on any error.
+    """
+    if not agent_id or not client_session_ids:
+        return 0
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            updated = await conn.execute(
+                """
+                UPDATE core.agent_process_bindings
+                SET stale_at = NOW()
+                WHERE agent_id = $1
+                  AND stale_at IS NULL
+                  AND client_session_id = ANY($2::text[])
+                """,
+                agent_id,
+                list(client_session_ids),
+            )
+        try:
+            return int((updated or "UPDATE 0").split()[-1])
+        except Exception:
+            return 0
+    except Exception as e:
+        logger.debug(f"[PROCESS_BINDING] retire_bindings failed: {e}")
+        return 0
+
+
 async def get_live_bindings(agent_id: str) -> List[Dict[str, Any]]:
     """Return all live bindings for an agent, most-recent first.
 

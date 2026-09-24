@@ -73,3 +73,52 @@ def test_checkin_presence_heartbeat_carries_the_session_id(monkeypatch):
     core._schedule_agent_presence_heartbeat(ctx)
 
     assert scheduled == [("uuid-1", "sess-1")]
+
+
+
+@pytest.mark.asyncio
+async def test_release_presence_retires_the_sessions_bindings(monkeypatch):
+    from src.mcp_handlers.identity import process_binding
+
+    retired = []
+
+    async def _release(agent_uuid, session_ids=()):
+        return {"released": True, "reason": "released"}
+
+    async def _retire(agent_id, session_ids):
+        retired.append((agent_id, session_ids))
+        return 1
+
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    monkeypatch.setattr(apl, "release_agent_presence", _release)
+    monkeypatch.setattr(process_binding, "retire_bindings", _retire)
+
+    body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
+
+    assert retired == [("caller-uuid", ("sess-1",))]
+    assert body["bindings_retired"] == 1
+
+
+@pytest.mark.asyncio
+async def test_release_presence_keeps_bindings_while_another_session_holds(monkeypatch):
+    from src.mcp_handlers.identity import process_binding
+
+    retired = []
+
+    async def _release(agent_uuid, session_ids=()):
+        return {"released": False, "reason": "held_by_other_session"}
+
+    async def _retire(agent_id, session_ids):
+        retired.append(agent_id)
+        return 1
+
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    monkeypatch.setattr(apl, "release_agent_presence", _release)
+    monkeypatch.setattr(process_binding, "retire_bindings", _retire)
+
+    body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
+
+    assert retired == []
+    assert body["bindings_retired"] == 0

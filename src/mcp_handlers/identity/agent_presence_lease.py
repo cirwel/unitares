@@ -96,6 +96,11 @@ _locks: dict[str, asyncio.Lock] = {}
 _SWEEP_INTERVAL_S = 60.0
 _last_sweep = 0.0
 
+# uuid -> monotonic time of its last acquire, refresh or release attempt. The
+# sweep keys on this, not on the holder set: a failed release empties the set
+# while its lease is still live, and its cached id must survive for a retry.
+_touched: dict[str, float] = {}
+
 
 def _sweep(now: float) -> None:
     """Drop per-identity state nothing still refreshes.
@@ -110,10 +115,12 @@ def _sweep(now: float) -> None:
     if now - _last_sweep < _SWEEP_INTERVAL_S:
         return
     _last_sweep = now
-    for agent_uuid, holders in list(_lease_sessions.items()):
-        if all(now - seen > _PRESENCE_TTL_S for seen in holders.values()):
+    for agent_uuid in set(_lease_sessions) | set(_lease_ids):
+        touched = _touched.setdefault(agent_uuid, now)  # untracked: start its clock
+        if now - touched > _PRESENCE_TTL_S:
             _lease_sessions.pop(agent_uuid, None)
             _lease_ids.pop(agent_uuid, None)
+            _touched.pop(agent_uuid, None)
     for agent_uuid in [u for u, at in _released_at.items() if now - at > _RELEASE_SUPPRESS_S]:
         _released_at.pop(agent_uuid, None)
         _released_sessions.pop(agent_uuid, None)
@@ -237,6 +244,7 @@ async def _refresh_presence(
                 _lease_sessions.setdefault(agent_uuid, {})[
                     client_session_id or _HOLDER_UNKNOWN
                 ] = time.monotonic()
+                _touched[agent_uuid] = time.monotonic()
                 return
         except Exception:
             pass
@@ -277,6 +285,7 @@ async def _refresh_presence(
                 await _release_lease(client, agent_uuid, str(new_id))
             return
         _lease_ids[agent_uuid] = str(new_id)
+        _touched[agent_uuid] = time.monotonic()
         holder = client_session_id or _HOLDER_UNKNOWN
         if idempotent:
             holders = _lease_sessions.setdefault(agent_uuid, {})
@@ -435,6 +444,7 @@ async def release_agent_presence(
         sessions = _released_sessions.setdefault(agent_uuid, set())
         sessions.update(session_ids)
 
+        _touched[agent_uuid] = now
         # The releasing session is gone whatever happens below.
         holders = _lease_sessions.setdefault(agent_uuid, {})
         for session_id in session_ids:
@@ -465,5 +475,6 @@ async def release_agent_presence(
         if ok:
             _lease_ids.pop(agent_uuid, None)
             _lease_sessions.pop(agent_uuid, None)
+            _touched.pop(agent_uuid, None)
         # On a refused release the cached id stays for a retry.
         return {"released": ok, "reason": "released" if ok else "release_refused"}
