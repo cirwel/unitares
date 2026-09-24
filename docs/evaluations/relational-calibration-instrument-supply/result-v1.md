@@ -48,10 +48,19 @@ identity or distribution was retained beyond these aggregates.
   rows recorded up to it, so the delay changes no predicate. It was late because
   no job or owner had been scheduled to run it; an audit on 2026-09-23 found it
   had never run.
-- **Retention.** The query reads rows present at execution. Retention on
-  `core.agent_state` removes old rows without an archive, so any deletion
-  between the cutoff and execution could only lower counts. Deletion inside
-  the window cannot be ruled out from the database alone.
+- **Retention and snapshot completeness.** The query reads rows present at
+  execution, and it is not monotone under deletion, so completeness had to be
+  established rather than assumed. It was, from code and catalog rather than
+  from the data: the only in-database deletion path for `core.agent_state` is
+  `core.cleanup_old_agent_state(90)`, called from `audit.partition_maintenance()`
+  (live definitions read from `pg_get_functiondef`), which removes rows older
+  than 90 days and always keeps each identity's latest row. Every row in the
+  frozen window (2026-08-18 to 2026-09-17) was at most 36 days old at
+  execution. The only other deletion route is the `ON DELETE CASCADE` from
+  `core.identities`; the one script that deletes identities
+  (`scripts/migration/cleanup_ghost_agents.py`) deletes only identities with
+  no `agent_state` rows and is not scheduled anywhere. No row in the window
+  could have been removed before the read.
 - **Deviation, ruled harmless: a pre-read row count.** Earlier on the same
   day, while assessing whether retention threatened this read, an audit ran a
   single raw row count of `core.agent_state` over the frozen window. It
