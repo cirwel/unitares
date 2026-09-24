@@ -2249,28 +2249,33 @@ def _canary_sql(doctor, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("eclass", "gate", "counted", "uncounted"),
+    ("eclass", "action", "gate", "expected"),
     [
+        # (decisions, counted, uncounted)
         # non-authored, risk-routed: the guard should have deferred it
-        ("substrate_interpretation", {"include_authored": True}, 1, 0),
+        ("substrate_interpretation", "pause", {"include_authored": True}, (1, 1, 0)),
         # non-authored, no gate (pre-guard row or non-risk stop): counted
-        ("substrate_interpretation", None, 1, 0),
+        ("substrate_interpretation", "pause", None, (1, 1, 0)),
         # authored, extended guard evaluated it and still paused: a failure
-        ("agent_report", {"include_authored": True}, 1, 0),
+        ("agent_report", "pause", {"include_authored": True}, (1, 1, 0)),
         # authored, evaluated before the extension (key absent): uncounted
-        ("agent_report", {"applied": False}, 0, 1),
-        # authored, extension switched off: uncounted
-        ("agent_report", {"include_authored": False}, 0, 1),
+        ("agent_report", "pause", {"applied": False}, (0, 0, 1)),
+        # authored, extension switched off: uncounted, and not observed
+        ("agent_report", "pause", {"include_authored": False}, (0, 0, 1)),
         # authored, not risk-routed (no gate): an independent stop, counted
-        ("agent_report", None, 1, 0),
-        # no recorded class, gate present (the guard failed closed on a
-        # missing class): authorship cannot be shown, so it counts
-        (None, {"applied": False}, 1, 0),
-        (None, {"include_authored": False}, 1, 0),
+        ("agent_report", "pause", None, (1, 1, 0)),
+        # no recorded class, gate present (guard failed closed): counts
+        (None, "pause", {"applied": False}, (1, 1, 0)),
+        (None, "pause", {"include_authored": False}, (1, 1, 0)),
+        # authored and deferred by the extended guard: observed, no pause
+        ("agent_report", "proceed", {"include_authored": True, "applied": True}, (1, 0, 0)),
+        # authored, never evaluated (no gate, no pause): not observed, so an
+        # all-authored window under the rollback flag SKIPs instead of passing
+        ("agent_report", "proceed", None, (0, 0, 0)),
     ],
 )
 def test_cold_start_canary_sql_classifies_each_row_shape(
-    doctor, monkeypatch, eclass, gate, counted, uncounted
+    doctor, monkeypatch, eclass, action, gate, expected
 ):
     """Run the canary's own SQL over one synthetic row per shape (a VALUES
     CTE in place of core.agent_state), so the populations are checked by
@@ -2279,7 +2284,7 @@ def test_cold_start_canary_sql_classifies_each_row_shape(
     import subprocess
 
     sql = _canary_sql(doctor, monkeypatch)
-    policy = {"action": "pause", "inputs": {"verdict_source": "phi_cold_start"}}
+    policy = {"action": action, "inputs": {"verdict_source": "phi_cold_start"}}
     if gate is not None:
         policy["epistemic_gate"] = gate
     state = {"eisv_telemetry": {"policy_evaluation": policy}}
@@ -2306,18 +2311,17 @@ def test_cold_start_canary_sql_classifies_each_row_shape(
         pytest.skip(f"test database not reachable: {out.stderr[:120]}")
     # Anything else (a syntax error in the canary query) must fail, not skip.
     assert out.returncode == 0, out.stderr
-    decisions, got_counted, got_uncounted = (int(x) for x in out.stdout.strip().split("|"))
-    assert decisions == 1
-    assert (got_counted, got_uncounted) == (counted, uncounted)
+    got = tuple(int(x) for x in out.stdout.strip().split("|"))
+    assert got == expected
 
 
-def test_cold_start_canary_denominator_includes_authored_cold_starts(doctor, monkeypatch):
-    """The extended guard is exercised by authored cold starts too, so an
-    all-authored window must not SKIP as 'nothing to observe'."""
-    sql = _canary_sql(doctor, monkeypatch)
-    denominator = sql.split("count(*)")[1]
-    assert "agent_report" not in denominator.split("),")[0]
-
+def test_cold_start_canary_skips_an_all_authored_window_under_rollback(doctor, monkeypatch):
+    """With the extension off, authored cold starts never reach the guard; a
+    window of only those must SKIP, not report a clean zero."""
+    monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["0", "0", "3"])
+    result = doctor.check_cold_start_pause_canary("postgresql:///x")
+    assert result.status is doctor.Status.SKIP
+    assert "3 agent-authored" in result.message
 
 def test_cold_start_canary_skips_when_db_unreachable(doctor, monkeypatch):
     monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: None)

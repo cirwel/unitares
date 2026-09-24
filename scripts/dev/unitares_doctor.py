@@ -2523,8 +2523,11 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     (written before the change) or false (flag off). Those are reported, never
     dropped. An authored pause with no `epistemic_gate` at all was not
     risk-routed (void, coherence, basin, non-risk CIRS), so it counts exactly as
-    a non-authored one does. The denominator is every cold-start decision,
-    authored or not, since the extended guard is exercised by both.
+    a non-authored one does. The denominator counts what the guard actually
+    watched: every non-authored cold-start decision, an authored one only when
+    its row shows the extended guard evaluated it (`include_authored = true`),
+    and any counted pause. Under the rollback flag an all-authored window
+    therefore SKIPs rather than passing on a guard that never looked.
 
     Zero is also what this check sees when nothing is looking, which is the
     whole reason it exists. The denominator is cold-start *decisions* of any
@@ -2549,7 +2552,10 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
         "  FROM core.agent_state"
         "  WHERE recorded_at > now() - interval '7 days'"
         "    AND state_json ? 'eisv_telemetry')"
-        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'),"
+        "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'"
+        "                          AND (eclass IS DISTINCT FROM 'agent_report'"
+        "                               OR incl = 'true'"
+        "                               OR (act = 'pause' AND NOT gated))),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
         "                          AND NOT (eclass IS NOT DISTINCT FROM 'agent_report'"
         "                                   AND gated"
