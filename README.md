@@ -17,10 +17,37 @@ connected. Recover work across restarts, context loss, and handoffs.
 
 </div>
 
+## Your agents forget. UNITARES remembers who did what.
+
 An agent reports that its fix is done and the tests pass. By morning its
 session has restarted, its context is gone, and another process has taken over
-the task. Who said it? What supports it? Who challenged it? What happened? Each
-run leaves its own log, and the answers scatter across them.
+the task. Who said it? What supports it? Who challenged it? What happened?
+
+With UNITARES, the next agent asks the record and gets the answer:
+
+```mermaid
+sequenceDiagram
+    participant A as Agent A
+    participant U as UNITARES
+    participant B as Agent B
+    A->>U: "Fixed the login bug. Tests pass."
+    Note over U: Filed under Agent A,<br/>with the test run as evidence
+    Note over A: Session ends. Its context is gone.
+    B->>U: "Was the login bug fixed? Who says so?"
+    U->>B: Fixed. Said by Agent A, backed by the test run,<br/>and a reviewer agreed.
+```
+
+## Start with one thing
+
+You don't need all of UNITARES on day one. Each layer works on its own.
+
+| Start here | You get | Tools |
+|---|---|---|
+| **1. Remember** | Every process has a name, and what it finds survives restarts and handoffs. | `start_session`, `store_finding`, `search_shared_memory` |
+| **2. Challenge** | Another agent reviews the work, and the disagreement stays on record. | `request_review` |
+| **3. Steer** | Check-ins return proceed, guide, or pause with a reason, and outcomes are recorded against them. | `sync_state`, `record_result` |
+
+## What UNITARES is
 
 UNITARES is self-hosted accountability infrastructure for operators running
 multiple AI agents. Its federation kernel connects independent runtimes to one
@@ -29,9 +56,8 @@ while keeping their own models, tools, and runtimes. They interoperate with
 each other over their own transports or A2A; UNITARES is the record behind
 them, not the transport between them.
 
-UNITARES preserves accountability across discontinuities in agent identity,
-context, process, and time. Agent work remains attributable, reviewable, and
-recoverable even when the process that started it is gone.
+Agent work remains attributable, reviewable, and recoverable even when the
+process that started it is gone.
 
 ## What UNITARES gives you
 
@@ -49,21 +75,8 @@ recoverable even when the process that started it is gone.
 - **Reconstruction** — give a successor the records needed to understand and
   continue earlier work.
 
-These are mechanisms that run and leave records, which is a different claim from
-improving outcomes. A [retrospective audit](docs/evaluations/review-correction-traces-2026-09-21.md)
-found documented review-driven revisions in 10 of 20 recently created, merged
-PRs, plus one later PR implementing a condition retained from an earlier
-structured review. That establishes inspectable correction traces, not
-comparative lift over ordinary review. The frozen outcome-lift read did not
-establish predictive lift — inconclusive rather than ruled out — and prevention
-or improvement from pausing remains untested. The
-[claim ledger](docs/EVIDENCE_AND_LIMITS.md) marks which side of that line each
-capability sits on.
-
-Together, these form an operator-owned accountability layer across coding
-agents, research agents, background agents, and custom runtimes. What it adds
-to a record of what happened is adjudication: disagreement, conditions, and
-outcomes bound to the process that made the claim.
+Every capability has an evidence status in the
+[claim ledger](docs/EVIDENCE_AND_LIMITS.md).
 
 ## Install
 

@@ -27,10 +27,16 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     )
     assert definition in readme_text
     assert definition in landing_text
-    assert "External adoption remains unvalidated" in landing_text
-    assert "did not establish predictive lift" in landing_text
-    assert "read-specific power" in landing_text
-    assert "inconclusive, not a demonstrated negative" in landing_text
+    # The landing states what runs and links the ledger; the scope wording
+    # lives in the ledger, where a reviewer reads it beside the data.
+    assert "docs/EVIDENCE_AND_LIMITS.md" in landing
+    ledger_text = " ".join(
+        (PROJECT_ROOT / "docs" / "EVIDENCE_AND_LIMITS.md").read_text(encoding="utf-8").split()
+    )
+    assert "External adoption remains unvalidated" in ledger_text
+    assert "did not establish predictive lift" in ledger_text
+    assert "read-specific power" in ledger_text
+    assert "inconclusive, not a demonstrated negative" in ledger_text
     assert "its claims, evidence, and behavior drift apart" in landing_text
     assert "Claims and evidence" in landing
     assert 'class="hero-actions"' in landing
