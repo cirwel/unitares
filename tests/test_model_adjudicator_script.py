@@ -556,3 +556,24 @@ def test_oversized_producer_fields_are_bounded_in_the_prompt(adj):
 def test_normal_fields_pass_through_untouched(adj):
     prompt = adj.build_prompt(ITEM, "h", None)
     assert "redis outdated" in prompt and "truncated" not in prompt
+
+
+def test_legacy_over_long_fingerprint_is_skipped_before_any_model_call(adj):
+    """Persisted before the ingest bound: the verdict route would 400 it."""
+    queue = [dict(ITEM, fingerprint="L" * 300), dict(ITEM, fingerprint="ok")]
+    io, calls = make_io(adj, {"fast": reply("confirmed")}, queue=queue)
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert calls["model"] == ["fast"]                     # only the postable item
+    assert [p["fingerprint"] for p in calls["posted"]] == ["ok"]
+
+
+def test_a_queue_of_only_legacy_fingerprints_is_not_a_judge_failure(adj):
+    io, calls = make_io(adj, {"fast": reply("confirmed")},
+                        queue=[dict(ITEM, fingerprint="L" * 300)])
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert calls["model"] == []
+
+
+def test_the_bound_matches_the_server(adj):
+    from src.http_routes.sentinel import _FINGERPRINT_MAX_CHARS
+    assert adj.FINGERPRINT_MAX_CHARS == _FINGERPRINT_MAX_CHARS

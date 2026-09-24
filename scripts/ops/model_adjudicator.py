@@ -111,6 +111,10 @@ SOURCE_MAX_CHARS = 8000
 # Mirrors _ADJUDICATION_DISMISS_REASONS in src/http_routes/sentinel.py; the
 # endpoint re-validates, so drift here fails loudly as a 400, never silently.
 DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
+# Mirrors _FINGERPRINT_MAX_CHARS in src/http_routes/sentinel.py. New findings
+# are normalized to fit at ingest, but a row persisted before that bound can
+# still carry a longer one, and the verdict route refuses it with a 400.
+FINGERPRINT_MAX_CHARS = 256
 VERDICTS = ("confirmed", "dismissed", "abstain")
 
 SYSTEM_PROMPT = (
@@ -526,6 +530,13 @@ def run_once(io: dict | None = None, dry_run: bool = False,
     for item in queue[:MAX_ITEMS]:
         fp = item.get("fingerprint")
         if not fp:
+            continue
+        if len(fp) > FINGERPRINT_MAX_CHARS:
+            # Unpostable, so judging it would only spend quota; and it says
+            # nothing about whether verdicts work, so it is not systemic.
+            # The operator's adjudicate route has no such bound.
+            log(f"{fp[:40]}…: fingerprint over {FINGERPRINT_MAX_CHARS} chars (persisted "
+                "before the ingest bound) — skipped, left for an operator")
             continue
         attempted += 1
         result = judge(item, io, tiers)
