@@ -890,3 +890,17 @@ class TestStrictModeMintPathClosure:
             "the dispatch allowlist doesn't reach it."
         )
         assert "Path E" in window, "Path E strict block must reference '#425 Path E'."
+
+
+def test_resolve_miss_wallclock_carries_utc_offset():
+    """``suppressed_last_at`` places a throttle flush's misses in time for
+    readers such as Sentinel's audit-volume check. A naive local timestamp is
+    only correct in a reader that shares the writer's zone; with the offset it
+    is one unambiguous instant anywhere, including across a DST change."""
+    from datetime import datetime
+
+    from src.mcp_handlers.identity import resolution
+
+    stamp = datetime.fromisoformat(resolution._resolve_miss_wallclock())
+    assert stamp.tzinfo is not None
+    assert abs((datetime.now().astimezone() - stamp).total_seconds()) < 5
