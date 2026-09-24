@@ -888,7 +888,9 @@ class TestPredictionBindingEcho:
         mock_monitor._prediction_ttl_seconds = 3600.0
         mock_monitor._prev_confidence = None
         mock_monitor.get_primary_eisv.return_value = (0.7, 0.75, 0.15, -0.03)
-        mock_monitor._behavioral_state = None
+        mock_monitor._behavioral_state = MagicMock(
+            E=0.61, I=0.7, S=0.2, V=-0.01, confidence=1.0, update_count=40,
+        )
 
         with patch('src.db.get_db', return_value=mock_db), \
              patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
@@ -912,6 +914,9 @@ class TestPredictionBindingEcho:
         parsed = parse_result(result)
         assert parsed.get('prediction_binding') == 'registry'
         mock_server.get_or_create_monitor.assert_called_once_with('agent-after-restart')
+        # The outcome snapshots the restored monitor's state, not a fallback.
+        _, db_kwargs = mock_db.record_bound_outcome_event.call_args
+        assert db_kwargs['detail'].get('behavioral_eisv', {}).get('E') == 0.61
 
     @pytest.mark.asyncio
     async def test_binding_missing_prediction_when_id_unknown(self):
