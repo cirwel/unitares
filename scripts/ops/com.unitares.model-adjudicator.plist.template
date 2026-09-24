@@ -32,11 +32,17 @@
     Values are Claude CLI --model names or aliases (e.g. haiku). Leave STRONG
     empty for the CLI's default model; set it to "off" to disable escalation.
 
-    If this deployment has NO human adjudicator, also set
+    If this deployment has NO human adjudicator, set
       UNITARES_OPERATOR_ADJUDICATION=off
-    on the doctor-findings job, so its two queue checks SKIP with the reason
-    instead of warning about a channel nobody can feed. Declared, never
+    on the doctor-findings job, so adjudication_feedstock SKIPs with the
+    reason instead of warning about a queue nobody can judge. Declared, never
     inferred: leave it unset wherever a human does adjudicate.
+
+    THIS JOB MUST CARRY THE SAME DECLARATION (it is set below). It re-runs
+    the doctor check that raised a finding as live evidence, in THIS job's
+    environment; if the two disagree, a check the doctor now SKIPs re-runs
+    here as WARN and the judge is handed false evidence. Keep every doctor
+    setting in sync with the doctor-findings job the same way.
 
     AUTH: the job reads UNITARES_MCP_BEARER_TOKEN, then UNITARES_HTTP_API_TOKEN,
     from the environment or ~/.config/cirwel/secrets.env (UNITARES_SECRETS_ENV
@@ -101,6 +107,7 @@
         <key>PATH</key><string>/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key><string>__HOME__</string>
         <key>USER</key><string>__USER__</string>
+        <key>UNITARES_OPERATOR_ADJUDICATION</key><string>off</string>
         <key>DB_POSTGRES_URL</key><string>postgresql://postgres:postgres@localhost:5432/governance</string>
         <key>UNITARES_MODEL_ADJUDICATOR_HOST</key><string>claude</string>
         <key>UNITARES_ADJUDICATOR_FAST_MODEL</key><string>haiku</string>

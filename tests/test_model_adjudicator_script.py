@@ -286,7 +286,8 @@ def test_doctor_evidence_is_a_rerun_plus_the_check_source(adj, monkeypatch):
                                   "message": "cold_start_pause_canary: 1 pause"})
     # Same DSN as the history read: evidence from one deployment only.
     assert urls == ["postgresql://h/producer"]
-    assert "LIVE RE-RUN of `cold_start_pause_canary`, done just now: PASS: 0 pauses" in out
+    assert "LIVE RE-RUN of `cold_start_pause_canary`, done just now" in out
+    assert "PASS: 0 pauses" in out
     assert "SOURCE of the check" in out and "the real logic" in out
     assert adj.io_doctor_evidence({"event_type": "doctor_check_finding",
                                    "message": "no_such_check: x"}) is None
@@ -427,3 +428,28 @@ def test_without_a_cutoff_nothing_counts_as_sure(adj, monkeypatch):
     monkeypatch.setattr(adj, "ESCALATE_BELOW", None)
     j = adj.parse_judgement(reply("confirmed", 1.0), tiers(adj)[0])
     assert j.unsure()
+
+
+def test_rerun_evidence_names_the_declaration_it_ran_under(adj, monkeypatch):
+    """A re-run under a different declaration than the producer's would hand
+    the judge false evidence; naming it makes a mismatch visible."""
+    class Status:
+        name = "SKIP"
+
+    class Result:
+        status, message, detail = Status(), "declared off", ""
+
+    class Check:
+        name, fn = "adjudication_feedstock", staticmethod(lambda: Result())
+
+    monkeypatch.setenv("UNITARES_OPERATOR_ADJUDICATION", "off")
+    monkeypatch.setitem(adj._DOCTOR, "mod", _fake_doctor(lambda r, u: [Check()]))
+    out = adj.io_doctor_evidence({"event_type": "doctor_check_finding",
+                                  "check": "adjudication_feedstock"})
+    assert "(UNITARES_OPERATOR_ADJUDICATION=off)" in out
+
+
+def test_plist_template_carries_the_doctor_declaration():
+    """The re-run happens in this job's env, so it must match the doctor job."""
+    template = (SCRIPT.parent / "com.unitares.model-adjudicator.plist.template").read_text()
+    assert "<key>UNITARES_OPERATOR_ADJUDICATION</key><string>off</string>" in template

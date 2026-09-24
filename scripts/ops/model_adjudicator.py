@@ -286,7 +286,12 @@ def io_doctor_evidence(item: dict) -> Optional[str]:
     except Exception as exc:  # noqa: BLE001 - evidence is best-effort
         return f"LIVE RE-RUN failed: {type(exc).__name__}: {str(exc)[:200]}"
     detail = f"\nDETAIL: {result.detail[:1500]}" if result.detail else ""
-    parts = [f"LIVE RE-RUN of `{name}`, done just now: "
+    # Say which deployment declaration the re-run ran under: the check reads
+    # it, and a mismatch with the producing job would make this re-run
+    # disagree with the finding for reasons that are not the system's state.
+    declared = os.environ.get("UNITARES_OPERATOR_ADJUDICATION", "").strip() or "unset"
+    parts = [f"LIVE RE-RUN of `{name}`, done just now "
+             f"(UNITARES_OPERATOR_ADJUDICATION={declared}): "
              f"{result.status.name}: {result.message[:1500]}{detail}"]
     fn = getattr(doctor, f"check_{name}", None)
     if fn is not None:
