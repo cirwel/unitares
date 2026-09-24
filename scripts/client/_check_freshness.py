@@ -5,8 +5,9 @@ A skill's frontmatter declares `last_verified` (when its content was last
 reviewed), `freshness_days`, and the `source_files` its claims depend on.
 Verification records live beside the skills as attestations (below). Two checks:
 
-- STALE: a cited source's content no longer matches the digest recorded when
-  the skill was last verified, or a cited source has no recorded digest. The
+- STALE: a cited source's current content matches no digest on record for
+  the current skill text (see Attestations below), or a cited source has no
+  recorded digest at all. The
   digest is computed from the file in the working tree, so the check needs no
   git history and gives the same answer in a fresh checkout, a shallow clone, a
   worktree, or an rsync copy. File mtime was the previous signal; every
@@ -26,7 +27,10 @@ against the changed sources, writes ONE NEW FILE per skill:
     skills/.attestations/<skill>/<YYYYMMDDTHHMMSSffffffZ>-<8 hex>.json
     {"schema": "unitares.skill_attestation.v1", "skill": ..., "verified_at":
      ISO-8601 UTC, "verified_date": "YYYY-MM-DD", "verifier": ...,
-     "source_digests": {source: digest}}
+     "source_digests": {source: digest}, "skill_digest": digest of SKILL.md}
+
+`skill_digest` (added 2026-09-24, optional for readers) names the skill text
+the record certified.
 
 It never edits SKILL.md. Until 2026-09-24 a stamp rewrote the `last_verified`
 line and a `source_digests` block inside SKILL.md, and the skills manifest
@@ -35,19 +39,46 @@ same lines: every merge put every other stamping PR back into conflict (five of
 seven conflicted PRs that day conflicted only there). New files with unique
 names cannot conflict, whoever writes them, from whichever harness.
 
-The newest attestation for a skill is its record, and newest means the
-lexically last file name (the name leads with a microsecond UTC timestamp): its digests
-drive STALE, and the effective verified date is the later of its
-`verified_date` and the frontmatter `last_verified`. `.attestations/` is
-excluded from SKILLS_MANIFEST.sha256, so the manifest moves only when skill
-content moves. Old attestations can be removed with `--prune`; deleting a file
-never conflicts with another PR adding one.
+A cited source is FRESH when its current digest equals the digest recorded
+for it in any attestation whose `skill_digest` equals the current SKILL.md:
+someone re-checked exactly this skill text against exactly that source
+content. Only when no attestation certified the current text (a SKILL.md edit
+not yet re-stamped, or records older than `skill_digest`) does the newest
+attestation alone vouch, as before. The legacy frontmatter
+`source_digests` block, which lives inside the current SKILL.md, also counts.
+Until 2026-09-24 only the newest attestation (the lexically last file name)
+counted, and that let a stamp mask a correct record: a branch cut from an
+older master stamps the skill, recording OLD digests for sources it never
+touched; the change to one of those sources merges first; the branch's
+attestation then sorts newest and the skill reads STALE although an older
+attestation records exactly the current content (observed on
+unitares-governance after #2363 merged). Older records are scoped to the skill
+text they certified because a digest verified for skill v1 says nothing about
+v2: if v1 was stamped against source X, v2 against Y, and the source reverts
+to X, v2 was never reviewed against X; nor does a v1 stamp from a concurrent
+branch vouch for v2 because its file happens to sort newest.
+
+The effective verified date, which drives AGING, comes from the same records
+that vouch for source digests: the latest `verified_date` among them, or the
+frontmatter `last_verified` if later. A newer stamp of different skill text
+does not reset AGING for the text on disk. `.attestations/` is excluded from the skills
+fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
+when skill content moves. Old attestations can be removed with `--prune`,
+which keeps the newest N per skill plus every record that still vouches for
+the current SKILL.md text with a source digest no other kept record carries; deleting a file never conflicts with another PR
+adding one.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
 into an attestation dated with that skill's `last_verified`.
 
 Readers of the same format: this checker, the plugin repository's copy of it,
-and the server's skills tool (src/mcp_handlers/introspection/skills.py).
+and the server's skills tool (src/mcp_handlers/introspection/skills.py). The
+checker and the server share the vouching rule, src/skill_attestations.py.
+
+A stamp made where a cited source is absent (another repository) carries that
+source's digest forward only from an attestation that certified the current
+skill text; otherwise the source is left unrecorded, so a stamp never certifies
+edited prose against source content nobody reviewed it against.
 
 Sources
 -------
@@ -73,6 +104,22 @@ from pathlib import Path
 
 import yaml
 
+# The vouching rule is shared with the server's `skills` tool
+# (src/skill_attestations.py), so both read the same records the same way.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from src.skill_attestations import (  # noqa: E402
+    ATTESTATIONS_DIR,
+    DIGEST_HEX,  # hex chars of sha256 per digest: change detection, not authentication
+    certified_attestations,
+    load_attestations,
+    skill_text_digest,
+    vouching_attestations,
+    vouching_date,
+)
+
 # Calendar-age floor (days). A skill's per-skill `freshness_days` is honored, but
 # the effective AGING threshold is never below this floor -- so stable reference
 # skills don't flip the whole gate red every couple of weeks on calendar time
@@ -83,11 +130,6 @@ FRESHNESS_FLOOR_DAYS = int(os.environ.get("SKILL_FRESHNESS_FLOOR_DAYS", "30"))
 # Explicit override: calendar age only, no source check at all.
 AGE_ONLY = os.environ.get("SKILL_FRESHNESS_AGE_ONLY") == "1"
 
-# Hex characters of sha256 recorded per source. Change detection, not
-# authentication: 64 bits is far more than a skill's dozen sources need.
-DIGEST_HEX = 16
-
-ATTESTATIONS_DIR = ".attestations"
 ATTESTATION_SCHEMA = "unitares.skill_attestation.v1"
 THIS_REPO_PREFIX = "unitares/"
 
@@ -157,29 +199,56 @@ def load_source_files(skill_dir: Path, frontmatter_sources: list[str]) -> list[s
 
 def latest_attestation(skills_dir: Path, name: str) -> dict | None:
     """The newest readable attestation for a skill, or None."""
-    adir = skills_dir / ATTESTATIONS_DIR / name
-    if not adir.is_dir():
-        return None
-    for path in sorted(adir.glob("*.json"), reverse=True):
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
-            return data
+    records = load_attestations(skills_dir, name)
+    return records[0] if records else None
+
+
+def effective_record(skills_dir: Path, name: str, meta: dict,
+                     skill_digest: str | None = None) -> tuple[str, dict[str, set[str]]]:
+    """(verified date, accepted digests per source).
+
+    Which attestations vouch for source digests:
+      * if any attestation certified the CURRENT skill text (its `skill_digest`
+        equals ``skill_digest``), exactly those do, whatever their age, and no
+        other. A record made against different skill text never vouches while
+        a record for this text exists: skill v2 was never reviewed against the
+        source content that v1 was, even if the v1 stamp sorts newest;
+      * otherwise the current text has never been certified (a SKILL.md edit
+        not yet re-stamped, or records older than `skill_digest`), and the
+        newest attestation alone vouches, the rule before 2026-09-24.
+    The legacy frontmatter block, which lives inside the current SKILL.md,
+    always counts.
+
+    The date comes from the SAME records: the newest `verified_date` among
+    the vouching attestations, or the frontmatter `last_verified` if later.
+    A stale branch stamping different skill text more recently must not reset
+    AGING for the text actually on disk, since nobody re-verified that text.
+    """
+    accepted: dict[str, set[str]] = {}
+    for src, digest in meta["source_digests"].items():
+        accepted.setdefault(src, set()).add(digest)
+    records = load_attestations(skills_dir, name)
+    for att in vouching_attestations(records, skill_digest):
+        for src, digest in att["source_digests"].items():
+            accepted.setdefault(str(src), set()).add(str(digest))
+    date = vouching_date(records, skill_digest, meta["last_verified"])
+    return date, accepted
+
+
+def carried_digest(skills_dir: Path, name: str, src: str, skill_digest: str) -> str | None:
+    """The digest to carry into a new stamp for a source this checkout cannot
+    see, so the stamp keeps the record made where the source was visible.
+
+    Only records that certified the CURRENT skill text may supply it: carrying
+    a digest from a record for other text would have the new stamp certify
+    this prose against source content nobody reviewed it against. With no such
+    record the source is left unrecorded, to be stamped where it is visible.
+    """
+    for att in certified_attestations(load_attestations(skills_dir, name), skill_digest):
+        digest = att["source_digests"].get(src)
+        if digest is not None:
+            return str(digest)
     return None
-
-
-def effective_record(skills_dir: Path, name: str, meta: dict) -> tuple[str, dict[str, str]]:
-    """(verified date, source digests): the newest attestation, falling back to
-    a frontmatter block not yet migrated; the date is the later of the
-    attestation's and the frontmatter's."""
-    att = latest_attestation(skills_dir, name)
-    if att is None:
-        return meta["last_verified"], meta["source_digests"]
-    att_date = str(att.get("verified_date") or "")
-    date = max(meta["last_verified"], att_date)
-    return date, {str(k): str(v) for k, v in att["source_digests"].items()}
 
 
 def check_skills(root: str, projects_root: str) -> int:
@@ -198,7 +267,8 @@ def check_skills(root: str, projects_root: str) -> int:
             print(f"  [{YELLOW}-{NC}] {skill_name}: no freshness metadata")
             continue
 
-        verified_date, digests = effective_record(skills_dir, skill_name, meta)
+        verified_date, accepted = effective_record(
+            skills_dir, skill_name, meta, skill_text_digest(skill_file))
 
         # Anchor to UTC so a CI runner (UTC) and a local machine (e.g. Mountain
         # Time) agree about day boundaries.
@@ -214,12 +284,13 @@ def check_skills(root: str, projects_root: str) -> int:
                 if not full_path.exists():
                     absent += 1
                     continue
-                recorded = digests.get(src)
-                if recorded is None:
+                recorded = accepted.get(src)
+                if not recorded:
                     drift = (src, "has no recorded digest")
                     break
-                if content_digest(full_path) != recorded:
-                    drift = (src, f"changed since {verified_date}")
+                if content_digest(full_path) not in recorded:
+                    drift = (src, f"changed since {verified_date}: no attestation "
+                                  "records its current content")
                     break
 
         if drift:
@@ -259,7 +330,8 @@ def _verifier(root: str) -> str:
 
 
 def write_attestation(skills_dir: Path, name: str, digests: dict[str, str],
-                      verified_at: datetime, verifier: str) -> Path:
+                      verified_at: datetime, verifier: str,
+                      skill_digest: str | None = None) -> Path:
     adir = skills_dir / ATTESTATIONS_DIR / name
     adir.mkdir(parents=True, exist_ok=True)
     # Microseconds keep file-name order chronological for stamps inside the
@@ -275,6 +347,10 @@ def write_attestation(skills_dir: Path, name: str, digests: dict[str, str],
         "verifier": verifier,
         "source_digests": dict(sorted(digests.items())),
     }
+    if skill_digest is not None:
+        # The SKILL.md content this record certified. An older record keeps
+        # vouching for its source digests only while the skill text is unchanged.
+        record["skill_digest"] = skill_digest
     path.write_text(json.dumps(record, indent=2) + "\n")
     return path
 
@@ -296,19 +372,20 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
             print(f"  [{RED}ERROR{NC}] {name}: no freshness metadata to stamp")
             rc = 1
             continue
-        _, previous = effective_record(skills_dir, name, meta)
+        skill_digest = skill_text_digest(skill_file)
         digests: dict[str, str] = {}
         absent: list[str] = []
         for src in load_source_files(skill_dir, meta["source_files"]):
             full_path = resolve_source(root, projects_root, src)
             if full_path.exists():
                 digests[src] = content_digest(full_path)
-            elif src in previous:
-                # Not verifiable from here; keep the record made where it was.
-                digests[src] = previous[src]
+            elif (carried := carried_digest(skills_dir, name, src, skill_digest)) is not None:
+                # Not verifiable from here; keep the record made where it was,
+                # but only one made for this exact skill text.
+                digests[src] = carried
             else:
                 absent.append(src)
-        path = write_attestation(skills_dir, name, digests, now, verifier)
+        path = write_attestation(skills_dir, name, digests, now, verifier, skill_digest)
         note = f", {len(absent)} absent source(s) left unrecorded" if absent else ""
         print(f"  stamped {name}: {path.relative_to(Path(root))}, {len(digests)} digest(s){note}")
     return rc
@@ -348,25 +425,77 @@ def migrate_skills(root: str) -> int:
         if not meta or not meta["source_digests"]:
             continue
         verified_at = datetime.strptime(meta["last_verified"], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        # Persist the attestation FIRST, then strip SKILL.md: if the record
+        # cannot be written, the frontmatter digests survive. The digest is of
+        # the stripped bytes, computed in memory, which are the bytes written.
+        stripped = strip_frontmatter_digests(content).encode("utf-8")
+        stripped_digest = hashlib.sha256(stripped).hexdigest()[:DIGEST_HEX]
         path = write_attestation(skills_dir, skill_dir.name, meta["source_digests"],
-                                 verified_at, "migrated from SKILL.md frontmatter")
-        skill_file.write_text(strip_frontmatter_digests(content))
+                                 verified_at, "migrated from SKILL.md frontmatter",
+                                 stripped_digest)
+        skill_file.write_bytes(stripped)
         print(f"  migrated {skill_dir.name}: {len(meta['source_digests'])} digest(s) -> {path.relative_to(Path(root))}")
         moved += 1
     print(f"  {moved} skill(s) migrated")
     return 0
 
 
+def _pairs(record: dict) -> set[tuple[str, str]]:
+    return {(str(k), str(v)) for k, v in record.get("source_digests", {}).items()}
+
+
 def prune_attestations(root: str, keep: int) -> int:
-    """Delete all but the newest `keep` attestations per skill."""
-    base = Path(root) / "skills" / ATTESTATIONS_DIR
-    removed = 0
+    """Delete all but the newest `keep` attestations per skill, never one
+    that still vouches for the current skill text.
+
+    While a record for the SKILL.md on disk exists, every such record vouches
+    and no other does (src/skill_attestations.py), so file-name recency alone
+    is not a safe pruning key. Beyond the newest `keep`, pruning retains the
+    newest record that certified the current text, and every current-text
+    record carrying a (source, digest) pair no retained current-text record
+    carries. What goes is history for other skill text and current-text
+    records whose every pair is covered elsewhere. That set is exactly what
+    the mirror sync's direction guard (scripts/dev/skills_direction_guard.py)
+    lets `rsync --delete` remove, so a prune never leaves the sync refusing,
+    and a source whose digest is not visible here keeps its voucher too.
+    """
+    skills_dir = Path(root) / "skills"
+    base = skills_dir / ATTESTATIONS_DIR
+    keep = max(keep, 1)
+    removed = retained = 0
     if base.is_dir():
         for adir in sorted(p for p in base.iterdir() if p.is_dir()):
-            for path in sorted(adir.glob("*.json"), reverse=True)[max(keep, 1):]:
-                path.unlink()
-                removed += 1
-    print(f"  pruned {removed} attestation(s), kept the newest {max(keep, 1)} per skill")
+            skill_md = skills_dir / adir.name / "SKILL.md"
+            paths = sorted(adir.glob("*.json"), reverse=True)
+            kept = set(paths[:keep])
+            if skill_md.is_file():
+                current = skill_text_digest(skill_md)
+                certified: list[tuple[Path, dict]] = []
+                for path in paths:
+                    try:
+                        data = json.loads(path.read_text())
+                    except (OSError, ValueError):
+                        continue
+                    if (isinstance(data, dict) and isinstance(data.get("source_digests"), dict)
+                            and data.get("skill_digest") == current):
+                        certified.append((path, data))
+                if certified and not any(path in kept for path, _ in certified):
+                    kept.add(certified[0][0])
+                covered: set[tuple[str, str]] = set()
+                for path, data in certified:
+                    if path in kept:
+                        covered |= _pairs(data)
+                for path, data in certified:
+                    if _pairs(data) - covered:
+                        kept.add(path)
+                        covered |= _pairs(data)
+            for path in paths:
+                if path not in kept:
+                    path.unlink()
+                    removed += 1
+            retained += max(0, len(kept) - min(keep, len(paths)))
+    note = f"; kept {retained} older record(s) that still vouch for the current text" if retained else ""
+    print(f"  pruned {removed} attestation(s), kept the newest {keep} per skill{note}")
     return 0
 
 
