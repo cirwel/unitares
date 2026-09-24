@@ -409,9 +409,32 @@ def test_prune_keeps_the_newest_record_for_the_current_skill_text(layout: Layout
     assert layout.run().returncode == 0
     result = layout.run("--prune", "1")
     assert result.returncode == 0
-    assert "kept 1 older record(s) for the current skill text" in result.stdout
+    assert "kept 1 older record(s) the current text still needs" in result.stdout
     names = [p.name for p in _attestations(layout)]
     assert names == ["20260101T000000000000Z-aaaaaaaa.json", "20260103T000000000000Z-cccccccc.json"]
+    assert layout.run().returncode == 0
+
+
+def test_prune_keeps_the_current_text_record_that_covers_a_source(layout: Layout):
+    # Two records certify the current text with different digests for the
+    # source; it currently matches only the OLDER one. Pruning to one record
+    # must not turn this unchanged checkout STALE.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20251231T000000000000Z-99999999", _day(4), {src: _digest("x = 5\n")})
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 2\n")})
+    _attest(layout, "20260103T000000000000Z-cccccccc", _day(1), {src: _digest("x = 0\n")},
+            skill_digest="0123456789abcdef")
+    assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0
+    assert "pruned 1 attestation(s)" in result.stdout      # the unneeded oldest
+    names = [p.name for p in _attestations(layout)]
+    assert names == ["20260101T000000000000Z-aaaaaaaa.json",
+                     "20260102T000000000000Z-bbbbbbbb.json",
+                     "20260103T000000000000Z-cccccccc.json"]
     assert layout.run().returncode == 0
 
 

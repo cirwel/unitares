@@ -64,8 +64,8 @@ frontmatter `last_verified` if later. A newer stamp of different skill text
 does not reset AGING for the text on disk. `.attestations/` is excluded from the skills
 fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
 when skill content moves. Old attestations can be removed with `--prune`,
-which keeps the newest N per skill and always the newest record that
-certified the current SKILL.md text; deleting a file never conflicts with another PR
+which keeps the newest N per skill plus any record the current SKILL.md text
+and cited sources still need; deleting a file never conflicts with another PR
 adding one.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
@@ -436,17 +436,19 @@ def migrate_skills(root: str) -> int:
     return 0
 
 
-def prune_attestations(root: str, keep: int) -> int:
-    """Delete all but the newest `keep` attestations per skill, always keeping
-    the newest record that certified the skill's CURRENT text.
+def prune_attestations(root: str, projects_root: str, keep: int) -> int:
+    """Delete all but the newest `keep` attestations per skill, never one the
+    current checkout still needs.
 
-    While a record for the SKILL.md on disk exists, only such records vouch
-    (src/skill_attestations.py), so file-name recency alone is not a safe
-    pruning key: a newer concurrent stamp for different text would survive
-    while the only record for the checked-out text was deleted, and the next
-    check would fall back to the mismatched record. Older records for the
-    current text are pruned like any others; that only narrows which past
-    source contents are accepted, the conservative direction.
+    While a record for the SKILL.md on disk exists, every such record vouches
+    and no other does (src/skill_attestations.py), so file-name recency alone
+    is not a safe pruning key. Beyond the newest `keep`, pruning also retains:
+      * the newest record that certified the current text, so the check cannot
+        fall back to a newer concurrent stamp for different text;
+      * for each cited source visible here, a current-text record carrying its
+        current digest, when no retained record does, so pruning never turns
+        an unchanged checkout STALE.
+    Everything else is history the current text and sources do not need.
     """
     skills_dir = Path(root) / "skills"
     base = skills_dir / ATTESTATIONS_DIR
@@ -454,26 +456,43 @@ def prune_attestations(root: str, keep: int) -> int:
     removed = retained = 0
     if base.is_dir():
         for adir in sorted(p for p in base.iterdir() if p.is_dir()):
-            skill_md = skills_dir / adir.name / "SKILL.md"
-            current = skill_text_digest(skill_md) if skill_md.is_file() else None
+            skill_dir = skills_dir / adir.name
+            skill_md = skill_dir / "SKILL.md"
             paths = sorted(adir.glob("*.json"), reverse=True)
-            anchor = None  # newest record for the current text
+            records: dict[Path, dict] = {}
             for path in paths:
                 try:
-                    record = json.loads(path.read_text())
+                    data = json.loads(path.read_text())
                 except (OSError, ValueError):
                     continue
-                if (current is not None and isinstance(record, dict)
-                        and record.get("skill_digest") == current):
-                    anchor = path
-                    break
-            for path in paths[keep:]:
-                if path == anchor:
-                    retained += 1
+                if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+                    records[path] = data
+            kept = set(paths[:keep])
+            if skill_md.is_file():
+                current = skill_text_digest(skill_md)
+                certified = [p for p in paths if records.get(p, {}).get("skill_digest") == current]
+                if certified:
+                    kept.add(certified[0])
+                    meta = parse_frontmatter(skill_md.read_text())
+                    for src in load_source_files(skill_dir, meta.get("source_files", []) if meta else []):
+                        full_path = resolve_source(root, projects_root, src)
+                        if not full_path.exists():
+                            continue
+                        digest = content_digest(full_path)
+                        if any(records.get(p, {}).get("source_digests", {}).get(src) == digest
+                               for p in kept):
+                            continue
+                        for p in certified:
+                            if records[p]["source_digests"].get(src) == digest:
+                                kept.add(p)
+                                break
+            for path in paths:
+                if path in kept:
                     continue
                 path.unlink()
                 removed += 1
-    note = f"; kept {retained} older record(s) for the current skill text" if retained else ""
+            retained += max(0, len(kept & set(paths)) - min(keep, len(paths)))
+    note = f"; kept {retained} older record(s) the current text still needs" if retained else ""
     print(f"  pruned {removed} attestation(s), kept the newest {keep} per skill{note}")
     return 0
 
@@ -497,7 +516,7 @@ def main(argv: list[str]) -> int:
     if args.migrate:
         return migrate_skills(args.root)
     if args.prune is not None:
-        return prune_attestations(args.root, args.prune)
+        return prune_attestations(args.root, args.projects_root, args.prune)
     return check_skills(args.root, args.projects_root)
 
 
