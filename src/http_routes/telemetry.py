@@ -363,6 +363,175 @@ async def http_enforcement_divergence(request):
         return JSONResponse({"error": "query failed"}, status_code=500)
 
 
+async def http_pause_outcomes(request):
+    """GET /v1/enforcement/pause-outcomes?days=30 — what happens around a pause.
+
+    The companion to /v1/enforcement/divergence. That endpoint counts pauses
+    produced and delivered; this one reads what surrounds a delivered pause,
+    from records that already exist. Read-only telemetry with no decision
+    authority: it informs the pause path, it cannot retire any part of it.
+
+    - ``delivered_pauses.ended_by``: for each ``lifecycle_paused`` event, the
+      first later exit for the same agent key (``lifecycle_resumed`` by
+      reason prefix, or ``pause_auto_expired``). ``none_recorded`` covers a
+      pause that is still in force AND an agent that simply stopped, and
+      before 2026-08-12 some events were keyed by a display handle that no
+      resume matches, so it is an upper bound on unresolved pauses.
+    - ``self_recovery``: calls by action from ``audit.tool_usage``, split by
+      whether the CALL succeeded. That is not recovery success: resumed
+      pauses are counted under ``delivered_pauses.ended_by``. The table
+      records MCP calls only from 2026-07-31 on.
+    - ``refused_recovery_reflections``: reflections review wrote to shared
+      memory without resuming the agent (``recovery_reflection``, severity
+      ``medium``), i.e. recovery attempts that published a note and failed.
+    - ``first_authored_checkin``: for identities whose first state row falls
+      in the window, how many began with a non-authored (hook) check-in, how
+      many of those later wrote their own, and the median lag. A first row
+      with no recorded ``epistemic_class`` is counted apart as unknown
+      provenance, never as non-authored. This measures
+      what the server's context produced, before and after changes to that
+      context; it is not a measure of agent intent (see the measurement
+      authority rules in AGENTS.md).
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+    try:
+        try:
+            days = int(request.query_params.get("days", "30"))
+        except (TypeError, ValueError):
+            days = 30
+        days = max(1, min(days, 365))
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            ended_by = await conn.fetch(
+                """
+                WITH pauses AS (
+                  SELECT ts, agent_key,
+                         lead(ts) OVER (PARTITION BY agent_key ORDER BY ts) AS next_pause_ts
+                  FROM (
+                    SELECT ts, coalesce(agent_id, payload->>'agent_handle') AS agent_key
+                    FROM audit.events
+                    WHERE event_type = 'lifecycle_paused'
+                      AND ts > now() - make_interval(days => $1)
+                  ) raw
+                ), exits AS (
+                  SELECT ts, coalesce(agent_id, payload->>'agent_handle') AS agent_key,
+                         CASE WHEN event_type = 'pause_auto_expired' THEN 'expired'
+                              WHEN payload->>'reason' ILIKE 'Self-recovery%' THEN 'self_recovery'
+                              WHEN payload->>'reason' ILIKE 'Resumed via dialectic%' THEN 'dialectic'
+                              ELSE 'other_resume' END AS route
+                  FROM audit.events
+                  WHERE event_type IN ('lifecycle_resumed', 'pause_auto_expired')
+                    AND ts > now() - make_interval(days => $1)
+                )
+                SELECT coalesce(
+                         (SELECT e.route FROM exits e
+                          WHERE e.agent_key = p.agent_key AND e.ts > p.ts
+                            AND (p.next_pause_ts IS NULL OR e.ts < p.next_pause_ts)
+                          ORDER BY e.ts LIMIT 1),
+                         'none_recorded') AS ended_by,
+                       count(*) AS n
+                FROM pauses p
+                GROUP BY 1
+                """,
+                days,
+            )
+            recovery = await conn.fetch(
+                """
+                SELECT coalesce(payload->>'action', 'check') AS action,
+                       success, coalesce(error_type, '') AS error_type,
+                       count(*) AS n
+                FROM audit.tool_usage
+                WHERE tool_name = 'self_recovery'
+                  AND ts > now() - make_interval(days => $1)
+                GROUP BY 1, 2, 3
+                """,
+                days,
+            )
+            refused = await conn.fetchval(
+                """
+                SELECT count(*) FROM knowledge.discoveries
+                WHERE type = 'recovery_reflection' AND severity = 'medium'
+                  AND created_at > now() - make_interval(days => $1)
+                """,
+                days,
+            )
+            authored = await conn.fetchrow(
+                """
+                WITH recent AS (
+                  SELECT DISTINCT identity_id FROM core.agent_state
+                  WHERE recorded_at > now() - make_interval(days => $1) AND NOT synthetic
+                ), firsts AS (
+                  SELECT f.first_at, f.first_class, a.first_authored_at
+                  FROM recent r
+                  CROSS JOIN LATERAL (
+                    SELECT recorded_at AS first_at, epistemic_class AS first_class
+                    FROM core.agent_state s
+                    WHERE s.identity_id = r.identity_id AND NOT s.synthetic
+                    ORDER BY recorded_at LIMIT 1
+                  ) f
+                  LEFT JOIN LATERAL (
+                    SELECT min(recorded_at) AS first_authored_at
+                    FROM core.agent_state s
+                    WHERE s.identity_id = r.identity_id AND NOT s.synthetic
+                      AND s.epistemic_class = 'agent_report'
+                  ) a ON true
+                  WHERE f.first_at > now() - make_interval(days => $1)
+                )
+                SELECT
+                  count(*) FILTER (WHERE first_class = 'agent_report') AS began_authored,
+                  count(*) FILTER (WHERE first_class IN
+                    ('substrate_interpretation', 'substrate_observation')) AS began_non_authored,
+                  count(*) FILTER (WHERE first_class IS NULL OR first_class NOT IN
+                    ('agent_report', 'substrate_interpretation', 'substrate_observation'))
+                    AS began_unknown_provenance,
+                  count(*) FILTER (WHERE first_class IN
+                    ('substrate_interpretation', 'substrate_observation')
+                    AND first_authored_at > first_at) AS later_authored,
+                  percentile_cont(0.5) WITHIN GROUP (
+                    ORDER BY extract(epoch FROM first_authored_at - first_at)
+                  ) FILTER (WHERE first_class IN
+                    ('substrate_interpretation', 'substrate_observation')
+                    AND first_authored_at > first_at) AS p50_lag_seconds
+                FROM firsts
+                """,
+                days,
+            )
+        ended = {r["ended_by"]: int(r["n"]) for r in ended_by}
+        p50 = authored["p50_lag_seconds"] if authored else None
+        return JSONResponse({
+            "window_days": days,
+            "delivered_pauses": {
+                "total": sum(ended.values()),
+                "ended_by": ended,
+            },
+            "self_recovery": [
+                {"action": r["action"], "call_succeeded": bool(r["success"]),
+                 "error_type": r["error_type"] or None, "n": int(r["n"])}
+                for r in recovery
+            ],
+            "refused_recovery_reflections": int(refused or 0),
+            "first_authored_checkin": {
+                "began_authored": int(authored["began_authored"]) if authored else 0,
+                "began_non_authored": int(authored["began_non_authored"]) if authored else 0,
+                "began_unknown_provenance": (
+                    int(authored["began_unknown_provenance"]) if authored else 0
+                ),
+                "later_authored": int(authored["later_authored"]) if authored else 0,
+                "p50_lag_seconds": round(float(p50), 1) if p50 is not None else None,
+            },
+            "note": ("Telemetry, not a verdict. none_recorded is an upper bound "
+                     "on unresolved pauses; self_recovery counts start "
+                     "2026-07-31; first_authored_checkin measures what the "
+                     "server's context produced, not agent intent."),
+        })
+    except Exception as e:
+        logger.error(f"pause outcomes query failed: {e}")
+        return JSONResponse({"error": "query failed"}, status_code=500)
+
+
 async def http_lifecycle_recent(request):
     """GET /v1/lifecycle/recent — recent lifecycle / circuit-breaker events
     from audit.events with the full payload (reason, EISV, drift) and

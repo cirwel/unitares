@@ -99,6 +99,7 @@ from src.http_routes.telemetry import (
     http_events,
     _LIFECYCLE_EVENT_TYPES,
     http_enforcement_divergence,
+    http_pause_outcomes,
     http_lifecycle_recent,
     websocket_eisv_stream,
 )
@@ -329,6 +330,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/eisv/telemetry-health", http_eisv_telemetry_health, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
+    app.routes.append(Route("/v1/enforcement/pause-outcomes", http_pause_outcomes, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))
     app.routes.append(Route("/api/findings", http_record_finding, methods=["POST"]))
     app.routes.append(Route("/v1/bridge/events", http_record_bridge_event, methods=["POST"]))
