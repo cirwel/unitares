@@ -686,6 +686,7 @@ async def _resolve_http_session_binding(
     token_agent_uuid = extract_token_agent_uuid_safe(
         arguments.get("continuity_token")
     )
+    proof_read = False
     if not token_agent_uuid:
         from src.mcp_handlers.decorators import get_call_identity_requirement
 
@@ -702,6 +703,7 @@ async def _resolve_http_session_binding(
 
             if get_session_proof_origin() != "caller_asserted":
                 return None
+            proof_read = True
 
     resolved = await resolve_session_identity(
         session_key,
@@ -729,6 +731,14 @@ async def _resolve_http_session_binding(
         return None
 
     update_context_agent_id(agent_uuid)
+    if proof_read:
+        # A proof-bearing pre_onboard read learns WHO is calling (the context
+        # binding) and nothing else. It stamps no agent_id target, because on
+        # a browsable read (a knowledge search) that argument becomes an
+        # author filter and hides every other agent's findings; and it leaves
+        # no sticky-cache entry and no session renewal behind, because a read
+        # must not produce state. Self-state reads take the caller from context.
+        return agent_uuid
     # Third and last prebind path, same rule (see _preserve_explicit_target):
     # a resumed session binding identifies the caller, not the target.
     _preserve_explicit_target(arguments, agent_uuid)

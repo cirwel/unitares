@@ -59,18 +59,18 @@ def _patches(proof_origin: str, resolve):
     ]
 
 
-async def _bind(tool_name: str, proof_origin: str):
+async def _bind(tool_name: str, proof_origin: str, arguments=None):
     resolve = AsyncMock(
         return_value={"agent_uuid": AGENT_UUID, "created": False, "source": "session_binding"}
     )
+    args = dict(arguments or {"client_session_id": SESSION_KEY})
     for p in _patches(proof_origin, resolve):
         p.start()
     try:
-        bound = await _resolve_http_bound_agent(
-            tool_name, {"client_session_id": SESSION_KEY}, None
-        )
+        bound = await _resolve_http_bound_agent(tool_name, args, None)
     finally:
         patch.stopall()
+    _bind.last_arguments = args
     return bound, resolve
 
 
@@ -93,3 +93,26 @@ async def test_server_inferred_read_stays_unbound(tool_name):
 
     assert bound is None
     assert resolve.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name, arguments",
+    [
+        ("search_knowledge_graph", {"client_session_id": SESSION_KEY, "query": "backup"}),
+        ("knowledge", {"client_session_id": SESSION_KEY, "action": "search", "query": "backup"}),
+        ("check_working_state", {"client_session_id": SESSION_KEY}),
+    ],
+)
+async def test_proof_read_stamps_no_target_and_leaves_no_cache(tool_name, arguments):
+    """The caller is known from context; the arguments are left as sent, so a
+    knowledge search is not narrowed to the caller's own findings."""
+    cache = MagicMock()
+    with patch("src.http_routes.access._cache_http_resolution", cache), \
+         patch("src.http_routes.access._touch_http_session_activity", AsyncMock()) as touch:
+        bound, _resolve = await _bind(tool_name, "caller_asserted", arguments)
+
+    assert bound == AGENT_UUID
+    assert "agent_id" not in _bind.last_arguments
+    cache.assert_not_called()
+    touch.assert_not_awaited()
