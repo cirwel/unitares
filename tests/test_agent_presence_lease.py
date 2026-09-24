@@ -474,3 +474,47 @@ async def test_idempotent_acquire_joins_the_existing_holders(monkeypatch):
     assert set(apl._lease_sessions["uuid-1"]) == {"sess-a", "sess-b"}
     result = await apl.release_agent_presence("uuid-1", ("sess-a",))
     assert result == {"released": False, "reason": "held_by_other_session"}
+
+
+@pytest.mark.asyncio
+async def test_cold_idempotent_reacquire_keeps_the_persisted_holder(monkeypatch):
+    """After a restart, B's idempotent reacquire returns A's record; A still
+    counts, so B's release must not free the lease."""
+    from datetime import datetime, timezone
+
+    client = _FakeClient()
+    client.sdk_shape = True
+    client.idempotent = True
+    _patch_models(monkeypatch, client)
+    acquired = datetime(2026, 9, 24, tzinfo=timezone.utc)
+    original = client.acquire
+
+    def _acquire(req, *, identity_proof=None):
+        result = original(req, identity_proof=identity_proof)
+        result.lease.audit_session = "sess-a"
+        result.lease.acquired_at = acquired
+        result.lease.last_heartbeat_at = None
+        return result
+
+    client.acquire = _acquire
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-b", apl.time.monotonic())
+
+    assert set(apl._lease_sessions["uuid-1"]) == {"sess-a", "sess-b"}
+    result = await apl.release_agent_presence("uuid-1", ("sess-b",))
+    assert result == {"released": False, "reason": "held_by_other_session"}
+
+
+def test_persisted_holder_is_unknown_once_renewed():
+    from datetime import datetime, timedelta, timezone
+
+    acquired = datetime(2026, 9, 24, tzinfo=timezone.utc)
+    renewed = SimpleNamespace(
+        audit_session="sess-a", acquired_at=acquired,
+        last_heartbeat_at=acquired + timedelta(minutes=1),
+    )
+    fresh = SimpleNamespace(audit_session="sess-a", acquired_at=acquired, last_heartbeat_at=None)
+
+    assert apl._persisted_holder(renewed) == apl._HOLDER_UNKNOWN
+    assert apl._persisted_holder(fresh) == "sess-a"
+    assert apl._persisted_holder(None) is None

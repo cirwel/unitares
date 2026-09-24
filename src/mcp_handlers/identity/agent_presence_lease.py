@@ -223,7 +223,14 @@ async def _refresh_presence(
         _lease_ids[agent_uuid] = str(new_id)
         holder = client_session_id or _HOLDER_UNKNOWN
         if idempotent:
-            _lease_sessions.setdefault(agent_uuid, {})[holder] = time.monotonic()
+            holders = _lease_sessions.setdefault(agent_uuid, {})
+            if not holders:
+                # Cold cache (e.g. after a restart): seed from the persisted
+                # record so the session that already holds the lease counts.
+                persisted = _persisted_holder(getattr(result, "lease", None))
+                if persisted:
+                    holders[persisted] = time.monotonic()
+            holders[holder] = time.monotonic()
         else:
             # A fresh lease starts a fresh holder set; the old one expired with it.
             _lease_sessions[agent_uuid] = {holder: time.monotonic()}
@@ -274,6 +281,20 @@ def schedule_agent_presence_heartbeat(
 
 # Holder marker for a lease whose current session cannot be determined.
 _HOLDER_UNKNOWN = "\x00unknown"
+
+
+def _persisted_holder(record) -> Optional[str]:
+    """The session a lease record names as holder, or unknown once renewed.
+
+    The record keeps the acquiring session's audit_session, and a renewal does
+    not update it, so after any renewal the current holder cannot be named."""
+    if record is None:
+        return None
+    acquired = getattr(record, "acquired_at", None)
+    last_heartbeat = getattr(record, "last_heartbeat_at", None)
+    if last_heartbeat is not None and (acquired is None or last_heartbeat > acquired):
+        return _HOLDER_UNKNOWN
+    return getattr(record, "audit_session", None) or _HOLDER_UNKNOWN
 
 
 async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[str]]:
