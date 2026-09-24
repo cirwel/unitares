@@ -1,10 +1,14 @@
 """P006 fires only on a handler whose body is effectively silent.
 
-Triage of 93 unresolved Watcher findings, 2026-09-24: P006 was 50 of them, and
-about 40 flagged handlers that already log at warning or above, re-raise, or
-return an error. Every true positive was a handler whose body is only ``pass``
-or only a ``logger.debug`` call. ``p006_actually_fires`` is the deterministic
-AST post-filter that encodes that line; ``parse_findings`` applies it.
+A manual triage of the unresolved queue on 2026-09-24 found P006 on 50 of 93
+rows (rows, not distinct sites: the same code appeared once per worktree and
+per line shift). About 40 flagged handlers that already log at warning or
+above, re-raise, or return an error; the ones the triager judged real were all
+``pass``-only or ``logger.debug``-only. Those are triage calls, not recorded
+verdicts (the lifetime record has 0 confirmed P006, see
+test_watcher_noise_narrowing.py). The silent/reacting split below is the
+chosen standard that ``p006_actually_fires`` encodes; ``parse_findings``
+applies it.
 """
 
 from __future__ import annotations

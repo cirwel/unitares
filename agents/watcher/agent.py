@@ -1698,11 +1698,17 @@ def _p006_stmt_is_silent(stmt: Any) -> bool:
 def p006_actually_fires(file_path: str, line: int) -> bool:
     """AST post-filter for P006 (silent exception swallow).
 
-    Triage 2026-09-24: P006 was 50 of 93 unresolved findings, and about 40 of
-    those flagged handlers that already log at warning or above, re-raise, or
-    return an error. Every true positive had a body of only ``pass`` or only a
-    ``logger.debug`` call. So the rule fires only when the governing handler's
-    body is entirely silent (see ``_p006_stmt_is_silent``).
+    Where the line falls is a chosen standard, not a measured threshold: the
+    rule fires only when the governing handler's body is entirely silent (see
+    ``_p006_stmt_is_silent``), and any return, assignment or other call counts
+    as reacting. It came from a manual triage of the unresolved queue on
+    2026-09-24: P006 was 50 of 93 unresolved rows (rows, not distinct sites;
+    the queue held the same code once per worktree and per line shift), and
+    about 40 flagged handlers that already log at warning or above, re-raise,
+    or return an error. The handlers the triager judged real were all
+    ``pass``-only or ``logger.debug``-only. Those are triage calls, not
+    recorded verdicts: the lifetime record still has 0 confirmed P006
+    findings (see the #2396 comment above ``_P006_EXCEPT_CLAUSE``).
 
     The governing handler is the innermost ``except`` whose span contains the
     flagged line. When the model cites a line of the ``try`` body instead, the
