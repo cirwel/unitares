@@ -315,7 +315,8 @@ def test_manifest_is_not_committed_in_unitares():
                            capture_output=True, text=True)
     if probe.returncode != 0:
         pytest.skip("not a git checkout")
-    rel = "skills/SKILLS_MANIFEST.sha256"
+    rel = _load_manifest_module().MANIFEST_PATH.relative_to(root).as_posix()
+    assert rel == "skills/SKILLS_MANIFEST.sha256"
     tracked = subprocess.run(["git", "-C", str(root), "ls-files", "--", rel],
                              capture_output=True, text=True, check=True).stdout.strip()
     assert tracked == "", f"{rel} is tracked again; it must stay generated, not committed"
