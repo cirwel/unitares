@@ -165,6 +165,12 @@ _LEAN_DISCOVERY_FIELDS = (
     "superseded_by",
     "staleness_warning",
     "authority",
+    # Who wrote it: the write-time display label and the identity a reader
+    # passes back as agent_id_filter. Without them the default lean search
+    # told a reader what a finding says but not who wrote it (#2386); the
+    # envelope's digest budget decides how much of this survives.
+    "by",
+    "_agent_id",
 )
 
 
