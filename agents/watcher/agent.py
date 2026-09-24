@@ -106,7 +106,9 @@ from agents.watcher.findings import (
     _sweep_stale_quiet,
     _sweep_token_drift_quiet,
     _write_findings_atomic,
+    auto_duplicate_aliases,
     compact_findings,
+    is_auto_duplicate,
     escalate,
     findings_state_lock,
     load_dedup,
@@ -750,6 +752,11 @@ def _build_checkin_summary() -> tuple[str, float, float]:
     by_status: dict[str, int] = {}
     by_severity: dict[str, int] = {}
     for f in findings:
+        # An automatic duplicate was never adjudicated. Counting it as a
+        # dismissal would pull Watcher's reported confidence down for every
+        # worktree that happens to hold the same code.
+        if is_auto_duplicate(f):
+            continue
         status = f.get("status", "open")
         by_status[status] = by_status.get(status, 0) + 1
         if status in ("open", "surfaced"):
@@ -1659,6 +1666,106 @@ def p008_actually_fires(file_path: str, line: int) -> bool:
     return False
 
 
+# Log methods that do not count as the handler "doing something". A handler
+# whose only action is debug-level logging is invisible at the default level,
+# which is exactly the swallow P006 exists for.
+_P006_SILENT_LOG_METHODS = frozenset({"debug"})
+
+
+def _p006_stmt_is_silent(stmt: Any) -> bool:
+    """True when ``stmt`` has no observable effect for P006 purposes.
+
+    Silent: ``pass``, ``continue``, ``...`` or any other bare constant (a
+    docstring-style string), and a call to ``<x>.debug(...)`` or
+    ``<x>.log(logging.DEBUG, ...)``. Everything else — info/warning/error/
+    exception logging, ``raise``, ``return``, assignments, any other call —
+    is the handler reacting to the failure.
+    """
+    import ast
+
+    if isinstance(stmt, (ast.Pass, ast.Continue)):
+        return True
+    if not isinstance(stmt, ast.Expr):
+        return False
+    value = stmt.value
+    if isinstance(value, ast.Constant):
+        return True
+    if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute):
+        return False
+    method = value.func.attr
+    if method in _P006_SILENT_LOG_METHODS:
+        return True
+    if method == "log" and value.args:
+        level = value.args[0]
+        if isinstance(level, ast.Attribute) and level.attr == "DEBUG":
+            return True
+    return False
+
+
+def p006_actually_fires(file_path: str, line: int) -> bool:
+    """AST post-filter for P006 (silent exception swallow).
+
+    Triage 2026-09-24: P006 was 50 of 93 unresolved findings, and about 40 of
+    those flagged handlers that already log at warning or above, re-raise, or
+    return an error. Every true positive had a body of only ``pass`` or only a
+    ``logger.debug`` call. So the rule fires only when the governing handler's
+    body is entirely silent (see ``_p006_stmt_is_silent``).
+
+    The governing handler is the innermost ``except`` whose span contains the
+    flagged line. When the model cites a line of the ``try`` body instead, the
+    innermost enclosing ``try`` counts, and the finding survives if any of its
+    handlers is silent. A line with no enclosing ``try``/``except`` has nothing
+    for P006 to describe.
+
+    Conservative on errors, like ``p008_actually_fires``: unreadable,
+    non-Python or unparseable files return True so the finding is kept.
+
+    Returns True  → possible real swallow; keep it
+    Returns False → verified false positive; suppress it
+    """
+    import ast
+
+    if not file_path.endswith(".py"):
+        return True
+    try:
+        source = Path(file_path).read_text()
+        tree = ast.parse(source, filename=file_path)
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return True
+
+    def _span(node: Any) -> tuple[int, int]:
+        start = getattr(node, "lineno", 0)
+        return start, getattr(node, "end_lineno", start) or start
+
+    def _silent(handler: Any) -> bool:
+        return all(_p006_stmt_is_silent(stmt) for stmt in handler.body)
+
+    handler_hit: Any = None
+    try_hit: Any = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler):
+            start, end = _span(node)
+            if start <= line <= end and (
+                handler_hit is None or start >= _span(handler_hit)[0]
+            ):
+                handler_hit = node
+        elif isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
+            start, end = _span(node)
+            if start <= line <= end and (
+                try_hit is None or start >= _span(try_hit)[0]
+            ):
+                try_hit = node
+
+    # A handler nested inside the innermost try is more specific than it.
+    if handler_hit is not None and (
+        try_hit is None or _span(handler_hit)[0] >= _span(try_hit)[0]
+    ):
+        return _silent(handler_hit)
+    if try_hit is not None:
+        return any(_silent(h) for h in try_hit.handlers)
+    return False
+
+
 def parse_findings(
     text: str, file_path: str, model_used: str, region_start: int
 ) -> list[tuple[Finding, str]]:
@@ -1799,6 +1906,16 @@ def parse_findings(
             log(
                 f"suppressing P008 false-positive at {file_path}:{line} "
                 f"(no shell=True / os.system at that line)",
+                "debug",
+            )
+            continue
+
+        # P006 post-filter: a handler that logs at info or above, re-raises,
+        # returns, or assigns is not a silent swallow. Verify with an AST scan.
+        if pattern == "P006" and not p006_actually_fires(file_path, line):
+            log(
+                f"suppressing P006 false-positive at {file_path}:{line} "
+                f"(governing except body is not silent)",
                 "debug",
             )
             continue
@@ -2155,6 +2272,7 @@ def surface_pending(
         pending_findings, _out_of_scope = _partition_findings_by_scope(
             pending_findings,
             scope_root,
+            auto_duplicate_aliases(all_findings),
         )
 
     if audience is None:
@@ -2602,7 +2720,7 @@ def _is_inside_get_or_create_monitor(
 
 # P006: the `except` clause that governs a flagged line, and the two ways its
 # author can show the swallow is deliberate or absent. patterns.md defines
-# P006 as a swallow "without re-raising", and ruff's BLE001 is the broad-except
+# P006 as an effectively silent handler, and ruff's BLE001 is the broad-except
 # rule, so `# noqa: BLE001` (or a bare `# noqa`) on the clause is the author
 # recording that decision. False-positive sweep 2026-09-24: of 39 lifetime P006
 # findings none was confirmed, and three flagged clauses already carried
@@ -3001,6 +3119,25 @@ def _verify_finding_against_source(
     return True
 
 
+# Lines either side of a flagged line that ``_context_hash`` covers.
+_CONTEXT_RADIUS = 3
+
+
+def _context_hash(line: int, snippet_lines_by_num: dict[int, str]) -> str:
+    """Hash of the flagged line and its neighbours, for insert-time dedupe.
+
+    Distinguishes two sites whose flagged line is identical (``pass``,
+    ``except Exception:``) while staying equal when the block only moved.
+    Lines outside the scanned window hash as absent; a scan whose window cut
+    the context differently just fails to match, which leaves the finding new.
+    """
+    window = [
+        snippet_lines_by_num[n].strip() if n in snippet_lines_by_num else "\x00"
+        for n in range(line - _CONTEXT_RADIUS, line + _CONTEXT_RADIUS + 1)
+    ]
+    return hash_line_content("\n".join(window))
+
+
 def scan_file(
     file_path: str,
     region: str | None = None,
@@ -3105,6 +3242,7 @@ def scan_file(
         # snapshot is what lets the sweep retain it. Truncated because this
         # is evidence for a human reading a chime, not a source of truth.
         f.line_content = source_line.strip()[:SNAPSHOT_MAX_CHARS]
+        f.context_hash = _context_hash(f.line, snippet_lines_by_num)
         f.fingerprint = f.compute_fingerprint()
         findings.append(f)
     if persist:

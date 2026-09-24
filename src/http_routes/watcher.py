@@ -79,6 +79,13 @@ def _watcher_summary_from_rows(rows, now=None, window_days=_WATCHER_DAILY_WINDOW
         severity = str(row.get("severity") or "?")
         by_status[status] += 1
 
+        # Watcher records a finding that repeats an unresolved one (same code
+        # in another worktree, or at a shifted line) as dismissed/dup with
+        # resolved_by "watcher_auto_dedup". Nobody adjudicated it, so it must
+        # not inflate a pattern's dismiss ratio or the detection timeline.
+        if row.get("resolved_by") == "watcher_auto_dedup" and row.get("duplicate_of"):
+            continue
+
         bucket = by_pattern[pattern]
         if status in ("confirmed", "dismissed"):
             bucket[status] += 1

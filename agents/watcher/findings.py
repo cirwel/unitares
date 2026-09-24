@@ -22,7 +22,9 @@ from typing import Any
 from agents.common.findings import post_finding
 from agents.watcher._util import (
     findings_state_lock as _findings_state_lock,
+    hash_line_content,
     log,
+    repo_relative_path,
     watcher_state_dir,
 )
 from agents.watcher.calibration import (
@@ -53,6 +55,22 @@ MIN_FINGERPRINT_PREFIX = 4  # users can type the first N chars instead of all 16
 # calibration.py). The others document operator intent without claiming
 # the finding was wrong.
 DISMISSAL_REASONS = frozenset({"fp", "wont_fix", "out_of_scope", "dup", "unclear", "stale"})
+
+# ``resolved_by`` stamped on a finding that persist_findings recorded as a
+# duplicate of an existing unresolved finding (same pattern, same code, same
+# repo-relative path, another worktree or a shifted line). Such a row is
+# dismissed with reason ``dup`` and a ``duplicate_of`` pointer. Nobody
+# adjudicated it, so it is never a resolution: no watcher_resolution event, no
+# external_signal outcome, and it does not count as a dismissal in Watcher's
+# self-reported confidence. See ``is_auto_duplicate``.
+AUTO_DEDUP_RESOLVER = "watcher_auto_dedup"
+
+_UNRESOLVED_STATUSES = ("open", "surfaced")
+
+
+def is_auto_duplicate(row: dict[str, Any]) -> bool:
+    """True for a row persist_findings recorded as an automatic duplicate."""
+    return row.get("resolved_by") == AUTO_DEDUP_RESOLVER and bool(row.get("duplicate_of"))
 
 
 def findings_state_lock(wait_s: float = 2.0):
@@ -92,6 +110,15 @@ class Finding:
     # retained on the strength of its snapshot. Display-only: it tells the
     # reader "this code is gone" so they judge the snippet, not the path.
     path_gone: bool = False
+    # Hash of the flagged line plus its neighbours, captured at detection.
+    # NOT part of the fingerprint. Insert-time dedupe uses it to recognise the
+    # same code at a shifted line number without mistaking a second identical
+    # one-liner (`pass`, `except Exception:`) elsewhere in the file for it.
+    context_hash: str = ""
+    # Path relative to the git worktree root, captured at persist time so a
+    # finding can still be matched after its worktree is removed. NOT part of
+    # the fingerprint either.
+    repo_relpath: str = ""
 
     def __post_init__(self) -> None:
         if not self.fingerprint:
@@ -230,15 +257,121 @@ def _absolute_provenance_key(
     return pattern, canonical_path, normalized_line, line_content_hash
 
 
+def _row_repo_relpath(row: dict[str, Any]) -> str:
+    """Repo-relative path of a stored finding, for duplicate matching.
+
+    Prefers the path captured at persist time. Older rows predate that field;
+    for them it is derived from ``file`` while the file still exists. An
+    absolute path that cannot be resolved is compared verbatim, which can only
+    ever match the same file. A legacy relative path has no knowable worktree
+    or repo, so it matches nothing (empty string).
+    """
+    stored = row.get("repo_relpath")
+    if isinstance(stored, str) and stored:
+        return stored
+    file_path = str(row.get("file") or "")
+    if not file_path or not Path(file_path).is_absolute():
+        return ""
+    if Path(file_path).exists():
+        return repo_relative_path(file_path)
+    return file_path
+
+
+def _find_duplicate_target(
+    finding: Finding,
+    relpath: str,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """The unresolved finding ``finding`` duplicates, or None.
+
+    A duplicate is the same pattern on the same code (``line_content_hash``)
+    at the same repo-relative path, in another worktree or at a shifted line.
+    ``candidates`` are the unresolved rows already sharing pattern and line
+    hash. The line hash alone is too weak for a shifted line: one-liners like
+    ``pass`` or ``except Exception:`` repeat within a file. So a line shift is
+    accepted only when both rows carry an equal ``context_hash`` (the flagged
+    line and its neighbours); rows without one match only at the same line.
+    Finally, when this finding's own file still holds the same code at the
+    candidate's line, the candidate's site is still in place here and this
+    finding is a second site, not a moved one.
+    """
+    for row in candidates:
+        if row.get("fingerprint") == finding.fingerprint:
+            continue
+        row_relpath = _row_repo_relpath(row)
+        if not row_relpath or row_relpath != relpath:
+            continue
+        try:
+            row_line = int(row.get("line") or 0)
+        except (TypeError, ValueError):
+            continue
+        row_context = str(row.get("context_hash") or "")
+        if row_context and finding.context_hash:
+            if row_context != finding.context_hash:
+                continue
+        elif row_line != finding.line:
+            continue
+        if row_line != finding.line:
+            current = _current_source_line(finding.file, row_line)
+            if current is not None and hash_line_content(current) == finding.line_content_hash:
+                continue
+        return row
+    return None
+
+
+def _auto_duplicate_row(finding: Finding, canonical: dict[str, Any], now: str) -> dict[str, Any]:
+    """The findings.jsonl row recording ``finding`` as a duplicate.
+
+    Kept, never deleted: the row carries its own path, line and snapshot, and
+    ``duplicate_of`` names the unresolved finding it folds into.
+    """
+    return {
+        **asdict(finding),
+        "status": "dismissed",
+        "dismissed_at": now,
+        "resolved_by": AUTO_DEDUP_RESOLVER,
+        "resolution_reason": "dup",
+        "duplicate_of": canonical.get("fingerprint", ""),
+    }
+
+
 def persist_findings(new_findings: list[Finding]) -> list[Finding]:
     """Append new (non-duplicate) findings to findings.jsonl. Return the ones
-    that were actually new (dedup filter applied)."""
+    that were actually new (dedup filter applied).
+
+    A finding that duplicates an existing unresolved one (see
+    ``_find_duplicate_target``) is appended as an auto-dismissed ``dup`` row
+    pointing at it, and is not returned: it is neither surfaced, escalated nor
+    mirrored to the event stream. Identical code in N worktrees, or the same
+    block after an edit above it, stays one unresolved item.
+    """
     with findings_state_lock():
         dedup = load_dedup()
         original_dedup = dict(dedup)
         dedup = sweep_stale_dedup(dedup)
         legacy_fingerprints: dict[tuple[str, str, int, str], list[str]] = {}
-        for row in _iter_findings_raw():
+        existing_rows = _iter_findings_raw()
+        unresolved_fps: set[str] = set()
+        dup_candidates: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for row in existing_rows:
+            if row.get("status", "open") in _UNRESOLVED_STATUSES:
+                fp = row.get("fingerprint")
+                if isinstance(fp, str) and fp:
+                    unresolved_fps.add(fp)
+                line_hash = str(row.get("line_content_hash") or "")
+                if line_hash:
+                    dup_candidates.setdefault(
+                        (str(row.get("pattern") or ""), line_hash), []
+                    ).append(row)
+        # Auto-duplicates whose canonical finding is still unresolved: a
+        # re-detection after the dedup TTL must not append a second row.
+        live_auto_dup_fps = {
+            row.get("fingerprint")
+            for row in existing_rows
+            if is_auto_duplicate(row) and row.get("duplicate_of") in unresolved_fps
+        }
+        auto_dups: list[dict[str, Any]] = []
+        for row in existing_rows:
             old_fingerprint = row.get("fingerprint")
             key = _absolute_provenance_key(
                 str(row.get("file") or ""),
@@ -271,15 +404,41 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 dedup[f.fingerprint] = max(prior_timestamps)
                 continue
             dedup[f.fingerprint] = now
+            if f.fingerprint in unresolved_fps or f.fingerprint in live_auto_dup_fps:
+                # Already on record and still live; the dedup TTL lapsed.
+                continue
+            canonical = None
+            if Path(f.file).is_absolute():
+                if not f.repo_relpath:
+                    f.repo_relpath = repo_relative_path(f.file)
+                if f.line_content_hash:
+                    canonical = _find_duplicate_target(
+                        f,
+                        f.repo_relpath,
+                        dup_candidates.get((f.pattern, f.line_content_hash), []),
+                    )
+            if canonical is not None:
+                auto_dups.append(_auto_duplicate_row(f, canonical, now))
+                log(
+                    f"auto-dup {f.pattern} {f.file}:{f.line} ({f.fingerprint}) "
+                    f"→ duplicate_of {canonical.get('fingerprint', '?')} "
+                    f"at {canonical.get('file', '?')}:{canonical.get('line', '?')}"
+                )
+                continue
             fresh.append(f)
 
-        if fresh or dedup != original_dedup:
+        if fresh or auto_dups or dedup != original_dedup:
             # Persist even if `fresh` is empty, so the sweep's pruning actually
             # lands on disk. Otherwise stale entries would rematerialize on the
             # next scan.
             STATE_DIR.mkdir(parents=True, exist_ok=True)
             for finding in fresh:
                 _append_finding_row(finding)
+            if auto_dups:
+                FINDINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+                with FINDINGS_FILE.open("a") as fh:
+                    for row in auto_dups:
+                        fh.write(json.dumps(row) + "\n")
             save_dedup(dedup)
 
     for finding in fresh:
@@ -1000,16 +1159,49 @@ def _resolve_session_scope_root(cwd: Path | None = None) -> Path | None:
         return None
 
 
+def auto_duplicate_aliases(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Map each canonical fingerprint to where its automatic duplicates live.
+
+    Scoped delivery uses this so folding a worktree's copy into another
+    worktree's finding does not hide that finding from the first worktree:
+    the canonical finding is shown there, at that worktree's own path/line.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if is_auto_duplicate(row) and row.get("file"):
+            out.setdefault(str(row["duplicate_of"]), []).append(
+                {"file": str(row["file"]), "line": row.get("line")}
+            )
+    return out
+
+
+def _path_under(file_path: str, resolved_scope: Path) -> bool:
+    candidate = Path(file_path)
+    if not file_path or not candidate.is_absolute():
+        return False
+    try:
+        candidate.resolve().relative_to(resolved_scope)
+    except ValueError:
+        return False
+    return True
+
+
 def _partition_findings_by_scope(
     findings: list[dict[str, Any]],
     scope_root: Path | None,
+    aliases: dict[str, list[dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Split findings into ``(in_scope, out_of_scope_groups)``.
 
-    A finding is in-scope when its ``file`` lives under ``scope_root``.
-    Out-of-scope findings are aggregated by their nearest ``.worktrees``
-    sibling label so the footer can summarize *where* the backlog is
-    without listing every path.
+    A finding is in-scope when its ``file`` lives under ``scope_root``, or
+    when one of its automatic duplicates does (``aliases``, keyed by
+    fingerprint; see ``auto_duplicate_aliases``). In the second case the
+    in-scope entry is a display copy carrying the duplicate's path and line,
+    with the canonical fingerprint, so the reader sees their own checkout and
+    a dismiss or receipt still lands on the one unresolved finding.
+    Out-of-scope findings are
+    aggregated by their nearest ``.worktrees`` sibling label so the footer
+    can summarize *where* the backlog is without listing every path.
 
     If ``scope_root`` is None, all findings are treated as in-scope —
     matches the legacy "surface everything" behavior so callers without
@@ -1021,6 +1213,7 @@ def _partition_findings_by_scope(
     in_scope: list[dict[str, Any]] = []
     out_groups: dict[str, int] = {}
     resolved_scope = scope_root.resolve()
+    aliases = aliases or {}
     for f in findings:
         file_path = f.get("file") or ""
         resolved_file: Path | None = None
@@ -1035,6 +1228,24 @@ def _partition_findings_by_scope(
                 else:
                     in_scope.append(f)
                     continue
+        local = next(
+            (
+                alias
+                for alias in aliases.get(str(f.get("fingerprint") or ""), ())
+                if _path_under(alias["file"], resolved_scope)
+            ),
+            None,
+        )
+        if local is not None:
+            in_scope.append(
+                {
+                    **f,
+                    "file": local["file"],
+                    "line": local["line"],
+                    "path_gone": not Path(local["file"]).exists(),
+                }
+            )
+            continue
         label_path = str(resolved_file) if resolved_file is not None else file_path
         label = _label_for_other_worktree(label_path)
         out_groups[label] = out_groups.get(label, 0) + 1
@@ -1077,7 +1288,8 @@ def print_unresolved(scope_root: Path | None = None) -> int:
         scope_root = _resolve_session_scope_root()
 
     findings: list[dict[str, Any]] = []
-    for finding in _iter_findings_raw():
+    all_rows = _iter_findings_raw()
+    for finding in all_rows:
         if finding.get("status", "open") not in ("open", "surfaced"):
             continue
         if _finding_target_exists(finding):
@@ -1088,7 +1300,9 @@ def print_unresolved(scope_root: Path | None = None) -> int:
             # removed. Mark only the display copy so SessionStart remains
             # strictly read-only; the next lifecycle sweep persists path_gone.
             findings.append({**finding, "path_gone": True})
-    in_scope, out_groups = _partition_findings_by_scope(findings, scope_root)
+    in_scope, out_groups = _partition_findings_by_scope(
+        findings, scope_root, auto_duplicate_aliases(all_rows)
+    )
 
     block, _shown = _format_findings_block(
         in_scope,
