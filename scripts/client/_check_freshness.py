@@ -5,8 +5,9 @@ A skill's frontmatter declares `last_verified` (when its content was last
 reviewed), `freshness_days`, and the `source_files` its claims depend on.
 Verification records live beside the skills as attestations (below). Two checks:
 
-- STALE: a cited source's content no longer matches the digest recorded when
-  the skill was last verified, or a cited source has no recorded digest. The
+- STALE: a cited source's current content matches the digest recorded for it
+  in NO attestation of the skill (nor in a legacy frontmatter block), or a
+  cited source has no recorded digest at all. The
   digest is computed from the file in the working tree, so the check needs no
   git history and gives the same answer in a fresh checkout, a shallow clone, a
   worktree, or an rsync copy. File mtime was the previous signal; every
@@ -35,13 +36,26 @@ same lines: every merge put every other stamping PR back into conflict (five of
 seven conflicted PRs that day conflicted only there). New files with unique
 names cannot conflict, whoever writes them, from whichever harness.
 
-The newest attestation for a skill is its record, and newest means the
-lexically last file name (the name leads with a microsecond UTC timestamp): its digests
-drive STALE, and the effective verified date is the later of its
-`verified_date` and the frontmatter `last_verified`. `.attestations/` is
-excluded from SKILLS_MANIFEST.sha256, so the manifest moves only when skill
-content moves. Old attestations can be removed with `--prune`; deleting a file
-never conflicts with another PR adding one.
+A cited source is FRESH when its current digest equals the digest recorded
+for it in ANY attestation of the skill: someone re-checked the skill against
+exactly that content. The legacy frontmatter `source_digests` block is a
+further fallback. Until 2026-09-24 only the newest attestation (the lexically
+last file name) counted, and that let a stamp mask a correct record: a branch
+cut from an older master stamps the skill, recording OLD digests for sources
+it never touched; the change to one of those sources merges first; the
+branch's attestation then sorts newest and the skill reads STALE although an
+older attestation records exactly the current content (observed on
+unitares-governance after #2363 merged). A stamp can add recognised content;
+it can no longer revoke one.
+
+The effective verified date, which drives AGING, is the newest one on record:
+the latest `verified_date` across the attestations, or the frontmatter
+`last_verified` if later. `.attestations/` is excluded from the skills
+fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
+when skill content moves. Old attestations can be removed with `--prune`;
+deleting a file never conflicts with another PR adding one, but a pruned file
+no longer vouches for its digests, so prune only what current content no
+longer needs.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
 into an attestation dated with that skill's `last_verified`.
@@ -155,31 +169,63 @@ def load_source_files(skill_dir: Path, frontmatter_sources: list[str]) -> list[s
     return list(frontmatter_sources)
 
 
-def latest_attestation(skills_dir: Path, name: str) -> dict | None:
-    """The newest readable attestation for a skill, or None."""
+def load_attestations(skills_dir: Path, name: str) -> list[dict]:
+    """Every readable attestation for a skill, newest first.
+
+    Newest means the lexically last file name, which leads with a microsecond
+    UTC timestamp. Unreadable files and records without a `source_digests`
+    map are skipped.
+    """
     adir = skills_dir / ATTESTATIONS_DIR / name
     if not adir.is_dir():
-        return None
+        return []
+    records: list[dict] = []
     for path in sorted(adir.glob("*.json"), reverse=True):
         try:
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
         if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
-            return data
-    return None
+            records.append(data)
+    return records
 
 
-def effective_record(skills_dir: Path, name: str, meta: dict) -> tuple[str, dict[str, str]]:
-    """(verified date, source digests): the newest attestation, falling back to
-    a frontmatter block not yet migrated; the date is the later of the
-    attestation's and the frontmatter's."""
-    att = latest_attestation(skills_dir, name)
-    if att is None:
-        return meta["last_verified"], meta["source_digests"]
-    att_date = str(att.get("verified_date") or "")
-    date = max(meta["last_verified"], att_date)
-    return date, {str(k): str(v) for k, v in att["source_digests"].items()}
+def latest_attestation(skills_dir: Path, name: str) -> dict | None:
+    """The newest readable attestation for a skill, or None."""
+    records = load_attestations(skills_dir, name)
+    return records[0] if records else None
+
+
+def effective_record(skills_dir: Path, name: str, meta: dict) -> tuple[str, dict[str, set[str]]]:
+    """(verified date, accepted digests per source).
+
+    A source's accepted digests are every digest recorded for it in ANY
+    attestation of the skill, plus the legacy frontmatter block: each one is
+    content somebody verified the skill against. The date is the newest on
+    record, across the attestations and the frontmatter `last_verified`.
+    """
+    accepted: dict[str, set[str]] = {}
+    for src, digest in meta["source_digests"].items():
+        accepted.setdefault(src, set()).add(digest)
+    date = meta["last_verified"]
+    for att in load_attestations(skills_dir, name):
+        att_date = att.get("verified_date")
+        if isinstance(att_date, str) and att_date > date:
+            date = att_date
+        for src, digest in att["source_digests"].items():
+            accepted.setdefault(str(src), set()).add(str(digest))
+    return date, accepted
+
+
+def carried_digest(skills_dir: Path, name: str, meta: dict, src: str) -> str | None:
+    """The most recent recorded digest for a source this checkout cannot see,
+    so a stamp made here keeps the record made where it was visible."""
+    for att in load_attestations(skills_dir, name):
+        digest = att["source_digests"].get(src)
+        if digest is not None:
+            return str(digest)
+    digest = meta["source_digests"].get(src)
+    return str(digest) if digest is not None else None
 
 
 def check_skills(root: str, projects_root: str) -> int:
@@ -198,7 +244,7 @@ def check_skills(root: str, projects_root: str) -> int:
             print(f"  [{YELLOW}-{NC}] {skill_name}: no freshness metadata")
             continue
 
-        verified_date, digests = effective_record(skills_dir, skill_name, meta)
+        verified_date, accepted = effective_record(skills_dir, skill_name, meta)
 
         # Anchor to UTC so a CI runner (UTC) and a local machine (e.g. Mountain
         # Time) agree about day boundaries.
@@ -214,12 +260,13 @@ def check_skills(root: str, projects_root: str) -> int:
                 if not full_path.exists():
                     absent += 1
                     continue
-                recorded = digests.get(src)
-                if recorded is None:
+                recorded = accepted.get(src)
+                if not recorded:
                     drift = (src, "has no recorded digest")
                     break
-                if content_digest(full_path) != recorded:
-                    drift = (src, f"changed since {verified_date}")
+                if content_digest(full_path) not in recorded:
+                    drift = (src, f"changed since {verified_date}: no attestation "
+                                  "records its current content")
                     break
 
         if drift:
@@ -296,16 +343,15 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
             print(f"  [{RED}ERROR{NC}] {name}: no freshness metadata to stamp")
             rc = 1
             continue
-        _, previous = effective_record(skills_dir, name, meta)
         digests: dict[str, str] = {}
         absent: list[str] = []
         for src in load_source_files(skill_dir, meta["source_files"]):
             full_path = resolve_source(root, projects_root, src)
             if full_path.exists():
                 digests[src] = content_digest(full_path)
-            elif src in previous:
+            elif (carried := carried_digest(skills_dir, name, meta, src)) is not None:
                 # Not verifiable from here; keep the record made where it was.
-                digests[src] = previous[src]
+                digests[src] = carried
             else:
                 absent.append(src)
         path = write_attestation(skills_dir, name, digests, now, verifier)

@@ -240,7 +240,31 @@ def test_load_skill_uses_the_later_of_frontmatter_and_attestation_dates(tmp_path
     assert loaded["version"] == "2026-03-01"
 
 
-def test_manifest_ignores_attestation_files(tmp_path, monkeypatch):
+def test_load_skill_takes_the_newest_date_whatever_the_file_order(tmp_path):
+    """Every attestation is read; the latest `verified_date` wins even when the
+    lexically last file carries an older one."""
+    import json as _json
+
+    from src.mcp_handlers.introspection import skills as skills_mod
+
+    skill_dir = tmp_path / "demo"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        '---\nname: demo\nlast_verified: "2026-01-01"\nfreshness_days: 14\n---\n# Demo\n'
+    )
+    adir = tmp_path / ".attestations" / "demo"
+    adir.mkdir(parents=True)
+    (adir / "20260101T000000000000Z-aaaaaaaa.json").write_text(
+        _json.dumps({"verified_date": "2026-03-01", "source_digests": {}})
+    )
+    (adir / "20260102T000000000000Z-bbbbbbbb.json").write_text(
+        _json.dumps({"verified_date": "2026-02-01", "source_digests": {}})
+    )
+    (adir / "20260103T000000000000Z-cccccccc.json").write_text("{not json")
+    assert skills_mod._load_skill(skill_dir)["last_verified"] == "2026-03-01"
+
+
+def _load_manifest_module():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -248,6 +272,11 @@ def test_manifest_ignores_attestation_files(tmp_path, monkeypatch):
     )
     manifest = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(manifest)
+    return manifest
+
+
+def test_manifest_ignores_attestation_files(tmp_path, monkeypatch):
+    manifest = _load_manifest_module()
     (tmp_path / "demo").mkdir()
     (tmp_path / "demo" / "SKILL.md").write_text("# Demo\n")
     monkeypatch.setattr(manifest, "SKILLS_DIR", tmp_path)
@@ -255,3 +284,40 @@ def test_manifest_ignores_attestation_files(tmp_path, monkeypatch):
     (tmp_path / ".attestations" / "demo").mkdir(parents=True)
     (tmp_path / ".attestations" / "demo" / "20260924T000000Z-cccccccc.json").write_text("{}")
     assert manifest.build_manifest() == before
+
+
+def test_manifest_ignores_a_manifest_file_in_the_tree(tmp_path):
+    """A stray regeneration in canonical, or the mirror's own copy, is not
+    part of the fingerprint, so a mirror verifies against itself."""
+    manifest = _load_manifest_module()
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "demo" / "SKILL.md").write_text("# Demo\n")
+    before = manifest.build_manifest(tmp_path)
+    (tmp_path / manifest.MANIFEST_NAME).write_text(before)
+    assert manifest.build_manifest(tmp_path) == before
+    assert manifest.main(["x", "--skills-dir", str(tmp_path),
+                          "--verify", str(tmp_path / manifest.MANIFEST_NAME)]) == 0
+    (tmp_path / "demo" / "SKILL.md").write_text("# Demo, edited\n")
+    assert manifest.main(["x", "--skills-dir", str(tmp_path),
+                          "--verify", str(tmp_path / manifest.MANIFEST_NAME)]) == 1
+
+
+def test_manifest_is_not_committed_in_unitares():
+    """The fingerprint is derived data, generated where it is consumed
+    (scripts/dev/sync-plugin-skills.sh writes it into the plugin mirror).
+    Committed, its aggregate line made any two PRs editing any two skills
+    conflict (#2361 against #2363, 2026-09-24). Re-adding it, even with
+    `git add -f` past .gitignore, brings that back."""
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    probe = subprocess.run(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True)
+    if probe.returncode != 0:
+        pytest.skip("not a git checkout")
+    rel = "skills/SKILLS_MANIFEST.sha256"
+    tracked = subprocess.run(["git", "-C", str(root), "ls-files", "--", rel],
+                             capture_output=True, text=True, check=True).stdout.strip()
+    assert tracked == "", f"{rel} is tracked again; it must stay generated, not committed"
+    ignored = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", "--no-index", rel])
+    assert ignored.returncode == 0, f"{rel} must stay in .gitignore"

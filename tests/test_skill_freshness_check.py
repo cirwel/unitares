@@ -163,14 +163,87 @@ def test_same_second_stamps_sort_in_the_order_they_were_made(layout: Layout):
     assert layout.run().returncode == 0
 
 
-def test_the_newest_attestation_is_the_record(layout: Layout):
+def test_a_new_stamp_records_changed_content(layout: Layout):
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(1), digest=None)
     layout.run("--stamp", "demo")
     layout.source("x = 2\n")
-    assert layout.run().returncode == 1          # drift against the attestation
+    assert layout.run().returncode == 1          # no record of this content
     layout.run("--stamp", "demo")
-    assert layout.run().returncode == 0          # the newer record wins
+    assert layout.run().returncode == 0          # now there is one
+
+
+def _attest(layout: "Layout", stem: str, verified_date: str, digests: dict) -> None:
+    """Write an attestation by hand, as a merged branch would have left it."""
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / f"{stem}.json").write_text(json.dumps({
+        "schema": "unitares.skill_attestation.v1", "skill": "demo",
+        "verified_at": f"{verified_date}T00:00:00Z", "verified_date": verified_date,
+        "verifier": "test", "source_digests": digests,
+    }))
+
+
+def test_a_newer_attestation_with_an_old_digest_does_not_mask_a_matching_one(layout: Layout):
+    # The 2026-09-24 unitares-governance case. Master verified the skill against
+    # the changed source (x = 2). A branch cut before that change stamped the
+    # skill later, recording the OLD digest (x = 1) for a source it never
+    # touched, and merged after. Its attestation sorts newest; the older one
+    # still records exactly the current content, so the skill is fresh.
+    layout.source("x = 2\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    src = "unitares/src/thing.py"
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 2\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")})
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert "FRESH" in result.stdout
+    # The age still comes from the newest verified date on record.
+    assert "verified 1 days ago" in result.stdout
+
+
+def test_a_source_whose_digest_is_in_no_attestation_is_stale(layout: Layout):
+    layout.source("x = 3\n")
+    layout.skill(last_verified=_day(20), digest=_digest("x = 0\n"))
+    src = "unitares/src/thing.py"
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 2\n")})
+    result = layout.run()
+    assert result.returncode == 1
+    assert "STALE" in result.stdout
+    assert f"{src} changed since {_day(1)}: no attestation records its current content" in result.stdout
+
+
+def test_the_legacy_frontmatter_digest_still_counts(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(3), digest=_digest("x = 1\n"))
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1),
+            {"unitares/src/thing.py": _digest("x = 9\n")})
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+
+
+def test_aging_uses_the_newest_date_even_if_its_file_sorts_first(layout: Layout):
+    # File-name order and date order normally agree; the date must not depend on it.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(60), digest=None, freshness_days=14)
+    src = "unitares/src/thing.py"
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(1), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(50), {src: _digest("x = 1\n")})
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert "verified 1 days ago" in result.stdout
+
+
+def test_a_stamp_carries_an_absent_sources_most_recent_digest(layout: Layout):
+    # A source this checkout cannot see keeps the digest recorded where it was
+    # visible, taken from the newest attestation that records it.
+    layout.skill(last_verified=_day(1), digest=None, source="elsewhere/src/bot.py")
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {"elsewhere/src/bot.py": "old"})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {"elsewhere/src/bot.py": "new"})
+    assert layout.run("--stamp", "demo").returncode == 0
+    newest = json.loads(_attestations(layout)[-1].read_text())
+    assert newest["source_digests"] == {"elsewhere/src/bot.py": "new"}
 
 
 def test_a_recent_attestation_keeps_an_old_frontmatter_date_fresh(layout: Layout):

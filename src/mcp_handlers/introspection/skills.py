@@ -122,24 +122,28 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
 
 
 def _latest_attestation_date(skills_root: Path, name: str) -> Optional[str]:
-    """`verified_date` of the newest attestation for a skill, if any.
+    """The newest `verified_date` recorded in any attestation for a skill.
 
-    Format and naming: scripts/client/_check_freshness.py. Files are named
-    `<YYYYMMDDTHHMMSSffffffZ>-<hex>.json`, so the lexically last readable one
-    is the newest.
+    Format and naming: scripts/client/_check_freshness.py. Every readable
+    attestation is read and the latest date wins, as in the CI checker, whose
+    AGING check uses the newest verified date on record. Reading only the
+    lexically last file assumed file-name order is date order; reading every
+    record makes the answer independent of that. This tool reports calendar
+    staleness only; source-digest freshness is the CI checker's.
     """
     adir = skills_root / ".attestations" / name
     if not adir.is_dir():
         return None
-    for path in sorted(adir.glob("*.json"), reverse=True):
+    newest: Optional[str] = None
+    for path in adir.glob("*.json"):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         verified = data.get("verified_date") if isinstance(data, dict) else None
-        if isinstance(verified, str) and verified:
-            return verified
-    return None
+        if isinstance(verified, str) and verified and (newest is None or verified > newest):
+            newest = verified
+    return newest
 
 
 def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
