@@ -10,7 +10,7 @@ verdict's voice anyway:
   guided agent "Paused - stop this line of work";
 - `_recovery_hint` treated risk >= 0.7 as severe whatever the decision, so it
   said "pause and call self_recovery", and reviewed recovery then refused the
-  agent (it gates on risk < 0.65) after recording its reflection;
+  agent (it refuses above risk 0.65) after recording its reflection;
 - the glossary's high-risk next_action says "Pause, reflect, ...", and a
   metrics read wraps that verdict with no decision at all.
 
@@ -146,18 +146,38 @@ def test_low_risk_cold_start_hint_does_not_threaten_a_pause():
     assert "can pause" not in hint
 
 
-def test_high_risk_continue_decision_does_not_route_to_self_recovery():
-    """Not paused: nothing to lift, and review refuses at risk >= 0.65 after
-    recording the reflection (27 refused reflections in 60 days, 2026-09-24)."""
-    hint = ES._recovery_hint({"decision": {"action": "guide"}}, None, 0.55)
-    assert "self_recovery(" not in hint
-    assert "does not block" in hint
+def test_high_risk_continue_decision_is_not_told_to_pause_or_routed_past_the_gate():
+    """Not paused: the hint must not say pause, and must not route the agent
+    to a review that refuses above MAX_RISK_FOR_SELF_RECOVERY after recording
+    the reflection (27 refused reflections in 60 days, 2026-09-24). Below
+    the gate a guide decision gets the same conditional advice as a proceed."""
+    below = ES._recovery_hint({"decision": {"action": "guide"}}, None, 0.55)
+    assert "does not block" in below
+    assert "pause" not in below.lower()
+    assert "only if work stalls" in below
+    above = ES._recovery_hint({"decision": {"action": "guide"}}, None, 0.70)
+    assert "self_recovery(" not in above
+    assert "does not block" in above
+
+
+def test_review_gate_boundary_matches_self_recovery():
+    """Review refuses only when risk EXCEEDS the limit (strict >)."""
+    from src.mcp_handlers.lifecycle.self_recovery import MAX_RISK_FOR_SELF_RECOVERY
+
+    limit = MAX_RISK_FOR_SELF_RECOVERY
+    decision = {"decision": {"action": "guide"}}
+    at = ES._recovery_hint(decision, None, limit)
+    over = ES._recovery_hint(decision, None, limit + 0.01)
+    assert "only if work stalls" in at
+    assert "refuses above risk" not in at
+    assert f"refuses above risk {limit:.2f}" in over
+    assert "self_recovery(" not in over
 
 
 def test_production_guide_shape_at_refusal_risk_is_not_routed_to_self_recovery():
     """The monitor emits proceed + sub_action guide, which makes the attention
-    branch fire first; at risk >= 0.65 (review refuses) it must still not
-    advise self_recovery."""
+    branch fire first; above the review gate it must still not advise
+    self_recovery."""
     payload = {"decision": {"action": "proceed", "sub_action": "guide"}}
     for risk in (0.67, 0.75):
         hint = ES._recovery_hint(payload, None, risk)
@@ -165,6 +185,29 @@ def test_production_guide_shape_at_refusal_risk_is_not_routed_to_self_recovery()
         assert "does not block" in hint, risk
     # Below the review gate the existing advisory wording stays.
     assert "only if work stalls" in ES._recovery_hint(payload, None, 0.5)
+
+
+def test_critical_state_guidance_does_not_tell_the_agent_to_pause():
+    """interpret_state knows no decision, and a standard sync_state or
+    metrics read surfaces its guidance (the envelope uses it as next_action
+    when no next_action is set). A guided cold-start agent at risk 0.79 was
+    told "Circuit breaker imminent. Pause and reassess." there."""
+    from src.governance_state import GovernanceState
+
+    guidance = GovernanceState._generate_guidance(
+        None, health="critical", basin="low", mode="stalled",
+        trajectory="stable", task_type="mixed", borderline={},
+    )
+    assert "pause" not in guidance.lower()
+    assert "imminent" not in guidance.lower()
+
+    formatted = format_response(_guided_cold_start_check_in(), {"response_mode": "standard"})
+    assert "pause" not in str(formatted.get("guidance") or "").lower()
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics",
+        {"success": True, "guidance": guidance}, {},
+    )
+    assert env.get("next_action") == guidance
 
 
 def test_never_checked_in_agent_is_not_reported_as_proceeding():
