@@ -495,6 +495,66 @@ def _build_pin_fingerprint_candidates(
 # stranger's session. Every other ladder source names the caller's own transport.
 FOREIGN_DESTINATION_SOURCES = frozenset({"pinned_onboard_session"})
 
+# Refusal reason for a destination whose provenance the caller did not declare.
+# Not a ladder source; named so a log line or payload can be told apart from a
+# source-label refusal without knowing the helper's internals.
+UNDECLARED_DESTINATION_PROVENANCE = "undeclared_provenance"
+
+# Refusal reason for a stable ``agent-{uuid12}`` key that is not the caller's
+# own. Resolution maps any ``agent-`` key to the identity whose uuid it
+# prefixes, so such a key belongs to that agent whatever ladder source
+# delivered it (for bind_session, whose destination is derived from transport
+# signals only, an ``X-Session-ID`` header can carry another agent's stable
+# id). This guards the bind DESTINATION only; it does not govern which
+# identity a caller resolves to.
+FOREIGN_STABLE_SESSION_ID = "foreign_stable_session_id"
+
+
+def bind_destination_refusal(
+    agent_uuid: str,
+    session_key: Optional[str],
+    key_source: Optional[str],
+) -> Optional[str]:
+    """Return why ``session_key`` must NOT be bound to ``agent_uuid``, or None.
+
+    This is the ownership predicate every safe bind caller already applies
+    (#2147). It lives in one place so a bind helper can enforce it for ALL
+    callers instead of each caller having to know the ladder taxonomy:
+
+    - The agent's own stable session id (``make_client_session_id``) is owned
+      by construction, whatever a caller says about its source.
+    - A key that resolved via a source in ``FOREIGN_DESTINATION_SOURCES``
+      belongs to someone else and is refused, naming the source.
+    - A key that is neither, with NO declared source, is refused as
+      ``UNDECLARED_DESTINATION_PROVENANCE``. The #2142 bind reached its
+      helper with exactly this shape, so an undeclared destination fails
+      closed rather than repeating it.
+    - A key in stable-id shape (``agent-...``) that is not the caller's own
+      is refused as ``FOREIGN_STABLE_SESSION_ID`` whatever its declared
+      source: resolution maps it to the agent whose uuid it prefixes.
+
+    Any other key under a declared ladder source is taken as the caller's own
+    transport key. This is a provenance check, not a live-owner lookup.
+    """
+    if session_key:
+        from .shared import make_client_session_id
+        try:
+            if session_key == make_client_session_id(agent_uuid):
+                return None
+        except ValueError:
+            # A malformed (<12-char) uuid cannot own a stable id; fall through
+            # to the source check. Only this error is expected here -- anything
+            # else would silently degrade the own-key short-circuit into a
+            # source-only check, so it is left to raise.
+            pass
+    if key_source in FOREIGN_DESTINATION_SOURCES:
+        return key_source
+    if key_source is None:
+        return UNDECLARED_DESTINATION_PROVENANCE
+    if session_key and session_key.startswith("agent-"):
+        return FOREIGN_STABLE_SESSION_ID
+    return None
+
 
 async def derive_session_key(
     signals: "Optional[SessionSignals]" = None,
