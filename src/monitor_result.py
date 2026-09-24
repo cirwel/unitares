@@ -555,7 +555,10 @@ def build_result(
             'state': monitor._behavioral_state.to_dict(),
             'assessment': {
                 'health': behavioral_assessment.health,
-                'verdict': explain_verdict(behavioral_assessment.verdict),
+                'verdict': explain_verdict(
+                    behavioral_assessment.verdict,
+                    decision_action=decision.get('action'),
+                ),
                 'risk': behavioral_assessment.risk,
                 'coherence': behavioral_assessment.coherence,
                 'coherence_source': BEHAVIORAL_COHERENCE_SOURCE,

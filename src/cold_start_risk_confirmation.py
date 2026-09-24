@@ -760,15 +760,22 @@ def apply_non_authored_cold_start_guard(
     guarded["cold_start_epistemic_deferred"] = True
     guarded["action"] = "proceed"
     guarded["sub_action"] = "guide"
+    # Agent-facing text. It leads with why this check-in did not pause, then
+    # keeps the overridden reason: that same reading on an agent-authored
+    # check-in is not guarded and can pause, which is the one thing the agent
+    # needs to know before its next sync_state.
     guarded["reason"] = (
-        "non-authored Phi cold-start pause deferred to guidance "
-        f"(epistemic_class={epistemic_class}, "
-        f"behavioral_confidence={confidence:.3f}; was: {original_reason})"
+        "Cold start: guidance only, because this check-in was not agent-authored "
+        f"and there is no behavioral history yet (epistemic_class={epistemic_class}, "
+        f"behavioral_confidence={confidence:.3f}). The same reading on an "
+        f"agent-authored check-in can pause (was: {original_reason})"
     )
     guarded["guidance"] = (
-        "Treat this fallback estimate as advisory. Hard-pause authority remains "
-        "available to agent-authored, behaviorally ready, independently verified, "
-        "structural, and runtime-safety evidence."
+        "This estimate is the cold-start prior, not a measurement of this agent's "
+        "behavior. Until behavioral confidence reaches 0.3 (the third check-in), "
+        "an agent-authored sync_state is scored on the same prior and can pause "
+        "at this risk; behaviorally ready, independently verified, structural, "
+        "and runtime-safety evidence can pause at any time."
     )
     return guarded
 

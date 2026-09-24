@@ -403,10 +403,30 @@ def _wrap(value: Any, table: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 _BEHAVIORAL_VERDICTS = frozenset({"safe", "caution", "high-risk"})
 
 
+# Decision actions that actually stop the agent. A behavioral verdict's
+# next_action may only tell the agent to pause when the decision is one of these.
+_STOP_ACTIONS = frozenset({"pause", "reject"})
+
+_NON_STOP_HIGH_RISK_NEXT_ACTION = (
+    "The decision was {action}, so this check-in does not block. A reading this "
+    "high can still pause a later check-in; keep scope tight and sync_state "
+    "after your next substantial step."
+)
+
+_STOP_UNDER_STEADY_VERDICT_NEXT_ACTION = (
+    "The decision was {action}: governed writes hold. "
+    "self_recovery(action='check') shows what lifting it needs."
+)
+
+# Verdicts whose glossary next_action tells the agent to carry on.
+_CARRY_ON_VERDICTS = frozenset({"proceed", "continue", "safe", "caution", "guide"})
+
+
 def explain_verdict(
     verdict: Optional[str],
     *,
     evidence_source: Optional[str] = None,
+    decision_action: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Wrap a verdict value with meaning + next_action.
 
@@ -419,8 +439,31 @@ def explain_verdict(
     the verdict still stands — it is just graded so the wording does not outrun
     the evidence. Omitted / ``"behavioral"`` → byte-identical to the ungraded
     output, so existing callers are unaffected.
+
+    ``decision_action`` is the policy decision the verdict rode on. The
+    behavioral verdict and the decision are separate: a ``high-risk`` verdict
+    can land with a ``proceed`` decision (the cold-start guard, gap
+    suppression), and a ``safe`` verdict can land with a ``pause`` decision
+    (void, coherence and CIRS stops). When the decision is known, the
+    directive follows the decision in both directions: a verdict the decision
+    overrode never tells an agent to pause, and never tells a paused agent to
+    continue. The action is also recorded as ``decision_action`` so a reader
+    holding only the wrapped verdict (the envelope, on a metrics read) can
+    tell the two apart. Omitted → byte-identical output.
     """
     wrapped = _wrap(verdict, VERDICTS)
+    if decision_action is not None:
+        action = str(decision_action).lower()
+        wrapped["decision_action"] = action
+        value = wrapped.get("value")
+        if action not in _STOP_ACTIONS and value == "high-risk":
+            wrapped["next_action"] = _NON_STOP_HIGH_RISK_NEXT_ACTION.format(
+                action=action
+            )
+        elif action in _STOP_ACTIONS and value in _CARRY_ON_VERDICTS:
+            wrapped["next_action"] = _STOP_UNDER_STEADY_VERDICT_NEXT_ACTION.format(
+                action=action
+            )
     if (
         evidence_source == "ode_fallback"
         and isinstance(wrapped.get("value"), str)

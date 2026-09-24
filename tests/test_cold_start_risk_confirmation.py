@@ -835,6 +835,17 @@ def test_non_authored_phi_cold_start_pause_becomes_advisory_guidance():
         guarded["cold_start_epistemic_gate"]["enforcement_basis"]
         == NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
     )
+    # Agent-facing text reads as cold start, not as an overridden pause; the
+    # original reason survives verbatim in the gate record.
+    # Agent-facing text leads with why this check-in did not pause, and keeps
+    # the overridden reason: the same reading on an agent-authored check-in is
+    # not guarded and can pause.
+    assert guarded["reason"].startswith("Cold start: guidance only")
+    assert "agent-authored check-in can pause" in guarded["reason"]
+    assert "was: UNITARES high-risk verdict" in guarded["reason"]
+    assert "can pause at this risk" in guarded["guidance"]
+    original = guarded["cold_start_epistemic_gate"]["original_decision"]
+    assert original["reason"] == "UNITARES high-risk verdict"
 
 
 def test_non_authored_phi_cold_start_cirs_risk_block_becomes_guidance():

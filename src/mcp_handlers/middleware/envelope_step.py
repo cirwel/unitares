@@ -152,10 +152,44 @@ def _verdict_value(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _decision_action(payload: Dict[str, Any]) -> Optional[str]:
+    """The action the policy decided, read before any verdict vocabulary.
+
+    Mirror mode drops `decision` and surfaces the behavioral verdict instead
+    (see `_agent_facing_verdict_raw`), and a metrics read carries no decision at
+    all. A guided proceed then arrives as verdict "high-risk", which
+    `_ACTION_ALIASES` maps to pause, so reading the verdict value first told an
+    agent that was never paused that its action was "pause". Order, most
+    authoritative first: the final `decision`; an applied runtime enforcement
+    (the agent IS paused); the final decision a wrapped verdict rode on
+    (`explain_verdict`'s `decision_action`); then `policy_evaluation`, which is
+    built before post-ODE dialectic enforcement can escalate the decision
+    (updates/phases.py) and so may be stale; then the verdict value.
+    """
     decision = payload.get("decision")
     if decision is not None and not isinstance(decision, dict):
         return str(decision).lower()
-    for container in (payload.get("decision"), payload.get("verdict"), payload):
+    metrics = payload.get("metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    verdicts = [
+        v for v in (payload.get("verdict"), metrics.get("verdict")) if isinstance(v, dict)
+    ]
+    enforcement = payload.get("enforcement")
+    enforced_pause = (
+        "pause"
+        if isinstance(enforcement, dict) and enforcement.get("applied") is True
+        else None
+    )
+    policy = payload.get("policy_evaluation")
+    decided = [
+        (decision or {}).get("action"),
+        enforced_pause,
+        *(v.get("decision_action") for v in verdicts),
+        policy.get("action") if isinstance(policy, dict) else None,
+    ]
+    for value in decided:
+        if value is not None:
+            return str(value).lower()
+    for container in (decision, payload.get("verdict"), payload):
         if not isinstance(container, dict):
             continue
         value = container.get("action") or container.get("value") or container.get("verdict")
@@ -386,8 +420,17 @@ def _recovery_hint(
     if not (risky or attention):
         return None
     action = _decision_action(payload) or _verdict_value(payload)
-    severe = action in {"pause", "reject", "block", "stop"} or (
-        risk is not None and risk >= 0.7
+    stopped = action in {"pause", "reject", "block", "stop"}
+    # High risk alone reads as severe only when no decision is known. Once the
+    # policy has decided to continue (the cold-start guard, gap suppression),
+    # "pause and call self_recovery" contradicts that decision, and reviewed
+    # recovery then refuses the agent anyway (it gates on risk < 0.65) after
+    # recording its reflection in shared memory.
+    decided_to_continue = action in {
+        "proceed", "continue", "approve", "ok", "healthy", "safe", "guide",
+    }
+    severe = stopped or (
+        not decided_to_continue and risk is not None and risk >= 0.7
     )
     # Kept in the signature for wire/caller compatibility. Recovery guidance
     # follows the decision and measured risk; the overloaded coherence scalar
@@ -418,8 +461,33 @@ def _recovery_hint(
             "Working state looks degraded - pause and call "
             "self_recovery(action='review', reflection='...') before continuing."
         )
+    if decided_to_continue and _verdict_assurance(payload)[0] == "provisional":
+        # A cold-start reading is the prior, not a measurement of the agent.
+        # This decision did not block, but the non-authored cold-start guard
+        # does not cover the agent's own reports: until behavioral confidence
+        # reaches 0.3, an authored sync_state is scored on the same prior and
+        # can pause at a high reading. That is the one sequence that still
+        # pauses at cold start, so say it rather than "keep working".
+        hint = (
+            "Cold start: this risk is the prior, not a measurement of your "
+            "behavior, and this decision does not block."
+        )
+        if risk is not None and risk >= 0.7:
+            hint += (
+                " Until your third check-in your own sync_state is scored on the "
+                "same prior and can pause at this risk."
+            )
+        return hint
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
+    if risky and decided_to_continue:
+        # Not paused: self_recovery has nothing to lift, and review refuses at
+        # risk >= 0.65 after recording the reflection.
+        return (
+            "Risk is elevated but this decision does not block - keep scope tight "
+            "and sync_state after your next substantial step. self_recovery is "
+            "for lifting a pause."
+        )
     if risky:
         return (
             "Risk is elevated - if you feel stuck, self_recovery(action='quick') "
