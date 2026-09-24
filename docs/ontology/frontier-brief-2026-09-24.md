@@ -54,20 +54,22 @@ must be re-opened before anyone cites it elsewhere.
    holds only when `UNITARES_GOVERNED_EFFECT_BINDING` is on, or the per-type
    flag for that effect type is, and only for effects routed through the
    governed-effect plane. Complete provenance reconstruction is unmeasured,
-   not disproven: clients assemble it across
-   retention boundaries, and the claim names no window or record set. Scope
-   both claims down before they appear in any assurance case (§2).
+   not disproven: clients assemble it across retention boundaries, and the
+   claim names no window or record set. Scope both claims down before they
+   appear in any assurance case (§2).
 4. **The oversight summary is the one item that is actually new, but only one
    of its four terms, review latency, can be computed today.** "Action
    coverage" needs to know how many actions happened in total. Anthropic
    knows that because every action on its platform passes through an inline
    monitor. UNITARES sees only the check-ins and effects that are sent to it.
-   "Human-resolution status" needs an authenticated resolver class: review
-   verdicts can carry an optional, self-declared reviewer stamp with no
-   `human` value, and only the Sentinel adjudication path records operator
-   versus model through an operator-authenticated route. "Escalation rate" has no single stream: the stored
-   `escalated` status has no writers, and pauses split into four populations
-   with different denominators (§1).
+   "Human-resolution status" needs an authenticated, session-level resolver
+   class. Review verdicts can carry an optional reviewer stamp, but it is
+   caller-declared except on the synthetic and orchestrated paths, and it is
+   not authenticated. Only the Sentinel adjudication path separates operator
+   from model verdicts by authenticated route, and it does so per finding,
+   not per dialectic session. "Escalation rate" has no single stream: the
+   stored `escalated` status has no writers, and pauses split into four
+   populations with different denominators (§1).
 
 ---
 
@@ -145,21 +147,25 @@ not equally available:
   campaign, model-version, or effect-class column, so reporting per campaign,
   model version, or effect class needs those dimensions recorded first.
 - *Human-resolution status* is not derivable today. Antithesis and synthesis
-  messages *can* carry a reviewer stamp (`observed_metrics.reviewer_backend`),
-  set from the optional `reviewer_provenance` argument or by the synthetic
-  and orchestrated reviewers. It holds a `reviewer_kind` (`agent_submitted`,
-  `external_consult`, `orchestrated`, or `in_process_synthetic`) and
-  `model_used` (`src/mcp_handlers/dialectic/handlers.py`). Verdicts submitted
-  without the argument carry no stamp, and the code calls the stamp
-  "descriptive provenance, not identity proof". It records the submission
-  route as declared by the caller, not who resolved the session. So it is a
-  place a resolver class could live, not evidence of one, and adding a
-  `human` value to it would not close the gap. What is missing is a
-  session-level resolver class set only by an operator-authenticated route
-  (an operator credential or passkey session), as the Sentinel adjudication
-  endpoint already requires (`src/http_routes/sentinel.py`, #2378). The
-  `awaiting_facilitation` flag (migration 053) marks sessions waiting on a
-  facilitator; it does not record who resolved them.
+  messages *can* carry a reviewer stamp (`observed_metrics.reviewer_backend`).
+  It comes from the optional `reviewer_provenance` argument, which restricts
+  `reviewer_kind` to `agent_submitted`, `external_consult`, `orchestrated`, or
+  `in_process_synthetic`, or it is written directly by the synthetic and
+  orchestrated reviewers (`src/mcp_handlers/dialectic/handlers.py`). On
+  antithesis, a caller may also pass `observed_metrics.reviewer_backend`
+  directly, and that value is stored unchecked. Synthesis accepts only the
+  vetted argument. Verdicts with none of these carry no stamp. The code calls
+  the stamp "descriptive provenance, not identity proof": it records a
+  submission route as declared, not who resolved the session. So it is a place
+  a resolver class could live, not evidence of one, and adding a `human` value
+  to it would not close the gap. What is missing is an authenticated,
+  session-level resolver class. One option is to set it only through an
+  operator-authenticated route (an operator credential or passkey session), as
+  the Sentinel adjudication endpoint already requires for its per-finding
+  verdicts (`src/http_routes/sentinel.py`, #2378). Whether "human" should mean
+  "operator", or any authenticated human reviewer, is the operator's decision.
+  The `awaiting_facilitation` flag (migration 053) marks sessions routed to
+  human facilitation; it does not record who resolved them.
 - *Action coverage* has no denominator. UNITARES observes what adapters and hooks
   submit. It does not see the harness actions that bypass it. A coverage figure
   computed as reported ÷ reported is always 100% and means nothing. The honest
