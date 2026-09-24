@@ -70,14 +70,18 @@ jobs:
       # Fails if skills/ changed without regenerating SKILLS_MANIFEST.sha256.
       # Keeps the canonical fingerprint honest so the plugin mirror can verify
       # against it; the always-on CI guard the ship.sh-only S15-d gate lacked.
+      # skills/.attestations/ is excluded, so a re-verification stamp never
+      # changes the manifest; only skill content does.
       run: |
         python scripts/dev/skills_manifest.py --check
 
-    - name: Validate skill freshness (cited sources unchanged since last_verified)
+    - name: Validate skill freshness (cited sources unchanged since last verified)
       # Two checks. STALE: a source the skill cites no longer matches the
-      # content digest recorded when the skill was last verified (frontmatter
-      # `source_digests`; re-check the skill's claims, then `--stamp` it).
-      # AGING: the last_verified date is older than freshness_days. Until
+      # content digest recorded when the skill was last verified (the newest
+      # file in skills/.attestations/<skill>/; re-check the skill's claims,
+      # then `--stamp` it, which writes a NEW attestation file and never edits
+      # SKILL.md, so concurrent stamping PRs cannot conflict).
+      # AGING: the last verified date is older than freshness_days. Until
       # 2026-09-07 CI ran the age check only, because the source check read
       # filesystem mtime, which a checkout rewrites; five skills sat stale
       # behind a green gate. SKILL_FRESHNESS_AGE_ONLY=1 restores that gate.
