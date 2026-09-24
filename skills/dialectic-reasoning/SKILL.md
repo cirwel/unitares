@@ -276,10 +276,11 @@ may claim it.
 ## Facilitation and Reviewer Recovery
 
 If no eligible reviewer remains, the session may report
-`awaiting_facilitation`. A session that stalls in SYNTHESIS with its reviewer
-still assigned raises the same request; the sweep does not reassign at that
-phase, because the protocol requires the same reviewer to revise its own
-verdict. This is a paused request for human help, not a reviewer
+`awaiting_facilitation`. A session that stalls in SYNTHESIS waiting on its
+reviewer (the paused agent spoke last) raises the same request; the sweep does
+not reassign at that phase, because the protocol requires the same reviewer to
+revise its own verdict. A SYNTHESIS stall where the paused agent owes the next
+move raises no request. This is a paused request for human help, not a reviewer
 verdict. A timeout sweep can eventually mark it failed, but that sweep outcome
 does not mean either side won.
 

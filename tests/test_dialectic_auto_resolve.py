@@ -468,6 +468,8 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
          patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mock_emit), \
          patch(f"{AUTO_RESOLVE}.emit_reviewer_reassigned", mock_emit_reassigned), \
          patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch(f"{AUTO_RESOLVE}.get_session_async",
+               new_callable=AsyncMock, return_value=_transcript("silent-reviewer", "a1")), \
          patch("src.mcp_handlers.dialectic.reviewer.select_reviewer", mock_select):
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
@@ -493,10 +495,85 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
         "action": "awaiting_facilitation",
         "stuck_reviewer": "silent-reviewer",
     }]
-    # The note reports the observation; the sweeper cannot see whose move it was.
+    # The note says whose move it was: the paused agent spoke last.
     note = mock_add_msg.await_args.kwargs["reasoning"]
     assert "SYNTHESIS" in note and "silent-reviewer" in note
+    assert "paused agent spoke last" in note
     assert "unresponsive" not in note
+
+
+def _transcript(*speakers):
+    """A get_session_async row whose messages were posted by `speakers`, in order."""
+    return {"messages": [{"agent_id": who, "message_type": "synthesis"} for who in speakers]}
+
+
+async def _sweep_synthesis_row(*, paused, reviewer, transcript):
+    """Sweep one SYNTHESIS row idle 2.5h (past stuck, inside the 4h window)."""
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": paused,
+         "phase": "synthesis", "reviewer_agent_id": reviewer}
+    ]
+    server = _make_mock_server({
+        paused: _make_agent_meta(status="paused"),
+        reviewer: _make_agent_meta(status="active"),
+    })
+    mocks = {
+        "update_status": AsyncMock(return_value=True),
+        "mark": AsyncMock(return_value=True),
+        "emit": AsyncMock(),
+        "add_msg": AsyncMock(),
+    }
+    if isinstance(transcript, Exception):
+        read = AsyncMock(side_effect=transcript)
+    else:
+        read = AsyncMock(return_value=transcript)
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mocks["update_status"]), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mocks["mark"]), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mocks["emit"]), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mocks["add_msg"]), \
+         patch(f"{AUTO_RESOLVE}.get_session_async", read):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+    return result, mocks
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stall_owed_by_paused_agent_raises_no_flag():
+    """At SYNTHESIS the flag means "the reviewer owes reconsideration":
+    `check_reviewer_stuck` reads it that way, and any bound caller's
+    get(check_timeout=true) then auto-replaces a stuck reviewer. When the
+    reviewer spoke last the paused agent owes the move, so raising the flag
+    would hand the returning paused agent a machine-picked reviewer with
+    authority over the original verdict. The row keeps its pre-#2202 path."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1", transcript=_transcript("a1", "r1"))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+    m["emit"].assert_not_awaited()
+    m["update_status"].assert_awaited_once_with("s1", "failed")
+
+
+@pytest.mark.asyncio
+async def test_synthesis_self_review_stall_raises_no_flag():
+    """Paused agent == reviewer: there is no separate reviewer to wait on."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="a1", transcript=_transcript("a1"))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_transcript_read_failure_raises_no_flag():
+    """A failed read cannot show the reviewer owes the move: no flag, and the
+    sweep itself does not error."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1", transcript=RuntimeError("db down"))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+    m["update_status"].assert_awaited_once_with("s1", "failed")
 
 
 @pytest.mark.asyncio

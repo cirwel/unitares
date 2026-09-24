@@ -34,6 +34,7 @@ from src.dialectic_db import (
     update_session_awaiting_facilitation_async,
     mark_awaiting_facilitation_async,
     add_message_async,
+    get_session_async,
     has_inflight_saga_async,
     probe_inflight_saga_async,
 )
@@ -203,6 +204,39 @@ async def _probe_write_overlap(
         source="sweeper",
     )
     return "detected"
+
+
+async def _synthesis_reviewer_owes_reply(
+    session_id: str,
+    paused_agent_id: Optional[str],
+    reviewer_agent_id: str,
+) -> bool:
+    """True when a SYNTHESIS session is waiting on its REVIEWER.
+
+    Reads the transcript and finds the last message from either party
+    (system notes are skipped). The reviewer owes the move only when the
+    paused agent spoke last. A self-review (paused agent == reviewer) or a
+    transcript with no party message has no reviewer to wait on.
+
+    Never raises. A failed read answers False, which leaves the row on its
+    pre-#2202 path rather than raising a flag the sweeper cannot justify.
+    """
+    if not paused_agent_id or paused_agent_id == reviewer_agent_id:
+        return False
+    try:
+        row = await get_session_async(session_id)
+    except Exception as exc:
+        logger.warning(
+            f"Could not read transcript for SYNTHESIS stall {session_id[:16]}: {exc}"
+        )
+        return False
+    for message in reversed((row or {}).get("messages") or []):
+        speaker = message.get("agent_id")
+        if speaker == paused_agent_id:
+            return True
+        if speaker == reviewer_agent_id:
+            return False
+    return False
 
 
 async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
@@ -484,9 +518,10 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # active, so `_apply_reviewer_reassignment` leaves it in SYNTHESIS
             # and the replacement continues by submitting synthesis
             # (`test_reassign_facilitates_standing_rejection_in_synthesis`);
-            # it rewinds to ANTITHESIS only for a refused self-review (old
-            # reviewer == paused agent), and reopens a row already reaped as
-            # `failed` to the phase it was waiting in.
+            # it rewinds to ANTITHESIS for a refused self-review (old reviewer
+            # == paused agent), and a row already reaped as `failed` is revived
+            # at ANTITHESIS too, since the revive path reopens any reaped row
+            # that has a thesis to that phase.
             #
             # ⛔NOT reusing the reassignment path above. The protocol requires
             # the SAME reviewer to revise its own verdict; a replacement chosen
@@ -501,14 +536,34 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # a liveness probe. The reviewer's own continuation wait is 1h
             # (`DEFAULT_CONTINUATION_WAIT_S`), so a SYNTHESIS row idle past the
             # 2h stuck threshold has already outlived the window in which the
-            # reviewer could come back on its own. The sweeper does not load
-            # the transcript and cannot tell which party owes the move, so the
-            # note says what was observed and no more.
-            elif phase in ("synthesis", "SYNTHESIS") and reviewer_agent_id:
+            # reviewer could come back on its own.
+            #
+            # ⛔ONLY when the REVIEWER owes the move. At SYNTHESIS the flag is
+            # not neutral: `check_reviewer_stuck` reads it as "the reviewer
+            # owes reconsideration" (the other two writers — a standing
+            # objection, an LLM reviewer that did not approve — both mean
+            # that), and a stuck reviewer is then auto-replaced by any bound
+            # caller's `dialectic(action="get", check_timeout=true)`. Raising
+            # it on a row where the PAUSED agent owes the move would hand the
+            # returning paused agent a machine-picked reviewer with authority
+            # over the original verdict. So the transcript decides: the flag
+            # goes up only when the paused agent spoke last. Otherwise the
+            # stall is the paused agent's own and the row keeps its prior
+            # behaviour (reaped at the stuck threshold). The read is skipped
+            # for rows already flagged, which the hold below handles.
+            elif (
+                phase in ("synthesis", "SYNTHESIS")
+                and reviewer_agent_id
+                and not awaiting_facilitation
+                and check_time and check_time > fail_time
+                and await _synthesis_reviewer_owes_reply(
+                    session_id, paused_agent_id, reviewer_agent_id
+                )
+            ):
                 facilitation_reason = "synthesis_stalled"
                 facilitation_note = (
-                    f"Session stalled in SYNTHESIS with reviewer '{reviewer_agent_id}' "
-                    "(no message from either party past the stuck threshold). "
+                    f"Session stalled in SYNTHESIS awaiting reviewer '{reviewer_agent_id}' "
+                    "(the paused agent spoke last; no reply past the stuck threshold). "
                     "Awaiting human facilitation."
                 )
 
@@ -539,8 +594,9 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # message and one count: `mark_awaiting_facilitation`
             # deliberately leaves `updated_at` alone (see its
             # docstring), so the row stays in the stuck set and this
-            # branch is re-entered on every sweep — which is what keeps
-            # `select_reviewer` retrying while a human is waited on.
+            # branch is re-entered on every sweep — which, at ANTITHESIS,
+            # is what keeps `select_reviewer` retrying while a human is
+            # waited on. The SYNTHESIS path never calls it.
             if (
                 facilitation_reason
                 and check_time and check_time > fail_time
