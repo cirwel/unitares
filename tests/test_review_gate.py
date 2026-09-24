@@ -7,6 +7,7 @@ pass a new diff)."""
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -959,3 +960,137 @@ def test_input_file_named_gh_is_not_mistaken_for_the_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "branch"))
     with pytest.raises(FileNotFoundError):
         rg.main(["record", "gh", "--reviewer-name", "someone", "--independent"])
+
+
+# --------------------------------------------------------------------------
+# Round cap: a Codex run spends the same quota authoring does.
+
+def _bot():
+    return {"login": rg.CODEX_BOT, "type": "Bot"}
+
+
+def _codex_review(rid, head, when, *, findings=(), body=""):
+    review = {"id": rid, "user": _bot(), "commit_id": head, "state": "COMMENTED",
+              "submitted_at": when, "body": body}
+    inline = [{"id": rid * 100 + i, "pull_request_review_id": rid, "user": _bot(),
+               "path": "a.txt", "line": 1, "html_url": f"u{rid}-{i}",
+               "body": f"**<sub><sub>![{p} Badge](https://img.shields.io/badge/{p}-x)</sub></sub>  Finding {i}**\n\nwhy"}
+              for i, p in enumerate(findings, 1)]
+    return review, inline
+
+
+def _rounds(*specs):
+    reviews, inline = [], []
+    for spec in specs:
+        r, i = _codex_review(*spec[:3], findings=spec[3] if len(spec) > 3 else ())
+        reviews.append(r)
+        inline += i
+    return reviews, inline
+
+
+def test_rounds_count_distinct_reviewed_commits_across_evidence_kinds():
+    reviews, inline = _rounds((1, "a" * 40, "2026-09-23T01:00:00Z", ["P2"]),
+                              (2, "b" * 40, "2026-09-23T02:00:00Z", ["P2", "P2"]))
+    clean = _native_comment("c" * 40, when="2026-09-23T03:00:00Z")
+    completion, _ = _native_completion("d" * 40)  # activity row completed 13:10
+    rounds = rg.codex_rounds([clean, completion], reviews, inline)
+    assert rounds.count == 4 and rounds.last_head.startswith("ddddddd") and not rounds.last_findings
+    # The latest round decides what the cap answers.
+    rounds = rg.codex_rounds([], reviews, inline)
+    assert rounds.count == 2 and len(rounds.last_findings) == 2
+
+
+def test_a_thread_reply_is_not_a_round():
+    reviews, inline = _rounds((1, "a" * 40, "2026-09-23T01:00:00Z", ["P2"]))
+    reply_review, reply = _codex_review(2, "b" * 40, "2026-09-23T02:00:00Z", findings=["P2"])
+    reply[0]["in_reply_to_id"] = 100
+    rounds = rg.codex_rounds([], reviews + [reply_review], inline + reply)
+    assert rounds.count == 1
+
+
+@pytest.mark.parametrize("count,last,capped", [
+    (2, ["P2"], False),          # under the cap
+    (3, ["P2", "P2"], True),     # a P2-only fix loop at the cap
+    (5, ["P1", "P2"], False),    # a P1 fix always gets a full run
+    (3, ["P0"], False),
+    (4, [], False),              # a clean last round is not a fix loop
+])
+def test_cap_applies_to_p2_fix_loops_only(count, last, capped):
+    specs = [(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z") for i in range(1, count)]
+    specs.append((count, str(count) * 40, f"2026-09-23T0{count}:00:00Z", last))
+    assert rg.codex_rounds([], *_rounds(*specs)).capped() is capped
+
+
+def test_check_description_shows_the_round():
+    assert rg.round_note(None) == "" and rg.round_note(rg.CodexRounds()) == ""
+    assert rg.round_note(rg.CodexRounds(2)) == " · Codex round 2 of 3"
+    assert rg.round_note(rg.CodexRounds(3)).endswith("(cap reached)")
+
+
+def _capped(repo, monkeypatch, verifier="", answers=()):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/change"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: True)
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    last = _git(repo, "rev-parse", "HEAD")
+    (repo / "a.txt").write_text("a fixed\n")
+    _git(repo, "commit", "-qam", "fix")
+    specs = [(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z") for i in (1, 2)]
+    specs.append((3, last, "2026-09-23T03:00:00Z", ["P2", "P2"]))
+    rounds = rg.codex_rounds([], *_rounds(*specs))
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], rounds=rounds))
+    monkeypatch.setattr(rg, "join_native", lambda *args: pytest.fail("requested a Codex run past the cap"))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("spent a local run past the cap"))
+    if verifier:
+        _git(repo, "config", "review.verifier", verifier)
+    replies = iter(answers)
+    monkeypatch.setattr(rg, "ask_verifier", lambda v, prompt: next(replies))
+    posted = []
+    monkeypatch.setattr(rg, "post_record", lambda pr, rec, heading, text: posted.append((rec, text)))
+    monkeypatch.setattr(rg, "finish_record", lambda repo_, pr, key, head, rec, comments:
+                        0 if rec.verdict == "CLEAN" else 1)
+    return posted
+
+
+def test_past_the_cap_without_a_verifier_spends_nothing_and_says_unreviewed(repo, monkeypatch, capsys):
+    posted = _capped(repo, monkeypatch)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
+    out = capsys.readouterr().out
+    assert not posted and "round cap reached (3 of 3" in out and "review.sh dispose" in out
+
+
+def test_past_the_cap_verified_fixes_record_clean_and_name_their_limit(repo, monkeypatch):
+    posted = _capped(repo, monkeypatch, "ollama:gemma4:latest", ["reasoning\nADDRESSED"] * 2)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 0
+    (rec, text), = posted
+    assert rec.verdict == "CLEAN" and rec.reviewer == "fix-verify:ollama:gemma4:latest"
+    assert "did not review the new lines" in text and rg.parse_verdict(text) == ("CLEAN", 0)
+
+
+def test_past_the_cap_unaddressed_findings_stay_open_and_disposable(repo, monkeypatch):
+    posted = _capped(repo, monkeypatch, "ollama:gemma4:latest", ["NOT_ADDRESSED", "ADDRESSED"])
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
+    (rec, text), = posted
+    assert (rec.verdict, rec.findings) == ("FINDINGS", 1) and rg.parse_verdict(text) == ("FINDINGS", 1)
+    # Numbered so `review.sh dispose` can answer exactly the open ones.
+    assert re.search(r"^1\. NOT ADDRESSED: a\.txt:1", text, re.M)
+
+
+def test_an_unusable_verifier_is_unreviewed_not_clean(repo, monkeypatch):
+    posted = _capped(repo, monkeypatch, "ollama:gemma4:latest", ["I think it is fine."])
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
+    assert not posted
+
+
+def test_an_explicit_reviewer_spends_a_round_past_the_cap(repo, monkeypatch):
+    _capped(repo, monkeypatch)
+    ran = []
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: ran.append(True) or 0)
+    rg.cmd_review(SimpleNamespace(reviewer="codex", budget=30, fresh=False))
+    assert ran
+
+
+def test_verifier_answer_is_the_last_verdict_word(monkeypatch):
+    monkeypatch.setattr(rg, "ask_verifier", lambda v, p: "Not ADDRESSED at first, but\nNOT_ADDRESSED")
+    assert rg.verify_fix("ollama:m", "f", "d") is False
+    monkeypatch.setattr(rg, "ask_verifier", lambda v, p: "NOT_ADDRESSED? no:\nADDRESSED")
+    assert rg.verify_fix("ollama:m", "f", "d") is True

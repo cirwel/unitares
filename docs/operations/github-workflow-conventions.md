@@ -111,7 +111,8 @@ the test run one.
   This check replaces the legacy commit status; old heads may still show
   that historical status until the next push. GitHub branch protections are
   separate and are not changed by this workflow.
-- Findings: fix and push (the new diff is reviewed), or post rebuttals with
+- Findings: fix and push (the new diff is reviewed, up to the
+  [round cap](#round-cap)), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
@@ -212,6 +213,54 @@ start on the initial draft of #2352 during the pilot; the command-owned request
 is therefore necessary for this workflow. See the PR for subsequent push and
 fallback validation.
 
+#### Round cap
+
+A PR gets **three full Codex rounds** (`ROUND_CAP` in `review_gate.py`). A
+round is one completed Codex run, counted by the distinct commits Codex names.
+Codex can post a result three ways: a submitted review, a clean comment, or a
+completed activity row. All three count. A reply inside an existing thread does
+not. The `review` check shows the count ("Codex round 2 of 3").
+
+Why: every run spends the same subscription quota that authoring does. In the
+first ~14 hours of native review (2026-09-23/24) there were 137 Codex runs
+across 27 PRs. Four PRs used 64 of them: #2380 (20), #2387 (18), #2378 (16),
+#2376 (10). Twelve PRs finished in two runs or fewer. The long runs did not
+converge because each fix added new text or code for Codex to flag. Those later
+findings were usually valid but minor, and the quota they cost was the scarce
+resource.
+
+The rule is for fix loops only:
+
+- A **P0/P1** in the last round always gets another full run after its fix.
+- A **clean** last round is not a fix loop. A push after it is new work, and
+  new work gets a full review.
+- Past the cap, with only P2s open, `review.sh` does not request Codex and
+  does not start the local fallback, which spends the same quota. Answer the
+  remaining findings in one batch:
+  - **Don't push:** dispose them on the reviewed diff with
+    `review.sh dispose` (fixed later in #N, or rebutted). This costs no model
+    call.
+  - **Push fixes:** if `git config review.verifier` is set, `review.sh` asks
+    that model whether each finding is addressed by the fix commits. It posts
+    a diff-bound record with the reviewer `fix-verify:<model>`. Findings it
+    judges unaddressed stay open as `FINDINGS(n)` for fixing or disposing.
+    It checks the fixes only, not the new lines for new problems, and the
+    record says so. With no verifier configured, a push past the cap is
+    UNREVIEWED. The author says so and disposes, or deliberately spends a
+    round.
+- `review.sh --reviewer codex` (or `claude`) deliberately spends a round past
+  the cap. Use it when the fixes changed enough that they need a real review.
+
+The verifier is opt-in, like `review.native`. `ollama:<model>` runs on the
+local Ollama server and costs nothing. `hf:<model>` uses the Hugging Face
+router, which is metered, so it is never the default. On this operator's
+machine, run the following once. The model choice rests on an evaluation
+recorded in the PR that added the cap:
+
+```bash
+git config review.verifier ollama:gemma4:latest
+```
+
 #### Requesting review without local tooling
 
 `review.sh` needs the `gh` CLI and a local Codex or Claude CLI, so it cannot
@@ -234,6 +283,9 @@ operator's), the environment-independent path is a PR comment:
    keep the PR in draft, and hand the disposition to someone who can run
    `review.sh dispose`, naming the thread. Do not assemble the disposition
    record by hand either.
+   The [round cap](#round-cap) applies here too. After three rounds with only
+   P2s open, do not post `@codex review` again: hand the remaining findings
+   off for disposition the same way. A P1 fix still gets its request.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -452,6 +504,7 @@ this entirely).
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
+| Codex round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping
