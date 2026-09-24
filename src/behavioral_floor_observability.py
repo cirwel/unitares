@@ -1,9 +1,13 @@
-"""Decision-neutral observability for behavioral absolute-floor geometry.
+"""Observability for behavioral absolute-floor geometry.
 
 The absolute EISV floors in :mod:`src.behavioral_assessment` bound individual
-risk components; they do not force a behavioral verdict.  This module records
-that geometry after assessment so production rows can answer issue #1995's
-calibration question without changing risk, verdict, policy, or enforcement.
+risk components; by default they do not force a behavioral verdict.  This
+module records that geometry after assessment so production rows can answer
+issue #1995's calibration question.  Building the row changes nothing: it is
+not read by risk, policy or enforcement.  The one exception to its default
+``telemetry_only`` / ``policy_effect: none`` labels is a row whose verdict the
+default-off ``UNITARES_FLOOR_BREACH_CAUTION_APPLY`` floor raised (in the
+assessment, before this row is built); that row says so.
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ def build_absolute_floor_observation(
     resolved_verdict_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Describe floor breaches without participating in assessment or policy.
+
+    The labels report the verdict the row describes: ``telemetry_only`` /
+    ``policy_effect: none``, except for a row the APPLY floor changed.
 
     Every evaluated check-in returns the same bounded schema, including an
     empty breach list.  That zero-inclusive denominator distinguishes "no
@@ -93,4 +100,24 @@ def build_absolute_floor_observation(
             for component, _dimension in _COMPONENT_DIMENSIONS
             if component in floor_components
         }
+    if assessment.floor_breach_caution is not None:
+        # Issue #1995 verdict-floor shadow/apply record.  Present only when
+        # UNITARES_FLOOR_BREACH_CAUTION_SHADOW or _APPLY is on, so the default
+        # row keeps its exact key set.  Under APPLY, ``behavioral_verdict``
+        # above is the floored verdict and ``breach_with_safe_behavioral_verdict``
+        # goes False for rows the floor changed; ``unfloored_verdict`` here keeps
+        # the pre-floor reading so the counter's history stays comparable.
+        observation["floor_breach_caution"] = dict(assessment.floor_breach_caution)
+        if assessment.floor_breach_caution.get("applied"):
+            # The floor raised this row's behavioral verdict. Whether that
+            # changed the final decision is settled after this row is built
+            # (earlier decision branches can decide regardless, a phi_floor
+            # source takes the worse of Φ and this verdict, and the warmup
+            # grace reads it in every source), so the row records only what
+            # the floor did; the audit row's reason and final verdict carry
+            # most of the rest, but not a warmup pause the floor kept (the
+            # grace runs after that row; see `warmup_structural_suppressed`).
+            # The default "none" would drop exactly the rows the floor changed.
+            observation["measurement_role"] = "verdict_floor"
+            observation["policy_effect"] = "behavioral_verdict_raised"
     return observation
