@@ -248,8 +248,13 @@ def test_doctor_evidence_is_a_rerun_plus_the_check_source(adj, monkeypatch):
     class Check:
         name, fn = "cold_start_pause_canary", staticmethod(lambda: Result())
 
-    monkeypatch.setitem(adj._DOCTOR, "mod", _fake_doctor(lambda root, url: [Check()]))
+    urls = []
+    monkeypatch.setattr(adj, "DB_URL", "postgresql://h/producer")
+    monkeypatch.setitem(adj._DOCTOR, "mod",
+                        _fake_doctor(lambda root, url: urls.append(url) or [Check()]))
     out = adj.io_doctor_evidence({"message": "cold_start_pause_canary: 1 pause"})
+    # Same DSN as the history read: evidence from one deployment only.
+    assert urls == ["postgresql://h/producer"]
     assert "LIVE RE-RUN of `cold_start_pause_canary`, done just now: PASS: 0 pauses" in out
     assert "SOURCE of the check" in out and "the real logic" in out
     assert adj.io_doctor_evidence({"message": "no_such_check: x"}) is None
@@ -271,7 +276,9 @@ def test_history_passes_the_fingerprint_as_a_psql_variable(adj, monkeypatch):
         return Proc("3|2026-09-01 00:00:00|2026-09-23 00:00:00")
 
     monkeypatch.setattr(adj.subprocess, "run", fake_run)
+    monkeypatch.setattr(adj, "DB_URL", "postgresql://h/producer")
     out = adj.io_history("x'; drop table audit.events; --")
+    assert seen["argv"][seen["argv"].index("-d") + 1] == "postgresql://h/producer"
     assert "fp=x'; drop table audit.events; --" in seen["argv"]
     assert ":'fp'" in seen["input"] and "drop table" not in seen["input"]
     assert out.startswith("fired 3 time(s)")

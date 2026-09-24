@@ -80,7 +80,13 @@ MAX_ITEMS = int(os.environ.get("UNITARES_ADJUDICATOR_MAX_ITEMS", "5"))
 TIMEOUT_S = float(os.environ.get("UNITARES_ADJUDICATOR_TIMEOUT_S", "420"))
 ESCALATE_BELOW = float(os.environ.get("UNITARES_ADJUDICATOR_ESCALATE_BELOW", "0.7"))
 HTTP_TIMEOUT_S = 15
-DB_NAME = os.environ.get("UNITARES_ADJUDICATOR_DB", "governance")
+# ONE DSN for every evidence query, and it must be the producer's: the queue
+# comes over HTTP from the server, so a re-run or history read against any
+# other database would hand the judge evidence from a different deployment.
+# Same variable and default as unitares_doctor / the server.
+DB_URL = os.environ.get(
+    "DB_POSTGRES_URL", "postgresql://postgres:postgres@localhost:5432/governance"
+)
 SOURCE_MAX_CHARS = 8000
 
 # Mirrors _ADJUDICATION_DISMISS_REASONS in src/http_routes/sentinel.py; the
@@ -206,7 +212,7 @@ def io_history(fingerprint: str) -> str:
     )
     try:
         out = subprocess.run(
-            ["psql", "-X", "-At", "-d", DB_NAME, "-v", f"fp={fingerprint}", "-f", "-"],
+            ["psql", "-X", "-At", "-d", DB_URL, "-v", f"fp={fingerprint}", "-f", "-"],
             input=sql, capture_output=True, text=True, timeout=20,
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
@@ -245,8 +251,7 @@ def io_doctor_evidence(item: dict) -> Optional[str]:
     name = match.group(1)
     try:
         doctor = _doctor_module()
-        db_url = os.environ.get("DB_POSTGRES_URL", doctor.DEFAULT_DB_URL)
-        checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, db_url)}
+        checks = {c.name: c for c in doctor.build_checks(REPO_ROOT, DB_URL)}
         check = checks.get(name)
         if check is None:
             return None
