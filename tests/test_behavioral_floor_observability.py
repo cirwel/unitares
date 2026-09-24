@@ -191,6 +191,27 @@ def test_verdict_floor_record_reaches_observation_only_when_flagged(monkeypatch)
     assert applied["floor_breach_caution"]["mode"] == "apply"
     assert applied["floor_breach_caution"]["unfloored_verdict"] == "safe"
     assert applied["floor_breach_caution"]["applied"] is True
+    # A row the floor changed is not telemetry-only: its verdict is the one
+    # the decision path acts on. Shadow and unflagged rows keep the defaults.
+    assert applied["measurement_role"] == "verdict_floor"
+    assert applied["policy_effect"] == "verdict_escalated_to_caution"
+    assert shadow["measurement_role"] == off["measurement_role"] == "telemetry_only"
+    assert shadow["policy_effect"] == off["policy_effect"] == "none"
+
+
+def test_apply_without_a_change_keeps_the_telemetry_labels(monkeypatch):
+    """APPLY on a row the floor did not move (no breach) leaves the verdict
+    and the labels as they were: only a changed row claims a policy effect."""
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", raising=False)
+    monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1")
+    state = _state(E=0.41, I=0.91, S=0.15, V=-0.1)
+    _normalize_baseline_at_current_state(state)
+
+    row = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert row["breached_dimensions"] == []
+    assert row["floor_breach_caution"]["applied"] is False
+    assert row["measurement_role"] == "telemetry_only"
+    assert row["policy_effect"] == "none"
 
 
 def test_threshold_snapshot_reads_the_assessment_source_at_evaluation_time(monkeypatch):

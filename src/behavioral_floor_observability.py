@@ -101,4 +101,12 @@ def build_absolute_floor_observation(
         # goes False for rows the floor changed; ``unfloored_verdict`` here keeps
         # the pre-floor reading so the counter's history stays comparable.
         observation["floor_breach_caution"] = dict(assessment.floor_breach_caution)
+        if assessment.floor_breach_caution.get("applied"):
+            # This row's behavioral verdict was raised by the floor, and under
+            # PHI_TELEMETRY_ONLY that verdict is authoritative (caution maps
+            # to guide). The default labels above would claim the row had no
+            # policy effect, so a reader filtering on them would drop exactly
+            # the rows the floor changed.
+            observation["measurement_role"] = "verdict_floor"
+            observation["policy_effect"] = "verdict_escalated_to_caution"
     return observation
