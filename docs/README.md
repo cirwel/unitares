@@ -106,6 +106,7 @@ For people working on UNITARES itself, not using it.
 - [`DRIFT_LEDGER.md`](dev/DRIFT_LEDGER.md) — guard/seam index for drift prevention and known unguarded seams
 - [`TOOL_REGISTRATION.md`](dev/TOOL_REGISTRATION.md) — how tools are wired into the MCP server
 - [`TOOL_EDGE_INDEX.md`](dev/TOOL_EDGE_INDEX.md) — generated: every tool resolved to its handler, action delegates, and params schema
+- [`TOOL_REFERENCE.md`](dev/TOOL_REFERENCE.md) — generated: what every tool does, with its identity requirement, timeouts, and other names
 - [`CIRCUIT_BREAKER_DIALECTIC.md`](dev/CIRCUIT_BREAKER_DIALECTIC.md) — recovery semantics (specialized)
 
 ## Research, provenance, and optional interpretation
