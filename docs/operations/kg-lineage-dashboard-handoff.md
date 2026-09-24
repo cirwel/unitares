@@ -155,7 +155,8 @@ Do the same here:
   than the related list.
 
 To decide whether to show the expander without a probe, thread a lightweight
-flag through the `discoveries` accessor (currently dropped): `related_to`
+flag through the `discoveries` accessor (currently dropped: `related_to` by
+search itself, the supersession flags by the accessor): `related_to`
 non-empty is already known relationally; for supersession, expose a boolean
 `has_supersession` (cheap: `status='superseded'` OR the id appears as a
 SUPERSEDES endpoint). Otherwise the endpoint can return `{empty:true}` and the

@@ -13,9 +13,15 @@ no dependencies). The operator's live install is a copy on `PATH`
 ## What shows up automatically
 
 Each collector degrades gracefully — an absent source yields zero items, never an
-error. Most collectors skip it silently; `crontab` warns when its command is
-missing or reports an error, and `systemd` when `systemctl` reports an error or,
-on Linux, is missing. So a host only "sees" the schedulers it actually has:
+error. Most collectors skip it silently. Three warn:
+
+- `crontab`, when its command is missing or `crontab -l` exits non-zero with a
+  message (including the usual `no crontab for <user>`)
+- `systemd`, when `systemctl` reports an error or, on Linux, is missing
+- `remote:<host>` (only when `UNITARES_CENSUS_REMOTE_HOST` is set), when the host
+  is unreachable or its remote `crontab -l` / `systemctl` call fails
+
+So a host only "sees" the schedulers it actually has:
 
 | Source | Discovers | Portable? |
 |---|---|---|
