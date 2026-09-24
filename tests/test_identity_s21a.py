@@ -333,6 +333,20 @@ class TestS21APath2FailClosed:
         assert flushes == [("burst", "r", 7, fields)]
         assert ("burst", "r") not in resolution._resolve_miss_audit_state
 
+        # One admission flushes a bounded number of closed keys; the rest
+        # stay pending for the next admission.
+        monkeypatch.setattr(resolution, "_RESOLVE_MISS_AUDIT_MAX_FLUSHES", 2)
+        for i in range(3):
+            resolution._resolve_miss_audit_admit(f"q{i}", "r")
+            resolution._resolve_miss_audit_admit(f"q{i}", "r")
+        clock[0] += resolution._RESOLVE_MISS_AUDIT_WINDOW_SECONDS + 1
+        _, flushes = resolution._resolve_miss_audit_admit("trigger1", "r")
+        assert len(flushes) == 2
+        _, flushes = resolution._resolve_miss_audit_admit("trigger2", "r")
+        assert [f[0] for f in flushes] == ["q2"]
+        resolution._reset_resolve_miss_audit_throttle()
+        resolution._resolve_miss_audit_admit("third", "r")
+
         # Eviction flushes a pending count instead of dropping it.
         monkeypatch.setattr(resolution, "_RESOLVE_MISS_AUDIT_MAX_KEYS", 1)
         assert resolution._resolve_miss_audit_admit("third", "r") is None

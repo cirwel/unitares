@@ -541,10 +541,11 @@ class AuditLogger:
 
         ``suppressed_since_last`` is how many identical misses (same session
         key and reason) the resolver throttled since the previous row for that
-        key. A row with ``resolution_source="throttle_flush"`` carries only a
-        pending count for a key that went quiet. ``count(*) +
-        sum(suppressed_since_last)`` is a lower bound on the true total: counts
-        still pending at process exit are lost (at most one window per key).
+        key. A row with ``resolution_source="throttle_flush"`` is not a miss:
+        it only carries the pending count for a key that went quiet. The total
+        is rows that are not flushes plus ``sum(suppressed_since_last)`` over
+        all rows. It is a lower bound: counts still pending at process exit
+        are lost (at most one window per key).
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),

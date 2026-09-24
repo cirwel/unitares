@@ -65,12 +65,16 @@ def _created_identity_outcome(*, force_new: bool, spawn_reason: Optional[str]) -
 # One row per key per window. The first miss is always written; a later row
 # for the key carries ``suppressed_since_last``. A key that goes quiet still
 # has its pending count flushed as its own row the next time ANY miss is
-# admitted (or when it is evicted). Only counts pending at process exit, or
-# for a key no later miss ever flushes, are lost, so
-# ``count(*) + sum(suppressed_since_last)`` is a lower bound, short by at
-# most one window per key.
+# admitted (or when it is evicted). A flush row stands for no miss of its own,
+# so the total is ``count(*) FILTER (WHERE resolution_source IS DISTINCT FROM
+# 'throttle_flush') + sum(suppressed_since_last)``. Counts pending at process
+# exit, or for a key no later miss ever flushes, are lost, so that total is a
+# lower bound, short by at most one window per key.
 _RESOLVE_MISS_AUDIT_WINDOW_SECONDS = 600.0
 _RESOLVE_MISS_AUDIT_MAX_KEYS = 4096
+# Each audit write fsyncs on the request path, so one admission flushes at
+# most this many closed keys; the rest stay pending for the next admission.
+_RESOLVE_MISS_AUDIT_MAX_FLUSHES = 16
 # (session_key, reason) -> [last_written_monotonic, suppressed_since_last, fields]
 _resolve_miss_audit_state: Dict[tuple, list] = {}
 _resolve_miss_clock = time.monotonic
@@ -107,6 +111,8 @@ def _resolve_miss_audit_admit(
         # Window closed: the next miss for this key would start a fresh row
         # anyway, so emit its pending count now rather than wait for one.
         if pending:
+            if len(flushes) >= _RESOLVE_MISS_AUDIT_MAX_FLUSHES:
+                continue  # stays pending; a later admission flushes it
             flushes.append((other[0], other[1], pending, other_fields))
         del _resolve_miss_audit_state[other]
 
