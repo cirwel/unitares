@@ -47,7 +47,7 @@ source_digests:
   unitares/dashboard/tests/telemetry-health.test.js: "efbb8e0db3f89f6b"
   unitares/src/http_api.py: "5abb17ed7c08df6b"
   unitares/src/http_routes/dashboard.py: "0fb5b075664dc0e6"
-  unitares/src/http_routes/sentinel.py: "c3fb7409b2872aa8"
+  unitares/src/http_routes/sentinel.py: "a602ae11cab03169"
   unitares/src/http_routes/telemetry.py: "a49c4c1b1c5fcaed"
   unitares/src/dashboard_auth.py: "4bfd1bf01b1b6b03"
 ---

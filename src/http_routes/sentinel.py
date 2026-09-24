@@ -5,6 +5,7 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
@@ -33,6 +34,23 @@ _FINDING_SEVERITIES = frozenset({"info", "low", "medium", "warning", "high", "cr
 _FINDING_TYPE_SUFFIX = "_finding"
 # Required top-level fields on the posted JSON
 _FINDING_REQUIRED_FIELDS = ("type", "severity", "message", "agent_id", "agent_name", "fingerprint")
+# One bound for every route that takes a fingerprint. Ingest used to accept any
+# length while the model-adjudicate route rejected over this, so a long one was
+# stored, queued, judged, and only then refused. An over-long fingerprint is
+# NORMALIZED at ingest, never rejected: producers post findings best-effort and
+# swallow errors, so a 400 would lose the finding silently — the failure the
+# finding stream exists to catch. The digest is deterministic, so dedup and
+# every later lookup by fingerprint still agree; the original is kept (capped).
+_FINGERPRINT_MAX_CHARS = 256
+_FINGERPRINT_ORIGINAL_MAX_CHARS = 4096
+
+
+def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
+    """``(fingerprint to store, original if it had to be replaced)``."""
+    if len(raw) <= _FINGERPRINT_MAX_CHARS:
+        return raw, None
+    digest = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return digest, raw[:_FINGERPRINT_ORIGINAL_MAX_CHARS]
 # Sentinel finding event types as persisted in audit.events (the durable store
 # behind the transient ring buffer). The backlog endpoint reads these.
 # Families eligible for the adjudication queue. Widened ONE family at a time,
@@ -344,6 +362,14 @@ async def http_record_finding(request):
                 {"success": False, "error": f"severity must be one of {sorted(_FINDING_SEVERITIES)}"},
                 status_code=400,
             )
+
+        fingerprint, original = _bounded_fingerprint(str(payload["fingerprint"]))
+        payload["fingerprint"] = fingerprint
+        if original is not None:
+            payload["fingerprint_original"] = original
+        else:
+            # Only this route may set it; never trust a client-supplied one.
+            payload.pop("fingerprint_original", None)
 
         # Evidence at ingest (bridge-dispatch proposal §4, PR #1450): forced-
         # release sentinel findings get their event check attached BEFORE
@@ -1190,9 +1216,12 @@ async def http_sentinel_model_adjudicate(request):
     fingerprint = str(body.get("fingerprint") or "").strip()
     verdict = str(body.get("verdict") or "").strip().lower()
     reason = (str(body.get("reason") or "").strip().lower() or None)
-    if not fingerprint or len(fingerprint) > 256:
-        return JSONResponse({"success": False, "error": "fingerprint required (<=256 chars)"},
-                            status_code=400)
+    if not fingerprint or len(fingerprint) > _FINGERPRINT_MAX_CHARS:
+        return JSONResponse(
+            {"success": False,
+             "error": f"fingerprint required (<={_FINGERPRINT_MAX_CHARS} chars)"},
+            status_code=400,
+        )
     if verdict not in _MODEL_VERDICTS:
         return JSONResponse(
             {"success": False, "error": f"verdict must be one of {', '.join(_MODEL_VERDICTS)}"},
