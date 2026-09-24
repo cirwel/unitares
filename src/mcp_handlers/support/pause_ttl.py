@@ -303,7 +303,7 @@ def paused_refusal_recovery(meta: Any) -> dict:
         "other_exits": (
             f"If a dialectic review was opened for this pause, {get_call} "
             "finds it; answering it is how the pause is reviewed. An operator "
-            "can resume the agent with agent(action='resume'). " + re_evaluation
+            "can resume the agent. " + re_evaluation
         ),
     }
     if expires_at:

@@ -48,7 +48,9 @@ def test_recovery_says_writes_are_refused_and_names_the_exits():
     assert "cannot write the check-in that would lower it" in recovery["action"]
     assert "0.40" not in recovery["action"] and "0.65" not in recovery["action"]
     assert "dialectic(action='get', agent_id=" in recovery["other_exits"]
-    assert "agent(action='resume')" in recovery["other_exits"]
+    assert "operator can resume" in recovery["other_exits"]
+    # The ungated agent(action='resume') must never be advertised to agents.
+    assert "agent(action='resume')" not in recovery["other_exits"]
 
 
 def test_expiry_is_described_as_re_evaluation_not_release():
