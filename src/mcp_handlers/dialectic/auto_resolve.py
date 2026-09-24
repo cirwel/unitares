@@ -228,28 +228,29 @@ async def _synthesis_reviewer_owes_reply(
     if not paused_agent_id or paused_agent_id == reviewer_agent_id:
         return False
     try:
-        row = await get_session_async(session_id)
+        # Function-local, like the select_reviewer import in the sweeper:
+        # handlers is heavy and reaches reviewer.py, which imports this
+        # module. Inside the try so a failed import answers False for this
+        # row instead of aborting the whole sweep.
+        from .handlers import (
+            _latest_synthesis_agent_in_session_data,
+            _reviewer_objection_stands_in_session_data,
+            _reviewer_verdict_pending_in_session_data,
+        )
+        row = dict(await get_session_async(session_id) or {})
+        row["paused_agent_id"] = paused_agent_id
+        row["reviewer_agent_id"] = reviewer_agent_id
+        if _reviewer_verdict_pending_in_session_data(row):
+            return True
+        return bool(
+            _reviewer_objection_stands_in_session_data(row)
+            and _latest_synthesis_agent_in_session_data(row) == paused_agent_id
+        )
     except Exception as exc:
         logger.warning(
-            f"Could not read transcript for SYNTHESIS stall {session_id[:16]}: {exc}"
+            f"Could not decide SYNTHESIS ownership for {session_id[:16]}: {exc}"
         )
         return False
-    row = dict(row or {})
-    row["paused_agent_id"] = paused_agent_id
-    row["reviewer_agent_id"] = reviewer_agent_id
-    # Function-local, like the select_reviewer import in the sweeper:
-    # handlers is heavy and reaches reviewer.py, which imports this module.
-    from .handlers import (
-        _latest_synthesis_agent_in_session_data,
-        _reviewer_objection_stands_in_session_data,
-        _reviewer_verdict_pending_in_session_data,
-    )
-    if _reviewer_verdict_pending_in_session_data(row):
-        return True
-    return bool(
-        _reviewer_objection_stands_in_session_data(row)
-        and _latest_synthesis_agent_in_session_data(row) == paused_agent_id
-    )
 
 
 async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
