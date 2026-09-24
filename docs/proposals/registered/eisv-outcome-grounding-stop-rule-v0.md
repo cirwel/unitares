@@ -531,8 +531,12 @@ The power-characterisation correction above
 records that no beta, AUC delta, or equivalent effect size fills the
 "predeclared smallest relevant effect" slot, and that the operator must
 declare one before any further live outcome-discrimination access. The
-operator's declaration, made 2026-09-23 before any access to the registered
-cohort, is that **no smallest relevant effect is set for this read**. The
+declaration, made 2026-09-23 before any access to the registered cohort, is
+that **no smallest relevant effect is set for this read**. How it was made:
+the operator delegated the choice among the reviewed alternatives to the
+working agent on 2026-09-23; the agent selected and drafted this one after
+an adversarial design review of the alternatives; it becomes the operator's
+declaration on merge, which ratifies it. The
 2026-09-02 interim access disclosed above ran a discrimination script after
 the 2026-08-23 correction and before this declaration existed; it returned 0
 eligible outcomes and computed no discrimination result. That
@@ -554,10 +558,8 @@ unchanged; the database-free power probe still runs as registered and is
 reported descriptively, not at a declared effect; on any non-PASS branch the scientific inference is `INCONCLUSIVE`
 by declaration, exactly as the gate already provides; and `REFUTED` is
 unreachable for this read. The slot is not closed for the future: a later
-read under a new premise carries its own declaration. No agent-chosen value
-is substituted. The wording of this declaration was drafted by the working
-agent after an adversarial design review of the alternatives and adopted by
-the operator, who ratifies it on merge.
+read under a new premise carries its own declaration. No numeric effect
+size is substituted for the unfilled slot.
 
 ## What continues regardless
 

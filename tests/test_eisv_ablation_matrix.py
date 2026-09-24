@@ -1244,8 +1244,25 @@ def test_stop_rule_manifest_pins_the_live_candidate_tuple_and_dispersion_feature
     assert entry.candidate_models == tuple(skeptic_module.EISV_PRIOR_STATE_MODELS)
     assert entry.dispersion_feature == skeptic_module.DISPERSION_FEATURE
     assert len(entry.candidate_models) == 7
-    # The pin is literal, not a reference to the live tuple.
-    assert entry.candidate_models is not skeptic_module.EISV_PRIOR_STATE_MODELS
+    # The pin is literal, not derived from the live tuple: in the manifest's
+    # source both keyword values are literal strings, so an edit to
+    # eisv_skeptic_report cannot silently carry the pin along with it
+    # (`(*EISV_PRIOR_STATE_MODELS,)` or `tuple(...)` would fail here).
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(matrix_module))
+    pinned = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg in {"candidate_models", "dispersion_feature"}:
+            pinned.setdefault(node.arg, []).append(node.value)
+    assert len(pinned.get("candidate_models", [])) == 1
+    assert len(pinned.get("dispersion_feature", [])) == 1
+    models_node = pinned["candidate_models"][0]
+    assert isinstance(models_node, ast.Tuple)
+    assert all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in models_node.elts)
+    feature_node = pinned["dispersion_feature"][0]
+    assert isinstance(feature_node, ast.Constant) and isinstance(feature_node.value, str)
     now = datetime(2026, 9, 1, tzinfo=timezone.utc)
     matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
     matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID + "-retry-1"), now=now)
