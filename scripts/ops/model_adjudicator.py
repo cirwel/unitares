@@ -527,6 +527,12 @@ def main(argv: list[str] | None = None) -> int:
         log("UNITARES_ADJUDICATOR_ESCALATE_BELOW unset or invalid (need 0 < x <= 1) — "
             "the operator's cutoff is required; not running")
         return 0
+    if not args.dry_run and not _load_secret("UNITARES_MODEL_ADJUDICATOR_TOKEN"):
+        # Checked BEFORE any model call: without it no verdict can be written,
+        # and judging anyway would spend quota every run for nothing. A
+        # failing exit, because an enabled job that cannot write is broken.
+        log("UNITARES_MODEL_ADJUDICATOR_TOKEN unset — cannot record verdicts; not judging")
+        return 1
     return run_once(dry_run=args.dry_run)
 
 

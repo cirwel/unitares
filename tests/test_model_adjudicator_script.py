@@ -475,3 +475,21 @@ def test_evidence_dsn_follows_the_producers_order(monkeypatch, tmp_path, gov, db
         assert mod.DB_URL == expected
     finally:
         sys.modules.pop("model_adjudicator_dsn", None)
+
+
+def test_missing_write_credential_fails_before_any_model_call(adj, monkeypatch):
+    """No token = no verdict can be recorded; judging anyway burns quota."""
+    monkeypatch.setattr(adj, "HOST", "claude")
+    monkeypatch.delenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", raising=False)
+    monkeypatch.setattr(adj, "run_once",
+                        lambda **k: pytest.fail("must not judge without the write credential"))
+    assert adj.main([]) == 1
+
+
+def test_dry_run_does_not_need_the_write_credential(adj, monkeypatch):
+    monkeypatch.setattr(adj, "HOST", "claude")
+    monkeypatch.delenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", raising=False)
+    ran = []
+    monkeypatch.setattr(adj, "run_once", lambda **k: ran.append(k) or 0)
+    assert adj.main(["--dry-run"]) == 0
+    assert ran == [{"dry_run": True}]
