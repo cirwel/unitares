@@ -540,6 +540,17 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
             if discovery_id is not None:
                 suggestion["discovery_id"] = discovery_id
 
+            # Attribution survives the digest: the canonical result leads with
+            # `by` (the write-time label) and carries `_agent_id` (the
+            # identity), and a lean reader asking who wrote a finding must not
+            # need a second, full-mode call to learn it.
+            by = item.get("by")
+            if isinstance(by, str) and by:
+                suggestion["by"] = by
+            agent_id = item.get("_agent_id") or item.get("agent_id")
+            if agent_id:
+                suggestion["agent_id"] = agent_id
+
             summary = item.get("summary")
             if isinstance(summary, str):
                 compact = " ".join(summary.split())

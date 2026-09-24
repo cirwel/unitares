@@ -1164,6 +1164,32 @@ def test_search_envelope_compact_mode_keeps_memory_suggestions():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
+def test_search_lean_projection_keeps_attribution():
+    """A lean digest still says who wrote each finding: the write-time label
+    and the identity it was filed under."""
+    payload = {
+        "success": True,
+        "count": 1,
+        "discoveries": [
+            {
+                "by": "backup-investigator",
+                "summary": "the disk was full",
+                "id": "d1",
+                "_agent_id": "5b0c1f7e-0000-4000-8000-000000000001",
+            }
+        ],
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", payload, {"response_mode": "lean"}
+    )
+
+    first = env["memory_suggestions"][0]
+    assert first["by"] == "backup-investigator"
+    assert first["agent_id"] == "5b0c1f7e-0000-4000-8000-000000000001"
+    assert "_agent_id" not in first
+
+
 def test_search_lean_projection_bounds_historical_summaries_and_total_wire():
     payload = {
         "success": True,
