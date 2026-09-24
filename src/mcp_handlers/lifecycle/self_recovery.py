@@ -66,6 +66,8 @@ FORBIDDEN_CONDITIONS = [
 ]
 
 MAX_RISK_FOR_SELF_RECOVERY = 0.65  # Matches lifecycle.py review thresholds
+# operator_resume_agent refuses above this even with force=True (hard limit).
+OPERATOR_RESUME_HARD_RISK_LIMIT = 0.80
 
 # A monitor can hold no risk that any verdict was made from: the resolved pair
 # did not survive a restart and could not be restored from the durable record.
@@ -679,9 +681,10 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             context={"void_value": void_value},
         )]
     
-    if risk_score is not None and risk_score > 0.80:
+    if risk_score is not None and risk_score > OPERATOR_RESUME_HARD_RISK_LIMIT:
         return [error_response(
-            f"Cannot resume {target_agent_id}: risk ({risk_score:.2f}) exceeds hard limit (0.80). "
+            f"Cannot resume {target_agent_id}: risk ({risk_score:.2f}) exceeds hard limit "
+            f"({OPERATOR_RESUME_HARD_RISK_LIMIT:.2f}). "
             "This requires human intervention.",
             error_code="RISK_TOO_HIGH",
             error_category="safety_error",
