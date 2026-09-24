@@ -766,7 +766,7 @@ def apply_non_authored_cold_start_guard(
     # needs to know before its next sync_state.
     guarded["reason"] = (
         "Cold start: guidance only, because this check-in was not agent-authored "
-        f"and there is no behavioral history yet (epistemic_class={epistemic_class}, "
+        f"and behavioral history is not yet authoritative (epistemic_class={epistemic_class}, "
         f"behavioral_confidence={confidence:.3f}). The same reading on an "
         f"agent-authored check-in can pause (was: {original_reason})"
     )
