@@ -142,3 +142,14 @@ def test_cold_start_blended_note_does_not_call_behavioral_independent():
     assert attribution["primary_driver"] != "behavioral_assessment"
     assert "was blended in at a capped 30%" in attribution["note"]
     assert "independent behavioral signal" not in attribution["note"]
+
+
+def test_threat_model_scopes_direct_blend_to_the_norm_threshold():
+    # compute_drift_vector skips the blend for a list/tuple whose norm is at
+    # most 0.01, so the threat model must not say every list caller gets it.
+    from pathlib import Path
+
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "SCOPE_AND_THREAT_MODEL.md").read_text()
+    flat = " ".join(doc.split())
+    assert "who pass a list or tuple do get the blend" not in flat
+    assert "with a norm above 0.01 do get the blend" in flat

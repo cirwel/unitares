@@ -59,8 +59,8 @@ behavioral signal telemetry-only. On MCP check-ins a
 self-reported `ethical_drift` does not currently enter the drift vector, Φ, or the
 verdict in any phase: the handler passes the vector as an array that the capped
 30% blend's type check rejects (found 2026-09-23). Direct callers of the Python
-API (`UNITARESMonitor.process_update()`) who pass a list or tuple do get the
-blend, and there it can affect the cold-start verdict and, once blended, later
+API (`UNITARESMonitor.process_update()`) who pass a list or tuple with a norm
+above 0.01 do get the blend (a `[0, 0, 0]` or near-zero report is skipped), and there it can affect the cold-start verdict and, once blended, later
 behavioral inputs. Whether self-reports should affect the decision at all is an
 open policy question, so the MCP path has deliberately not been repaired. Described-behavior semantics don't fully register
 until check-in 3; self-relative scoring still waits until check-in 25.
