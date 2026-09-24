@@ -229,6 +229,17 @@ def parse_record(body: str) -> Record | None:
         return None
 
 
+_NATIVE_DISPOSITION_RE = re.compile(
+    r"dispositions for FINDINGS\((\d+)\) — \S*#pullrequestreview-\d+")
+
+
+def _answers_native_review(rec: Record) -> bool:
+    """A disposition whose heading cites a native Codex review with the same
+    number of findings (``post_record`` writes that heading in `dispose`)."""
+    m = _NATIVE_DISPOSITION_RE.search(getattr(rec, "text", "") or "")
+    return bool(m and int(m.group(1)) == rec.findings)
+
+
 def latest_matching(comments: list[dict], key: str,
                     native: list[Record] = ()) -> Record | None:
     """The record that decides `key`'s status. Comments arrive oldest first.
@@ -263,6 +274,13 @@ def latest_matching(comments: list[dict], key: str,
                 open_findings.append(rec)
             elif open_findings and open_findings[-1].findings == rec.findings:
                 open_findings.pop()
+            elif not open_findings and _answers_native_review(rec):
+                # The native review it answered is no longer visible: native
+                # evidence is bound to the reviewed head commit, so a base
+                # merge that moves the head (and keeps this diff key) drops
+                # it. The disposition itself names that review, so it stays
+                # disposed rather than reopening as an unanswered finding.
+                pass
             else:
                 rec.disposed = False
                 open_findings.append(rec)

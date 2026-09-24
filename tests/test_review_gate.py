@@ -595,6 +595,46 @@ def test_native_findings_survive_later_clean_until_disposed(repo):
     assert snapshot.records[0].verdict == "FINDINGS"
 
 
+def _disposition(findings, cited_url, text="1. rebutted: measured bound"):
+    rec = rg.Record("k", "FINDINGS", findings, True, "codex-native")
+    body = (rg.render_marker(rec)
+            + f"\n### Review record — dispositions for FINDINGS({findings}) — {cited_url}\n\n"
+            + text)
+    return {"author_association": "OWNER", "html_url": "disposition",
+            "created_at": "2026-09-24T09:01:25Z", "body": body}
+
+
+def test_disposition_of_a_native_review_survives_a_base_merge():
+    # #2361, 2026-09-24: Codex posted FINDINGS(1) natively on head b46731ea,
+    # the author disposed it, then a master merge moved the head to cd220253
+    # with the SAME diff key. Native evidence is bound to the reviewed head,
+    # so it vanished and the orphaned disposition read as an open finding.
+    d = _disposition(1, "https://github.com/cirwel/unitares/pull/2361#pullrequestreview-5302128003")
+    got = rg.latest_matching([d], "k", [])
+    assert got.disposed and got.status()[0] == "success"
+
+
+@pytest.mark.parametrize("findings,cited", [
+    (1, "https://github.com/cirwel/unitares/pull/2361#issuecomment-5809909208"),  # not a native review
+    (2, "https://github.com/cirwel/unitares/pull/2361#pullrequestreview-5302128003"),  # count mismatch below
+])
+def test_an_orphaned_disposition_that_names_no_matching_native_review_stays_open(findings, cited):
+    d = _disposition(findings, cited)
+    if findings == 2:
+        # Heading says FINDINGS(2) but the marker records 1: not the same review.
+        d["body"] = d["body"].replace("findings=2", "findings=1", 1)
+    got = rg.latest_matching([d], "k", [])
+    assert not got.disposed and got.status()[0] != "success"
+
+
+def test_a_new_finding_after_an_orphaned_native_disposition_still_opens():
+    d = _disposition(1, "https://github.com/cirwel/unitares/pull/2361#pullrequestreview-5302128003")
+    later = _comment(rg.Record("k", "FINDINGS", 1, False, "claude"), url="later")
+    later["created_at"] = "2026-09-24T10:00:00Z"
+    got = rg.latest_matching([d, later], "k", [])
+    assert got.url == "later" and not got.disposed
+
+
 def test_native_thread_reply_is_not_a_new_finding(repo):
     head = _git(repo, "rev-parse", "HEAD")
     bot = {"login": rg.CODEX_BOT, "type": "Bot"}
