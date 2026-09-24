@@ -486,7 +486,8 @@ jobs:
     # This job existed before 2026-08-19 but only imported `src`, `governance_core`
     # and `src.versioning` — none of which import `config`. So it passed green
     # while the wheel raised ModuleNotFoundError on the 67 modules that do. The
-    # import list below is therefore deliberately module-level and config-bound:
+    # standalone smoke's import list below is therefore deliberately config-bound
+    # (every entry but src.monitor_result reaches `config` at import time):
     # a package that builds but cannot import its own server is not packaged.
     runs-on: ubuntu-latest
     steps:
@@ -541,7 +542,8 @@ jobs:
       run: |
         cd /tmp
         python - <<'PY'
-        # Every import here is module-level and reaches `config`, which is the
+        # Every import here except src.monitor_result (whose `config` imports are
+        # function-local) is module-level and reaches `config`, which is the
         # regression this guards. Kept to the CORE dependency set on purpose:
         # src.mcp_server pulls prometheus_client from the `full` extra, so
         # importing it would test the extra rather than the package layout.
