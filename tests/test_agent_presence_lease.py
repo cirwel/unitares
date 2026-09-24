@@ -19,10 +19,12 @@ def _clear_cache():
     apl._lease_ids.clear()
     apl._released_at.clear()
     apl._released_sessions.clear()
+    apl._locks.clear()
     yield
     apl._lease_ids.clear()
     apl._released_at.clear()
     apl._released_sessions.clear()
+    apl._locks.clear()
 
 
 def _fake_req(**kw):
@@ -285,3 +287,38 @@ async def test_release_without_a_session_id_leaves_the_ttl_in_charge(monkeypatch
     }
     assert client.releases == []
     assert apl._lease_ids["uuid-1"] == "lease-abc"
+
+
+@pytest.mark.asyncio
+async def test_resumed_session_heartbeat_waits_for_an_in_progress_release(monkeypatch):
+    """A new session's heartbeat that arrives mid-release acquires only after the
+    old row is released, so it is never left without a lease."""
+    import asyncio
+
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "old-lease"
+    order = []
+    gate = asyncio.Event()
+
+    async def _slow_release(client_, agent_uuid, lease_id):
+        order.append(("release", lease_id))
+        await gate.wait()
+        return True
+
+    monkeypatch.setattr(apl, "_release_lease", _slow_release)
+
+    release_task = asyncio.create_task(apl.release_agent_presence("uuid-1", ("sess-1",)))
+    await asyncio.sleep(0)
+    heartbeat_task = asyncio.create_task(
+        apl.heartbeat_agent_presence("uuid-1", "sess-2", apl.time.monotonic())
+    )
+    await asyncio.sleep(0)
+    assert client.acquired == []  # blocked behind the release
+    gate.set()
+    await release_task
+    await heartbeat_task
+
+    assert order == [("release", "old-lease")]
+    assert len(client.acquired) == 1
+    assert apl._lease_ids["uuid-1"] == "lease-123"

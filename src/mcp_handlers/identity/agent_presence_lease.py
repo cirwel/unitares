@@ -59,6 +59,18 @@ _lease_ids: dict[str, str] = {}
 _released_at: dict[str, float] = {}
 _released_sessions: dict[str, set[str]] = {}
 
+# Per-uuid lock shared by heartbeat and release. Without it a resumed session's
+# heartbeat can race an in-progress release: it finds the cache emptied while
+# the old row is still live, gets held_by_other, and is left with no lease.
+_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock_for(agent_uuid: str) -> asyncio.Lock:
+    lock = _locks.get(agent_uuid)
+    if lock is None:
+        lock = _locks[agent_uuid] = asyncio.Lock()
+    return lock
+
 # Guarded SDK imports: unavailable in isolated test/CI envs and in deploys
 # without the lease-plane boundary. When absent the module loads and every entry
 # point no-ops. Tests monkeypatch these module attributes with fakes.
@@ -122,7 +134,10 @@ async def heartbeat_agent_presence(
     if client is None:
         return
     try:
-        await _refresh_presence(client, agent_uuid, client_session_id, scheduled_at)
+        async with _lock_for(agent_uuid):
+            if _released_since(agent_uuid, scheduled_at, client_session_id):
+                return
+            await _refresh_presence(client, agent_uuid, client_session_id, scheduled_at)
     except Exception as e:  # pragma: no cover - best-effort; must never affect check-in
         logger.debug(f"[AGENT_PRESENCE] heartbeat_agent_presence failed (non-fatal): {e}")
 
@@ -286,24 +301,27 @@ async def release_agent_presence(
         # session could not be told apart from a resumed session and would
         # re-acquire the lease. Leave the TTL in charge instead.
         return {"released": False, "reason": "session_id_required"}
-    now = time.monotonic()
-    _released_at[agent_uuid] = now
-    sessions = _released_sessions.setdefault(agent_uuid, set())
-    sessions.update(session_ids)
-    for stale in [u for u, at in _released_at.items() if now - at > 2 * _PRESENCE_TTL_S]:
-        _released_at.pop(stale, None)
-        _released_sessions.pop(stale, None)
+    async with _lock_for(agent_uuid):
+        # Tombstone inside the lock: a heartbeat already in flight finishes and
+        # caches its lease first, so the release below finds and frees it.
+        now = time.monotonic()
+        _released_at[agent_uuid] = now
+        sessions = _released_sessions.setdefault(agent_uuid, set())
+        sessions.update(session_ids)
+        for stale in [u for u, at in _released_at.items() if now - at > 2 * _PRESENCE_TTL_S]:
+            _released_at.pop(stale, None)
+            _released_sessions.pop(stale, None)
 
-    client = _make_client()
-    if client is None:
-        _lease_ids.pop(agent_uuid, None)
-        return {"released": False, "reason": "lease_plane_unavailable"}
-    lease_id = _lease_ids.pop(agent_uuid, None) or await _lookup_live_lease_id(agent_uuid)
-    if not lease_id:
-        return {"released": False, "reason": "no_live_lease"}
-    try:
-        ok = await _release_lease(client, agent_uuid, lease_id)
-    except Exception as e:  # noqa: BLE001 - best-effort; the TTL remains the backstop
-        logger.debug(f"[AGENT_PRESENCE] release failed (non-fatal): {e}")
-        ok = False
-    return {"released": ok, "reason": "released" if ok else "release_refused"}
+        client = _make_client()
+        if client is None:
+            _lease_ids.pop(agent_uuid, None)
+            return {"released": False, "reason": "lease_plane_unavailable"}
+        lease_id = _lease_ids.pop(agent_uuid, None) or await _lookup_live_lease_id(agent_uuid)
+        if not lease_id:
+            return {"released": False, "reason": "no_live_lease"}
+        try:
+            ok = await _release_lease(client, agent_uuid, lease_id)
+        except Exception as e:  # noqa: BLE001 - best-effort; the TTL remains the backstop
+            logger.debug(f"[AGENT_PRESENCE] release failed (non-fatal): {e}")
+            ok = False
+        return {"released": ok, "reason": "released" if ok else "release_refused"}
