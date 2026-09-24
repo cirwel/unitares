@@ -98,9 +98,13 @@ HTTP_TIMEOUT_S = 15
 # ONE DSN for every evidence query, and it must be the producer's: the queue
 # comes over HTTP from the server, so a re-run or history read against any
 # other database would hand the judge evidence from a different deployment.
-# Same variable and default as unitares_doctor / the server.
-DB_URL = os.environ.get(
-    "DB_POSTGRES_URL", "postgresql://postgres:postgres@localhost:5432/governance"
+# Resolved in the producers' own order: GOVERNANCE_DATABASE_URL is what the
+# doctor-findings job (the producer of doctor findings) reads, DB_POSTGRES_URL
+# is the server's and unitares_doctor's CLI default, then the shared default.
+DB_URL = (
+    os.environ.get("GOVERNANCE_DATABASE_URL")
+    or os.environ.get("DB_POSTGRES_URL")
+    or "postgresql://postgres:postgres@localhost:5432/governance"
 )
 SOURCE_MAX_CHARS = 8000
 

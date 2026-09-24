@@ -57,11 +57,13 @@
     server; unset there = the route answers 503) and the secrets file this
     job reads. Keep it out of this plist.
 
-    DATABASE: DB_POSTGRES_URL must name the SAME database the governance
-    server writes (the value below is the default). The queue comes over HTTP
-    from the server, while the evidence (history, the doctor-check re-run) is
-    read straight from Postgres; pointed at another database, the judge would
-    be handed a different deployment's evidence.
+    DATABASE: GOVERNANCE_DATABASE_URL must be the SAME value the
+    doctor-findings job uses (that is the variable it reads; the value below
+    is the default), naming the database the governance server writes. The
+    queue comes over HTTP from the server, while the evidence (history, the
+    doctor-check re-run) is read straight from Postgres; pointed at another
+    database, the judge would be handed a different deployment's evidence.
+    (DB_POSTGRES_URL, the server's name for it, is the fallback.)
 
     TWO ENVIRONMENT REQUIREMENTS:
       PATH must hold the keg-only postgresql@17 bin dir (the job re-runs the
@@ -108,7 +110,7 @@
         <key>HOME</key><string>__HOME__</string>
         <key>USER</key><string>__USER__</string>
         <key>UNITARES_OPERATOR_ADJUDICATION</key><string>off</string>
-        <key>DB_POSTGRES_URL</key><string>postgresql://postgres:postgres@localhost:5432/governance</string>
+        <key>GOVERNANCE_DATABASE_URL</key><string>postgresql://postgres:postgres@localhost:5432/governance</string>
         <key>UNITARES_MODEL_ADJUDICATOR_HOST</key><string>claude</string>
         <key>UNITARES_ADJUDICATOR_FAST_MODEL</key><string>haiku</string>
         <key>UNITARES_ADJUDICATOR_STRONG_MODEL</key><string></string>

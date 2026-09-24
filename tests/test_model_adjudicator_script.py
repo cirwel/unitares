@@ -453,3 +453,25 @@ def test_plist_template_carries_the_doctor_declaration():
     """The re-run happens in this job's env, so it must match the doctor job."""
     template = (SCRIPT.parent / "com.unitares.model-adjudicator.plist.template").read_text()
     assert "<key>UNITARES_OPERATOR_ADJUDICATION</key><string>off</string>" in template
+
+
+@pytest.mark.parametrize("gov,db,expected", [
+    ("postgresql://doctor/db", "postgresql://server/db", "postgresql://doctor/db"),
+    (None, "postgresql://server/db", "postgresql://server/db"),
+    (None, None, "postgresql://postgres:postgres@localhost:5432/governance"),
+])
+def test_evidence_dsn_follows_the_producers_order(monkeypatch, tmp_path, gov, db, expected):
+    """GOVERNANCE_DATABASE_URL is what the doctor-findings job reads."""
+    for name, value in (("GOVERNANCE_DATABASE_URL", gov), ("DB_POSTGRES_URL", db)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    spec = importlib.util.spec_from_file_location("model_adjudicator_dsn", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["model_adjudicator_dsn"] = mod
+    try:
+        spec.loader.exec_module(mod)
+        assert mod.DB_URL == expected
+    finally:
+        sys.modules.pop("model_adjudicator_dsn", None)
