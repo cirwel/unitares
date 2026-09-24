@@ -1024,16 +1024,39 @@ def test_emit_keys_against_a_non_master_base(repo, tmp_path, capsys):
     assert key == rg.diff_key("origin/stack", "HEAD") != rg.diff_key("origin/master", "HEAD")
 
 
-def test_emit_refuses_a_head_the_remote_branch_does_not_hold(repo, tmp_path):
-    # A tracking ref pointing at the base (checkout -b x origin/master) must not
-    # stand in for the pushed PR head.
+def test_emit_accepts_a_pushed_branch_that_tracks_the_base(repo, tmp_path, capsys):
+    # `git checkout -b x origin/master` then `git push origin x` (no -u): the
+    # branch is pushed, but its upstream is the base, not the PR head.
     _pushed(repo, tmp_path)
-    _git(repo, "checkout", "-q", "-b", "untracked-push")
-    (repo / "a.txt").write_text("never pushed\n")
-    _git(repo, "commit", "-q", "-am", "local only")
-    _git(repo, "branch", "-q", "--set-upstream-to", "origin/feature")
+    _git(repo, "branch", "-q", "--set-upstream-to", "origin/master")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    assert rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                    "--independent", "--emit"]) == 0
+    assert rg.parse_record(capsys.readouterr().out).verdict == "CLEAN"
+
+
+def test_emit_refuses_when_the_remote_moved_past_a_stale_tracking_ref(repo, tmp_path):
+    # Someone else pushed to the PR branch; the local tracking ref still equals
+    # HEAD, but CI will see the remote head.
+    _pushed(repo, tmp_path)
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", "-b", "feature", str(tmp_path / "remote.git"), str(other))
+    _git(other, "config", "user.email", "o@example.invalid")
+    _git(other, "config", "user.name", "o")
+    (other / "b.txt").write_text("pushed by someone else\n")
+    _git(other, "commit", "-q", "-am", "theirs")
+    _git(other, "push", "-q", "origin", "feature")
     (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
     with pytest.raises(SystemExit, match="HEAD pushed"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                 "--independent", "--emit"])
+
+
+def test_emit_refuses_when_the_remote_cannot_be_read(repo, tmp_path):
+    _pushed(repo, tmp_path)
+    _git(repo, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="could not read"):
         rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
                  "--independent", "--emit"])
 

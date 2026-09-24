@@ -614,11 +614,17 @@ def _resolve_offline(args) -> str:
     remote, _, branch = base.partition("/")
     git("fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{base}", check=False)
     head = git("rev-parse", "HEAD").strip()
-    # Compare against the remote branch of the same name, freshly fetched: a
+    # Compare against the remote branch of the same name, read live: a
     # stale tracking ref, or one tracking the base, would pass a head CI never sees.
     mine = git("rev-parse", "--abbrev-ref", "HEAD").strip()
-    git("fetch", "--quiet", remote, f"+refs/heads/{mine}:refs/remotes/{remote}/{mine}", check=False)
-    pushed = git("rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{mine}", check=False).strip()
+    # ls-remote exits 2 when the branch does not exist, anything else nonzero
+    # on a transport failure; neither may fall back to a local tracking ref.
+    probe = _launch(["git", "ls-remote", "--exit-code", remote, f"refs/heads/{mine}"],
+                    text=True, capture_output=True)
+    if probe.returncode not in (0, 2):
+        raise SystemExit(f"review_gate: --emit could not read {remote}/{mine} "
+                         f"({probe.stderr.strip()[:200]}); refusing to trust a local ref")
+    pushed = probe.stdout.split()[0] if probe.returncode == 0 and probe.stdout.strip() else ""
     if pushed != head:
         raise SystemExit(f"review_gate: --emit needs HEAD pushed: {remote}/{mine} is "
                          f"{pushed[:12] or 'missing'}, HEAD is {head[:12]}. Push first, or the "
