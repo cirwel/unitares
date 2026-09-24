@@ -89,8 +89,14 @@ def test_enrich_thread_identity_adds_r6_thin_shape_for_sibling_locus():
     assert thread_context["episode_fork_kind"] == "sibling_locus"
     assert thread_context["identity_lineage_fork"] is False
     assert thread_context["is_fork"] == (thread_context["episode_fork_kind"] != "none")
-    assert "registry UUID" in thread_context["honest_message"]
-    assert "whether you have integrated it is yours to demonstrate" in thread_context["honest_message"]
+    # ctx.meta cannot tell a fresh mint from a resumed UUID (#2375), so the
+    # thin text must claim neither: no shared UUID, no fresh mint.
+    message = thread_context["honest_message"]
+    assert "share a registry UUID" not in message
+    assert "no child UUID minted" not in message
+    assert "a fresh UUID" not in message
+    assert "Sharing a thread declares no lineage" in message
+    assert "whether you have integrated it is yours to demonstrate" in message
 
 
 def test_enrich_thread_identity_adds_r6_thin_shape_for_identity_lineage():

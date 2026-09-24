@@ -44,9 +44,16 @@ branch does not deploy the master-only public Pages workflow.
 
 1. Start from current `master` with a clean named branch and no active surface
    claim. Run `git prepr --scope "release vX.Y.Z"` before the release PR.
-2. Run `make version-bump PART=patch|minor|major`, update
-   [`docs/CHANGELOG.md`](../CHANGELOG.md) and the `date-released` field in
-   [`CITATION.cff`](../../CITATION.cff), then review every generated version
+2. First fold the pending changelog fragments into `## [Unreleased]`, before
+   any version header exists: review
+   `python3 scripts/dev/changelog_assemble.py --preview`, then run
+   `python3 scripts/dev/changelog_assemble.py`, which files each
+   [`docs/changelog.d/`](../changelog.d/README.md) fragment under its
+   subsection and deletes it; commit the changelog and the deletions
+   together. Then run `make version-bump PART=patch|minor|major`, turn the
+   assembled `## [Unreleased]` into the version entry in
+   [`docs/CHANGELOG.md`](../CHANGELOG.md), update the `date-released` field in
+   [`CITATION.cff`](../../CITATION.cff), and review every generated version
    change. `VERSION` remains the source-version authority. Leave
    `PUBLISHED_VERSION` unchanged during release preparation.
 3. Run `./scripts/dev/test-cache.sh` and `make validate`. When container build
@@ -177,6 +184,16 @@ python scripts/ci/release_series_drift.py   # SDK and skills vs their own tags
 
 Both stand down unless the tree is a release — `VERSION` names a version with no
 tag yet — so they cost ordinary PRs nothing.
+
+`changelog_coverage.py` also fails a release tree that still holds a file in
+`docs/changelog.d/` other than its README: that fragment's entry is not in the
+release entry, so step 2's assembly was skipped or ran before the fragment
+merged. Re-run the assembler on the release branch. On ordinary PRs the same
+workflow validates fragments (`changelog_assemble.py --check`) and fails a PR
+that edits `## [Unreleased]` directly
+(`scripts/ci/changelog_direct_edit.py`); the release tree and dependabot are
+exempt, and released entries stay editable for errata and maintenance
+forward-merges.
 
 `changelog_coverage.py` lists every merged pull request the entry does not name.
 It reads the first-parent walk and accepts both a squash subject's trailing
