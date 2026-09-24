@@ -137,6 +137,22 @@ def test_innermost_handler_governs(tmp_path):
     assert p006_actually_fires(str(path), 9) is True
 
 
+def test_try_finally_defers_to_the_enclosing_handlers(tmp_path):
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            work()\n"
+        "        finally:\n"
+        "            cleanup()\n"
+        "    except Exception:\n"
+        "        pass\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 4) is True
+    assert p006_actually_fires(str(path), 6) is True
+
+
 def test_line_outside_any_try_is_dropped(tmp_path):
     path = _write(tmp_path, "def f():\n    return work()\n")
     assert p006_actually_fires(str(path), 2) is False

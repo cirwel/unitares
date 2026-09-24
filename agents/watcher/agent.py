@@ -1750,7 +1750,11 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
                 handler_hit is None or start >= _span(handler_hit)[0]
             ):
                 handler_hit = node
-        elif isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
+        elif (
+            isinstance(node, ast.Try) or type(node).__name__ == "TryStar"
+        ) and node.handlers:
+            # A try/finally has no handlers and cannot swallow anything; the
+            # enclosing try that does have handlers governs its body.
             start, end = _span(node)
             if start <= line <= end and (
                 try_hit is None or start >= _span(try_hit)[0]

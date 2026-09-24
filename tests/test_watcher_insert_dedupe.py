@@ -416,8 +416,9 @@ def test_closing_the_canonical_releases_the_copy(worktrees, capsys, status, reas
     assert copy.fingerprint[:8] in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("reason", ["fp", "wont_fix", "out_of_scope"])
+@pytest.mark.parametrize("reason", ["fp", "wont_fix", "out_of_scope", None])
 def test_a_verdict_on_the_code_settles_the_copy(worktrees, reason):
+    # None: `--dismiss <fp>` with no --reason is the documented false-positive path.
     main, other = worktrees
     first = _detect(main / "src" / "envelope_step.py", 5)
     copy = _detect(other / "src" / "envelope_step.py", 5)
@@ -441,6 +442,28 @@ def test_release_re_folds_the_remaining_copies(worktrees, tmp_path):
     rows = {r["fingerprint"]: r for r in _rows()}
     assert [r["fingerprint"] for r in _unresolved()] == [second.fingerprint]
     assert rows[third.fingerprint]["duplicate_of"] == second.fingerprint
+
+
+def test_redetecting_a_shifted_copy_after_a_fix_claim_reopens_it(worktrees):
+    """Confirming the canonical settles its same-file copy only until the
+    code is seen again: a re-detection reopens that copy, in place."""
+    main, _ = worktrees
+    path = main / "src" / "envelope_step.py"
+    first = _detect(path, 5)
+    F.persist_findings([first])
+    path.write_text("import os\n" * 5 + SOURCE)
+    shifted = _detect(path, 10)
+    F.persist_findings([shifted])
+    F.update_finding_status(first.fingerprint, "confirmed", emit_resolution_event=False)
+    assert _unresolved() == []
+
+    F.DEDUP_FILE.write_text("{}")
+    again = _detect(path, 10)
+    assert [f.fingerprint for f in F.persist_findings([again])] == [shifted.fingerprint]
+    [reopened] = _unresolved()
+    assert reopened["fingerprint"] == shifted.fingerprint
+    assert reopened["released_from_duplicate_of"] == first.fingerprint
+    assert [r["fingerprint"] for r in _rows()].count(shifted.fingerprint) == 1
 
 
 def test_adjudicating_a_copy_leaves_the_canonical_open(worktrees):

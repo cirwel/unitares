@@ -69,11 +69,21 @@ AUTO_DEDUP_RESOLVER = "watcher_auto_dedup"
 _UNRESOLVED_STATUSES = ("open", "surfaced")
 
 
-# Verdicts on a canonical finding that speak for the code itself, so they
-# also settle its automatic duplicates. Any other closure (confirmed = fixed
-# in that checkout, aged_out, or a dismissal that says nothing about the code)
-# releases the duplicates: the same code may still be live in their worktrees.
-_VERDICT_COVERS_DUPLICATES = frozenset({"fp", "wont_fix", "out_of_scope"})
+# Dismissal reasons that say nothing about the code itself. A canonical
+# finding dismissed for one of these, confirmed (fixed in its own checkout),
+# or aged out releases its automatic duplicates: the same code may still be
+# live in their worktrees. Every other dismissal settles them, including one
+# with no reason, because `--dismiss <fp>` without `--reason` is the
+# documented way to mark a false positive.
+_DISMISSAL_REASONS_RELEASING = frozenset({"stale", "unclear", "dup"})
+
+
+def _closure_settles_code(canonical: dict[str, Any]) -> bool:
+    """True when a closed canonical finding's verdict covers the code."""
+    return (
+        canonical.get("status") == "dismissed"
+        and canonical.get("resolution_reason") not in _DISMISSAL_REASONS_RELEASING
+    )
 
 
 def is_auto_duplicate(row: dict[str, Any]) -> bool:
@@ -115,6 +125,22 @@ def _same_file(a: str, b: str) -> bool:
         return a == b
 
 
+def _reopen_copy(row: dict[str, Any], stamp: str) -> dict[str, Any]:
+    """An auto-duplicate row turned back into an open finding, keeping a
+    pointer to what it had been folded into."""
+    reopened = {
+        key: value
+        for key, value in row.items()
+        if key not in ("status", "dismissed_at", "resolved_by", "resolution_reason", "duplicate_of")
+    }
+    reopened.update(
+        status="open",
+        released_from_duplicate_of=row.get("duplicate_of", ""),
+        released_at=stamp,
+    )
+    return reopened
+
+
 def release_orphaned_duplicates(
     rows: list[dict[str, Any]], now: str | None = None
 ) -> tuple[list[dict[str, Any]], int]:
@@ -125,10 +151,11 @@ def release_orphaned_duplicates(
     or dismissed for a reason that says nothing about the code, the copies in
     other worktrees may still hold the bug, so the first copy is reopened as
     the new canonical finding and any others are re-pointed at it. A verdict
-    about the code (``fp``/``wont_fix``/``out_of_scope``) settles the copies
-    too, as does any closure for a copy in the canonical's own file (that is
-    the same site after a line shift), and a canonical row that no longer
-    exists leaves them as they are. Returns the new rows and how many copies were reopened.
+    about the code (any other dismissal, see ``_closure_settles_code``)
+    settles the copies too. So does any closure for a copy in the canonical's
+    own file (the same site after a line shift) until the code is detected
+    again, and a canonical row that no longer exists leaves them as they are;
+    ``persist_findings`` reopens such a copy on re-detection. Returns the new rows and how many copies were reopened.
     """
     by_fp = {row.get("fingerprint"): row for row in rows if row.get("fingerprint")}
     promoted: dict[str, str] = {}
@@ -144,10 +171,9 @@ def release_orphaned_duplicates(
         if canonical is None or canonical.get("status", "open") in _UNRESOLVED_STATUSES:
             out.append(row)
             continue
-        if (
-            canonical.get("status") == "dismissed"
-            and canonical.get("resolution_reason") in _VERDICT_COVERS_DUPLICATES
-        ) or _same_file(str(row.get("file") or ""), str(canonical.get("file") or "")):
+        if _closure_settles_code(canonical) or _same_file(
+            str(row.get("file") or ""), str(canonical.get("file") or "")
+        ):
             # A verdict about the code, or a copy in the canonical's own file
             # (a line shift): the closure already speaks for this copy.
             out.append(row)
@@ -155,19 +181,9 @@ def release_orphaned_duplicates(
         if canonical_fp in promoted:
             out.append({**row, "duplicate_of": promoted[canonical_fp]})
             continue
-        reopened = {
-            key: value
-            for key, value in row.items()
-            if key not in ("status", "dismissed_at", "resolved_by", "resolution_reason", "duplicate_of")
-        }
-        reopened.update(
-            status="open",
-            released_from_duplicate_of=canonical_fp,
-            released_at=stamp,
-        )
         promoted[canonical_fp] = str(row.get("fingerprint") or "")
         released += 1
-        out.append(reopened)
+        out.append(_reopen_copy(row, stamp))
     if released:
         log(f"released {released} auto-duplicate finding(s) whose canonical finding closed")
     return out, released
@@ -470,12 +486,16 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                     dup_candidates.setdefault(
                         (str(row.get("pattern") or ""), line_hash), []
                     ).append(row)
-        # A re-detection after the dedup TTL must not append a second row with
-        # the fingerprint of an existing auto-duplicate: either it is still
-        # folded into a live finding, or a verdict about the code settled it
-        # (a released copy is open again and already in unresolved_fps). A
-        # second row would also make --dismiss/--resolve on it ambiguous.
-        auto_dup_fps = {row.get("fingerprint") for row in existing_rows if is_auto_duplicate(row)}
+        # A re-detection after the dedup TTL never appends a second row with an
+        # existing auto-duplicate's fingerprint; that would make --dismiss or
+        # --resolve on it ambiguous. If the copy is still folded into a live
+        # finding, or a verdict about the code settled it, the re-detection is
+        # absorbed. Otherwise (its canonical was confirmed, aged out or is
+        # gone, and the code is still here) the copy row itself is reopened.
+        rows_by_fp = {row.get("fingerprint"): row for row in existing_rows}
+        auto_dup_rows = {
+            row.get("fingerprint"): row for row in existing_rows if is_auto_duplicate(row)
+        }
         auto_dups: list[dict[str, Any]] = []
         for row in existing_rows:
             old_fingerprint = row.get("fingerprint")
@@ -509,8 +529,21 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
                 dedup[f.fingerprint] = max(prior_timestamps)
                 continue
             dedup[f.fingerprint] = now
-            if f.fingerprint in unresolved_fps or f.fingerprint in auto_dup_fps:
+            if f.fingerprint in unresolved_fps:
                 # Already on record and still live; the dedup TTL lapsed.
+                continue
+            copy = auto_dup_rows.get(f.fingerprint)
+            if copy is not None:
+                canonical_row = rows_by_fp.get(copy.get("duplicate_of"))
+                if canonical_row is not None and (
+                    canonical_row.get("status", "open") in _UNRESOLVED_STATUSES
+                    or _closure_settles_code(canonical_row)
+                ):
+                    continue
+                reopened = _reopen_copy(copy, now)
+                existing_rows[existing_rows.index(copy)] = reopened
+                rewrite = True
+                fresh.append(f)
                 continue
             canonical = None
             if Path(f.file).is_absolute():
@@ -545,10 +578,14 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
             fresh.append(f)
 
         if rewrite:
-            # A release or a relocation changed existing rows: rewrite the
-            # whole file once, new rows included.
+            # A release, relocation or reopen changed existing rows: rewrite
+            # the whole file once, new rows included (a reopened copy is
+            # already one of the existing rows).
+            on_file = {row.get("fingerprint") for row in existing_rows}
             _write_findings_atomic(
-                existing_rows + [asdict(finding) for finding in fresh] + auto_dups
+                existing_rows
+                + [asdict(finding) for finding in fresh if finding.fingerprint not in on_file]
+                + auto_dups
             )
         if fresh or auto_dups or rewrite or dedup != original_dedup:
             # Persist even if `fresh` is empty, so the sweep's pruning actually
