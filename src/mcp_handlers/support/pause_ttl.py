@@ -28,7 +28,7 @@ captured main loop) using the same pattern as
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from src.logging_utils import get_logger
@@ -221,6 +221,94 @@ def _schedule_persistence_fire_and_forget(
             captured_loop.call_soon_threadsafe(_spawn_on_main)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[pause-ttl] persistence schedule failed: %r", exc)
+
+
+def _parse_utc(value: Any) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+# A pause's lifecycle event is stamped a moment after paused_at in memory
+# (add_lifecycle_event takes its own clock) and exactly at paused_at when
+# persisted. Two pauses of one agent cannot fall this close together: a paused
+# agent's writes are refused.
+_PAUSE_EVENT_MATCH_SECONDS = 5.0
+
+
+def paused_refusal_recovery(meta: Any) -> dict:
+    """The `recovery` block for a write refused because the agent is paused.
+
+    Says what a paused agent can use from its own refusal: why it was paused,
+    what happens to its writes, and how a pause actually ends. The earlier
+    text said only "circuit breaker triggered due to governance threshold
+    violation", which named neither the reason nor an end.
+
+    It does not present self_recovery as the way out. A paused agent cannot
+    write the check-in that would lower its risk, so self_recovery (quick at
+    <= 0.40, review below 0.65) cannot lift a pause whose risk is frozen above
+    those gates; measured 2026-09-24, every pause since July froze at >= 0.70.
+    self_recovery(action='check') is still the authority on self-recovery
+    eligibility. The reason is taken only from a "paused" event
+    stamped at this pause's paused_at, so an older pause's reason is never
+    presented as the current one.
+    """
+    paused_raw = getattr(meta, "paused_at", None)
+    paused_dt = _parse_utc(paused_raw) if isinstance(paused_raw, str) and paused_raw else None
+    reason = None
+    if paused_dt is not None:
+        for event in reversed(getattr(meta, "lifecycle_events", None) or []):
+            if not (isinstance(event, dict) and event.get("event") == "paused"):
+                continue
+            event_dt = _parse_utc(event.get("timestamp"))
+            if event_dt is not None and abs((event_dt - paused_dt).total_seconds()) <= _PAUSE_EVENT_MATCH_SECONDS:
+                reason = event.get("reason")
+                break
+    expires_at = None
+    if paused_dt is not None:
+        try:
+            from config.governance_config import GovernanceConfig
+
+            expires_at = (
+                paused_dt
+                + timedelta(seconds=int(GovernanceConfig.PAUSE_AUTO_EXPIRE_SECONDS))
+            ).isoformat()
+        except (ValueError, TypeError, AttributeError, ImportError):
+            expires_at = None
+    if expires_at:
+        re_evaluation = (
+            f"After {expires_at} the next check-in or shared-memory write is let "
+            "through and the pause lifts; a check-in whose reading still trips "
+            "pauses again on that same call."
+        )
+    else:
+        re_evaluation = "No re-evaluation time is recorded for this pause."
+    agent_id = getattr(meta, "agent_id", None)
+    get_call = (
+        f"dialectic(action='get', agent_id='{agent_id}')" if agent_id
+        else "dialectic(action='get', agent_id=<this agent>)"
+    )
+    recovery = {
+        "action": (
+            "Check-ins (sync_state) and shared-memory writes are refused while "
+            "paused and are not queued; resubmit them after the pause lifts. "
+            "Dialectic moves are still accepted. self_recovery(action='check') "
+            "reports self-recovery eligibility: self_recovery lifts a pause only "
+            "while the risk that paused the agent is below its gates, and a "
+            "paused agent cannot write the check-in that would lower it."
+        ),
+        "why": reason or "No reason is recorded for this pause.",
+        "other_exits": (
+            f"If a dialectic review was opened for this pause, {get_call} "
+            "finds it; answering it is how the pause is reviewed. An operator "
+            "can resume the agent with agent(action='resume'). " + re_evaluation
+        ),
+    }
+    if expires_at:
+        recovery["expires_at"] = expires_at
+    return recovery
 
 
 def maybe_auto_expire_pause_sync(agent_uuid: str, meta: Any) -> bool:

@@ -206,7 +206,7 @@ watched less, or from a busy one that you have already reported.
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause / reject** | Stop your current task. Reflect on what is flagged. Consider requesting a dialectic review |
+| **pause / reject** | Check-ins and shared-memory writes are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so self-recovery rarely applies; a dialectic review opened for the pause, an operator, or re-evaluation at expiry usually ends it (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
@@ -230,7 +230,10 @@ Strong ownership proof is better than implicit continuity. If the runtime falls 
 
 ## Recovery
 
-When you are paused, stuck, or need intervention:
+When you are paused, stuck, or need intervention. A paused agent cannot write
+the check-in that would lower its risk, so quick and review succeed only when
+the reading that paused it is already under their gates; otherwise the dialectic
+review opened for the pause, an operator, or re-evaluation at expiry ends it.
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
