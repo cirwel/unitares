@@ -936,12 +936,18 @@ async def http_sentinel_adjudication_queue(request):
         exclude_model_abstained = (
             request.query_params.get("exclude_model_abstained", "") in ("1", "true")
         )
+        # ?postable_only=1: skip items whose fingerprint the model-adjudicate
+        # route would refuse (rows persisted before the ingest bound). Done
+        # HERE, before the limit, so a caller that cannot post them is never
+        # handed a window full of them. Counted, like every other exclusion.
+        postable_only = request.query_params.get("postable_only", "") in ("1", "true")
 
         seen: set = set()
         queue = []
         pending_total = 0
         abstained_suppressed = 0
         model_suppressed = 0
+        unpostable_suppressed = 0
         evidence_targets = []
         for e in events:
             details = e.get("details") or {}
@@ -965,6 +971,9 @@ async def http_sentinel_adjudication_queue(request):
                 model_verdict == "abstain" and exclude_model_abstained
             ):
                 model_suppressed += 1
+                continue
+            if postable_only and len(fp) > _FINGERPRINT_MAX_CHARS:
+                unpostable_suppressed += 1
                 continue
             pending_total += 1
             if len(queue) < limit:
@@ -1004,6 +1013,7 @@ async def http_sentinel_adjudication_queue(request):
             # Same rule as abstention: judged-by-a-model items are counted,
             # never silently dropped.
             "model_adjudicated_suppressed": model_suppressed,
+            "unpostable_suppressed": unpostable_suppressed,
             "model_adjudication_cooldown_hours": _MODEL_ADJUDICATION_COOLDOWN_HOURS,
             "progress": await _adjudication_progress(),
         })

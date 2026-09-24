@@ -229,6 +229,25 @@ class TestQueueSuppression:
         assert fps == ["fp-open", "fp-abstained"]
         assert body["model_adjudicated_suppressed"] == 2
 
+    def test_postable_only_filters_long_fingerprints_before_the_limit(self, client):
+        """25+ legacy rows ahead of a valid one must not starve it."""
+        events = [_event("L" * 300 + str(i)) for i in range(30)] + [_event("fp-valid")]
+        with patch("src.audit_db.query_audit_events_async", AsyncMock(return_value=events)), \
+             patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
+                   AsyncMock(return_value=set())), \
+             patch("src.http_routes.sentinel._abstained_sentinel_fingerprints",
+                   AsyncMock(return_value=set())), \
+             patch("src.http_routes.sentinel._model_adjudicated_fingerprints",
+                   AsyncMock(return_value={})), \
+             patch("src.http_routes.sentinel._adjudication_progress",
+                   AsyncMock(return_value=dict(PROGRESS))):
+            body = client.get("/v1/sentinel/adjudication-queue?limit=1&postable_only=1").json()
+            plain = client.get("/v1/sentinel/adjudication-queue?limit=1").json()
+        assert [q["fingerprint"] for q in body["queue"]] == ["fp-valid"]
+        assert body["unpostable_suppressed"] == 30
+        # Without the flag the operator view is unchanged: nothing hidden.
+        assert plain["unpostable_suppressed"] == 0 and plain["pending_total"] == 31
+
     def test_the_adjudicator_can_skip_what_it_already_declined(self, client):
         body = self._get(client, self.VERDICTS, "&exclude_model_abstained=1")
         assert [q["fingerprint"] for q in body["queue"]] == ["fp-open"]

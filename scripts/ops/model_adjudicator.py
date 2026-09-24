@@ -115,7 +115,6 @@ DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
 # are normalized to fit at ingest, but a row persisted before that bound can
 # still carry a longer one, and the verdict route refuses it with a 400.
 FINGERPRINT_MAX_CHARS = 256
-QUEUE_FETCH_LIMIT = 25  # the adjudication-queue route's own cap on ?limit=
 VERDICTS = ("confirmed", "dismissed", "abstain")
 
 SYSTEM_PROMPT = (
@@ -224,10 +223,11 @@ def resolve_claude_cli() -> Optional[str]:
 
 
 def io_fetch_queue(tokens: list[str]) -> list[dict]:
-    # The server's max window, not MAX_ITEMS: items this job must skip
-    # (legacy over-long fingerprints) would otherwise fill every fetch and
-    # starve the judgeable findings behind them. MAX_ITEMS caps what is JUDGED.
-    query = urllib.parse.urlencode({"limit": QUEUE_FETCH_LIMIT, "exclude_model_abstained": 1})
+    # postable_only: the server drops fingerprints the verdict route would
+    # refuse BEFORE applying the limit, so legacy over-long rows can never
+    # fill the window and starve judgeable findings behind them.
+    query = urllib.parse.urlencode({"limit": MAX_ITEMS, "exclude_model_abstained": 1,
+                                    "postable_only": 1})
     body = _http_json(f"{GOV_URL}/v1/sentinel/adjudication-queue?{query}", None, tokens)
     return list(body.get("queue") or []) if body.get("success") else []
 
@@ -538,9 +538,11 @@ def run_once(io: dict | None = None, dry_run: bool = False,
         if not fp:
             continue
         if len(fp) > FINGERPRINT_MAX_CHARS:
-            # Unpostable, so judging it would only spend quota; and it says
-            # nothing about whether verdicts work, so it is not systemic.
-            # The operator's adjudicate route has no such bound.
+            # Defence in depth: ?postable_only=1 already filters these server
+            # side (an older server ignores the parameter). Unpostable, so
+            # judging it would only spend quota, and it says nothing about
+            # whether verdicts work, so it is not systemic. The operator's
+            # adjudicate route has no such bound.
             log(f"{fp[:40]}…: fingerprint over {FINGERPRINT_MAX_CHARS} chars (persisted "
                 "before the ingest bound) — skipped, left for an operator")
             continue

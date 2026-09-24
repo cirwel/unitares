@@ -589,10 +589,13 @@ def test_skipped_legacy_rows_do_not_starve_judgeable_findings(adj, monkeypatch):
     assert [p["fingerprint"] for p in calls["posted"]] == ["ok0", "ok1"]
 
 
-def test_the_queue_is_fetched_at_the_servers_max_window(adj, monkeypatch):
+def test_the_queue_is_fetched_postable_only(adj, monkeypatch):
+    """The server filters unpostable rows before its limit, so they can never
+    fill the window."""
     seen = {}
     monkeypatch.setattr(adj, "_http_json",
                         lambda url, payload, tokens, extra_headers=None:
                         seen.setdefault("url", url) and {"success": True, "queue": []})
     adj.io_fetch_queue(["t"])
-    assert "limit=25" in seen["url"] and "exclude_model_abstained=1" in seen["url"]
+    for part in ("postable_only=1", "exclude_model_abstained=1", f"limit={adj.MAX_ITEMS}"):
+        assert part in seen["url"]
