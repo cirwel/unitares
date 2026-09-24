@@ -136,8 +136,9 @@ def floor_breach_caution_apply_enabled() -> bool:
     sub_action "guide". It can also keep a pause: the warmup structural grace
     (governance_monitor `_apply_warmup_structural_grace`) lifts a cold-start
     void/coherence/basin/cirs pause only when the behavioral verdict is
-    "safe", so after a restart a baselined agent at a floor breach keeps a
-    pause the grace would otherwise have lifted. Escalate-only and
+    "safe", and reads it whatever the verdict source (even with
+    GOVERNANCE_BEHAVIORAL_VERDICT off), so after a restart a baselined agent
+    at a floor breach keeps a pause the grace would otherwise have lifted. Escalate-only and
     baselined-only: never lowers a
     verdict, never fires before the agent's own baseline is warm. Implies the
     shadow record, with ``applied`` marking rows the floor actually changed.

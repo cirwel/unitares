@@ -155,8 +155,11 @@ identity of EISV itself.
   explicitly `telemetry_only` with `policy_effect: none`; no risk, policy, or
   enforcement input consumes it. The exception is the default-off
   `UNITARES_FLOOR_BREACH_CAUTION_APPLY` floor (issue #1995): a row whose
-  verdict it raised to `caution` is labelled `measurement_role: verdict_floor`,
-  `policy_effect: verdict_escalated_to_caution`. Zero-breach rows remain present so the audit
+  behavioral verdict it raised to `caution` is labelled
+  `measurement_role: verdict_floor`, `policy_effect: behavioral_verdict_raised`.
+  The label records what the floor did; what that changed downstream (guide,
+  the worse of it and Φ, or a warmup pause kept) depends on
+  `resolved_verdict_source` and the warmup grace, so read those with it. Zero-breach rows remain present so the audit
   has a denominator, failed evaluation is `evaluated: false` (unknown, not
   zero), and dry-run rows use `measurement_scope: simulation` with
   `eligible_for_production_counter: false`. A production count therefore

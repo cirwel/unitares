@@ -108,18 +108,15 @@ def build_absolute_floor_observation(
         # goes False for rows the floor changed; ``unfloored_verdict`` here keeps
         # the pre-floor reading so the counter's history stays comparable.
         observation["floor_breach_caution"] = dict(assessment.floor_breach_caution)
-        if (
-            assessment.floor_breach_caution.get("applied")
-            and observation["behavioral_verdict_authoritative"]
-        ):
-            # This row's behavioral verdict was raised by the floor AND the
-            # behavioral verdict is the one the decision path resolved from
-            # (caution maps to guide, and it can keep a warmup pause). The
-            # default labels would claim no policy effect, so a reader
-            # filtering on them would drop exactly the rows the floor changed.
-            # When another source decided (phi cold-start, phi floor, or
-            # GOVERNANCE_BEHAVIORAL_VERDICT off), the raised verdict decided
-            # nothing and the defaults stay.
+        if assessment.floor_breach_caution.get("applied"):
+            # The floor raised this row's behavioral verdict. What that did
+            # downstream is decided later and elsewhere: guide when the
+            # behavioral verdict is authoritative, the worse of it and Φ under
+            # a phi_floor source, and in every source a warmup pause the grace
+            # would have lifted (the grace reads the behavioral verdict
+            # directly). So the row records what the floor did, not a final
+            # decision; read ``resolved_verdict_source`` for the rest. The
+            # default "none" would drop exactly the rows the floor changed.
             observation["measurement_role"] = "verdict_floor"
-            observation["policy_effect"] = "verdict_escalated_to_caution"
+            observation["policy_effect"] = "behavioral_verdict_raised"
     return observation

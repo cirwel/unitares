@@ -191,29 +191,20 @@ def test_verdict_floor_record_reaches_observation_only_when_flagged(monkeypatch)
     assert applied["floor_breach_caution"]["mode"] == "apply"
     assert applied["floor_breach_caution"]["unfloored_verdict"] == "safe"
     assert applied["floor_breach_caution"]["applied"] is True
-    # With no resolved source the behavioral verdict decided nothing, so even
-    # a changed row keeps the defaults. Shadow and unflagged rows too.
-    assert applied["measurement_role"] == "telemetry_only"
-    assert applied["policy_effect"] == "none"
+    # A row the floor changed records that, whatever decided downstream;
+    # shadow and unflagged rows keep the defaults.
+    assert applied["measurement_role"] == "verdict_floor"
+    assert applied["policy_effect"] == "behavioral_verdict_raised"
     assert shadow["measurement_role"] == off["measurement_role"] == "telemetry_only"
     assert shadow["policy_effect"] == off["policy_effect"] == "none"
 
-    # When the behavioral verdict is the one the decision path resolved from,
-    # a row the floor changed is not telemetry-only.
-    decided = build_absolute_floor_observation(
-        state, assess_behavioral_state(state),
-        resolved_verdict_source="behavioral_assessment")
-    assert decided["behavioral_verdict_authoritative"] is True
-    assert decided["measurement_role"] == "verdict_floor"
-    assert decided["policy_effect"] == "verdict_escalated_to_caution"
 
-
-@pytest.mark.parametrize("source", ["phi_cold_start", "phi_floor"])
-def test_applied_floor_under_another_verdict_source_claims_no_policy_effect(
-    monkeypatch, source
-):
-    """The floor raised the behavioral verdict, but Φ decided (cold start,
-    Φ floor, or the behavioral verdict switched off): no policy effect."""
+@pytest.mark.parametrize("source", ["behavioral_assessment", "phi_cold_start", "phi_floor"])
+def test_applied_floor_is_labelled_whatever_the_verdict_source(monkeypatch, source):
+    """The row cannot know the downstream effect: a phi_floor source takes
+    the worse of Φ and this verdict, and the warmup grace reads it in every
+    source. So every row the floor changed is labelled, and the source is
+    carried beside it for the reader."""
     monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", raising=False)
     monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1")
     state = _state(E=0.41, I=0.91, S=0.15, V=-0.505)
@@ -222,9 +213,9 @@ def test_applied_floor_under_another_verdict_source_claims_no_policy_effect(
     row = build_absolute_floor_observation(
         state, assess_behavioral_state(state), resolved_verdict_source=source)
     assert row["floor_breach_caution"]["applied"] is True
-    assert row["behavioral_verdict_authoritative"] is False
-    assert row["measurement_role"] == "telemetry_only"
-    assert row["policy_effect"] == "none"
+    assert row["resolved_verdict_source"] == source
+    assert row["measurement_role"] == "verdict_floor"
+    assert row["policy_effect"] == "behavioral_verdict_raised"
 
 
 def test_apply_without_a_change_keeps_the_telemetry_labels(monkeypatch):
