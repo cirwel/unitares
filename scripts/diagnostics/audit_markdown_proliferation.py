@@ -39,6 +39,15 @@ APPROVED_FILES = {
     'tools/README.md',
 }
 
+# Changelog fragments awaiting the release cut, which folds them into
+# docs/CHANGELOG.md and deletes them. They are changelog entries, not docs.
+FRAGMENT_DIR = project_root / 'docs' / 'changelog.d'
+
+
+def is_changelog_fragment(filepath: Path) -> bool:
+    return FRAGMENT_DIR in filepath.parents
+
+
 # Max total files allowed (hard limit)
 MAX_MARKDOWN_FILES = 50
 
@@ -197,6 +206,7 @@ def main():
     # Also check root
     root_md = list(project_root.glob('*.md'))
     markdown_files.extend(root_md)
+    markdown_files = [f for f in markdown_files if not is_changelog_fragment(f)]
     
     if not args.check_new and not args.suggest_consolidation and not args.suggest_migration:
         args.stats = True  # Default to stats

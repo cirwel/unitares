@@ -236,8 +236,28 @@ def test_truncation_is_reported_as_a_budget_problem():
             result = asyncio.run(hb.call_openai_compat_backend("p"))
 
     assert result.text is None
-    assert "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS" in (result.error or "")
+    assert "UNITARES_DIALECTIC_EXTERNAL_MAX_TOKENS" in (result.error or "")
     assert result.finish_reason == "length"
+
+
+def test_external_budget_is_separate_from_the_local_models():
+    """#2379: the shared 1024 default cut a hosted reasoning model off before
+    its verdict. The external host gets its own, larger default, and the local
+    model's knob no longer reaches it."""
+    client = _FakeClient(_response('{"agrees": false, "reasoning": "r"}'))
+    env = {**CONFIGURED, "UNITARES_DIALECTIC_REVIEW_MAX_TOKENS": "1024"}
+    with patch.dict("os.environ", env, clear=True):
+        with _patch_openai(client):
+            asyncio.run(hb.call_openai_compat_backend("p"))
+    assert client.seen["max_tokens"] == hb.DEFAULT_EXTERNAL_MAX_TOKENS
+    assert hb.DEFAULT_EXTERNAL_MAX_TOKENS > 1024
+
+    client = _FakeClient(_response('{"agrees": false, "reasoning": "r"}'))
+    env = {**CONFIGURED, "UNITARES_DIALECTIC_EXTERNAL_MAX_TOKENS": "3000"}
+    with patch.dict("os.environ", env, clear=True):
+        with _patch_openai(client):
+            asyncio.run(hb.call_openai_compat_backend("p"))
+    assert client.seen["max_tokens"] == 3000
 
 
 def test_missing_openai_dependency_degrades_instead_of_raising():
