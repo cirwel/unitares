@@ -45,12 +45,12 @@ sequenceDiagram
 
 ## Start with one thing
 
-Start with the first layer and add the next when you need it. Each process calls
-`start_session(force_new=true)` once and reuses its `client_session_id` after that; a session that takes over finished work also passes `parent_agent_id` and `spawn_reason="explicit"`.
+Start with the first layer and add the next when you need it. How a session gets
+its identity, including handoffs, is in [Agent identity](docs/integration/MCP_CLIENTS.md#agent-identity).
 
 | Start here | You get | Tools |
 |---|---|---|
-| **1. Remember** | Every process has a name, and what it finds survives restarts and handoffs. | `start_session`, `store_finding`, `search_shared_memory` |
+| **1. Remember** | Every process has a name, and what it finds survives restarts and handoffs. | `start_session`, `search_shared_memory`, `store_finding` |
 | **2. Challenge** | Open a review on the record. A peer agent or a reviewer model you configure answers it, and any disagreement stays with the work. | `request_review` |
 | **3. Steer** | Check-ins return proceed, guide, or pause with a reason, and outcomes are recorded against them. | `sync_state`, `record_result` |
 
