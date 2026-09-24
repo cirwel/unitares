@@ -115,6 +115,7 @@ DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
 # are normalized to fit at ingest, but a row persisted before that bound can
 # still carry a longer one, and the verdict route refuses it with a 400.
 FINGERPRINT_MAX_CHARS = 256
+QUEUE_FETCH_LIMIT = 25  # the adjudication-queue route's own cap on ?limit=
 VERDICTS = ("confirmed", "dismissed", "abstain")
 
 SYSTEM_PROMPT = (
@@ -223,7 +224,10 @@ def resolve_claude_cli() -> Optional[str]:
 
 
 def io_fetch_queue(tokens: list[str]) -> list[dict]:
-    query = urllib.parse.urlencode({"limit": MAX_ITEMS, "exclude_model_abstained": 1})
+    # The server's max window, not MAX_ITEMS: items this job must skip
+    # (legacy over-long fingerprints) would otherwise fill every fetch and
+    # starve the judgeable findings behind them. MAX_ITEMS caps what is JUDGED.
+    query = urllib.parse.urlencode({"limit": QUEUE_FETCH_LIMIT, "exclude_model_abstained": 1})
     body = _http_json(f"{GOV_URL}/v1/sentinel/adjudication-queue?{query}", None, tokens)
     return list(body.get("queue") or []) if body.get("success") else []
 
@@ -527,7 +531,9 @@ def run_once(io: dict | None = None, dry_run: bool = False,
         return 0
     recorded = 0
     attempted = answered = 0
-    for item in queue[:MAX_ITEMS]:
+    for item in queue:
+        if attempted >= MAX_ITEMS:
+            break
         fp = item.get("fingerprint")
         if not fp:
             continue

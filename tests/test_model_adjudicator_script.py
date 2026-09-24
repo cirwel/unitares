@@ -577,3 +577,22 @@ def test_a_queue_of_only_legacy_fingerprints_is_not_a_judge_failure(adj):
 def test_the_bound_matches_the_server(adj):
     from src.http_routes.sentinel import _FINGERPRINT_MAX_CHARS
     assert adj.FINGERPRINT_MAX_CHARS == _FINGERPRINT_MAX_CHARS
+
+
+def test_skipped_legacy_rows_do_not_starve_judgeable_findings(adj, monkeypatch):
+    """MAX_ITEMS caps what is judged, not what is fetched."""
+    monkeypatch.setattr(adj, "MAX_ITEMS", 2)
+    queue = ([dict(ITEM, fingerprint="L" * 300 + str(i)) for i in range(5)]
+             + [dict(ITEM, fingerprint=f"ok{i}") for i in range(4)])
+    io, calls = make_io(adj, {"fast": reply("confirmed")}, queue=queue)
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert [p["fingerprint"] for p in calls["posted"]] == ["ok0", "ok1"]
+
+
+def test_the_queue_is_fetched_at_the_servers_max_window(adj, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(adj, "_http_json",
+                        lambda url, payload, tokens, extra_headers=None:
+                        seen.setdefault("url", url) and {"success": True, "queue": []})
+    adj.io_fetch_queue(["t"])
+    assert "limit=25" in seen["url"] and "exclude_model_abstained=1" in seen["url"]
