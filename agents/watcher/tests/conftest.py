@@ -80,6 +80,9 @@ def _watcher_isolation(monkeypatch, tmp_path, request):
                 continue
 
     sandbox_log = tmp_path / "unitares-watcher.log"
+    # log() prefers this override over LOG_FILE; point it at the same sandbox
+    # so a suite-wide value from tests/conftest.py cannot split the two.
+    monkeypatch.setenv("UNITARES_WATCHER_LOG_FILE", str(sandbox_log))
     for mod in list(sys.modules.values()):
         try:
             if getattr(mod, "LOG_FILE", None) == _REAL_LOG:

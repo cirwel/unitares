@@ -27,6 +27,16 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "unitares-vigil-test.log"),
 )
 
+# Same leak, Watcher's log. The watcher tests under tests/ (path exclusion,
+# state-dir migration, detector capability) call into agents.watcher, which
+# logs every drop and migration to ~/Library/Logs/unitares-watcher.log. On
+# 2026-09-24 those fixture lines were about 1 in 5 lines of the operator's log,
+# including the model_not_found / timeout lines that read as detector outages.
+os.environ.setdefault(
+    "UNITARES_WATCHER_LOG_FILE",
+    str(Path(tempfile.gettempdir()) / "unitares-watcher-test.log"),
+)
+
 # The resident roster is now deployment config (UNITARES_RESIDENTS), empty by
 # default for user-agnostic installs. The test suite validates the resident
 # machinery against the canonical fleet, so configure it here BEFORE any test
