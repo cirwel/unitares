@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Model adjudicator.
+
+    Every 6h, judges the adjudication queue with a model and records each
+    verdict through /v1/sentinel/model-adjudicate. For deployments where nobody
+    adjudicates: without it the queue fills, never drains, and its two doctor
+    checks warn forever.
+
+    A MODEL VERDICT IS TELEMETRY, NEVER AN OPERATOR LABEL. It lands in
+    audit.events as finding_model_adjudicated and never in outcome_events, so
+    it cannot reach is_bad, the EISV anchor channel or the registered outcome
+    read. Installing this does not make anyone an adjudicator.
+
+    Installing this plist IS the opt-in (execution-cost policy): it sets
+    UNITARES_MODEL_ADJUDICATOR_HOST=codex, which spends ChatGPT-subscription
+    quota through the Codex CLI. No metered API key is involved.
+
+    Model tiers: FAST judges every item; STRONG sees only what FAST abstained
+    on or scored below UNITARES_ADJUDICATOR_ESCALATE_BELOW (default 0.7).
+    Leave a model empty for the CLI's default; set STRONG to "off" to disable
+    escalation. List what your CLI offers from ~/.codex/models_cache.json —
+    pick a fast, cheap model for FAST and a frontier one for STRONG.
+
+    If this deployment has NO human adjudicator, also set
+      UNITARES_OPERATOR_ADJUDICATION=off
+    on the doctor-findings job, so its two queue checks SKIP with the reason
+    instead of warning about a channel nobody can feed. Declared, never
+    inferred: leave it unset wherever a human does adjudicate.
+
+    TWO ENVIRONMENT REQUIREMENTS:
+      PATH must hold the keg-only postgresql@17 bin dir (the job re-runs the
+      finding's doctor check and reads its history with psql) and the dir
+      holding `codex`. launchd's minimal PATH has neither.
+      HOME and USER must be set: the Codex CLI reads its login from HOME, and
+      a subscription CLI under launchd without USER reports "not logged in".
+
+    Before installing, substitute the placeholders:
+      __UNITARES_ROOT__ -> absolute path to the deploy checkout
+      PYTHON_BIN        -> absolute path to a 3.14+ interpreter
+      __HOME__          -> your home directory
+      __USER__          -> your username
+
+    Example:
+      sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares-deploy|g" \
+          -e "s|PYTHON_BIN|$(which python3)|g" \
+          -e "s|__HOME__|$HOME|g" -e "s|__USER__|$USER|g" \
+          scripts/ops/com.unitares.model-adjudicator.plist.template \
+          > ~/Library/LaunchAgents/com.unitares.model-adjudicator.plist
+      launchctl load ~/Library/LaunchAgents/com.unitares.model-adjudicator.plist
+
+    Verify first, posting nothing:
+      UNITARES_MODEL_ADJUDICATOR_HOST=codex PYTHON_BIN \
+          scripts/ops/model_adjudicator.py (pass the dry-run flag)
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>com.unitares.model-adjudicator</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>PYTHON_BIN</string>
+        <string>__UNITARES_ROOT__/scripts/ops/model_adjudicator.py</string>
+    </array>
+    <key>WorkingDirectory</key><string>__UNITARES_ROOT__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key><string>__HOME__</string>
+        <key>USER</key><string>__USER__</string>
+        <key>UNITARES_MODEL_ADJUDICATOR_HOST</key><string>codex</string>
+        <key>UNITARES_ADJUDICATOR_FAST_MODEL</key><string></string>
+        <key>UNITARES_ADJUDICATOR_FAST_EFFORT</key><string>low</string>
+        <key>UNITARES_ADJUDICATOR_STRONG_MODEL</key><string></string>
+        <key>UNITARES_ADJUDICATOR_STRONG_EFFORT</key><string>medium</string>
+    </dict>
+    <key>StartInterval</key><integer>21600</integer>
+    <key>RunAtLoad</key><false/>
+    <key>ProcessType</key><string>Background</string>
+    <key>StandardOutPath</key><string>__UNITARES_ROOT__/data/logs/model-adjudicator.log</string>
+    <key>StandardErrorPath</key><string>__UNITARES_ROOT__/data/logs/model-adjudicator.err</string>
+</dict>
+</plist>
