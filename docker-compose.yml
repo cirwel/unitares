@@ -7,7 +7,7 @@
 # Then point an MCP client at http://localhost:8767/mcp/ and call onboard().
 #
 # This brings up:
-#   - postgres-age      Postgres 17 + Apache AGE + pgvector  (port 5432)
+#   - postgres-age      Postgres 18 + Apache AGE + pgvector  (port 5432)
 #   - redis             De-facto primary session store + locks (port 6379)
 #   - lease-plane       Exclusive surface leases + handoffs   (port 8788)
 #   - governance-mcp    UNITARES governance server            (port 8767)

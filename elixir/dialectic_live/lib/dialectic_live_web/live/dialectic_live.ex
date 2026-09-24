@@ -8,9 +8,11 @@ defmodule DialecticLiveWeb.DialecticLive do
       to refetch (mirrors the JS dashboard's ws.js). A 10s timer is the floor so
       the pane stays fresh even before dialectic_* events exist server-side.
     * sessions with `awaiting_facilitation == true` float to the top and get a
-      badge — these are the #1015 human-facilitation-needed sessions. (Depends on
-      the server exposing the field in `list`; PR #1220 / migration 053. Until
-      then the field is simply absent and nothing is badged — no crash.)
+      badge — these are the #1015 human-facilitation-needed sessions. (The server
+      already returns the field on every session in `list`'s default shape, which
+      `list_sessions/0` requests — only the opt-in `fields: "compact"` projection
+      drops it; PR #1220 / migration 053. A session without the key is simply not
+      badged — no crash.)
 
   B2 (NOT here): true per-turn streaming needs the engine to emit dialectic_*
   events (#1167 Ask 1). The topic + doorbell are ready for that upgrade.

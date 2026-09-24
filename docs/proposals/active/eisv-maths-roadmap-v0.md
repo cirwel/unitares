@@ -2,6 +2,11 @@
 
 **Status:** design-intent / roadmap (not a change). Captures the direction; each
 *move* lands as its own flagged, reversible PR with its own gate.
+**Re-read 2026-09-23 (proposals audit):** the outcome-validity question in §6
+(B's gate, condition 3) is now owned by the registered
+[`eisv-outcome-grounding-stop-rule-v0.md`](../registered/eisv-outcome-grounding-stop-rule-v0.md)
+(#1425; read fixed for 2026-12-01, status unresolved). This roadmap predates it and
+does not otherwise cite it.
 **Method:** starts from design **values**, translates them into maths, and
 sequences reversible moves. The values are the operator's; the translation and
 the layer-tagging are the engineering. Where a decision is a value, it is held

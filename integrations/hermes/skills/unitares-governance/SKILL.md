@@ -31,6 +31,8 @@ If this process is an intentional handoff from an exited predecessor, pass its U
 
 When there is meaningful work to report, call `sync_state(response_text=..., complexity=..., client_session_id=...)`. Do not manufacture a check-in for every message or tool call.
 
+When you know them, include the model provider and model in `sync_state`'s `provenance_context`, for example `provenance_context={"model_provider": "anthropic", "model": "<model id>"}` or `{"model_provider": "openai-codex", "model": "<model id>"}`. The harness is Hermes whatever provider you run on. Do not put the provider name in `harness_type`: provider ids such as `openai-codex` or `claude` would be read as a different harness. The plugin already declares the harness.
+
 Treat UNITARES state estimates and coherence signals as runtime telemetry, not as an oracle about task correctness or real-world outcomes.
 
 For evidence-bearing work, distinguish what is directly observed from the repository or runtime, what is reported by another system, and what is inferred.

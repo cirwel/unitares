@@ -91,6 +91,12 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
         last_verified = last_verified.isoformat()
     elif last_verified is not None:
         last_verified = str(last_verified)
+    # Re-verifications are recorded as attestation files, not by editing
+    # SKILL.md (see scripts/client/_check_freshness.py). The effective date is
+    # the later of the two, the same rule the CI checker applies.
+    attested = _latest_attestation_date(skill_dir.parent, skill_dir.name)
+    if attested and (not last_verified or attested > last_verified):
+        last_verified = attested
 
     source_files = meta.get("source_files") or []
     if not isinstance(source_files, list):
@@ -115,6 +121,27 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
     return skill
 
 
+def _latest_attestation_date(skills_root: Path, name: str) -> Optional[str]:
+    """`verified_date` of the newest attestation for a skill, if any.
+
+    Format and naming: scripts/client/_check_freshness.py. Files are named
+    `<YYYYMMDDTHHMMSSffffffZ>-<hex>.json`, so the lexically last readable one
+    is the newest.
+    """
+    adir = skills_root / ".attestations" / name
+    if not adir.is_dir():
+        return None
+    for path in sorted(adir.glob("*.json"), reverse=True):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        verified = data.get("verified_date") if isinstance(data, dict) else None
+        if isinstance(verified, str) and verified:
+            return verified
+    return None
+
+
 def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
     """Compute stale flag based on age of last_verified vs freshness_days.
 
@@ -122,8 +149,9 @@ def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
     git-log staleness is a future enhancement; the date check covers the
     common case (skill not touched in N days).
 
-    UTC, because `scripts/client/_check_freshness.py` stamps `last_verified`
-    in UTC. Reading it back with a local `date.today()` made a skill stamped
+    UTC, because `scripts/client/_check_freshness.py` records verified
+    dates (frontmatter `last_verified` and attestation `verified_date`) in
+    UTC. Reading them back with a local `date.today()` made a skill stamped
     after 00:00 UTC report a negative age on any host behind UTC, quietly
     widening the freshness window by a day.
     """
