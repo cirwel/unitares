@@ -1,9 +1,11 @@
-"""The two adjudication-queue checks under a declared no-operator deployment.
+"""Adjudication checks under a declared no-operator deployment.
 
-Both checks judge the OPERATOR label channel. When a deployment declares it has
-no human adjudicator (UNITARES_OPERATOR_ADJUDICATION=off) their WARN can never
-clear, so they SKIP and say why. The declaration must be explicit: absence of
-operator verdicts is never inferred.
+adjudication_feedstock asks whether the queue is fed for an operator to judge.
+When a deployment declares it has no human adjudicator
+(UNITARES_OPERATOR_ADJUDICATION=off) its WARN can never clear, so it SKIPs and
+says why. anchor_all_positive_generator does NOT skip: it audits labels already
+in the anchor channel, which the declaration does not remove. The declaration
+must be explicit: absence of operator verdicts is never inferred.
 """
 from __future__ import annotations
 
@@ -14,7 +16,7 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "dev" / "unitares_doctor.py"
-CHECKS = ("check_anchor_all_positive_generator", "check_adjudication_feedstock")
+CHECKS = ("check_adjudication_feedstock",)
 
 
 @pytest.fixture(scope="module")
@@ -62,3 +64,13 @@ def test_unreadable_model_count_still_skips(doctor, monkeypatch):
     result = doctor.check_adjudication_feedstock("postgresql:///x")
     assert result.status is doctor.Status.SKIP
     assert "model verdict" not in result.message
+
+
+def test_historical_anchor_audit_still_runs_when_operators_are_off(doctor, monkeypatch):
+    """Declaring no FUTURE adjudicator does not remove labels already recorded."""
+    monkeypatch.setenv("UNITARES_OPERATOR_ADJUDICATION", "off")
+    monkeypatch.setattr(doctor, "_psql_rows",
+                        lambda *a, **k: [["sentinel_finding", "17", "0"]])
+    result = doctor.check_anchor_all_positive_generator("postgresql:///x")
+    assert result.status is doctor.Status.WARN
+    assert "sentinel_finding: 17 confirmed, 0 dismissed" in result.message

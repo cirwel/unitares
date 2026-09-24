@@ -210,8 +210,13 @@ def test_codex_argv_is_read_only_and_never_shell_interpolated(adj, monkeypatch):
     monkeypatch.setattr(adj.subprocess, "run", fake_run)
     adj.io_run_codex("prompt; rm -rf /", adj.Tier("fast", "m-fast", "low"))
     argv = seen["argv"]
-    assert argv[:5] == ["/bin/codex", "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
-    assert ["-m", "m-fast"] == argv[5:7]
+    assert argv[:2] == ["/bin/codex", "exec"]
+    # Isolated like the host adapter's codex lane, not only sandboxed.
+    for flag in ("--ignore-user-config", "--ephemeral", "--skip-git-repo-check"):
+        assert flag in argv
+    assert argv[argv.index("--sandbox") + 1] == "read-only"
+    assert "project_doc_max_bytes=0" in argv
+    assert argv[argv.index("-m") + 1] == "m-fast"
     assert argv[-1] == "prompt; rm -rf /"   # one argv element, no shell
     assert seen["kw"]["stdin"] is adj.subprocess.DEVNULL
     assert "shell" not in seen["kw"]
@@ -286,3 +291,10 @@ def test_a_non_401_error_does_not_try_other_tokens(adj, monkeypatch):
     with pytest.raises(adj.urllib.error.HTTPError):
         adj._http_json("http://x", None, ["a", "b"])
     assert len(sent) == 1
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+def test_non_finite_confidence_counts_as_none_and_escalates(adj, raw):
+    text = '{"verdict": "confirmed", "confidence": %s}' % raw
+    j = adj.parse_judgement(text, tiers(adj)[0])
+    assert j.confidence == 0.0 and j.unsure()

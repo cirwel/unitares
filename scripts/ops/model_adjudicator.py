@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -235,7 +236,15 @@ def io_run_codex(prompt: str, tier: Tier) -> Optional[str]:
     if cli is None:
         log("codex CLI not found (set UNITARES_CODEX_CLI)")
         return None
-    argv = [cli, "exec", "--sandbox", "read-only", "--skip-git-repo-check"]
+    # Isolation beyond the sandbox, matching the host adapter's codex lane:
+    # --ignore-user-config drops the operator's configured MCP servers and
+    # hooks (network- or write-capable tools the read-only sandbox does not
+    # cover), --ephemeral keeps no session, and project_doc_max_bytes=0 stops
+    # the checkout's AGENTS.md from steering a judge that is reading
+    # untrusted finding text.
+    argv = [cli, "exec", "--ignore-user-config", "--ephemeral",
+            "--sandbox", "read-only", "--skip-git-repo-check",
+            "-c", "project_doc_max_bytes=0"]
     if tier.model:
         argv += ["-m", tier.model]
     if tier.effort:
@@ -346,9 +355,12 @@ def parse_judgement(text: Optional[str], tier: Tier) -> Optional[Judgement]:
     if verdict == "dismissed" and reason not in DISMISS_REASONS:
         return None
     try:
-        confidence = max(0.0, min(1.0, float(found.get("confidence"))))
+        confidence = float(found.get("confidence"))
     except (TypeError, ValueError):
         confidence = 0.0
+    # json accepts NaN/Infinity and the clamp would turn either into 1.0,
+    # i.e. maximal confidence that skips escalation. Treat as no confidence.
+    confidence = max(0.0, min(1.0, confidence)) if math.isfinite(confidence) else 0.0
     return Judgement(verdict, reason if verdict == "dismissed" else None,
                      confidence, str(found.get("rationale") or "")[:2000], tier)
 

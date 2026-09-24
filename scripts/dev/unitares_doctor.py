@@ -2754,11 +2754,12 @@ def _operator_adjudication_declared_off() -> bool:
 
 
 def _no_operator_adjudicator(name: str, mode: str, db_url: str) -> CheckResult:
-    """SKIP for a queue check whose subject cannot exist on this deployment.
+    """SKIP for a queue-feed check whose subject cannot exist on this deployment.
 
-    Both queue checks judge the OPERATOR label channel. With no operator it
-    receives nothing by construction, so their WARN could never clear and
-    would repeat every sweep forever. Model verdicts (finding_model_adjudicated)
+    adjudication_feedstock asks whether the queue is fed for the OPERATOR to
+    judge. With no operator nothing is judged by construction, so its WARN
+    could never clear and would repeat every sweep forever. Not used by
+    anchor_all_positive_generator, which audits labels already recorded. Model verdicts (finding_model_adjudicated)
     are named here as the reason the queue still drains, and deliberately NOT
     counted as the channel's verdicts: they are telemetry, not anchors.
     """
@@ -2801,8 +2802,9 @@ def check_anchor_all_positive_generator(db_url: str) -> CheckResult:
     wrong lever.
     """
     name, mode = "anchor_all_positive_generator", "operator"
-    if _operator_adjudication_declared_off():
-        return _no_operator_adjudicator(name, mode, db_url)
+    # Deliberately NOT skipped under UNITARES_OPERATOR_ADJUDICATION=off: this
+    # audits labels ALREADY in the anchor channel (every family, not only the
+    # queue's), and declaring no future adjudicator does not remove them.
     rows = _psql_rows(db_url, (
         "SELECT regexp_replace(outcome_type, '_(confirmed|dismissed)$', '') AS family, "
         "count(*) FILTER (WHERE outcome_type LIKE '%_confirmed') AS confirmed, "
