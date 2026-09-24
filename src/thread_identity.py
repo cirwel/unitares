@@ -120,8 +120,9 @@ def fork_honest_message(
     if episode_fork_kind == "sibling_locus" and minted_fresh is None:
         return (
             "You are a distinct subject - a process-instance on a thread that "
-            "other process-instances also occupy. Sharing a thread declares no "
-            "lineage: only a declared parent_agent_id does. Memory access (KG, "
+            "other process-instances have also occupied. Sharing a thread "
+            "declares no lineage: only a declared, distinct parent_agent_id "
+            "does. Memory access (KG, "
             "project files, harness-side caches) may be available; whether "
             "you have integrated it is yours to demonstrate, not asserted."
         )
@@ -129,7 +130,7 @@ def fork_honest_message(
     if episode_fork_kind == "sibling_locus" and minted_fresh:
         return (
             "You are a distinct subject - a fresh UUID on a thread that earlier "
-            "process-instances also occupy. Sharing a thread declares no "
+            "process-instances have also occupied. Sharing a thread declares no "
             "lineage: they are not your predecessors. Memory access (KG, "
             "project files, harness-side caches) may be available; whether "
             "you have integrated it is yours to demonstrate, not asserted."

@@ -296,7 +296,11 @@ class TestBuildForkContext:
         )
         assert "share a registry UUID" not in message
         assert "a fresh UUID" not in message
-        assert "only a declared parent_agent_id does" in message
+        assert "only a declared, distinct parent_agent_id does" in message
+        # position is a monotonic counter: earlier nodes may all have exited,
+        # so the text must not assert concurrent occupancy.
+        assert "also occupy" not in message
+        assert "have also occupied" in message
         # Non-sibling kinds ignore the flag entirely.
         assert fork_honest_message("none", None, None, minted_fresh=None) == (
             "You are the first observation under this thread. No fork."
