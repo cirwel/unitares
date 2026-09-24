@@ -293,7 +293,7 @@ async def sweep_stale_bindings() -> int:
         return 0
 
 
-async def retire_bindings(agent_id: str) -> int:
+async def retire_bindings(agent_id: str) -> Optional[int]:
     """Mark the identity's live bindings stale on a clean exit.
 
     The lineage gate counts a live binding as a running parent for
@@ -302,7 +302,8 @@ async def retire_bindings(agent_id: str) -> int:
     id: a fresh start_session records its binding before its client_session_id
     exists, and one live process per identity is the contract. The caller
     retires only when the exiting session was the identity's last live holder.
-    Returns the number of rows retired; 0 on any error.
+    Returns the number of rows retired, or None when the update failed, so a
+    caller can tell "nothing to retire" from "a live binding may remain".
     """
     if not agent_id:
         return 0
@@ -324,8 +325,8 @@ async def retire_bindings(agent_id: str) -> int:
         except Exception:
             return 0
     except Exception as e:
-        logger.debug(f"[PROCESS_BINDING] retire_bindings failed: {e}")
-        return 0
+        logger.warning(f"[PROCESS_BINDING] retire_bindings failed: {e}")
+        return None
 
 
 async def get_live_bindings(agent_id: str) -> List[Dict[str, Any]]:

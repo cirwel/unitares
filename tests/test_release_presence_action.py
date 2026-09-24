@@ -166,3 +166,29 @@ async def test_binding_insert_after_a_clean_exit_is_skipped(monkeypatch):
         assert called == []
     finally:
         apl._released_at.pop("caller-uuid", None)
+
+
+
+@pytest.mark.asyncio
+async def test_release_presence_reports_a_failed_binding_retirement(monkeypatch):
+    from src.mcp_handlers.identity import process_binding
+
+    attempts = []
+
+    async def _release(agent_uuid, session_ids=()):
+        return {"released": True, "reason": "released"}
+
+    async def _retire(agent_id):
+        attempts.append(agent_id)
+        return None
+
+    monkeypatch.setattr(shared, "require_write_permission", lambda arguments=None: (True, None))
+    monkeypatch.setattr(shared, "get_bound_agent_id", lambda session_id=None, arguments=None: "caller-uuid")
+    monkeypatch.setattr(apl, "release_agent_presence", _release)
+    monkeypatch.setattr(process_binding, "retire_bindings", _retire)
+
+    body = _payload(await handle_release_presence({"client_session_id": "sess-1"}))
+
+    assert len(attempts) == 2
+    assert body["binding_retirement_failed"] is True
+    assert body["bindings_retired"] is None
