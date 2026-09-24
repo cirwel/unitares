@@ -6,7 +6,7 @@ the Python SDK under `agents/sdk/` has its own `sdk-v*` tags and its own PyPI
 version, and `skills/` is mirrored byte-for-byte into the separately tagged
 `unitares-governance-plugin`.
 
-`version_manager.py` guards the server version across seven files, thoroughly.
+`version_manager.py` guards the server version thoroughly, checking its references against `VERSION` and `PUBLISHED_VERSION`.
 Nothing watched the other series. So `agents/sdk/` accumulated four commits and
 a new public method across two server releases while PyPI still served 0.1.0,
 and the skills bundle shipped guidance the server had already changed. Neither

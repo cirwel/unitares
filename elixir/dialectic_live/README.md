@@ -30,8 +30,9 @@ the Python governance MCP (`:8767`); this app is purely a *consumer*:
 - **B2** (true per-turn streaming) is blocked upstream: the engine does not yet
   emit `dialectic_*` broadcast events (#1167 Ask 1). The PubSub topic and
   doorbell are wired and ready for them.
-- The `awaiting_facilitation` badge activates once that field is exposed in
-  `dialectic(list)` (#1220 / migration 053).
+- The `awaiting_facilitation` badge needs no further server work: `dialectic(list)`
+  returns that field on each session in its default (non-`compact`) shape, which
+  is what this pane requests (#1220 / migration 053).
 
 ## Running
 
