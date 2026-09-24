@@ -510,6 +510,7 @@ def _reflection(source_payload: Dict[str, Any]) -> Optional[str]:
 
 
 _UNKNOWN_WRITER = "unknown"
+_DIGEST_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
 
 
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
@@ -987,6 +988,22 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
             envelope["discovery_retrieval_options"] = keep
 
     suggestions = envelope.get("memory_suggestions")
+    # Attribution never costs a result or its fields. Set it aside, run the
+    # budget steps exactly as for an attribution-free payload (which decides
+    # which digests and fields survive), then give each survivor back as much
+    # attribution as still fits, in rank order: label and identity, else the
+    # identity alone, else neither. An identity is only ever whole. One
+    # envelope-level marker says something was withheld, if it fits.
+    set_aside: List[Dict[str, Any]] = []
+    if isinstance(suggestions, list):
+        for item in suggestions:
+            snap = {}
+            if isinstance(item, dict):
+                for key in _DIGEST_ATTRIBUTION_KEYS:
+                    if key in item:
+                        snap[key] = item.pop(key)
+            set_aside.append(snap)
+
     while (
         isinstance(suggestions, list)
         and suggestions
@@ -1010,48 +1027,33 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
                 compact["summary"] = summary[:96].rstrip() + (
                     "…" if len(summary) > 96 else ""
                 )
-            # Who wrote it survives compaction, copied as the digest already
-            # shaped it: the label is bounded (and flagged if it was cut) and
-            # the identity is exact. Re-slicing here would cut the flagged
-            # ellipsis off or turn the identity into a prefix.
-            attribution = {
-                key: item[key]
-                for key in ("by", "by_truncated", "agent_id")
-                if item.get(key)
-            }
-            compact.update(attribution)
             suggestions[0] = compact
-            # This can still overflow: other envelope fields (a long
-            # confidence_note, say) can fill the budget so that even a normal
-            # UUID does not fit, and a pathological legacy identifier never
-            # does. Shed the display label first and keep the identity; if
-            # that is not enough, withhold attribution with a marker (the
-            # discovery_id still opens the full record) instead of dropping
-            # the whole digest or emitting a prefix.
-            if attribution and wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
-                # Each step is re-measured with its marker; a marker that does
-                # not fit is dropped before anything else, and the last step is
-                # exactly the attribution-free digest master emitted, so
-                # attribution never costs the reader the record's handle.
-                base = {k: v for k, v in compact.items() if k not in attribution}
-                steps = []
-                if attribution.get("agent_id"):
-                    steps += [
-                        {"agent_id": attribution["agent_id"], "attribution_label_omitted": True},
-                        {"agent_id": attribution["agent_id"]},
-                    ]
-                steps += [{"attribution_omitted": True}, {}]
-                for extra in steps:
-                    compact.clear()
-                    compact.update(base)
-                    compact.update(extra)
-                    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
-                        break
         else:
             suggestions[0] = {"summary": str(item)[:96]}
 
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
+
+    if isinstance(suggestions, list):
+        withheld = False
+        for item, snap in zip(suggestions, set_aside):
+            if not snap or not isinstance(item, dict):
+                continue
+            identity = {"agent_id": snap["agent_id"]} if "agent_id" in snap else {}
+            for attempt in (snap, identity):
+                if not attempt:
+                    continue
+                item.update(attempt)
+                if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+                    break
+                for key in attempt:
+                    item.pop(key, None)
+            if any(key not in item for key in snap):
+                withheld = True
+        if withheld:
+            envelope["digest_attribution_omitted"] = True
+            if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+                envelope.pop("digest_attribution_omitted", None)
 
     state = envelope.get("state_summary")
     if isinstance(state, dict) and isinstance(suggestions, list):

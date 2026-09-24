@@ -1391,41 +1391,54 @@ def test_search_lean_projection_worst_case_attribution_holds_wire_budget():
             assert len(digest["by"]) == 64
 
 
-def test_a_crowded_envelope_sheds_the_label_before_the_identity():
-    """Review on #2386: a long envelope field (here `confidence_note`) can
-    leave too little room even for a normal UUID plus label. The label goes
-    first; the exact identity stays while it still fits."""
-    uuid = "5b0c1f7e-1a2b-4c3d-8e9f-000000000001"
-    base = {
-        "success": True,
-        "results": [{"id": "d1", "by": "backup-investigator-" + "x" * 40,
-                     "_agent_id": uuid, "summary": "short"}],
-        "total_count": 1,
-    }
-    kept_label = kept_id_only = False
-    for n in range(0, 2400, 5):
-        env = build_experience_envelope("search_shared_memory", "knowledge",
-                                        {**base, "confidence_note": "c" * n})
+_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
+
+
+def _results(n_results, attributed):
+    rows = []
+    for i in range(n_results):
+        row = {"id": f"d{i + 1}", "title": f"Title {i + 1}", "type": "insight",
+               "status": "open", "tags": ["a", "b"], "fusion_score": 0.5 - i / 10,
+               "summary": ("finding " + str(i + 1) + " ") * 25}
+        if attributed:
+            row["by"] = "backup-investigator-session-label"
+            row["_agent_id"] = f"5b0c1f7e-1a2b-4c3d-8e9f-00000000000{i + 1}"
+        rows.append(row)
+    return rows
+
+
+@pytest.mark.parametrize("n_results", [1, 3])
+def test_attribution_never_costs_a_result_or_its_fields(n_results):
+    """Review on #2386: attribution never costs a result or its fields.
+    Swept over the envelope's free space: every digest an attribution-free
+    payload keeps, the attributed payload keeps with the same
+    non-attribution fields; attribution returns as label+identity, identity
+    alone, or not at all, and an identity that survives is exact."""
+    saw_labels, saw_ids_only, saw_none = False, False, False
+    for n in range(0, 2600, 10):
+        extra = {"total_count": n_results, "confidence_note": "c" * n, "success": True}
         # Whole-envelope size is not asserted here: master already overshoots
-        # 3,000 bytes in a narrow window (the response-size block is added
-        # after the budget check), independent of attribution.
-        digest = env.get("memory_suggestions") or []
-        # Parity with an attribution-free row: wherever that keeps a digest,
-        # attribution must not cost the reader the record's handle.
+        # 3,000 bytes in a narrow window, independent of attribution.
         bare = build_experience_envelope(
-            "search_shared_memory", "knowledge",
-            {**base, "results": [{"id": "d1", "summary": "short"}], "confidence_note": "c" * n})
-        if bare.get("memory_suggestions"):
-            assert digest and digest[0]["discovery_id"] == "d1", n
-        if not digest:
-            continue
-        first = digest[0]
-        assert "agent_id" not in first or first["agent_id"] == uuid  # never a prefix
-        if "by" in first:
-            kept_label = True
-        elif first.get("agent_id") == uuid and first.get("attribution_label_omitted"):
-            kept_id_only = True
-    assert kept_label and kept_id_only
+            "search_shared_memory", "knowledge", {**extra, "results": _results(n_results, False)})
+        env = build_experience_envelope(
+            "search_shared_memory", "knowledge", {**extra, "results": _results(n_results, True)})
+        bare_d = bare.get("memory_suggestions") or []
+        env_d = env.get("memory_suggestions") or []
+        assert len(env_d) >= len(bare_d), n
+        for got, want in zip(env_d, bare_d):
+            assert {k: v for k, v in got.items() if k not in _ATTRIBUTION_KEYS} == want, n
+        for i, got in enumerate(env_d):
+            if "agent_id" in got:
+                assert got["agent_id"] == f"5b0c1f7e-1a2b-4c3d-8e9f-00000000000{i + 1}"
+        for got in env_d:
+            if "by" in got:
+                saw_labels = True
+            elif "agent_id" in got:
+                saw_ids_only = True
+            else:
+                saw_none = True
+    assert saw_labels and saw_ids_only and saw_none
 
 
 def test_search_projection_budget_omits_pathological_identity_explicitly():
@@ -1449,8 +1462,8 @@ def test_search_projection_budget_omits_pathological_identity_explicitly():
     assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
     first = env["memory_suggestions"][0]
     assert first["discovery_id"] == "d1"
-    assert first["attribution_omitted"] is True
-    assert "agent_id" not in first
+    assert env["digest_attribution_omitted"] is True
+    assert "agent_id" not in first and "by" not in first
 
 
 def test_search_projection_budget_drops_oversized_single_result():
