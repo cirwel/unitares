@@ -1595,9 +1595,11 @@ class UNITARESMonitor:
 
         # Issue #1995: measure the absolute-floor geometry after the behavioral
         # verdict and primary policy decision have already been computed.  This
-        # observation is telemetry-only, zero-inclusive, and fail-open: neither
-        # a breach nor an instrumentation failure may alter risk, verdict, or
-        # enforcement.  Import lazily so an optional-instrument refactor cannot
+        # observation is telemetry-only, zero-inclusive, and fail-open: building
+        # it, and any instrumentation failure, alters no risk, verdict, or
+        # enforcement.  (A breach can change the verdict only through the
+        # default-off UNITARES_FLOOR_BREACH_CAUTION_APPLY floor, which runs in
+        # the assessment above; the row then labels itself accordingly.)  Import lazily so an optional-instrument refactor cannot
         # prevent the governance monitor itself from loading.
         measurement_scope = "simulation" if self._simulation_active else "live"
         try:

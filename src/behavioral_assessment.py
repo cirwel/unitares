@@ -7,7 +7,8 @@ After warmup, scoring switches from fixed universal thresholds to
 self-relative z-score deviations from the agent's own behavioral baseline.
 Absolute safety floors always apply regardless of baseline, but each floor
 bounds only its own component's contribution to composite risk — not the
-verdict, and reliably in true isolation only for S. See the constants
+verdict (unless the default-off UNITARES_FLOOR_BREACH_CAUTION_APPLY floor
+below is on), and reliably in true isolation only for S. See the constants
 block below for what that does and does not guarantee (issue #1995).
 
 Self-relative deviation risk is gated by absolute basin health (issue #689):
@@ -132,7 +133,12 @@ def floor_breach_caution_apply_enabled() -> bool:
 
     LIVE-AFFECTING when on: the behavioral verdict is authoritative post-warmup
     under UNITARES_PHI_TELEMETRY_ONLY, and monitor_decision maps "caution" to
-    sub_action "guide". Escalate-only and baselined-only: never lowers a
+    sub_action "guide". It can also keep a pause: the warmup structural grace
+    (governance_monitor `_apply_warmup_structural_grace`) lifts a cold-start
+    void/coherence/basin/cirs pause only when the behavioral verdict is
+    "safe", so after a restart a baselined agent at a floor breach keeps a
+    pause the grace would otherwise have lifted. Escalate-only and
+    baselined-only: never lowers a
     verdict, never fires before the agent's own baseline is warm. Implies the
     shadow record, with ``applied`` marking rows the floor actually changed.
     """
