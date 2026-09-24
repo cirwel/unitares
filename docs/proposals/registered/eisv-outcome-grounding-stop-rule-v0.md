@@ -1,8 +1,9 @@
 # EISV outcome-grounding: scope correction and a stop rule
 
 Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17;
-power-characterisation correction, 2026-08-23; condition 4 clarification,
-drafted 2026-09-23, effective at merge
+power-characterisation correction, 2026-08-23; condition 4 clarification
+and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
+merge
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -394,9 +395,12 @@ claim that the tuple's order selects. What it does not freeze: the
 tie-break order, which is the construction order in `build_model_scores`,
 and what any candidate computes. The tie-break order is recorded above and
 guarded by a CI canary test (`test_build_model_scores_construction_order_is_the_recorded_tie_break`
-in `tests/test_eisv_ablation_matrix.py`), which fails if a change to
-`master` reorders it, so a reordering cannot reach the read unnoticed; the
-canary is a CI check, not a refusal inside the read. The model
+in `tests/test_eisv_ablation_matrix.py`). It fails if `master` changes any
+part of how that order arises: the order `build_model_scores` constructs
+candidates in, a sort of its result, or a selection path that stops
+following the order of the scores it is given (checked at runtime by a
+forced exact tie through `build_matrix_row`). The canary is a CI check, not
+a refusal inside the read. The model
 constructors in `build_model_scores`, their binning,
 `min_feature_rows` (30), `MIN_DISPERSION_SNAPSHOTS` (5) and
 `DISPERSION_WINDOW_MINUTES` (90.0) remain governed only by the registered
@@ -454,38 +458,6 @@ produce FAIL, which closes the scheduled read track (not EISV; "What
 continues regardless" below governs that). The operator accepts that
 trade: a stable-argmax requirement that may not be met, rather than one
 that cannot fail.
-
-**Smallest relevant effect.** The power-characterisation correction above
-records that no beta, AUC delta, or equivalent effect size fills the
-"predeclared smallest relevant effect" slot, and that the operator must
-declare one before any further live outcome-discrimination access. The
-operator's declaration, made 2026-09-23 before any access to the registered
-cohort, is that **no smallest relevant effect is set for this read**. The
-2026-09-02 interim access disclosed above ran a discrimination script after
-the 2026-08-23 correction and before this declaration existed; it returned 0
-eligible outcomes and computed no discrimination result. That
-is a choice, not an omission, and it is recorded here as the declaration
-the correction asks for. Three reasons, each checkable against this
-repository: the record contains no relevance anchor for this estimand (every
-candidate value in it is a detectability figure, a runtime report label, or
-the withdrawn 0.05 bound that this gate bars by name); the only claim a
-power-qualified `REFUTED` could refute is rework prediction, because in the
-dated inventory of 2026-09-02
-(`docs/proposals/archive/outcome-fixture-conflation-decision-packet-v0.md`,
-21-day window) every `is_bad` row is `test_failed` or
-`watcher_finding_dismissed`, and no recorded measurement shows a bad row of a
-violation, harm, or concealment type; and a value
-chosen now so that `REFUTED` becomes reachable would be derived from what the
-read can detect, which the gate forbids. Consequences: the December read
-runs as registered; the operational stop rule decides PASS or FAIL
-unchanged; the database-free power probe still runs as registered and is
-reported descriptively, not at a declared effect; on any non-PASS branch the scientific inference is `INCONCLUSIVE`
-by declaration, exactly as the gate already provides; and `REFUTED` is
-unreachable for this read. The slot is not closed for the future: a later
-read under a new premise carries its own declaration. No agent-chosen value
-is substituted. The wording of this declaration was drafted by the working
-agent after an adversarial design review of the alternatives and adopted by
-the operator, who ratifies it on merge.
 
 **What this block does not do.** It does not alter conditions 1–3, the 150
 block threshold, the 0.05 level, the 400-resample null, the cohort, the
@@ -548,6 +520,44 @@ live data before the registered read. The 2026-12-01 read remains in force
 exactly as registered. If condition 3 is unmet, the interpretation already
 specified above applies: closure for insufficient eligible evidence, not a
 measured null or disproof.
+
+### Smallest relevant effect — declared 2026-09-23, effective at merge
+
+This is a separate declaration from the condition-4 clarification above, made
+in the same change. It fills the slot the 2026-08-23 correction left open; it
+is a choice of standard, stated here before the read applies it.
+
+The power-characterisation correction above
+records that no beta, AUC delta, or equivalent effect size fills the
+"predeclared smallest relevant effect" slot, and that the operator must
+declare one before any further live outcome-discrimination access. The
+operator's declaration, made 2026-09-23 before any access to the registered
+cohort, is that **no smallest relevant effect is set for this read**. The
+2026-09-02 interim access disclosed above ran a discrimination script after
+the 2026-08-23 correction and before this declaration existed; it returned 0
+eligible outcomes and computed no discrimination result. That
+is a choice, not an omission, and it is recorded here as the declaration
+the correction asks for. Three reasons, each checkable against this
+repository: the record contains no relevance anchor for this estimand (every
+candidate value in it is a detectability figure, a runtime report label, or
+the withdrawn 0.05 bound that this gate bars by name); the only claim a
+power-qualified `REFUTED` could refute is rework prediction, because in the
+dated inventory of 2026-09-02
+(`docs/proposals/archive/outcome-fixture-conflation-decision-packet-v0.md`,
+21-day window) every `is_bad` row is `test_failed` or
+`watcher_finding_dismissed`, and no recorded measurement shows a bad row of a
+violation, harm, or concealment type; and a value
+chosen now so that `REFUTED` becomes reachable would be derived from what the
+read can detect, which the gate forbids. Consequences: the December read
+runs as registered; the operational stop rule decides PASS or FAIL
+unchanged; the database-free power probe still runs as registered and is
+reported descriptively, not at a declared effect; on any non-PASS branch the scientific inference is `INCONCLUSIVE`
+by declaration, exactly as the gate already provides; and `REFUTED` is
+unreachable for this read. The slot is not closed for the future: a later
+read under a new premise carries its own declaration. No agent-chosen value
+is substituted. The wording of this declaration was drafted by the working
+agent after an adversarial design review of the alternatives and adopted by
+the operator, who ratifies it on merge.
 
 ## What continues regardless
 

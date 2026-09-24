@@ -1265,16 +1265,31 @@ RECORDED_CONSTRUCTION_ORDER = (
 )
 
 
-def test_build_model_scores_construction_order_is_the_recorded_tie_break():
-    """CI canary, not a read-time refusal: the manifest pins the candidate
-    tuple but not the order `build_model_scores` constructs candidates in,
-    which breaks exact ties. The stop rule records that order; a change on
-    master that reorders it fails here, before the read."""
+def _tied_score(name, auc=0.7, brier=0.2):
+    keys = tuple(range(10))
+    return skeptic_module.ModelScore(
+        name=name, n_train=20, n_test=10, n_test_scored=10, auc=auc, brier=brier,
+        scored_row_keys=keys, y_true=(0, 1) * 5, y_prob=(0.5,) * 10,
+        y_auc_score=(0.5,) * 10, auc_fitted=auc, n_train_bad=3,
+    )
+
+
+def test_build_model_scores_construction_order_is_the_recorded_tie_break(monkeypatch):
+    """CI canary, not a read-time refusal. An exact tie on the selection key
+    is broken by the order candidates reach `max` in `build_matrix_row`, which
+    the manifest does not pin. The stop rule records that order; this fails if
+    master changes any part of how it arises:
+    (a) the order `build_model_scores` constructs candidates in (source);
+    (b) the selection path following the order of the scores it is given
+        (not, say, iterating the candidate tuple), exercised at runtime by a
+        forced tie through the real `build_matrix_row`;
+    (c) `build_model_scores` reordering its result (no sort in its body)."""
     import ast
     import inspect
     import textwrap
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(skeptic_module.build_model_scores)))
+    # (a) Construction order, read from the source.
     names = []
     for node in ast.walk(tree):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -1288,6 +1303,25 @@ def test_build_model_scores_construction_order_is_the_recorded_tie_break():
                   if name in skeptic_module.EISV_PRIOR_STATE_MODELS)
     assert order == RECORDED_CONSTRUCTION_ORDER
     assert set(order) == set(skeptic_module.EISV_PRIOR_STATE_MODELS)
+
+    # (c) Nothing in build_model_scores reorders what it returns.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+            assert called not in {"sorted", "sort", "reverse", "reversed"}, called
+
+    # (b) A forced exact tie resolves to the first candidate in the order the
+    # scores arrive, through the real selection in build_matrix_row.
+    def winner(candidate_order):
+        scores = [_tied_score("previous_outcome_bad", auc=0.5, brier=0.25)]
+        scores += [_tied_score(name) for name in candidate_order]
+        monkeypatch.setattr(matrix_module, "build_model_scores", lambda rows, **kw: list(scores))
+        return matrix_module.build_matrix_row(
+            [], scope="task", window_days=365, lead_minutes=0.0).best_candidate
+
+    assert winner(RECORDED_CONSTRUCTION_ORDER) == RECORDED_CONSTRUCTION_ORDER[0]
+    assert winner(tuple(reversed(RECORDED_CONSTRUCTION_ORDER))) == RECORDED_CONSTRUCTION_ORDER[-1]
 
 
 def test_registered_read_refuses_a_moved_candidate_tuple(monkeypatch, tmp_path):
