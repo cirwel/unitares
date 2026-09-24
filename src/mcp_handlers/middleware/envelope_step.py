@@ -67,6 +67,8 @@ _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
+# Bound on a digest's `by` label and `agent_id`; a UUID is 36 characters.
+_MEMORY_ATTRIBUTION_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
@@ -546,10 +548,10 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
             # need a second, full-mode call to learn it.
             by = item.get("by")
             if isinstance(by, str) and by:
-                suggestion["by"] = by
+                suggestion["by"] = by[:_MEMORY_ATTRIBUTION_CHARS]
             agent_id = item.get("_agent_id") or item.get("agent_id")
             if agent_id:
-                suggestion["agent_id"] = agent_id
+                suggestion["agent_id"] = str(agent_id)[:_MEMORY_ATTRIBUTION_CHARS]
 
             summary = item.get("summary")
             if isinstance(summary, str):
@@ -988,6 +990,13 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
                 compact["summary"] = summary[:96].rstrip() + (
                     "…" if len(summary) > 96 else ""
                 )
+            # Who wrote it survives compaction; both fields are short and
+            # bounded, and losing them would force the full-mode call the
+            # lean digest exists to avoid.
+            for key in ("by", "agent_id"):
+                value = item.get(key)
+                if isinstance(value, str) and value:
+                    compact[key] = value[:_MEMORY_ATTRIBUTION_CHARS]
             suggestions[0] = compact
         else:
             suggestions[0] = {"summary": str(item)[:96]}

@@ -1241,6 +1241,30 @@ def test_search_lean_projection_bounds_historical_summaries_and_total_wire():
     assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
 
 
+def test_search_projection_budget_compaction_keeps_attribution():
+    payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "by": "backup-investigator",
+                "_agent_id": "5b0c1f7e-0000-4000-8000-000000000001",
+                "title": "legacy-title-" + "x" * 2_600,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+    first = env["memory_suggestions"][0]
+    assert "title" not in first
+    assert first["by"] == "backup-investigator"
+    assert first["agent_id"] == "5b0c1f7e-0000-4000-8000-000000000001"
+
+
 def test_search_projection_budget_drops_oversized_single_result():
     payload = {
         "success": True,
