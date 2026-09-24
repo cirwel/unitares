@@ -62,7 +62,9 @@ def compute_drift_vector(
 
     Returns (drift_vector, agent_drift_norm).
     """
-    agent_baseline = get_agent_baseline(monitor.agent_id)
+    # A simulation clone carries a private baseline copy so it never touches
+    # the shared LRU cache (see UNITARESMonitor.simulate_update).
+    agent_baseline = getattr(monitor, '_simulation_baseline', None) or get_agent_baseline(monitor.agent_id)
 
     # Get calibration error (tactical confidence-outcome mismatch) if available.
     calibration_error = None
