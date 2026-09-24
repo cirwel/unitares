@@ -35,7 +35,7 @@ source_files:
   - unitares/skills/discord-bridge/SKILL.md
   - unitares/skills/unitares-dashboard/SKILL.md
 source_digests:
-  unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
+  unitares/src/mcp_handlers/core.py: "c4e49357d1a7928b"
   unitares/src/mcp_handlers/identity/handlers.py: "ec60c763a8bc243e"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f5c881194d51f538"
@@ -49,7 +49,7 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "401bbce563c30439"
-  unitares/skills/governance-lifecycle/SKILL.md: "5142a71de830857a"
+  unitares/skills/governance-lifecycle/SKILL.md: "af831961d196b9f4"
   unitares/skills/governance-fundamentals/SKILL.md: "3487a323d9bee6f8"
   unitares/skills/knowledge-graph/SKILL.md: "59fe32ff129edd0b"
   unitares/skills/dialectic-reasoning/SKILL.md: "ff52ebbe467bc7f7"

@@ -39,7 +39,7 @@ source_files:
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
 source_digests:
-  unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
+  unitares/src/mcp_handlers/core.py: "c4e49357d1a7928b"
   unitares/src/mcp_handlers/identity/handlers.py: "ec60c763a8bc243e"
   unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
   unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"

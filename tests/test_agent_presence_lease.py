@@ -562,3 +562,18 @@ async def test_release_during_a_lease_plane_outage_can_be_retried(monkeypatch):
     monkeypatch.setattr(apl, "_make_client", lambda: client)
     second = await apl.release_agent_presence("uuid-1", ("sess-a",))
     assert second == {"released": True, "reason": "released"}
+
+
+@pytest.mark.asyncio
+async def test_release_suppression_expires_for_a_later_rebind(monkeypatch):
+    """client_session_id is derived from the identity, so a later rebind reuses
+    it; once the short suppression window passes, its heartbeats proceed."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.release_agent_presence("uuid-1", ("agent-uuid-1",))
+    apl._released_at["uuid-1"] -= apl._RELEASE_SUPPRESS_S + 1
+
+    await apl.heartbeat_agent_presence("uuid-1", "agent-uuid-1", apl.time.monotonic())
+
+    assert len(client.acquired) == 1
+    assert "uuid-1" not in apl._released_at

@@ -66,6 +66,21 @@ _lease_sessions: dict[str, dict[str, float]] = {}
 _released_at: dict[str, float] = {}
 _released_sessions: dict[str, set[str]] = {}
 
+# How long a release suppresses the released session's heartbeats. The race it
+# covers is a host's final check-in landing just after its session-end release,
+# which takes seconds. client_session_id is derived from the identity
+# (make_client_session_id), so a later rebind of the same identity carries the
+# same id; past this window its heartbeats must proceed, or a live agent would
+# lose its presence and read as exited.
+_RELEASE_SUPPRESS_S = 120.0
+
+
+def _expire_tombstone(agent_uuid: str, now: float) -> None:
+    released = _released_at.get(agent_uuid)
+    if released is not None and now - released > _RELEASE_SUPPRESS_S:
+        _released_at.pop(agent_uuid, None)
+        _released_sessions.pop(agent_uuid, None)
+
 # Per-uuid lock shared by heartbeat and release. Without it a resumed session's
 # heartbeat can race an in-progress release: it finds the cache emptied while
 # the old row is still live, gets held_by_other, and is left with no lease.
@@ -118,7 +133,8 @@ def _released_since(
     scheduled_at: Optional[float],
     client_session_id: Optional[str] = None,
 ) -> bool:
-    """True when this heartbeat belongs to a session that has already exited."""
+    """True when this heartbeat belongs to a session that has just exited."""
+    _expire_tombstone(agent_uuid, time.monotonic())
     released = _released_at.get(agent_uuid)
     if released is None:
         return False
@@ -371,12 +387,12 @@ async def release_agent_presence(
         # Tombstone inside the lock: a heartbeat already in flight finishes and
         # caches its lease first, so the release below finds and frees it.
         now = time.monotonic()
+        for stale in [u for u, at in _released_at.items() if now - at > _RELEASE_SUPPRESS_S]:
+            _released_at.pop(stale, None)
+            _released_sessions.pop(stale, None)
         _released_at[agent_uuid] = now
         sessions = _released_sessions.setdefault(agent_uuid, set())
         sessions.update(session_ids)
-        for stale in [u for u, at in _released_at.items() if now - at > 2 * _PRESENCE_TTL_S]:
-            _released_at.pop(stale, None)
-            _released_sessions.pop(stale, None)
 
         # The releasing session is gone whatever happens below.
         holders = _lease_sessions.setdefault(agent_uuid, {})
