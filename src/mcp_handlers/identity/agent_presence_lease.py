@@ -228,7 +228,7 @@ async def _refresh_presence(
                 # Cold cache (e.g. after a restart): seed from the persisted
                 # record so the session that already holds the lease counts.
                 persisted = _persisted_holder(getattr(result, "lease", None))
-                if persisted:
+                if persisted and persisted not in _released_sessions.get(agent_uuid, ()):
                     holders[persisted] = time.monotonic()
             holders[holder] = time.monotonic()
         else:

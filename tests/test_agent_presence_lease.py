@@ -518,3 +518,29 @@ def test_persisted_holder_is_unknown_once_renewed():
     assert apl._persisted_holder(renewed) == apl._HOLDER_UNKNOWN
     assert apl._persisted_holder(fresh) == "sess-a"
     assert apl._persisted_holder(None) is None
+
+
+@pytest.mark.asyncio
+async def test_cold_reacquire_does_not_revive_a_session_that_already_exited(monkeypatch):
+    from datetime import datetime, timezone
+
+    client = _FakeClient()
+    client.sdk_shape = True
+    client.idempotent = True
+    _patch_models(monkeypatch, client)
+    apl._released_at["uuid-1"] = apl.time.monotonic()
+    apl._released_sessions["uuid-1"] = {"sess-a"}
+    original = client.acquire
+
+    def _acquire(req, *, identity_proof=None):
+        result = original(req, identity_proof=identity_proof)
+        result.lease.audit_session = "sess-a"
+        result.lease.acquired_at = datetime(2026, 9, 24, tzinfo=timezone.utc)
+        result.lease.last_heartbeat_at = None
+        return result
+
+    client.acquire = _acquire
+
+    await apl.heartbeat_agent_presence("uuid-1", "sess-b", apl.time.monotonic())
+
+    assert set(apl._lease_sessions["uuid-1"]) == {"sess-b"}
