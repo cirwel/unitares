@@ -54,6 +54,18 @@ def test_reserved_test_surface_predicate():
     assert not _is_reserved_test_surface(None)
 
 
+def test_lease_plane_suite_namespace_is_suppressed():
+    # The Elixir lease-plane suite mints these against the governance DB; three
+    # of its forced releases paged as HIGH alarms on 2026-08-26.
+    assert _is_reserved_test_surface("dialectic:/test_elixir_http_402d753bd15e")
+    assert _is_reserved_test_surface("resident:/test_elixir_substrate_renew_7")
+    # Real surfaces still alarm.
+    assert not _is_reserved_test_surface("resident:/steward_eisv_sync")
+    assert not _is_reserved_test_surface("resident:/sentinel_cycle")
+    # Sentinel's own poller integration fixtures EXPECT to alarm.
+    assert not _is_reserved_test_surface("dialectic:/test_sentinel_3c_abc")
+
+
 def test_ad_hoc_fingerprint_is_event_id_only():
     row = {
         "event_id": "e1",
