@@ -1265,6 +1265,157 @@ def test_search_projection_budget_compaction_keeps_attribution():
     assert first["agent_id"] == "5b0c1f7e-0000-4000-8000-000000000001"
 
 
+def test_search_lean_projection_never_truncates_agent_id():
+    """`agent_id` is the key a reader passes back as `agent_id_filter`; a
+    legacy non-UUID writer id longer than the label bound must arrive whole,
+    in the lean digest and through budget compaction alike."""
+    legacy_id = "legacy-writer-" + "k" * 90
+    lean_payload = {
+        "success": True,
+        "discoveries": [{"id": "d1", "summary": "s", "_agent_id": legacy_id}],
+    }
+    compact_payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "agent_id": legacy_id,
+                "title": "legacy-title-" + "x" * 2_600,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    lean = build_experience_envelope(
+        "search_shared_memory", "knowledge", lean_payload, {"response_mode": "lean"}
+    )
+    compacted = build_experience_envelope(
+        "search_shared_memory", "knowledge", compact_payload
+    )
+
+    assert lean["memory_suggestions"][0]["agent_id"] == legacy_id
+    assert compacted["projection_truncated"] is True
+    assert "title" not in compacted["memory_suggestions"][0]
+    assert compacted["memory_suggestions"][0]["agent_id"] == legacy_id
+
+
+def test_search_lean_projection_flags_a_truncated_by_label():
+    """A write-time label longer than the bound is cut visibly (ellipsis plus
+    `by_truncated`), never returned as a prefix posing as the whole label,
+    and the flag survives budget compaction."""
+    long_label = "investigator-" + "q" * 200
+    agent_id = "5b0c1f7e-0000-4000-8000-000000000001"
+    lean_payload = {
+        "success": True,
+        "discoveries": [
+            {"id": "d1", "summary": "s", "by": long_label, "_agent_id": agent_id}
+        ],
+    }
+    compact_payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "by": long_label,
+                "_agent_id": agent_id,
+                "title": "legacy-title-" + "x" * 2_600,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    lean = build_experience_envelope(
+        "search_shared_memory", "knowledge", lean_payload, {"response_mode": "lean"}
+    )["memory_suggestions"][0]
+    compacted = build_experience_envelope(
+        "search_shared_memory", "knowledge", compact_payload
+    )["memory_suggestions"][0]
+
+    for first in (lean, compacted):
+        assert first["by_truncated"] is True
+        assert first["by"].endswith("…")
+        assert len(first["by"]) == 64
+        assert long_label.startswith(first["by"][:-1])
+        assert first["agent_id"] == agent_id
+
+    short = build_experience_envelope(
+        "search_shared_memory",
+        "knowledge",
+        {"success": True, "discoveries": [{"id": "d1", "by": "x" * 64}]},
+        {"response_mode": "lean"},
+    )["memory_suggestions"][0]
+    assert short["by"] == "x" * 64
+    assert "by_truncated" not in short
+
+
+def test_search_lean_projection_worst_case_attribution_holds_wire_budget():
+    """Worst-case attribution on every digest: maximal labels, long legacy
+    writer ids, and summaries/tags at their own bounds. The whole envelope
+    stays inside 3,000 bytes, and every surviving digest carries either the
+    exact identity or an explicit omission marker, never a prefix."""
+    agent_ids = [f"legacy-writer-{i}-" + "z" * 120 for i in range(5)]
+    payload = {
+        "success": True,
+        "count": 5,
+        "discoveries": [
+            {
+                "id": f"d{i}",
+                "by": "label-🌱-" + "w" * 5_000,
+                "_agent_id": agent_ids[i],
+                "summary": "qualification-preserving context 🌱 " * 180,
+                "type": "experiment",
+                "status": "open",
+                "tags": [f"tag-{n}" for n in range(9)],
+                "fusion_score": 0.8,
+            }
+            for i in range(5)
+        ],
+    }
+
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", payload, {"response_mode": "lean"}
+    )
+
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+    suggestions = env["memory_suggestions"]
+    assert suggestions
+    for i, digest in enumerate(suggestions):
+        if "agent_id" in digest:
+            assert digest["agent_id"] == agent_ids[i]
+        else:
+            assert digest.get("attribution_omitted") is True
+        if "by" in digest:
+            assert digest["by_truncated"] is True
+            assert len(digest["by"]) == 64
+
+
+def test_search_projection_budget_omits_pathological_identity_explicitly():
+    """An identifier too large for the budget on its own is withheld with a
+    marker, not cut to a prefix; the handle that opens the record remains."""
+    payload = {
+        "success": True,
+        "results": [
+            {
+                "id": "d1",
+                "by": "backup-investigator",
+                "agent_id": "legacy-" + "k" * 4_000,
+                "summary": "short summary",
+            }
+        ],
+        "total_count": 1,
+    }
+
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+
+    assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 3_000
+    first = env["memory_suggestions"][0]
+    assert first["discovery_id"] == "d1"
+    assert first["attribution_omitted"] is True
+    assert "agent_id" not in first
+
+
 def test_search_projection_budget_drops_oversized_single_result():
     payload = {
         "success": True,

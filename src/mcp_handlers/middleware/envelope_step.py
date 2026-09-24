@@ -67,8 +67,10 @@ _RECOVERY_RISK_CEILING = 0.40
 
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
-# Bound on a digest's `by` label and `agent_id`; a UUID is 36 characters.
-_MEMORY_ATTRIBUTION_CHARS = 64
+# Bound on a digest's `by` display label. `agent_id` is never bounded: it is
+# the identity key a reader passes back as `agent_id_filter`, so a prefix of it
+# would silently name nobody (or the wrong writer).
+_MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
@@ -545,13 +547,19 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
             # Attribution survives the digest: the canonical result leads with
             # `by` (the write-time label) and carries `_agent_id` (the
             # identity), and a lean reader asking who wrote a finding must not
-            # need a second, full-mode call to learn it.
+            # need a second, full-mode call to learn it. The identity is
+            # copied whole; only the display label is bounded, and a bounded
+            # label says so rather than posing as the complete value.
             by = item.get("by")
             if isinstance(by, str) and by:
-                suggestion["by"] = by[:_MEMORY_ATTRIBUTION_CHARS]
+                if len(by) > _MEMORY_BY_LABEL_CHARS:
+                    suggestion["by"] = by[: _MEMORY_BY_LABEL_CHARS - 1] + "…"
+                    suggestion["by_truncated"] = True
+                else:
+                    suggestion["by"] = by
             agent_id = item.get("_agent_id") or item.get("agent_id")
             if agent_id:
-                suggestion["agent_id"] = str(agent_id)[:_MEMORY_ATTRIBUTION_CHARS]
+                suggestion["agent_id"] = str(agent_id)
 
             summary = item.get("summary")
             if isinstance(summary, str):
@@ -990,14 +998,25 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
                 compact["summary"] = summary[:96].rstrip() + (
                     "…" if len(summary) > 96 else ""
                 )
-            # Who wrote it survives compaction; both fields are short and
-            # bounded, and losing them would force the full-mode call the
-            # lean digest exists to avoid.
-            for key in ("by", "agent_id"):
-                value = item.get(key)
-                if isinstance(value, str) and value:
-                    compact[key] = value[:_MEMORY_ATTRIBUTION_CHARS]
+            # Who wrote it survives compaction, copied as the digest already
+            # shaped it: the label is bounded (and flagged if it was cut) and
+            # the identity is exact. Re-slicing here would cut the flagged
+            # ellipsis off or turn the identity into a prefix.
+            attribution = {
+                key: item[key]
+                for key in ("by", "by_truncated", "agent_id")
+                if item.get(key)
+            }
+            compact.update(attribution)
             suggestions[0] = compact
+            # Only a pathological legacy identifier could still overflow here.
+            # Say that attribution was withheld (the discovery_id still opens
+            # the full record) instead of dropping the whole digest or
+            # emitting a prefix.
+            if attribution and wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+                for key in attribution:
+                    compact.pop(key, None)
+                compact["attribution_omitted"] = True
         else:
             suggestions[0] = {"summary": str(item)[:96]}
 
