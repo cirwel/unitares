@@ -350,10 +350,23 @@ def io_run_claude(prompt: str, tier: Tier) -> Optional[tuple[str, Optional[str]]
 
 
 RECORDED, SKIPPED, FAILED = "recorded", "skipped", "failed"
-# Refusals about THIS item: it left the queue (404) or an operator judged it
-# meanwhile (409). Anything else — auth, a server that will not write — would
-# refuse every item alike, so it is systemic.
-_ITEM_SPECIFIC_HTTP = {404, 409}
+# Refusals about THIS item: an operator judged it meanwhile (409), or the
+# route itself says it left the queue (404 with exactly this error). A bare
+# 404 is NOT that — an older server, a wrong base URL or a proxy without the
+# route answers 404 to every item. Anything else is systemic.
+_NOT_A_QUEUE_FINDING = "fingerprint is not a queue finding"
+
+
+def _item_specific_refusal(exc: urllib.error.HTTPError) -> bool:
+    if exc.code == 409:
+        return True
+    if exc.code != 404:
+        return False
+    try:
+        body = json.loads(exc.read().decode() or "{}")
+    except (ValueError, OSError):
+        return False
+    return isinstance(body, dict) and body.get("error") == _NOT_A_QUEUE_FINDING
 
 
 def io_post_verdict(payload: dict, tokens: list[str]) -> str:
@@ -369,7 +382,7 @@ def io_post_verdict(payload: dict, tokens: list[str]) -> str:
                           {"X-Unitares-Adjudicator": adjudicator})
     except urllib.error.HTTPError as exc:
         log(f"verdict for {payload['fingerprint']} refused: HTTP {exc.code}")
-        return SKIPPED if exc.code in _ITEM_SPECIFIC_HTTP else FAILED
+        return SKIPPED if _item_specific_refusal(exc) else FAILED
     except (urllib.error.URLError, OSError, TimeoutError, ValueError) as exc:
         log(f"verdict for {payload['fingerprint']} not delivered: {exc}")
         return FAILED
@@ -565,9 +578,11 @@ def main(argv: list[str] | None = None) -> int:
         log("model adjudication not enabled (UNITARES_MODEL_ADJUDICATOR_HOST != claude)")
         return 0
     if ESCALATE_BELOW is None:
+        # Enabled but misconfigured (e.g. the template placeholder left in):
+        # a failing exit, so monitoring sees it instead of a healthy no-op.
         log("UNITARES_ADJUDICATOR_ESCALATE_BELOW unset or invalid (need 0 < x <= 1) — "
             "the operator's cutoff is required; not running")
-        return 0
+        return 1
     if not args.dry_run and not _load_secret("UNITARES_MODEL_ADJUDICATOR_TOKEN"):
         # Checked BEFORE any model call: without it no verdict can be written,
         # and judging anyway would spend quota every run for nothing. A

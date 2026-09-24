@@ -369,15 +369,18 @@ def test_an_item_specific_refusal_does_not_stop_the_run(adj):
     assert calls["model"] == ["fast", "fast", "fast"]
 
 
-@pytest.mark.parametrize("code,expected", [
-    (404, "skipped"), (409, "skipped"), (401, "failed"), (403, "failed"),
-    (500, "failed"), (503, "failed"),
+@pytest.mark.parametrize("code,body,expected", [
+    (404, b'{"success": false, "error": "fingerprint is not a queue finding"}', "skipped"),
+    (404, b'Not Found', "failed"),               # route not mounted / wrong URL
+    (404, b'{"detail": "Not Found"}', "failed"),
+    (409, b'', "skipped"), (401, b'', "failed"), (403, b'', "failed"),
+    (500, b'', "failed"), (503, b'', "failed"),
 ])
-def test_http_refusals_are_classified(adj, monkeypatch, code, expected):
+def test_http_refusals_are_classified(adj, monkeypatch, code, body, expected):
     monkeypatch.setenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", "t")
 
     def boom(*a, **k):
-        raise adj.urllib.error.HTTPError("http://x", code, "no", {}, _io.BytesIO())
+        raise adj.urllib.error.HTTPError("http://x", code, "no", {}, _io.BytesIO(body))
 
     monkeypatch.setattr(adj, "_http_json", boom)
     assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) == expected
@@ -449,16 +452,18 @@ def test_no_adjudicator_credential_means_no_post(adj, monkeypatch):
     assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) == "failed"
 
 
-@pytest.mark.parametrize("raw", ["", "abc", "0", "1.5", "nan", "inf", "-0.2"])
-def test_no_valid_operator_cutoff_means_no_run(adj, monkeypatch, raw):
-    """The cutoff is a deciding standard: never defaulted, never guessed."""
+@pytest.mark.parametrize("raw", ["", "abc", "0", "1.5", "nan", "inf", "-0.2",
+                                 "__ESCALATE_BELOW__"])
+def test_no_valid_operator_cutoff_means_no_run_and_a_failing_exit(adj, monkeypatch, raw):
+    """The cutoff is a deciding standard: never defaulted, never guessed. An
+    enabled job without one is misconfigured, not healthy."""
     monkeypatch.setenv("UNITARES_ADJUDICATOR_ESCALATE_BELOW", raw)
     assert adj._escalate_below() is None
     monkeypatch.setattr(adj, "HOST", "claude")
     monkeypatch.setattr(adj, "ESCALATE_BELOW", None)
     monkeypatch.setattr(adj, "run_once",
                         lambda **k: pytest.fail("must not run without the operator's cutoff"))
-    assert adj.main([]) == 0
+    assert adj.main([]) == 1
 
 
 @pytest.mark.parametrize("raw,expected", [("0.7", 0.7), ("1", 1.0), (" 0.55 ", 0.55)])
