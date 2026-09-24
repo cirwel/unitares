@@ -135,6 +135,16 @@ def success_response(data: Dict[str, Any], agent_id: str = None, arguments: Dict
         response["agent_signature"] = signature
 
     param_coercions = (arguments or {}).get("_param_coercions")
+    # A default a friendly alias injects for an omitted parameter is the alias's
+    # documented behavior, not a correction of anything the caller sent, so it
+    # does not earn the "auto-corrected" notice. It stays visible in
+    # normalized_parameters.
+    if isinstance(param_coercions, dict):
+        param_coercions = {
+            name: record
+            for name, record in param_coercions.items()
+            if not (isinstance(record, dict) and record.get("interpretation") == "alias_default")
+        }
     if param_coercions and not lite_response:
         response["_param_coercions"] = {
             "applied": param_coercions,
