@@ -342,6 +342,22 @@ def test_a_stamp_carries_an_absent_sources_most_recent_digest(layout: Layout):
     assert newest["source_digests"] == {"elsewhere/src/bot.py": "new"}
 
 
+def test_a_stamp_does_not_carry_a_digest_certified_for_other_skill_text(layout: Layout):
+    # The skill text was edited since the only record that saw the absent
+    # source. Carrying that digest would have the new stamp certify the edited
+    # prose against content nobody reviewed it against, so it stays unrecorded.
+    layout.skill(last_verified=_day(1), digest=None, source="elsewhere/src/bot.py")
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {"elsewhere/src/bot.py": "old"},
+            skill_digest="0123456789abcdef")
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {"elsewhere/src/bot.py": "legacy"},
+            skill_digest=None)
+    result = layout.run("--stamp", "demo")
+    assert result.returncode == 0, result.stdout
+    assert "1 absent source(s) left unrecorded" in result.stdout
+    newest = json.loads(_attestations(layout)[-1].read_text())
+    assert newest["source_digests"] == {}
+
+
 def test_a_recent_attestation_keeps_an_old_frontmatter_date_fresh(layout: Layout):
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(45), digest=None, freshness_days=14)

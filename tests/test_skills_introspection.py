@@ -240,9 +240,11 @@ def test_load_skill_uses_the_later_of_frontmatter_and_attestation_dates(tmp_path
     assert loaded["version"] == "2026-03-01"
 
 
-def test_load_skill_takes_the_newest_date_whatever_the_file_order(tmp_path):
-    """Every attestation is read; the latest `verified_date` wins even when the
-    lexically last file carries an older one."""
+def _served_skill(tmp_path, attestations):
+    """A demo skill plus attestations, each (stem, verified_date, skill_digest),
+    where skill_digest "CURRENT" means the text on disk and None means a
+    record older than the field."""
+    import hashlib
     import json as _json
 
     from src.mcp_handlers.introspection import skills as skills_mod
@@ -252,16 +254,48 @@ def test_load_skill_takes_the_newest_date_whatever_the_file_order(tmp_path):
     (skill_dir / "SKILL.md").write_text(
         '---\nname: demo\nlast_verified: "2026-01-01"\nfreshness_days: 14\n---\n# Demo\n'
     )
+    current = hashlib.sha256((skill_dir / "SKILL.md").read_bytes()).hexdigest()[:16]
     adir = tmp_path / ".attestations" / "demo"
     adir.mkdir(parents=True)
-    (adir / "20260101T000000000000Z-aaaaaaaa.json").write_text(
-        _json.dumps({"verified_date": "2026-03-01", "source_digests": {}})
-    )
-    (adir / "20260102T000000000000Z-bbbbbbbb.json").write_text(
-        _json.dumps({"verified_date": "2026-02-01", "source_digests": {}})
-    )
-    (adir / "20260103T000000000000Z-cccccccc.json").write_text("{not json")
-    assert skills_mod._load_skill(skill_dir)["last_verified"] == "2026-03-01"
+    for stem, verified, digest in attestations:
+        record = {"verified_date": verified, "source_digests": {}}
+        if digest is not None:
+            record["skill_digest"] = current if digest == "CURRENT" else digest
+        (adir / f"{stem}.json").write_text(_json.dumps(record))
+    return skills_mod._load_skill(skill_dir)
+
+
+def test_load_skill_takes_the_newest_current_text_date_whatever_the_file_order(tmp_path):
+    """Among records that certified the served text, the latest date wins even
+    when the lexically last file carries an older one."""
+    loaded = _served_skill(tmp_path, [
+        ("20260101T000000000000Z-aaaaaaaa", "2026-03-01", "CURRENT"),
+        ("20260102T000000000000Z-bbbbbbbb", "2026-02-01", "CURRENT"),
+    ])
+    assert loaded["last_verified"] == "2026-03-01"
+
+
+def test_a_newer_stamp_for_other_skill_text_does_not_refresh_the_served_date(tmp_path):
+    """A stale branch stamped DIFFERENT skill text more recently. The served
+    text was last verified on 2026-02-01, so date, version and staleness must
+    say so; they feed `since_version` filtering and `registry_version`."""
+    loaded = _served_skill(tmp_path, [
+        ("20260101T000000000000Z-aaaaaaaa", "2026-02-01", "CURRENT"),
+        ("20260102T000000000000Z-bbbbbbbb", "2026-09-01", "0123456789abcdef"),
+    ])
+    assert loaded["last_verified"] == "2026-02-01"
+    assert loaded["version"] == "2026-02-01"
+    assert loaded["stale"] is True
+
+
+def test_legacy_records_serve_the_newest_records_date(tmp_path):
+    """Records older than `skill_digest` cannot name their text, so the newest
+    alone speaks, as the CI checker reads them."""
+    loaded = _served_skill(tmp_path, [
+        ("20260101T000000000000Z-aaaaaaaa", "2026-03-01", None),
+        ("20260102T000000000000Z-bbbbbbbb", "2026-02-01", None),
+    ])
+    assert loaded["last_verified"] == "2026-02-01"
 
 
 def _load_manifest_module():
