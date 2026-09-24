@@ -35,6 +35,18 @@ defmodule UnitaresSentinel.Findings do
   end
 
   @doc """
+  POST one alarm and report whether it landed (`:accepted`, `:deduped`) or
+  was lost (`{:error, reason}`), for callers that retry lost alarms.
+  """
+  @spec post_alarm_result(UnitaresSentinel.ForcedReleasePoller.Logic.alarm(), keyword()) ::
+          :accepted | :deduped | {:error, term()}
+  def post_alarm_result(alarm, opts \\ []) when is_map(alarm) do
+    alarm
+    |> alarm_body(opts)
+    |> post_json_result(opts)
+  end
+
+  @doc """
   POST one fleet analysis finding as a `sentinel_finding` event.
   """
   @spec post_finding(map(), keyword()) :: boolean()
@@ -67,6 +79,86 @@ defmodule UnitaresSentinel.Findings do
     finding
     |> finding_body(opts)
     |> post_json_result(opts)
+  end
+
+  @doc """
+  Log and POST one finding for a caller that owns its own re-alert schedule.
+
+  True when the finding reached governance — accepted, or deduped because
+  governance already holds it — or when `opts[:emit_findings]` is false.
+  False only for a delivery failure, which the caller should queue and resend
+  on its next tick (see `deliver_bounded/4`) rather than count as sent.
+  """
+  @spec deliver(map(), keyword(), String.t()) :: boolean()
+  def deliver(finding, opts, source) when is_map(finding) do
+    Logger.warning("#{source}: [#{finding.severity}] #{finding.summary}")
+
+    if Keyword.get(opts, :emit_findings, true) do
+      case post_finding_result(finding, Keyword.get(opts, :findings_opts, [])) do
+        result when result in [:accepted, :deduped] ->
+          true
+
+        {:error, reason} ->
+          Logger.warning("#{source}: finding not delivered, retrying next tick: #{inspect(reason)}")
+          false
+      end
+    else
+      true
+    end
+  end
+
+  @doc """
+  Deliver at most `max` of `findings` via `deliver/3`, in order; return
+  `{delivered, undelivered}`. `undelivered` lists the ones not attempted ahead
+  of the ones that just failed, so retries rotate through a queue instead of
+  re-trying the same head every tick.
+
+  Callers pass their new findings first and their queue after, carry
+  `undelivered` to the next tick, and so resend a finding that failed to POST
+  even if the condition behind it has since cleared. The cap bounds a tick's
+  worst case when governance accepts connections but every POST stalls to its
+  timeout: without it a long queue could eat the tick's deadline and starve
+  the check itself. Resending one that did land is harmless: governance dedups
+  on fingerprint and change_token.
+  """
+  @spec deliver_bounded([map()], non_neg_integer(), keyword(), String.t()) ::
+          {[map()], [map()]}
+  def deliver_bounded(findings, max, opts, source) when is_list(findings) do
+    {attempt, rest} = Enum.split(findings, max)
+    {delivered, failed} = Enum.split_with(attempt, &deliver(&1, opts, source))
+    {delivered, rest ++ Enum.map(failed, &stamp_queued/1)}
+  end
+
+  @doc """
+  Mark when a finding or alarm first entered a retry queue. The key is
+  top-level, so it never reaches the POST body.
+  """
+  @spec stamp_queued(map()) :: map()
+  def stamp_queued(item), do: Map.put_new(item, :queued_ms, System.monotonic_time(:millisecond))
+
+  @doc """
+  Cap a retry queue at `max` without disturbing its order: when over, evict
+  the lowest-severity items first and, within a severity, the ones queued
+  longest ago. Order is the attempt rotation and eviction is a separate
+  policy; conflating them let a fresh failure be dropped from the tail.
+  """
+  @spec cap_queue([map()], non_neg_integer()) :: [map()]
+  def cap_queue(queue, max) when length(queue) <= max, do: queue
+
+  def cap_queue(queue, max) do
+    keep =
+      queue
+      |> Enum.with_index()
+      |> Enum.sort_by(fn {item, _i} ->
+        {-UnitaresSentinel.ReAlert.rank(Map.get(item, :severity)), -Map.get(item, :queued_ms, 0)}
+      end)
+      |> Enum.take(max)
+      |> MapSet.new(fn {_item, i} -> i end)
+
+    queue
+    |> Enum.with_index()
+    |> Enum.filter(fn {_item, i} -> MapSet.member?(keep, i) end)
+    |> Enum.map(fn {item, _i} -> item end)
   end
 
   @doc """
