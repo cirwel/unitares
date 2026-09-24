@@ -226,4 +226,4 @@ class TestIO:
     def test_render_is_readable_and_states_what_it_does_not_settle(self):
         text = render(summarize([_row(), _firing()]))
         assert "candidate FPs" in text
-        assert "owners' sign-off" in text
+        assert "open as D2" in text
