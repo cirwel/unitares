@@ -111,6 +111,10 @@ SOURCE_MAX_CHARS = 8000
 # Mirrors _ADJUDICATION_DISMISS_REASONS in src/http_routes/sentinel.py; the
 # endpoint re-validates, so drift here fails loudly as a 400, never silently.
 DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
+# Mirrors _FINGERPRINT_MAX_CHARS in src/http_routes/sentinel.py. New findings
+# are normalized to fit at ingest, but a row persisted before that bound can
+# still carry a longer one, and the verdict route refuses it with a 400.
+FINGERPRINT_MAX_CHARS = 256
 VERDICTS = ("confirmed", "dismissed", "abstain")
 
 SYSTEM_PROMPT = (
@@ -219,18 +223,32 @@ def resolve_claude_cli() -> Optional[str]:
 
 
 def io_fetch_queue(tokens: list[str]) -> list[dict]:
-    query = urllib.parse.urlencode({"limit": MAX_ITEMS, "exclude_model_abstained": 1})
+    # postable_only: the server drops fingerprints the verdict route would
+    # refuse BEFORE applying the limit, so legacy over-long rows can never
+    # fill the window and starve judgeable findings behind them.
+    query = urllib.parse.urlencode({"limit": MAX_ITEMS, "exclude_model_abstained": 1,
+                                    "postable_only": 1})
     body = _http_json(f"{GOV_URL}/v1/sentinel/adjudication-queue?{query}", None, tokens)
     return list(body.get("queue") or []) if body.get("success") else []
 
 
 def io_history(fingerprint: str) -> str:
     """How long this fingerprint has been firing. psql variables quote it,
-    because a fingerprint is producer-supplied text."""
+    because a fingerprint is producer-supplied text.
+
+    Counts both forms of one finding: a row persisted before the ingest bound
+    keeps its raw over-long fingerprint, while its recurrences are stored as
+    the sha256 digest of it (the server's _canonical_fingerprint). Matching the
+    digest alone would drop every legacy occurrence and understate the
+    history the judge sees.
+    """
     sql = (
         "SELECT count(*), min(ts)::timestamp(0), max(ts)::timestamp(0) "
         "FROM audit.events WHERE event_type LIKE '%\\_finding' "
-        "AND payload->>'fingerprint' = :'fp';\n"
+        "AND (payload->>'fingerprint' = :'fp' "
+        f"OR (length(payload->>'fingerprint') > {FINGERPRINT_MAX_CHARS} "
+        "AND 'sha256:' || encode(sha256(convert_to(payload->>'fingerprint', 'UTF8')), 'hex')"
+        " = :'fp'));\n"
     )
     try:
         out = subprocess.run(
@@ -523,9 +541,20 @@ def run_once(io: dict | None = None, dry_run: bool = False,
         return 0
     recorded = 0
     attempted = answered = 0
-    for item in queue[:MAX_ITEMS]:
+    for item in queue:
+        if attempted >= MAX_ITEMS:
+            break
         fp = item.get("fingerprint")
         if not fp:
+            continue
+        if len(fp) > FINGERPRINT_MAX_CHARS:
+            # Defence in depth: ?postable_only=1 already filters these server
+            # side (an older server ignores the parameter). Unpostable, so
+            # judging it would only spend quota, and it says nothing about
+            # whether verdicts work, so it is not systemic. The operator's
+            # adjudicate route has no such bound.
+            log(f"{fp[:40]}…: fingerprint over {FINGERPRINT_MAX_CHARS} chars (persisted "
+                "before the ingest bound) — skipped, left for an operator")
             continue
         attempted += 1
         result = judge(item, io, tiers)
