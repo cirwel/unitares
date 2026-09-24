@@ -68,10 +68,10 @@ jobs:
 
     - name: Validate skill freshness (cited sources unchanged since last verified)
       # Two checks. STALE: a source the skill cites matches no digest on record
-      # for the current skill text under skills/.attestations/<skill>/ (the
-      # newest attestation, or any older one that certified this exact
-      # SKILL.md, so a newer stamp from a branch cut before the change cannot
-      # mask a correct older one);
+      # for the current skill text under skills/.attestations/<skill>/ (every
+      # attestation that certified this exact SKILL.md, of any age, so a newer
+      # stamp from a branch cut before the change cannot mask a correct older
+      # one; the newest attestation alone if none certified this text);
       # re-check the skill's claims, then `--stamp` it, which writes a NEW
       # attestation file and never edits SKILL.md, so concurrent stamping PRs
       # cannot conflict.

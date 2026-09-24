@@ -244,6 +244,35 @@ def test_an_older_attestation_without_a_skill_digest_vouches_only_as_newest(layo
     assert layout.run().returncode == 1                  # older and unscoped: no vouching
 
 
+def test_a_newest_attestation_for_other_skill_text_does_not_vouch(layout: Layout):
+    # Concurrent branches: one stamped v1 (its file sorts newest), the other
+    # edited the skill to v2 and stamped that. v2 is the text on disk, so only
+    # the v2 record vouches; v1's source digest does not.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    v1 = hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 2\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")},
+            skill_digest=v1)
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    layout.source("x = 2\n")
+    assert layout.run().returncode == 0
+
+
+def test_an_uncertified_skill_edit_falls_back_to_the_newest_record(layout: Layout):
+    # Editing SKILL.md without re-stamping keeps the pre-existing behaviour:
+    # the newest attestation's digests still vouch.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(1), {src: _digest("x = 1\n")})
+    layout.skill_file.write_text(layout.skill_file.read_text() + "unstamped edit\n")
+    assert layout.run().returncode == 0
+
+
 def test_stamp_records_the_skill_text_it_certified(layout: Layout):
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(1), digest=None)

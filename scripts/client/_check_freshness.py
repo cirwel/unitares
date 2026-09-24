@@ -40,9 +40,11 @@ seven conflicted PRs that day conflicted only there). New files with unique
 names cannot conflict, whoever writes them, from whichever harness.
 
 A cited source is FRESH when its current digest equals the digest recorded
-for it in the newest attestation, or in any older attestation whose
-`skill_digest` equals the current SKILL.md: someone re-checked exactly this
-skill text against exactly that source content. The legacy frontmatter
+for it in any attestation whose `skill_digest` equals the current SKILL.md:
+someone re-checked exactly this skill text against exactly that source
+content. Only when no attestation certified the current text (a SKILL.md edit
+not yet re-stamped, or records older than `skill_digest`) does the newest
+attestation alone vouch, as before. The legacy frontmatter
 `source_digests` block, which lives inside the current SKILL.md, also counts.
 Until 2026-09-24 only the newest attestation (the lexically last file name)
 counted, and that let a stamp mask a correct record: a branch cut from an
@@ -53,8 +55,8 @@ attestation records exactly the current content (observed on
 unitares-governance after #2363 merged). Older records are scoped to the skill
 text they certified because a digest verified for skill v1 says nothing about
 v2: if v1 was stamped against source X, v2 against Y, and the source reverts
-to X, v2 was never reviewed against X. Records written before `skill_digest`
-existed vouch only as the newest, exactly as before.
+to X, v2 was never reviewed against X; nor does a v1 stamp from a concurrent
+branch vouch for v2 because its file happens to sort newest.
 
 The effective verified date, which drives AGING, is the newest one on record:
 the latest `verified_date` across the attestations, or the frontmatter
@@ -208,29 +210,33 @@ def effective_record(skills_dir: Path, name: str, meta: dict,
                      skill_digest: str | None = None) -> tuple[str, dict[str, set[str]]]:
     """(verified date, accepted digests per source).
 
-    Accepted for a source:
-      * the digest in the NEWEST attestation (the record as it always was);
-      * the digest in any OLDER attestation that certified the CURRENT skill
-        text, i.e. whose `skill_digest` equals ``skill_digest``. A record made
-        against different skill text (or one that predates `skill_digest`)
-        vouches for nothing but itself as the newest: skill v2 was never
-        reviewed against the source content that v1 was;
-      * the legacy frontmatter block, which lives inside the current SKILL.md.
-    The date is the newest on record, across every attestation and the
-    frontmatter `last_verified`.
+    Which attestations vouch for source digests:
+      * if any attestation certified the CURRENT skill text (its `skill_digest`
+        equals ``skill_digest``), exactly those do, whatever their age, and no
+        other. A record made against different skill text never vouches while
+        a record for this text exists: skill v2 was never reviewed against the
+        source content that v1 was, even if the v1 stamp sorts newest;
+      * otherwise the current text has never been certified (a SKILL.md edit
+        not yet re-stamped, or records older than `skill_digest`), and the
+        newest attestation alone vouches, the rule before 2026-09-24.
+    The legacy frontmatter block, which lives inside the current SKILL.md,
+    always counts. The date is the newest on record, across every
+    attestation and the frontmatter `last_verified`.
     """
     accepted: dict[str, set[str]] = {}
     for src, digest in meta["source_digests"].items():
         accepted.setdefault(src, set()).add(digest)
     date = meta["last_verified"]
-    for i, att in enumerate(load_attestations(skills_dir, name)):
+    records = load_attestations(skills_dir, name)
+    for att in records:
         att_date = att.get("verified_date")
         if isinstance(att_date, str) and att_date > date:
             date = att_date
-        same_text = skill_digest is not None and att.get("skill_digest") == skill_digest
-        if i == 0 or same_text:
-            for src, digest in att["source_digests"].items():
-                accepted.setdefault(str(src), set()).add(str(digest))
+    certified = [a for a in records
+                 if skill_digest is not None and a.get("skill_digest") == skill_digest]
+    for att in certified or records[:1]:
+        for src, digest in att["source_digests"].items():
+            accepted.setdefault(str(src), set()).add(str(digest))
     return date, accepted
 
 
