@@ -157,13 +157,15 @@ def _load_tokens() -> list[str]:
     return tokens or [""]
 
 
-def _http_json(url: str, payload: dict | None, tokens: list[str]) -> dict:
+def _http_json(url: str, payload: dict | None, tokens: list[str],
+               extra_headers: dict | None = None) -> dict:
     for i, token in enumerate(tokens):
         req = urllib.request.Request(
             url,
             data=json.dumps(payload).encode() if payload is not None else None,
             headers={"Content-Type": "application/json",
-                     **({"Authorization": f"Bearer {token}"} if token else {})},
+                     **({"Authorization": f"Bearer {token}"} if token else {}),
+                     **(extra_headers or {})},
             method="POST" if payload is not None else "GET",
         )
         try:
@@ -307,8 +309,16 @@ def io_run_claude(prompt: str, tier: Tier) -> Optional[tuple[str, Optional[str]]
 
 
 def io_post_verdict(payload: dict, tokens: list[str]) -> bool:
+    # The route's own credential, on top of the transport bearer: a model
+    # verdict hides a finding from the operator queue, so generic client auth
+    # is not enough to write one.
+    adjudicator = _load_secret("UNITARES_MODEL_ADJUDICATOR_TOKEN")
+    if not adjudicator:
+        log("UNITARES_MODEL_ADJUDICATOR_TOKEN unset — cannot record verdicts")
+        return False
     try:
-        body = _http_json(f"{GOV_URL}/v1/sentinel/model-adjudicate", payload, tokens)
+        body = _http_json(f"{GOV_URL}/v1/sentinel/model-adjudicate", payload, tokens,
+                          {"X-Unitares-Adjudicator": adjudicator})
     except urllib.error.HTTPError as exc:
         log(f"verdict for {payload['fingerprint']} refused: HTTP {exc.code}")
         return False

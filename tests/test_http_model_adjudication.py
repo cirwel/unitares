@@ -26,9 +26,13 @@ PROGRESS = {"outcomes": 0, "bad": 0, "days": 0, "bad_days": 0, "bad_days_target"
 MODEL = {"backend": "codex", "host_id": "codex:host-adapter", "model": "m-fast", "tier": "fast"}
 
 
+ADJ_TOKEN = "test-adjudicator-token"
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setenv("UNITARES_HTTP_API_TOKEN", READ_TOKEN)
+    monkeypatch.setenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", ADJ_TOKEN)
     app = Starlette(routes=[
         Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]),
         Route("/v1/sentinel/model-adjudicate", http_sentinel_model_adjudicate, methods=["POST"]),
@@ -51,10 +55,12 @@ def _patches(already=frozenset(), event_type="doctor_check_finding"):
     )
 
 
-def _post(client, **body):
+def _post(client, headers=None, **body):
     payload = {"fingerprint": "fp1", "verdict": "confirmed", "model": MODEL}
     payload.update(body)
-    return client.post("/v1/sentinel/model-adjudicate", json=payload)
+    return client.post("/v1/sentinel/model-adjudicate", json=payload,
+                       headers={"X-Unitares-Adjudicator": ADJ_TOKEN} if headers is None
+                       else headers)
 
 
 class TestModelAdjudicateIsolation:
@@ -137,6 +143,43 @@ class TestModelAdjudicateValidation:
 
     def test_non_numeric_confidence_400(self, client):
         assert _post(client, confidence="high").status_code == 400
+
+    @pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+    def test_non_finite_confidence_400(self, client, raw):
+        """json accepts these and a clamp would turn them into 1.0."""
+        r = client.post(
+            "/v1/sentinel/model-adjudicate",
+            content=('{"fingerprint": "fp1", "verdict": "confirmed", '
+                     '"model": {"backend": "claude"}, "confidence": %s}' % raw),
+            headers={"X-Unitares-Adjudicator": ADJ_TOKEN,
+                     "Content-Type": "application/json"},
+        )
+        assert r.status_code == 400
+        assert "finite" in r.json()["error"]
+
+
+class TestAdjudicatorCredential:
+    """A model verdict hides a finding from the operator queue, so generic
+    client auth is not enough to write one."""
+
+    def test_missing_adjudicator_header_is_403(self, client):
+        adjudicated, producer, recorder = _patches()
+        appended = AsyncMock(return_value=True)
+        with adjudicated, producer, recorder, \
+                patch("src.db.get_db", return_value=_db(appended)):
+            r = _post(client, headers={})
+        assert r.status_code == 403
+        appended.assert_not_awaited()
+
+    def test_wrong_adjudicator_token_is_403(self, client):
+        r = _post(client, headers={"X-Unitares-Adjudicator": "guess"})
+        assert r.status_code == 403
+
+    def test_route_is_off_when_the_server_has_no_token(self, client, monkeypatch):
+        monkeypatch.delenv("UNITARES_MODEL_ADJUDICATOR_TOKEN")
+        r = _post(client)
+        assert r.status_code == 503
+        assert "UNITARES_MODEL_ADJUDICATOR_TOKEN" in r.json()["error"]
 
     def test_abstain_needs_no_reason_and_suppresses_nothing(self, client):
         adjudicated, producer, recorder = _patches()

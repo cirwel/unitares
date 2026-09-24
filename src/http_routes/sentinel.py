@@ -5,8 +5,10 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import math
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -590,6 +592,13 @@ _MODEL_ADJUDICATION_COOLDOWN_HOURS = float(
     os.getenv("UNITARES_MODEL_ADJUDICATION_COOLDOWN_H", "168")
 )
 _MODEL_RATIONALE_MAX_CHARS = 2000
+# A model verdict is not an operator label, but it IS a consequential write: a
+# confirm or dismiss hides the finding from the operator queue for the whole
+# cooldown. The generic bearer/trusted-network check authenticates any client,
+# not the adjudicator, so this route also requires its own shared secret in
+# X-Unitares-Adjudicator. Unset on the server = the route is off (503).
+_MODEL_ADJUDICATOR_TOKEN_ENV = "UNITARES_MODEL_ADJUDICATOR_TOKEN"
+_MODEL_ADJUDICATOR_HEADER = "x-unitares-adjudicator"
 _MODEL_PROVENANCE_KEYS = ("backend", "host_id", "model", "tier")
 
 
@@ -1153,6 +1162,19 @@ async def http_sentinel_model_adjudicate(request):
     http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
     if not access._check_http_auth(request, http_api_token=http_api_token):
         return access._http_unauthorized()
+    expected = os.getenv(_MODEL_ADJUDICATOR_TOKEN_ENV, "").strip()
+    if not expected:
+        return JSONResponse(
+            {"success": False,
+             "error": f"model adjudication disabled: {_MODEL_ADJUDICATOR_TOKEN_ENV} unset"},
+            status_code=503,
+        )
+    presented = request.headers.get(_MODEL_ADJUDICATOR_HEADER, "")
+    if not presented or not secrets.compare_digest(presented, expected):
+        return JSONResponse(
+            {"success": False, "error": "adjudicator credential required"},
+            status_code=403,
+        )
     try:
         body = await request.json()
     except Exception:
@@ -1185,10 +1207,16 @@ async def http_sentinel_model_adjudicate(request):
                             status_code=400)
     confidence = body.get("confidence")
     try:
-        confidence = None if confidence is None else max(0.0, min(1.0, float(confidence)))
+        confidence = None if confidence is None else float(confidence)
     except (TypeError, ValueError):
-        return JSONResponse({"success": False, "error": "confidence must be a number"},
+        confidence = math.nan
+    if confidence is not None and not math.isfinite(confidence):
+        # json and float() both accept NaN/Infinity, and a clamp would turn
+        # either into 1.0: maximal confidence nobody stated.
+        return JSONResponse({"success": False, "error": "confidence must be a finite number"},
                             status_code=400)
+    if confidence is not None:
+        confidence = max(0.0, min(1.0, confidence))
     rationale = str(body.get("rationale") or "")[:_MODEL_RATIONALE_MAX_CHARS]
 
     try:

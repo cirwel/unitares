@@ -343,3 +343,23 @@ def test_a_non_401_error_does_not_try_other_tokens(adj, monkeypatch):
     with pytest.raises(adj.urllib.error.HTTPError):
         adj._http_json("http://x", None, ["a", "b"])
     assert len(sent) == 1
+
+
+def test_verdicts_carry_the_adjudicator_credential(adj, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", "adj-secret")
+    seen = {}
+
+    def fake_http(url, payload, tokens, extra_headers=None):
+        seen["headers"] = extra_headers
+        return {"success": True}
+
+    monkeypatch.setattr(adj, "_http_json", fake_http)
+    assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) is True
+    assert seen["headers"] == {"X-Unitares-Adjudicator": "adj-secret"}
+
+
+def test_no_adjudicator_credential_means_no_post(adj, monkeypatch):
+    monkeypatch.delenv("UNITARES_MODEL_ADJUDICATOR_TOKEN", raising=False)
+    monkeypatch.setattr(adj, "_http_json",
+                        lambda *a, **k: pytest.fail("must not post without the credential"))
+    assert adj.io_post_verdict({"fingerprint": "fp1"}, ["t"]) is False
