@@ -281,3 +281,15 @@ def test_rewrap_tolerates_a_result_without_a_behavioral_block():
     result = {}
     _rewrap_behavioral_verdict(result, {"action": "pause"})
     assert result == {}
+
+
+def test_simulate_update_escalation_rewraps_the_nested_verdict():
+    """simulate_update applies the same post-ODE escalation (mcp_handlers/core.py)
+    and must re-wrap the nested behavioral verdict the same way."""
+    import inspect
+
+    from src.mcp_handlers import core
+
+    source = inspect.getsource(core.handle_simulate_update)
+    escalation = source[source.index("escalated_decision is not decision"):]
+    assert "_rewrap_behavioral_verdict(result, escalated_decision)" in escalation[:400]
