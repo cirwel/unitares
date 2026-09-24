@@ -105,9 +105,10 @@ ABSOLUTE_V_CEILING = 0.50
 # the AssessmentResult (and from there into the #2047 observation row in
 # audit.events) without touching the verdict; APPLY changes the verdict and
 # records that it did. Read at call time, not import time, so a deployment
-# flips them with a restart and tests can set them per case. Like the other
-# constants here, read straight from the environment rather than through
-# config.governance_config, to keep this module's import numpy-free.
+# flips them with a restart and tests can set them per case. They are read
+# straight from the environment, unlike the verdict-floor flags that live in
+# config.governance_config (e.g. VERIFICATION_FLOOR_ENABLED); moving them
+# there is a reasonable follow-up and changes no behaviour.
 FLOOR_BREACH_VERDICT_FLOOR = "caution"
 
 

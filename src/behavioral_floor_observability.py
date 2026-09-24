@@ -1,9 +1,13 @@
-"""Decision-neutral observability for behavioral absolute-floor geometry.
+"""Observability for behavioral absolute-floor geometry.
 
 The absolute EISV floors in :mod:`src.behavioral_assessment` bound individual
-risk components; they do not force a behavioral verdict.  This module records
-that geometry after assessment so production rows can answer issue #1995's
-calibration question without changing risk, verdict, policy, or enforcement.
+risk components; by default they do not force a behavioral verdict.  This
+module records that geometry after assessment so production rows can answer
+issue #1995's calibration question.  Building the row changes nothing: it is
+not read by risk, policy or enforcement.  The one exception to its default
+``telemetry_only`` / ``policy_effect: none`` labels is a row whose verdict the
+default-off ``UNITARES_FLOOR_BREACH_CAUTION_APPLY`` floor raised (in the
+assessment, before this row is built); that row says so.
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ def build_absolute_floor_observation(
     resolved_verdict_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Describe floor breaches without participating in assessment or policy.
+
+    The labels report the verdict the row describes: ``telemetry_only`` /
+    ``policy_effect: none``, except for a row the APPLY floor changed.
 
     Every evaluated check-in returns the same bounded schema, including an
     empty breach list.  That zero-inclusive denominator distinguishes "no
