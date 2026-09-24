@@ -1675,7 +1675,10 @@ def _rewrap_behavioral_verdict(result: dict, decision: dict) -> None:
 
     build_result wrapped it with the decision as it stood then; the escalation
     replaced that decision, so the wrapped next_action would describe the old
-    one (explain_verdict follows the decision it is given).
+    one (explain_verdict follows the decision it is given). The dialectic
+    escalation is capped at guide (dialectic/enforcement.py), so today this
+    re-wraps proceed to the same text; it stays so a later rewriter that can
+    stop the agent cannot leave a stale wrap.
     """
     try:
         assessment = result.get('behavioral', {}).get('assessment', {})
