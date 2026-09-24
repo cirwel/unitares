@@ -174,8 +174,9 @@ async def _refresh_presence(
                 ),
             )
             if getattr(result, "ok", False):
-                if client_session_id:
-                    _lease_sessions[agent_uuid] = client_session_id
+                # A nameless refresh proves someone is live without saying who,
+                # so no session's release may free it.
+                _lease_sessions[agent_uuid] = client_session_id or _HOLDER_UNKNOWN
                 return
         except Exception:
             pass
@@ -208,10 +209,7 @@ async def _refresh_presence(
             await _release_lease(client, agent_uuid, str(new_id))
             return
         _lease_ids[agent_uuid] = str(new_id)
-        if client_session_id:
-            _lease_sessions[agent_uuid] = client_session_id
-        else:
-            _lease_sessions.pop(agent_uuid, None)
+        _lease_sessions[agent_uuid] = client_session_id or _HOLDER_UNKNOWN
 
 
 def _mint_presence_attestation(agent_uuid: str, path: str, request: object) -> str | None:

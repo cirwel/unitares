@@ -399,3 +399,18 @@ async def test_sessionless_heartbeat_queued_before_release_is_dropped(monkeypatc
     await apl.heartbeat_agent_presence("uuid-1", None, queued_at)
 
     assert client.acquired == []
+
+
+@pytest.mark.asyncio
+async def test_nameless_refresh_blocks_an_earlier_sessions_release(monkeypatch):
+    """A refresh without a session id proves a live caller without naming it,
+    so the session that acquired first cannot release the lease out from under it."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.heartbeat_agent_presence("uuid-1", "sess-a", apl.time.monotonic())
+    await apl.heartbeat_agent_presence("uuid-1", None, apl.time.monotonic())
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-a",))
+
+    assert result == {"released": False, "reason": "holder_unknown"}
+    assert client.releases == []
