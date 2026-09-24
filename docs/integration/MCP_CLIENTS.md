@@ -194,6 +194,8 @@ For a fresh process, call `start_session(force_new=true)`. If the process is tak
 
 Keep the returned `client_session_id` and pass it on every later call from the same process. Without it, writes fall back to a weak transport-fingerprint binding that can merge or split co-resident sessions.
 
+Two kinds of process do not follow this default. A short dispatched subagent usually should not onboard at all; if it needs its own identity, it calls `start_session(force_new=true, parent_agent_id=<driver uuid>, spawn_reason="subagent")` and lands at least one real `sync_state()` before it exits. Persistent or substrate agents use their dedicated substrate identity pattern, not an ordinary session.
+
 Use raw `onboard(...)` instead when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift
 `agent_uuid`, `client_session_id`, and `next_action`. Read aliases default to a
