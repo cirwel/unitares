@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-23"
+last_verified: "2026-09-24"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -46,7 +46,7 @@ source_digests:
   unitares/src/mcp_handlers/middleware/envelope_step.py: "f5c881194d51f538"
   unitares/src/mcp_handlers/middleware/identity_step.py: "f50ccc2629ef7832"
   unitares/src/mcp_handlers/updates/phases.py: "d8d32bccff74956b"
-  unitares/src/governance_monitor.py: "bf2ac268a3ecfec9"
+  unitares/src/governance_monitor.py: "e6122a72dbd2694c"
   unitares/src/monitor_calibration.py: "c99375f368dd98aa"
   unitares/src/mcp_handlers/updates/enrichments.py: "0aec78c062f4af99"
   unitares/src/mcp_handlers/dialectic/handlers.py: "2b6f70a94a7361f5"
