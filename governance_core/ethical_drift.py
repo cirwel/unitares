@@ -467,6 +467,14 @@ def set_agent_baseline(agent_id: str, baseline: AgentBaseline) -> None:
     _evict_if_over_cap()
 
 
+def peek_agent_baseline(agent_id: str) -> Optional[AgentBaseline]:
+    """Cached baseline or None, without creating one or touching LRU order.
+
+    For callers that must leave the shared cache exactly as they found it
+    (UNITARESMonitor.simulate_update)."""
+    return _baseline_cache.get(agent_id)
+
+
 def get_baseline_or_none(agent_id: str) -> Optional[AgentBaseline]:
     """Get baseline if cached, without creating a default. LRU-touched on hit."""
     if agent_id in _baseline_cache:

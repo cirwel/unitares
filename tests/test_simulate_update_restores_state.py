@@ -83,3 +83,23 @@ def test_simulate_update_restores_state_even_when_the_update_raises(monkeypatch)
         monitor.simulate_update(dict(LOUD), confidence=0.2)
     monkeypatch.undo()
     assert _everything(monitor) == before
+
+
+def test_simulate_update_never_evicts_or_reorders_the_shared_baseline_lru(monkeypatch):
+    import governance_core.ethical_drift as ed
+
+    monkeypatch.setattr(ed, "_baseline_cache", ed.OrderedDict())
+    monkeypatch.setattr(ed, "_BASELINE_CACHE_MAXLEN", 3)
+    for name in ("other-a", "other-b", "other-c"):
+        ed.get_agent_baseline(name)
+    order_before = list(ed._baseline_cache)
+
+    # Uncached agent: its baseline must not be inserted (which would evict).
+    fresh = UNITARESMonitor(f"test-sim-lru-{uuid.uuid4().hex[:12]}", load_state=False)
+    fresh.simulate_update(dict(LOUD), confidence=0.2)
+    assert list(ed._baseline_cache) == order_before
+
+    # Cached agent: a simulation must not move it to most-recently-used.
+    cached = UNITARESMonitor("other-a", load_state=False)
+    cached.simulate_update(dict(LOUD), confidence=0.2)
+    assert list(ed._baseline_cache) == order_before

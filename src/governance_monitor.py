@@ -1046,9 +1046,10 @@ class UNITARESMonitor:
         vector and more, so every MCP simulate_update call shifted the agent's
         real verdict state. The copy costs about 1 ms at 200 updates of history.
 
-        One piece of state lives outside the monitor: this agent's entry in the
-        governance_core drift-baseline cache, which process_update() updates in
-        place. It is snapshotted and put back here.
+        One piece of state lives outside the monitor: the governance_core
+        drift-baseline cache, a process-wide bounded LRU. The clone gets a
+        private copy of this agent's baseline, so the shared cache is neither
+        written nor re-ordered.
 
         Args:
             agent_state: Agent state dict with parameters, ethical_drift, response_text, complexity
@@ -1060,32 +1061,27 @@ class UNITARESMonitor:
         """
         import copy
 
-        from governance_core.ethical_drift import (
-            clear_baseline,
-            get_baseline_or_none,
-            set_agent_baseline,
-        )
+        from governance_core.ethical_drift import AgentBaseline, peek_agent_baseline
 
-        saved_drift_baseline = get_baseline_or_none(self.agent_id)
-        drift_baseline_copy = copy.deepcopy(saved_drift_baseline)
         clone = copy.deepcopy(self)
         clone._simulation_active = True
-        if saved_drift_baseline is not None:
-            # The clone must update a copy, not the live cache entry.
-            set_agent_baseline(self.agent_id, drift_baseline_copy)
-        try:
-            result = clone.process_update(agent_state, confidence=confidence)
+        # The drift baseline lives in a process-wide bounded LRU. Reading,
+        # inserting or re-ordering it would change cross-agent state (an insert
+        # can evict another agent's baseline), so the clone gets a private
+        # copy and the shared cache is never touched.
+        cached = peek_agent_baseline(self.agent_id)
+        clone._simulation_baseline = (
+            copy.deepcopy(cached) if cached is not None
+            else AgentBaseline(agent_id=self.agent_id)
+        )
 
-            # Mark as simulation
-            result['simulation'] = True
-            result['note'] = 'This was a simulation - state was not modified'
+        result = clone.process_update(agent_state, confidence=confidence)
 
-            return result
-        finally:
-            if saved_drift_baseline is None:
-                clear_baseline(self.agent_id)
-            else:
-                set_agent_baseline(self.agent_id, saved_drift_baseline)
+        # Mark as simulation
+        result['simulation'] = True
+        result['note'] = 'This was a simulation - state was not modified'
+
+        return result
 
     def process_update(self, agent_state: Dict, confidence: Optional[float] = None, task_type: str = "mixed") -> Dict:
         """
