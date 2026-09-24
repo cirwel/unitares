@@ -64,8 +64,8 @@ must be re-opened before anyone cites it elsewhere.
    monitor. UNITARES sees only the check-ins and effects that are sent to it.
    "Human-resolution status" needs an authenticated, session-level resolver
    class. Review verdicts can carry an optional reviewer stamp, but it is
-   caller-declared except on the synthetic and orchestrated paths, and it is
-   not authenticated. Only the Sentinel adjudication path separates operator
+   caller-declared on every path except the in-process synthetic reviewer,
+   and it is not authenticated. Only the Sentinel adjudication path separates operator
    from model verdicts by authenticated route, and it does so per finding,
    not per dialectic session. "Escalation rate" has no single stream: the
    stored `escalated` status has no writers, and pauses split into four
@@ -150,11 +150,12 @@ not equally available:
   messages *can* carry a reviewer stamp (`observed_metrics.reviewer_backend`).
   It comes from the optional `reviewer_provenance` argument, which restricts
   `reviewer_kind` to `agent_submitted`, `external_consult`, `orchestrated`, or
-  `in_process_synthetic`, or it is written directly by the synthetic and
-  orchestrated reviewers (`src/mcp_handlers/dialectic/handlers.py`). On
+  `in_process_synthetic`, or it is written by the server for the in-process
+  synthetic reviewer (`src/mcp_handlers/dialectic/handlers.py`). On
   antithesis, a caller may also pass `observed_metrics.reviewer_backend`
-  directly, and that value is stored unchecked. Synthesis accepts only the
-  vetted argument. Verdicts with none of these carry no stamp. The code calls
+  directly, and that value is stored unchecked; the orchestrated reviewer
+  uses this route (`agents/dialectic_reviewer/reviewer.py`). Synthesis accepts
+  only the vetted argument. Verdicts with none of these carry no stamp. The code calls
   the stamp "descriptive provenance, not identity proof": it records a
   submission route as declared, not who resolved the session. So it is a place
   a resolver class could live, not evidence of one, and adding a `human` value
