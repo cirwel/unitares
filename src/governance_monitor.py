@@ -1595,9 +1595,12 @@ class UNITARESMonitor:
 
         # Issue #1995: measure the absolute-floor geometry after the behavioral
         # verdict and primary policy decision have already been computed.  This
-        # observation is telemetry-only, zero-inclusive, and fail-open: neither
-        # a breach nor an instrumentation failure may alter risk, verdict, or
-        # enforcement.  Import lazily so an optional-instrument refactor cannot
+        # observation is telemetry-only, zero-inclusive, and fail-open: building
+        # it, and any instrumentation failure, alters no risk, verdict, or
+        # enforcement.  (A breach reaches the verdict elsewhere, in the
+        # assessment above: always through its risk component, and, with the
+        # default-off UNITARES_FLOOR_BREACH_CAUTION_APPLY floor, directly; the
+        # row labels a verdict that floor raised.)  Import lazily so an optional-instrument refactor cannot
         # prevent the governance monitor itself from loading.
         measurement_scope = "simulation" if self._simulation_active else "live"
         try:
@@ -1625,6 +1628,12 @@ class UNITARESMonitor:
                 "eligible_for_production_counter": False,
                 "unavailable_reason": "evaluation_failed",
             }
+            # The APPLY floor runs in the assessment, before this row, so a
+            # failed observation must still say when it raised the verdict.
+            _floor = getattr(behavioral_assessment, "floor_breach_caution", None)
+            if isinstance(_floor, dict) and _floor.get("applied"):
+                absolute_floor_observation["measurement_role"] = "verdict_floor"
+                absolute_floor_observation["policy_effect"] = "behavioral_verdict_raised"
         self._last_absolute_floor_observation = absolute_floor_observation
 
         # Log decision via audit logger (for accountability and transparency).
