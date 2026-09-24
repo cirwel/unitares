@@ -105,7 +105,7 @@ def fork_honest_message(
     parent_uuid: Optional[str],
     spawn_reason: Optional[str],
     *,
-    minted_fresh: bool = False,
+    minted_fresh: Optional[bool] = False,
 ) -> str:
     """Build the R6 honest-message text shared by thin and rich contexts.
 
@@ -113,8 +113,19 @@ def fork_honest_message(
     a resumed UUID reoccupying its thread (the case R6 was written for), and
     a freshly minted UUID landing on a thread earlier, unrelated
     process-instances already occupy (a shared IP:UA fingerprint). Only the
-    onboard caller knows which it is, so it passes ``minted_fresh``.
+    onboard caller knows which it is, so it passes ``minted_fresh`` as a
+    bool. A caller that cannot tell (the thin check-in enrichment reads only
+    ``ctx.meta``) passes ``None`` and gets text true in both cases.
     """
+    if episode_fork_kind == "sibling_locus" and minted_fresh is None:
+        return (
+            "You are a distinct subject - a process-instance on a thread that "
+            "other process-instances also occupy. Sharing a thread declares no "
+            "lineage: only a declared parent_agent_id does. Memory access (KG, "
+            "project files, harness-side caches) may be available; whether "
+            "you have integrated it is yours to demonstrate, not asserted."
+        )
+
     if episode_fork_kind == "sibling_locus" and minted_fresh:
         return (
             "You are a distinct subject - a fresh UUID on a thread that earlier "

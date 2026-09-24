@@ -49,7 +49,7 @@ source_digests:
   unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
   unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
   unitares/src/schema_brief.py: "401bbce563c30439"
-  unitares/skills/governance-lifecycle/SKILL.md: "5142a71de830857a"
+  unitares/skills/governance-lifecycle/SKILL.md: "6c4d504205b903e4"
   unitares/skills/governance-fundamentals/SKILL.md: "3487a323d9bee6f8"
   unitares/skills/knowledge-graph/SKILL.md: "4bfc2bcc994fb083"
   unitares/skills/dialectic-reasoning/SKILL.md: "ff52ebbe467bc7f7"
