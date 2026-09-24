@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from unitares_sdk._checkin_fields import resolve_checkin_fields
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
@@ -196,19 +197,22 @@ class SyncGovernanceClient:
         raw = self.call_tool("sync_state", args)
         self._raise_for_tool_failure("sync_state", raw)
 
-        decision = raw.get("decision", {})
-        verdict = decision.get("action", raw.get("verdict", "proceed"))
-        guidance = decision.get("guidance") or raw.get("guidance")
+        # Envelope-aware field resolution shared with client.py (#2366): the
+        # compact sync_state envelope carries no top-level decision/metrics.
+        fields = resolve_checkin_fields(raw)
+        verdict = fields["verdict"]
+        guidance = fields["guidance"]
 
         result_data = dict(raw)
         result_data["verdict"] = verdict
         if guidance:
             result_data["guidance"] = guidance
 
-        metrics = raw.get("metrics", {})
-        if metrics:
-            result_data.setdefault("coherence", metrics.get("coherence"))
-            result_data.setdefault("risk", metrics.get("risk"))
+        if fields["coherence"] is not None:
+            result_data.setdefault("coherence", fields["coherence"])
+        if fields["risk"] is not None:
+            result_data.setdefault("risk", fields["risk"])
+        metrics = fields["metrics"]
 
         # RFC §7.13: emit substrate observation alongside process_agent_update
         # (mirrors UnitaresClient.checkin). Failure observational-only.

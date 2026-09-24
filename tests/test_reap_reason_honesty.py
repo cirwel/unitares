@@ -43,7 +43,7 @@ def test_ordinary_stall_points_at_the_record_instead_of_guessing():
 
 @pytest.mark.parametrize("awaiting", [True, False])
 def test_never_claims_a_verdict(awaiting):
-    """The sweeper does not load the transcript, so it cannot know who was right.
+    """The sweeper derives no verdict from the transcript, so it cannot say who was right.
 
     Replacing one confident wrong sentence with a different confident wrong
     sentence would be no improvement.

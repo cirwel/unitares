@@ -2288,9 +2288,15 @@ _PATTERN_FILE_PATH_CONSTRAINTS: dict[str, tuple[str, ...]] = {
 # fire on tests. False-positive class confirmed 2026-06-27: 156
 # `UNITARESMonitor(` call sites across 32 test files would all trip P003
 # (e.g. test_hck_rho_coupling.py:20/26/33/49).
+#
+# P006 (silent exception swallow) joined 2026-09-24: a test that tolerates an
+# absent table or a missing optional service is the test's own fixture logic,
+# not a masked production failure, and 0 of 39 lifetime P006 findings was ever
+# confirmed.
 _PATTERN_FILE_PATH_EXCLUSIONS: dict[str, tuple[str, ...]] = {
     "P001": ("/tests/",),
     "P003": ("/tests/",),
+    "P006": ("/tests/",),
     "P011": ("/tests/",),
 }
 
@@ -2594,6 +2600,68 @@ def _is_inside_get_or_create_monitor(
     return False
 
 
+# P006: the `except` clause that governs a flagged line, and the two ways its
+# author can show the swallow is deliberate or absent. patterns.md defines
+# P006 as a swallow "without re-raising", and ruff's BLE001 is the broad-except
+# rule, so `# noqa: BLE001` (or a bare `# noqa`) on the clause is the author
+# recording that decision. False-positive sweep 2026-09-24: of 39 lifetime P006
+# findings none was confirmed, and three flagged clauses already carried
+# `# noqa: BLE001`.
+_P006_EXCEPT_CLAUSE = re.compile(r"^(\s*)except\b")
+_P006_ACKNOWLEDGED = re.compile(r"#\s*noqa(?!\s*:)|#\s*noqa:[^#\n]*\bBLE001\b")
+_P006_RAISE = re.compile(r"^\s*raise\b")
+
+
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _p006_governing_except(
+    flagged_line: int,
+    snippet_lines_by_num: dict[int, str],
+    lookback: int = 8,
+) -> int | None:
+    """Line number of the `except` clause the flagged line belongs to.
+
+    The model cites either the clause itself or a line in its body (usually
+    the `logger.debug(...)` call). Walk back to the nearest clause indented
+    less than the flagged line, stopping at a def header. None when no clause
+    is visible, in which case the finding is left alone.
+    """
+    src = snippet_lines_by_num.get(flagged_line, "")
+    if _P006_EXCEPT_CLAUSE.match(src):
+        return flagged_line
+    flagged_indent = _indent_of(src)
+    for line_no in range(flagged_line - 1, flagged_line - lookback - 1, -1):
+        line = snippet_lines_by_num.get(line_no, "")
+        if not line.strip():
+            continue
+        if _P003_OTHER_DEF.match(line):
+            return None
+        if _P006_EXCEPT_CLAUSE.match(line) and _indent_of(line) < flagged_indent:
+            return line_no
+    return None
+
+
+def _p006_body_reraises(except_line: int, snippet_lines_by_num: dict[int, str]) -> bool:
+    """True when the except body visibly contains a `raise`.
+
+    Only lines indented deeper than the clause count as its body. A body the
+    snippet truncates returns False, which keeps the finding.
+    """
+    clause_indent = _indent_of(snippet_lines_by_num.get(except_line, ""))
+    line_no = except_line + 1
+    while line_no in snippet_lines_by_num:
+        line = snippet_lines_by_num[line_no]
+        if line.strip():
+            if _indent_of(line) <= clause_indent:
+                return False
+            if _P006_RAISE.match(line):
+                return True
+        line_no += 1
+    return False
+
+
 def _has_preceding_persist_call(
     flagged_line: int, snippet_lines_by_num: dict[int, str], lookback: int = 8
 ) -> bool:
@@ -2877,6 +2945,27 @@ def _verify_finding_against_source(
             "warning",
         )
         return False
+    # P006 specifically: the governing `except` clause is acknowledged with
+    # `# noqa: BLE001` / bare `# noqa`, or its body re-raises. Either way the
+    # "silent swallow" the rule describes is not there.
+    if finding.pattern == "P006":
+        except_line = _p006_governing_except(finding.line, snippet_lines_by_num)
+        if except_line is not None:
+            clause = snippet_lines_by_num.get(except_line, "")
+            if _P006_ACKNOWLEDGED.search(clause):
+                log(
+                    f"drop P006 {finding.file}:{finding.line} — except clause at line "
+                    f"{except_line} is acknowledged with noqa: {clause.strip()[:80]}",
+                    "warning",
+                )
+                return False
+            if _p006_body_reraises(except_line, snippet_lines_by_num):
+                log(
+                    f"drop P006 {finding.file}:{finding.line} — except body at line "
+                    f"{except_line} re-raises (not a swallow)",
+                    "warning",
+                )
+                return False
     # P011 specifically: if there's an `await persist|archive|save|...` call in
     # the lines preceding the flagged mutation, the temporal ordering is
     # correct and this is a false positive.

@@ -26,7 +26,9 @@ BOTH claims are now known false, so do not restore them:
   * Not the self-clear guard. It is written in
     `mcp_handlers/dialectic/auto_resolve.py` under `check_time > fail_time`, a
     reviewer-liveness TIMING condition recording that the sweeper raised a
-    facilitation request. The "paused agent came back and was refused" reading
+    facilitation request. At SYNTHESIS (since #2361) the sweeper also requires
+    the handlers' turn predicates to put the move on the reviewer; that reads
+    whose move it is, never who was right. The "paused agent came back and was refused" reading
     was REFUTED by measurement: 24 sessions carry the flag with the paused
     agent having never replied.
 
@@ -35,9 +37,10 @@ carrying agrees=false, unsuperseded -- passed in as `standing_rejection`. The
 flag survives as a fallback for callers that cannot supply it, which is safe
 because it remains specific. This module still fixes the readers rather than
 the terminal write, which is the far smaller blast radius on a load-bearing
-path, and ⛔the writer must NOT be "repaired" to match: the sweeper never loads
-the transcript, so making it set the flag would fabricate a facilitation
-request that was never raised.
+path, and ⛔the writer must NOT be "repaired" to match: the sweeper derives no
+verdict from the transcript (at SYNTHESIS it reads only whose move it is), so
+making it set the flag to encode a standing rejection would fabricate a
+facilitation request that was never raised.
 
 Canary partitioning uses `core.agents.label LIKE 'canary_dialectic%'`.
 It deliberately does NOT use `trigger_source`, which is the literal string
@@ -114,12 +117,13 @@ def classify_outcome(
     the writer. It is set in `mcp_handlers/dialectic/auto_resolve.py` under
     `check_time > fail_time`, a reviewer-liveness TIMING condition recording
     that the sweeper raised a facilitation request -- not a verdict about the
-    transcript. An earlier reading of it as "the paused agent returned and its
+    transcript (at SYNTHESIS it also checks, via the handlers' turn
+    predicates, that the move is the reviewer's; that is not a verdict). An earlier reading of it as "the paused agent returned and its
     self-clear was refused" was REFUTED by measurement: 24 sessions carry the
     flag with the paused agent having never replied. And the Python sweeper's
-    own reap-description docstring says it deliberately never claims a verdict
-    because it never loads the transcript, so making it set the flag would
-    fabricate a facilitation request that was never raised.
+    own reap-description docstring says it deliberately never claims a
+    verdict, so making it set the flag to encode one would fabricate a
+    facilitation request that was never raised.
 
     Hence the fix belongs here, in the reader, with the transcript-derived
     predicate supplied by the caller.
