@@ -51,18 +51,19 @@ must be re-opened before anyone cites it elsewhere.
 3. **Only two of the brief's four proposed assessable claims hold today without
    narrowing:** identical retries return one canonical outcome, and conflicting
    reuse of a key is rejected. "No governed mutation without a current permit"
-   holds only when `UNITARES_GOVERNED_EFFECT_BINDING` is on, and only for effects
-   routed through the governed-effect plane. Complete provenance
+   holds only when `UNITARES_GOVERNED_EFFECT_BINDING` or a per-type flag is on,
+   and only for effects routed through the governed-effect plane. Complete provenance
    reconstruction is unmeasured, not disproven: clients assemble it across
    retention boundaries, and the claim names no window or record set. Scope
    both claims down before they appear in any assurance case (§2).
 4. **The oversight summary is the one item that is actually new, but only one
    of its four terms, review latency, can be computed today.** "Action
-   coverage" needs to know how many actions happened in total. Anthropic knows that because every action on
-   its platform passes through an inline monitor. UNITARES sees only the
-   check-ins and effects that are sent to it. "Human-resolution status" needs a
-   recorded human-or-model resolver class, which exists only on the Sentinel
-   adjudication path. "Escalation rate" has no single stream: the stored
+   coverage" needs to know how many actions happened in total. Anthropic
+   knows that because every action on its platform passes through an inline
+   monitor. UNITARES sees only the check-ins and effects that are sent to it.
+   "Human-resolution status" needs a "human" resolver value: review verdicts
+   already record agent versus model reviewers, but not humans, except on the
+   Sentinel adjudication path. "Escalation rate" has no single stream: the stored
    `escalated` status has no writers, and pauses split into four populations
    with different denominators (§1).
 
@@ -141,11 +142,16 @@ not equally available:
 - *The proposed breakdowns are not all available.* The dialectic schema has no
   campaign, model-version, or effect-class column, so reporting per campaign,
   model version, or effect class needs those dimensions recorded first.
-- *Human-resolution status* is not derivable today. Dialectic sessions keep a
-  `reviewer_agent_id` and a terminal resolution, but nothing records whether the
-  resolver was a human or a model. Operator versus model adjudication is recorded
-  only on the Sentinel path (`src/http_routes/sentinel.py`, #2378). This term
-  needs a recorded resolver class before it can be reported.
+- *Human-resolution status* is not derivable today, but it is closer than it
+  looks. Antithesis and synthesis messages already carry a per-verdict
+  `reviewer_provenance` with `reviewer_kind` (`agent_submitted`,
+  `external_consult`, or `orchestrated`) and `model_used`
+  (`src/mcp_handlers/schemas/dialectic.py`). Sessions also carry an
+  `awaiting_facilitation` flag (migration 053). What is missing is a `human`
+  value and a session-level resolver field. Operator versus model adjudication
+  is recorded only on the Sentinel path (`src/http_routes/sentinel.py`, #2378).
+  A `human` value is evidence only if it comes from the authentication tier,
+  as on the Sentinel path, not from self-declaration.
 - *Action coverage* has no denominator. UNITARES observes what adapters and hooks
   submit. It does not see the harness actions that bypass it. A coverage figure
   computed as reported ÷ reported is always 100% and means nothing. The honest
