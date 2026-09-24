@@ -925,3 +925,37 @@ def test_check_publication_updates_its_own_run_with_neutral_warning(monkeypatch)
     assert "PATCH" in cmd and "repos/o/r/check-runs/4" in cmd
     payload = json.loads(kwargs["input"])
     assert payload["conclusion"] == "neutral" and "head_sha" not in payload
+
+
+@pytest.mark.parametrize("argv", [
+    ["review"],
+    ["record", "review.txt", "--reviewer-name", "someone", "--independent"],
+])
+def test_missing_gh_is_unreviewed_not_findings(monkeypatch, tmp_path, capsys, argv):
+    # Exit 1 means "findings need author action". A machine without `gh`
+    # reviewed nothing, so it must report UNREVIEWED (2), not a traceback
+    # whose exit status reads as findings. Empty PATH gives the real error.
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert rg.main(argv) == rg.UNREVIEWED
+    out = capsys.readouterr().out
+    assert "UNREVIEWED" in out and "`gh` CLI" in out
+
+
+def test_other_missing_files_still_raise(monkeypatch):
+    # Only the missing `gh` executable is reclassified; a missing input file
+    # is a real error and must not be reported as an unavailable reviewer.
+    def missing(_args):
+        raise FileNotFoundError(2, "No such file or directory", "review.txt")
+    monkeypatch.setattr(rg, "cmd_review", missing)
+    with pytest.raises(FileNotFoundError):
+        rg.main(["review"])
+
+
+def test_input_file_named_gh_is_not_mistaken_for_the_cli(monkeypatch, tmp_path):
+    # A missing input FILE called "gh" raises FileNotFoundError with filename
+    # "gh" too. Only the launch of the gh executable is reclassified, so this
+    # must stay an input error rather than be reported as UNREVIEWED.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "branch"))
+    with pytest.raises(FileNotFoundError):
+        rg.main(["record", "gh", "--reviewer-name", "someone", "--independent"])
