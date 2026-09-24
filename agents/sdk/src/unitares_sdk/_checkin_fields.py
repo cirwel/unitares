@@ -7,7 +7,10 @@ sits at ``state_summary.action``, and the canonical payload rides under
 Until #2366 both SDK clients read the canonical top-level ``decision`` /
 ``metrics`` keys — which the default compact envelope never carries — so every
 check-in parsed as ``"proceed"`` with ``coherence``/``risk`` ``None``, and the
-pause/reject branches in ``agent.py`` could never fire.
+pause branch in ``agent.py`` could never fire. (Its ``reject`` branch is a
+separate matter: the server's ``decision.action`` is only ``proceed`` or
+``pause``; ``guide`` and ``reject`` exist as ``sub_action`` only, so this
+module does not make that branch reachable.)
 
 Both clients resolve through :func:`resolve_checkin_fields` so the two
 parsers cannot drift apart again. Precedence is canonical first (a direct
@@ -45,8 +48,13 @@ def resolve_checkin_fields(raw: dict) -> dict[str, Any]:
 
     ``verdict`` always resolves to a string (``"proceed"`` when no shape
     carries an action, matching the historical default); the others are
-    ``None`` when absent. ``metrics`` is the canonical metrics dict wherever
-    it lives, for callers that forward it (substrate emission).
+    ``None`` when absent. ``verdict`` is the binary policy action; a guide
+    is ``"proceed"`` with the server's reason as ``guidance``.
+
+    ``metrics`` is the canonical metrics dict when the response carries one
+    (a direct ``process_agent_update`` caller, or ``response_mode="full"``).
+    The default compact envelope carries none, so it is ``{}`` there and
+    callers that forward it for substrate emission skip on that path.
     """
     decision = _dict(raw.get("decision"))
     metrics = _dict(raw.get("metrics"))
@@ -54,6 +62,7 @@ def resolve_checkin_fields(raw: dict) -> dict[str, Any]:
     gov_decision = _dict(governance.get("decision"))
     gov_metrics = _dict(governance.get("metrics"))
     summary = _dict(raw.get("state_summary"))
+    action_summary = _dict(raw.get("action_summary"))
 
     verdict = _first(
         decision.get("action"),
@@ -62,14 +71,28 @@ def resolve_checkin_fields(raw: dict) -> dict[str, Any]:
         _scalar(raw.get("verdict")),
         _scalar(governance.get("verdict")),
     )
+    sub_action = _first(
+        decision.get("sub_action"),
+        gov_decision.get("sub_action"),
+        summary.get("sub_action"),
+        action_summary.get("sub_action"),
+    )
+    # The compact envelope lifts no guidance. What stands in for it depends
+    # on the decision: a pause's next_action is the concrete instruction (it
+    # names self_recovery); a guide's is the server's reason. On any other
+    # proceed, next_action is a generic "keep working" prompt, not guidance.
+    if verdict == "pause":
+        envelope_guidance = _first(raw.get("next_action"), action_summary.get("reason"))
+    elif sub_action == "guide":
+        envelope_guidance = action_summary.get("reason")
+    else:
+        envelope_guidance = None
     guidance = _first(
         decision.get("guidance"),
         raw.get("guidance"),
         gov_decision.get("guidance"),
         governance.get("guidance"),
-        # The compact envelope lifts no guidance; next_action is the concrete
-        # instruction it carries instead (the pause text names self_recovery).
-        raw.get("next_action"),
+        envelope_guidance,
     )
     canonical_metrics = metrics or gov_metrics
     coherence = _first(
