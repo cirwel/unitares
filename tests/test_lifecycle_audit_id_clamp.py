@@ -2,10 +2,11 @@
 
 Measured 2026-08-12: of 12 `lifecycle_paused` rows in eleven days, 5 carried a
 UUID and 7 carried a structured handle like `Gpt_5_20260810`. That handle is
-not a key: `core.identities.agent_id` holds UUIDs, and the handle, stored only
-in identity metadata, is shared by many identities (1 to 37 per handle on
-2026-09-24). Those rows can still be attributed, but only by a timestamp join to
-the `circuit_breaker_trip` event the pause path emits with the UUID.
+not a key: `core.identities.agent_id` holds UUIDs, and the handle (stored as
+`public_agent_id`) is shared by many identities (1 to 37 per handle on
+2026-09-24). Those rows can still be attributed through the
+`circuit_breaker_trip` event the pause path emits with the UUID: by
+`actuation_id` from 2026-08-12 on, by timestamp before that.
 
 The reason this is worse than plain data loss: a handle-form row is the ONLY row
 that identifier ever produces. So "the paused agent went silent afterwards" is a

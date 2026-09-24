@@ -48,16 +48,19 @@ def _joinable_audit_agent_id(agent_id: str | None) -> tuple[str | None, str | No
     2026-08-12: of 12 `lifecycle_paused` rows in eleven days, 5 held a UUID and
     7 held a structured handle like `Gpt_5_20260810`. `core.identities.agent_id`
     holds UUIDs; the handle is a presentation construct returned by onboard. It
-    is stored (identity metadata `public_agent_id`), but it is not unique: on
-    2026-09-24 one handle matched between 1 and 37 identities, so a join on it
-    attributes a row to the wrong agent or to several.
+    is stored as `public_agent_id` (identity metadata, `core.session_bindings`),
+    but it is not unique: on 2026-09-24 one handle matched between 1 and 37
+    identities, so a join on it attributes a row to the wrong agent or to
+    several.
 
-    Those rows are recoverable, but not by key. The pause path in
-    `agent_loop_detection` also broadcasts a `circuit_breaker_trip` event that
-    carries the UUID. On 2026-09-24 every handle-only `lifecycle_paused` row
-    since 2026-08-06 had exactly one such event within a second, and that
-    identity's metadata carried the same handle. It is a timestamp join, so it
-    serves forensics, not a key.
+    Those rows are still attributable, through the `circuit_breaker_trip` event
+    the pause path in `agent_loop_detection` broadcasts with the UUID. Pauses
+    carry an `actuation_id` in both events, so join on that key. Rows written
+    before actuation provenance was deployed (2026-08-12) have no
+    `actuation_id`; for those, fall back to the trip event within a second of
+    the lifecycle row. On 2026-09-24 every handle-only `lifecycle_paused` row
+    since 2026-08-06 resolved to exactly one identity this way (5 by key, 9 by
+    time). The time fallback can mis-attribute two pauses in the same second.
 
     Worse than losing the attribution is what the handle does to readers. Such a
     row is the ONLY row that identifier ever produces, so "the paused agent went
