@@ -103,6 +103,35 @@ def test_build_spec_forwards_bounded_reviewer_backend_config(monkeypatch):
     assert json.loads(spec["env"]["DIALECTIC_PAUSED_AGENT_STATE"]) == {}
 
 
+def test_build_spec_forwards_external_host_config_but_not_key(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", "gemini")
+    monkeypatch.setenv(
+        "UNITARES_DIALECTIC_EXTERNAL_BASE_URL",
+        "https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+    monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_MODEL", "gemini-test-model")
+    monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV", "GEMINI_API_KEY")
+    monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S", "90")
+    monkeypatch.setenv("GEMINI_API_KEY", "must-not-forward")
+
+    spec = od._build_spec(
+        "s",
+        {"root_cause": "", "proposed_conditions": [], "reasoning": ""},
+        None,
+    )
+
+    env = spec["env"]
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOST"] == "gemini"
+    assert env["UNITARES_DIALECTIC_EXTERNAL_BASE_URL"].startswith(
+        "https://generativelanguage.googleapis.com/"
+    )
+    assert env["UNITARES_DIALECTIC_EXTERNAL_MODEL"] == "gemini-test-model"
+    assert env["UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV"] == "GEMINI_API_KEY"
+    assert env["UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S"] == "90"
+    assert "GEMINI_API_KEY" not in env
+    assert "must-not-forward" not in env.values()
+
+
 def test_build_spec_forwards_continuation_timing_and_sizes_runtime(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "120")
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_POLL_S", "7.5")

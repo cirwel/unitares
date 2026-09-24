@@ -3,7 +3,8 @@
 **Status:** Pre-registration only. This commit states the disconfirming
 conditions and the shape the answer must take. The comparative analysis is not
 in this commit and lands separately on this branch, so the ordering is visible
-in history rather than asserted. Commissioned by the design-read charter in
+in history rather than asserted. **Re-read 2026-09-23 (proposals audit):** the analysis has since landed in this
+file (c98f84fa, §§7–12); the sentence above describes the first commit only. Commissioned by the design-read charter in
 [`relay-substrate-relayering-v0.md`](relay-substrate-relayering-v0.md) (row 3,
 decision recorded 2026-09-17), which records **no decision** on the
 governed-effect execute plane and requires this document to state disconfirming

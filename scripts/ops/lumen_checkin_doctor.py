@@ -249,6 +249,22 @@ def io_live_session_row_count() -> int | None:
     return int(out) if out.isdigit() else None
 
 
+def io_recovery_persisted(fingerprint: str) -> bool | None:
+    """Is this RECOVERED notice a durable audit.events row? None = can't tell.
+
+    /api/findings answers success before its fire-and-forget persist, which
+    swallows DB errors, so only a readback shows the notice actually landed.
+    `fingerprint` is built here from an int, never from outside input.
+    """
+    out = _run(
+        ["psql", "-h", "localhost", "-U", "postgres", "-d", "governance", "-tAc",
+         "select count(*) from audit.events"
+         " where event_type = 'lumen_checkin_finding'"
+         f" and payload->>'fingerprint' = '{fingerprint}'"]
+    ).strip()
+    return int(out) > 0 if out.isdigit() else None
+
+
 def io_redis_uptime_s() -> int | None:
     out = _run(["redis-cli", "INFO", "server"])
     m = re.search(r"uptime_in_seconds:(\d+)", out)
@@ -305,9 +321,10 @@ def io_pi_restart_services(admin_secret: str) -> list[str]:
     return results
 
 
-def io_post_finding(severity: str, fingerprint: str, message: str, token: str) -> None:
+def io_post_finding(severity: str, fingerprint: str, message: str, token: str) -> bool:
+    """True only when governance confirmed the finding (stored or deduped)."""
     try:
-        _http_json(
+        resp = _http_json(
             f"{GOV_URL}/api/findings",
             {"type": "lumen_checkin_finding", "severity": severity,
              "message": message,
@@ -315,8 +332,9 @@ def io_post_finding(severity: str, fingerprint: str, message: str, token: str) -
              "agent_name": "lumen-checkin-doctor", "fingerprint": fingerprint},
             headers={"Authorization": f"Bearer {token}"} if token else {},
         )
-    except (urllib.error.URLError, OSError, TimeoutError):
-        pass  # escalation is best-effort; the log line below always lands
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError):
+        return False  # escalation is best-effort; the log line below always lands
+    return resp.get("success") is True
 
 
 DEFAULT_IO: dict[str, Callable[..., Any]] = {
@@ -332,6 +350,7 @@ DEFAULT_IO: dict[str, Callable[..., Any]] = {
     "resume": io_resume,
     "pi_restart_services": io_pi_restart_services,
     "post_finding": io_post_finding,
+    "recovery_persisted": io_recovery_persisted,
     "now": time.time,
     "sleep": time.sleep,
 }
@@ -525,8 +544,70 @@ class Doctor:
         last = self.state.get("alerts", {}).get(cls, 0)
         return self.io["now"]() - last >= ALERT_COOLDOWN_S
 
-    def _record_alert(self, cls: str) -> None:
+    def _record_alert(self, cls: str, severity: str) -> None:
         self.state.setdefault("alerts", {})[cls] = self.io["now"]()
+        if severity != "info":
+            self.state["problem_alert_at"] = self.io["now"]()
+
+    # -- recovery notice
+    #
+    # This doctor fires on failure only, so between incidents it is silent by
+    # design. From the outside that silence is indistinguishable from a dead
+    # doctor, and unitares_doctor's finding_producer_live reads it as exactly
+    # that: after the 2026-09-12 incident it reported lumen_checkin_finding as
+    # "silent 10.8d (usually every 6.0h)" while this job logged OK every 10
+    # minutes. That check already exempts a producer whose LAST word was an
+    # info all-clear (the bridge watchdog's RECOVERED notice), so the fix is to
+    # say the all-clear, not to teach the check a roster.
+    def _last_problem_alert(self) -> float:
+        if "problem_alert_at" in self.state:
+            return self.state["problem_alert_at"]
+        # State written before severities were recorded. Every class except
+        # the two info-only ones escalates at high/critical. The C1/C2 keys
+        # also carry the info [self-healed] notice, so this can over-report
+        # once: a spare RECOVERED line, never a missed one.
+        return max(
+            (t for c, t in self.state.get("alerts", {}).items()
+             if c not in (RESTART_GAP, HOST_SLEEP_GAP)),
+            default=0,
+        )
+
+    def _post_recovery_if_open(self, evidence: str) -> None:
+        last_problem = self._last_problem_alert()
+        if last_problem <= self.state.get("recovered_at", 0) or self.dry_run:
+            return
+        # Incident-specific fingerprint. Governance dedups on fingerprint
+        # alone inside a 30-min window and answers success=true, deduped=true
+        # WITHOUT storing an event, so a fixed fingerprint would let a second
+        # incident's recovery "succeed" into nothing.
+        fingerprint = f"lumen-checkin-recovered-{int(last_problem)}"
+        # Closed only on a durable row. A success reply is not one: the
+        # endpoint acks before a fire-and-forget persist that swallows DB
+        # errors. Until the row shows up, every healthy tick re-posts; inside
+        # the dedup window that is a no-op, after it a fresh attempt.
+        persisted = self.io["recovery_persisted"](fingerprint)
+        if persisted:
+            self._close_recovery(last_problem, "confirmed in audit.events")
+            return
+        delivered = self.io["post_finding"](
+            "info", fingerprint,
+            f"RECOVERED: Lumen is checking in again — {evidence}",
+            _load_secret("UNITARES_HTTP_API_TOKEN"),
+        )
+        if not delivered:
+            log("RECOVERED notice not accepted by governance — retrying next tick")
+            return
+        # With no readback (persisted is None) the incident stays open too: an
+        # ack is exactly what a failed persist also returns. The repost cost
+        # is bounded by governance's dedup window, one row per 30 min at most.
+        log("posted RECOVERED notice — closing once audit.events shows it"
+            + (" (READBACK UNAVAILABLE: psql probe failed)" if persisted is None else "")
+            + f" ({evidence})")
+
+    def _close_recovery(self, last_problem: float, how: str) -> None:
+        log(f"RECOVERED notice closed — {how}")
+        self.state["problem_alert_at"] = last_problem
+        self.state["recovered_at"] = self.io["now"]()
 
     # -- gather
     def gather(self, deep: bool = False) -> Signals:
@@ -589,6 +670,7 @@ class Doctor:
         cls, evidence = classify(signals)
         if cls == HEALTHY:
             self.state.pop("unreachable_since", None)
+            self._post_recovery_if_open(evidence)
             self._save_state()
             last = _parse_ts(signals.central.get("last_update"))
             age = (signals.now - last) if last else None
@@ -618,6 +700,7 @@ class Doctor:
             signals = self.gather(deep=True)
             cls, evidence = classify(signals)
             if cls == HEALTHY:
+                self._post_recovery_if_open(evidence)
                 self._save_state()
                 log(f"OK on deep re-check — {evidence}")
                 return cls
@@ -690,7 +773,7 @@ class Doctor:
                 severity, f"lumen-checkin-{fingerprint_cls}", message,
                 _load_secret("UNITARES_HTTP_API_TOKEN"),
             )
-            self._record_alert(fingerprint_cls)
+            self._record_alert(fingerprint_cls, severity)
             self._save_state()
         else:
             log(f"finding suppressed (cooldown active for {fingerprint_cls})")

@@ -1,6 +1,7 @@
 # Orchestrated Dialectic Reviewer — the agent-orchestrator's first consumer (v0)
 
 - **Status:** Implemented behind opt-in gates. The standalone reviewer, governed-first spawn path, real disagreeing verdict, local/Codex/Claude backend routing, fallback behavior, and provenance tests are present. Operator rollout remains separate from merge.
+- **Status re-read 2026-09-23 (proposals audit):** default-off in code (`orchestrator_dispatch.py`); the maintainer deployment's governance-mcp plist sets `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`, so the operator rollout step has been taken there. That is a read of the plist, not of the running process. The problem statement below describes the handler as it was before this work and no longer matches current line numbers.
 - **Why this one:** it converts a standing governance weakness (rubber-stamp reviews) into a fix using *exactly* what the orchestrator already does (spawn → lease-bind → supervise → capture exit → clean up). It's demand-real, not hypothetical.
 
 ## The problem it fixes

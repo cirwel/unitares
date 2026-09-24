@@ -21,10 +21,17 @@ from typing import Any, Iterable, Optional
 # class, where fleet-wide constants apply. This is what makes UNITARES
 # user-agnostic: a fresh install inherits no operator-specific identities.
 #
-# Each named resident becomes its own N=1 calibration class, so a deployment
-# that names residents must also provide their class-conditional scale
-# constants (config/governance_config.py) — guarded by
-# tests/test_grounding_scale_constants.py.
+# Each named resident becomes its own N=1 calibration class, checked before
+# any tag. Its constants do NOT go in config/governance_config.py, which
+# ships generic classes only (see
+# test_public_dicts_are_user_agnostic_generic_classes_only in
+# tests/test_grounding_scale_constants.py). A deployment supplies a
+# resident's healthy_operating_point, delta_norm_max and void_threshold in
+# its local UNITARES_CLASS_CALIBRATION overlay
+# (_apply_class_calibration_overlay); the S/I/E scale maps have no overlay
+# section. A resident with no entry there gets the *_DEFAULT constants and
+# the standard void threshold, not its tag class's values and not the
+# "default" class entry.
 #
 # The SDK mirrors this contract by reading the same env var; see
 # agents/sdk/src/unitares_sdk/_substrate.py. The env var NAME is the

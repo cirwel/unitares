@@ -5,7 +5,7 @@ name: Stranded Work Audit
 # the same branch, no surface ever reports the gap; 2026-07-01 a manual sweep
 # found 10 branches carrying real marooned fixes). The audit itself is
 # scripts/dev/stranded_work_audit.py; this workflow is just the schedule plus
-# a deduped GitHub issue when STRANDED or DANGLING-REVIEW branches exist (same pattern as
+# a deduped GitHub issue when STRANDED, DANGLING-REVIEW or INDETERMINATE branches exist (same pattern as
 # surface-findings.yml: hidden fingerprint marker, ci-finding label).
 #
 # GITHUB_TOKEN-only — no metered APIs (execution-cost policy).
