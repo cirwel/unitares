@@ -39,14 +39,14 @@ sequenceDiagram
     B->>U: "Full disk, or a log that never rotated?"
     A->>U: "Checked. Rotation works. It was the disk."
     Note over A: Session ends. Its context is gone.
-    A2->>U: "Continuing session 1. What did it leave?"
+    A2->>U: Starts with session 1 as its declared parent: "What's left?"
     U->>A2: The finding, its logs, and Agent B's challenge
 ```
 
 ## Start with one thing
 
 Start with the first layer and add the next when you need it. Each process calls
-`start_session(force_new=true)` once and reuses its `client_session_id` after that.
+`start_session(force_new=true)` once and reuses its `client_session_id` after that; a session that continues earlier work also passes `parent_agent_id`.
 
 | Start here | You get | Tools |
 |---|---|---|
