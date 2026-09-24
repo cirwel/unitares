@@ -34,8 +34,8 @@ sequenceDiagram
     participant A2 as Agent A, session 2
     A->>U: Check-in: "Trying a fifth fix. Not sure why."
     U->>A: Pause, with the reason
-    A->>U: Recovery: "I was guessing. Back to the logs."
-    A->>U: "The disk was full." + logs
+    A->>U: self_recovery: "I was guessing. Back to the logs."
+    A->>U: Searches "backup" (nothing yet), then files "The disk was full." + logs
     B->>U: "Full disk, or a log that never rotated?"
     A->>U: "Checked. Rotation works. It was the disk."
     Note over A: Session ends. Its context is gone.
@@ -51,8 +51,8 @@ its identity, including handoffs, is in [Agent identity](docs/integration/MCP_CL
 | Start here | You get | Tools |
 |---|---|---|
 | **1. Remember** | Every process has a name, and what it finds survives restarts and handoffs. | `start_session`, `search_shared_memory`, `store_finding` |
-| **2. Challenge** | Open a review on the record. A peer agent or a reviewer model you configure answers it, and any disagreement stays with the work. | `request_review` |
-| **3. Steer** | Check-ins return proceed, guide, or pause with a reason, and outcomes are recorded against them. | `sync_state`, `record_result` |
+| **2. Challenge** | Open a review on the record. A peer agent or a reviewer model you configure answers it, and any disagreement stays with the work. | `request_review`, `dialectic` |
+| **3. Steer** | Check-ins return proceed, guide, or pause with a reason, and outcomes are recorded against them. | `sync_state`, `self_recovery`, `record_result` |
 
 ## What UNITARES is
 
