@@ -479,7 +479,7 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                         "paused_at": meta.paused_at,
                         "status": "paused",
                     },
-                    recovery=paused_refusal_recovery(meta),
+                    recovery=paused_refusal_recovery(meta, ctx.agent_uuid),
                 )]
             # Expired — fall through to normal processing; categorizer
             # will re-pause if state is genuinely degraded.
@@ -688,7 +688,7 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
 
         elif meta.status == "paused":
             from ..support.pause_ttl import paused_refusal_recovery
-            recovery = paused_refusal_recovery(meta)
+            recovery = paused_refusal_recovery(meta, ctx.agent_uuid)
             recovery["related_tools"] = ["get_governance_metrics", "self_recovery"]
             return [error_response(
                 f"Agent '{agent_id}' is paused - check-ins and new shared-memory entries are refused.",

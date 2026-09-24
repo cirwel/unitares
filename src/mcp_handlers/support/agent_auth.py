@@ -195,7 +195,7 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
                 "paused_at": meta.paused_at,
                 "status": "paused",
             },
-            recovery=paused_refusal_recovery(meta),
+            recovery=paused_refusal_recovery(meta, agent_uuid),
         )
     elif meta.status == "archived":
         return error_response(

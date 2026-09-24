@@ -96,8 +96,11 @@ def test_no_refusal_calls_a_threshold_reading_a_violation():
 
 def test_the_dialectic_lookup_is_callable_as_written():
     """dialectic(action='get') errors without session_id or agent_id."""
-    recovery = paused_refusal_recovery(_meta(agent_id="a-123"))
-    assert "dialectic(action='get', agent_id='a-123')" in recovery["other_exits"]
+    # The UUID, not meta.agent_id (often a display handle sessions are not
+    # keyed by): dialectic sessions store paused_agent_id as the UUID.
+    recovery = paused_refusal_recovery(_meta(agent_id="Claude_x_20260924"), "uuid-123")
+    assert "dialectic(action='get', agent_id='uuid-123')" in recovery["other_exits"]
+    assert "Claude_x_20260924" not in recovery["other_exits"]
 
 
 def test_a_slow_event_write_still_matches_the_current_pause():

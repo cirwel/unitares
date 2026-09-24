@@ -240,7 +240,7 @@ def _parse_utc(value: Any) -> Optional[datetime]:
 _PAUSE_EVENT_EARLY_SLACK_SECONDS = 1.0
 
 
-def paused_refusal_recovery(meta: Any) -> dict:
+def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict:
     """The `recovery` block for a write refused because the agent is paused.
 
     Says what a paused agent can use from its own refusal: why it was paused,
@@ -291,10 +291,12 @@ def paused_refusal_recovery(meta: Any) -> dict:
         )
     else:
         re_evaluation = "No re-evaluation time is recorded for this pause."
-    agent_id = getattr(meta, "agent_id", None)
+    # Dialectic sessions are keyed by the identity UUID (paused_agent_id);
+    # meta.agent_id is often a structured display handle, which finds nothing.
+    lookup_id = agent_uuid or None
     get_call = (
-        f"dialectic(action='get', agent_id='{agent_id}')" if agent_id
-        else "dialectic(action='get', agent_id=<this agent>)"
+        f"dialectic(action='get', agent_id='{lookup_id}')" if lookup_id
+        else "dialectic(action='get', agent_id=<your agent UUID>)"
     )
     recovery = {
         "action": (

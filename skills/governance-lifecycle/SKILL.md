@@ -241,7 +241,7 @@ review opened for the pause, an operator, or re-evaluation at expiry ends it.
 | Clearly safe self-resume | `self_recovery(action="quick")` | Requires low risk and no active void |
 | Moderate state with reflection | `self_recovery(action="review", reflection="...")` | Requires a genuine reflection; may accept conditions |
 | Disagree with verdict, want structured review | `request_review(issue_description="...")` | One-call request + thesis by default; pass `use_brief_as_thesis=false` for a neutral two-call flow |
-| Human/operator override | `operator_resume_agent(target_agent_id="...", reason="...")` | Operator-only; refuses an active void or risk above 0.80. Never resume your own pause through an operator path |
+| Human/operator override | `operator_resume_agent(target_agent_id="...", reason="...")` | Operator-only. Refuses an active void or risk above 0.80, and needs `force=true` above 0.60; beyond that an operator resumes from the dashboard. Never resume your own pause through an operator path |
 
 Recovery is not a shortcut. Its authoritative checks are risk, active void, status,
 ownership, and (for review recovery) reflection/persistence evidence. Legacy
