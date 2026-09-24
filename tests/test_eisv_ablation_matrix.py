@@ -1291,42 +1291,62 @@ def _tied_score(name, auc=0.7, brier=0.2):
     )
 
 
+def _all_candidates_fit_rows():
+    """Rows on which every registered candidate fits at the registered
+    min_feature_rows (30): every prior-state feature varies, both classes
+    occur in train and test, and eight agents carry a previous outcome."""
+    rows = []
+    for idx in range(200):
+        bad = (idx * 7) % 10 < 3
+        level = ((idx * 37) % 100) / 100.0
+        rows.append(skeptic_module.OutcomeRow(
+            ts=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=idx),
+            agent_id=f"agent-{idx % 8}",
+            outcome_type="task_failed" if bad else "task_completed",
+            is_bad=bad,
+            outcome_score=0.0 if bad else 1.0,
+            verification_source="server_observation",
+            reported_confidence=None,
+            reported_complexity=None,
+            detail={},
+            prior_state_age_seconds=30.0,
+            prior_risk=level,
+            prior_phi=1.0 - level,
+            prior_verdict=("high-risk", "caution", "safe")[idx % 3],
+            prior_coherence=0.5,
+            prior_e=0.7,
+            prior_i=0.7,
+            prior_s=((idx * 13) % 100) / 100.0,
+            prior_v=0.0,
+            snapshot_verdict=None,
+            snapshot_e=None,
+            snapshot_i=None,
+            snapshot_s=None,
+            snapshot_v=None,
+            snapshot_phi=None,
+            snapshot_coherence=None,
+            prior_s_disp=((idx * 29) % 100) / 100.0,
+        ))
+    return rows
+
+
 def test_build_model_scores_construction_order_is_the_recorded_tie_break(monkeypatch):
     """CI canary, not a read-time refusal. An exact tie on the selection key
     is broken by the order candidates reach `max` in `build_matrix_row`, which
     the manifest does not pin. The stop rule records that order; this fails if
-    master changes any part of how it arises:
-    (a) the order `build_model_scores` constructs candidates in (source);
-    (b) the selection path following the order of the scores it is given
-        (not, say, iterating the candidate tuple), exercised at runtime by a
-        forced tie through the real `build_matrix_row`;
-    (c) `build_model_scores` reordering its result (no sort in its body)."""
-    import ast
-    import inspect
-    import textwrap
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(skeptic_module.build_model_scores)))
-    # (a) Construction order, read from the source.
-    names = []
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "append" and node.args):
-            inner = node.args[0]
-            if isinstance(inner, ast.Call):
-                for arg in inner.args[:1]:
-                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                        names.append((node.lineno, arg.value))
-    order = tuple(name for _, name in sorted(names)
-                  if name in skeptic_module.EISV_PRIOR_STATE_MODELS)
+    master changes it, at runtime on both halves of the path:
+    (a) the order the real `build_model_scores` returns candidates in, as
+        passed through the real `score_deltas_vs_baseline`, on rows where all
+        seven fit (a reordered construction, a sort, a slice or a reversal of
+        the result all change it);
+    (b) the selection following the order of the deltas it is given (not, say,
+        iterating the candidate tuple), exercised by a forced exact tie
+        through the real `build_matrix_row`."""
+    # (a) What the real scorer hands to the selection, in order.
+    scores = skeptic_module.build_model_scores(_all_candidates_fit_rows())
+    order = tuple(delta.name for delta in skeptic_module.score_deltas_vs_baseline(scores))
     assert order == RECORDED_CONSTRUCTION_ORDER
     assert set(order) == set(skeptic_module.EISV_PRIOR_STATE_MODELS)
-
-    # (c) Nothing in build_model_scores reorders what it returns.
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
-            assert called not in {"sorted", "sort", "reverse", "reversed"}, called
 
     # (b) A forced exact tie resolves to the first candidate in the order the
     # scores arrive, through the real selection in build_matrix_row.

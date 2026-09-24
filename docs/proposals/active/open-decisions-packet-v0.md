@@ -19,6 +19,16 @@ Review recommendations are attributed separately from observations and policy.
 **Recommendations:** non-binding, including the independent review's table
 below. Agreement between agent passes does not supply operator authorization.
 
+**D4 disposed — recorded 2026-09-23, effective at merge of #2373.** The
+operator selected option A (winner-name identity), with
+`EISV_PRIOR_STATE_MODELS` and `DISPERSION_FEATURE` pinned in
+`REGISTERED_READ_MANIFEST`. The ruling text is the "Pre-read clarification"
+block in `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`.
+For D4 only, this supersedes "All seven decisions remain open", "Nothing here
+is implemented" and D4's *Default if silent*. The other six decisions remain
+open, and the rest of this packet, D4's entry included, is kept as written on
+its dates.
+
 ---
 
 ## Codex review recommendations — recorded 2026-09-10
@@ -275,6 +285,9 @@ blocks that exist because two verification passes ran over every entry:
 **Reversibility:** reversible until 2026-12-01, one-way after.
 **Blast radius:** fleet, and partly external.
 **Decays:** yes — at the moment the read executes.
+**Disposition:** option A, recorded 2026-09-23, effective at merge of #2373
+(see the note under the status block). The *Established* bullet "The
+candidate tuple is not pinned" describes the state before that change.
 
 ### The fork
 

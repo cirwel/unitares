@@ -395,12 +395,15 @@ claim that the tuple's order selects. What it does not freeze: the
 tie-break order, which is the construction order in `build_model_scores`,
 and what any candidate computes. The tie-break order is recorded above and
 guarded by a CI canary test (`test_build_model_scores_construction_order_is_the_recorded_tie_break`
-in `tests/test_eisv_ablation_matrix.py`). It fails if `master` changes any
-part of how that order arises: the order `build_model_scores` constructs
-candidates in, a sort of its result, or a selection path that stops
-following the order of the scores it is given (checked at runtime by a
-forced exact tie through `build_matrix_row`). The canary is a CI check, not
-a refusal inside the read. The model
+in `tests/test_eisv_ablation_matrix.py`). It runs the real
+`build_model_scores` and `score_deltas_vs_baseline` on synthetic rows where
+all seven candidates fit and checks the order they reach the selection in,
+so a reordered construction, a sort, a slice or a reversal of the result
+fails it; and it forces an exact tie through the real `build_matrix_row` to
+check that the selection follows that order rather than, say, the tuple's.
+Its rows are synthetic, so a change that reordered candidates only on other
+data would pass it. The canary is a CI check, not a refusal inside the
+read. The model
 constructors in `build_model_scores`, their binning,
 `min_feature_rows` (30), `MIN_DISPERSION_SNAPSHOTS` (5) and
 `DISPERSION_WINDOW_MINUTES` (90.0) remain governed only by the registered
@@ -438,9 +441,12 @@ task and strict scopes at 30 d and 90 d: `prior_risk_binned` /
 (`docs/operations/ablation-initiates-finding-2026-06-16.md`) has one,
 task / 90 d: `previous_bad_plus_prior_risk` / `prior_s_binned`. The winning
 names differ on all five, so this definition would have been unmet on every
-recorded pair. In addition, the ablation watchdog completed 42 runs after
-the frozen cutoff whose live matrices exposed selected candidates
-(`docs/ontology/falsification-design-system-audit-2026-08-23.md`); their
+recorded pair. In addition, after the frozen cutoff the ablation watchdog
+completed 42 runs and the dogfood/ablation guard 43, each printing two live
+matrices whose `Best EISV/prior model` column exposed the selected
+candidates; the guard disabled null resampling, which does not suppress
+that column (see "Protocol deviation — disclosed 2026-08-23" above and
+`docs/ontology/falsification-design-system-audit-2026-08-23.md`). Their
 winners were not recorded and are not known to this block. It is written
 with those facts in view: it is a pre-read choice, not a pre-evidence one.
 It was written before any access to the registered cohort; no live outcome
