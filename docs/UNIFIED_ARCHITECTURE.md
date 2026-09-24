@@ -6,8 +6,8 @@ Status: canonical prose summary. If this file and runtime code disagree, trust [
 
 ```
   Any AI Agent                                    Unitares Server
-  (Cursor, Claude Code,                           (port 8767)
-   Claude Desktop, CLI, ...)
+  (Claude Code, Codex,                            (port 8767)
+   Hermes, any MCP client)
   ============================                    ========================
 
   Do work                     HTTP POST /mcp/
@@ -41,7 +41,7 @@ Every agent check-in flows through the same pipeline:
 
 ### 1. Check-in
 
-An agent calls `process_agent_update` with:
+An agent calls `process_agent_update` (advertised to agents as `sync_state`) with:
 - `response_text` — what it did; primary operational input
 - `complexity` — optional reflective self-report [0, 1]
 - `confidence` — optional reflective self-report [0, 1]
@@ -73,22 +73,23 @@ Four observable signals define a drift vector that feeds entropy:
 | Calibration deviation | Stated confidence vs actual outcomes |
 | Complexity divergence | Self-reported complexity vs system estimate |
 | Coherence deviation | How far coherence has moved from baseline |
-| Stability deviation | EISV variance over recent window |
+| Stability deviation | Decision-pattern instability (`1 − decision_consistency`) |
 
 No human oracle is needed for runtime drift estimation. Independent exogenous outcomes still matter for calibration and research validation.
 
 ### 4. Verdict
 
-The server returns a governance decision:
+The decision engine (`src/monitor_decision.py`) returns one of two actions, `proceed` or `pause`; `guide` is a `sub_action` of `proceed` that the response surfaces as its own policy action:
 
-| Verdict | Meaning | Agent action |
+| Policy action | Meaning | Agent action |
 |---------|---------|-------------|
 | `proceed` | State is healthy | Continue working |
-| `guide` | Slightly off track | Read guidance, adjust approach |
-| `pause` | Needs attention | Stop, reflect, consider dialectic review |
-| `reject` | Significant concern | Requires dialectic review or human input |
+| `guide` | `proceed` with guidance — slightly off track or at a basin boundary | Read guidance, adjust approach |
+| `pause` | Needs attention | Stop, reflect, consider `self_recovery` or dialectic review |
 
-Verdicts include `margin` (comfortable / tight / critical) indicating proximity to basin boundaries.
+`reject` is no longer emitted; it survives only as a legacy input alias that normalizes to `pause`.
+
+Responses include `margin` indicating proximity to basin boundaries: `comfortable` / `tight`, `warning` (a threshold just crossed, < 0.1 past), `critical` (≥ 0.1 past), or `settling` (fewer than 3 check-ins of history). See `config/governance_config.py`.
 
 #### Edge-regime postures: oscillation and assessment failure
 
@@ -108,25 +109,31 @@ Agents and operators interact through several bound services. All bind to `127.0
 
 | Service | Port | Endpoint | Purpose |
 |---|---|---|---|
-| Governance MCP | `8767` | `/mcp/` (Streamable HTTP), `/v1/tools/call` (REST), `/dashboard` (HTML) | Primary agent surface — check-ins, queries, verdicts |
+| Governance MCP | `8767` | `/mcp/` (Streamable HTTP), `/v1/tools/call` (REST), `/dashboard` (HTML), `/ws/eisv` (WebSocket event stream) | Primary agent surface — check-ins, queries, verdicts |
 | Gateway MCP | `8768` | `/mcp/` | Reduced surface for weak external clients |
-| Lease plane | `8788` | `/v1/lease/*` (bearer-auth, fail-closed) | Elixir/OTP coordination layer for single-writer surfaces — runbook in [`operations/lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) |
-| PostgreSQL@17 + AGE | `5432` | `postgresql://…/governance` | Single source of truth |
-| Redis | `6379` | `redis://…/0` | De-facto primary session/identity store — not optional; most live sessions exist only here. Being migrated to a Postgres-mirror model (`docs/proposals/archive/redis-retirement-v0.md`) |
+| Wave 3A handlers | `8770` | — | BEAM-hosted handlers (`src/wave3a_routing.py`) |
+| Lease plane + governed-effect plane | `8788` | `/v1/lease/*`, `/v1/effects`, `/v1/dialectic/*`, `/v1/msg/*` (bearer-auth, fail-closed) | Elixir/OTP coordination layer for single-writer surfaces, governed effects, and agent messaging — runbook in [`operations/lease-plane-operator-runbook.md`](operations/lease-plane-operator-runbook.md) |
+| Agent orchestrator | `8789` | — | BEAM orchestrator used for dialectic reviewer dispatch (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
+| Dialectic-live | `8790` | — | Phoenix/LiveView view of dialectic sessions |
+| PostgreSQL + AGE | `5432` | `postgresql://…/governance` | Single source of truth (PG17 on the Homebrew deployment; the Docker image is PG18) |
+| Redis | `6379` | `redis://…/0` | De-facto primary session/identity store — not optional; most live sessions exist only here. Durable identity/session state is moving to Postgres behind default-off mirror flags; Redis stays permanently for ephemeral and cross-process coordination (cache, locks, rate limits, pin TTLs) — operator topology decision 2026-06-28 in [`proposals/archive/redis-retirement-v0.md`](proposals/archive/redis-retirement-v0.md) |
+
+The authoritative port registry is [`operations/DEFINITIVE_PORTS.md`](operations/DEFINITIVE_PORTS.md). Setting `UNITARES_UDS_SOCKET` adds an optional kernel-attested Unix-socket listener for residents (`src/uds_listener.py`).
 
 ## Recovery: Circuit Breaker + Dialectic
 
 When an agent is paused, recovery follows a structured protocol:
 
-1. **Self-recovery** — `self_recovery(action="quick")` if risk < 0.40 and no void is active; legacy `C(V)` is diagnostic context only
-2. **LLM-assisted dialectic** — local LLM provides antithesis for single-agent reflection
-3. **Peer dialectic** — another agent reviews (thesis -> antithesis -> synthesis)
+1. **Self-recovery** — `self_recovery(action="quick")` if risk ≤ 0.40 and no void is active; `self_recovery(action="review")` with a reflection up to risk 0.65. Legacy `C(V)` is diagnostic context only
+2. **LLM-assisted dialectic** — an in-process local-LLM antithesis for single-agent reflection. It always agrees, so it is a reflection aid, not an independent reviewer
+3. **Orchestrated dialectic reviewer** — a separate reviewer process with its own identity (`agents/dialectic_reviewer/`, local/Codex/Claude backends) that can disagree. Default-off in code (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW`); see [`proposals/active/orchestrated-dialectic-reviewer-v0.md`](proposals/active/orchestrated-dialectic-reviewer-v0.md)
+4. **Peer dialectic** — another agent reviews (thesis -> antithesis -> synthesis)
 
 See [dev/CIRCUIT_BREAKER_DIALECTIC.md](dev/CIRCUIT_BREAKER_DIALECTIC.md) for the full protocol.
 
 ## Knowledge Graph
 
-Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonical retrieval backend** (`UNITARES_KNOWLEDGE_BACKEND=postgres`, default); Apache AGE is an **optional graph backend** for queries that benefit from cypher-style traversal (`UNITARES_KNOWLEDGE_BACKEND=age`). The factory lives in [`src/knowledge_graph.py`](../src/knowledge_graph.py).
+Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonical retrieval backend** (`UNITARES_KNOWLEDGE_BACKEND=auto`, the default, resolves to `postgres` when `DB_BACKEND=postgres`); Apache AGE is an **optional graph backend** for queries that benefit from cypher-style traversal (`UNITARES_KNOWLEDGE_BACKEND=age`). The factory lives in [`src/knowledge_graph.py`](../src/knowledge_graph.py).
 
 - Discoveries tagged with agent state, severity, and type
 - Searchable across all agents and sessions; hybrid RRF (vector + FTS) requires the AGE backend — `KnowledgeGraphPostgres` exposes no `semantic_search`, and `UNITARES_ENABLE_HYBRID` defaults off
@@ -137,15 +144,23 @@ Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonic
 ```
 +------------------------------+
 |  PostgreSQL+AGE (port 5432)   |
-|  +- core.identities          |     All agent state, audit,
-|  +- core.agent_state         |     and knowledge lives here.
-|  +- audit.events             |
-|  +- knowledge.discoveries    |     relational KG record + FTS.
-|  +- discovery_embeddings     |     pgvector semantic search.
-|  +- governance_graph (AGE)   |     There is no SQLite.
-|  +- dialectic.*              |
-|  +- core.calibration         |
-|  +- audit.tool_usage         |
+|  core.*                      |     All agent state, audit,
+|    identities, agents,       |     and knowledge lives here.
+|    agent_state, sessions,    |     There is no SQLite.
+|    session_bindings,         |
+|    onboard_pins, calibration,|
+|    dialectic_sessions,       |
+|    dialectic_messages,       |
+|    discovery_embeddings*     |     pgvector (per-model tables)
+|  audit.*                     |
+|    events, tool_usage,       |
+|    outcome_events            |
+|  knowledge.discoveries       |     relational KG record + FTS.
+|  governance_graph (AGE)      |
+|  metrics.series              |     Chronicler time series
+|  lease_plane.*, effects.*,   |     BEAM coordination planes
+|  coordination.*,             |
+|  orchestration.*             |
 |                              |
 |  Redis (port 6379)           |     De-facto primary session store —
 |  audit_log.jsonl (raw)       |     not optional; degraded local-only without it.
@@ -247,7 +262,8 @@ anyio isolation (Redis guards, sync blocking I/O, performance caches):
 | `config/governance_config.py` | Thresholds, margin computation |
 | `src/mcp_server.py` | MCP server entry point |
 | `src/mcp_handlers/core.py` | `process_agent_update` handler |
-| `src/mcp_handlers/lifecycle/handlers.py` | Stuck detection, auto-recovery |
+| `src/mcp_handlers/lifecycle/stuck.py` | Stuck detection, auto-recovery (`lifecycle/handlers.py` re-exports) |
+| `src/mcp_handlers/lifecycle/self_recovery.py` | `self_recovery` quick/review paths |
 | `src/mcp_handlers/dialectic/handlers.py` | Thesis/antithesis/synthesis |
 | `src/calibration.py` | Confidence -> correctness mapping |
 | `src/mcp_handlers/cirs/` | CIRS v2 protocol (7 message types) |
@@ -261,11 +277,14 @@ Several long-lived governance agents run alongside the server. They consume the 
 | Resident | Cadence | Role |
 |---|---|---|
 | **Vigil** | scheduled (launchd, ~30 min) | Janitorial — health checks, KG groundskeeping, test triggers |
-| **Sentinel** | continuous (WebSocket) | Fleet monitor — anomaly detection on the live event stream |
+| **Vigil hygiene** | weekly | Branch hygiene |
+| **Sentinel** | continuous (`/ws/eisv`) | Fleet monitor — anomaly detection on the live event stream. The live slot is the BEAM Sentinel (`elixir/sentinel`); the Python Sentinel is the reference / rollback slot |
 | **Watcher** | event-driven | Code-watcher — wired into Claude Code's PostToolUse hook, local-LLM pattern match |
-| **Chronicler** | daily | Longitudinal codebase metrics → `metrics.series` |
+| **Chronicler** | daily | Codebase, fleet and governance metrics → `metrics.series` |
+| **Dialectic reviewer** | on dispatch | Orchestrated external reviewer (see Recovery above) |
+| **Triage scribe** | on demand | Local-model anomaly summarizer |
 
-See [`agents/README.md`](../agents/README.md) for the reference implementations. The residents are reference patterns, **not** load-bearing governance internals — the public contract lives in `agents/sdk/`.
+Which residents a deployment runs is configuration (`UNITARES_RESIDENTS`, empty by default; see [`operations/resident-roster.md`](operations/resident-roster.md)). `agents/local_resident/` is the shared runner. See [`agents/README.md`](../agents/README.md) for the reference implementations. The residents are reference patterns, **not** load-bearing governance internals — the public contract lives in `agents/sdk/`.
 
 ## Threat model and security posture
 
@@ -274,7 +293,7 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 - All services bind to `127.0.0.1` by default — public exposure is an operator decision (env-var gated)
 - The lease plane fails closed if `LEASE_PLANE_BEARER_TOKEN` is unset
 - Agent identity is bearer-token-based with intentional retention of the symmetric stack (asymmetric DPoP considered, shelved 2026-04-19 — see [`ontology/s1-continuity-token-retirement.md`](ontology/s1-continuity-token-retirement.md))
-- The dashboard reads PostgreSQL directly with the same auth model as MCP
+- Dashboard auth is passkey/WebAuthn sessions, deliberately separate from MCP authentication (`src/dashboard_auth.py`)
 
 Multi-tenant or public-facing deployment will benefit from a harder auth posture than the current defaults. Vulnerability reports: [`SECURITY.md`](../.github/SECURITY.md).
 
@@ -299,7 +318,7 @@ For Lumen's internal architecture (sensors, neural bands, DrawingEISV, LED pipel
 The system is in active development. Larger conceptual shifts and shipping RFCs live in:
 
 - **[`ontology/`](ontology/)** — the versioned identity ontology and the research/system RFCs that evolve it. Start at [`ontology/README.md`](ontology/README.md).
-- **[`proposals/`](proposals/)** — RFCs that don't (yet) belong in `ontology/`. The Plexus / lease-plane / BEAM-coordination work is here ([`plexus-scope.md`](proposals/active/plexus-scope.md), [`surface-lease-plane-v0.md`](proposals/active/surface-lease-plane-v0.md), [`beam-footprint-roadmap-v0.md`](proposals/active/beam-footprint-roadmap-v0.md), [`monitor-delegated-liveness-v0.md`](proposals/archive/monitor-delegated-liveness-v0.md), and the `wave-*` series).
+- **[`proposals/`](proposals/)** — RFCs that don't (yet) belong in `ontology/`. [`proposals/active/README.md`](proposals/active/README.md) is the status index (Built / Active / Parked). Already built: the Plexus boundary over the surface lease plane ([`plexus-scope.md`](proposals/active/plexus-scope.md); [`surface-lease-plane-v0.md`](proposals/active/surface-lease-plane-v0.md) Phase A #305, `resident` enforcement #476), the agent message transport, and the orchestrated dialectic reviewer. Still active: the BEAM roadmap ([`beam-footprint-roadmap-v0.md`](proposals/active/beam-footprint-roadmap-v0.md) — Wave 3 signed GO-WITH-REDUCED-SCOPE, no implementation authorised yet). Most of the `wave-*` series is archived.
 - **The paper** — [`unitares-paper-v6`](https://github.com/cirwel/unitares-paper-v6) (DOI [10.5281/zenodo.19647159](https://doi.org/10.5281/zenodo.19647159)). v7 is in scoping; see [`ontology/paper-positioning.md`](ontology/paper-positioning.md).
 
 If runtime code and this doc disagree, runtime wins. Disputes resolve against [`dev/CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md).
