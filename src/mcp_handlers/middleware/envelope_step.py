@@ -239,7 +239,9 @@ def _is_cold_start(payload: Dict[str, Any]) -> bool:
     )
     driver = attribution.get("primary_driver")
     basis = _verdict_evidence(payload).get("basis")
-    if driver == "behavioral_assessment" or primary_source == "behavioral":
+    if driver in {"behavioral_assessment", "independent_verification_floor"} or (
+        primary_source == "behavioral"
+    ):
         return False
     return (
         driver == "phi_cold_start"
@@ -502,7 +504,9 @@ def _recovery_hint(
         # only when it is true.
         hint = (
             "Cold start: this risk is the prior, not a measurement of your "
-            "behavior, and this decision does not block."
+            "behavior, and "
+            + ("nothing blocks you now." if action == "resumed"
+               else "this decision does not block.")
         )
         # Only true while the cold-start guard leaves an agent's own report
         # out (COLD_START_GUARD_INCLUDE_AUTHORED off, or the guard disabled).
@@ -518,9 +522,11 @@ def _recovery_hint(
         return hint
     if risky and decided_to_continue and recovery_refused:
         return (
-            "Risk is elevated but this decision does not block - keep scope tight "
-            "and sync_state after your next substantial step. self_recovery is "
-            "for lifting a pause."
+            "Risk is elevated but "
+            + ("nothing blocks you now" if action == "resumed"
+               else "this decision does not block")
+            + " - keep scope tight and sync_state after your next substantial "
+            "step. self_recovery is for lifting a pause."
         )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
@@ -528,9 +534,11 @@ def _recovery_hint(
         # Not paused: self_recovery has nothing to lift, and review refuses at
         # risk >= 0.65 after recording the reflection.
         return (
-            "Risk is elevated but this decision does not block - keep scope tight "
-            "and sync_state after your next substantial step. self_recovery is "
-            "for lifting a pause."
+            "Risk is elevated but "
+            + ("nothing blocks you now" if action == "resumed"
+               else "this decision does not block")
+            + " - keep scope tight and sync_state after your next substantial "
+            "step. self_recovery is for lifting a pause."
         )
     if risky:
         return (
