@@ -99,6 +99,20 @@ def test_query_excludes_every_suppressed_test_surface(doctor, monkeypatch):
         )
 
 
+def test_elixir_producer_suppresses_the_same_prefixes(doctor):
+    """The ACTIVE Sentinel is the BEAM one. Its prefix list must match the
+    doctor mirror, or the doctor counts a fixture the producer suppressed as a
+    real forced release that never alarmed (a false FAIL)."""
+    ex = (REPO_ROOT / "elixir" / "sentinel" / "lib" / "unitares_sentinel"
+          / "forced_release_poller" / "logic.ex").read_text()
+    block = re.search(
+        r"@suppressed_test_surface_prefixes \[(.*?)\]", ex, re.S
+    )
+    assert block, "could not find @suppressed_test_surface_prefixes in logic.ex"
+    ex_prefixes = set(re.findall(r'"([^"]+)"', block.group(1)))
+    assert ex_prefixes == set(doctor.FORCED_TRANSFORM_TEST_SURFACE_PREFIXES)
+
+
 def test_suppression_mirror_matches_the_producer(doctor):
     """Regression, caught 2026-08-19. The producer suppresses the legacy
     pre-#1102 naming as well as the reserved namespace, and the governance DB
