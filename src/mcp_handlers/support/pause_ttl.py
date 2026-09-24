@@ -279,7 +279,9 @@ def paused_refusal_recovery(meta: Any) -> dict:
                 paused_dt
                 + timedelta(seconds=int(GovernanceConfig.PAUSE_AUTO_EXPIRE_SECONDS))
             ).isoformat()
-        except (ValueError, TypeError, AttributeError, ImportError):
+        except (ValueError, TypeError, AttributeError, ImportError, OverflowError):
+            # OverflowError: an operator can effectively disable expiry with a
+            # huge PAUSE_AUTO_EXPIRE_SECONDS; the refusal must still render.
             expires_at = None
     if expires_at:
         re_evaluation = (

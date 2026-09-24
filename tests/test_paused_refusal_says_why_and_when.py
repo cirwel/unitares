@@ -114,3 +114,14 @@ def test_a_slow_event_write_still_matches_the_current_pause():
         ],
     )
     assert paused_refusal_recovery(meta)["why"] == "current pause"
+
+
+def test_a_huge_expiry_setting_does_not_crash_the_refusal(monkeypatch):
+    """_pause_is_stale tolerates it; the refusal builder must too, or every
+    paused agent's check-in fails with an unhandled OverflowError."""
+    monkeypatch.setattr(GovernanceConfig, "PAUSE_AUTO_EXPIRE_SECONDS", 999999999999)
+    recovery = paused_refusal_recovery(
+        _meta(paused_at=datetime(2026, 9, 21, tzinfo=timezone.utc).isoformat())
+    )
+    assert "expires_at" not in recovery
+    assert "No re-evaluation time is recorded" in recovery["other_exits"]
