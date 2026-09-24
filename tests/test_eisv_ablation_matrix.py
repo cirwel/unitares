@@ -1251,6 +1251,45 @@ def test_stop_rule_manifest_pins_the_live_candidate_tuple_and_dispersion_feature
     matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID + "-retry-1"), now=now)
 
 
+# The tie-break order recorded in the stop rule's condition-4 clarification:
+# `max` keeps the first maximal element, and candidates reach it in the order
+# `build_model_scores` constructs them.
+RECORDED_CONSTRUCTION_ORDER = (
+    "prior_risk_binned",
+    "previous_bad_plus_prior_risk",
+    "prior_eisv_dispersion_binned",
+    "previous_bad_plus_dispersion",
+    "prior_phi_binned",
+    "prior_s_binned",
+    "prior_verdict",
+)
+
+
+def test_build_model_scores_construction_order_is_the_recorded_tie_break():
+    """CI canary, not a read-time refusal: the manifest pins the candidate
+    tuple but not the order `build_model_scores` constructs candidates in,
+    which breaks exact ties. The stop rule records that order; a change on
+    master that reorders it fails here, before the read."""
+    import ast
+    import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(skeptic_module.build_model_scores)))
+    names = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "append" and node.args):
+            inner = node.args[0]
+            if isinstance(inner, ast.Call):
+                for arg in inner.args[:1]:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        names.append((node.lineno, arg.value))
+    order = tuple(name for _, name in sorted(names)
+                  if name in skeptic_module.EISV_PRIOR_STATE_MODELS)
+    assert order == RECORDED_CONSTRUCTION_ORDER
+    assert set(order) == set(skeptic_module.EISV_PRIOR_STATE_MODELS)
+
+
 def test_registered_read_refuses_a_moved_candidate_tuple(monkeypatch, tmp_path):
     now = datetime(2026, 9, 1, tzinfo=timezone.utc)
     original = tuple(skeptic_module.EISV_PRIOR_STATE_MODELS)

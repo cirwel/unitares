@@ -303,8 +303,8 @@ verbatim.
   is unmet. The cell is expected to be identical across the three seeded
   reads, because the winner is selected before the seed is used (the seed
   drives the bootstrap interval and the selective null only); any
-  disagreement between seeds is disclosed as a harness defect, not
-  adjudicated as a failed condition. Whether the two names share an EISV
+  disagreement between seeds is disclosed as a harness defect, and no
+  signal sentence is published for that read. Whether the two names share an EISV
   feature may be reported as context; it does not decide the condition.
 - **If the selective null was not formed** (fewer than 3 permutable
   clusters; the harness prints the conclusion *unqualified* in that case —
@@ -435,8 +435,8 @@ architecture docs — a usability result carries no evidence about either.
   #1791) were filed at 2026-08-21T18:39Z and its recording commit was authored
   at 18:40Z, both after the 07:34Z merge, so the rehearsal most likely ran
   after registration. The protocol version is unchanged.
-- **Terminology clarification, 2026-09-23.** Lane P's "candidate family" now
-  follows the stop rule's 2026-09-23 pre-data clarification of its PASS
+- **Terminology clarification, drafted 2026-09-23, effective at merge.** Lane
+  P's "candidate family" now follows the stop rule's pre-read clarification of its PASS
   condition 4, made alongside this entry: the compared object is the winning
   candidate's name as the harness prints it (`Best EISV/prior model`),
   identical at lead 0 and lead 30 in the registered output, with `-` in
