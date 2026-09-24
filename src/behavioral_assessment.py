@@ -138,9 +138,11 @@ def floor_breach_caution_apply_enabled() -> bool:
     void/coherence/basin/cirs pause only when the behavioral verdict is
     "safe", and reads it whatever the verdict source (even with
     GOVERNANCE_BEHAVIORAL_VERDICT off), so after a restart a baselined agent
-    at a floor breach keeps a pause the grace would otherwise have lifted. Escalate-only and
-    baselined-only: never lowers a
-    verdict, never fires before the agent's own baseline is warm. Implies the
+    at a floor breach keeps a pause the grace would otherwise have lifted.
+    It has no hysteresis: an agent oscillating across a floor flips
+    safe/caution each check-in, and those flips count toward CIRS resonance
+    (adaptive_governor, 4 flips in a window of 10). Escalate-only and
+    baselined-only: never lowers a verdict, never fires before the agent's own baseline is warm. Implies the
     shadow record, with ``applied`` marking rows the floor actually changed.
     """
     return os.getenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "").strip().lower() in {
