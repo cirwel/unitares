@@ -101,10 +101,25 @@ def test_unsure_everywhere_is_recorded_as_abstention(adj):
     assert "unsure confirmed" in posted["rationale"]
 
 
-def test_no_answer_from_any_tier_posts_nothing(adj):
+def test_no_answer_from_any_tier_posts_nothing_and_fails_the_run(adj):
+    """CLI missing / login expired / provider down: not a healthy run."""
     io, calls = make_io(adj, {"fast": None, "strong": None})
-    adj.run_once(io=io, tiers=tiers(adj))
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 1
     assert calls["posted"] == []
+
+
+def test_one_unusable_item_among_answered_ones_is_not_a_failure(adj):
+    queue = [dict(ITEM, fingerprint="bad"), dict(ITEM, fingerprint="good")]
+    io, calls = make_io(adj, {}, queue=queue)
+    answers = iter([None, None, (reply("confirmed"), "m")])
+    io["run_model"] = lambda prompt, tier: next(answers)
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
+    assert [p["fingerprint"] for p in calls["posted"]] == ["good"]
+
+
+def test_an_empty_queue_is_a_healthy_run(adj):
+    io, calls = make_io(adj, {}, queue=())
+    assert adj.run_once(io=io, tiers=tiers(adj)) == 0
 
 
 def test_strong_off_means_one_tier(adj, monkeypatch):

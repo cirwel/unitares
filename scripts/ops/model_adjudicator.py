@@ -492,14 +492,17 @@ def run_once(io: dict | None = None, dry_run: bool = False,
         log("queue empty — nothing to judge")
         return 0
     recorded = 0
+    attempted = answered = 0
     for item in queue[:MAX_ITEMS]:
         fp = item.get("fingerprint")
         if not fp:
             continue
+        attempted += 1
         result = judge(item, io, tiers)
         if result is None:
             log(f"{fp}: no usable answer from any tier — left for the next run")
             continue
+        answered += 1
         payload = {
             "fingerprint": fp,
             "verdict": result.verdict,
@@ -528,6 +531,12 @@ def run_once(io: dict | None = None, dry_run: bool = False,
                 "accepted, so further model calls would be wasted")
             return 1
     log(f"{recorded} verdict(s) recorded" + (" (dry run)" if dry_run else ""))
+    if attempted and not answered:
+        # CLI missing, login expired, provider down, or nothing parseable:
+        # the judge is unavailable, and a clean exit would read as healthy.
+        log(f"no usable model answer for any of {attempted} item(s) — the judge "
+            "is unavailable")
+        return 1
     return 0
 
 
