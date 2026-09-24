@@ -93,7 +93,8 @@ NATIVE_WAIT_S = 600
 # same subscription quota authoring does, and past the third round most
 # findings are about text the previous fix added.
 ROUND_CAP = 3
-SEVERE_BADGE_RE = re.compile(r"!\[P[01] Badge\]")
+# Codex renders severity as an image badge; plain `[P1]` titles occur too.
+SEVERE_BADGE_RE = re.compile(r"!\[P[01] Badge\]|\[P[01]\]")
 
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
@@ -331,20 +332,32 @@ class CodexRounds:
         return self.count >= ROUND_CAP and bool(self.last_findings) and not self.last_severe
 
 
-def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict]) -> CodexRounds:
-    """Count completed Codex runs by the distinct commits they name.
+LOCAL_REVIEWERS = {"codex", "claude"}  # review.sh's fallbacks, which spend the same quota
 
-    Findings arrive as a submitted review; a clean result as a comment naming
-    the commit or an activity row marked Completed. Heads are compared on
-    seven hex digits, the shortest form Codex prints.
+
+def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
+                 events: list[dict] = ()) -> CodexRounds:
+    """Count completed review runs: native Codex by the distinct commits it
+    names, local fallbacks by the distinct diffs their records key.
+
+    Native findings arrive as a submitted review; a clean result as a comment
+    naming the commit or an activity row marked Completed. Heads are compared
+    on seven hex digits, the shortest form Codex prints. A base change resets
+    the count: native_records discards the same evidence, because it does not
+    name the base it reviewed.
     """
     runs: dict[str, tuple[float, str, list[dict]]] = {}
+    since = max((timestamp(e.get("created_at", "")) for e in events
+                 if e.get("event") in {"base_ref_changed", "base_ref_force_pushed"}), default=0)
 
-    def seen(commit: str, when: str, findings: list[dict]) -> None:
+    def seen(commit: str, when: str, findings: list[dict], run: str = "") -> None:
         t = timestamp(when)
-        prior = runs.get(commit[:7])
+        if t <= since:
+            return
+        run = run or commit[:7]
+        prior = runs.get(run)
         if prior is None or t >= prior[0]:
-            runs[commit[:7]] = (t, commit, findings or (prior[2] if prior else []))
+            runs[run] = (t, commit, findings or (prior[2] if prior else []))
 
     for c in comments:
         if not is_codex_bot(c):
@@ -372,6 +385,15 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict]) 
         replies_only = posted and not findings and not (review.get("body") or "").strip()
         if not replies_only:
             seen(review["commit_id"], review.get("submitted_at", ""), findings)
+    for c in comments:
+        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            continue
+        rec = parse_record(c.get("body", ""))
+        if rec and rec.reviewer in LOCAL_REVIEWERS and rec.verdict in {"CLEAN", "FINDINGS"}:
+            # No commit is named and no per-finding structure exists, so a
+            # capped local round can be disposed but not fix-verified.
+            findings = [{"body": c.get("body", "")}] if rec.verdict == "FINDINGS" else []
+            seen("", c.get("created_at", ""), findings, run=f"local:{rec.key}")
     if not runs:
         return CodexRounds()
     _, last, findings = max(runs.values(), key=lambda r: r[0])
@@ -479,7 +501,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
                   in (c.get("body") or "") for c in comments)
     reactions = api_pages(f"repos/{repo}/issues/{pr}/reactions") if summary else []
     snapshot = native_records(comments, reviews, inline, events, key, head, reactions)
-    snapshot.rounds = codex_rounds(comments, reviews, inline)
+    snapshot.rounds = codex_rounds(comments, reviews, inline, events)
     return snapshot
 
 
@@ -954,13 +976,14 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
     review the new lines for new problems, and the record says so.
     """
     n = len(rounds.last_findings)
-    print(f"[review] Codex round cap reached ({rounds.count} of {ROUND_CAP}, "
+    print(f"[review] review round cap reached ({rounds.count} of {ROUND_CAP}, "
           f"last round {n} finding(s), no P0/P1): not requesting another run.")
     verifier = git("config", "review.verifier", check=False).strip()
     last = git("rev-parse", "--verify", "--quiet", f"{rounds.last_head}^{{commit}}", check=False).strip()
     if not verifier or not last:
         why = ("no verifier configured (git config review.verifier ollama:gemma4:latest)"
-               if not verifier else f"last reviewed commit {rounds.last_head} is not in this clone")
+               if not verifier else "the last round was a local review, which names no commit"
+               if not rounds.last_head else f"last reviewed commit {rounds.last_head} is not in this clone")
         print(f"[review] UNREVIEWED: {why}. Past the cap, answer findings with "
               "`review.sh dispose` on the reviewed diff instead of pushing fixes, or spend "
               "a round deliberately with `review.sh --reviewer codex`.")
@@ -976,7 +999,7 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
         return UNREVIEWED
     open_ = [c for c, ok in results if not ok]
     done = [c for c, ok in results if ok]
-    lines = [f"Codex round cap reached ({rounds.count} of {ROUND_CAP}). {verifier} checked each "
+    lines = [f"Review round cap reached ({rounds.count} of {ROUND_CAP}). {verifier} checked each "
              f"finding from the last Codex round (`{last[:10]}`) against the fixes pushed since "
              f"(`{last[:10]}..{head[:10]}`). It checks the fixes only; it did not review the "
              "new lines for new problems.", ""]
@@ -1247,7 +1270,7 @@ def post_check(repo: str, pr: int, head: str, conclusion: str, description: str,
 def round_note(rounds: CodexRounds | None) -> str:
     if not rounds or not rounds.count:
         return ""
-    note = f" · Codex round {rounds.count} of {ROUND_CAP}"
+    note = f" · review round {rounds.count} of {ROUND_CAP}"
     return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
 
 

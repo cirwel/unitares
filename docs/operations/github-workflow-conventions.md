@@ -215,11 +215,18 @@ fallback validation.
 
 #### Round cap
 
-A PR gets **three full Codex rounds** (`ROUND_CAP` in `review_gate.py`). A
-round is one completed Codex run, counted by the distinct commits Codex names.
-Codex can post a result three ways: a submitted review, a clean comment, or a
-completed activity row. All three count. A reply inside an existing thread does
-not. The `review` check shows the count ("Codex round 2 of 3").
+A PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
+round is one completed review run:
+- **Native Codex:** counted by the distinct commits Codex names. Codex can post
+  a result three ways: a submitted review, a clean comment, or a completed
+  activity row. All three count.
+- **Local `codex`/`claude` fallback:** counted by the distinct diffs its
+  records cover, because it spends the same quota.
+
+These don't count: a reply inside an existing thread, the receipt that records
+a native result, and a fix verification. A base change resets the count,
+because the gate discards the pre-retarget evidence for the same reason. The
+`review` check shows the count ("review round 2 of 3").
 
 Why: every run spends the same subscription quota that authoring does. In the
 first ~14 hours of native review (2026-09-23/24) there were 137 Codex runs
@@ -245,7 +252,8 @@ The rule is for fix loops only:
     a diff-bound record with the reviewer `fix-verify:<model>`. Findings it
     judges unaddressed stay open as `FINDINGS(n)` for fixing or disposing.
     It checks the fixes only, not the new lines for new problems, and the
-    record says so. With no verifier configured, a push past the cap is
+    record says so. A local round names no commit, so its findings are
+    disposed rather than fix-verified. With no verifier configured, a push past the cap is
     UNREVIEWED. The author says so and disposes, or deliberately spends a
     round.
 - `review.sh --reviewer codex` (or `claude`) deliberately spends a round past
@@ -507,7 +515,7 @@ this entirely).
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Codex round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
+| Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

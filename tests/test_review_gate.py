@@ -1023,7 +1023,7 @@ def test_cap_applies_to_p2_fix_loops_only(count, last, capped):
 
 def test_check_description_shows_the_round():
     assert rg.round_note(None) == "" and rg.round_note(rg.CodexRounds()) == ""
-    assert rg.round_note(rg.CodexRounds(2)) == " · Codex round 2 of 3"
+    assert rg.round_note(rg.CodexRounds(2)) == " · review round 2 of 3"
     assert rg.round_note(rg.CodexRounds(3)).endswith("(cap reached)")
 
 
@@ -1094,3 +1094,45 @@ def test_verifier_answer_is_the_last_verdict_word(monkeypatch):
     assert rg.verify_fix("ollama:m", "f", "d") is False
     monkeypatch.setattr(rg, "ask_verifier", lambda v, p: "NOT_ADDRESSED? no:\nADDRESSED")
     assert rg.verify_fix("ollama:m", "f", "d") is True
+
+
+def test_a_retarget_resets_the_round_count():
+    # PR #2401 review: native_records discards pre-retarget evidence, so the
+    # cap must not keep deciding from it.
+    reviews, inline = _rounds(*[(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z", ["P2"]) for i in (1, 2, 3)])
+    assert rg.codex_rounds([], reviews, inline).capped()
+    events = [{"event": "base_ref_changed", "created_at": "2026-09-23T03:30:00Z"}]
+    assert rg.codex_rounds([], reviews, inline, events).count == 0
+    later, more = _codex_review(4, "4" * 40, "2026-09-23T04:00:00Z", findings=["P2"])
+    assert rg.codex_rounds([], reviews + [later], inline + more, events).count == 1
+
+
+def test_plain_text_severity_labels_are_severe():
+    rounds = rg.CodexRounds(3, "a" * 40, [{"body": "[P1] loses data"}])
+    assert rounds.last_severe and not rounds.capped()
+    assert not rg.CodexRounds(3, "a" * 40, [{"body": "[P2] wording"}]).last_severe
+
+
+def test_local_fallback_rounds_count_toward_the_cap():
+    comments = [_comment(rg.Record(f"k{i}", "FINDINGS", 1, False, reviewer), text="1. bug")
+                for i, reviewer in enumerate(["codex", "claude", "codex"])]
+    for i, c in enumerate(comments):
+        c["created_at"] = f"2026-09-23T0{i + 1}:00:00Z"
+    rounds = rg.codex_rounds(comments, [], [])
+    assert rounds.count == 3 and rounds.capped() and rounds.last_head == ""
+    # Receipts of native results and fix verifications are not extra runs.
+    receipt = _comment(rg.Record("k9", "CLEAN", 0, False, "codex-native"))
+    verified = _comment(rg.Record("k8", "CLEAN", 0, False, "fix-verify:ollama:m"))
+    assert rg.codex_rounds([receipt, verified], [], []).count == 0
+
+
+def test_a_capped_local_round_is_disposed_not_fix_verified(repo, monkeypatch, capsys):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/change"))
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    rounds = rg.CodexRounds(3, "", [{"body": "1. bug"}])
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], rounds=rounds))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("spent a local run past the cap"))
+    monkeypatch.setattr(rg, "ask_verifier", lambda *args: pytest.fail("verified without a reviewed commit"))
+    _git(repo, "config", "review.verifier", "ollama:m")
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
+    assert "names no commit" in capsys.readouterr().out
