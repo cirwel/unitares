@@ -1628,6 +1628,12 @@ class UNITARESMonitor:
                 "eligible_for_production_counter": False,
                 "unavailable_reason": "evaluation_failed",
             }
+            # The APPLY floor runs in the assessment, before this row, so a
+            # failed observation must still say when it raised the verdict.
+            _floor = getattr(behavioral_assessment, "floor_breach_caution", None)
+            if isinstance(_floor, dict) and _floor.get("applied"):
+                absolute_floor_observation["measurement_role"] = "verdict_floor"
+                absolute_floor_observation["policy_effect"] = "behavioral_verdict_raised"
         self._last_absolute_floor_observation = absolute_floor_observation
 
         # Log decision via audit logger (for accountability and transparency).

@@ -349,6 +349,29 @@ def test_observation_failure_is_explicit_unknown_not_a_zero():
     assert logged.call_count == 1
 
 
+def test_observation_failure_still_labels_a_floor_raised_verdict():
+    """The APPLY floor runs in the assessment, before the observation is
+    built, so a failed observation must still say the verdict was raised."""
+    import src.governance_monitor as gm
+
+    real_assess = gm.assess_behavioral_state
+
+    def _raised(*args, **kwargs):
+        result = real_assess(*args, **kwargs)
+        result.floor_breach_caution = {"mode": "apply", "applied": True}
+        return result
+
+    with patch("src.governance_monitor.assess_behavioral_state", side_effect=_raised):
+        _monitor, result, _logged = _run_with_observer(
+            RuntimeError("telemetry unavailable"), run_label="failed-raised"
+        )
+
+    observation = result["behavioral"]["assessment"]["absolute_floor_observation"]
+    assert observation["evaluated"] is False
+    assert observation["measurement_role"] == "verdict_floor"
+    assert observation["policy_effect"] == "behavioral_verdict_raised"
+
+
 def test_simulation_is_excluded_from_counter_and_restores_real_observation():
     monitor = UNITARESMonitor("test-floor-observation-simulation", load_state=False)
     real_observation = {"marker": "last-real-observation"}
