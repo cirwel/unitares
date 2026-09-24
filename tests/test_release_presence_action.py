@@ -50,3 +50,26 @@ async def test_release_presence_refuses_an_unbound_caller(monkeypatch):
 
     assert called == []
     assert body["success"] is False
+
+
+def test_checkin_presence_heartbeat_carries_the_session_id(monkeypatch):
+    """sync_state's UpdateContext has no client_session_id attribute; the id in
+    its arguments must still reach the presence heartbeat, or a session's own
+    release would see its check-ins as an unnamed holder."""
+    from types import SimpleNamespace
+
+    from src.mcp_handlers import core
+
+    scheduled = []
+    monkeypatch.setattr(
+        apl,
+        "schedule_agent_presence_heartbeat",
+        lambda agent_uuid, client_session_id=None: scheduled.append(
+            (agent_uuid, client_session_id)
+        ),
+    )
+    ctx = SimpleNamespace(agent_uuid="uuid-1", arguments={"client_session_id": "sess-1"})
+
+    core._schedule_agent_presence_heartbeat(ctx)
+
+    assert scheduled == [("uuid-1", "sess-1")]
