@@ -413,9 +413,13 @@ _NON_STOP_HIGH_RISK_NEXT_ACTION = (
     "after your next substantial step."
 )
 
+# Says what was decided, not that a hold is in force: a post-ODE dialectic
+# escalation (updates/phases.py) decides pause after the circuit breaker has
+# already run, so that pause is not actuated.
 _STOP_UNDER_STEADY_VERDICT_NEXT_ACTION = (
-    "The decision was {action}: governed writes hold. "
-    "self_recovery(action='check') shows what lifting it needs."
+    "The decision was {action}, which overrides this verdict. "
+    "self_recovery(action='check') shows whether a hold is in force and what "
+    "lifting it needs."
 )
 
 # Verdicts whose glossary next_action tells the agent to carry on.

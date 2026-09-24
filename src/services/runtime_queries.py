@@ -217,14 +217,15 @@ def _last_decision_action(meta: Any) -> Optional[str]:
     """The decision this agent's verdict last rode on, for explain_verdict.
 
     The lifecycle status decides whether a stop is in force. Paused wins over
-    the check-in history. When the agent is not paused, a recorded stop is
-    stale: pause expiry (support/pause_ttl.py) and dialectic resolution set the
-    status back to active without touching `recent_decisions`, so reporting
-    that stop would tell a resumed agent to pause. It yields None instead, as
-    does an empty history, which leaves the verdict wording unchanged. Any
-    status other than paused or active (archived, deleted, waiting_input)
+    the check-in history. When the agent is active, a recorded stop is stale:
+    pause expiry (support/pause_ttl.py) and dialectic resolution set the status
+    back to active without touching `recent_decisions`. A resumed agent
+    proceeds until its next check-in decides, so that is reported as
+    "proceed"; reporting nothing would fall back to the glossary's "Pause,
+    reflect" and tell a resumed agent to pause. An empty history yields None.
+    Any status other than paused or active (archived, deleted, waiting_input)
     refuses or holds writes for its own reasons, so no decision is reported
-    there either.
+    there.
     """
     if meta is None:
         return None
@@ -237,7 +238,7 @@ def _last_decision_action(meta: Any) -> Optional[str]:
     if not recent_decisions:
         return None
     last = str(recent_decisions[-1]).lower()
-    return None if last in {"pause", "reject"} else last
+    return "proceed" if last in {"pause", "reject"} else last
 
 
 async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], server=None) -> Dict[str, Any]:

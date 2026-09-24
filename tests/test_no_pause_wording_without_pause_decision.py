@@ -96,7 +96,10 @@ def test_a_stop_decision_under_a_steady_verdict_never_says_continue():
     for verdict in ("safe", "caution", "proceed"):
         wrapped = explain_verdict(verdict, decision_action="pause")
         assert "continue" not in wrapped["next_action"].lower(), verdict
-        assert "governed writes hold" in wrapped["next_action"], verdict
+        assert "self_recovery(action='check')" in wrapped["next_action"], verdict
+        # A post-ODE escalation decides pause without actuating it, so the
+        # text must not claim a hold is in force.
+        assert "writes hold" not in wrapped["next_action"], verdict
 
 
 def test_high_risk_verdict_on_a_pause_decision_keeps_its_directive():
@@ -233,9 +236,14 @@ def test_non_active_statuses_report_no_decision():
 
 def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
     """Pause expiry and dialectic resolution set status=active but leave the
-    last recorded decision at "pause". That stop is no longer in force."""
-    assert _last_decision_action(_Meta("active", ["proceed", "pause"])) is None
-    assert _last_decision_action(_Meta("active", ["reject"])) is None
+    last recorded decision at "pause". That stop is no longer in force; the
+    agent proceeds, and the verdict wrap must not fall back to "Pause"."""
+    assert _last_decision_action(_Meta("active", ["proceed", "pause"])) == "proceed"
+    assert _last_decision_action(_Meta("active", ["reject"])) == "proceed"
+    wrapped = explain_verdict(
+        "high-risk", decision_action=_last_decision_action(_Meta("active", ["pause"]))
+    )
+    assert not wrapped["next_action"].startswith("Pause")
 
 
 # --- the server instructions ------------------------------------------------
