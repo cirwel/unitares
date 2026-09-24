@@ -112,7 +112,8 @@ def compute_drift_vector(
     # assessment through several inputs (behavioral S, ODE-derived auxiliaries)
     # and persists in its EMA, so attribution stops calling it independent.
     # In-process only; unreachable from the MCP path, which never blends.
-    if monitor._last_self_report_blended:
+    # Not during simulate_update(), which promises not to change monitor state.
+    if monitor._last_self_report_blended and not getattr(monitor, '_simulation_active', False):
         monitor._self_report_ever_blended = True
     if agent_drift_norm > 0.01:
         ad = list(agent_drift_raw) + [0.0] * max(0, 3 - len(agent_drift_raw))
