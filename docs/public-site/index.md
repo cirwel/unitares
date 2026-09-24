@@ -41,9 +41,7 @@ Tool-boundary enforcement, trace emission, and agent-to-agent transport are not
 this server's job: runtime middleware (NeMo Relay has a shipped integration),
 OpenTelemetry, and A2A own those. UNITARES keeps the record beside them.
 
-The deployed policy path uses auditable behavioral state estimation. The
-mathematical formulation in the companion paper remains a research target and
-parallel diagnostic path, not the live decision mechanism.
+The deployed policy path uses auditable behavioral state estimation.
 
 ## Try the released surfaces
 
@@ -68,8 +66,8 @@ Or inspect the signed multi-architecture server image:
 docker pull ghcr.io/cirwel/unitares:v2.22.1
 ```
 
-The demo establishes that the stack is wired. It does not establish predictive
-value or governance efficacy.
+The demo onboards an agent and runs six check-ins against your server. Each one
+returns a state estimate and a policy response with its reason.
 
 ## Evaluate the project
 
@@ -82,26 +80,19 @@ value or governance efficacy.
 | How is the system operated and released? | [Operations docs](https://github.com/cirwel/unitares/tree/master/docs/operations) |
 | What remains on the roadmap? | [Roadmap](https://github.com/cirwel/unitares/blob/master/docs/ROADMAP.md) |
 
-## Evidence boundary
+## Evidence
 
-The [public operational record](https://github.com/cirwel/unitares#evidence-and-limits)
-comes from one long-running maintainer deployment. External adoption remains
-unvalidated. The frozen outcome-lift read did not establish predictive lift,
-and its preserved record lacks the cluster geometry needed to reconstruct
-read-specific power; the result is therefore inconclusive, not a demonstrated
-negative. UNITARES does not claim to prove correctness, ethics, safety, or
-incident prevention. It makes process identity, telemetry, evidence, and policy
-history inspectable so those claims can be tested rather than assumed.
+The [evidence ledger](https://github.com/cirwel/unitares/blob/master/docs/EVIDENCE_AND_LIMITS.md)
+lists measured results with their evidence status: what has run, what was
+measured, and what is still open, with the data behind each.
 
-## Cross-operator federation is a research direction
+## Federation across operators
 
-Federation in the product sense, independent runtimes sharing one
-operator-controlled server, is deployed. Federation between operators is not.
-Today, each deployment is governed by its own operator. The architecture exposes
-versioned telemetry, provenance, identity, and named policy decisions so future
-work can test cross-operator attestations without centralizing raw telemetry.
-Cross-governor trust, consensus, and enforcement are research goals, not deployed
-guarantees.
+Today one operator runs a deployment, and many independent runtimes share its
+record. Trust between operators is the research direction. The architecture
+already exposes versioned telemetry, provenance, identity, and named policy
+decisions, so attestations between deployments can be tested without
+centralizing raw telemetry.
 
 ## Where to go next
 

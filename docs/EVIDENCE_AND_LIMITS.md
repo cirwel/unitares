@@ -5,6 +5,24 @@ record. This page carries the qualifications, provenance, deployment numbers,
 and evaluation boundaries in full so the landing page can remain a concise
 explanation of what UNITARES offers.
 
+## Scope in brief
+
+The public operational record comes from one long-running maintainer
+deployment. External adoption remains unvalidated. The frozen outcome-lift read
+did not establish predictive lift, and its preserved record lacks the cluster
+geometry needed to reconstruct read-specific power; the result is therefore
+inconclusive, not a demonstrated negative. UNITARES does not claim to prove
+correctness, ethics, safety, or incident prevention. It makes process identity,
+telemetry, evidence, and policy history inspectable so those claims can be
+tested rather than assumed.
+
+The deployed policy path uses auditable behavioral state estimation. The
+mathematical formulation in the companion paper remains a research target and
+parallel diagnostic path, not the live decision mechanism. The `make demo`
+walkthrough establishes that the stack is wired, not predictive value or
+governance efficacy. Cross-operator trust, consensus, and enforcement are
+research goals, not deployed guarantees.
+
 ## Claim ledger
 
 Every claim below carries an evidence class. A class says what a result

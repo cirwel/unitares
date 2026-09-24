@@ -5,8 +5,10 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import math
 import os
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -564,6 +566,60 @@ async def _abstained_sentinel_fingerprints() -> set:
     return {r["fp"] for r in rows if r["fp"]}
 
 
+# --- Model adjudication ------------------------------------------------------
+#
+# A model's verdict on a queue item. Built for deployments with no human
+# adjudicator: the queue otherwise fills and never drains, and its doctor
+# checks warn forever about a channel nobody can feed.
+#
+# ⛔A model verdict is NOT an operator verdict and must never become one. The
+# operator path books `external_signal` (TRUSTED_EXTERNAL), which is the label
+# channel the EISV falsifier and the registered 2026-12-01 outcome read consume
+# — swapping a model in there would change the label source of a
+# pre-registered read. So this lands where abstention lands, in audit.events,
+# and is kept out of the same two places for the same reasons:
+#   * _SENTINEL_FINDING_EVENT_TYPES — or the queue would re-ingest it
+#   * _SENTINEL_ADJUDICATION_OUTCOME_TYPES — so the 409 dedup, the anchor-day
+#     count and outcome_events never see it
+# It is telemetry: a per-detector, model-judged precision signal with the
+# judging model named on every row.
+_MODEL_ADJUDICATION_EVENT_TYPE = "finding_model_adjudicated"
+_MODEL_VERDICTS = ("confirmed", "dismissed", "abstain")
+# A model verdict suppresses the item for a cooldown, never permanently: a
+# persisting condition comes back for a fresh look, the same bounded-window
+# argument abstention makes.
+_MODEL_ADJUDICATION_COOLDOWN_HOURS = float(
+    os.getenv("UNITARES_MODEL_ADJUDICATION_COOLDOWN_H", "168")
+)
+_MODEL_RATIONALE_MAX_CHARS = 2000
+# A model verdict is not an operator label, but it IS a consequential write: a
+# confirm or dismiss hides the finding from the operator queue for the whole
+# cooldown. The generic bearer/trusted-network check authenticates any client,
+# not the adjudicator, so this route also requires its own shared secret in
+# X-Unitares-Adjudicator. Unset on the server = the route is off (503).
+_MODEL_ADJUDICATOR_TOKEN_ENV = "UNITARES_MODEL_ADJUDICATOR_TOKEN"
+_MODEL_ADJUDICATOR_HEADER = "x-unitares-adjudicator"
+_MODEL_PROVENANCE_KEYS = ("backend", "host_id", "model", "tier")
+
+
+async def _model_adjudicated_fingerprints() -> dict:
+    """``{fingerprint: newest model verdict}`` within the cooldown window."""
+    from src.db import get_db
+    db = get_db()
+    async with db.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT DISTINCT ON (payload->>'fingerprint')
+                      payload->>'fingerprint' AS fp, payload->>'verdict' AS verdict
+                 FROM audit.events
+                WHERE event_type = $1
+                  AND ts > now() - ($2 || ' hours')::interval
+                  AND payload->>'fingerprint' IS NOT NULL
+                ORDER BY payload->>'fingerprint', ts DESC""",
+            _MODEL_ADJUDICATION_EVENT_TYPE, str(_MODEL_ADJUDICATION_COOLDOWN_HOURS),
+        )
+    return {r["fp"]: r["verdict"] for r in rows if r["fp"]}
+
+
 async def _adjudicated_sentinel_fingerprints() -> set:
     """Fingerprints already carrying a durable adjudication outcome (option A:
     the outcome_event IS the adjudication record; backlog rows are immutable)."""
@@ -845,11 +901,21 @@ async def http_sentinel_adjudication_queue(request):
         # Two different exclusions, deliberately not merged: `adjudicated` is
         # permanent and drives the 409; `abstained` expires and does not.
         abstained = await _abstained_sentinel_fingerprints()
+        # A model's confirm/dismiss takes the item off the queue for a
+        # cooldown. A model ABSTAIN does not — "the model could not tell" must
+        # leave the item for whoever can — unless the caller is the model
+        # adjudicator itself, which asks not to be re-shown what it already
+        # declined (?exclude_model_abstained=1).
+        model_verdicts = await _model_adjudicated_fingerprints()
+        exclude_model_abstained = (
+            request.query_params.get("exclude_model_abstained", "") in ("1", "true")
+        )
 
         seen: set = set()
         queue = []
         pending_total = 0
         abstained_suppressed = 0
+        model_suppressed = 0
         evidence_targets = []
         for e in events:
             details = e.get("details") or {}
@@ -868,10 +934,21 @@ async def http_sentinel_adjudication_queue(request):
             if fp in abstained:
                 abstained_suppressed += 1
                 continue
+            model_verdict = model_verdicts.get(fp)
+            if model_verdict in ("confirmed", "dismissed") or (
+                model_verdict == "abstain" and exclude_model_abstained
+            ):
+                model_suppressed += 1
+                continue
             pending_total += 1
             if len(queue) < limit:
                 item = {
                     "timestamp": e.get("timestamp"),
+                    # Structured provenance, so a consumer never has to infer
+                    # which producer (or which doctor check) raised this from
+                    # its prose — message text is producer-controlled.
+                    "event_type": e.get("event_type"),
+                    "check": details.get("check"),
                     "severity": severity,
                     "finding_type": details.get("finding_type") or details.get("alarm_kind"),
                     "violation_class": details.get("violation_class"),
@@ -898,6 +975,10 @@ async def http_sentinel_adjudication_queue(request):
             # the cooldown would read as "queue is clear" when it is not.
             "abstained_suppressed": abstained_suppressed,
             "abstain_cooldown_hours": _ABSTAIN_COOLDOWN_HOURS,
+            # Same rule as abstention: judged-by-a-model items are counted,
+            # never silently dropped.
+            "model_adjudicated_suppressed": model_suppressed,
+            "model_adjudication_cooldown_hours": _MODEL_ADJUDICATION_COOLDOWN_HOURS,
             "progress": await _adjudication_progress(),
         })
     except Exception as e:
@@ -1057,4 +1138,145 @@ async def http_sentinel_adjudicate(request):
         })
     except Exception as e:
         logger.error(f"Error recording adjudication for {fingerprint}: {e}")
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+def _clean_provenance(raw) -> Optional[dict]:
+    """Model provenance as short strings, or None if ``backend`` is missing."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for key in _MODEL_PROVENANCE_KEYS:
+        value = raw.get(key)
+        if value is not None:
+            out[key] = str(value).strip()[:100]
+    return out if out.get("backend") else None
+
+
+async def http_sentinel_model_adjudicate(request):
+    """POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item.
+
+    Body: {fingerprint, verdict: confirmed|dismissed|abstain, reason?,
+    rationale?, confidence?, model: {backend, host_id?, model?, tier?}}.
+
+    Telemetry only: writes one audit.events row and never an outcome_event, so
+    it cannot reach is_bad, the anchor channel or the falsifier (see
+    _MODEL_ADJUDICATION_EVENT_TYPE). Bearer-authenticated like /api/findings,
+    not operator-gated, precisely because it confers no operator authority.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+    expected = os.getenv(_MODEL_ADJUDICATOR_TOKEN_ENV, "").strip()
+    if not expected:
+        return JSONResponse(
+            {"success": False,
+             "error": f"model adjudication disabled: {_MODEL_ADJUDICATOR_TOKEN_ENV} unset"},
+            status_code=503,
+        )
+    presented = request.headers.get(_MODEL_ADJUDICATOR_HEADER, "")
+    if not presented or not secrets.compare_digest(presented, expected):
+        return JSONResponse(
+            {"success": False, "error": "adjudicator credential required"},
+            status_code=403,
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"success": False, "error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"success": False, "error": "body must be a JSON object"}, status_code=400)
+
+    fingerprint = str(body.get("fingerprint") or "").strip()
+    verdict = str(body.get("verdict") or "").strip().lower()
+    reason = (str(body.get("reason") or "").strip().lower() or None)
+    if not fingerprint or len(fingerprint) > 256:
+        return JSONResponse({"success": False, "error": "fingerprint required (<=256 chars)"},
+                            status_code=400)
+    if verdict not in _MODEL_VERDICTS:
+        return JSONResponse(
+            {"success": False, "error": f"verdict must be one of {', '.join(_MODEL_VERDICTS)}"},
+            status_code=400,
+        )
+    if verdict == "dismissed" and reason not in _ADJUDICATION_DISMISS_REASONS:
+        return JSONResponse(
+            {"success": False,
+             "error": f"dismissal needs a reason: {', '.join(_ADJUDICATION_DISMISS_REASONS)}"},
+            status_code=400,
+        )
+    provenance = _clean_provenance(body.get("model"))
+    if provenance is None:
+        # An unattributed model verdict is worse than none: the whole value of
+        # this channel is knowing WHICH model judged, so tiers can be compared.
+        return JSONResponse({"success": False, "error": "model.backend required"},
+                            status_code=400)
+    confidence = body.get("confidence")
+    try:
+        confidence = None if confidence is None else float(confidence)
+    except (TypeError, ValueError):
+        confidence = math.nan
+    if confidence is not None and not math.isfinite(confidence):
+        # json and float() both accept NaN/Infinity, and a clamp would turn
+        # either into 1.0: maximal confidence nobody stated.
+        return JSONResponse({"success": False, "error": "confidence must be a finite number"},
+                            status_code=400)
+    if confidence is not None:
+        confidence = max(0.0, min(1.0, confidence))
+    rationale = str(body.get("rationale") or "")[:_MODEL_RATIONALE_MAX_CHARS]
+
+    try:
+        if fingerprint in await _adjudicated_sentinel_fingerprints():
+            # An operator verdict outranks any model's; never shadow it.
+            return JSONResponse(
+                {"success": False, "error": "already adjudicated by an operator",
+                 "fingerprint": fingerprint},
+                status_code=409,
+            )
+        _, producer_ref, event_type = await _finding_producer_uuid(fingerprint)
+        if event_type not in _SENTINEL_FINDING_EVENT_TYPES:
+            return JSONResponse(
+                {"success": False, "error": "fingerprint is not a queue finding",
+                 "fingerprint": fingerprint},
+                status_code=404,
+            )
+        import uuid as _uuid
+        from src.db import get_db
+        from src.db.base import AuditEvent
+        inserted = await get_db().append_audit_event(AuditEvent(
+            ts=datetime.now(timezone.utc),
+            event_id=str(_uuid.uuid4()),
+            event_type=_MODEL_ADJUDICATION_EVENT_TYPE,
+            payload={
+                "fingerprint": fingerprint,
+                "verdict": verdict,
+                "reason": reason,
+                "rationale": rationale,
+                "confidence": confidence,
+                "model": provenance,
+                "finding_event_type": event_type,
+                "producer_ref": producer_ref,
+                "note": ("model verdict; telemetry only — NOT an operator "
+                         "adjudication and NOT an exogenous-truth label"),
+            },
+        ))
+        if not inserted:
+            # append_audit_event swallows DB errors and returns False. Saying
+            # success here would let the caller count a verdict that left no
+            # row and suppresses nothing.
+            return JSONResponse(
+                {"success": False, "error": "audit event not recorded",
+                 "fingerprint": fingerprint},
+                status_code=500,
+            )
+        return JSONResponse({
+            "success": True,
+            "fingerprint": fingerprint,
+            "verdict": verdict,
+            "recorded_outcome": False,
+            "suppressed_for_hours": (
+                _MODEL_ADJUDICATION_COOLDOWN_HOURS if verdict != "abstain" else 0
+            ),
+        })
+    except Exception as e:
+        logger.error(f"Error recording model adjudication for {fingerprint}: {e}")
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
