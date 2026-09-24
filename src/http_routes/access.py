@@ -733,11 +733,13 @@ async def _resolve_http_session_binding(
     update_context_agent_id(agent_uuid)
     if proof_read:
         # A proof-bearing pre_onboard read learns WHO is calling (the context
-        # binding) and nothing else. It stamps no agent_id target, because on
-        # a browsable read (a knowledge search) that argument becomes an
-        # author filter and hides every other agent's findings; and it leaves
-        # no sticky-cache entry and no session renewal behind, because a read
-        # must not produce state. Self-state reads take the caller from context.
+        # binding). It stamps no agent_id target, because on a browsable read
+        # (a knowledge search) that argument becomes an author filter and hides
+        # every other agent's findings; and it writes no sticky-cache entry and
+        # skips this layer's session touch. The resolver's own TTL refresh on a
+        # session hit still happens, exactly as for a proof-bearing MCP read:
+        # the caller has just proven its session is live. Self-state reads take
+        # the caller from context.
         return agent_uuid
     # Third and last prebind path, same rule (see _preserve_explicit_target):
     # a resumed session binding identifies the caller, not the target.
