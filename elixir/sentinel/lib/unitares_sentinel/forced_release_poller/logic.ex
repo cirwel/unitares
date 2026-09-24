@@ -57,7 +57,18 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
   #   * "td:/test/" — reserved namespace (PR #1102+)
   #   * "td:/force-release-contract-test-" — legacy pre-#1102 naming whose
   #     events still linger in lease_plane_events (governance DB forbids DELETE)
-  @suppressed_test_surface_prefixes ["td:/test/", "td:/force-release-contract-test-"]
+  #   * "dialectic:/test_elixir_" / "resident:/test_elixir_" — the lease-plane
+  #     suite's namespace (LeaseTestHelpers.unique_surface_id). It runs against
+  #     the governance DB by default; its force-release tests paged as three
+  #     HIGH alarms on 2026-08-26. NOT a blanket `:/test_*` rule — this suite's
+  #     own poller integration tests use `dialectic:/test_sentinel_*` and
+  #     expect alarms.
+  @suppressed_test_surface_prefixes [
+    "td:/test/",
+    "td:/force-release-contract-test-",
+    "dialectic:/test_elixir_",
+    "resident:/test_elixir_"
+  ]
 
   @type alarm :: %{
           kind: String.t(),

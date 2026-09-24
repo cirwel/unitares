@@ -2768,6 +2768,45 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
 # The contrast is the point: watcher_finding ran 2 confirmed / 55 dismissed over
 # the same channel, so a ~96% dismissal rate is what a healthy family looks like
 # here and 0-of-17 is not small-sample noise.
+def _operator_adjudication_declared_off() -> bool:
+    """True when this deployment DECLARES it has no human adjudicator.
+
+    Declared, never inferred: "no operator verdicts lately" is also what a
+    broken dashboard or a busy week looks like, and inferring absence from it
+    would switch these checks off exactly when they are needed.
+    """
+    return os.environ.get("UNITARES_OPERATOR_ADJUDICATION", "").strip().lower() in (
+        "off", "none", "0", "false", "no",
+    )
+
+
+def _no_operator_adjudicator(name: str, mode: str, db_url: str) -> CheckResult:
+    """SKIP for a queue-feed check whose subject cannot exist on this deployment.
+
+    adjudication_feedstock asks whether the queue is fed for the OPERATOR to
+    judge. With no operator nothing is judged by construction, so its WARN
+    could never clear and would repeat every sweep forever. Not used by
+    anchor_all_positive_generator, which audits labels already recorded. Model verdicts (finding_model_adjudicated)
+    are named here as the reason the queue still drains, and deliberately NOT
+    counted as the channel's verdicts: they are telemetry, not anchors.
+    """
+    row = _psql_row(db_url, (
+        "SELECT count(*) FROM audit.events "
+        "WHERE event_type = 'finding_model_adjudicated' "
+        "  AND ts > now() - interval '7 days'"
+    ))
+    model_note = (
+        f"; {row[0]} model verdict(s) in 7d (telemetry, never anchors)"
+        if row else ""
+    )
+    return CheckResult(
+        name, mode, Status.SKIP,
+        "operator adjudication declared off (UNITARES_OPERATOR_ADJUDICATION) — "
+        "no operator verdicts reach the anchor channel on this deployment, so "
+        "there is nothing for this check to judge" + model_note,
+    )
+
+
 ALL_POSITIVE_MIN_N = 10   # below this, "no dismissals yet" is cadence, not shape
 
 
@@ -2790,6 +2829,9 @@ def check_anchor_all_positive_generator(db_url: str) -> CheckResult:
     wrong lever.
     """
     name, mode = "anchor_all_positive_generator", "operator"
+    # Deliberately NOT skipped under UNITARES_OPERATOR_ADJUDICATION=off: this
+    # audits labels ALREADY in the anchor channel (every family, not only the
+    # queue's), and declaring no future adjudicator does not remove them.
     rows = _psql_rows(db_url, (
         "SELECT regexp_replace(outcome_type, '_(confirmed|dismissed)$', '') AS family, "
         "count(*) FILTER (WHERE outcome_type LIKE '%_confirmed') AS confirmed, "
@@ -3251,6 +3293,8 @@ def check_adjudication_feedstock(db_url: str) -> CheckResult:
     lever retired" — which is a decision, not a defect.
     """
     name, mode = "adjudication_feedstock", "operator"
+    if _operator_adjudication_declared_off():
+        return _no_operator_adjudicator(name, mode, db_url)
 
     eligible_sql = _adjudicable_predicate_sql()
 
@@ -3416,6 +3460,8 @@ FORCED_TRANSFORM_FINGERPRINT_PREFIX = "forced_release:ad_hoc:"
 FORCED_TRANSFORM_TEST_SURFACE_PREFIXES = (
     "td:/test/",
     "td:/force-release-contract-test-",
+    "dialectic:/test_elixir_",
+    "resident:/test_elixir_",
 )
 FORCED_TRANSFORM_DAYS = 30        # lookback for the ABSENCE arm
 FORCED_TRANSFORM_LATENCY_DAYS = 7  # lookback for the LATENCY arm (see docstring)

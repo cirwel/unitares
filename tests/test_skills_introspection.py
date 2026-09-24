@@ -211,3 +211,47 @@ def test_compute_stale_reads_in_utc_not_the_local_clock(monkeypatch):
     # 8 days old in UTC, but only 7 under the local clock. This is the
     # assertion the old `date.today()` implementation gets wrong.
     assert skills_mod._compute_stale("2026-09-12", 7) is True
+
+
+def test_load_skill_uses_the_later_of_frontmatter_and_attestation_dates(tmp_path):
+    """Re-verification writes an attestation file instead of editing SKILL.md
+    (scripts/client/_check_freshness.py), so the served date must read it."""
+    import json as _json
+
+    from src.mcp_handlers.introspection import skills as skills_mod
+
+    skill_dir = tmp_path / "demo"
+    skill_dir.mkdir()
+    (skill_dir / "SKILL.md").write_text(
+        '---\nname: demo\nlast_verified: "2026-01-01"\nfreshness_days: 14\n---\n# Demo\n'
+    )
+    assert skills_mod._load_skill(skill_dir)["last_verified"] == "2026-01-01"
+
+    adir = tmp_path / ".attestations" / "demo"
+    adir.mkdir(parents=True)
+    (adir / "20260301T000000Z-aaaaaaaa.json").write_text(
+        _json.dumps({"verified_date": "2026-03-01", "source_digests": {}})
+    )
+    (adir / "20260201T000000Z-bbbbbbbb.json").write_text(
+        _json.dumps({"verified_date": "2026-02-01", "source_digests": {}})
+    )
+    loaded = skills_mod._load_skill(skill_dir)
+    assert loaded["last_verified"] == "2026-03-01"
+    assert loaded["version"] == "2026-03-01"
+
+
+def test_manifest_ignores_attestation_files(tmp_path, monkeypatch):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "skills_manifest", Path(__file__).resolve().parents[1] / "scripts/dev/skills_manifest.py"
+    )
+    manifest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(manifest)
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "demo" / "SKILL.md").write_text("# Demo\n")
+    monkeypatch.setattr(manifest, "SKILLS_DIR", tmp_path)
+    before = manifest.build_manifest()
+    (tmp_path / ".attestations" / "demo").mkdir(parents=True)
+    (tmp_path / ".attestations" / "demo" / "20260924T000000Z-cccccccc.json").write_text("{}")
+    assert manifest.build_manifest() == before

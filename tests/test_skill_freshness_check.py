@@ -11,6 +11,7 @@ run the checker the way CI does, as a subprocess against a throwaway layout.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -112,34 +113,127 @@ def test_an_absent_source_is_reported_not_guessed(layout: Layout):
     assert "1 cited source(s) absent from this checkout" in result.stdout
 
 
-def test_stamp_records_today_and_the_current_digest_and_touches_nothing_else(layout: Layout):
+def _attestations(layout: "Layout") -> list:
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    return sorted(adir.glob("*.json")) if adir.is_dir() else []
+
+
+def test_stamp_writes_a_new_attestation_and_never_touches_skill_md(layout: Layout):
     layout.source("x = 2\n")
     layout.skill(last_verified=_day(10), digest=_digest("x = 1\n"))
-    before = layout.skill_file.read_text()
+    before = layout.skill_file.read_bytes()
 
     result = layout.run("--stamp", "demo")
-    assert result.returncode == 0, result.stdout + result.stderr
-    after = layout.skill_file.read_text()
+    assert result.returncode == 0, result.stdout
+    assert layout.skill_file.read_bytes() == before
 
-    assert f'last_verified: "{_day(0)}"' in after
-    assert f'  unitares/src/thing.py: "{_digest("x = 2\n")}"' in after
-    # Only the date line and the digest block moved.
-    untouched = [l for l in before.splitlines()
-                 if not l.startswith("last_verified:") and "unitares/src/thing.py: " not in l]
-    assert [l for l in after.splitlines()
-            if not l.startswith("last_verified:") and "unitares/src/thing.py: " not in l] == untouched
-    assert "# a comment inside the list survives too" in after
-    assert after.index("source_files:") < after.index("source_digests:") < after.index("\n---\n# Demo")
-
+    [path] = _attestations(layout)
+    record = json.loads(path.read_text())
+    assert record["schema"] == "unitares.skill_attestation.v1"
+    assert record["skill"] == "demo"
+    assert record["verified_date"] == _day(0)
+    assert record["source_digests"] == {"unitares/src/thing.py": _digest("x = 2\n")}
     assert layout.run().returncode == 0
 
 
-def test_stamp_adds_the_digest_block_when_none_existed(layout: Layout):
+def test_two_stamps_write_two_distinct_files(layout: Layout):
+    # Distinct names are what keep concurrent pull requests from conflicting.
     layout.source("x = 1\n")
-    layout.skill(last_verified=_day(10), digest=None)
-    assert layout.run("--stamp", "demo").returncode == 0
-    assert 'source_digests:\n  unitares/src/thing.py: "' in layout.skill_file.read_text()
+    layout.skill(last_verified=_day(1), digest=None)
+    layout.run("--stamp", "demo")
+    layout.run("--stamp", "demo")
+    paths = _attestations(layout)
+    assert len(paths) == 2 and paths[0].name != paths[1].name
+
+
+def test_same_second_stamps_sort_in_the_order_they_were_made(layout: Layout):
+    # Names lead with a microsecond UTC timestamp, so the lexically last file
+    # is the newest even for stamps inside one second; the random suffix must
+    # never decide which record wins.
+    import re
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    for content in ("x = 1\n", "x = 2\n", "x = 3\n"):
+        layout.source(content)
+        layout.run("--stamp", "demo")
+    paths = _attestations(layout)
+    assert all(re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}\.json", p.name) for p in paths)
+    newest = json.loads(paths[-1].read_text())
+    assert newest["source_digests"] == {"unitares/src/thing.py": _digest("x = 3\n")}
     assert layout.run().returncode == 0
+
+
+def test_the_newest_attestation_is_the_record(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    assert layout.run().returncode == 1          # drift against the attestation
+    layout.run("--stamp", "demo")
+    assert layout.run().returncode == 0          # the newer record wins
+
+
+def test_a_recent_attestation_keeps_an_old_frontmatter_date_fresh(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(45), digest=None, freshness_days=14)
+    assert layout.run().returncode == 1          # stale: no digest, and aging
+    layout.run("--stamp", "demo")
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert "verified 0 days ago" in result.stdout
+
+
+def test_migrate_moves_frontmatter_digests_into_an_attestation(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(3), digest=_digest("x = 1\n"))
+    assert layout.run("--migrate").returncode == 0
+    text = layout.skill_file.read_text()
+    assert "source_digests" not in text
+    assert "must leave exactly as it found it." in text      # rest untouched
+    [path] = _attestations(layout)
+    record = json.loads(path.read_text())
+    assert record["verified_date"] == _day(3)
+    assert record["source_digests"] == {"unitares/src/thing.py": _digest("x = 1\n")}
+    assert layout.run().returncode == 0
+
+
+def test_prune_keeps_only_the_newest(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    for _ in range(3):
+        layout.run("--stamp", "demo")
+    newest = _attestations(layout)[-1]
+    assert layout.run("--prune", "1").returncode == 0
+    assert _attestations(layout) == [newest]
+
+
+def test_this_repo_sources_resolve_in_a_checkout_not_named_unitares(tmp_path: Path):
+    # A worktree is rarely named "unitares"; before 2026-09-24 every cited
+    # unitares/ path was "absent" there and the check passed vacuously.
+    projects = tmp_path
+    repo = projects / "unitares-some-worktree"
+    (repo / "src").mkdir(parents=True)
+    (repo / "skills" / "demo").mkdir(parents=True)
+    (repo / "src" / "thing.py").write_text("x = 2\n")
+    (repo / "skills" / "demo" / "SKILL.md").write_text(textwrap.dedent(f'''\
+        ---
+        name: demo
+        last_verified: "{_day(1)}"
+        freshness_days: 14
+        source_files:
+          - unitares/src/thing.py
+        source_digests:
+          unitares/src/thing.py: "{_digest("x = 1\n")}"
+        ---
+        # Demo
+        '''))
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), str(repo), str(projects)],
+        capture_output=True, text=True,
+        env={**os.environ, "SKILL_FRESHNESS_FLOOR_DAYS": "30"},
+    )
+    assert result.returncode == 1
+    assert "STALE" in result.stdout and "absent" not in result.stdout
 
 
 def test_age_only_override_skips_the_source_check(layout: Layout):

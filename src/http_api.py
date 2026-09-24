@@ -151,6 +151,7 @@ from src.http_routes.sentinel import (
     _attach_forced_release_evidence,
     http_sentinel_adjudication_queue,
     http_sentinel_adjudicate,
+    http_sentinel_model_adjudicate,
 )
 from src.http_routes.vigil import (
     _VIGIL_DEFAULT_WINDOW_HOURS,
@@ -339,6 +340,7 @@ def register_http_routes(
     app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]))
     app.routes.append(Route("/v1/sentinel/adjudicate", http_sentinel_adjudicate, methods=["POST"]))
+    app.routes.append(Route("/v1/sentinel/model-adjudicate", http_sentinel_model_adjudicate, methods=["POST"]))
     app.routes.append(Route("/v1/harness/outcome", http_harness_outcome, methods=["POST"]))
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))

@@ -14,14 +14,6 @@ source_files:
   - unitares-discord-bridge/src/bridge/hud.py
   - unitares-discord-bridge/src/bridge/lumen.py
   - unitares-discord-bridge/src/bridge/iterations.py
-source_digests:
-  unitares-discord-bridge/src/bridge/bot.py: "4bbc77ac0ab62bdf"
-  unitares-discord-bridge/src/bridge/acks.py: "0f718b44ed130959"
-  unitares-discord-bridge/src/bridge/config.py: "ebe2d773bef04501"
-  unitares-discord-bridge/src/bridge/server_setup.py: "8ef33d50b336d341"
-  unitares-discord-bridge/src/bridge/hud.py: "a4b1d3e3d2b77dbb"
-  unitares-discord-bridge/src/bridge/lumen.py: "fe5bafcf89c7ecc1"
-  unitares-discord-bridge/src/bridge/iterations.py: "776cef186a6990b4"
 ---
 
 # Discord Bridge
