@@ -582,6 +582,31 @@ async def test_synthesis_stall_awaiting_first_reviewer_verdict_raises_the_flag()
 
 
 @pytest.mark.asyncio
+async def test_synthesis_after_reassignment_with_objection_owed_by_paused_raises_no_flag():
+    """The objection survives reassignment: r_old rejected, the paused agent
+    has not answered, r_new is assigned. `whose_move` says the paused
+    agent's; a speaker walk that skipped r_old would land on a1's thesis."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r_new",
+        transcript=_transcript(("a1", "thesis"), ("r_old", "antithesis"),
+                               ("r_old", "synthesis", False)))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_negotiation_without_a_standing_objection_raises_no_flag():
+    """Reviewer agreed, paused agent then disagreed: no objection stands, so
+    no reviewer reconsideration is owed."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1",
+        transcript=_transcript(("a1", "thesis"), ("r1", "antithesis"),
+                               ("r1", "synthesis", True), ("a1", "synthesis", False)))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_synthesis_self_review_stall_raises_no_flag():
     """Paused agent == reviewer: there is no separate reviewer to wait on."""
     result, m = await _sweep_synthesis_row(

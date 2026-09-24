@@ -287,8 +287,10 @@ requires the same reviewer to revise its own verdict. Once raised, the request
 lets `dialectic(action="get", check_timeout=true)` replace a reviewer that is
 paused or missing, as it already can after a standing objection; a reviewer
 whose status still reads active waits for an operator `reassign`. A SYNTHESIS
-stall where the paused agent owes the next move raises no request and is
-failed at the stuck threshold.
+stall where the paused agent owes the next move when the sweep finds it raises
+no request and is failed at the stuck threshold. A request is not withdrawn
+when the reviewer later answers, so a session flagged while the reviewer owed
+the move stays on the 4h hold after the move passes back.
 
 Reviewer reassignment is privileged:
 

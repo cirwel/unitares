@@ -214,13 +214,13 @@ async def _synthesis_reviewer_owes_reply(
 ) -> bool:
     """True when a SYNTHESIS session is waiting on its REVIEWER.
 
-    Two states put the move on the reviewer, matching `whose_move` in the
-    handlers: its FIRST synthesis verdict is pending (an independent
-    antithesis and no verdict yet — `submit_antithesis` enters SYNTHESIS
-    before that verdict, and the paused agent cannot move until it lands),
-    or the paused agent spoke last (the reviewer owes a reconsideration).
-    System notes are skipped. A self-review (paused agent == reviewer) or a
-    transcript with no party message has no reviewer to wait on.
+    Uses the handlers' own turn predicates, the ones `whose_move` is built
+    from, so the sweeper and the agent-facing answer cannot disagree. The
+    reviewer owes the move when its FIRST synthesis verdict is pending (an
+    independent antithesis and no verdict yet; `submit_antithesis` enters
+    SYNTHESIS before that verdict), or when its standing objection is
+    answered by the paused agent's latest synthesis (reconsideration owed).
+    A self-review has no separate reviewer to wait on.
 
     Never raises. A failed read answers False, which leaves the row on its
     pre-#2202 path rather than raising a flag the sweeper cannot justify.
@@ -235,20 +235,21 @@ async def _synthesis_reviewer_owes_reply(
         )
         return False
     row = dict(row or {})
-    row.setdefault("paused_agent_id", paused_agent_id)
-    row.setdefault("reviewer_agent_id", reviewer_agent_id)
+    row["paused_agent_id"] = paused_agent_id
+    row["reviewer_agent_id"] = reviewer_agent_id
     # Function-local, like the select_reviewer import in the sweeper:
     # handlers is heavy and reaches reviewer.py, which imports this module.
-    from .handlers import _reviewer_verdict_pending_in_session_data
+    from .handlers import (
+        _latest_synthesis_agent_in_session_data,
+        _reviewer_objection_stands_in_session_data,
+        _reviewer_verdict_pending_in_session_data,
+    )
     if _reviewer_verdict_pending_in_session_data(row):
         return True
-    for message in reversed(row.get("messages") or []):
-        speaker = message.get("agent_id")
-        if speaker == paused_agent_id:
-            return True
-        if speaker == reviewer_agent_id:
-            return False
-    return False
+    return bool(
+        _reviewer_objection_stands_in_session_data(row)
+        and _latest_synthesis_agent_in_session_data(row) == paused_agent_id
+    )
 
 
 async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
@@ -571,6 +572,13 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # stall is the paused agent's own and the row keeps its prior
             # behaviour (reaped at the stuck threshold). The read is skipped
             # for rows already flagged, which the hold below handles.
+            #
+            # ⛔Known gap, not closed here: the check runs only when the flag
+            # is raised, and nothing clears the flag when the reviewer later
+            # answers (the standing-objection writer has the same property).
+            # A row flagged while the reviewer owed the move therefore keeps
+            # the 4h hold and `check_reviewer_stuck`'s reading after the move
+            # passes back to the paused agent.
             elif (
                 phase in ("synthesis", "SYNTHESIS")
                 and reviewer_agent_id
