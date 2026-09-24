@@ -516,6 +516,15 @@ def _recovery_hint(
         "tight", "boundary", "near_edge"
     }
     if severe:
+        if recovery_refused:
+            # Reviewed recovery would record the reflection and then refuse at
+            # this risk, so do not send a stopped agent there.
+            return (
+                "Working state looks degraded - pause this line of work. "
+                f"Reviewed self-recovery refuses above risk {review_limit:.2f}, so "
+                "open a dialectic review with request_review; an operator can "
+                "also resume you."
+            )
         return (
             "Working state looks degraded - pause and call "
             "self_recovery(action='review', reflection='...') before continuing."
@@ -1381,11 +1390,21 @@ def build_experience_envelope(
         if state_summary.get("action") == "pause":
             # The generic continuation text below was emitted on pause verdicts
             # too, telling a paused agent to "keep working". Match recovery_hint.
-            next_action = (
-                "Paused - stop this line of work and do not continue it. Call "
-                "self_recovery(action='review', reflection='...') to request "
-                "resumption."
-            )
+            review_limit = _review_risk_limit()
+            if risk is not None and risk > review_limit:
+                # Reviewed recovery records the reflection, then refuses here.
+                next_action = (
+                    "Paused - stop this line of work and do not continue it. "
+                    f"Reviewed self-recovery refuses above risk {review_limit:.2f}, "
+                    "so open a dialectic review with request_review; an "
+                    "operator can also resume you."
+                )
+            else:
+                next_action = (
+                    "Paused - stop this line of work and do not continue it. Call "
+                    "self_recovery(action='review', reflection='...') to request "
+                    "resumption."
+                )
         elif prediction_id:
             # The id already sits in the canonical payload; naming it here is
             # what makes registry-bound record_result discoverable — otherwise

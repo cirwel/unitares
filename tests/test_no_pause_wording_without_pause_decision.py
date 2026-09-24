@@ -234,7 +234,24 @@ def test_a_real_pause_keeps_its_stop_and_recovery_directives():
     env = _envelope(source, "auto")
     assert env["action_summary"]["action"] == "pause"
     assert "stop this line of work" in env["next_action"]
-    assert "self_recovery(action='review'" in env["recovery_hint"]
+    # At 0.79 reviewed self-recovery refuses, so the stop routes elsewhere.
+    assert "pause this line of work" in env["recovery_hint"]
+    assert "request_review" in env["recovery_hint"]
+    assert "self_recovery(" not in env["recovery_hint"]
+
+
+def test_a_stopped_agent_is_routed_to_review_only_below_its_gate():
+    """Review records the reflection and then refuses above
+    MAX_RISK_FOR_SELF_RECOVERY; a stop below that limit keeps the directive."""
+    from src.mcp_handlers.lifecycle.self_recovery import MAX_RISK_FOR_SELF_RECOVERY
+
+    limit = MAX_RISK_FOR_SELF_RECOVERY
+    paused = {"decision": {"action": "pause"}}
+    below = ES._recovery_hint(paused, None, limit)
+    above = ES._recovery_hint(paused, None, limit + 0.01)
+    assert "self_recovery(action='review'" in below
+    assert "self_recovery(" not in above
+    assert "request_review" in above
 
 
 # --- _recovery_hint directly ------------------------------------------------
@@ -242,14 +259,15 @@ def test_a_real_pause_keeps_its_stop_and_recovery_directives():
 def test_unknown_decision_with_high_risk_is_still_severe():
     """No decision anywhere: behavior unchanged."""
     hint = ES._recovery_hint({"risk_score": 0.8}, None, 0.8)
-    assert "pause and call" in hint
+    assert "pause this line of work" in hint
+    assert "request_review" in hint
 
 
 def test_metrics_read_shape_follows_the_verdicts_decision_action():
     proceeding = {"verdict": explain_verdict("high-risk", decision_action="proceed")}
     paused = {"verdict": explain_verdict("high-risk", decision_action="pause")}
-    assert "pause and call" not in ES._recovery_hint(proceeding, None, 0.79)
-    assert "pause and call" in ES._recovery_hint(paused, None, 0.79)
+    assert "pause" not in ES._recovery_hint(proceeding, None, 0.79).lower()
+    assert "pause this line of work" in ES._recovery_hint(paused, None, 0.79)
 
 
 def test_mirror_shape_escalated_after_policy_evaluation_reports_the_pause():
@@ -266,7 +284,7 @@ def test_mirror_shape_escalated_after_policy_evaluation_reports_the_pause():
     # policy_evaluation still says proceed: it predates the escalation.
     env = _envelope(source, "mirror")
     assert env["action_summary"]["action"] == "pause"
-    assert "self_recovery(action='review'" in env["recovery_hint"]
+    assert "pause this line of work" in env["recovery_hint"]
 
 
 def test_applied_runtime_enforcement_reads_as_pause():
