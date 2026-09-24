@@ -421,6 +421,16 @@ _RESUMED_HIGH_RISK_NEXT_ACTION = (
     "sync_state after your next substantial step."
 )
 
+# Active, checked in before, but no decision is held in this server process:
+# the history is memory-only, so a restart empties it as a resume does. Claim
+# only what the status establishes.
+_NOT_PAUSED_HIGH_RISK_NEXT_ACTION = (
+    "The agent is not paused and nothing blocks it now. No decision since "
+    "this reading is recorded, and a reading this high can still pause a "
+    "later check-in; keep scope tight and sync_state after your next "
+    "substantial step."
+)
+
 # Says what was decided, not that a hold is in force: a post-ODE dialectic
 # escalation (updates/phases.py) decides pause after the circuit breaker has
 # already run, so that pause is not actuated.
@@ -470,6 +480,8 @@ def explain_verdict(
         value = wrapped.get("value")
         if action == "resumed" and value == "high-risk":
             wrapped["next_action"] = _RESUMED_HIGH_RISK_NEXT_ACTION
+        elif action == "not_paused" and value == "high-risk":
+            wrapped["next_action"] = _NOT_PAUSED_HIGH_RISK_NEXT_ACTION
         elif action not in _STOP_ACTIONS and value == "high-risk":
             wrapped["next_action"] = _NON_STOP_HIGH_RISK_NEXT_ACTION.format(
                 action=action

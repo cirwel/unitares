@@ -331,8 +331,31 @@ def test_last_decision_action_prefers_a_paused_lifecycle_status():
     assert _last_decision_action(_Meta("active", ["pause", "proceed"])) == "proceed"
     # Never checked in: no decision, keep the "uninitialized" wording.
     assert _last_decision_action(_Meta("active", [], total_updates=0)) is None
-    # Checked in before, history cleared by a resume path: resumed.
-    assert _last_decision_action(_Meta("active", [], total_updates=4)) == "resumed"
+    # Checked in before but no history: a resume path or a server restart
+    # (recent_decisions is memory-only) emptied it, so no resume is claimed.
+    assert _last_decision_action(_Meta("active", [], total_updates=4)) == "not_paused"
+    # A recorded stop under an active status was lifted: that is a resume.
+    assert _last_decision_action(_Meta("active", ["proceed", "pause"])) == "resumed"
+
+
+def test_restart_emptied_history_does_not_claim_a_resume():
+    """After a restart every active agent that checked in has an empty
+    recent_decisions and a persisted total_updates; no text may say it was
+    resumed."""
+    action = _last_decision_action(_Meta("active", [], total_updates=12))
+    wrapped = explain_verdict("high-risk", decision_action=action)
+    assert "resumed" not in wrapped["next_action"]
+    assert "nothing blocks it now" in wrapped["next_action"]
+    env_payload = {"verdict": wrapped, "metrics": {"risk_score": 0.79}}
+    hint = ES._recovery_hint(env_payload, None, 0.79)
+    assert "pause" not in hint.lower()
+    assert "resumed" not in hint.lower()
+    assert ES._decision_action(env_payload) == "not_paused"
+
+
+def test_review_refusal_names_the_legacy_exception():
+    hint = ES._recovery_hint({"decision": {"action": "pause"}}, None, 0.79)
+    assert "legacy cold-start trap" in hint
     assert _last_decision_action(None) is None
 
 

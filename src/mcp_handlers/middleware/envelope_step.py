@@ -84,6 +84,19 @@ def _review_risk_limit() -> float:
     except Exception:  # pragma: no cover - defensive; the constant is 0.65
         return 0.65
 
+
+def _review_refusal_phrase(limit: float) -> str:
+    """State the review gate without overclaiming it.
+
+    handle_self_recovery_review still admits an agent above the limit when
+    the persisted row proves the legacy non-authored cold-start trap, so the
+    refusal is not absolute.
+    """
+    return (
+        f"Reviewed self-recovery refuses at risk {limit:.2f} and above "
+        "(except where it finds the legacy cold-start trap)"
+    )
+
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
 # Bound on a digest's `by` display label. `agent_id` is never bounded: it is
@@ -103,6 +116,7 @@ _ACTION_ALIASES = {
     "caution": ("proceed", "guide"),
     "guide": ("proceed", "guide"),
     "resumed": ("proceed", "resumed"),
+    "not_paused": ("proceed", "not_paused"),
     "block": ("pause", "block"),
     "high-risk": ("pause", "high-risk"),
     "reject": ("pause", "reject"),
@@ -487,7 +501,7 @@ def _recovery_hint(
     # memory.
     decided_to_continue = action in {
         "proceed", "continue", "approve", "ok", "healthy", "safe", "guide",
-        "resumed",
+        "resumed", "not_paused",
     }
     # Reviewed recovery refuses at or above this risk; no agent may be routed
     # to a review that will refuse it.
@@ -526,7 +540,7 @@ def _recovery_hint(
             # this risk, so do not send a stopped agent there.
             return (
                 "Working state looks degraded - pause this line of work. "
-                f"Reviewed self-recovery refuses at risk {review_limit:.2f} and above, so "
+                f"{_review_refusal_phrase(review_limit)}, so "
                 "open a dialectic review with request_review; an operator can "
                 "also resume you."
             )
@@ -544,7 +558,7 @@ def _recovery_hint(
         hint = (
             "Cold start: this risk is the prior, not a measurement of your "
             "behavior, and "
-            + ("nothing blocks you now." if action == "resumed"
+            + ("nothing blocks you now." if action in {"resumed", "not_paused"}
                else "this decision does not block.")
         )
         if risk is not None and risk >= 0.7:
@@ -556,11 +570,10 @@ def _recovery_hint(
     if risky and decided_to_continue and recovery_refused:
         return (
             "Risk is elevated but "
-            + ("nothing blocks you now" if action == "resumed"
+            + ("nothing blocks you now" if action in {"resumed", "not_paused"}
                else "this decision does not block")
             + " - keep scope tight and sync_state after your next substantial "
-            f"step. Reviewed self-recovery refuses at risk {review_limit:.2f} and "
-            "above, so it is not a step here."
+            f"step. {_review_refusal_phrase(review_limit)}, so it is not a step here."
         )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
@@ -569,7 +582,7 @@ def _recovery_hint(
         # branch gives a continuing agent, so two branches never disagree.
         return (
             "Risk is elevated but "
-            + ("nothing blocks you now" if action == "resumed"
+            + ("nothing blocks you now" if action in {"resumed", "not_paused"}
                else "this decision does not block")
             + " - keep scope tight, sync_state after your next substantial "
             "step, and use self_recovery(action='review', reflection='...') "
@@ -579,9 +592,10 @@ def _recovery_hint(
         # Unrecognised action (e.g. a bare "high-risk" verdict on a read):
         # quick and reviewed recovery both refuse at this risk.
         return (
-            f"Risk is elevated - self-recovery refuses at risk {review_limit:.2f} "
-            "and above; if you are blocked, open a dialectic review with "
-            "request_review."
+            "Risk is elevated - "
+            + _review_refusal_phrase(review_limit)[0].lower()
+            + _review_refusal_phrase(review_limit)[1:]
+            + "; if you are blocked, open a dialectic review with request_review."
         )
     if risky:
         return (
@@ -1408,7 +1422,7 @@ def build_experience_envelope(
                 # Reviewed recovery records the reflection, then refuses here.
                 next_action = (
                     "Paused - stop this line of work and do not continue it. "
-                    f"Reviewed self-recovery refuses at risk {review_limit:.2f} and above, "
+                    f"{_review_refusal_phrase(review_limit)}, "
                     "so open a dialectic review with request_review; an "
                     "operator can also resume you."
                 )

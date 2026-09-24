@@ -228,6 +228,11 @@ def _last_decision_action(meta: Any) -> Optional[str]:
     fall back to the glossary's "Pause, reflect" and tell a resumed agent to
     pause. An agent that never checked in reports None, keeping its
     "uninitialized" wording.
+    An EMPTY history on an agent that has checked in is "not_paused", not
+    "resumed": `recent_decisions` is memory-only (never persisted) while
+    `total_updates` is, so every server restart empties it too. It says only
+    what the status establishes - nothing blocks the agent now - and claims
+    no resume.
     Any status other than paused or active (archived, deleted, waiting_input)
     refuses or holds writes for its own reasons, so no decision is reported
     there.
@@ -242,8 +247,9 @@ def _last_decision_action(meta: Any) -> Optional[str]:
     recent_decisions = getattr(meta, "recent_decisions", None) or []
     if not recent_decisions:
         # Never checked in: no decision exists, keep "uninitialized" wording.
-        # Checked in before but history cleared: a resume path emptied it.
-        return "resumed" if (getattr(meta, "total_updates", 0) or 0) > 0 else None
+        # Checked in before but no history: a resume path OR a server restart
+        # (the history is memory-only) emptied it, so claim neither.
+        return "not_paused" if (getattr(meta, "total_updates", 0) or 0) > 0 else None
     last = str(recent_decisions[-1]).lower()
     return "resumed" if last in {"pause", "reject"} else last
 
