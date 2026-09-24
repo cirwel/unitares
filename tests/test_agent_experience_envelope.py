@@ -1492,6 +1492,29 @@ def test_a_short_identity_is_restored_where_the_marker_cannot_fit():
     assert exercised  # the marker-cannot-fit window was actually swept
 
 
+def test_default_lean_search_carries_attribution_end_to_end():
+    """Review on #2386 (round 8): the default search_shared_memory path runs
+    the canonical result through _lean_search_payload before the envelope is
+    built, and that projection used to drop `by` and `_agent_id`, so no
+    attribution ever reached the default digest. Exercise that path."""
+    from src.mcp_handlers.knowledge.handlers import _lean_search_payload
+
+    writer = "5b0c1f7e-0000-4000-8000-00000000abcd"
+    canonical = {
+        "success": True,
+        "discoveries": [{"id": "d1", "by": "backup-investigator", "_agent_id": writer,
+                         "summary": "what was found", "type": "insight", "status": "open"}],
+        "similarity_scores": {"d1": 0.8},
+    }
+    lean = _lean_search_payload(canonical)
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", lean, {"response_mode": "lean"})
+    first = env["memory_suggestions"][0]
+    assert first["discovery_id"] == "d1"
+    assert first["by"] == "backup-investigator"
+    assert first["agent_id"] == writer
+
+
 def test_search_projection_budget_omits_pathological_identity_explicitly():
     """An identifier that cannot fit is withheld with a marker, not cut to a
     prefix; the handle that opens the record remains."""
