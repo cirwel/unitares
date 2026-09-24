@@ -346,6 +346,188 @@ def test_list_mode_reports_the_same_gaps_without_failing(repo: Repo):
     assert "#11" in result.stdout
 
 
+# --- changelog fragments on a release tree ----------------------------------
+
+FRAGMENT = "docs/changelog.d/added-alpha.md"
+FRAGMENT_README = "docs/changelog.d/README.md"
+
+
+def test_a_release_tree_still_holding_a_fragment_fails(repo: Repo):
+    """Assembly was skipped: the entry cites everything but ships without #11's."""
+    repo.commit("feat: alpha (#10)")
+    repo.commit("feat: beta (#11)", {FRAGMENT: "- **beta:** new (#11).\n"})
+    _release(repo, cited="- **things:** alpha and beta (#10, #11)")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert "2 of 2 cited" in result.stdout
+    assert FRAGMENT in result.stderr
+    assert "changelog_assemble.py" in result.stderr
+
+
+def test_a_nested_leftover_fragment_also_fails_a_release_tree(repo: Repo):
+    nested = "docs/changelog.d/added/alpha.md"
+    repo.commit("feat: alpha (#10)", {nested: "- **alpha:** new (#10).\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert nested in result.stderr
+
+
+def test_a_leftover_fragment_is_reported_even_when_the_entry_is_missing(repo: Repo):
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    repo.commit("chore(release): bump (#99)", {"VERSION": "1.1.0\n"})
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert FRAGMENT in result.stderr
+    assert "must carry its entry" in result.stderr
+
+
+def test_an_assembled_release_tree_passes_with_only_the_readme_left(repo: Repo):
+    repo.commit("docs: fragment readme (#9)", {FRAGMENT_README: "# Fragments\n"})
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    repo._git("rm", "-q", FRAGMENT)
+    _release(repo, cited="- **things:** readme and alpha (#9, #10)")
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0, result.stderr
+    assert "fragment" not in result.stderr
+
+
+def test_fragments_do_not_fail_a_tree_that_is_not_a_release(repo: Repo):
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 0
+    assert "already tagged" in result.stdout
+
+
+def test_list_mode_reports_a_leftover_fragment_without_failing(repo: Repo):
+    repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE, "--list")
+    assert result.returncode == 0
+    assert FRAGMENT in result.stderr
+
+
+# --- ordinary PRs add a fragment, not an Unreleased edit ----------------------
+
+DIRECT_EDIT = REPO_ROOT / "scripts/ci/changelog_direct_edit.py"
+
+BASE_CHANGELOG = (
+    "# Changelog\n\n---\n\n## [Unreleased]\n\n### Added\n- **old:** on master (#5).\n\n"
+    "---\n\n## [1.0.0] - 2025-12-01\n\n### Fixed\n\n- **seed:** released (#1).\n"
+)
+_CI_ENV = ("GITHUB_EVENT_NAME", "PR_AUTHOR", "GITHUB_HEAD_REF")
+
+
+@pytest.fixture
+def pr(tmp_path: Path) -> Repo:
+    """A tagged master with Unreleased entries, and a `pr` branch checked out."""
+    r = Repo(tmp_path)
+    r.commit("chore: seed", {"VERSION": "1.0.0\n", "docs/CHANGELOG.md": BASE_CHANGELOG})
+    r.tag("v1.0.0")
+    r._git("checkout", "-q", "-b", "pr")
+    return r
+
+
+def _run_guard(repo: Repo, **env: str) -> subprocess.CompletedProcess:
+    import os
+
+    for script in (COVERAGE, DIRECT_EDIT):
+        target = repo.path / "scripts" / "ci" / script.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(script.read_text(encoding="utf-8"), encoding="utf-8")
+    environment = {k: v for k, v in os.environ.items() if k not in _CI_ENV}
+    environment["GITHUB_EVENT_NAME"] = "pull_request"
+    environment.update(env)
+    return subprocess.run(
+        [sys.executable, str(repo.path / "scripts/ci/changelog_direct_edit.py"),
+         "--base", "master"],
+        capture_output=True, text=True, cwd=repo.path, env=environment,
+    )
+
+
+def _edited_unreleased() -> str:
+    return BASE_CHANGELOG.replace("### Added\n", "### Added\n- **mine:** new (#7).\n")
+
+
+def test_an_ordinary_pr_editing_unreleased_fails(pr: Repo):
+    pr.commit("feat: mine", {"docs/CHANGELOG.md": _edited_unreleased()})
+    result = _run_guard(pr)
+    assert result.returncode == 1
+    assert "docs/changelog.d/" in result.stderr
+
+
+def test_rewording_an_existing_unreleased_entry_also_fails(pr: Repo):
+    pr.commit("docs: reword", {"docs/CHANGELOG.md": BASE_CHANGELOG.replace(
+        "on master (#5)", "reworded (#5)")})
+    assert _run_guard(pr).returncode == 1
+
+
+def test_an_ordinary_pr_adding_a_fragment_passes(pr: Repo):
+    pr.commit("feat: mine", {FRAGMENT: "- **mine:** new (#7).\n"})
+    result = _run_guard(pr)
+    assert result.returncode == 0, result.stderr
+    assert "untouched" in result.stdout
+
+
+def test_an_errata_edit_to_a_released_entry_passes(pr: Repo):
+    pr.commit("docs: errata", {"docs/CHANGELOG.md": BASE_CHANGELOG.replace(
+        "released (#1).", "released (#1); corrected (#8).")})
+    result = _run_guard(pr)
+    assert result.returncode == 0, result.stderr
+    assert "released entries only" in result.stdout
+
+
+def test_a_forward_merged_release_entry_passes(pr: Repo):
+    """A maintenance entry lands between Unreleased and the older release."""
+    pr.commit("merge: forward-merge 1.0.1", {"docs/CHANGELOG.md": BASE_CHANGELOG.replace(
+        "---\n\n## [1.0.0]",
+        "---\n\n## [1.0.1] - 2025-12-15\n\n### Fixed\n\n- **patch:** (#3).\n\n---\n\n## [1.0.0]")})
+    result = _run_guard(pr)
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_separator_added_before_a_forward_merged_entry_is_not_an_unreleased_edit(
+        tmp_path: Path):
+    """The live changelog has no `---` between Unreleased and the release below.
+
+    A forward-merge that adds one ahead of the new maintenance entry puts the
+    rule inside the Unreleased span unless the span stops at its last content.
+    """
+    base = ("# Changelog\n\n## [Unreleased]\n\n### Added\n- **old:** on master (#5).\n\n"
+            "## [1.0.0] - 2025-12-01\n\n- **seed:** released (#1).\n")
+    r = Repo(tmp_path)
+    r.commit("chore: seed", {"VERSION": "1.0.0\n", "docs/CHANGELOG.md": base})
+    r.tag("v1.0.0")
+    r._git("checkout", "-q", "-b", "pr")
+    r.commit("merge: forward-merge 1.0.1", {"docs/CHANGELOG.md": base.replace(
+        "\n## [1.0.0]", "\n---\n\n## [1.0.1] - 2025-12-15\n\n- **patch:** (#3).\n\n## [1.0.0]")})
+    result = _run_guard(r)
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_release_cut_may_edit_unreleased(pr: Repo):
+    pr.commit("chore(release): 1.1.0", {
+        "VERSION": "1.1.0\n",
+        "docs/CHANGELOG.md": _edited_unreleased().replace(
+            "## [Unreleased]\n", "## [Unreleased]\n\n---\n\n## [1.1.0] - 2026-01-01\n"),
+    })
+    result = _run_guard(pr)
+    assert result.returncode == 0, result.stderr
+    assert "release tree" in result.stdout
+
+
+@pytest.mark.parametrize("env", [
+    {"PR_AUTHOR": "dependabot[bot]"},
+    {"GITHUB_HEAD_REF": "dependabot/pip/mcp-2.2.0"},
+    {"GITHUB_EVENT_NAME": "push"},
+    {"GITHUB_EVENT_NAME": "merge_group"},
+])
+def test_dependabot_and_non_pr_events_are_exempt(pr: Repo, env: dict[str, str]):
+    pr.commit("build(deps): bump", {"docs/CHANGELOG.md": _edited_unreleased()})
+    result = _run_guard(pr, **env)
+    assert result.returncode == 0, result.stderr
+
+
 # --- series drift -----------------------------------------------------------
 
 

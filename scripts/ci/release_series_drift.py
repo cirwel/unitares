@@ -78,8 +78,9 @@ SERIES = [
         "version_file": None,
         "consumer": "unitares-governance-plugin",
         "resolution": (
-            "re-run scripts/dev/skills_manifest.py, mirror skills/ plus the "
-            "manifest into the plugin, and cut a plugin release carrying it"
+            "run scripts/dev/sync-plugin-skills.sh (mirrors skills/ and writes "
+            "the fingerprint manifest into the plugin), and cut a plugin release "
+            "carrying it"
         ),
     },
 ]

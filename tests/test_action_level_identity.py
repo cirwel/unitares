@@ -167,7 +167,7 @@ def test_write_actions_never_in_exemption_sets():
     the same handler-level suppression + pin."""
     writes = {
         "knowledge": {"store", "update", "note", "cleanup", "synthesize", "supersede", "audit"},
-        "agent": {"update", "archive", "resume", "delete"},
+        "agent": {"update", "archive", "resume", "delete", "release_presence"},
         "calibration": {"update", "backfill", "rebuild"},
         "config": {"set"},
         "dialectic": {"quick", "request", "thesis", "antithesis", "synthesis", "reassign"},

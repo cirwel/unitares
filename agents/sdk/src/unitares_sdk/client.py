@@ -13,6 +13,7 @@ from typing import Any
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from unitares_sdk._checkin_fields import resolve_checkin_fields
 from unitares_sdk._mcp_httpx import mcp_httpx
 from unitares_sdk.errors import (
     GovernanceConnectionError,
@@ -595,10 +596,14 @@ class GovernanceClient:
             if refusal is not None:
                 raise refusal
 
-        # Extract verdict for potential error raising
-        decision = raw.get("decision", {})
-        verdict = decision.get("action", raw.get("verdict", "proceed"))
-        guidance = decision.get("guidance") or raw.get("guidance")
+        # Extract verdict for potential error raising. sync_state answers with
+        # the experience envelope (verdict at state_summary.action, canonical
+        # payload under raw_governance only in full mode), not the canonical
+        # top-level decision/metrics this block read until #2366 — which made
+        # every compact check-in parse as "proceed". Shared with sync_client.
+        fields = resolve_checkin_fields(raw)
+        verdict = fields["verdict"]
+        guidance = fields["guidance"]
 
         # Build result with flattened verdict
         result_data = dict(raw)
@@ -606,11 +611,12 @@ class GovernanceClient:
         if guidance:
             result_data["guidance"] = guidance
 
-        # Extract coherence/risk from metrics if present
-        metrics = raw.get("metrics", {})
-        if metrics:
-            result_data.setdefault("coherence", metrics.get("coherence"))
-            result_data.setdefault("risk", metrics.get("risk"))
+        # Flatten coherence/risk from whichever shape carried them
+        if fields["coherence"] is not None:
+            result_data.setdefault("coherence", fields["coherence"])
+        if fields["risk"] is not None:
+            result_data.setdefault("risk", fields["risk"])
+        metrics = fields["metrics"]
 
         # RFC §7.13: emit substrate observation to lease_plane.surface_leases
         # alongside the existing process_agent_update path. Failure does NOT

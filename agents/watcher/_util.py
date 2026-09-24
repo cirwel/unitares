@@ -20,7 +20,15 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-LOG_FILE = Path.home() / "Library" / "Logs" / "unitares-watcher.log"
+# UNITARES_WATCHER_LOG_FILE exists for the test suite: tests/conftest.py sets it
+# before any test imports this module. The per-test LOG_FILE repoint in
+# agents/watcher/tests/conftest.py only covers that directory, and the watcher
+# tests under tests/ were appending fixture scans to the operator's real log
+# (about 1 in 5 lines of it on 2026-09-24).
+LOG_FILE = Path(
+    os.environ.get("UNITARES_WATCHER_LOG_FILE")
+    or Path.home() / "Library" / "Logs" / "unitares-watcher.log"
+)
 
 # Legacy state location — relative to whichever checkout this module loads from.
 # Kept only as a migration source; nothing should write here anymore.
@@ -188,11 +196,15 @@ MAX_LOG_LINES = 5000
 
 
 def log(msg: str, level: str = "info") -> None:
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Re-read the override per call: pytest may import this module (via
+    # agents/) before tests/conftest.py has set the variable.
+    override = os.environ.get("UNITARES_WATCHER_LOG_FILE")
+    log_file = Path(override) if override else LOG_FILE
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     line = f"{ts} [{level}] {msg}\n"
     try:
-        with LOG_FILE.open("a") as f:
+        with log_file.open("a") as f:
             f.write(line)
     except OSError:
         pass  # never let logging errors take down the watcher

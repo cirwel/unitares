@@ -249,6 +249,131 @@ class TestS21APath2FailClosed:
         assert log_miss.call_args.kwargs["reason"] == "pg_lookup_exception"
 
     @pytest.mark.asyncio
+    async def test_repeated_miss_on_one_key_writes_one_audit_row_per_window(self):
+        """T3c: a client that keeps echoing a dead client_session_id misses on
+        every call. Each call still fails closed, but the audit row is written
+        once per key per window, and the next row carries the throttled count.
+
+        Live 2026-09-16 → 09-24: one bridge key missed ~140k times/day and
+        was >75% of audit.events.
+        """
+        from src.mcp_handlers.identity import resolution
+        from src.mcp_handlers.identity.handlers import resolve_session_identity
+
+        resolution._reset_resolve_miss_audit_throttle()
+        db = _make_db_no_session()
+        clock = [1000.0]
+
+        with patch("src.mcp_handlers.identity.persistence._redis_cache", False), \
+             patch("src.mcp_handlers.identity.resolution.get_db", return_value=db), \
+             patch("src.mcp_handlers.identity.persistence.get_db", return_value=db), \
+             patch("src.mcp_handlers.identity.handlers.get_db", return_value=db), \
+             patch.object(resolution, "_resolve_miss_clock", lambda: clock[0]), \
+             patch("src.audit_log.audit_logger.log_session_resolve_miss_observed") as log_miss:
+            for i in range(50):
+                clock[0] = 1000.0 + 10 * i  # a steady storm, one miss per 10s
+                result = await resolve_session_identity(
+                    session_key="agent-storm-key", resume=True,
+                )
+                assert result.get("resume_failed") is True
+            other = await resolve_session_identity(
+                session_key="agent-other-key", resume=True,
+            )
+            assert other.get("resume_failed") is True
+
+            assert log_miss.call_count == 2
+            keys = [c.kwargs["session_key"] for c in log_miss.call_args_list]
+            assert keys == ["agent-storm-key", "agent-other-key"]
+            assert log_miss.call_args_list[0].kwargs["suppressed_since_last"] == 0
+
+            clock[0] = 1000.0 + resolution._RESOLVE_MISS_AUDIT_WINDOW_SECONDS + 1
+            await resolve_session_identity(session_key="agent-storm-key", resume=True)
+
+        assert log_miss.call_count == 3
+        last = log_miss.call_args_list[2].kwargs
+        assert last["session_key"] == "agent-storm-key"
+        assert last["suppressed_since_last"] == 49
+        resolution._reset_resolve_miss_audit_throttle()
+
+    def test_miss_audit_throttle_state_is_bounded(self, monkeypatch):
+        """T3d: throttle memory is capped; the stalest key is evicted."""
+        from src.mcp_handlers.identity import resolution
+
+        resolution._reset_resolve_miss_audit_throttle()
+        monkeypatch.setattr(resolution, "_RESOLVE_MISS_AUDIT_MAX_KEYS", 3)
+        for i in range(5):
+            assert resolution._resolve_miss_audit_admit(f"k{i}", "r") == (0, [])
+        assert len(resolution._resolve_miss_audit_state) == 3
+        assert ("k0", "r") not in resolution._resolve_miss_audit_state
+        resolution._reset_resolve_miss_audit_throttle()
+
+    def test_pending_count_is_flushed_when_its_key_goes_quiet(self, monkeypatch):
+        """T3e: a burst that stops before its next window still gets counted,
+        in the time bucket where it happened.
+
+        Once a key's window closes, the next miss on any key flushes its
+        pending count as its own row, stamped with the last suppressed miss.
+        Flushes are capped per admission, and eviction flushes too.
+        """
+        from src.mcp_handlers.identity import resolution
+
+        resolution._reset_resolve_miss_audit_throttle()
+        clock = [0.0]
+        monkeypatch.setattr(resolution, "_resolve_miss_clock", lambda: clock[0])
+        monkeypatch.setattr(resolution, "_resolve_miss_wallclock", lambda: f"t{clock[0]:g}")
+        window = resolution._RESOLVE_MISS_AUDIT_WINDOW_SECONDS
+        fields = {"resume": True, "client_hint": "discord-bridge"}
+
+        assert resolution._resolve_miss_audit_admit("burst", "r", fields) == (0, [])
+        for step in range(7):
+            clock[0] = float(step + 1)
+            assert resolution._resolve_miss_audit_admit("burst", "r", fields) is None
+
+        # Inside the window, another key does not flush the burst yet.
+        assert resolution._resolve_miss_audit_admit("other", "r") == (0, [])
+
+        clock[0] = window + 3600  # hours later
+        suppressed, flushes = resolution._resolve_miss_audit_admit("third", "r")
+        assert suppressed == 0
+        assert flushes == [("burst", "r", 7, fields, "t7")]
+        assert ("burst", "r") not in resolution._resolve_miss_audit_state
+
+        # The key's OWN stale count also gets a flush row at its own time
+        # instead of riding a row written hours later.
+        resolution._reset_resolve_miss_audit_throttle()
+        clock[0] = 0.0
+        resolution._resolve_miss_audit_admit("self", "r")
+        clock[0] = 5.0
+        resolution._resolve_miss_audit_admit("self", "r")
+        clock[0] = 5.0 + window + 3600
+        suppressed, flushes = resolution._resolve_miss_audit_admit("self", "r")
+        assert suppressed == 0
+        assert flushes == [("self", "r", 1, {}, "t5")]
+
+        # One admission flushes a bounded number of closed keys; the rest
+        # stay pending for the next admission.
+        resolution._reset_resolve_miss_audit_throttle()
+        monkeypatch.setattr(resolution, "_RESOLVE_MISS_AUDIT_MAX_FLUSHES", 2)
+        clock[0] = 0.0
+        for i in range(3):
+            resolution._resolve_miss_audit_admit(f"q{i}", "r")
+            resolution._resolve_miss_audit_admit(f"q{i}", "r")
+        clock[0] = window + 1
+        _, flushes = resolution._resolve_miss_audit_admit("trigger1", "r")
+        assert len(flushes) == 2
+        _, flushes = resolution._resolve_miss_audit_admit("trigger2", "r")
+        assert [f[0] for f in flushes] == ["q2"]
+
+        # Eviction flushes a pending count instead of dropping it.
+        resolution._reset_resolve_miss_audit_throttle()
+        monkeypatch.setattr(resolution, "_RESOLVE_MISS_AUDIT_MAX_KEYS", 1)
+        resolution._resolve_miss_audit_admit("third", "r")
+        assert resolution._resolve_miss_audit_admit("third", "r") is None
+        _, flushes = resolution._resolve_miss_audit_admit("fourth", "r")
+        assert [f[:3] for f in flushes] == [("third", "r", 1)]
+        resolution._reset_resolve_miss_audit_throttle()
+
+    @pytest.mark.asyncio
     async def test_dispatch_retry_declares_dispatch_auto_mint(self):
         """T4: dispatch-time middleware retry on session_resolve_miss declares
         spawn_reason='dispatch_auto_mint' so the fresh identity carries

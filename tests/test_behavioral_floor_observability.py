@@ -155,6 +155,84 @@ def test_observation_schema_is_bounded_json_and_snapshots_verdict_geometry():
     assert json.loads(json.dumps(observation)) == observation
 
 
+def test_verdict_floor_record_reaches_observation_only_when_flagged(monkeypatch):
+    """Issue #1995 verdict-floor shadow/apply record rides the #2047 row.
+
+    The production shape that woke the stop rule on 2026-09-13: warm baseline,
+    |V| just past the ceiling, S/E/I clean, behavioral risk far below safe.
+    """
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", raising=False)
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", raising=False)
+    state = _state(E=0.41, I=0.91, S=0.15, V=-0.505)
+    _normalize_baseline_at_current_state(state)
+
+    off = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert off["breached_dimensions"] == ["V"]
+    assert off["behavioral_verdict"] == "safe"
+    assert off["breach_with_safe_behavioral_verdict"] is True
+    assert "floor_breach_caution" not in off
+
+    monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", "1")
+    shadow = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert shadow["behavioral_verdict"] == "safe"
+    assert shadow["breach_with_safe_behavioral_verdict"] is True
+    assert shadow["floor_breach_caution"]["mode"] == "shadow"
+    assert shadow["floor_breach_caution"]["would_change"] is True
+    assert shadow["floor_breach_caution"]["applied"] is False
+    assert {k: v for k, v in shadow.items() if k != "floor_breach_caution"} == off
+    assert json.loads(json.dumps(shadow)) == shadow
+
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW")
+    monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1")
+    applied = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert applied["behavioral_verdict"] == "caution"
+    assert applied["behavioral_risk"] == off["behavioral_risk"]
+    assert applied["breach_with_safe_behavioral_verdict"] is False
+    assert applied["floor_breach_caution"]["mode"] == "apply"
+    assert applied["floor_breach_caution"]["unfloored_verdict"] == "safe"
+    assert applied["floor_breach_caution"]["applied"] is True
+    # A row the floor changed records that, whatever decided downstream;
+    # shadow and unflagged rows keep the defaults.
+    assert applied["measurement_role"] == "verdict_floor"
+    assert applied["policy_effect"] == "behavioral_verdict_raised"
+    assert shadow["measurement_role"] == off["measurement_role"] == "telemetry_only"
+    assert shadow["policy_effect"] == off["policy_effect"] == "none"
+
+
+@pytest.mark.parametrize("source", ["behavioral_assessment", "phi_cold_start", "phi_floor"])
+def test_applied_floor_is_labelled_whatever_the_verdict_source(monkeypatch, source):
+    """The row cannot know the downstream effect: a phi_floor source takes
+    the worse of Φ and this verdict, and the warmup grace reads it in every
+    source. So every row the floor changed is labelled, and the source is
+    carried beside it for the reader."""
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", raising=False)
+    monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1")
+    state = _state(E=0.41, I=0.91, S=0.15, V=-0.505)
+    _normalize_baseline_at_current_state(state)
+
+    row = build_absolute_floor_observation(
+        state, assess_behavioral_state(state), resolved_verdict_source=source)
+    assert row["floor_breach_caution"]["applied"] is True
+    assert row["resolved_verdict_source"] == source
+    assert row["measurement_role"] == "verdict_floor"
+    assert row["policy_effect"] == "behavioral_verdict_raised"
+
+
+def test_apply_without_a_change_keeps_the_telemetry_labels(monkeypatch):
+    """APPLY on a row the floor did not move (no breach) leaves the verdict
+    and the labels as they were: only a changed row claims a policy effect."""
+    monkeypatch.delenv("UNITARES_FLOOR_BREACH_CAUTION_SHADOW", raising=False)
+    monkeypatch.setenv("UNITARES_FLOOR_BREACH_CAUTION_APPLY", "1")
+    state = _state(E=0.41, I=0.91, S=0.15, V=-0.1)
+    _normalize_baseline_at_current_state(state)
+
+    row = build_absolute_floor_observation(state, assess_behavioral_state(state))
+    assert row["breached_dimensions"] == []
+    assert row["floor_breach_caution"]["applied"] is False
+    assert row["measurement_role"] == "telemetry_only"
+    assert row["policy_effect"] == "none"
+
+
 def test_threshold_snapshot_reads_the_assessment_source_at_evaluation_time(monkeypatch):
     monkeypatch.setattr(behavioral_assessment, "ABSOLUTE_E_FLOOR", 0.25)
     state = _state(E=0.20)
@@ -269,6 +347,29 @@ def test_observation_failure_is_explicit_unknown_not_a_zero():
         "unavailable_reason": "evaluation_failed",
     }
     assert logged.call_count == 1
+
+
+def test_observation_failure_still_labels_a_floor_raised_verdict():
+    """The APPLY floor runs in the assessment, before the observation is
+    built, so a failed observation must still say the verdict was raised."""
+    import src.governance_monitor as gm
+
+    real_assess = gm.assess_behavioral_state
+
+    def _raised(*args, **kwargs):
+        result = real_assess(*args, **kwargs)
+        result.floor_breach_caution = {"mode": "apply", "applied": True}
+        return result
+
+    with patch("src.governance_monitor.assess_behavioral_state", side_effect=_raised):
+        _monitor, result, _logged = _run_with_observer(
+            RuntimeError("telemetry unavailable"), run_label="failed-raised"
+        )
+
+    observation = result["behavioral"]["assessment"]["absolute_floor_observation"]
+    assert observation["evaluated"] is False
+    assert observation["measurement_role"] == "verdict_floor"
+    assert observation["policy_effect"] == "behavioral_verdict_raised"
 
 
 def test_simulation_is_excluded_from_counter_and_restores_real_observation():
