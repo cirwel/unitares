@@ -425,6 +425,262 @@ async def test_antithesis_with_active_reviewer_not_reassigned():
     mock_update_status.assert_called_once_with("s1", "failed")
 
 
+# --- SYNTHESIS stall (#2202) ---
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stall_awaits_facilitation_without_reassigning():
+    """A reviewer that verdicted and went silent must get the operator window.
+
+    Until #2202 the rescue branch matched ANTITHESIS only, so a SYNTHESIS row
+    idle past the 2h threshold fell straight through to FAILED while an
+    ANTITHESIS stall got 4h. The narrow fix: raise `awaiting_facilitation`
+    (which is what admits the operator's `reassign` in this phase) and STOP.
+    No `select_reviewer`, no reviewer write — the verdict's author keeps review
+    authority, and the stored reviewer status is not consulted, because it read
+    "active" on the live instance while the reviewer process was gone.
+    """
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": "a1",
+         "phase": "synthesis", "reviewer_agent_id": "silent-reviewer"}
+    ]
+
+    server = _make_mock_server({
+        "a1": _make_agent_meta(status="paused"),
+        "silent-reviewer": _make_agent_meta(status="active"),  # stored, not live
+        "spare-reviewer": _make_agent_meta(status="active"),   # must NOT be picked
+    })
+
+    mock_update_status = AsyncMock()
+    mock_update_reviewer = AsyncMock()
+    mock_add_msg = AsyncMock()
+    mock_mark = AsyncMock(return_value=True)
+    mock_emit = AsyncMock()
+    mock_emit_reassigned = AsyncMock()
+    mock_select = AsyncMock(return_value="spare-reviewer")
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.update_session_reviewer_async", mock_update_reviewer), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mock_emit), \
+         patch(f"{AUTO_RESOLVE}.emit_reviewer_reassigned", mock_emit_reassigned), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch(f"{AUTO_RESOLVE}.get_session_async",
+               new_callable=AsyncMock, return_value=_transcript(("a1", "thesis"), ("silent-reviewer", "antithesis"),
+                                             ("silent-reviewer", "synthesis", False),
+                                             ("a1", "synthesis", True))), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer", mock_select):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["facilitation_count"] == 1
+    assert result["resolved_count"] == 0, "the operator window has not opened yet"
+    assert result["reassigned_count"] == 0
+    mock_update_status.assert_not_called()
+    mock_mark.assert_awaited_once_with("s1")
+    # Authority stays with the reviewer that formed the objection.
+    mock_select.assert_not_awaited()
+    mock_update_reviewer.assert_not_called()
+    mock_emit_reassigned.assert_not_awaited()
+    # Announced under its own reason so the two stalls stay distinguishable.
+    mock_emit.assert_awaited_once()
+    assert mock_emit.await_args.kwargs["session_id"] == "s1"
+    assert mock_emit.await_args.kwargs["phase"] == "synthesis"
+    assert mock_emit.await_args.kwargs["reason"] == "synthesis_stalled"
+    assert result["details"] == [{
+        "session_id": "s1",
+        "paused_agent_id": "a1",
+        "phase": "synthesis",
+        "action": "awaiting_facilitation",
+        "stuck_reviewer": "silent-reviewer",
+    }]
+    # The note says whose move it was.
+    note = mock_add_msg.await_args.kwargs["reasoning"]
+    assert "SYNTHESIS" in note and "silent-reviewer" in note
+    assert "the move is the reviewer's" in note
+    assert "unresponsive" not in note
+
+
+def _transcript(*messages):
+    """A get_session_async row. Each message is ``(agent_id, message_type)``
+    or ``(agent_id, message_type, agrees)``, in order."""
+    rows = []
+    for message in messages:
+        who, kind, *rest = message
+        row = {"agent_id": who, "message_type": kind}
+        if rest:
+            row["agrees"] = rest[0]
+        rows.append(row)
+    return {"messages": rows}
+
+
+async def _sweep_synthesis_row(*, paused, reviewer, transcript):
+    """Sweep one SYNTHESIS row idle 2.5h (past stuck, inside the 4h window)."""
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(2.5), "paused_agent_id": paused,
+         "phase": "synthesis", "reviewer_agent_id": reviewer}
+    ]
+    server = _make_mock_server({
+        paused: _make_agent_meta(status="paused"),
+        reviewer: _make_agent_meta(status="active"),
+    })
+    mocks = {
+        "update_status": AsyncMock(return_value=True),
+        "mark": AsyncMock(return_value=True),
+        "emit": AsyncMock(),
+        "add_msg": AsyncMock(),
+    }
+    if isinstance(transcript, Exception):
+        read = AsyncMock(side_effect=transcript)
+    else:
+        read = AsyncMock(return_value=transcript)
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mocks["update_status"]), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mocks["mark"]), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mocks["emit"]), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mocks["add_msg"]), \
+         patch(f"{AUTO_RESOLVE}.get_session_async", read):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+    return result, mocks
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stall_owed_by_paused_agent_raises_no_flag():
+    """At SYNTHESIS the flag means "the reviewer owes reconsideration":
+    `check_reviewer_stuck` reads it that way, and any bound caller's
+    get(check_timeout=true) then auto-replaces a stuck reviewer. When the
+    reviewer's standing objection is the latest synthesis, the paused agent
+    owes the move, so raising the flag
+    would hand the returning paused agent a machine-picked reviewer with
+    authority over the original verdict. The row keeps its pre-#2202 path."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1",
+        transcript=_transcript(("a1", "thesis"), ("r1", "antithesis"), ("r1", "synthesis", False)))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+    m["emit"].assert_not_awaited()
+    m["update_status"].assert_awaited_once_with("s1", "failed")
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stall_awaiting_first_reviewer_verdict_raises_the_flag():
+    """`submit_antithesis` enters SYNTHESIS before the reviewer's first
+    verdict, and the paused agent cannot move until it lands. So a reviewer
+    that went silent right after its antithesis owes the move even though it
+    spoke last: the #2202 case in its most common form."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1",
+        transcript=_transcript(("a1", "thesis"), ("r1", "antithesis")))
+    assert result["facilitation_count"] == 1
+    m["mark"].assert_awaited_once_with("s1")
+    m["update_status"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_after_reassignment_with_objection_owed_by_paused_raises_no_flag():
+    """The objection survives reassignment: r_old rejected, the paused agent
+    has not answered, r_new is assigned. `whose_move` says the paused
+    agent's; a speaker walk that skipped r_old would land on a1's thesis."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r_new",
+        transcript=_transcript(("a1", "thesis"), ("r_old", "antithesis"),
+                               ("r_old", "synthesis", False)))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_negotiation_without_a_standing_objection_raises_no_flag():
+    """Reviewer agreed, paused agent then disagreed: no objection stands, so
+    no reviewer reconsideration is owed."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1",
+        transcript=_transcript(("a1", "thesis"), ("r1", "antithesis"),
+                               ("r1", "synthesis", True), ("a1", "synthesis", False)))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_self_review_stall_raises_no_flag():
+    """Paused agent == reviewer: there is no separate reviewer to wait on."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="a1", transcript=_transcript(("a1", "thesis")))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_transcript_read_failure_raises_no_flag():
+    """A failed read cannot show the reviewer owes the move: no flag, and the
+    sweep itself does not error."""
+    result, m = await _sweep_synthesis_row(
+        paused="a1", reviewer="r1", transcript=RuntimeError("db down"))
+    assert result["facilitation_count"] == 0
+    m["mark"].assert_not_awaited()
+    m["update_status"].assert_awaited_once_with("s1", "failed")
+
+
+@pytest.mark.asyncio
+async def test_synthesis_standing_request_is_held_not_rerecorded():
+    """Once raised, a SYNTHESIS request runs on the operator's 4h clock."""
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(3), "paused_agent_id": "a1",
+         "phase": "synthesis", "reviewer_agent_id": "silent-reviewer",
+         "awaiting_facilitation": True}
+    ]
+
+    mock_update_status = AsyncMock()
+    mock_mark = AsyncMock(return_value=True)
+    mock_add_msg = AsyncMock()
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["facilitation_count"] == 0
+    assert result["resolved_count"] == 0
+    mock_mark.assert_not_awaited()
+    mock_add_msg.assert_not_awaited()
+    mock_update_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stall_still_fails_after_facilitation_timeout():
+    """The window is extended, not removed: past 4h a SYNTHESIS stall is reaped."""
+    sessions = [
+        {"session_id": "s1", "updated_at": _old_time(5), "paused_agent_id": "a1",
+         "phase": "synthesis", "reviewer_agent_id": "silent-reviewer"}
+    ]
+
+    mock_update_status = AsyncMock()
+    mock_mark = AsyncMock(return_value=True)
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", AsyncMock()):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    assert result["resolved_count"] == 1
+    assert result["facilitation_count"] == 0
+    mock_mark.assert_not_awaited()
+    mock_update_status.assert_called_once_with("s1", "failed")
+
+
 @pytest.mark.asyncio
 async def test_handles_session_without_id():
     """Sessions without session_id should be skipped."""
