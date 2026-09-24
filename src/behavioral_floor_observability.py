@@ -115,8 +115,9 @@ def build_absolute_floor_observation(
             # source takes the worse of Φ and this verdict, and the warmup
             # grace reads it in every source), so the row records only what
             # the floor did; the audit row's reason and final verdict carry
-            # the rest. The default "none" would drop exactly the rows the
-            # floor changed.
+            # most of the rest, but not a warmup pause the floor kept (the
+            # grace runs after that row; see `warmup_structural_suppressed`).
+            # The default "none" would drop exactly the rows the floor changed.
             observation["measurement_role"] = "verdict_floor"
             observation["policy_effect"] = "behavioral_verdict_raised"
     return observation

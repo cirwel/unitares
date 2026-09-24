@@ -161,8 +161,11 @@ identity of EISV itself.
   the final decision changed is read from the rest of the same `auto_attest`
   audit row: `details.reason` names the deciding branch ("Proceeding mindfully"
   for a caution verdict) and `details.unitares_verdict` is the final verdict.
-  Two things it cannot settle: Φ's own verdict under a `phi_floor` source is
-  not kept, and the CIRS soft-dampen and fast-trip paths are ambiguous. Zero-breach rows remain present so the audit
+  Three things it cannot settle: Φ's own verdict under a `phi_floor` source is
+  not kept, the CIRS soft-dampen and fast-trip paths are ambiguous, and a
+  warmup pause the floor kept looks identical to one it did not (the grace
+  runs after this row is written; only the absence of a
+  `warmup_structural_suppressed` event shows the pause was kept). Zero-breach rows remain present so the audit
   has a denominator, failed evaluation is `evaluated: false` (unknown, not
   zero), and dry-run rows use `measurement_scope: simulation` with
   `eligible_for_production_counter: false`. A production count therefore
