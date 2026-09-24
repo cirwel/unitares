@@ -280,10 +280,16 @@ async def release_agent_presence(
     """
     if not agent_uuid:
         return {"released": False, "reason": "no_identity"}
+    session_ids = tuple(s for s in client_session_ids if s)
+    if not session_ids:
+        # Without the releasing session's id, a late final check-in from that
+        # session could not be told apart from a resumed session and would
+        # re-acquire the lease. Leave the TTL in charge instead.
+        return {"released": False, "reason": "session_id_required"}
     now = time.monotonic()
     _released_at[agent_uuid] = now
     sessions = _released_sessions.setdefault(agent_uuid, set())
-    sessions.update(s for s in client_session_ids if s)
+    sessions.update(session_ids)
     for stale in [u for u, at in _released_at.items() if now - at > 2 * _PRESENCE_TTL_S]:
         _released_at.pop(stale, None)
         _released_sessions.pop(stale, None)

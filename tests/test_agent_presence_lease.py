@@ -165,7 +165,7 @@ async def test_release_hands_back_the_cached_lease(monkeypatch):
     _patch_models(monkeypatch, client)
     apl._lease_ids["uuid-1"] = "lease-abc"
 
-    result = await apl.release_agent_presence("uuid-1")
+    result = await apl.release_agent_presence("uuid-1", ("sess-x",))
 
     assert result == {"released": True, "reason": "released"}
     assert [r.lease_id for r in client.releases] == ["lease-abc"]
@@ -184,7 +184,7 @@ async def test_release_finds_the_lease_after_a_server_restart(monkeypatch):
 
     monkeypatch.setattr(apl, "_lookup_live_lease_id", _lookup)
 
-    result = await apl.release_agent_presence("uuid-1")
+    result = await apl.release_agent_presence("uuid-1", ("sess-x",))
 
     assert result["released"] is True
     assert [r.lease_id for r in client.releases] == ["lease-from-db"]
@@ -200,7 +200,7 @@ async def test_release_without_a_live_lease_reports_it(monkeypatch):
 
     monkeypatch.setattr(apl, "_lookup_live_lease_id", _lookup)
 
-    assert await apl.release_agent_presence("uuid-1") == {
+    assert await apl.release_agent_presence("uuid-1", ("sess-x",)) == {
         "released": False,
         "reason": "no_live_lease",
     }
@@ -209,7 +209,7 @@ async def test_release_without_a_live_lease_reports_it(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_release_without_identity_is_a_no_op():
-    assert await apl.release_agent_presence(None) == {
+    assert await apl.release_agent_presence(None, ("sess-x",)) == {
         "released": False,
         "reason": "no_identity",
     }
@@ -220,7 +220,7 @@ async def test_heartbeat_scheduled_before_release_does_not_reacquire(monkeypatch
     client = _FakeClient()
     _patch_models(monkeypatch, client)
     scheduled_at = apl.time.monotonic()
-    await apl.release_agent_presence("uuid-1")
+    await apl.release_agent_presence("uuid-1", ("sess-x",))
 
     await apl.heartbeat_agent_presence("uuid-1", "sess-1", scheduled_at)
 
@@ -233,7 +233,7 @@ async def test_heartbeat_scheduled_after_release_proceeds(monkeypatch):
     """A later session resuming the same identity keeps its presence."""
     client = _FakeClient()
     _patch_models(monkeypatch, client)
-    await apl.release_agent_presence("uuid-1")
+    await apl.release_agent_presence("uuid-1", ("sess-x",))
 
     await apl.heartbeat_agent_presence("uuid-1", "sess-2", apl.time.monotonic())
 
@@ -269,3 +269,19 @@ async def test_late_checkin_from_the_releasing_session_does_not_reacquire(monkey
 
     assert client.acquired == []
     assert "uuid-1" not in apl._lease_ids
+
+
+@pytest.mark.asyncio
+async def test_release_without_a_session_id_leaves_the_ttl_in_charge(monkeypatch):
+    """A fingerprint-bound caller has no session id to tombstone, so its late
+    check-in could re-acquire; the release is refused rather than half-done."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    apl._lease_ids["uuid-1"] = "lease-abc"
+
+    assert await apl.release_agent_presence("uuid-1") == {
+        "released": False,
+        "reason": "session_id_required",
+    }
+    assert client.releases == []
+    assert apl._lease_ids["uuid-1"] == "lease-abc"
