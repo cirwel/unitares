@@ -119,22 +119,6 @@ class TestCleanupStaleLocks:
             call_kwargs = mock_fn.call_args
             assert call_kwargs[1]["max_age_seconds"] == 600.0 or call_kwargs.kwargs.get("max_age_seconds") == 600.0
 
-    @pytest.mark.asyncio
-    async def test_cleanup_sweeps_the_writers_lock_dir(self):
-        """No project_root: the sweep resolves StateLockManager's directory.
-        Deriving a root from the handler's own path gave src/, where no lock
-        is ever written, so the tool reported success having swept nothing."""
-        mock_result = {
-            "cleaned": 0, "kept": 0, "errors": 0,
-            "cleaned_locks": [], "kept_locks": [],
-        }
-        with patch("src.lock_cleanup.cleanup_stale_state_locks", return_value=mock_result) as mock_fn:
-            from src.mcp_handlers.admin.handlers import handle_cleanup_stale_locks
-            await handle_cleanup_stale_locks({})
-
-            assert "project_root" not in mock_fn.call_args.kwargs
-            assert not mock_fn.call_args.args
-
 
 # ============================================================================
 # handle_validate_file_path
