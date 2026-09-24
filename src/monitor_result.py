@@ -509,7 +509,10 @@ def build_result(
                 drift_vector=dv,
                 agent_id=monitor.agent_id,
                 update_count=monitor.state.update_count,
-                baseline=get_agent_baseline(monitor.agent_id),
+                baseline=(
+                    getattr(monitor, '_simulation_baseline', None)
+                    or get_agent_baseline(monitor.agent_id)
+                ),
                 decision=decision['action'],
                 confidence=confidence,
             )

@@ -84,7 +84,7 @@ class TestPureFloor:
 
 class TestFlagDefault:
     def test_flag_defaults_off(self):
-        # Default-off: the Phase-2 actuator wiring is council-gated and inert
+        # Default-off: the Phase-2 actuator wiring is gated and inert
         # until an operator deliberately enables it.
         import config.governance_config as cfg
         assert cfg.GovernanceConfig.VERIFICATION_FLOOR_ENABLED is False
