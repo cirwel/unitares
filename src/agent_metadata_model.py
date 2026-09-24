@@ -46,11 +46,18 @@ def _joinable_audit_agent_id(agent_id: str | None) -> tuple[str | None, str | No
     `audit.events.agent_id` was being written with whatever this metadata object
     happened to carry, and that is two different identifier spaces. Measured
     2026-08-12: of 12 `lifecycle_paused` rows in eleven days, 5 held a UUID and
-    7 held a structured handle like `Gpt_5_20260810` — which resolves in NO
-    table. `core.identities.agent_id` holds UUIDs; the handle is a presentation
-    construct returned by onboard and persisted as a key nowhere. Those 7 rows
-    are permanently unattributable, and no backfill can recover them because the
-    mapping was never stored.
+    7 held a structured handle like `Gpt_5_20260810`. `core.identities.agent_id`
+    holds UUIDs; the handle is a presentation construct returned by onboard. It
+    is stored (identity metadata `public_agent_id`), but it is not unique: on
+    2026-09-24 one handle matched between 1 and 37 identities, so a join on it
+    attributes a row to the wrong agent or to several.
+
+    Those rows are recoverable, but not by key. The pause path in
+    `agent_loop_detection` also broadcasts a `circuit_breaker_trip` event that
+    carries the UUID. On 2026-09-24 every handle-only `lifecycle_paused` row
+    since 2026-08-06 had exactly one such event within a second, and that
+    identity's metadata carried the same handle. It is a timestamp join, so it
+    serves forensics, not a key.
 
     Worse than losing the attribution is what the handle does to readers. Such a
     row is the ONLY row that identifier ever produces, so "the paused agent went
