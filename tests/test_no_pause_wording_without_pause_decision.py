@@ -212,7 +212,11 @@ def test_critical_state_guidance_does_not_tell_the_agent_to_pause():
     assert "imminent" not in guidance.lower()
 
     formatted = format_response(_guided_cold_start_check_in(), {"response_mode": "standard"})
-    assert "pause" not in str(formatted.get("guidance") or "").lower()
+    # interpret_state's text lands at state.guidance (top-level guidance is
+    # the decision's own); read the field that actually carries it.
+    state_guidance = formatted["state"]["guidance"]
+    assert "critical band" in state_guidance
+    assert "pause" not in state_guidance.lower()
     env = build_experience_envelope(
         "check_working_state", "get_governance_metrics",
         {"success": True, "guidance": guidance}, {},
@@ -331,17 +335,17 @@ def test_last_decision_action_prefers_a_paused_lifecycle_status():
     assert _last_decision_action(_Meta("active", ["pause", "proceed"])) == "proceed"
     # Never checked in: no decision, keep the "uninitialized" wording.
     assert _last_decision_action(_Meta("active", [], total_updates=0)) is None
-    # Checked in before but no history: a resume path or a server restart
-    # (recent_decisions is memory-only) emptied it, so no resume is claimed.
+    # Checked in before but no history: a recovery/resume cleared it or the
+    # identity record carries none, so no resume is claimed.
     assert _last_decision_action(_Meta("active", [], total_updates=4)) == "not_paused"
     # A recorded stop under an active status was lifted: that is a resume.
     assert _last_decision_action(_Meta("active", ["proceed", "pause"])) == "resumed"
 
 
-def test_restart_emptied_history_does_not_claim_a_resume():
-    """After a restart every active agent that checked in has an empty
-    recent_decisions and a persisted total_updates; no text may say it was
-    resumed."""
+def test_empty_history_does_not_claim_a_resume():
+    """An active agent that has checked in but carries an empty
+    recent_decisions (cleared by a recovery/resume, or never persisted on its
+    identity record) proves no resume; no text may say it was resumed."""
     action = _last_decision_action(_Meta("active", [], total_updates=12))
     wrapped = explain_verdict("high-risk", decision_action=action)
     assert "resumed" not in wrapped["next_action"]

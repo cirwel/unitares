@@ -422,7 +422,7 @@ _RESUMED_HIGH_RISK_NEXT_ACTION = (
 )
 
 # Active, checked in before, but no decision is held in this server process:
-# the history is memory-only, so a restart empties it as a resume does. Claim
+# a recovery/resume clears the history, and a record may carry none. Claim
 # only what the status establishes.
 _NOT_PAUSED_HIGH_RISK_NEXT_ACTION = (
     "The agent is not paused and nothing blocks it now. No decision since "
