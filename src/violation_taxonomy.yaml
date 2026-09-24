@@ -28,7 +28,7 @@ classes:
       Loss of coherence, assurance, or validated coupling between
       claims, state, and evidence.
     surfaces:
-      watcher_patterns: [P010, P011, P012, P016]
+      watcher_patterns: [P010, P011, P012]  # P016 demoted to experimental 2026-09-24; re-add on re-promotion
       sentinel_findings: []
       broadcast_events: [knowledge_confidence_clamped]
 

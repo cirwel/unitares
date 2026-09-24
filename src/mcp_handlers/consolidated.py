@@ -47,6 +47,7 @@ from .lifecycle.handlers import (
     handle_archive_agent,
     handle_resume_agent,
     handle_delete_agent,
+    handle_release_presence,
 )
 from .admin.calibration import (
     handle_check_calibration,
@@ -223,6 +224,7 @@ handle_agent = action_router(
         "archive": handle_archive_agent,
         "resume": handle_resume_agent,
         "delete": handle_delete_agent,
+        "release_presence": handle_release_presence,
     },
     timeout=20.0,
     description="Unified agent lifecycle operations",
@@ -236,6 +238,7 @@ handle_agent = action_router(
         "agent(action='update', tags=['explorer', 'governance'])",
         "agent(action='archive', agent_id='old-agent-id')",
         "agent(action='resume', agent_id='stuck-agent-id')",
+        "agent(action='release_presence')  # on clean exit, so a successor can declare this agent as parent",
     ],
 )
 

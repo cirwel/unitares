@@ -112,6 +112,7 @@ def test_build_spec_forwards_external_host_config_but_not_key(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_MODEL", "gemini-test-model")
     monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV", "GEMINI_API_KEY")
     monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S", "90")
+    monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_MAX_TOKENS", "8192")
     monkeypatch.setenv("GEMINI_API_KEY", "must-not-forward")
 
     spec = od._build_spec(
@@ -128,6 +129,7 @@ def test_build_spec_forwards_external_host_config_but_not_key(monkeypatch):
     assert env["UNITARES_DIALECTIC_EXTERNAL_MODEL"] == "gemini-test-model"
     assert env["UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV"] == "GEMINI_API_KEY"
     assert env["UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S"] == "90"
+    assert env["UNITARES_DIALECTIC_EXTERNAL_MAX_TOKENS"] == "8192"
     assert "GEMINI_API_KEY" not in env
     assert "must-not-forward" not in env.values()
 

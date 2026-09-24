@@ -145,6 +145,8 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     # agent reads
     ("agent", "list"),
     ("agent", "get"),
+    # agent — releases only the caller's own presence lease at a clean exit
+    ("agent", "release_presence"),
     # calibration read
     ("calibration", "check"),
     # config read
