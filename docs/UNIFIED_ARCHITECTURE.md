@@ -85,7 +85,7 @@ The server returns a governance decision:
 |---------|---------|-------------|
 | `proceed` | State is healthy | Continue working |
 | `guide` | Slightly off track | Read guidance, adjust approach |
-| `pause` | Needs attention | Stop, reflect, consider dialectic review |
+| `pause` | A hard stop: check-ins and shared-memory writes are refused, not queued | Stop, read the reason, `self_recovery(action="check")` for self-recovery eligibility |
 | `reject` | Significant concern | Requires dialectic review or human input |
 
 Verdicts include `margin` (comfortable / tight / critical) indicating proximity to basin boundaries.
