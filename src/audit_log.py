@@ -530,7 +530,7 @@ class AuditLogger:
         client_hint: Optional[str] = None,
         model_type: Optional[str] = None,
         suppressed_since_last: int = 0,
-        observed_at: Optional[str] = None,
+        suppressed_last_at: Optional[str] = None,
     ) -> None:
         """Record PATH 2 fail-closed misses as structured audit telemetry.
 
@@ -546,11 +546,13 @@ class AuditLogger:
         it only carries the pending count for a key that went quiet. The total
         is rows that are not flushes plus ``sum(suppressed_since_last)`` over
         all rows. It is a lower bound: counts still pending at process exit
-        are lost (at most one window per key). ``observed_at`` stamps a flush
-        row with the time of its last suppressed miss rather than flush time.
+        are lost (at most one window per key). ``suppressed_last_at`` is the
+        wall time of the last suppressed miss; bucket a flush row's count by it
+        rather than by the row timestamp. The row timestamp stays append time
+        on purpose: backward-scanning readers stop at the first pre-cutoff row.
         """
         entry = AuditEntry(
-            timestamp=observed_at or datetime.now().isoformat(),
+            timestamp=datetime.now().isoformat(),
             agent_id=None,
             event_type="session_resolve_miss_observed",
             confidence=1.0,
@@ -565,6 +567,7 @@ class AuditLogger:
                 "client_hint": client_hint,
                 "model_type": model_type,
                 "suppressed_since_last": suppressed_since_last,
+                "suppressed_last_at": suppressed_last_at,
             },
         )
         self._write_entry(entry)

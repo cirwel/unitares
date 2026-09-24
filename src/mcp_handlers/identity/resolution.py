@@ -67,8 +67,10 @@ def _created_identity_outcome(*, force_new: bool, spawn_reason: Optional[str]) -
 # the key's next row only if its last suppressed miss is less than one window
 # old; otherwise, and for a key that went quiet (flushed at the next admitted
 # miss on ANY key) or was evicted, it gets its own ``throttle_flush`` row
-# stamped with the time of its last suppressed miss, so time-bucketed trends
-# stay in the right bucket. A flush row stands for no miss of its own, so the
+# carrying ``suppressed_last_at`` (wall time of its last suppressed miss), so
+# time-bucketed trends can place the count where it happened. The row's own
+# timestamp stays append time: backward-scanning readers of the JSONL stop at
+# the first pre-cutoff row, so a backdated row would hide newer ones. A flush row stands for no miss of its own, so the
 # total is ``count(*) FILTER (WHERE resolution_source IS DISTINCT FROM
 # 'throttle_flush') + sum(suppressed_since_last)``. Counts pending at process
 # exit, or for a key no later miss ever flushes, are lost, so that total is a
@@ -186,7 +188,7 @@ def _audit_session_resolve_miss(
                 client_hint=f_fields.get("client_hint"),
                 model_type=f_fields.get("model_type"),
                 suppressed_since_last=f_pending,
-                observed_at=f_observed_at,
+                suppressed_last_at=f_observed_at,
             )
         except Exception as e:
             logger.debug(f"[PATH2_RESUME_MISS] audit flush failed (non-fatal): {e}")

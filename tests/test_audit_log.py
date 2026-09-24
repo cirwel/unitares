@@ -344,7 +344,7 @@ class TestLogSessionResolveMissObserved:
         d = _read_jsonl(logger.log_file)[0]["details"]
         assert d["suppressed_since_last"] == 49
 
-    def test_flush_row_keeps_its_observation_time(self, tmp_path):
+    def test_flush_row_carries_observation_time_but_appends_at_now(self, tmp_path):
         logger = _make_logger(tmp_path)
         logger.log_session_resolve_miss_observed(
             session_key="agent-quiet-key",
@@ -354,11 +354,13 @@ class TestLogSessionResolveMissObserved:
             force_new=False,
             token_agent_uuid_present=False,
             suppressed_since_last=7,
-            observed_at="2026-09-20T10:00:00",
+            suppressed_last_at="2026-09-20T10:00:00",
         )
 
         e = _read_jsonl(logger.log_file)[0]
-        assert e["timestamp"] == "2026-09-20T10:00:00"
+        # Append order stays monotonic for backward-scanning readers.
+        assert e["timestamp"] != "2026-09-20T10:00:00"
+        assert e["details"]["suppressed_last_at"] == "2026-09-20T10:00:00"
         assert e["details"]["resolution_source"] == "throttle_flush"
 
 
