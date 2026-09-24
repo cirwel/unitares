@@ -2523,11 +2523,14 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     (written before the change) or false (flag off). Those are reported, never
     dropped. An authored pause with no `epistemic_gate` at all was not
     risk-routed (void, coherence, basin, non-risk CIRS), so it counts exactly as
-    a non-authored one does. The denominator counts what the guard actually
-    watched: every non-authored cold-start decision, an authored one only when
-    its row shows the extended guard evaluated it (`include_authored = true`),
-    and any counted pause. Under the rollback flag an all-authored window
-    therefore SKIPs rather than passing on a guard that never looked.
+    a non-authored one does. The denominator is every cold-start decision
+    except the same known-unwatched rows the numerator leaves uncounted: an
+    authored row whose gate record shows the guard evaluated it without the
+    extension. The guard attaches its record only to risk-routed pauses, so a
+    cold start that never produced a pause verdict has none and is counted,
+    authored or not; a PASS then means "cold starts happened and none of them
+    paused". Under the rollback flag, a window whose only cold starts are
+    authored pause verdicts SKIPs, with those pauses named in the note.
 
     Zero is also what this check sees when nothing is looking, which is the
     whole reason it exists. The denominator is cold-start *decisions* of any
@@ -2553,9 +2556,9 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
         "  WHERE recorded_at > now() - interval '7 days'"
         "    AND state_json ? 'eisv_telemetry')"
         "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'"
-        "                          AND (eclass IS DISTINCT FROM 'agent_report'"
-        "                               OR incl = 'true'"
-        "                               OR (act = 'pause' AND NOT gated))),"
+        "                          AND NOT (eclass IS NOT DISTINCT FROM 'agent_report'"
+        "                                   AND gated"
+        "                                   AND incl IS DISTINCT FROM 'true')),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
         "                          AND NOT (eclass IS NOT DISTINCT FROM 'agent_report'"
         "                                   AND gated"

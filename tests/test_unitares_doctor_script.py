@@ -2269,9 +2269,9 @@ def _canary_sql(doctor, monkeypatch):
         (None, "pause", {"include_authored": False}, (1, 1, 0)),
         # authored and deferred by the extended guard: observed, no pause
         ("agent_report", "proceed", {"include_authored": True, "applied": True}, (1, 0, 0)),
-        # authored, never evaluated (no gate, no pause): not observed, so an
-        # all-authored window under the rollback flag SKIPs instead of passing
-        ("agent_report", "proceed", None, (0, 0, 0)),
+        # authored cold start that never produced a pause verdict: a cold
+        # start that did not pause, counted in the denominator (flag on or off)
+        ("agent_report", "proceed", None, (1, 0, 0)),
     ],
 )
 def test_cold_start_canary_sql_classifies_each_row_shape(
@@ -2320,8 +2320,9 @@ def test_cold_start_canary_sql_classifies_each_row_shape(
 
 
 def test_cold_start_canary_skips_an_all_authored_window_under_rollback(doctor, monkeypatch):
-    """With the extension off, authored cold starts never reach the guard; a
-    window of only those must SKIP, not report a clean zero."""
+    """With the extension off, a window whose only cold starts are authored
+    pause verdicts (gated, include_authored false) has no watched decision:
+    it must SKIP with those pauses named, not report a clean zero."""
     monkeypatch.setattr(doctor, "_psql_row", lambda *a, **k: ["0", "0", "3"])
     result = doctor.check_cold_start_pause_canary("postgresql:///x")
     assert result.status is doctor.Status.SKIP
