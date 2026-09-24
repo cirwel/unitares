@@ -73,12 +73,17 @@ class Fragment:
 
 
 def fragment_paths(root: Path) -> list[Path]:
-    """Every file in the fragment directory except its README, sorted."""
+    """Every file under the fragment directory except its README, sorted.
+
+    Recursive on purpose: a file in a subdirectory (a nested
+    `<section>/<slug>.md` layout, say) is not a valid fragment, and a shallow
+    scan would report it as nothing at all, so it would never ship.
+    """
     directory = root / FRAGMENT_DIR
     if not directory.is_dir():
         return []
-    return sorted(p for p in directory.iterdir()
-                  if p.is_file() and p.name not in NOT_FRAGMENTS)
+    return sorted(p for p in directory.rglob("*")
+                  if p.is_file() and p.relative_to(directory).as_posix() not in NOT_FRAGMENTS)
 
 
 def load(root: Path) -> tuple[list[Fragment], list[str]]:
@@ -87,6 +92,11 @@ def load(root: Path) -> tuple[list[Fragment], list[str]]:
     problems: list[str] = []
     for path in fragment_paths(root):
         rel = path.relative_to(root).as_posix()
+        if path.parent != root / FRAGMENT_DIR:
+            problems.append(
+                f"{rel}: fragments live directly in {FRAGMENT_DIR.as_posix()}/, "
+                "not in a subdirectory")
+            continue
         match = FRAGMENT_NAME.match(path.name)
         if not match:
             problems.append(

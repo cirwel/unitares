@@ -364,6 +364,15 @@ def test_a_release_tree_still_holding_a_fragment_fails(repo: Repo):
     assert "changelog_assemble.py" in result.stderr
 
 
+def test_a_nested_leftover_fragment_also_fails_a_release_tree(repo: Repo):
+    nested = "docs/changelog.d/added/alpha.md"
+    repo.commit("feat: alpha (#10)", {nested: "- **alpha:** new (#10).\n"})
+    _release(repo)
+    result = _run(repo.path, COVERAGE)
+    assert result.returncode == 1
+    assert nested in result.stderr
+
+
 def test_a_leftover_fragment_is_reported_even_when_the_entry_is_missing(repo: Repo):
     repo.commit("feat: alpha (#10)", {FRAGMENT: "- **alpha:** new (#10).\n"})
     repo.commit("chore(release): bump (#99)", {"VERSION": "1.1.0\n"})

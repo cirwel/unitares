@@ -108,6 +108,20 @@ def test_check_rejects_a_malformed_fragment(tmp_path: Path, name: str, body: str
     assert complaint in result.stderr
 
 
+@pytest.mark.parametrize("nested", ["added/new-thing.md", "added/README.md"])
+def test_a_fragment_in_a_subdirectory_is_rejected_not_ignored(tmp_path: Path, nested: str):
+    """A shallow scan would report zero fragments, and the entry would never ship."""
+    root = _checkout(tmp_path, {})
+    target = root / "docs" / "changelog.d" / nested
+    target.parent.mkdir()
+    target.write_text("- **nested:** entry (#10).\n", encoding="utf-8")
+    result = _run(root, "--check")
+    assert result.returncode == 1
+    assert "not in a subdirectory" in result.stderr
+    assert _run(root).returncode == 1
+    assert target.exists()
+
+
 def test_an_invalid_fragment_blocks_assembly_and_changes_nothing(tmp_path: Path):
     root = _checkout(tmp_path, {
         "added-good.md": "- **good:** fine (#10).\n",

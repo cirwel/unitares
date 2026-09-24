@@ -8,8 +8,9 @@ file with a unique name cannot conflict, and a base merge never touches it.
 
 ## Format
 
-Name the file `<section>-<slug>.md`: lowercase letters, digits and hyphens,
-for example `fixed-lease-renewal-race.md`. The body is the entry exactly as
+Name the file `<section>-<slug>.md`, directly in this directory (not a
+subdirectory): lowercase letters, digits and hyphens, for example
+`fixed-lease-renewal-race.md`. The body is the entry exactly as
 it would appear in the changelog, a markdown bullet with the PR reference
 when you know it:
 

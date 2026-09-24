@@ -275,12 +275,14 @@ def pending_fragments() -> list[str]:
 
     Every file except the directory's README counts, a malformed one included:
     the assembler refuses to fold an invalid fragment, so it is as unshipped as
-    a valid one that was never assembled.
+    a valid one that was never assembled. The scan is recursive for the same
+    reason: a file in a subdirectory is a malformed fragment, not nothing.
     """
     if not FRAGMENT_DIR.is_dir():
         return []
-    return sorted(p.relative_to(REPO_ROOT).as_posix() for p in FRAGMENT_DIR.iterdir()
-                  if p.is_file() and p.name not in FRAGMENT_DIR_DOCS)
+    return sorted(p.relative_to(REPO_ROOT).as_posix() for p in FRAGMENT_DIR.rglob("*")
+                  if p.is_file()
+                  and p.relative_to(FRAGMENT_DIR).as_posix() not in FRAGMENT_DIR_DOCS)
 
 
 def cited_prs(section: str) -> set[int]:

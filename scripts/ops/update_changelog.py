@@ -234,8 +234,8 @@ class ChangelogGenerator:
         fragment_dir = self.repo_path / "docs" / "changelog.d"
         if not fragment_dir.is_dir():
             return []
-        return sorted(p for p in fragment_dir.iterdir()
-                      if p.is_file() and p.name != "README.md")
+        return sorted(p for p in fragment_dir.rglob("*")
+                      if p.is_file() and p.relative_to(fragment_dir).as_posix() != "README.md")
 
     def update_changelog(self, dry_run: bool = False):
         """Update CHANGELOG.md with new commits."""
