@@ -1,5 +1,17 @@
 # Self-report dependence of the enforcement verdict — worked example
 
+> **Correction (2026-09-23), read first.** Every statement in this record that a
+> self-reported `ethical_drift` is "a capped ≤30% blend", or that it moves the verdict,
+> describes the code as written, not as it ran. The check-in handler passes the vector as
+> a numpy array, and `compute_drift_vector` only measured list/tuple input, so on the
+> MCP check-in path every self-report was read as zero. A maxed report and a zero report
+> were scored identically in every phase (measured in-process against the deployed code;
+> see #2372, which is parked as a policy question). That includes the "verbatim from
+> current source" and reconciliation sections below, and the reproduction step that says
+> the verdict "moves on the number alone". The observation this record was built on (two
+> agents describing opposite behaviour getting the same verdict) stands. The rest is left
+> as written for the audit trail.
+
 > **Correction (2026-06-28, same day):** the original headline framing — "the verdict
 > is only as trustworthy as the agent's self-reported drift" — is **inverted** and is
 > kept below only for the audit trail. Verified against source:
@@ -199,6 +211,9 @@ false-drift combination still under-flags while described behavior is not yet we
 
 ## Interpretation — what this does and does not establish
 
+> **See the 2026-09-23 correction at the top:** the self-report blend described in this
+> section never ran on the live check-in path.
+
 **Establishes:**
 - **Pre-warmup**, the enforcement verdict is the Φ cold-start prior, computed mostly from
   server-derived signals (`complexity_divergence`); the caller's self-reported
@@ -245,7 +260,8 @@ and the sub-warmup regime in force, making `response_text` the only intended var
 Expected: indistinguishable `proceed / safe` verdicts; `primary_driver: self_reported`
 on both; `enforcement.applied: false` on both. To confirm the dependence directly, hold
 `response_text` fixed and vary only `ethical_drift` from `[0,0,0]` to a high vector — the
-verdict moves on the number alone, with no change in described behavior. To see the
+verdict moves on the number alone, with no change in described behavior. *(2026-09-23: on
+the MCP check-in path it does not move. See the correction at the top.)* To see the
 warmup boundary, run the same pair on an agent past update #3 and watch the behavioral
 channel begin to (escalate-only) participate.
 
