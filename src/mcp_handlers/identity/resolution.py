@@ -63,10 +63,13 @@ def _created_identity_outcome(*, force_new: bool, spawn_reason: Optional[str]) -
 # missed ~140k times/day (50 calls per 30s HUD cycle), >75% of all audit rows.
 #
 # One row per key per window. The first miss is always written; a later row
-# for the key carries ``suppressed_since_last``. A key that goes quiet still
-# has its pending count flushed as its own row the next time ANY miss is
-# admitted (or when it is evicted). A flush row stands for no miss of its own,
-# so the total is ``count(*) FILTER (WHERE resolution_source IS DISTINCT FROM
+# for the key carries ``suppressed_since_last``. A pending count is attached to
+# the key's next row only if its last suppressed miss is less than one window
+# old; otherwise, and for a key that went quiet (flushed at the next admitted
+# miss on ANY key) or was evicted, it gets its own ``throttle_flush`` row
+# stamped with the time of its last suppressed miss, so time-bucketed trends
+# stay in the right bucket. A flush row stands for no miss of its own, so the
+# total is ``count(*) FILTER (WHERE resolution_source IS DISTINCT FROM
 # 'throttle_flush') + sum(suppressed_since_last)``. Counts pending at process
 # exit, or for a key no later miss ever flushes, are lost, so that total is a
 # lower bound, short by at most one window per key.
@@ -75,9 +78,16 @@ _RESOLVE_MISS_AUDIT_MAX_KEYS = 4096
 # Each audit write fsyncs on the request path, so one admission flushes at
 # most this many closed keys; the rest stay pending for the next admission.
 _RESOLVE_MISS_AUDIT_MAX_FLUSHES = 16
-# (session_key, reason) -> [last_written_monotonic, suppressed_since_last, fields]
-_resolve_miss_audit_state: Dict[tuple, list] = {}
+# (session_key, reason) -> {"written": monotonic, "pending": int, "fields":
+# dict, "last_mono": monotonic, "last_at": iso wall time} (last = last
+# suppressed miss)
+_resolve_miss_audit_state: Dict[tuple, Dict[str, Any]] = {}
 _resolve_miss_clock = time.monotonic
+
+
+def _resolve_miss_wallclock() -> str:
+    # Same clock AuditEntry uses for its own timestamp.
+    return datetime.now().isoformat()
 
 
 def _reset_resolve_miss_audit_throttle() -> None:
@@ -93,36 +103,52 @@ def _resolve_miss_audit_admit(
     Returns None when it falls inside the window of an already-written miss
     for the same key (the count is kept). Otherwise returns
     ``(suppressed_since_last, flushes)`` where ``flushes`` lists
-    ``(session_key, reason, suppressed, fields)`` for OTHER keys whose window
-    has closed with a pending count, or that were evicted with one.
+    ``(session_key, reason, suppressed, fields, observed_at)`` for pending
+    counts that get their own row: closed windows of other keys, an evicted
+    key, or this key's own count when its last suppressed miss is stale.
     """
     now = _resolve_miss_clock()
+    window = _RESOLVE_MISS_AUDIT_WINDOW_SECONDS
     key = (session_key, reason)
     state = _resolve_miss_audit_state.get(key)
-    if state is not None and now - state[0] < _RESOLVE_MISS_AUDIT_WINDOW_SECONDS:
-        state[1] += 1
+    if state is not None and now - state["written"] < window:
+        state["pending"] += 1
+        state["last_mono"] = now
+        state["last_at"] = _resolve_miss_wallclock()
         return None
-    suppressed = state[1] if state is not None else 0
+
+    def _flush(k: tuple, st: Dict[str, Any]) -> tuple:
+        return (k[0], k[1], st["pending"], st["fields"], st["last_at"])
 
     flushes = []
-    for other, (written_at, pending, other_fields) in list(_resolve_miss_audit_state.items()):
-        if other == key or now - written_at < _RESOLVE_MISS_AUDIT_WINDOW_SECONDS:
+    suppressed = 0
+    if state is not None and state["pending"]:
+        if now - state["last_mono"] < window:
+            suppressed = state["pending"]
+        else:
+            flushes.append(_flush(key, state))
+
+    for other, st in list(_resolve_miss_audit_state.items()):
+        if other == key or now - st["written"] < window:
             continue
         # Window closed: the next miss for this key would start a fresh row
         # anyway, so emit its pending count now rather than wait for one.
-        if pending:
+        if st["pending"]:
             if len(flushes) >= _RESOLVE_MISS_AUDIT_MAX_FLUSHES:
                 continue  # stays pending; a later admission flushes it
-            flushes.append((other[0], other[1], pending, other_fields))
+            flushes.append(_flush(other, st))
         del _resolve_miss_audit_state[other]
 
-    if state is None and len(_resolve_miss_audit_state) >= _RESOLVE_MISS_AUDIT_MAX_KEYS:
+    if key not in _resolve_miss_audit_state and len(_resolve_miss_audit_state) >= _RESOLVE_MISS_AUDIT_MAX_KEYS:
         # Bounded memory: evict the stalest entry, flushing its pending count.
-        oldest = min(_resolve_miss_audit_state, key=lambda k: _resolve_miss_audit_state[k][0])
-        _, pending, oldest_fields = _resolve_miss_audit_state.pop(oldest)
-        if pending:
-            flushes.append((oldest[0], oldest[1], pending, oldest_fields))
-    _resolve_miss_audit_state[key] = [now, 0, dict(fields or {})]
+        oldest = min(_resolve_miss_audit_state, key=lambda k: _resolve_miss_audit_state[k]["written"])
+        st = _resolve_miss_audit_state.pop(oldest)
+        if st["pending"]:
+            flushes.append(_flush(oldest, st))
+    _resolve_miss_audit_state[key] = {
+        "written": now, "pending": 0, "fields": dict(fields or {}),
+        "last_mono": now, "last_at": None,
+    }
     return suppressed, flushes
 
 
@@ -147,7 +173,7 @@ def _audit_session_resolve_miss(
     if admitted is None:
         return
     suppressed, flushes = admitted
-    for f_key, f_reason, f_pending, f_fields in flushes:
+    for f_key, f_reason, f_pending, f_fields, f_observed_at in flushes:
         try:
             from src.audit_log import audit_logger as _audit
             _audit.log_session_resolve_miss_observed(
@@ -160,6 +186,7 @@ def _audit_session_resolve_miss(
                 client_hint=f_fields.get("client_hint"),
                 model_type=f_fields.get("model_type"),
                 suppressed_since_last=f_pending,
+                observed_at=f_observed_at,
             )
         except Exception as e:
             logger.debug(f"[PATH2_RESUME_MISS] audit flush failed (non-fatal): {e}")

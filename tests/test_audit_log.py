@@ -344,6 +344,23 @@ class TestLogSessionResolveMissObserved:
         d = _read_jsonl(logger.log_file)[0]["details"]
         assert d["suppressed_since_last"] == 49
 
+    def test_flush_row_keeps_its_observation_time(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_session_resolve_miss_observed(
+            session_key="agent-quiet-key",
+            resolution_source="throttle_flush",
+            reason="pg_session_missing",
+            resume=True,
+            force_new=False,
+            token_agent_uuid_present=False,
+            suppressed_since_last=7,
+            observed_at="2026-09-20T10:00:00",
+        )
+
+        e = _read_jsonl(logger.log_file)[0]
+        assert e["timestamp"] == "2026-09-20T10:00:00"
+        assert e["details"]["resolution_source"] == "throttle_flush"
+
 
 # ===========================================================================
 # AuditLogger.__init__ and internal flags
