@@ -959,3 +959,57 @@ def test_input_file_named_gh_is_not_mistaken_for_the_cli(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "branch"))
     with pytest.raises(FileNotFoundError):
         rg.main(["record", "gh", "--reviewer-name", "someone", "--independent"])
+
+
+# --------------------------------------------------------------------------
+# --emit: record a review from an environment without gh (cloud sessions with
+# only a GitHub connector). The tool renders the body; the caller posts it.
+
+def _pushed(repo, tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "origin", "master")
+    _git(repo, "push", "-q", "-u", "origin", "feature")
+
+
+def test_emit_renders_the_record_ci_reads_without_gh(repo, tmp_path, monkeypatch, capsys):
+    _pushed(repo, tmp_path)
+    (tmp_path / "review.txt").write_text("checked every claim\nVERDICT: CLEAN\n")
+    monkeypatch.setattr(rg, "_launch", lambda cmd, **kw: pytest.fail("called gh") if cmd[0] == "gh"
+                        else subprocess.run(cmd, **kw))
+    assert rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name",
+                    "subagent:claude-fresh-context", "--independent", "--emit"]) == 0
+    body = capsys.readouterr().out
+    rec = rg.parse_record(body)
+    assert (rec.key, rec.verdict, rec.reviewer) == (
+        rg.diff_key("origin/master", "HEAD"), "CLEAN", "subagent:claude-fresh-context")
+    # What CI sees when this body is posted from a trusted account.
+    got = rg.latest_matching([{"author_association": "OWNER", "html_url": "u", "body": body}], rec.key)
+    assert got.status() == ("success", "clean (subagent:claude-fresh-context)")
+
+
+def test_emit_refuses_an_unpushed_head(repo, tmp_path):
+    _pushed(repo, tmp_path)
+    (repo / "a.txt").write_text("a changed locally\n")
+    _git(repo, "commit", "-q", "-am", "not pushed")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="HEAD pushed"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                 "--independent", "--emit"])
+
+
+def test_reviewer_name_with_whitespace_is_refused(tmp_path):
+    # The name is a whitespace-delimited marker field; a space would truncate it.
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="whitespace"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "a b",
+                 "--independent", "--emit"])
+
+
+def test_missing_gh_names_the_emit_path(monkeypatch, capsys):
+    def no_gh(args):
+        raise rg.GhUnavailable("the `gh` CLI is not installed or not on PATH")
+    monkeypatch.setattr(rg, "cmd_review", no_gh)
+    assert rg.main(["review"]) == rg.UNREVIEWED
+    assert "--emit" in capsys.readouterr().out

@@ -583,8 +583,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     return text, ("exit 0" if rc == 0 else f"exit {rc}")
 
 
-def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
-    require_open(pr)  # a local reviewer may have finished after the merge
+def render_body(rec: Record, heading: str, text: str) -> str:
+    """The exact comment body a record is posted as (and `--emit` prints)."""
     body = f"{render_marker(rec)}\n### Review record — {heading}\n\n"
     body += f"Diff key `{rec.key[:12]}` · reviewer `{rec.reviewer}`\n\n"
     if len(text) > COMMENT_LIMIT:
@@ -592,9 +592,32 @@ def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     body += text.strip() + "\n"
     # Evidence is not a new bot command. Native footers include example
     # mentions that dispatch cloud tasks when copied by the author's account.
-    body = re.sub(r"@codex\b", "Codex", body, flags=re.I)
+    return re.sub(r"@codex\b", "Codex", body, flags=re.I)
+
+
+def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
+    require_open(pr)  # a local reviewer may have finished after the merge
     _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"],
-            input=body, text=True, check=True, capture_output=True)
+            input=render_body(rec, heading, text), text=True, check=True, capture_output=True)
+
+
+def _resolve_offline(args) -> str:
+    """Diff key for HEAD without gh, for `--emit`. Refuses an unpushed HEAD.
+
+    CI keys the PR head against its base, so the emitted record is only valid
+    if HEAD is exactly what the branch's upstream holds. The caller posts the
+    body through whatever GitHub client it has (an MCP connector, the REST
+    API); the gate then reads it like any other record.
+    """
+    base = args.base or DEFAULT_BASE
+    remote, _, branch = base.partition("/")
+    git("fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{base}", check=False)
+    head = git("rev-parse", "HEAD").strip()
+    upstream = git("rev-parse", "--verify", "--quiet", "@{upstream}", check=False).strip()
+    if upstream != head:
+        raise SystemExit("review_gate: --emit needs HEAD pushed and equal to its upstream "
+                         "(git push -u first), or the record would describe a diff CI never sees")
+    return diff_key(base, head)
 
 
 def _resolve(args) -> tuple[int, str, str, str]:
@@ -871,19 +894,32 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
 
 
 def cmd_record(args) -> int:
-    pr, repo, key, branch = _resolve(args)
     if not args.independent:
         raise SystemExit("review_gate: record requires --independent to attest that a "
                          "separate reviewer examined this diff. Consult advice alone is not a code review.")
+    # Without --emit, gh is resolved first: a machine without it is UNREVIEWED
+    # (exit 2) before any input is read.
+    resolved = None if args.emit else _resolve(args)
     text = Path(args.file).read_text()
     parsed = parse_verdict(text)
     if parsed is None:
         raise SystemExit("review_gate: the review text needs a final "
                          "'VERDICT: CLEAN' or 'VERDICT: FINDINGS(n)' line")
     verdict, n = parsed
+    if re.search(r"\s", args.reviewer_name):
+        raise SystemExit("review_gate: --reviewer-name must not contain whitespace "
+                         "(it is a field in the record marker)")
+    heading = (f"{verdict if verdict == 'CLEAN' else f'FINDINGS({n})'} "
+               f"(recorded, reviewed by {args.reviewer_name})")
+    if args.emit:
+        rec = Record(_resolve_offline(args), verdict, n, False, args.reviewer_name)
+        sys.stdout.write(render_body(rec, heading, text))
+        print(f"[review] emitted, not posted: post the body above verbatim as a PR comment "
+              f"({rec.status()[1]})", file=sys.stderr)
+        return 0
+    pr, repo, key, branch = resolved
     rec = Record(key, verdict, n, False, args.reviewer_name)
-    post_record(pr, rec, f"{verdict if verdict == 'CLEAN' else f'FINDINGS({n})'} "
-                f"(recorded, reviewed by {args.reviewer_name})", text)
+    post_record(pr, rec, heading, text)
     print(f"[review] recorded: {rec.status()[1]}")
     return 0
 
@@ -1095,6 +1131,9 @@ def main(argv: list[str] | None = None) -> int:
     rc.add_argument("--reviewer-name", required=True)
     rc.add_argument("--independent", action="store_true",
                     help="attest this is a separate review of the current diff, not the author's self-check")
+    rc.add_argument("--emit", action="store_true",
+                    help="print the record body instead of posting it (no gh needed); "
+                         "post it verbatim with any GitHub client")
 
     d = sub.add_parser("dispose", help="post dispositions for a FINDINGS record")
     d.add_argument("file")
@@ -1127,7 +1166,12 @@ def main(argv: list[str] | None = None) -> int:
         # FileNotFoundError traceback used to report.
         print(f"[review] UNREVIEWED: {exc}, so review evidence can be neither "
               "read nor posted from here. Run review.sh where gh is available, "
-              "or hand off explicitly.")
+              "request native review (`@codex review` on the PR), or run an "
+              "independent review and render its record with `review.sh record "
+              "FILE --reviewer-name NAME --independent --emit`, then post the "
+              "printed body verbatim through your GitHub connector "
+              "(docs/operations/github-workflow-conventions.md, "
+              "#recording-a-review-without-gh).")
         return UNREVIEWED
 
 

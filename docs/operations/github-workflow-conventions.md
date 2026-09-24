@@ -242,10 +242,41 @@ operator's), the environment-independent path is a PR comment:
 
 Do not hand-build a `unitares-review v1` record in place of this. The gate
 trusts records from the owner's account, which every agent posts through, so
-a record assembled by the authoring session from its own subagents' reviews
-reads as independent when it is not (#2356 posted one and retracted it).
-`review.sh` remains the path when native review is not enabled, and the
-fallback when Codex is unavailable.
+a hand-assembled record is indistinguishable from a real one (#2356 posted one
+and retracted it). `review.sh` remains the path when native review is not
+enabled, and the fallback when Codex is unavailable. Without `gh` either, use
+the next section.
+
+#### Recording a review without gh
+
+Operator decision, 2026-09-24: an agent without `gh` (a cloud session with
+only a GitHub connector) may complete its own review gate with a **subagent
+or council review**, as long as the record says which it was. Before this, a
+Codex usage limit left such sessions with no way to finish a PR (#2423).
+
+1. Run the review in a **fresh context** that did not write the diff: a
+   subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
+   a council/dialectic reviewer. It must end with the `VERDICT:` line.
+   Advisory `consult` output is still not a review.
+2. Push first. Then render the record with the tool, never by hand:
+
+   ```bash
+   ./scripts/dev/review.sh record review.txt --independent --emit \
+       --reviewer-name subagent:<model>-fresh-context   # or council:<who>
+   ```
+
+   `--emit` needs no `gh`: it computes the diff key locally, refuses a HEAD
+   that differs from its pushed upstream, and prints the exact comment body.
+3. Post the printed body **verbatim** as a top-level PR comment through the
+   connector. The `review` check reads it like any other record, and its
+   description names the reviewer, so a same-session subagent review is
+   visible as one.
+4. Findings: fix, push, and review the new diff the same way. Rebuttals still
+   need `review.sh dispose`, which reads the prior record through `gh`.
+
+A same-model subagent is the weakest reviewer this gate accepts: it shares the
+author's model and blind spots. Prefer native Codex or another model when one
+is available, and name the reviewer honestly in `--reviewer-name`.
 
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
