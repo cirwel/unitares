@@ -282,7 +282,9 @@ def _build_risk_attribution(
             "verification and policy maturity records."
         )
     elif primary_driver == "behavioral_assessment":
-        if self_report_ever_blended:
+        # This check-in's own blend counts too, so a simulate_update() preview
+        # (which does not set the sticky flag) is described correctly.
+        if self_report_ever_blended or self_report_blended:
             # Direct callers passing a list get the blend. The blended vector
             # then reaches the behavioral assessment through several inputs
             # (behavioral S, ODE-derived auxiliaries) and persists in its EMA,
