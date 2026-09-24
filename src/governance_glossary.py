@@ -186,7 +186,7 @@ BASINS: Dict[str, Dict[str, Any]] = {
         },
     },
     "critical": {
-        "meaning": "Circuit breaker imminent. Pause and reassess.",
+        "meaning": "Risk in the critical band. Reassess; the policy decision, not this label, says whether the agent is stopped.",
         "thresholds": {
             "type": "operator_alert",
             "rule": "Used by higher-level diagnostics when risk/coherence guards are near breaker thresholds.",

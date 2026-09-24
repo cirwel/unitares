@@ -567,8 +567,16 @@ class GovernanceState:
         """Generate actionable guidance based on interpreted state."""
         
         # Priority 1: Critical warnings
+        # The state does not know the policy decision: the cold-start guard or
+        # gap suppression may have turned this reading into proceed/guide, and
+        # a metrics read surfaces this text as the agent's next_action. So it
+        # must not tell the agent to stop; the decision field says whether it
+        # blocks.
         if health == "critical":
-            return "Circuit breaker imminent. Pause and reassess. Consider dialectic review."
+            return (
+                "Risk is in the critical band. Reassess before continuing and "
+                "consider a dialectic review; the decision says whether this blocks."
+            )
         
         if trajectory == "declining":
             return "Value trajectory negative. Simplify approach or seek input."

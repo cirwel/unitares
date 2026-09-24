@@ -65,6 +65,20 @@ logger = get_logger(__name__)
 # and is deliberately absent from recovery guidance.
 _RECOVERY_RISK_CEILING = 0.40
 
+
+def _review_risk_limit() -> float:
+    """Reviewed self-recovery's risk gate (refuses when risk exceeds it).
+
+    Imported lazily: the lifecycle handler module pulls in storage and the
+    tool registry, which the middleware must not load at import time.
+    """
+    try:
+        from src.mcp_handlers.lifecycle.self_recovery import MAX_RISK_FOR_SELF_RECOVERY
+
+        return float(MAX_RISK_FOR_SELF_RECOVERY)
+    except Exception:  # pragma: no cover - defensive; the constant is 0.65
+        return 0.65
+
 _MEMORY_SUGGESTION_LIMIT = 3
 _MEMORY_SUMMARY_PREVIEW_CHARS = 240
 # Bound on a digest's `by` display label. `agent_id` is never bounded: it is
@@ -463,15 +477,17 @@ def _recovery_hint(
     # High risk alone reads as severe only when no decision is known. Once the
     # policy has decided to continue (the cold-start guard, gap suppression),
     # "pause and call self_recovery" contradicts that decision, and reviewed
-    # recovery then refuses the agent anyway (it gates on risk < 0.65) after
-    # recording its reflection in shared memory.
+    # recovery then refuses the agent anyway (it refuses when risk exceeds
+    # MAX_RISK_FOR_SELF_RECOVERY) after recording its reflection in shared
+    # memory.
     decided_to_continue = action in {
         "proceed", "continue", "approve", "ok", "healthy", "safe", "guide",
         "resumed",
     }
-    # Reviewed recovery refuses at this risk (and self_recovery lifts pauses);
-    # an agent that is not paused must not be routed to it here.
-    recovery_refused = risk is not None and risk >= 0.65
+    # Reviewed recovery refuses above this risk; an agent that is not paused
+    # must not be routed to a review that will refuse it.
+    review_limit = _review_risk_limit()
+    recovery_refused = risk is not None and risk > review_limit
     severe = stopped or (
         not decided_to_continue and risk is not None and risk >= 0.7
     )
@@ -529,19 +545,21 @@ def _recovery_hint(
             + ("nothing blocks you now" if action == "resumed"
                else "this decision does not block")
             + " - keep scope tight and sync_state after your next substantial "
-            "step. self_recovery is for lifting a pause."
+            f"step. Reviewed self-recovery refuses above risk {review_limit:.2f}, "
+            "so it is not a step here."
         )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
     if risky and decided_to_continue:
-        # Not paused: self_recovery has nothing to lift, and review refuses at
-        # risk >= 0.65 after recording the reflection.
+        # Not paused and below the review gate: same advice the attention
+        # branch gives a continuing agent, so two branches never disagree.
         return (
             "Risk is elevated but "
             + ("nothing blocks you now" if action == "resumed"
                else "this decision does not block")
-            + " - keep scope tight and sync_state after your next substantial "
-            "step. self_recovery is for lifting a pause."
+            + " - keep scope tight, sync_state after your next substantial "
+            "step, and use self_recovery(action='review', reflection='...') "
+            "only if work stalls."
         )
     if risky:
         return (
