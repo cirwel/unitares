@@ -191,7 +191,7 @@ in your first terminal.
 
 ---
 
-## Step 7 — (Optional) Connect a Claude Code / Cursor / Claude Desktop client
+## Step 7 — (Optional) Connect an MCP client (Claude Code, Codex, Claude Desktop, …)
 
 Follow [`docs/integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md) for the
 current client-specific command or configuration. That document is the one
