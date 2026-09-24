@@ -874,6 +874,46 @@ class TestPredictionBindingEcho:
         assert open_predictions[pid].get('consumed') is True
 
     @pytest.mark.asyncio
+    async def test_binding_loads_an_unloaded_monitor_before_resolving(self):
+        """After a restart an outcome can be the agent's first request, so its
+        monitor (and the forecasts restored with it) is not loaded yet."""
+        from src.monitor_prediction import register_tactical_prediction
+        mock_db = _make_outcome_mock_db()
+
+        open_predictions = {}
+        pid = register_tactical_prediction(open_predictions, confidence=0.65)
+
+        mock_monitor = MagicMock()
+        mock_monitor._open_predictions = open_predictions
+        mock_monitor._prediction_ttl_seconds = 3600.0
+        mock_monitor._prev_confidence = None
+        mock_monitor.get_primary_eisv.return_value = (0.7, 0.75, 0.15, -0.03)
+        mock_monitor._behavioral_state = None
+
+        with patch('src.db.get_db', return_value=mock_db), \
+             patch('src.mcp_handlers.observability.outcome_events.mcp_server') as mock_server, \
+             patch('src.mcp_handlers.context.get_context_agent_id', return_value='agent-after-restart'), \
+             patch('src.mcp_handlers.context.get_context_client_session_id', return_value=None):
+
+            mock_server.monitors = {}
+
+            def _load(agent_id):
+                mock_server.monitors[agent_id] = mock_monitor
+                return mock_monitor
+
+            mock_server.get_or_create_monitor.side_effect = _load
+
+            from src.mcp_handlers.observability.outcome_events import handle_outcome_event
+            result = await handle_outcome_event({
+                'outcome_type': 'test_passed',
+                'prediction_id': pid,
+            })
+
+        parsed = parse_result(result)
+        assert parsed.get('prediction_binding') == 'registry'
+        mock_server.get_or_create_monitor.assert_called_once_with('agent-after-restart')
+
+    @pytest.mark.asyncio
     async def test_binding_missing_prediction_when_id_unknown(self):
         """An id that doesn't exist in open_predictions resolves as 'missing_prediction'."""
         mock_db = _make_outcome_mock_db()

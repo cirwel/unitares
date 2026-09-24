@@ -349,6 +349,20 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     prediction_record = None
     prediction_binding: str = "no_binding"
     _monitors = getattr(mcp_server, "monitors", None) or {}
+    if (
+        prediction_id
+        and isinstance(_monitors, dict)
+        and agent_id not in _monitors
+        and hasattr(mcp_server, "get_or_create_monitor")
+    ):
+        # An outcome can be an agent's first request after a restart. Its open
+        # forecasts are in the monitor snapshot, which is only read when the
+        # monitor loads, so load it before resolving the prediction_id.
+        try:
+            mcp_server.get_or_create_monitor(agent_id)
+            _monitors = getattr(mcp_server, "monitors", None) or {}
+        except Exception as e:  # noqa: BLE001 - fall through to the existing paths
+            logger.debug(f"outcome_event: monitor load for prediction lookup failed: {e}")
     _monitor_for_ttl = _monitors.get(agent_id) if isinstance(_monitors, dict) else None
     ttl_seconds = float(getattr(_monitor_for_ttl, "_prediction_ttl_seconds", 3600.0))
 
