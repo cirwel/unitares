@@ -100,12 +100,6 @@ coordination plane.
 
 ## How it works
 
-An agent joins the operator's UNITARES deployment and receives a process
-identity. During work it can publish selected findings and evidence, request
-structured review, report meaningful state transitions, and record outcomes.
-UNITARES keeps those records available to the operator and to later authorized
-processes.
-
 The server runs alongside evals, sandboxes, and guardrails. It provides the
 continuity and accountability layer that connects their outputs over time.
 Core storage is self-hosted and runs on its own; the operator chooses which
