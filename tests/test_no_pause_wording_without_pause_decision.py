@@ -166,6 +166,34 @@ def test_high_risk_continue_decision_does_not_route_to_self_recovery():
     assert "does not block" in hint
 
 
+def test_production_guide_shape_at_refusal_risk_is_not_routed_to_self_recovery():
+    """The monitor emits proceed + sub_action guide, which makes the attention
+    branch fire first; at risk >= 0.65 (review refuses) it must still not
+    advise self_recovery."""
+    payload = {"decision": {"action": "proceed", "sub_action": "guide"}}
+    for risk in (0.67, 0.75):
+        hint = ES._recovery_hint(payload, None, risk)
+        assert "self_recovery(" not in hint, risk
+        assert "does not block" in hint, risk
+    # Below the review gate the existing advisory wording stays.
+    assert "only if work stalls" in ES._recovery_hint(payload, None, 0.5)
+
+
+def test_never_checked_in_agent_is_not_reported_as_proceeding():
+    wrapped = explain_verdict(
+        "uninitialized", evidence_source="ode_fallback",
+        decision_action=_last_decision_action(_Meta("active", [], total_updates=0)),
+    )
+    assert "decision_action" not in wrapped
+    assert ES._decision_action({"verdict": wrapped}) == "uninitialized"
+
+
+def test_resumed_wording_claims_no_decision():
+    wrapped = explain_verdict("high-risk", decision_action="resumed")
+    assert "The decision was" not in wrapped["next_action"]
+    assert "resumed" in wrapped["next_action"]
+
+
 def test_a_real_pause_keeps_its_stop_and_recovery_directives():
     source = _guided_cold_start_check_in()
     source["decision"] = {"action": "pause", "sub_action": "risk_pause"}
@@ -227,16 +255,21 @@ def test_decision_outranks_policy_evaluation_and_verdict():
 # --- the metrics read -------------------------------------------------------
 
 class _Meta:
-    def __init__(self, status="active", recent_decisions=None):
+    def __init__(self, status="active", recent_decisions=None, total_updates=None):
         self.status = status
         self.recent_decisions = recent_decisions
+        self.total_updates = (
+            len(recent_decisions or []) if total_updates is None else total_updates
+        )
 
 
 def test_last_decision_action_prefers_a_paused_lifecycle_status():
     assert _last_decision_action(_Meta("paused", ["proceed"])) == "pause"
     assert _last_decision_action(_Meta("active", ["pause", "proceed"])) == "proceed"
-    # _resume_with_persistence clears the history: still proceeding.
-    assert _last_decision_action(_Meta("active", [])) == "proceed"
+    # Never checked in: no decision, keep the "uninitialized" wording.
+    assert _last_decision_action(_Meta("active", [], total_updates=0)) is None
+    # Checked in before, history cleared by a resume path: resumed.
+    assert _last_decision_action(_Meta("active", [], total_updates=4)) == "resumed"
     assert _last_decision_action(None) is None
 
 
@@ -251,8 +284,8 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
     """Pause expiry and dialectic resolution set status=active but leave the
     last recorded decision at "pause". That stop is no longer in force; the
     agent proceeds, and the verdict wrap must not fall back to "Pause"."""
-    assert _last_decision_action(_Meta("active", ["proceed", "pause"])) == "proceed"
-    assert _last_decision_action(_Meta("active", ["reject"])) == "proceed"
+    assert _last_decision_action(_Meta("active", ["proceed", "pause"])) == "resumed"
+    assert _last_decision_action(_Meta("active", ["reject"])) == "resumed"
     wrapped = explain_verdict(
         "high-risk", decision_action=_last_decision_action(_Meta("active", ["pause"]))
     )
@@ -317,7 +350,7 @@ def test_simulate_update_escalation_rewraps_the_nested_verdict():
 def test_resumed_agent_with_cleared_history_is_not_told_to_pause():
     """Operator resume at risk 0.75 clears recent_decisions; the metrics read
     must not fall back to "Pause, reflect"."""
-    action = _last_decision_action(_Meta("active", []))
+    action = _last_decision_action(_Meta("active", [], total_updates=3))
     wrapped = explain_verdict("high-risk", decision_action=action)
     assert not wrapped["next_action"].startswith("Pause")
     hint = ES._recovery_hint({"verdict": wrapped}, None, 0.75)

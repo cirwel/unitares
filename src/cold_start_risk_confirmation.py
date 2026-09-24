@@ -791,8 +791,8 @@ def apply_non_authored_cold_start_guard(
     # and the overridden reason verbatim.
     if include_authored:
         guarded["reason"] = (
-            "Cold start: guidance only, because there is no behavioral history "
-            f"yet (epistemic_class={epistemic_class}, behavioral_confidence="
+            "Cold start: guidance only, because behavioral history is not yet "
+            f"authoritative (epistemic_class={epistemic_class}, behavioral_confidence="
             f"{confidence:.3f}). A risk-only cold-start estimate with complete "
             f"provenance does not pause (was: {original_reason})"
         )
@@ -806,7 +806,7 @@ def apply_non_authored_cold_start_guard(
     else:
         guarded["reason"] = (
             "Cold start: guidance only, because this check-in was not "
-            "agent-authored and there is no behavioral history yet "
+            "agent-authored and behavioral history is not yet authoritative "
             f"(epistemic_class={epistemic_class}, behavioral_confidence="
             f"{confidence:.3f}). The same reading on an agent-authored check-in "
             f"can pause (was: {original_reason})"

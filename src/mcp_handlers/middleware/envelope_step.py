@@ -83,6 +83,7 @@ _ACTION_ALIASES = {
     "safe": ("proceed", None),
     "caution": ("proceed", "guide"),
     "guide": ("proceed", "guide"),
+    "resumed": ("proceed", "resumed"),
     "block": ("pause", "block"),
     "high-risk": ("pause", "high-risk"),
     "reject": ("pause", "reject"),
@@ -457,7 +458,11 @@ def _recovery_hint(
     # recording its reflection in shared memory.
     decided_to_continue = action in {
         "proceed", "continue", "approve", "ok", "healthy", "safe", "guide",
+        "resumed",
     }
+    # Reviewed recovery refuses at this risk (and self_recovery lifts pauses);
+    # an agent that is not paused must not be routed to it here.
+    recovery_refused = risk is not None and risk >= 0.65
     severe = stopped or (
         not decided_to_continue and risk is not None and risk >= 0.7
     )
@@ -511,6 +516,12 @@ def _recovery_hint(
                 "same prior and can pause at this risk."
             )
         return hint
+    if risky and decided_to_continue and recovery_refused:
+        return (
+            "Risk is elevated but this decision does not block - keep scope tight "
+            "and sync_state after your next substantial step. self_recovery is "
+            "for lifting a pause."
+        )
     if attention and continuing:
         return margin_hint if margin_is_near_edge else verdict_hint
     if risky and decided_to_continue:
