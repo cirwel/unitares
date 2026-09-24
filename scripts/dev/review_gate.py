@@ -956,10 +956,13 @@ def ask_verifier(verifier: str, prompt: str) -> str:
         headers = ["-H", f"Authorization: Bearer {token}"]
     else:
         raise ValueError(f"unknown verifier backend {backend!r} (use ollama:<model> or hf:<model>)")
-    proc = subprocess.run(["curl", "-sS", "--fail-with-body", "--max-time", str(VERIFY_TIMEOUT_S),
-                           "-H", "Content-Type: application/json", *headers,
-                           "--data-binary", "@-", url],
-                          input=json.dumps(payload), text=True, capture_output=True)
+    try:
+        proc = subprocess.run(["curl", "-sS", "--fail-with-body", "--max-time", str(VERIFY_TIMEOUT_S),
+                               "-H", "Content-Type: application/json", *headers,
+                               "--data-binary", "@-", url],
+                              input=json.dumps(payload), text=True, capture_output=True)
+    except OSError as exc:  # no curl: an outage (UNREVIEWED), never findings
+        raise RuntimeError(f"{verifier} unavailable: cannot run curl: {exc}") from exc
     if proc.returncode:
         raise RuntimeError(f"{verifier} unavailable: {(proc.stderr or proc.stdout).strip()[:200]}")
     reply = json.loads(proc.stdout)

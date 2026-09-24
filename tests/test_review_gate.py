@@ -1149,3 +1149,12 @@ def test_a_push_after_a_fix_verification_gets_a_full_review():
     # A verification older than the last round does not lift the next cap.
     verified["created_at"] = "2026-09-23T02:30:00Z"
     assert rg.codex_rounds([verified], reviews, inline).capped()
+
+
+def test_a_host_without_curl_is_a_verifier_outage(monkeypatch):
+    # PR #2401 review round 3: a missing binary must reach the UNREVIEWED path.
+    def no_curl(*args, **kwargs):
+        raise FileNotFoundError("curl")
+    monkeypatch.setattr(rg.subprocess, "run", no_curl)
+    with pytest.raises(RuntimeError, match="cannot run curl"):
+        rg.ask_verifier("ollama:m", "prompt")
