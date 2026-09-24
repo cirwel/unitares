@@ -50,6 +50,11 @@ _PRESENCE_TTL_S = 600
 # the source of truth.
 _lease_ids: dict[str, str] = {}
 
+# uuid -> client_session_id that last acquired or refreshed the cached lease.
+# A release from one session must not free a lease another live session under
+# the same identity (a resume) has since taken over.
+_lease_sessions: dict[str, str] = {}
+
 # uuid -> monotonic time of the agent's own clean-exit release, and the
 # client_session_id(s) that released it. A heartbeat from the releasing session
 # never re-acquires, however late it lands (a host's final check-in can reach
@@ -166,6 +171,8 @@ async def _refresh_presence(
                 ),
             )
             if getattr(result, "ok", False):
+                if client_session_id:
+                    _lease_sessions[agent_uuid] = client_session_id
                 return
         except Exception:
             pass
@@ -198,6 +205,10 @@ async def _refresh_presence(
             await _release_lease(client, agent_uuid, str(new_id))
             return
         _lease_ids[agent_uuid] = str(new_id)
+        if client_session_id:
+            _lease_sessions[agent_uuid] = client_session_id
+        else:
+            _lease_sessions.pop(agent_uuid, None)
 
 
 def _mint_presence_attestation(agent_uuid: str, path: str, request: object) -> str | None:
@@ -243,17 +254,19 @@ def schedule_agent_presence_heartbeat(
         logger.debug(f"[AGENT_PRESENCE] scheduling skipped: {e}")
 
 
-async def _lookup_live_lease_id(agent_uuid: str) -> Optional[str]:
-    """Find the agent's unreleased presence lease when the in-process cache lost it
-    (a server restart since the acquire). Returns None on any error."""
+async def _lookup_live_lease(agent_uuid: str) -> tuple[Optional[str], Optional[str]]:
+    """Find the agent's unreleased presence lease, and the session that acquired
+    it, when the in-process cache lost it (a server restart since the acquire).
+    Returns (None, None) on any error."""
     try:
         from src.db import get_db
 
         db = get_db()
         async with db.acquire() as conn:
-            lease_id = await conn.fetchval(
+            row = await conn.fetchrow(
                 """
-                SELECT lease_id::text FROM lease_plane.surface_leases
+                SELECT lease_id::text AS lease_id, audit_session
+                FROM lease_plane.surface_leases
                 WHERE surface_id = $1
                   AND released_at IS NULL
                   AND expires_at > NOW()
@@ -262,10 +275,12 @@ async def _lookup_live_lease_id(agent_uuid: str) -> Optional[str]:
                 """,
                 f"agent:/{agent_uuid}",
             )
-        return str(lease_id) if lease_id else None
+        if not row or not row["lease_id"]:
+            return None, None
+        return str(row["lease_id"]), row["audit_session"]
     except Exception as e:  # pragma: no cover - defensive
         logger.debug(f"[AGENT_PRESENCE] live lease lookup failed (non-fatal): {e}")
-        return None
+        return None, None
 
 
 async def _release_lease(client, agent_uuid: str, lease_id: str) -> bool:
@@ -316,9 +331,18 @@ async def release_agent_presence(
         if client is None:
             _lease_ids.pop(agent_uuid, None)
             return {"released": False, "reason": "lease_plane_unavailable"}
-        lease_id = _lease_ids.pop(agent_uuid, None) or await _lookup_live_lease_id(agent_uuid)
+        lease_id = _lease_ids.get(agent_uuid)
+        holder = _lease_sessions.get(agent_uuid)
+        if not lease_id:
+            lease_id, holder = await _lookup_live_lease(agent_uuid)
         if not lease_id:
             return {"released": False, "reason": "no_live_lease"}
+        if holder and holder not in session_ids:
+            # Another session under this identity refreshed the lease after
+            # this one; it is still live, so its presence stays.
+            return {"released": False, "reason": "held_by_other_session"}
+        _lease_ids.pop(agent_uuid, None)
+        _lease_sessions.pop(agent_uuid, None)
         try:
             ok = await _release_lease(client, agent_uuid, lease_id)
         except Exception as e:  # noqa: BLE001 - best-effort; the TTL remains the backstop

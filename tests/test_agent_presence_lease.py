@@ -20,11 +20,13 @@ def _clear_cache():
     apl._released_at.clear()
     apl._released_sessions.clear()
     apl._locks.clear()
+    apl._lease_sessions.clear()
     yield
     apl._lease_ids.clear()
     apl._released_at.clear()
     apl._released_sessions.clear()
     apl._locks.clear()
+    apl._lease_sessions.clear()
 
 
 def _fake_req(**kw):
@@ -182,9 +184,9 @@ async def test_release_finds_the_lease_after_a_server_restart(monkeypatch):
     _patch_models(monkeypatch, client)
 
     async def _lookup(agent_uuid):
-        return "lease-from-db"
+        return "lease-from-db", "sess-x"
 
-    monkeypatch.setattr(apl, "_lookup_live_lease_id", _lookup)
+    monkeypatch.setattr(apl, "_lookup_live_lease", _lookup)
 
     result = await apl.release_agent_presence("uuid-1", ("sess-x",))
 
@@ -198,9 +200,9 @@ async def test_release_without_a_live_lease_reports_it(monkeypatch):
     _patch_models(monkeypatch, client)
 
     async def _lookup(agent_uuid):
-        return None
+        return None, None
 
-    monkeypatch.setattr(apl, "_lookup_live_lease_id", _lookup)
+    monkeypatch.setattr(apl, "_lookup_live_lease", _lookup)
 
     assert await apl.release_agent_presence("uuid-1", ("sess-x",)) == {
         "released": False,
@@ -322,3 +324,34 @@ async def test_resumed_session_heartbeat_waits_for_an_in_progress_release(monkey
     assert order == [("release", "old-lease")]
     assert len(client.acquired) == 1
     assert apl._lease_ids["uuid-1"] == "lease-123"
+
+
+@pytest.mark.asyncio
+async def test_release_leaves_a_lease_another_session_refreshed(monkeypatch):
+    """A resumed session under the same identity heartbeat first; the old
+    session's release must not free the lease the live session now holds."""
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    await apl.heartbeat_agent_presence("uuid-1", "sess-new", apl.time.monotonic())
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-old",))
+
+    assert result == {"released": False, "reason": "held_by_other_session"}
+    assert client.releases == []
+    assert apl._lease_ids["uuid-1"] == "lease-123"
+
+
+@pytest.mark.asyncio
+async def test_release_after_restart_respects_the_acquiring_session(monkeypatch):
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+
+    async def _lookup(agent_uuid):
+        return "lease-from-db", "sess-new"
+
+    monkeypatch.setattr(apl, "_lookup_live_lease", _lookup)
+
+    result = await apl.release_agent_presence("uuid-1", ("sess-old",))
+
+    assert result["reason"] == "held_by_other_session"
+    assert client.releases == []
