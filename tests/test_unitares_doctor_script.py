@@ -2305,9 +2305,13 @@ def test_cold_start_canary_sql_classifies_each_row_shape(
                              capture_output=True, text=True, timeout=20)
     except FileNotFoundError:
         pytest.skip("psql not available")
-    unreachable = ("could not connect", "connection to server", "does not exist",
-                   "password authentication failed", "Connection refused")
-    if out.returncode != 0 and any(m in out.stderr for m in unreachable):
+    # Connection-level failures only: a query error ("column ... does not
+    # exist") must fail, so the bare "does not exist" is not a marker.
+    unreachable = re.compile(
+        r'could not connect|connection to server|Connection refused'
+        r'|password authentication failed|database "[^"]+" does not exist'
+    )
+    if out.returncode != 0 and unreachable.search(out.stderr):
         pytest.skip(f"test database not reachable: {out.stderr[:120]}")
     # Anything else (a syntax error in the canary query) must fail, not skip.
     assert out.returncode == 0, out.stderr
