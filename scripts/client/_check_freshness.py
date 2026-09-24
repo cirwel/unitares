@@ -23,7 +23,7 @@ Attestations
 `--stamp NAME [NAME ...]`, run after a skill's claims have been re-checked
 against the changed sources, writes ONE NEW FILE per skill:
 
-    skills/.attestations/<skill>/<YYYYMMDDTHHMMSSZ>-<8 hex>.json
+    skills/.attestations/<skill>/<YYYYMMDDTHHMMSSffffffZ>-<8 hex>.json
     {"schema": "unitares.skill_attestation.v1", "skill": ..., "verified_at":
      ISO-8601 UTC, "verified_date": "YYYY-MM-DD", "verifier": ...,
      "source_digests": {source: digest}}
@@ -35,7 +35,8 @@ same lines: every merge put every other stamping PR back into conflict (five of
 seven conflicted PRs that day conflicted only there). New files with unique
 names cannot conflict, whoever writes them, from whichever harness.
 
-The newest attestation for a skill (by file name) is its record: its digests
+The newest attestation for a skill is its record, and newest means the
+lexically last file name (the name leads with a microsecond UTC timestamp): its digests
 drive STALE, and the effective verified date is the later of its
 `verified_date` and the frontmatter `last_verified`. `.attestations/` is
 excluded from SKILLS_MANIFEST.sha256, so the manifest moves only when skill
@@ -261,7 +262,10 @@ def write_attestation(skills_dir: Path, name: str, digests: dict[str, str],
                       verified_at: datetime, verifier: str) -> Path:
     adir = skills_dir / ATTESTATIONS_DIR / name
     adir.mkdir(parents=True, exist_ok=True)
-    stem = f"{verified_at.strftime('%Y%m%dT%H%M%SZ')}-{secrets.token_hex(4)}"
+    # Microseconds keep file-name order chronological for stamps inside the
+    # same second; every reader takes the lexically last file as the newest,
+    # so the random suffix must never be the tie-breaker.
+    stem = f"{verified_at.strftime('%Y%m%dT%H%M%S%fZ')}-{secrets.token_hex(4)}"
     path = adir / f"{stem}.json"
     record = {
         "schema": ATTESTATION_SCHEMA,

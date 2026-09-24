@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-09-24T06:30:52Z",
+  "verified_at": "2026-09-24T06:49:34Z",
   "verified_date": "2026-09-24",
   "verifier": "Kenny Wang",
   "source_digests": {

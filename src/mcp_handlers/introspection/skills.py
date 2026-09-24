@@ -125,8 +125,8 @@ def _latest_attestation_date(skills_root: Path, name: str) -> Optional[str]:
     """`verified_date` of the newest attestation for a skill, if any.
 
     Format and naming: scripts/client/_check_freshness.py. Files are named
-    `<YYYYMMDDTHHMMSSZ>-<hex>.json`, so the lexically last readable one is the
-    newest.
+    `<YYYYMMDDTHHMMSSffffffZ>-<hex>.json`, so the lexically last readable one
+    is the newest.
     """
     adir = skills_root / ".attestations" / name
     if not adir.is_dir():

@@ -146,6 +146,23 @@ def test_two_stamps_write_two_distinct_files(layout: Layout):
     assert len(paths) == 2 and paths[0].name != paths[1].name
 
 
+def test_same_second_stamps_sort_in_the_order_they_were_made(layout: Layout):
+    # Names lead with a microsecond UTC timestamp, so the lexically last file
+    # is the newest even for stamps inside one second; the random suffix must
+    # never decide which record wins.
+    import re
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    for content in ("x = 1\n", "x = 2\n", "x = 3\n"):
+        layout.source(content)
+        layout.run("--stamp", "demo")
+    paths = _attestations(layout)
+    assert all(re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}\.json", p.name) for p in paths)
+    newest = json.loads(paths[-1].read_text())
+    assert newest["source_digests"] == {"unitares/src/thing.py": _digest("x = 3\n")}
+    assert layout.run().returncode == 0
+
+
 def test_the_newest_attestation_is_the_record(layout: Layout):
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(1), digest=None)
