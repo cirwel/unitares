@@ -394,6 +394,27 @@ def test_prune_keeps_only_the_newest(layout: Layout):
     assert _attestations(layout) == [newest]
 
 
+def test_prune_keeps_the_newest_record_for_the_current_skill_text(layout: Layout):
+    # A newer concurrent stamp for DIFFERENT skill text sorts first. Pruning by
+    # recency alone would delete the only record for the text on disk, and the
+    # skill would fall back to the mismatched record and read STALE.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 0\n")},
+            skill_digest="0123456789abcdef")
+    _attest(layout, "20260103T000000000000Z-cccccccc", _day(1), {src: _digest("x = 9\n")},
+            skill_digest="fedcba9876543210")
+    assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0
+    assert "kept 1 older record(s) for the current skill text" in result.stdout
+    names = [p.name for p in _attestations(layout)]
+    assert names == ["20260101T000000000000Z-aaaaaaaa.json", "20260103T000000000000Z-cccccccc.json"]
+    assert layout.run().returncode == 0
+
+
 def test_this_repo_sources_resolve_in_a_checkout_not_named_unitares(tmp_path: Path):
     # A worktree is rarely named "unitares"; before 2026-09-24 every cited
     # unitares/ path was "absent" there and the check passed vacuously.

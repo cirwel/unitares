@@ -38,11 +38,15 @@ def trees(tmp_path: Path) -> tuple[Path, Path]:
     (canon / "scripts" / "dev").mkdir(parents=True)
     for name in SCRIPTS:
         shutil.copy2(REPO_ROOT / "scripts" / "dev" / name, canon / "scripts" / "dev" / name)
+    # The direction guard imports the shared attestation rule from src/.
+    (canon / "src").mkdir()
+    (canon / "src" / "__init__.py").write_text("")
+    shutil.copy2(REPO_ROOT / "src" / "skill_attestations.py", canon / "src" / "skill_attestations.py")
     skill = canon / "skills" / "demo"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text('---\nname: demo\nlast_verified: "2026-09-24"\n---\n# Demo\n')
     _git(canon, "init", "-q")
-    _git(canon, "add", "skills", "scripts")
+    _git(canon, "add", "skills", "scripts", "src")
     _git(canon, "commit", "-q", "-m", "canon")
 
     plugin = tmp_path / "plugin"

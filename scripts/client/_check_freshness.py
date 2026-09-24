@@ -63,10 +63,10 @@ that vouch for source digests: the latest `verified_date` among them, or the
 frontmatter `last_verified` if later. A newer stamp of different skill text
 does not reset AGING for the text on disk. `.attestations/` is excluded from the skills
 fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
-when skill content moves. Old attestations can be removed with `--prune`;
-deleting a file never conflicts with another PR adding one, but a pruned file
-no longer vouches for its digests, so prune only what current content no
-longer needs.
+when skill content moves. Old attestations can be removed with `--prune`,
+which keeps the newest N per skill and always the newest record that
+certified the current SKILL.md text; deleting a file never conflicts with another PR
+adding one.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
 into an attestation dated with that skill's `last_verified`.
@@ -437,15 +437,44 @@ def migrate_skills(root: str) -> int:
 
 
 def prune_attestations(root: str, keep: int) -> int:
-    """Delete all but the newest `keep` attestations per skill."""
-    base = Path(root) / "skills" / ATTESTATIONS_DIR
-    removed = 0
+    """Delete all but the newest `keep` attestations per skill, always keeping
+    the newest record that certified the skill's CURRENT text.
+
+    While a record for the SKILL.md on disk exists, only such records vouch
+    (src/skill_attestations.py), so file-name recency alone is not a safe
+    pruning key: a newer concurrent stamp for different text would survive
+    while the only record for the checked-out text was deleted, and the next
+    check would fall back to the mismatched record. Older records for the
+    current text are pruned like any others; that only narrows which past
+    source contents are accepted, the conservative direction.
+    """
+    skills_dir = Path(root) / "skills"
+    base = skills_dir / ATTESTATIONS_DIR
+    keep = max(keep, 1)
+    removed = retained = 0
     if base.is_dir():
         for adir in sorted(p for p in base.iterdir() if p.is_dir()):
-            for path in sorted(adir.glob("*.json"), reverse=True)[max(keep, 1):]:
+            skill_md = skills_dir / adir.name / "SKILL.md"
+            current = skill_text_digest(skill_md) if skill_md.is_file() else None
+            paths = sorted(adir.glob("*.json"), reverse=True)
+            anchor = None  # newest record for the current text
+            for path in paths:
+                try:
+                    record = json.loads(path.read_text())
+                except (OSError, ValueError):
+                    continue
+                if (current is not None and isinstance(record, dict)
+                        and record.get("skill_digest") == current):
+                    anchor = path
+                    break
+            for path in paths[keep:]:
+                if path == anchor:
+                    retained += 1
+                    continue
                 path.unlink()
                 removed += 1
-    print(f"  pruned {removed} attestation(s), kept the newest {max(keep, 1)} per skill")
+    note = f"; kept {retained} older record(s) for the current skill text" if retained else ""
+    print(f"  pruned {removed} attestation(s), kept the newest {keep} per skill{note}")
     return 0
 
 
