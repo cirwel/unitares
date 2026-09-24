@@ -80,7 +80,7 @@ process that started it is gone.
 - **Reconstruction** — give a successor the records needed to understand and
   continue earlier work.
 
-Every capability has an evidence status in the
+Measured results and their evidence status are in the
 [claim ledger](docs/EVIDENCE_AND_LIMITS.md).
 
 ## Install

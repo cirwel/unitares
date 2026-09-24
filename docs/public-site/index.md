@@ -83,8 +83,8 @@ returns a state estimate and a policy response with its reason.
 ## Evidence
 
 The [evidence ledger](https://github.com/cirwel/unitares/blob/master/docs/EVIDENCE_AND_LIMITS.md)
-gives every capability an evidence status: what is measured, what has run, and
-what is still open, with the data behind each.
+lists measured results with their evidence status: what has run, what was
+measured, and what is still open, with the data behind each.
 
 ## Federation across operators
 
