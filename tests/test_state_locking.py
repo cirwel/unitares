@@ -98,10 +98,13 @@ class TestStateLockManagerInit:
         assert mgr.lock_dir == tmp_path
 
     def test_default_lock_dir_when_none(self):
-        """When lock_dir is None, it should derive from the project root."""
+        """When lock_dir is None, it should use the module default, which
+        derives from the project root (conftest redirects it for the suite)."""
+        import src.state_locking as state_locking
+
         mgr = StateLockManager(lock_dir=None)
+        assert mgr.lock_dir == state_locking.DEFAULT_LOCK_DIR
         assert mgr.lock_dir.exists()
-        assert str(mgr.lock_dir).endswith("data/locks")
 
 
 # ============================================================================

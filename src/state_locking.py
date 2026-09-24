@@ -37,6 +37,10 @@ def is_process_alive(pid: int) -> bool:
         return False
 
 
+# Module-level so the test suite can redirect it (tests/conftest.py).
+DEFAULT_LOCK_DIR = Path(__file__).parent.parent / "data" / "locks"
+
+
 class StateLockManager:
     """Ensures only one process can modify agent state at a time"""
     
@@ -48,8 +52,7 @@ class StateLockManager:
     ) -> None:
         if lock_dir is None:
             # Use project data directory for locks
-            project_root = Path(__file__).parent.parent
-            lock_dir = project_root / "data" / "locks"
+            lock_dir = DEFAULT_LOCK_DIR
         self.lock_dir = lock_dir
         self._ensure_lock_dir()
         self.auto_cleanup_stale = auto_cleanup_stale

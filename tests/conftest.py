@@ -440,6 +440,70 @@ def _isolate_tool_usage_tracker(tmp_path_factory):
         tut._tool_usage_tracker = original
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_repo_data_writers(tmp_path_factory):
+    """
+    Keep the suite's audit log, heartbeats, state locks and calibration
+    state out of <checkout>/data/.
+
+    These writers derive their default path from the checkout. Without this,
+    every run appends test agents (test_agent, div_bound, test_stress, ...)
+    to data/audit_log.jsonl, which in a long-lived dev checkout grew to
+    795MB / 1.4M lines, and nothing rotates it outside the live server.
+
+    Two moves per writer: redirect the module default (covers instances
+    built later, including fresh AuditLogger() calls in handlers), and
+    repoint the import-time singletons in place (covers the references
+    other modules already bound). Lazy calibration singletons are reset so
+    they rebuild from the tmp default. Tests that pass their own path or
+    patch the singleton still override this.
+    """
+    import sys
+
+    root = tmp_path_factory.mktemp("repo_data")
+    audit_file = root / "audit_log.jsonl"
+    pid_dir = root / "processes"
+    lock_dir = root / "locks"
+    pid_dir.mkdir()
+    lock_dir.mkdir()
+
+    mp = pytest.MonkeyPatch()
+
+    import src.audit_log as audit_log
+    mp.setattr(audit_log, "DEFAULT_LOG_FILE", audit_file)
+    mp.setattr(audit_log.audit_logger, "log_file", audit_file)
+
+    import src.process_cleanup as process_cleanup
+    mp.setattr(process_cleanup, "DEFAULT_PID_DIR", pid_dir)
+
+    import src.state_locking as state_locking
+    mp.setattr(state_locking, "DEFAULT_LOCK_DIR", lock_dir)
+
+    apm = sys.modules.get("src.agent_process_mgmt")
+    if apm is not None:
+        mgr = apm.process_mgr
+        mp.setattr(mgr, "pid_dir", pid_dir)
+        mp.setattr(mgr, "heartbeat_file", pid_dir / mgr.heartbeat_file.name)
+        mp.setattr(apm.lock_manager, "lock_dir", lock_dir)
+
+    import src.calibration as calibration
+    mp.setattr(calibration, "DEFAULT_STATE_FILE", root / "calibration_state.json")
+    mp.setattr(calibration, "_calibration_checker_instance", None)
+
+    import src.sequential_calibration as sequential_calibration
+    mp.setattr(
+        sequential_calibration,
+        "DEFAULT_STATE_FILE",
+        root / "sequential_calibration_state.json",
+    )
+    mp.setattr(sequential_calibration, "_sequential_calibration_tracker_instance", None)
+
+    try:
+        yield root
+    finally:
+        mp.undo()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_recall_telemetry(monkeypatch, tmp_path):
     """Keep recall-miss telemetry out of the real data/telemetry file."""
