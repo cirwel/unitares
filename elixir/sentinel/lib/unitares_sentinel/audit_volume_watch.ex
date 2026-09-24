@@ -17,11 +17,12 @@ defmodule UnitaresSentinel.AuditVolumeWatch do
   event of its own and can be appended long after the misses it summarises,
   so it contributes only its suppressed count, placed at `suppressed_last_at`
   (when those misses happened) rather than at the row's own timestamp. The
-  writer stamps that field as naive local time, so it is read in the database
-  session's time zone, which matches the writer's on a single-host
-  deployment. A missing or unparseable value falls back to the row timestamp
-  (`pg_input_is_valid`, PostgreSQL 16+), so one bad payload cannot abort the
-  query.
+  writer stamps that field with its UTC offset, so it parses to the same
+  instant in any session zone. Rows written before the offset was added carry
+  naive local time and are read in the session zone, which matches the writer
+  on a single-host deployment. A missing or unparseable value falls back to
+  the row timestamp (`pg_input_is_valid`, PostgreSQL 16+), so one bad payload
+  cannot abort the query.
 
   Findings re-alert through `UnitaresSentinel.ReAlert`: once, then at 1h, 2h,
   4h ... capped at 24h while

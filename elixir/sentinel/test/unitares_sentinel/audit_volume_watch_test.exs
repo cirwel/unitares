@@ -256,7 +256,13 @@ defmodule UnitaresSentinel.AuditVolumeWatchTest do
             (now(), NULL, $1, 'volume_watch_probe',
              jsonb_build_object('suppressed_since_last', 50,
                                 'resolution_source', 'throttle_flush',
-                                'suppressed_last_at', '2026-13-45T99:00:00'))
+                                'suppressed_last_at', '2026-13-45T99:00:00')),
+            (now(), NULL, $1, 'volume_watch_probe',
+             jsonb_build_object('suppressed_since_last', 25,
+                                'resolution_source', 'throttle_flush',
+                                'suppressed_last_at',
+                                to_char((now() - interval '10 minutes') AT TIME ZONE 'UTC',
+                                        'YYYY-MM-DD"T"HH24:MI:SS"+00:00"')))
           """,
           [key]
         )
@@ -269,8 +275,10 @@ defmodule UnitaresSentinel.AuditVolumeWatchTest do
     assert %{recent: recent, prior: prior} = Enum.find(rows, &(&1.source == key))
     # 11 rows, each standing for itself plus 99 suppressed misses, plus the
     # recent flush's 700, plus the malformed flush's 50 placed at its own ts
-    # (the query must not abort on it); the old flush's 5000 is prior traffic.
-    assert Decimal.to_integer(recent) == 1_850
+    # (the query must not abort on it), plus the offset-stamped flush's 25
+    # (a UTC rendering must land at the same instant in any session zone);
+    # the old flush's 5000 is prior traffic.
+    assert Decimal.to_integer(recent) == 1_875
     assert Decimal.to_integer(prior) == 5_000
   end
 end
