@@ -19,25 +19,27 @@ connected. Recover work across restarts, context loss, and handoffs.
 
 ## Your agents forget. UNITARES remembers who did what.
 
-An agent reports that its fix is done and the tests pass. By morning its
-session has restarted, its context is gone, and another process has taken over
-the task. Who said it? What supports it? Who challenged it? What happened?
+An agent spends the night working out why a backup failed. By morning its
+session has restarted, its context is gone, and another process has taken over.
+What did it find? What backs that up? Who challenged it? None of that is a
+commit, so your repository never sees it.
 
-With UNITARES, the next agent asks the record and gets back who said what,
-what backs it up, and who checked it:
+With UNITARES, agents check in as they work, and the record outlives them:
 
 ```mermaid
 sequenceDiagram
     participant A as Agent A
-    participant R as Reviewer
     participant U as UNITARES
-    participant B as Agent B
-    A->>U: "Fixed the login bug. Tests pass." + test run
-    Note over U: Filed under Agent A,<br/>with the test run attached
-    R->>U: "Checked the fix. I agree."
+    participant B as Agent B (other model)
+    participant A2 as Agent A, session 2
+    A->>U: Check-in: "Trying a fifth fix. Not sure why."
+    U->>A: Pause, with the reason
+    A->>U: "The disk was full." + logs
+    B->>U: "Full disk, or a log that never rotated?"
+    A->>U: "Checked. Rotation works. It was the disk."
     Note over A: Session ends. Its context is gone.
-    B->>U: "Was the login bug fixed? Who says so?"
-    U->>B: Agent A claimed it, attached the test run,<br/>and the reviewer agreed.
+    A2->>U: "Continuing session 1. What did it leave?"
+    U->>A2: The finding, its logs, and Agent B's challenge
 ```
 
 ## Start with one thing
