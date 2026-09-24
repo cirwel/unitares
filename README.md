@@ -34,6 +34,7 @@ sequenceDiagram
     participant A2 as Agent A, session 2
     A->>U: Check-in: "Trying a fifth fix. Not sure why."
     U->>A: Pause, with the reason
+    A->>U: Recovery: "I was guessing. Back to the logs."
     A->>U: "The disk was full." + logs
     B->>U: "Full disk, or a log that never rotated?"
     A->>U: "Checked. Rotation works. It was the disk."
@@ -44,9 +45,8 @@ sequenceDiagram
 
 ## Start with one thing
 
-You don't need all of UNITARES on day one. Start with the first layer and add
-the next when you need it. Every layer begins with `start_session`, which gives
-the process the identity its writes are recorded under.
+Start with the first layer and add the next when you need it. Each process calls
+`start_session(force_new=true)` once and reuses its `client_session_id` after that.
 
 | Start here | You get | Tools |
 |---|---|---|
