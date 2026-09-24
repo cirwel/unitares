@@ -240,6 +240,43 @@ def _parse_utc(value: Any) -> Optional[datetime]:
 _PAUSE_EVENT_EARLY_SLACK_SECONDS = 1.0
 
 
+def _post_gap_repause_text() -> str:
+    """Describe when a still-bad reading can pause again after expiry.
+
+    Every check-in that arrives more than GAP_RECOVERY_ARM_SECONDS after the
+    previous one re-arms gap recovery (GAP_RECOVERY_CYCLES) and cannot pause,
+    and neither can the check-ins that drain the counter. An agent that
+    checks in less often than the arm interval is therefore never re-paused
+    by the gap path, and the text must not promise otherwise.
+    """
+    try:
+        from config.governance_config import GovernanceConfig
+
+        arm = int(GovernanceConfig.GAP_RECOVERY_ARM_SECONDS)
+        cycles = int(GovernanceConfig.GAP_RECOVERY_CYCLES)
+    except (ValueError, TypeError, AttributeError, ImportError):
+        return (
+            "Check-ins after a long gap are gap-suppressed, so a reading that "
+            "still trips may not pause again at once."
+        )
+    if cycles <= 0:
+        return "A reading that still trips pauses again on the next check-in."
+    nth = {1: "first", 2: "second", 3: "third"}.get(cycles, f"{cycles}th")
+    rest = cycles - 1
+    also = (
+        "" if rest == 0
+        else ", and neither can the check-in after it" if rest == 1
+        else f", and neither can the {rest} check-ins after it"
+    )
+    return (
+        f"A check-in that arrives more than {arm}s after the previous one cannot "
+        f"pause{also}. A reading that still "
+        f"trips pauses again only on the {nth} check-in in a row to "
+        f"arrive within {arm}s of the one before; at a slower cadence it does "
+        "not pause again."
+    )
+
+
 def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict:
     """The `recovery` block for a write refused because the agent is paused.
 
@@ -286,9 +323,7 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
     if expires_at:
         re_evaluation = (
             f"After {expires_at} the next check-in or new shared-memory entry is let "
-            "through and the pause lifts. The first check-ins after so long a gap "
-            "are gap-suppressed, so a reading that still trips pauses again from "
-            "about the third check-in."
+            "through and the pause lifts. " + _post_gap_repause_text()
         )
     else:
         re_evaluation = "No re-evaluation time is recorded for this pause."

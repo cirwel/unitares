@@ -57,11 +57,56 @@ def test_expiry_is_described_as_re_evaluation_not_release():
     paused_at = datetime(2026, 9, 21, 12, 0, tzinfo=timezone.utc)
     recovery = paused_refusal_recovery(_meta(paused_at=paused_at.isoformat()))
     assert "the pause lifts" in recovery["other_exits"]
-    # Gap suppression (GAP_RECOVERY_CYCLES after a >150s gap) turns the first
-    # post-expiry pause verdicts into proceed; the text must not promise an
-    # immediate re-pause.
-    assert "gap-suppressed" in recovery["other_exits"]
-    assert "on that same call" not in recovery["other_exits"]
+    text = recovery["other_exits"]
+    assert "on that same call" not in text
+    # Every check-in after a gap longer than the arm interval re-arms gap
+    # recovery, so a slow-cadence agent is never re-paused; the text says so.
+    arm = int(GovernanceConfig.GAP_RECOVERY_ARM_SECONDS)
+    assert f"more than {arm}s after the previous one cannot pause" in text
+    assert "at a slower cadence it does not pause again" in text
+    assert "about the third check-in" not in text
+
+
+def _first_pause_after_expiry(gaps_seconds, monkeypatch):
+    """Drive the monitor's gap suppression over post-expiry check-ins.
+
+    Each entry is the gap before that check-in; every check-in carries a
+    pause verdict. Returns the 1-based index of the first one left as a
+    pause, or None. Arming mirrors UNITARESMonitor's elapsed-time check.
+    """
+    import src.governance_monitor as gm
+
+    monkeypatch.setattr(gm.audit_logger, "log_attest_gap_suppressed", lambda **kw: None)
+    monitor = SimpleNamespace(agent_id="a", _gap_recovery_cycles_remaining=0)
+    for index, gap in enumerate(gaps_seconds, start=1):
+        if gap > gm.config.GAP_RECOVERY_ARM_SECONDS:
+            monitor._gap_recovery_cycles_remaining = gm.config.GAP_RECOVERY_CYCLES
+        decision = gm.UNITARESMonitor._maybe_gap_suppress(
+            monitor, {"action": "pause", "reason": "risk"}, gap, 0.8,
+        )
+        if decision["action"] == "pause":
+            return index
+    return None
+
+
+def test_the_re_pause_rule_matches_the_monitor(monkeypatch):
+    from config.governance_config import config
+
+    arm = config.GAP_RECOVERY_ARM_SECONDS
+    cycles = config.GAP_RECOVERY_CYCLES
+    expiry_gap = 72 * 3600
+    # Close cadence: the text says the pause returns on the `cycles`-th
+    # check-in in a row within the arm interval, after the gapped one.
+    close = [expiry_gap] + [arm / 2] * (cycles + 2)
+    assert _first_pause_after_expiry(close, monkeypatch) == 1 + cycles
+    # Slow cadence: every check-in re-arms, so nothing ever pauses again.
+    slow = [expiry_gap] + [arm * 2] * 10
+    assert _first_pause_after_expiry(slow, monkeypatch) is None
+    # And the refusal names that same count.
+    from src.mcp_handlers.support.pause_ttl import _post_gap_repause_text
+
+    nth = {1: "first", 2: "second", 3: "third"}.get(cycles, f"{cycles}th")
+    assert f"only on the {nth} check-in in a row" in _post_gap_repause_text()
 
 
 def test_an_earlier_pauses_reason_is_never_presented_as_current():
