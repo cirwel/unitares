@@ -251,16 +251,18 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
 
 def test_instructions_state_how_a_pause_actually_ends():
     """The exits in the code, and the recovery cost, stated as they are:
-    self_recovery (not always available), dialectic resolution, resumes by
-    agent(action='resume'), operator tools or the automatic safety nets, and
-    expiry. "Applied": a decided pause the breaker did not actuate holds
+    self_recovery (not always available), dialectic resolution, an operator
+    or the automatic safety nets, and expiry. "Applied": a decided pause the breaker did not actuate holds
     nothing. Review's reflection is recorded in shared memory."""
     text = build_server_instructions("progressive")
     sentence = text[text.index("An applied pause is a hard stop"):]
     sentence = sentence[:sentence.index("expires.") + len("expires.")]
-    for exit_route in ("self_recovery", "request_review", "agent(action='resume')",
+    for exit_route in ("self_recovery", "request_review", "an operator",
                        "automatic safety net", "or it expires"):
         assert exit_route in sentence, exit_route
+    # agent(action='resume') has no ownership, risk or void gate and a paused
+    # agent can call it on itself; it must never be advertised to agents.
+    assert "agent(action='resume')" not in text
     assert "self_recovery refuses while risk stays high" in text
     assert "records your written reflection in shared memory" in text
 
