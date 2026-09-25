@@ -848,7 +848,7 @@ class OAuthAttemptLogger:
             seen, body, complete, receive = await _peek_body(receive, _MAX_TOKEN_BODY)
             fields = (
                 parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
-                if complete else [("body", "unparsed (over cap or disconnected)")]
+                if complete else None
             )
         else:
             await self.app(scope, receive, send)
@@ -856,7 +856,14 @@ class OAuthAttemptLogger:
         # Observing must never change the response: any failure to describe
         # the request degrades the log line, not the request.
         try:
-            facts = _attempt_facts(path, dict(fields), _basic_credentials(scope))
+            if fields is None:
+                # Unparsed body: report that, never defaults as if observed.
+                basic = _basic_credentials(scope)
+                facts = {"body": f"unparsed (over {_MAX_TOKEN_BODY} bytes or disconnected)"}
+                if basic:
+                    facts["client"] = basic[0]
+            else:
+                facts = _attempt_facts(path, dict(fields), _basic_credentials(scope))
         except Exception as exc:
             facts = {"facts": f"unavailable ({type(exc).__name__})"}
 

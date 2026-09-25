@@ -504,3 +504,18 @@ def test_dropped_lines_are_counted_in_the_next_window(monkeypatch, caplog):
         client.get("/authorize", params=params, follow_redirects=False)
     lines = [r.getMessage() for r in caplog.records if r.name == "src.oauth_provider"]
     assert "[OAUTH] 2 attempt line(s) suppressed by the rate limit" in lines
+
+
+@pytest.mark.parametrize("path,extra", [
+    ("/token", {"grant_type": "authorization_code", "client_id": CID, "client_secret": SECRET}),
+    ("/authorize", {"response_type": "code", "client_id": CID, "code_challenge": "c" * 43}),
+])
+def test_an_unparsed_body_is_logged_as_unparsed_not_as_defaults(caplog, path, extra):
+    client = _app()
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        client.post(path, data={**extra, "pad": "p" * 100_000}, follow_redirects=False)
+    line = next(r.getMessage() for r in caplog.records
+                if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
+    assert "unparsed" in line
+    for default in ('pkce="no"', 'client="-"', 'auth="none"', 'grant="-"', 'verifier="no"'):
+        assert default not in line, line
