@@ -27,11 +27,12 @@ by releases and canonical documentation, not by this file.
   (see `docs/ontology/eisv-proprioception-contract.md`, "Sensory class split").
   A fitted or outcome-learned estimator (fitted blend weights, a learned
   readout) is efficacy work, not instrument-frame work: it is gated like other
-  efficacy work and waits on the 2026-12-01 outcome read. Whether fitting it to
-  the same label channel could reopen a closed outcome question is an operator
-  decision; the contract records a proposed reading, pending that decision, that
-  it would not by itself constitute a new premise (contract, "Fitted and learned
-  estimators", added 2026-09-25).
+  efficacy work and waits on the 2026-12-01 outcome read. That fitting it to
+  the same label channel would not by itself reopen a closed outcome question
+  was ratified 2026-09-25 as a pre-read clarification in the registered stop
+  rule (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`,
+  "Pre-read clarification — drafted 2026-09-25"); the contract's "Fitted and
+  learned estimators" section places the work and points there.
 
 - **Multi-principal trust** is a separate claim with its own evidence path:
   whether identity, attestation, and enforcement survive a principal who does

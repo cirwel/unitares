@@ -3,7 +3,7 @@
 Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17;
 power-characterisation correction, 2026-08-23; condition 4 clarification
 and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
-merge
+merge; reopening-clause clarification, drafted 2026-09-25, effective at merge
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -566,6 +566,91 @@ by declaration, exactly as the gate already provides; and `REFUTED` is
 unreachable for this read. The slot is not closed for the future: a later
 read under a new premise carries its own declaration. No numeric effect
 size is substituted for the unfilled slot.
+
+### Pre-read clarification — drafted 2026-09-25, effective at merge: what the reopening clause's "new premise" excludes
+
+The kill criterion above says that after a FAIL, "Reopening requires a *new
+premise* — a materially different label channel or measurement process — not
+simply more of the same labels." The registered text excludes more labels on
+the same channel. It does not say whether a new estimator fitted or learned on
+that channel is a new premise, and nothing else in this document or its code
+decides it. This block settles that boundary before the registered read
+exists. It is a clarification of the reopening clause, not a change to any
+PASS condition, threshold, cohort, cutoff, date, estimator, command, pinned
+candidate, or `REGISTERED_READ_MANIFEST` entry. It applies only if the read
+FAILs; it says nothing about which branch the read will take.
+
+**Definition.** The *label channel* is the outcome labels the registered read
+scores: the `task` scope under `--anchor-scope trusted` and
+`--fixture-rule registered`, or more labels of the same kind. An estimator
+*fitted or learned on that channel* is one whose parameters or selection are
+chosen against those labels: fitted blend weights, a learned readout from
+EISV or prior state to an outcome, or any other fitted function of
+measurements the deployed producers already record. Such an estimator does
+not, by itself, constitute a "materially different label channel or
+measurement process" under the reopening clause. A fitted readout whose
+inputs come from a genuinely new measurement process, or which is scored
+against a genuinely different label channel, remains a candidate new premise.
+It is assessed on that new process or channel, not on the fact that it was
+fitted.
+
+**How it is applied.** A proposal to reopen a closed question names its new
+premise. If the only new element is the estimator — its weights, its
+functional form, or its training — while the labels and the measurements it
+reads are the ones this read used, the proposal does not meet the reopening
+clause on that ground. Whether a new measurement process or label channel is
+"materially different" remains a judgement made on its merits, and the
+operator-judgement clause above ("If condition 3 fails on the registered
+cohort, whether a corrected instrument and producer contract are the
+'materially different measurement process' the reopening clause requires is
+the operator's judgment") is unchanged: a corrected instrument changes what
+is measured, which this block does not address.
+
+**Why this reading.** (1) The clause's own exclusion is "more of the same
+labels": the evidence a fitted estimator on this channel brings is those
+labels, used again. (2) The registered candidates in
+`EISV_PRIOR_STATE_MODELS` are already readouts from prior state to these
+labels, so a fitted readout on this channel is another candidate of the same
+kind. Admitting it as a new premise after a FAIL would widen the candidate set
+after the read and re-read, which is the selection loop "Why this needs a
+stop rule at all" describes: the best of several candidates, re-run until a
+positive maximum appears. (3) It is decidable from the proposal alone, by
+asking what is new besides the fit, with no read of any outcome data. (4) It
+is conservative against a false reopening. It is not conservative against a
+missed signal; the cost below states that.
+
+**Named cost.** If the read FAILs, a fitted estimator that would in fact
+discriminate better on this channel cannot reopen the question by itself.
+It can still be proposed together with a new measurement process or label
+channel, and this document can be amended by pull request. The trade is
+accepted: a reopening clause that a re-fit cannot satisfy, rather than one
+that any new estimator satisfies.
+
+**Disclosure of what was known when this was written.** Drafted 2026-09-25,
+before the registered read and before any 2026-12-01 data exists. No outcome
+read, dry run, or discrimination analysis was performed to prepare it. It was
+written alongside a placement note in
+`docs/ontology/eisv-proprioception-contract.md` ("Fitted and learned
+estimators — which bucket they sit in") that first proposed this reading.
+
+**What this block does not do.** It does not alter any of the four PASS
+conditions, the 150-block threshold, the 0.05 level, the 400-resample null,
+the cohort, the fixture rule, the cutoff, the date, the command, the
+condition-4 clarification, the smallest-relevant-effect declaration, the
+pinned candidate tuple, `DISPERSION_FEATURE`, or any estimator in
+`eisv_ablation_matrix.py` or `eisv_skeptic_report.py`. It authorises no read
+before 2026-12-01 and no fitted estimator before or after it. It narrows no
+condition of the read.
+
+**How it was decided.** Operator direction, 2026-09-25: "proceed best for the
+future of the federation", given after an adversarial design review of these
+decisions recommended the option recorded here. Merging remains the
+operator's act, so the decision is reversible until merge.
+
+**Attestation.** Attested by the operator on merge as a clarification of the
+reopening clause, not a weakening of the registered protocol (`CLAUDE.md`,
+"Measurement authority — what a number may decide", exemption for
+pre-registered scientific stop rules).
 
 ## What continues regardless
 

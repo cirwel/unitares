@@ -1454,9 +1454,10 @@ than two patches.
 
 Added 2026-09-25 after an adversarial design review of a critique that the
 ODE is a fixed, hand-set model where a learned one should be. This is a
-placement note plus one **proposed** reading, not a tested claim and not a
-decided standard: it adds no ledger row, runs no outcome read, and changes
-nothing deployed. The deployed observation model is hand-set
+placement note, not a tested claim: it adds no ledger row, runs no outcome
+read, and changes nothing deployed. The one deciding standard it first
+proposed, on reopening, is now ratified in the registered stop rule and only
+summarised here. The deployed observation model is hand-set
 (`docs/EISV_COMPUTATION.md`: "The weights are hand-set, not derived"), and this
 section says where a fitted replacement would sit in the buckets this repo
 already has.
@@ -1478,34 +1479,23 @@ parked on 2026-09-24. It may be revisited after the 12-01 read reports, and only
 as an arm inside the incremental-value ablation
 (`docs/proposals/eisv-incremental-value-ablation-v1.md`).
 
-**Proposed reading, pending operator decision: the same label channel is not
-a new premise.** The stop rule's kill criterion says that once
-outcome-grounding is closed, reopening "requires a *new premise* — a materially
-different label channel or measurement process — not simply more of the same
-labels"
-(`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md:289-290`).
-The registered text excludes more data on the same channel. It does not say
-whether a new estimator fitted to that channel is a new premise. Answering that
-is a deciding standard for any post-FAIL reopening, and under AGENTS.md
-"Measurement authority" such a standard is the operator's to decide unless
-explicitly delegated within a recorded scope. No such decision or delegation is
-recorded, so what follows is a proposal awaiting that decision, not a rule.
-
-The proposed reading: an estimator fitted to the same trusted task/test label
-channel would not by itself constitute a new premise. Its labels are that
-channel, and fitting against them uses the same labels again rather than
-measuring the agent differently. The registered read's own candidates (the
-seven names pinned in `REGISTERED_READ_MANIFEST`,
-`scripts/analysis/eisv_ablation_matrix.py`) are already readouts from prior
-state to those labels, so a fitted readout on that channel is the same kind of
-thing the read tests. A fitted readout does not correct an instrument; it
-re-scores the same labels. Until the operator decides, this reading carries no
-authority over a reopening, and a proposal to reopen on a fitted readout goes
-to the operator on its merits. The registered text is unchanged. The
-operator-judgment clause at `:165-168` (whether a corrected instrument and
-producer contract are the "materially different measurement process", if
-condition 3 fails) is untouched. None of this anticipates the read. The outcome
-question is unresolved, not negative.
+**Ratified 2026-09-25: the same label channel is not a new premise.** The
+authority for this is the registered stop rule, not this document: its block
+"Pre-read clarification — drafted 2026-09-25, effective at merge: what the
+reopening clause's 'new premise' excludes"
+(`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`), ratified
+2026-09-25 under the operator's recorded delegation as a pre-read
+clarification of that rule's reopening clause, effective at merge. In short:
+if the read FAILs, an estimator fitted or learned on the same trusted
+task/test label channel does not, by itself, constitute the "materially
+different label channel or measurement process" the clause requires; a fitted
+readout whose inputs come from a genuinely new measurement process or label
+channel remains a candidate new premise. The rule's operator-judgement clause
+on a corrected instrument and producer contract is unchanged, and no
+condition, threshold, pinned candidate or manifest entry of the read moves.
+Where this summary and the registered block differ, the registered block
+governs. None of this anticipates the read. The outcome question is
+unresolved, not negative.
 
 **Label-free work may proceed offline.** Self-predictability confidence (how well
 an agent's own recent series predicts its next reading), rolling or windowed
