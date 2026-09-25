@@ -1107,19 +1107,56 @@ def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
     return assurance.get("baseline") != "fresh_identity"
 
 
+# Every key a plain fresh minimal onboard carries (live shape, 2026-09-25).
+# An allowlist, not a denylist: onboard adds keys after building the record
+# (label_renamed, resident_registration, bootstrap, deprecations, ...), and a
+# key this list does not know about must show the full record rather than be
+# dropped as routine.
+_ROUTINE_MINT_KEYS = frozenset({
+    "success",
+    "server_time",
+    "welcome",
+    "uuid",
+    "agent_uuid",
+    "agent_id",
+    "display_name",
+    "is_new",
+    "client_session_id",
+    "session_key",
+    "identity_assurance",
+    "next_step",
+    "response_mode",
+    "identity_resolution_outcome",
+    "onboard_origin",
+    "onboard_origin_basis",
+    "lineage_state",
+    "continuity_token",
+    "thread_context",
+    "provisional_lineage",
+    "_response_size",
+})
+
+
 def _is_routine_mint(payload: Dict[str, Any]) -> bool:
     """A fresh mint that went as asked: nothing about it needs explaining.
 
     Positive evidence only. A missing outcome is not routine, so a producer
     regression that drops the field shows the full record instead of looking
-    like a clean mint.
+    like a clean mint. Any non-empty key outside _ROUTINE_MINT_KEYS (a label
+    rename, a resident-registration notice, a bootstrap write, a deprecation)
+    also keeps the record.
     """
     if payload.get("is_new") is not True:
         return False
     if payload.get("identity_resolution_outcome") not in _ROUTINE_MINT_OUTCOMES:
         return False
-    for key in ("auto_resumed", "previous_status", "trajectory", "provisional_lineage"):
-        if payload.get(key):
+    if payload.get("lineage_state") not in (None, "no_lineage_declared"):
+        # Declared, provisional or rejected lineage is something to read.
+        return False
+    if payload.get("provisional_lineage"):
+        return False
+    for key, value in payload.items():
+        if key not in _ROUTINE_MINT_KEYS and value not in (None, False, "", [], {}):
             return False
     thread_context = payload.get("thread_context")
     if isinstance(thread_context, dict) and (
