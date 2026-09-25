@@ -285,10 +285,11 @@ def auth_gate_refusal(
     auth gate on the MCP route, not OAuth specifically, so an operator who has
     rotated to a bearer credential is not held down by it.
 
-    ``main_listener_ungated`` is True when OAuth is confined to the public
-    listener while the main listener binds beyond loopback: a provider exists,
-    but the route reachable on the main port has no gate, which is the state
-    this flag exists to refuse.
+    ``main_listener_ungated`` is True when OAuth is confined to a public
+    listener (UNITARES_OAUTH_PUBLIC_PORT): a provider exists, but the main
+    listener's route has no OAuth gate, on loopback as much as beyond it (a
+    tunnel still pointed at it, or any local process, reaches it). That is the
+    state this flag exists to refuse unless a bearer allowlist gates it.
     """
     if not oauth_gate_required():
         return None
@@ -296,12 +297,11 @@ def auth_gate_refusal(
         return None
     if provider_present and main_listener_ungated:
         return (
-            "UNITARES_OAUTH_REQUIRED is set but the main MCP listener has no auth "
-            "gate: UNITARES_OAUTH_PUBLIC_PORT confines OAuth to the public listener "
-            f"while the main listener binds beyond loopback ({main_host or 'non-loopback host'}, "
-            "from --host, UNITARES_MCP_HOST or UNITARES_BIND_ALL_INTERFACES), and "
-            "UNITARES_MCP_BEARER_TOKENS is empty. Bind the main listener to loopback "
-            "or set a bearer allowlist."
+            "UNITARES_OAUTH_REQUIRED is set but the main MCP listener "
+            f"({main_host or 'main host'}) has no auth gate: UNITARES_OAUTH_PUBLIC_PORT "
+            "confines OAuth to the public listener, and UNITARES_MCP_BEARER_TOKENS is "
+            "empty. Set a bearer allowlist to gate the main listener, or unset "
+            "UNITARES_OAUTH_PUBLIC_PORT to gate every request with OAuth."
         )
     if provider_present:
         return None

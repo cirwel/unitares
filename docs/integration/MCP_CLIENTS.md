@@ -145,8 +145,9 @@ tool runs:
    `http://127.0.0.1:8772` (an explicit IPv4 address, not `localhost`).
    **Order matters when migrating an existing OAuth deployment:** a tunnel
    still pointed at the main port is served ungated the moment this variable
-   takes effect, and neither the startup warning nor
-   `UNITARES_OAUTH_REQUIRED` can see it (the main listener is on loopback).
+   takes effect. The startup warning cannot see that (the main listener is
+   on loopback); `UNITARES_OAUTH_REQUIRED=1` refuses the combination unless
+   a bearer allowlist gates the main listener.
    Repoint the tunnel first; until the restart it simply gets connection
    refused on the new port.
 
@@ -155,9 +156,12 @@ tool runs:
    and tailnet callers when `UNITARES_BIND_ALL_INTERFACES=1` — gets `/mcp`
    without a credential, as with no OAuth configured. The server warns at
    startup when the main listener binds beyond loopback (`--host` included)
-   with no bearer allowlist, and `UNITARES_OAUTH_REQUIRED=1` refuses to serve
-   in that state. The refusal is judged from `--host` and the environment
-   before bootstrap, so it never stops a running predecessor. The public entry point belongs on the public port. The
+   with no bearer allowlist. `UNITARES_OAUTH_REQUIRED=1` ("a gate on `/mcp`
+   or no service") refuses to serve with a public port and no bearer
+   allowlist whatever the host, since a loopback main listener is still
+   reachable by local processes and by a tunnel left on the main port. The
+   refusal is judged from `--host` and the environment before bootstrap, so
+   it never stops a running predecessor. The public entry point belongs on the public port. The
    listener is identified by the socket that accepted the connection, which
    nothing in a request can forge, unlike `Host`, the peer address or
    forwarding headers. REST routes reached through the public listener never

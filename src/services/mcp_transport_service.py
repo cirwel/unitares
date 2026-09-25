@@ -628,8 +628,8 @@ def bind_public_socket(public_port: int, *, main_port: int) -> Any:
 
     Bound by the caller rather than by uvicorn: uvicorn's startup calls
     ``sys.exit`` on a bind error, which escapes an asyncio task and would take
-    the main listener down with it; binding before the runtime is built also
-    lets ``main()`` refuse to serve before any background work starts. When
+    the main listener down with it. ``main()`` binds it after bootstrap (so a
+    predecessor has released the port) and before building the runtime. When
     this returns None, ``build_transport_runtime`` gates every request on the
     main listener instead, so a bad port fails closed.
     """

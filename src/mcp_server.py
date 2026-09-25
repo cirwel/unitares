@@ -338,13 +338,14 @@ async def main():
     # in this process into an outage. Only --host and the environment are
     # needed; a public listener that later fails to bind falls back to gating
     # every request, which is stricter than what is judged here.
+    # "A gate on /mcp or no service" covers the main listener on loopback too:
+    # a tunnel still pointed at the main port, or any local caller, reaches it.
+    # So with OAuth confined to a public listener, only a bearer allowlist
+    # satisfies the flag, whatever the host.
     _refusal = auth_gate_refusal(
         provider_present=_oauth_provider is not None,
         issuer_set=bool(_oauth_issuer_url),
-        main_listener_ungated=main_listener_ungated(
-            public_listener_up=bool(_oauth_issuer_url and _oauth_public_port),
-            host=args.host,
-        ),
+        main_listener_ungated=bool(_oauth_issuer_url and _oauth_public_port),
         main_host=args.host,
     )
     if _refusal:
@@ -405,7 +406,7 @@ async def main():
                 # than serving it open. Scoped to the route: every other
                 # surface on this process keeps its own gate.
                 gate_unavailable=_oauth_setup_error is not None,
-                # Same condition as public_port below: no issuer, no listener.
+                # Same condition as the public socket's bind: no issuer, no listener.
                 oauth_public_listener_only=bool(_oauth_issuer_url and _oauth_public_port),
                 static_client_id=_oauth_static_client_id,
             ),

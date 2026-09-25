@@ -442,7 +442,7 @@ def test_required_refuses_an_ungated_main_listener(monkeypatch):
         provider_present=True, issuer_set=True, main_listener_ungated=True,
         main_host="100.96.201.46",
     )
-    assert message and "100.96.201.46" in message and "--host" in message
+    assert message and "100.96.201.46" in message and "UNITARES_MCP_BEARER_TOKENS" in message
     assert auth_gate_refusal(
         provider_present=True, issuer_set=True, main_listener_ungated=False
     ) is None
@@ -503,3 +503,56 @@ async def test_required_refusal_runs_before_bootstrap(monkeypatch):
     with pytest.raises(SystemExit):
         await mcp_server.main()
     assert bootstrapped == []
+
+
+@pytest.mark.asyncio
+async def test_required_refuses_a_public_port_even_on_a_loopback_main(monkeypatch):
+    """A loopback main listener is still reached by local processes and by a
+    tunnel left on the main port; REQUIRED means a gate on /mcp or no service."""
+    from types import SimpleNamespace
+
+    from src import mcp_server
+
+    async def _bootstrap(**_kwargs):
+        raise AssertionError("bootstrap must not run")
+
+    monkeypatch.setattr("src.services.mcp_server_bootstrap.bootstrap_server", _bootstrap)
+    monkeypatch.setattr(mcp_server, "_oauth_provider", object())
+    monkeypatch.setattr(mcp_server, "_oauth_issuer_url", "https://gov.example.org")
+    monkeypatch.setattr(mcp_server, "_oauth_public_port", 8772)
+    monkeypatch.setattr(
+        mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(host="127.0.0.1", port=8767, force=False, reload=False),
+    )
+    monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+    with pytest.raises(SystemExit):
+        await mcp_server.main()
+
+
+@pytest.mark.asyncio
+async def test_required_accepts_a_public_port_with_a_bearer_allowlist(monkeypatch):
+    from types import SimpleNamespace
+
+    from src import mcp_server
+
+    class _Reached(Exception):
+        pass
+
+    async def _bootstrap(**_kwargs):
+        raise _Reached
+
+    monkeypatch.setattr("src.services.mcp_server_bootstrap.bootstrap_server", _bootstrap)
+    monkeypatch.setattr(mcp_server, "_oauth_provider", object())
+    monkeypatch.setattr(mcp_server, "_oauth_issuer_url", "https://gov.example.org")
+    monkeypatch.setattr(mcp_server, "_oauth_public_port", 8772)
+    monkeypatch.setattr(
+        mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(host="127.0.0.1", port=8767, force=False, reload=False),
+    )
+    monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "tok")
+    with pytest.raises(_Reached):
+        await mcp_server.main()
