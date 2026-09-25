@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -946,7 +947,22 @@ def _group_copies(
     no content hash, with a pattern in ``_UNGROUPED_PATTERNS``, or that cannot
     be placed in a git worktree stay on their own. Groups keep the order of
     their first member, and members keep the input order.
+
+    Placing a finding can cost a git subprocess, and this runs on every
+    prompt. Copies share their repo-relative path, so they share a file
+    name; a finding whose (pattern, hash, severity, file name) no other
+    finding shares cannot be a copy and is left unplaced.
     """
+
+    def _candidate_key(f: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            f.get("pattern", ""),
+            str(f.get("line_content_hash") or ""),
+            f.get("severity", "low"),
+            Path(str(f.get("file") or "")).name,
+        )
+
+    candidates = Counter(_candidate_key(f) for f in findings)
     groups: dict[Any, list[dict[str, Any]]] = {}
     for index, f in enumerate(findings):
         content_hash = str(f.get("line_content_hash") or "")
@@ -954,6 +970,8 @@ def _group_copies(
         location = (
             None
             if pattern in _UNGROUPED_PATTERNS
+            or not content_hash
+            or candidates[_candidate_key(f)] < 2
             else _git_location(str(f.get("file") or ""), cache)
         )
         if content_hash and location is not None:

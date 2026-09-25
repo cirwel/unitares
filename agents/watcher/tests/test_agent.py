@@ -2412,6 +2412,38 @@ def test_listing_runs_no_git_for_low_findings(watcher_module, tmp_path, monkeypa
     assert block is None or "(#" not in block
 
 
+def test_listing_places_only_findings_that_could_be_copies(
+    watcher_module, tmp_path, monkeypatch
+):
+    """The chime renders on every prompt, so a finding that shares its
+    (pattern, hash, severity, file name) with no other finding cannot be a
+    copy and must not cost a git subprocess: 40 distinct findings in 40
+    directories render with no git call."""
+    for i in range(40):
+        (tmp_path / f"dir{i}").mkdir()
+    findings = [
+        _copy(
+            f"d{i:015d}",
+            tmp_path / f"dir{i}",
+            rel=f"mod{i}.py",
+            line_content_hash=f"h{i:011d}",
+        )
+        for i in range(40)
+    ]
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+        raise OSError("subprocess blocked by test")
+
+    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert calls == []
+    assert block is not None
+    assert len(shown) == 10
+
+
 def test_display_cap_bounds_one_large_group(watcher_module, tmp_path):
     # One file with 30 identical lines is one group; it still shows 10 rows.
     trees = _repo_with_worktrees(tmp_path)
