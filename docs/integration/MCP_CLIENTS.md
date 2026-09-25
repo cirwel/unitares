@@ -175,8 +175,10 @@ tool runs:
    If setup fails *and* the public listener cannot bind, nothing confines
    the failed gate, so every `/mcp` request answers 503.
    `scripts/dev/unitares_doctor.py`'s `mcp_route_gate` probes the public
-   listener when `UNITARES_OAUTH_PUBLIC_PORT` and `UNITARES_OAUTH_ISSUER_URL`
-   are both set.
+   listener when `UNITARES_OAUTH_PUBLIC_PORT` is exported in its shell and
+   that port's `/health` names the same server process as the main
+   listener's; otherwise (nothing listening, no issuer on the server, or
+   another service on the port) it probes the main listener.
    An incomplete static-client configuration (any of the three variables
    without the others) fails OAuth setup. A bearer allowlist
    (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.
