@@ -130,6 +130,10 @@ from src.mcp_listen_config import (
     auth_gate_refusal,
     build_transport_security_settings,
     default_listen_host,
+    main_listener_ungated,
+    oauth_dynamic_registration_enabled,
+    oauth_gate_required,
+    oauth_public_port,
 )
 
 # --- OAuth 2.1 configuration (optional, enabled by env var) ---
@@ -139,11 +143,19 @@ _auth_settings = None
 _OAUTH_REQUIRED_SCOPES = ["mcp:tools"]
 
 _oauth_setup_error: Exception | None = None
+# Read outside the issuer branch so a provider that fails to build still closes
+# only the public listener the operator asked to gate.
+_oauth_public_port = oauth_public_port()
+_oauth_static_client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID") or None
 
 if _oauth_issuer_url:
     try:
         from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
-        from src.oauth_provider import GovernanceOAuthProvider
+        from src.oauth_provider import (
+            GovernanceOAuthProvider,
+            RedisOAuthStore,
+            static_clients_from_env,
+        )
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
         _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
@@ -151,18 +163,37 @@ if _oauth_issuer_url:
             os.environ.get("UNITARES_OAUTH_RESOURCE_URL")
             or f"{_oauth_issuer_url.rstrip('/')}/mcp"
         )
-        _oauth_provider = GovernanceOAuthProvider(secret=_oauth_secret, auto_approve=_auto_approve)
+        _static_clients = static_clients_from_env()
+        _oauth_provider = GovernanceOAuthProvider(
+            secret=_oauth_secret,
+            auto_approve=_auto_approve,
+            static_clients=_static_clients,
+            # Tokens and DCR clients survive restarts; memory-only if Redis is down.
+            store=RedisOAuthStore(),
+        )
         _auth_settings = AuthSettings(
             issuer_url=_oauth_issuer_url,
             resource_server_url=_oauth_resource_url,
             required_scopes=_OAUTH_REQUIRED_SCOPES,
+            # Open DCR plus auto-approve lets anyone mint a token, so an
+            # operator can close it and admit only pre-registered clients
+            # (or open it briefly to add a connector; registrations that got
+            # a token persist after it closes).
             client_registration_options=ClientRegistrationOptions(
-                enabled=True,
+                enabled=oauth_dynamic_registration_enabled(),
                 valid_scopes=["mcp:tools"],
                 default_scopes=["mcp:tools"],
             ),
         )
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
+        print(
+            "[FastMCP] OAuth gate applies to "
+            + ("the public listener (UNITARES_OAUTH_PUBLIC_PORT) only, if it binds" if _oauth_public_port else "every request")
+            + ("; static client configured" if _oauth_static_client_id else "")
+            + ("; dynamic registration OPEN" if _auth_settings.client_registration_options.enabled
+               else "; dynamic registration closed"),
+            file=sys.stderr, flush=True,
+        )
     except Exception as e:
         # An operator who set the issuer URL asked for an auth gate. Serving
         # /mcp unauthenticated anyway answers a different question than the one
@@ -178,7 +209,14 @@ if _oauth_issuer_url:
         _oauth_setup_error = e
         print(
             "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
-            f"and is now CLOSED (503) rather than served open ({type(e).__name__})",
+            + (
+                "and is now CLOSED (503) on the public listener; "
+                "the main listener is still served, unless the public listener "
+                "cannot bind, in which case every /mcp request answers 503"
+                if _oauth_public_port
+                else "and is now CLOSED (503) rather than served open"
+            )
+            + f" ({type(e).__name__})",
             file=sys.stderr, flush=True,
         )
         print(
@@ -209,6 +247,10 @@ if _oauth_issuer_url:
 # OAuth. Refusing to start takes all of them down for a fault in one. That blast
 # radius is why this is opt-in rather than the default, and why a route-scoped
 # refusal (503 on /mcp alone) is the better long-term shape.
+# Read once, with the import-time refusal, so the check in main() sees the
+# same environment: ~/.env.mcp loads between the two and must not widen the
+# flag's reach.
+_OAUTH_GATE_REQUIRED = oauth_gate_required()
 _auth_refusal = auth_gate_refusal(
     provider_present=_oauth_provider is not None,
     issuer_set=bool(_oauth_issuer_url),
@@ -309,6 +351,47 @@ async def main():
     """Start the governance server and own its lifecycle."""
     args = parse_args()
 
+    # Judged before bootstrap: bootstrap's lease acquisition SIGTERMs any
+    # running predecessor, so a refusal after it would turn a config mistake
+    # in this process into an outage. The flag is the import-time reading;
+    # the bearer allowlist is read live, as the per-request gate reads it
+    # (--host appears only in the message). A public listener that later
+    # fails to bind falls back to gating every request, which is stricter
+    # than what is judged here.
+    # "A gate on /mcp or no service" covers the main listener on loopback too:
+    # a tunnel still pointed at the main port, or any local caller, reaches it.
+    # So with OAuth confined to a public listener, only a bearer allowlist
+    # satisfies the flag, whatever the host.
+    # Judges only the public-port case; every other REQUIRED case was judged
+    # at import. Gated on the import-time reading of the flag.
+    _refusal = (
+        auth_gate_refusal(
+            provider_present=_oauth_provider is not None,
+            issuer_set=True,
+            main_listener_ungated=True,
+            main_host=args.host,
+        )
+        if _OAUTH_GATE_REQUIRED and _oauth_issuer_url and _oauth_public_port
+        else None
+    )
+    if _refusal:
+        print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)
+        raise SystemExit(1)
+    # Registration was decided at import; ~/.env.mcp has loaded since. A
+    # "false" that arrived only now did not close it, which fails open, so
+    # say so loudly rather than leave the operator believing it is closed.
+    if (
+        _auth_settings is not None
+        and _auth_settings.client_registration_options.enabled
+        and not oauth_dynamic_registration_enabled()
+    ):
+        print(
+            "[FastMCP] ERROR: UNITARES_OAUTH_DYNAMIC_REGISTRATION=false was set after "
+            "startup read it (e.g. in ~/.env.mcp); dynamic registration is still OPEN. "
+            "Set it in the LaunchAgent plist or process environment and restart.",
+            file=sys.stderr, flush=True,
+        )
+
     from src.services.mcp_server_bootstrap import (
         ServerStartupError,
         bootstrap_server,
@@ -331,7 +414,20 @@ async def main():
     try:
         from src.services.mcp_transport_service import (
             McpAuthConfig,
+            bind_public_socket,
             build_transport_runtime,
+        )
+
+        # Bound after bootstrap, so a predecessor has released the port with
+        # its lease, and before the runtime, which is what lets a bind failure
+        # fall back to gating every request.
+        _public_socket = (
+            bind_public_socket(_oauth_public_port, main_port=args.port)
+            if _oauth_issuer_url and _oauth_public_port
+            else None
+        )
+        _main_ungated = main_listener_ungated(
+            public_listener_up=_public_socket is not None, host=args.host
         )
 
         def _set_server_ready() -> None:
@@ -349,6 +445,9 @@ async def main():
                 # than serving it open. Scoped to the route: every other
                 # surface on this process keeps its own gate.
                 gate_unavailable=_oauth_setup_error is not None,
+                # Same condition as the public socket's bind: no issuer, no listener.
+                oauth_public_listener_only=bool(_oauth_issuer_url and _oauth_public_port),
+                static_client_id=_oauth_static_client_id,
             ),
             host=args.host,
             port=args.port,
@@ -358,7 +457,16 @@ async def main():
             server_start_time=SERVER_START_TIME,
             server_version=SERVER_VERSION,
             server_build_sha=SERVER_BUILD_SHA,
+            public_socket=_public_socket,
         )
+        if _main_ungated:
+            print(
+                f"[FastMCP] WARNING: the main listener on {args.host}:{args.port} is NOT "
+                "OAuth-gated (UNITARES_OAUTH_PUBLIC_PORT confines OAuth to the public "
+                "listener); anything that reaches it gets /mcp without a credential. "
+                "Bind it to loopback or set UNITARES_MCP_BEARER_TOKENS if that is not intended.",
+                file=sys.stderr, flush=True,
+            )
         await runtime.serve()
     except ImportError:
         print(

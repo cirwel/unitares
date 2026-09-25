@@ -2052,3 +2052,145 @@ def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
         "check_working_state", "get_governance_metrics", {"risk_score": risk}
     )
     assert envelope["risk_summary"] == f"risk {band} ({risk:.2f})"
+
+
+# --- check_working_state verbosity tiers ---------------------------------------
+#
+# The handler has always honoured minimal / standard / full, but only boolean
+# `lite` was advertised, so an agent wanting more than the minimum reached `full`
+# (~15 KB) and was then told to go back to lite=true (external agent, 2026-09-24).
+
+
+@pytest.mark.parametrize(
+    "arguments, current",
+    [
+        ({}, "minimal"),
+        ({"lite": True}, "minimal"),
+        ({"lite": False}, "full"),
+        ({"verbosity": "standard"}, "standard"),
+        ({"verbosity": "full", "lite": True}, "full"),
+        ({"verbosity": "minimal", "lite": False}, "minimal"),
+    ],
+)
+def test_metrics_response_options_report_the_tier_actually_served(arguments, current):
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    options = env["response_options"]
+    assert options["current"] == current
+    assert "verbosity='standard'" in options["interpreted_state"]
+
+
+def test_oversized_full_metrics_point_at_the_standard_tier():
+    payload = {"success": True, "padding": "x" * 6_000}
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, {"lite": False}
+    )
+    assert "verbosity='standard'" in env["_response_size"]["reduce_with"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"lite": None},
+        {"lite": None, "verbosity": None},
+        {"lite": "false"},
+        {"lite": "on"},
+        {"lite": "banana"},
+        {"verbosity": "bogus", "lite": False},
+        {"verbosity": "standard", "lite": None},
+    ],
+)
+def test_metrics_tier_reported_matches_the_tier_the_handler_builds(arguments):
+    """Review of #2430: lite=null made the handler build full while the
+    envelope reported minimal. Both now resolve through one function; this
+    pins the envelope to the handler on raw AND schema-validated arguments."""
+    from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
+    from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
+
+    raw_tier = resolve_metrics_verbosity(arguments)
+    try:
+        validated = GetGovernanceMetricsParams.model_validate(arguments).model_dump()
+    except Exception:
+        # Refused on validated routes, but REST get_governance_metrics skips
+        # validation and hands these raw arguments to the handler, so the
+        # raw-tier assertions below still apply.
+        validated = None
+    if validated is not None:
+        assert resolve_metrics_verbosity(validated) == raw_tier
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    assert env["response_options"]["current"] == raw_tier
+    assert ("raw_governance" in env) == (raw_tier != "minimal")
+
+
+def _tier_built(data):
+    """Which branch of get_governance_metrics_data produced ``data``."""
+    if "_debug_lite_received" in data:
+        return "full"
+    if str(data.get("_note", "")).startswith("Use verbosity='full'"):
+        return "standard"
+    return "minimal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"lite": None},
+        {"lite": True},
+        {"lite": False},
+        {"lite": "false"},
+        {"lite": "banana"},
+        {"verbosity": "standard"},
+        {"verbosity": "standard", "lite": None},
+        {"verbosity": "full", "lite": True},
+    ],
+)
+async def test_envelope_reports_the_tier_the_real_handler_built(arguments):
+    """Runs the handler itself, so reverting runtime_queries' tier logic fails
+    here even though the envelope and resolver would still agree."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from src.governance_monitor import UNITARESMonitor
+    from src.services.runtime_queries import get_governance_metrics_data
+
+    monitor = UNITARESMonitor("test-tier-parity", load_state=False)
+    server = SimpleNamespace(get_or_create_monitor=lambda aid: monitor, agent_metadata={})
+    with patch(
+        "src.agent_monitor_state.hydrate_from_db_if_fresh",
+        new=AsyncMock(return_value=False),
+    ):
+        data = await get_governance_metrics_data(
+            "test-tier-parity", dict(arguments), server=server
+        )
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    assert env["response_options"]["current"] == _tier_built(data)
+
+
+def test_metrics_verbosity_is_matched_exactly_like_the_handler_always_did():
+    """No case folding. Only unvalidated REST get_governance_metrics can pass
+    "Standard" here, and it keeps falling through to lite; validated routes
+    refuse it (see the next test)."""
+    from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
+
+    assert resolve_metrics_verbosity({"verbosity": "Standard"}) == "minimal"
+    assert resolve_metrics_verbosity({"verbosity": " full", "lite": False}) == "full"
+    assert resolve_metrics_verbosity({"verbosity": "Full", "lite": True}) == "minimal"
+
+
+def test_validated_routes_refuse_an_off_list_verbosity():
+    """1.15.0 note: /mcp/ and REST check_working_state validate, so a value they
+    once ignored is now a validation error, as 1.8.0 did for cirs_protocol."""
+    import pydantic
+
+    from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
+
+    for value in ("Standard", "bogus"):
+        with pytest.raises(pydantic.ValidationError):
+            GetGovernanceMetricsParams.model_validate({"verbosity": value})

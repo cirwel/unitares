@@ -28,6 +28,14 @@ CASES = {
     "cirs_protocol": {"since_hours": 5.0, "action_id": "abc", "trust_default": "full"},
     "list_tools": {"lite": False, "include_advanced": False, "tier": "essential"},
     "knowledge": {"agent_id_filter": "author-agent"},
+    # runtime_queries has read verbosity since the three tiers existed; the
+    # schema named only lite, so /mcp/ dropped it and 'standard' was unreachable.
+    "get_governance_metrics": {"verbosity": "standard"},
+}
+# Workflow aliases are registered on the transport but are not canonical tool
+# definitions, so only the FastMCP argument-model check applies to them.
+TRANSPORT_ALIAS_CASES = {
+    "check_working_state": {"verbosity": "standard"},
 }
 
 
@@ -66,7 +74,7 @@ def test_wire_schema_declares_the_parameters(tool_name):
     assert set(CASES[tool_name]) <= set(schema["properties"])
 
 
-@pytest.mark.parametrize("tool_name", sorted(CASES))
+@pytest.mark.parametrize("tool_name", sorted({**CASES, **TRANSPORT_ALIAS_CASES}))
 def test_fastmcp_argument_model_keeps_the_parameters(tool_name):
     """The registered FastMCP tool, not just the schema builder."""
     from src import mcp_server
@@ -79,10 +87,13 @@ def test_fastmcp_argument_model_keeps_the_parameters(tool_name):
         "cirs_protocol": {"protocol": "void_alert", "action": "query"},
         "list_tools": {},
         "knowledge": {"action": "search"},
+        "get_governance_metrics": {},
+        "check_working_state": {},
     }[tool_name]
-    validated = tool.fn_metadata.arg_model.model_validate({**required_example, **CASES[tool_name]})
+    case = {**CASES, **TRANSPORT_ALIAS_CASES}[tool_name]
+    validated = tool.fn_metadata.arg_model.model_validate({**required_example, **case})
     dumped = validated.model_dump_one_level() if hasattr(validated, "model_dump_one_level") else validated.model_dump()
-    for key, value in CASES[tool_name].items():
+    for key, value in case.items():
         assert dumped[key] == value, key
 
 
