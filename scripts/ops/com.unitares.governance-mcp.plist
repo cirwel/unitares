@@ -96,6 +96,18 @@
         <string>localhost:*</string>
         <key>UNITARES_MCP_ALLOWED_ORIGINS</key>
         <string>http://localhost:*</string>
+        <!-- Dashboard passkey sign-in (WebAuthn). Empty = off: a passkey is
+             bound to one domain, so there is no default, and the passkey
+             endpoints answer 503 naming these two keys. To sign in to the
+             dashboard through the tunnel, set the RP id to the public
+             hostname and the origin to its exact https origin, e.g.
+               your-tunnel-host.example.org
+               https://your-tunnel-host.example.org
+             The origin may be left empty when it is https:// plus the RP id. -->
+        <key>UNITARES_DASHBOARD_RP_ID</key>
+        <string></string>
+        <key>UNITARES_DASHBOARD_ORIGIN</key>
+        <string></string>
         <!-- Static bearer-token gate for /mcp (API-key auth). Empty/unset =
              gate OFF (localhost dev). For a publicly reachable connector set
              this to a long random secret (python3 -c "import secrets;
