@@ -2092,7 +2092,9 @@ def test_metrics_tier_reported_matches_the_tier_the_handler_builds(arguments):
     try:
         validated = GetGovernanceMetricsParams.model_validate(arguments).model_dump()
     except Exception:
-        validated = None  # an invalid verbosity never reaches the handler
+        # Refused over /mcp/, but REST skips validation and hands these raw
+        # arguments to the handler, so the raw-tier assertions below still apply.
+        validated = None
     if validated is not None:
         assert resolve_metrics_verbosity(validated) == raw_tier
     env = build_experience_envelope(

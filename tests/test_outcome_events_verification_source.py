@@ -353,6 +353,46 @@ async def test_inline_outcome_response_echoes_corroboration_metadata():
     assert persisted_detail["hard_exogenous"] is False
 
 
+async def _inline_record(detail):
+    from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
+
+    db = MagicMock()
+    db.get_latest_eisv_by_agent_id = AsyncMock(return_value=None)
+    db.get_latest_confidence_before = AsyncMock(return_value=None)
+    db.record_outcome_event = AsyncMock(return_value="outcome-id")
+    with patch("src.db.get_db", return_value=db):
+        payload = await _record_outcome_event_inline({
+            "agent_id": "agent-1",
+            "outcome_type": "task_completed",
+            "detail": detail,
+            "verification_source": "agent_reported_tool_result",
+        })
+    return payload, db.record_outcome_event.await_args.kwargs["detail"]
+
+
+@pytest.mark.asyncio
+async def test_public_record_result_returns_the_hint_but_never_persists_it():
+    """End to end through the public path and the friendly envelope, so removing
+    the response entry, the envelope lift, or passing the wrong ceiling fails."""
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+    payload, persisted = await _inline_record({"summary": "Finished the work."})
+
+    hint = payload["corroboration_hint"]
+    assert hint and "exit_code" in hint and "capped at tool_observed" in hint
+    assert "corroboration_hint" not in persisted
+    env = build_experience_envelope("record_result", "outcome_event", payload)
+    assert env["state_summary"]["corroboration_hint"] == hint
+
+
+@pytest.mark.asyncio
+async def test_public_record_result_has_no_hint_once_at_the_cap():
+    payload, _ = await _inline_record({"kind": "test", "exit_code": 0})
+
+    assert payload["corroboration_grade"] == "tool_observed"
+    assert payload["corroboration_hint"] is None
+
+
 # --- EISV outcome-snapshot bridge (Stage-0 population bridge; roadmap §6.3 falsifiability) ---
 # External-signal/test outcomes arrive with no EISV, so eisv_* land NULL and the row can
 # never join an agent's state for the residual-vs-Phi falsifiability test. These pin the
