@@ -3430,10 +3430,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 # ⛔No fallback to `api_key`. That is the SYNTHESIS CALLER's
                 # argument -- usually the reviewer -- so falling back to it
                 # signed party A's slot with party B's key: a "paused agent
-                # signature" the paused agent never produced. Same rule as the
-                # synthetic path (#2155): no key on file means an empty key,
-                # compute_signature returns "", and describe_attestation
-                # reports the record as `unsigned` -- which is the truth.
+                # signature" the paused agent never produced. Same rule #2155
+                # set at the synthetic-reviewer and LLM-assisted finalize
+                # sites: no key on file means an empty key, compute_signature
+                # returns "", and describe_attestation reports the record as
+                # `unsigned` -- which is the truth.
                 api_key_a = paused_meta.api_key if paused_meta and paused_meta.api_key else ""
                 api_key_b = reviewer_meta.api_key if reviewer_meta and reviewer_meta.api_key else ""
     
