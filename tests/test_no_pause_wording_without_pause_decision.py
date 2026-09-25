@@ -97,8 +97,9 @@ def test_a_stop_decision_under_a_steady_verdict_never_says_continue():
         wrapped = explain_verdict(verdict, decision_action="pause")
         assert "continue" not in wrapped["next_action"].lower(), verdict
         assert "self_recovery(action='check')" in wrapped["next_action"], verdict
-        # A post-ODE escalation decides pause without actuating it, so the
-        # text must not claim a hold is in force.
+        # A decided stop is not necessarily an actuated one (the circuit
+        # breaker actuates separately), so the text must not claim a hold is
+        # in force.
         assert "writes hold" not in wrapped["next_action"], verdict
 
 
@@ -323,10 +324,9 @@ def test_mirror_shape_escalated_after_policy_evaluation_reports_the_pause():
     policy_evaluation was built leaves the policy record stale, and mirror mode
     drops the decision, so the verdict's decision_action must outrank it.
 
-    The only such rewriter today is the post-ODE dialectic escalation, whose
-    pause is not actuated; #2415 caps that escalation at guide, after which
-    this pause shape no longer occurs. The test pins the field priority, not
-    the escalation."""
+    The only such rewriter is the post-ODE dialectic escalation, which this
+    branch caps at guide, so a pause of this shape no longer arises from it.
+    The test pins the field priority, not the escalation."""
     source = _guided_cold_start_check_in()
     source["decision"] = {"action": "pause", "sub_action": "dialectic_condition"}
     # policy_evaluation still says proceed: it predates the escalation.
@@ -465,8 +465,12 @@ def test_instructions_paragraph_stays_inside_the_client_cutoff():
 
 def test_post_ode_escalation_rewraps_the_nested_behavioral_verdict():
     """build_result wraps behavioral.assessment.verdict with the decision as it
-    stood; a post-ODE dialectic escalation then replaces the decision. The
-    nested wrap must follow the escalated one."""
+    stood; anything that replaces the decision afterwards must re-wrap it.
+
+    Pins the helper, not the escalation: on this branch the post-ODE dialectic
+    escalation is capped at guide, so it only ever passes a proceed decision
+    (which re-wraps to the same text). The pause input exercises the
+    re-wrap for any later rewriter that can stop the agent."""
     result = {
         "behavioral": {"assessment": {
             "verdict": explain_verdict("high-risk", decision_action="proceed"),
@@ -486,7 +490,9 @@ def test_rewrap_tolerates_a_result_without_a_behavioral_block():
 
 def test_simulate_update_escalation_rewraps_the_nested_verdict():
     """simulate_update applies the same post-ODE escalation (mcp_handlers/core.py)
-    and must re-wrap the nested behavioral verdict the same way."""
+    and must re-wrap the nested behavioral verdict the same way. A wiring
+    check only: with the escalation capped at guide the re-wrap does not
+    change the text, so no behavioral assertion could distinguish it."""
     import inspect
 
     from src.mcp_handlers import core

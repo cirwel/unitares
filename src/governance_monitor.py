@@ -427,6 +427,16 @@ class UNITARESMonitor:
                 # GovernanceState.from_dict does not see an unknown key).
                 self._last_sensor_divergence = data.pop('sensor_divergence', None)
                 # Restore bounded divergence trend history (pop for the same reason).
+                open_rows = data.pop('open_predictions', None)
+                if open_rows:
+                    from src.monitor_prediction import restore_open_predictions
+
+                    self._open_predictions.update(
+                        restore_open_predictions(
+                            open_rows,
+                            float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
+                        )
+                    )
                 div_hist = data.pop('sensor_divergence_history', None)
                 if div_hist:
                     self._sensor_divergence_history = deque(
@@ -500,6 +510,16 @@ class UNITARESMonitor:
             # Persist last_update so cross-restart gaps integrate against the real
             # prior check-in time, not the lazy-init wall-clock.
             state_data['last_update_iso'] = self.last_update.isoformat()
+            # Open check-in forecasts, matching the live writer
+            # (agent_monitor_state._attach_monitor_transients).
+            if self._open_predictions:
+                from src.monitor_prediction import serialize_open_predictions
+
+                open_rows = serialize_open_predictions(
+                    self._open_predictions, float(self._prediction_ttl_seconds)
+                )
+                if open_rows:
+                    state_data['open_predictions'] = open_rows
             # Atomic write: write to temp file, then rename to prevent corruption
             tmp_fd, tmp_path = tempfile.mkstemp(dir=state_file.parent, suffix='.tmp')
             try:

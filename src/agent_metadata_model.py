@@ -46,22 +46,40 @@ def _joinable_audit_agent_id(agent_id: str | None) -> tuple[str | None, str | No
     `audit.events.agent_id` was being written with whatever this metadata object
     happened to carry, and that is two different identifier spaces. Measured
     2026-08-12: of 12 `lifecycle_paused` rows in eleven days, 5 held a UUID and
-    7 held a structured handle like `Gpt_5_20260810` — which resolves in NO
-    table. `core.identities.agent_id` holds UUIDs; the handle is a presentation
-    construct returned by onboard and persisted as a key nowhere. Those 7 rows
-    are permanently unattributable, and no backfill can recover them because the
-    mapping was never stored.
+    7 held a structured handle like `Gpt_5_20260810`. `core.identities.agent_id`
+    holds UUIDs; the handle is a presentation construct returned by onboard. It
+    is stored as `public_agent_id` (identity metadata, `core.session_bindings`),
+    but it is not unique: on 2026-09-24, 8 of the 11 distinct handles on these
+    rows were shared by 2 to 37 identities each, so a join on it can attribute
+    a row to the wrong agent or to several.
 
-    Worse than losing the attribution is what the handle does to readers. Such a
-    row is the ONLY row that identifier ever produces, so "the paused agent went
+    Those rows are still attributable, through the `circuit_breaker_trip` event
+    the pause path in `agent_loop_detection` broadcasts with the UUID. Pauses
+    carry an `actuation_id` in both events, so join on that key. Rows written
+    before actuation provenance was deployed (2026-08-12) have no
+    `actuation_id`; for those, fall back to the trip event within a second of
+    the lifecycle row. On 2026-09-24 every handle-only `lifecycle_paused` row
+    since 2026-08-06 resolved to exactly one identity this way (5 by key, 9 by
+    time). The time fallback can mis-attribute two pauses in the same second.
+
+    The trip event itself only exists from 2026-04-16. The 55 non-UUID
+    `lifecycle_paused` rows before that (2026-04-09 to 04-11, all carrying the
+    task name `eisv-sync-task`) have no trip event and match neither join;
+    those are genuinely unattributable. Every non-UUID row after it, 23 of them
+    from 2026-05-30 through 2026-09-21, matched exactly one trip event.
+
+    Worse than obscuring the attribution is what the handle does to readers. In
+    the `audit.events.agent_id` column, such a row is the ONLY row that
+    identifier ever produces, so "the paused agent went
     silent afterwards" is true of the schema and says nothing about the agent. A
     pause-compliance conclusion was drawn from exactly that and was wrong.
 
     So: emit the UUID when there is one, otherwise NULL plus the handle in the
     payload. This follows the rule already stated for the tool-usage recorder —
     "a UUID clamp alone would only make a forged value JOINABLE, which is worse
-    than NULL". An honestly unattributed event is recoverable by a human reading
-    the payload; a plausible-looking key that joins to nothing is not.
+    than NULL". An honestly unattributed event tells its reader to do the
+    recovery join above; a plausible-looking key invites a direct join that
+    matches no UUID, or through the handle matches the wrong agent or several.
     """
     candidate = (agent_id or "").strip()
     if _UUID_RE.match(candidate):

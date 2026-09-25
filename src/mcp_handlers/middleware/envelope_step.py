@@ -937,6 +937,21 @@ def _friendly_hint_text(value: str) -> str:
     return result
 
 
+# Keys whose values are the caller's own words (a finding's summary, a review's
+# reasoning), echoed back. Translating tool names inside them rewrote user text:
+# a summary saying "auto-onboard" came back as "auto-start_session".
+_CALLER_TEXT_KEYS = frozenset({
+    "summary",
+    "details",
+    "content",
+    "reasoning",
+    "root_cause",
+    "response_text",
+    "issue_description",
+    "title",
+})
+
+
 def _friendly_action_hint(value: Any) -> Any:
     """Recursively translate tool names in an agent-facing action hint."""
     if isinstance(value, str):
@@ -949,7 +964,7 @@ def _friendly_action_hint(value: Any) -> Any:
         return value
 
     friendly = {
-        key: _friendly_action_hint(item)
+        key: item if key in _CALLER_TEXT_KEYS else _friendly_action_hint(item)
         for key, item in value.items()
     }
     tool = value.get("tool")

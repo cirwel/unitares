@@ -267,6 +267,21 @@ class TestCleanupStaleStateLocks:
         result = cleanup_stale_state_locks(project_root=tmp_path)
         assert result["cleaned"] == 1
 
+    def test_default_sweeps_the_state_lock_managers_dir(self, tmp_path, monkeypatch):
+        """Without project_root, sweep the directory StateLockManager writes
+        to, so a UNITARES_LOCK_DIR override moves writer and sweeper together."""
+        import src.state_locking as state_locking
+
+        lock_dir = tmp_path / "elsewhere"
+        lock_dir.mkdir()
+        monkeypatch.setattr(state_locking, "DEFAULT_LOCK_DIR", lock_dir)
+        lock = lock_dir / "test.lock"
+        lock.write_text(json.dumps({"pid": 999999999, "timestamp": time.time()}))
+
+        result = cleanup_stale_state_locks()
+        assert result["cleaned"] == 1
+        assert not lock.exists()
+
     def test_missing_lock_dir(self, tmp_path):
         """Should handle missing data/locks dir gracefully."""
         result = cleanup_stale_state_locks(project_root=tmp_path)
