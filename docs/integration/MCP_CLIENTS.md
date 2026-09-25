@@ -144,10 +144,18 @@ tool runs:
      connectors: list each connector's redirect URI in
      `UNITARES_OAUTH_STATIC_REDIRECT_URIS` (comma-separated) and paste the
      same ID and secret into each (claude.ai: the custom connector's
-     advanced settings). Alternatively, open registration briefly to add a
+     advanced settings). Connectors sharing a static client share its
+     `oauth:<client_id>` session attribution, and if you enable token
+     revocation (it is not mounted by default), revoking one connector's
+     token signs out every connector on that client for the refresh-token
+     lifetime, across restarts. Give each connector its own client via DCR
+     if either matters. Alternatively, open registration briefly to add a
      DCR connector and close it again: a registration that received a token
-     is kept in Redis, so it stays connected. Registration alone writes
-     nothing to Redis, so an open `/register` cannot grow the session store.
+     is kept in Redis, so it stays connected. `POST /register` alone writes
+     nothing to Redis, but while registration is open and sign-in is
+     auto-approved, anyone can still register, sign in and obtain a token,
+     which writes a client and its tokens to Redis; only closing
+     registration bounds that.
 
    OAuth gates `/mcp` on **every** request by default, which locks out
    local clients that do not speak OAuth. To keep them working, give the

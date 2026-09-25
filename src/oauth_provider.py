@@ -57,6 +57,9 @@ class RefreshTokenEntry:
     client_id: str
     scopes: list[str]
     created_at: float = field(default_factory=time.time)
+    #: Read by the SDK's token handler on every refresh grant; without it the
+    #: grant raised AttributeError (HTTP 500) and no connector could refresh.
+    expires_at: int | None = None
 
     def is_expired(self, ttl: int = 604800) -> bool:
         return time.time() > self.created_at + ttl
@@ -65,8 +68,10 @@ class RefreshTokenEntry:
 logger = logging.getLogger(__name__)
 
 #: A DCR registration is written to the store only when a token is issued
-#: to it (so unauthenticated POST /register cannot grow the store), and then
-#: expires unless another token is issued within this window.
+#: to it, then expires unless another token is issued within this window.
+#: POST /register alone writes nothing; with registration open and sign-in
+#: auto-approved, anyone can still obtain a token (and so a stored client),
+#: which only UNITARES_OAUTH_DYNAMIC_REGISTRATION=false bounds.
 CLIENT_STATE_TTL = 30 * 86400
 
 
@@ -225,6 +230,16 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         # A client that just got a token is in use; keep its registration.
         await self._persist_client(client)
 
+    def _new_refresh(self, token: str, client_id: str, scopes: list[str]) -> RefreshTokenEntry:
+        now = time.time()
+        return RefreshTokenEntry(
+            token=token,
+            client_id=client_id,
+            scopes=scopes,
+            created_at=now,
+            expires_at=int(now + self._refresh_token_ttl),
+        )
+
     def _generate_token(self, prefix: str = "at") -> str:
         """Generate a cryptographically random token."""
         raw = secrets.token_hex(32)
@@ -311,10 +326,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             resource=authorization_code.resource,
         )
 
-        self._refresh_tokens[refresh_token_str] = RefreshTokenEntry(
-            token=refresh_token_str,
-            client_id=client.client_id,
-            scopes=authorization_code.scopes or ["mcp:tools"],
+        self._refresh_tokens[refresh_token_str] = self._new_refresh(
+            refresh_token_str, client.client_id, authorization_code.scopes or ["mcp:tools"]
         )
         await self._issued(
             client,
@@ -339,11 +352,13 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             if raw:
                 try:
                     data = json.loads(raw)
+                    created = float(data["created_at"])
                     entry = RefreshTokenEntry(
                         token=refresh_token,
                         client_id=str(data["client_id"]),
                         scopes=list(data.get("scopes") or []),
-                        created_at=float(data["created_at"]),
+                        created_at=created,
+                        expires_at=int(created + self._refresh_token_ttl),
                     )
                 except (ValueError, KeyError, TypeError):
                     return None
@@ -382,10 +397,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             expires_at=expires_at,
         )
 
-        self._refresh_tokens[new_refresh_str] = RefreshTokenEntry(
-            token=new_refresh_str,
-            client_id=client.client_id,
-            scopes=effective_scopes,
+        self._refresh_tokens[new_refresh_str] = self._new_refresh(
+            new_refresh_str, client.client_id, effective_scopes
         )
         await self._issued(
             client,
