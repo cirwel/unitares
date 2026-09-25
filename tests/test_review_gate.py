@@ -7,6 +7,7 @@ pass a new diff)."""
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -23,6 +24,7 @@ _spec.loader.exec_module(rg)
 read_native_api = rg.read_native
 completed_review_exit = rg.completed_review_exit
 require_open = rg.require_open
+real_disabled_providers = rg.disabled_providers
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +33,8 @@ def no_cloud_reads(monkeypatch):
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
+    # The tracked provider switch reflects today's outages; unit tests pin it.
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {})
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -1021,6 +1025,114 @@ def test_input_file_named_gh_is_not_mistaken_for_the_cli(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
+# --emit: record a review from an environment without gh (cloud sessions with
+# only a GitHub connector). The tool renders the body; the caller posts it.
+
+def _pushed(repo, tmp_path):
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "-q", "--bare", str(remote))
+    _git(repo, "remote", "add", "origin", str(remote))
+    _git(repo, "push", "-q", "origin", "master")
+    _git(repo, "push", "-q", "-u", "origin", "feature")
+
+
+def test_emit_renders_the_record_ci_reads_without_gh(repo, tmp_path, monkeypatch, capsys):
+    _pushed(repo, tmp_path)
+    (tmp_path / "review.txt").write_text("checked every claim\nVERDICT: CLEAN\n")
+    monkeypatch.setattr(rg, "_launch", lambda cmd, **kw: pytest.fail("called gh") if cmd[0] == "gh"
+                        else subprocess.run(cmd, **kw))
+    assert rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name",
+                    "subagent:claude-fresh-context", "--independent", "--emit"]) == 0
+    body = capsys.readouterr().out
+    rec = rg.parse_record(body)
+    assert (rec.key, rec.verdict, rec.reviewer) == (
+        rg.diff_key("origin/master", "HEAD"), "CLEAN", "subagent:claude-fresh-context")
+    # What CI sees when this body is posted from a trusted account.
+    got = rg.latest_matching([{"author_association": "OWNER", "html_url": "u", "body": body}], rec.key)
+    assert got.status() == ("success", "clean (subagent:claude-fresh-context)")
+
+
+def test_emit_refuses_an_unpushed_head(repo, tmp_path):
+    _pushed(repo, tmp_path)
+    (repo / "a.txt").write_text("a changed locally\n")
+    _git(repo, "commit", "-q", "-am", "not pushed")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="HEAD pushed"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                 "--independent", "--emit"])
+
+
+@pytest.mark.parametrize("name", ["a b", "council:a->b"])
+def test_a_reviewer_name_that_breaks_the_marker_is_refused(tmp_path, name):
+    # Whitespace truncates the marker field; '>' ends the marker comment early.
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="must match"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", name,
+                 "--independent", "--emit"])
+
+
+def test_emit_keys_against_a_non_master_base(repo, tmp_path, capsys):
+    # A stacked PR: CI keys against origin/<base_ref>, so --emit must too.
+    _git(repo, "checkout", "-q", "-b", "stack", "master")
+    (repo / "b.txt").write_text("b on stack\n")
+    _git(repo, "commit", "-q", "-am", "stack base")
+    _git(repo, "checkout", "-q", "feature")
+    _git(repo, "rebase", "-q", "stack")
+    _pushed(repo, tmp_path)
+    _git(repo, "push", "-q", "origin", "stack")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    assert rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                    "--independent", "--emit", "--base", "origin/stack"]) == 0
+    key = rg.parse_record(capsys.readouterr().out).key
+    assert key == rg.diff_key("origin/stack", "HEAD") != rg.diff_key("origin/master", "HEAD")
+
+
+def test_emit_accepts_a_pushed_branch_that_tracks_the_base(repo, tmp_path, capsys):
+    # `git checkout -b x origin/master` then `git push origin x` (no -u): the
+    # branch is pushed, but its upstream is the base, not the PR head.
+    _pushed(repo, tmp_path)
+    _git(repo, "branch", "-q", "--set-upstream-to", "origin/master")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    assert rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                    "--independent", "--emit"]) == 0
+    assert rg.parse_record(capsys.readouterr().out).verdict == "CLEAN"
+
+
+def test_emit_refuses_when_the_remote_moved_past_a_stale_tracking_ref(repo, tmp_path):
+    # Someone else pushed to the PR branch; the local tracking ref still equals
+    # HEAD, but CI will see the remote head.
+    _pushed(repo, tmp_path)
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", "-b", "feature", str(tmp_path / "remote.git"), str(other))
+    _git(other, "config", "user.email", "o@example.invalid")
+    _git(other, "config", "user.name", "o")
+    (other / "b.txt").write_text("pushed by someone else\n")
+    _git(other, "commit", "-q", "-am", "theirs")
+    _git(other, "push", "-q", "origin", "feature")
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="HEAD pushed"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                 "--independent", "--emit"])
+
+
+def test_emit_refuses_when_the_remote_cannot_be_read(repo, tmp_path):
+    _pushed(repo, tmp_path)
+    _git(repo, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
+    (tmp_path / "review.txt").write_text("VERDICT: CLEAN\n")
+    with pytest.raises(SystemExit, match="could not read"):
+        rg.main(["record", str(tmp_path / "review.txt"), "--reviewer-name", "x",
+                 "--independent", "--emit"])
+
+
+def test_missing_gh_names_the_emit_path(monkeypatch, capsys):
+    def no_gh(args):
+        raise rg.GhUnavailable("the `gh` CLI is not installed or not on PATH")
+    monkeypatch.setattr(rg, "cmd_review", no_gh)
+    assert rg.main(["review"]) == rg.UNREVIEWED
+    assert "--emit" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
 # Round cap: a Codex run spends the same quota authoring does.
 
 def _bot():
@@ -1252,3 +1364,104 @@ def test_local_fallback_records_are_not_rounds():
     comments = [_comment(rg.Record(f"k{i}", "FINDINGS", 1, False, r), text="1. [P2] bug")
                 for i, r in enumerate(["codex", "claude", "codex"])]
     assert rg.codex_rounds(comments, [], []).count == 0
+
+
+def test_dispose_emit_answers_the_open_record_ci_reads(repo, tmp_path, capsys):
+    _pushed(repo, tmp_path)
+    key = rg.diff_key("origin/master", "HEAD")
+    open_rec = _comment(rg.Record(key, "FINDINGS", 2, False, "subagent:x"), url="open")
+    open_rec["created_at"] = "2026-09-25T01:00:00Z"
+    (tmp_path / "d.txt").write_text("1. fixed in abc123\n2. rebutted: measured, see thread\n")
+    assert rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "2",
+                    "--reviewer", "subagent:x", "--cites", "open"]) == 0
+    body = capsys.readouterr().out
+    disposition = {"author_association": "OWNER", "html_url": "d", "body": body,
+                   "created_at": "2026-09-25T02:00:00Z"}
+    got = rg.latest_matching([open_rec, disposition], key)
+    assert got.disposed and got.status()[0] == "success"
+
+
+def test_dispose_emit_refuses_incomplete_dispositions(repo, tmp_path):
+    _pushed(repo, tmp_path)
+    (tmp_path / "d.txt").write_text("1. fixed in abc123\n")
+    with pytest.raises(SystemExit, match="numbered entry"):
+        rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "2",
+                 "--reviewer", "x", "--cites", "u"])
+
+
+def test_dispose_emit_needs_the_open_record_named(tmp_path):
+    (tmp_path / "d.txt").write_text("1. fixed\n")
+    with pytest.raises(SystemExit, match="missing: reviewer, cites"):
+        rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "1"])
+
+
+# --------------------------------------------------------------------------
+# Repo-wide provider switch (scripts/dev/review_providers.json).
+
+def test_a_disabled_provider_is_not_the_default_or_native(monkeypatch):
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    assert rg.default_reviewer("claude/fix-x") == "claude"
+    assert rg.default_reviewer("codex/fix-x") == "claude"
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "true")
+    assert rg.native_enabled() is False
+
+
+def test_a_disabled_provider_is_skipped_unless_asked_for(monkeypatch, capsys):
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    ran = []
+    monkeypatch.setattr(rg, "_review_locked", lambda a, pr, key, p: ran.append(p) or 0)
+    assert rg.review_with_fallback(SimpleNamespace(budget=30, reviewer=None), 1, "k", "codex") == 0
+    assert ran == ["claude"] and "disabled repo-wide" in capsys.readouterr().out
+    ran.clear()
+    rg.review_with_fallback(SimpleNamespace(budget=30, reviewer="codex"), 1, "k", "codex")
+    assert ran == ["codex"]
+
+
+def test_every_provider_the_tracked_file_lists_is_disabled():
+    # The committed file, not the autouse pin: a shape the parser drops would
+    # silently re-enable the provider in every checkout.
+    listed = json.loads(rg.PROVIDERS_FILE.read_text()).get("disabled") or {}
+    names = listed if isinstance(listed, list) else [n for n, v in listed.items() if v]
+    assert set(names) <= set(real_disabled_providers())
+
+
+@pytest.mark.parametrize("content,expected", [
+    ('{"disabled": {"codex": {"reason": "r"}}}', {"codex": "r"}),
+    ('{"disabled": {"codex": "suspended"}}', {"codex": "suspended"}),
+    ('{"disabled": {"codex": true}}', {"codex": "disabled"}),
+    ('{"disabled": ["codex"]}', {"codex": "disabled"}),
+    ('{"disabled": {"codex": false}}', {}),
+    ('{"disabled": {"Codex": true}}', {"codex": "disabled"}),
+    ('{"disabled": {"codex": ""}}', {"codex": "disabled"}),
+    ('{}', {}),
+])
+def test_provider_entry_shapes(monkeypatch, tmp_path, content, expected):
+    f = tmp_path / "p.json"
+    f.write_text(content)
+    monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
+    assert real_disabled_providers() == expected
+
+
+@pytest.mark.parametrize("content,warning", [
+    ('{"disable": {"codex": true}}', "misspelled key"),
+    ('{"disabled": {"codx": true}}', "unknown provider"),
+])
+def test_a_provider_file_typo_warns(monkeypatch, tmp_path, capsys, content, warning):
+    f = tmp_path / "p.json"
+    f.write_text(content)
+    monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
+    real_disabled_providers()
+    assert warning in capsys.readouterr().err
+
+
+def test_the_committed_provider_file_parses_without_warnings(capsys):
+    real_disabled_providers()
+    assert "WARNING" not in capsys.readouterr().err
+
+
+def test_a_malformed_provider_file_warns(monkeypatch, tmp_path, capsys):
+    f = tmp_path / "p.json"
+    f.write_text("{not json")
+    monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
+    assert real_disabled_providers() == {} and "malformed" in capsys.readouterr().err

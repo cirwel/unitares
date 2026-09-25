@@ -137,8 +137,10 @@ The friendly tools return a normalized envelope. Read `action_summary` when
 present for the action, verdict, and evidence maturity, then `next_action`,
 `state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
 present. `check_working_state()` and `search_shared_memory()` omit the repeated
-canonical payload by default; use `lite=false` or `response_mode="full"`,
-respectively, when you need it under `raw_governance`.
+canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
+`response_mode="full"`, respectively, when you need it under `raw_governance`.
+`check_working_state(verbosity="standard")` is the middle tier: EISV, verdict,
+risk_score, basin and mode with their meanings, without the diagnostics.
 
 One response is deliberately **not** that envelope. When a call is refused for
 identity, you get the typed refusal contract instead: `status`

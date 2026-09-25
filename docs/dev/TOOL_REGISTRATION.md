@@ -7,7 +7,8 @@ Status: specialized developer reference. Use for MCP/tool-surface changes, not r
 For the *current* wiring rather than how to add to it, see
 [`TOOL_EDGE_INDEX.md`](TOOL_EDGE_INDEX.md) — generated from the live registries, it resolves
 every registered tool to its handler, each consolidated tool's `action` → delegate map, and
-the params schema that validates it.
+the params schema that validates it. For what each tool is for, see
+[`TOOL_REFERENCE.md`](TOOL_REFERENCE.md), generated from the same registries.
 
 ## Quick Reference: Adding a New Tool
 
@@ -53,6 +54,11 @@ listing; otherwise clients reach it through `list_tools` → `describe_tool` →
 `use_tool`. Keep its schema, ToolMeta record, and handler consistent; the
 interface and registry tests catch missing definitions. Category and tier are
 browsing metadata, not authorization gates.
+
+**Step 5: Regenerate the generated docs.** Run `make docs`. `TOOL_REFERENCE.md`
+and `TOOL_EDGE_INDEX.md` are built from the live registries, and the CI `smoke`
+job fails when either no longer matches them, so a new tool, action, alias,
+timeout or description ships with its regenerated pages.
 
 ---
 
