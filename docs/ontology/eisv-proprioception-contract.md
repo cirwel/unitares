@@ -1456,8 +1456,8 @@ Added 2026-09-25 after an adversarial design review of a critique that the
 ODE is a fixed, hand-set model where a learned one should be. This is a
 placement note, not a tested claim: it adds no ledger row, runs no outcome
 read, and changes nothing deployed. The one deciding standard it first
-proposed, on reopening, is now ratified in the registered stop rule and only
-summarised here. The deployed observation model is hand-set
+proposed, on reopening, is now decided in the registered stop rule (ratified
+on merge) and only summarised here. The deployed observation model is hand-set
 (`docs/EISV_COMPUTATION.md`: "The weights are hand-set, not derived"), and this
 section says where a fitted replacement would sit in the buckets this repo
 already has.
@@ -1479,13 +1479,13 @@ parked on 2026-09-24. It may be revisited after the 12-01 read reports, and only
 as an arm inside the incremental-value ablation
 (`docs/proposals/eisv-incremental-value-ablation-v1.md`).
 
-**Ratified 2026-09-25, effective at merge: the same label channel is not a
+**Decided 2026-09-25, ratified on merge: the same label channel is not a
 new premise.** The authority for this is the registered stop rule, not this
 document: its block "Pre-read clarification — drafted 2026-09-25, effective
 at merge: what the reopening clause's 'new premise' excludes"
-(`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`), ratified
+(`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`), decided
 2026-09-25 under the operator's recorded delegation as a pre-read
-clarification of that rule's reopening clause, effective at merge. In short:
+clarification of that rule's reopening clause; merge ratifies it. In short:
 if the read FAILs, an estimator fitted or learned on the same trusted
 task/test label channel does not, by itself, constitute the "materially
 different label channel or measurement process" the clause requires; a fitted

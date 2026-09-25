@@ -583,14 +583,17 @@ FAILs; it says nothing about which branch the read will take.
 **Definition.** The *label channel* is the outcome labels the registered read
 scores: the `task` scope under `--anchor-scope trusted` and
 `--fixture-rule registered`, or more labels of the same kind. The channel is
-fixed by where the labels come from, the `TASK_OUTCOMES` outcome types the
-`task` scope reads, not by flag values: a fitted estimator re-scored on those
-outcome types under another anchor scope or row filter gains no new label
-channel by that alone. Whether a corrected instrument and producer contract
-are a materially different measurement process is the operator-judgement
-clause's question (below), which this block leaves unchanged. An estimator
-*fitted or learned on that channel* is one whose parameters or selection are
-chosen against those labels: fitted blend weights, a learned readout from
+fixed by the labels' kind and provenance, not by flag values: the
+`TASK_OUTCOMES` outcome types, from the exogenous verification sources the
+trusted anchor scope admits (`anchored_outcomes_predicate`, which filters on
+`verification_source`). Re-scoring those rows, or a subset or re-filtering
+of them (another fixture rule, a stricter scope, a row filter), gains no new
+label channel by that alone. Labels from a verification source the
+registered read did not admit, such as a new exogenous verifier added to the
+anchor registry, can be a genuinely different label channel even when they
+carry the same outcome types, and are assessed on their merits as below.
+An estimator *fitted or learned on that channel* is one whose parameters or
+selection are chosen against those labels: fitted blend weights, a learned readout from
 EISV or prior state to an outcome, or any other fitted function of
 measurements the deployed producers already record. Such an estimator does
 not, by itself, constitute a "materially different label channel or
@@ -610,10 +613,14 @@ operator-judgement clause above ("If condition 3 fails on the registered
 cohort, whether a corrected instrument and producer contract are the
 'materially different measurement process' the reopening clause requires is
 the operator's judgment") is unchanged: a corrected instrument changes what
-is measured, which this block does not address. A corrected instrument
-whose parameters were tuned against these labels falls under that clause,
-not this block: the correction is judged there, and its tuning neither
-qualifies nor disqualifies it here.
+is measured, which this block does not address. What a change is called
+does not move it out of this block. A change that only refits parameters of
+the deployed producers against these labels, such as their blend weights,
+is a fitted estimator under this block whatever it is called, on every FAIL
+branch. A correction that changes what is measured can be a new premise
+because of that change, never because of its tuning: it is judged under the
+operator-judgement clause when condition 3 fails, and otherwise, like any
+other proposed new measurement process, on its merits.
 
 **Why this reading.** (1) The clause's own exclusion is "more of the same
 labels": the evidence a fitted estimator on this channel brings is those
