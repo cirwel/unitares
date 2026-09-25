@@ -25,6 +25,12 @@ by releases and canonical documentation, not by this file.
   instrument-frame work — reliability, faithfulness under intervention, and
   calibration — which needs neither external labels nor another operator
   (see `docs/ontology/eisv-proprioception-contract.md`, "Sensory class split").
+  A fitted or outcome-learned estimator (fitted blend weights, a learned
+  readout) is efficacy work, not instrument-frame work: it is gated like other
+  efficacy work and waits on the 2026-12-01 outcome read. In the contract's
+  reading of the registered reopen clause, fitting it to the same label channel
+  cannot reopen a closed outcome question (contract, "Fitted and learned
+  estimators", added 2026-09-25).
 
 - **Multi-principal trust** is a separate claim with its own evidence path:
   whether identity, attestation, and enforcement survive a principal who does

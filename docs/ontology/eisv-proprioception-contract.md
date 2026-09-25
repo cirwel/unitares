@@ -599,12 +599,17 @@ the label was proprioceptive.
 
 ### The split, as derived in `src/behavioral_sensor.py`
 
+Anchors are function names, not line numbers: the line anchors this table first
+carried had gone stale by 2026-09-25 and were replaced that day, re-read
+against `src/behavioral_sensor.py` and `src/governance_monitor.py`. Weights are
+as coded; the post-blends are applied in `compute_behavioral_sensor_components`.
+
 | Axis | Derivation (weights as coded) | Class | Validation regime | Gated by the 2026-12-01 stop rule? |
 |---|---|---|---|---|
-| **E** | `_compute_E` (:233) — 35% decision success, 25% legacy `C(V)` level, 20% complexity calibration, 20% outcome success (:277); then a 20% continuity blend and 15% `1.0 - tool_error_rate` (:64) | **Externally referenced.** Decision outcomes, tool errors and outcome success are world facts, not self-state | Error against referent | **No** — blocked by a *join*, not by labels |
-| **I** | `_compute_I` (:288) — 50% `1.0 - calibration_error` (:293), 30% legacy coherence trend, 20% outcome consistency (:307) | **Internally referenced / calibration-related.** Its dominant term is confidence-vs-correctness correspondence. *Research interpretation:* this may be compared with Garfinkel-style interoceptive awareness. | Metacognitive calibration (ECE / meta-d′) | **No** |
-| **S** | `_compute_S` (:332) — 40% drift norm, 35% regime instability, 25% complexity divergence (:337-344), plus a tool-velocity term | **Self-relative / deviation-dynamics.** How much is the runtime moving and switching; no single externally correct value exists. *Research interpretation:* this may be compared with homeostatic or arousal constructs. | Test–retest reliability + faithfulness under intervention | **No** |
-| **V** | `_compute_V(E_history, I_history)` (:366) — 60% (E slope − I slope) + 40% instantaneous E−I gap (:382) | **Not a sense.** Takes no exogenous input; a deterministic function of two other axes | None available — see below | n/a |
+| **E** | `_compute_E_components` — 35% decision success, 25% legacy `C(V)` level, 20% complexity calibration, 20% outcome success when outcome history exists (40% / 30% / 30% without it); then a 20% continuity blend and 15% `1.0 - tool_error_rate` | **Externally referenced.** Decision outcomes, tool errors and outcome success are world facts, not self-state | Error against referent | **No** — blocked by a *join*, not by labels |
+| **I** | `_compute_I_components` — 50% `1.0 - calibration_error`, 30% legacy coherence trend, 20% outcome consistency when outcome history exists (60% / 40% without it); then a 20% continuity blend and 10% `unique_tools_ratio` | **Internally referenced / calibration-related.** Its dominant term is confidence-vs-correctness correspondence. *Research interpretation:* this may be compared with Garfinkel-style interoceptive awareness. | Metacognitive calibration (ECE / meta-d′) | **No** |
+| **S** | `_compute_S_components` — 40% drift norm, 35% regime instability, 25% complexity divergence; then a 20% continuity blend plus a tool-velocity term | **Self-relative / deviation-dynamics.** How much is the runtime moving and switching; no single externally correct value exists. *Research interpretation:* this may be compared with homeostatic or arousal constructs. | Test–retest reliability + faithfulness under intervention | **No** |
+| **V** (sensor) | `_compute_V` / `_compute_V_components(E_history, I_history)` — 60% (E slope − I slope) + 40% instantaneous E−I gap over the last 10 check-ins. This is the **sensor's** V. It reaches the ODE only through the sensor spring coupling (`k_anchor` in `governance_core/dynamics.py`, when `sensor_coupling_allows` admits the source), and otherwise lands only in measurement-only records (sensor–ODE divergence, derivation). It is **not the verdict V**: `GovernanceMonitor` passes only E/I/S to `BehavioralState.update`, whose V is an EMA of the raw imbalance `E_obs − I_obs` (`BehavioralState._raw_valence`, `V_FORMULA_VERSION = 2`) | **Not a sense.** Takes no exogenous input; a deterministic function of two other axes | None available — see below | n/a |
 
 **E — the referent exists and is not joined.** E already ingests machine-checked
 external signal: `tool_error_rate` at 15% and outcome success at 20%. That makes
@@ -1444,6 +1449,85 @@ rows from #1777's one-step shadow cannot identify closed-loop gain or basin
 counterfactuals. Relates to the "pause-scores-0.5" do-not above: both are
 verdict→`decision_e` feedback paths and both want one deliberate decision rather
 than two patches.
+
+### Fitted and learned estimators — which bucket they sit in (2026-09-25)
+
+Added 2026-09-25 after an adversarial design review of a critique that the
+ODE is a fixed, hand-set model where a learned one should be. This is a
+placement rule, not a tested claim: it adds no ledger row, runs no outcome read,
+and changes nothing deployed. The deployed observation model is hand-set
+(`docs/EISV_COMPUTATION.md`: "The weights are hand-set, not derived"), and this
+section says where a fitted replacement would sit in the buckets this repo
+already has.
+
+**Fitted to outcome labels ⇒ efficacy, label-gated.** A fitted or
+outcome-learned estimator — blend weights fitted against outcomes, or a learned
+readout from EISV/prior state to an outcome — is **efficacy** work in the sense
+of `docs/ROADMAP.md` (the "This item gates **efficacy** claims" paragraph under
+"Now"). It is gated like any other efficacy claim, and the outcome-grounding
+question it depends on belongs to the registered 2026-12-01 read. That read
+tests only its pinned candidates; it does not adjudicate a new fitted
+estimator. It is not instrument-frame work.
+The ROADMAP's instrument-frame "calibration" is the confidence-vs-correctness
+regime this document assigns to I in the sensory class split above. It does not
+mean fitting the instrument to the outcome it is later scored against. Fitting
+one before the read would also put an outcome-discrimination result in front of
+the operator in the pre-read window. That was one of the reasons #2410 was
+parked on 2026-09-24. It may be revisited after the 12-01 read reports, and only
+as an arm inside the incremental-value ablation
+(`docs/proposals/eisv-incremental-value-ablation-v1.md`).
+
+**The same label channel is not a new premise.** The stop rule's kill criterion
+says that once outcome-grounding is closed, reopening "requires a *new premise* —
+a materially different label channel or measurement process — not simply more
+of the same labels"
+(`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md:289-290`).
+An estimator fitted to the same trusted task/test label channel does not meet
+that. Its labels are that channel, and fitting against them uses the same labels
+again rather than measuring the agent differently. The registered read's own
+candidates (the seven names pinned in `REGISTERED_READ_MANIFEST`,
+`scripts/analysis/eisv_ablation_matrix.py`) are already readouts from prior
+state to those labels, so a fitted readout on that channel is the same kind of
+thing the read tests. So if the registered read's
+operational rule closes outcome-grounding, a fitted or learned readout on that
+channel cannot reopen it. This is this contract's reading of the reopen clause;
+the registered text is unchanged. The operator-judgment clause at `:165-168`
+(whether a corrected instrument and producer contract are the "materially
+different measurement process", if condition 3 fails) is untouched. A fitted
+readout does not correct an instrument; it re-scores the same labels. None of
+this anticipates the read. The outcome question is unresolved, not negative.
+
+**Label-free work may proceed offline.** Self-predictability confidence (how well
+an agent's own recent series predicts its next reading), rolling or windowed
+baselines in place of the expanding Welford ones, and system identification of
+the dynamics against an agent's own series need no outcome labels. They sit in
+the instrument-frame bucket and may proceed offline, as analysis and design
+notes. **Any live-path change from that work waits for the 2026-12-01 report:**
+baselines, weights, verdict inputs, or thresholds. The reason is the one behind
+the `decision_e` park above. Changing a predictor before the read contaminates
+the registered series.
+
+**Supply is thin (inference).** The 2026-09-23 relational calibration
+instrument-supply read
+(`docs/evaluations/relational-calibration-instrument-supply/result-v1.md`)
+returned `instrument_supply_not_ready`: `strict_supply = 0` against a frozen
+threshold of 200; its funnel fell from 38 `behavioral_mature` identities to 0
+at `temporal_established`. That
+read measured the supply for one registered instrument. Taking it to mean that
+few identities carry the long, same-instrument series a per-agent learned
+estimator needs is an inference, not a measured result.
+
+**Reach (deployment snapshot, read-only query run 2026-09-25).** Of the 276
+non-synthetic identities with state rows between 2026-09-18T00:00Z and
+2026-09-25T00:00Z, 172 had no behavioral-primary row. For them the ODE fallback
+was the whole estimator. Every one of the 172 had at most two rows in that
+window, and 147 had one. Behavioral authority starts at update 3 (row 43), so
+they sat below that threshold throughout the window. By rows the fallback share
+is small: 387 of 7,789 rows. Across all 276 identities, rows per identity had p50 1 and max 3,340. This
+refreshes the population picture in ledger row 26 (2026-08-06 snapshot) for one
+window; it is not a trend. A per-agent learned estimator cannot reach these
+identities; for them the only calibration lever is the class/population prior
+(inference from the row counts, not a measured result).
 
 ## Preferred wording
 
