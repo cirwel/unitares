@@ -155,6 +155,10 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         "UNITARES_DIALECTIC_CONTINUATION_POLL_S",
         "UNITARES_CLAUDE_CLI",
         "UNITARES_CODEX_CLI",
+        # Antigravity (agy): subscription auth from the child runtime, like
+        # claude/codex; only the CLI path and timeout are configuration.
+        "UNITARES_ANTIGRAVITY_CLI",
+        "UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S",
         "UNITARES_LLM_MODEL",
         "UNITARES_OLLAMA_BASE_URL",
         # The reviewer talks to gov-mcp through GovernanceClient. If that /mcp

@@ -1,15 +1,20 @@
 """
 Stale Lock Cleanup Utility
 
-Automatically detects and removes lock files that are no longer held by active processes.
-Prevents lock files from accumulating when processes crash or are killed.
+Removes lock files that no process holds. Held-ness (a non-blocking flock) is
+the only staleness test: a held lock is never removed, whatever its recorded pid
+or age says. Free lock files block nobody, so this is housekeeping; a lock held
+by a stuck process is released only when that process exits.
 """
 
+import fcntl
 import os
 import json
 import time
 from pathlib import Path
 from typing import Dict, Tuple
+
+from src.state_locking import remove_lock_file_if_free
 
 # Import structured logging
 from src.logging_utils import get_logger
@@ -38,50 +43,68 @@ def is_process_alive(pid: int) -> bool:
         return False
 
 
+def _recorded_pid(lock_file: Path):
+    """The pid the holder wrote into the lock file, for reporting only.
+
+    StateLockManager writes JSON with a "pid" key; the DistributedLock file
+    fallback writes a bare integer. None when neither parses, including a
+    file the holder has just truncated before rewriting.
+    """
+    try:
+        data = json.loads(lock_file.read_text() or "null")
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
+    if isinstance(data, dict):
+        data = data.get("pid")
+    return data if isinstance(data, int) and not isinstance(data, bool) else None
+
+
+def _held_reason(lock_file: Path) -> str:
+    """Describe a held lock. The recorded pid is reported, never trusted."""
+    pid = _recorded_pid(lock_file)
+    if pid is None:
+        return "held by a live process (holder pid unknown)"
+    alive = "alive" if is_process_alive(pid) else "not running"
+    return f"held by a live process (recorded pid {pid}, {alive})"
+
+
 def check_lock_staleness(lock_file: Path, max_age_seconds: float = 300.0) -> Tuple[bool, str]:
     """
-    Check if a lock file is stale (not held by active process or too old).
-    
+    Report whether a lock file could be removed, without removing it.
+
+    A lock file is stale only when no process holds it (a non-blocking
+    exclusive flock succeeds) and it was last touched at least
+    ``max_age_seconds`` ago. The recorded pid and timestamp are reported but
+    never make a held lock stale; see state_locking.remove_lock_file_if_free.
+
     Args:
         lock_file: Path to lock file
-        max_age_seconds: Maximum age in seconds before considering stale (default: 5 minutes)
-    
+        max_age_seconds: Minimum age before a free lock file counts as stale
+
     Returns:
         (is_stale, reason) tuple
     """
-    if not lock_file.exists():
-        return False, "lock file doesn't exist"
-    
-    # Check file modification time
-    file_age = time.time() - lock_file.stat().st_mtime
-    if file_age > max_age_seconds:
-        return True, f"lock file age ({file_age:.0f}s) exceeds max_age ({max_age_seconds}s)"
-    
-    # Try to read lock info
     try:
-        with open(lock_file, 'r') as f:
-            lock_data = json.load(f)
-            pid = lock_data.get('pid')
-            timestamp = lock_data.get('timestamp', 0)
-            
-            if pid is None:
-                return True, "no PID in lock file"
-            
-            # Check if process is alive
-            if not is_process_alive(pid):
-                return True, f"process {pid} is not running"
-            
-            # Check lock timestamp age
-            if timestamp > 0:
-                lock_age = time.time() - timestamp
-                if lock_age > max_age_seconds:
-                    return True, f"lock timestamp age ({lock_age:.0f}s) exceeds max_age ({max_age_seconds}s)"
-    
-    except (json.JSONDecodeError, IOError, ValueError) as e:
-        # Corrupted or unreadable lock file - consider stale
-        return True, f"lock file unreadable: {e}"
-    
-    return False, "lock is active"
+        fd = os.open(str(lock_file), os.O_RDONLY)  # read-only suffices for flock; never create
+    except FileNotFoundError:
+        return False, "lock file doesn't exist"
+    except OSError as exc:
+        return False, f"cannot open lock file: {exc}"
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False, _held_reason(lock_file)
+        age = time.time() - os.fstat(fd).st_mtime
+        if age < max_age_seconds:
+            return False, f"free, but touched {age:.0f}s ago (< {max_age_seconds:.0f}s)"
+        return True, "not held by any process"
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
 
 
 def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run: bool = False) -> Dict[str, any]:
@@ -90,7 +113,7 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
     
     Args:
         lock_dir: Directory containing lock files
-        max_age_seconds: Maximum age before considering stale (default: 5 minutes)
+        max_age_seconds: Minimum age before a free lock file is removed (default: 5 minutes)
         dry_run: If True, only report what would be cleaned, don't actually delete
     
     Returns:
@@ -111,11 +134,27 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
     
     for lock_file in lock_files:
         try:
-            is_stale, reason = check_lock_staleness(lock_file, max_age_seconds)
-            
-            if is_stale:
-                if not dry_run:
-                    lock_file.unlink(missing_ok=True)
+            if dry_run:
+                is_stale, reason = check_lock_staleness(lock_file, max_age_seconds)
+            else:
+                # Probe and unlink under one held flock; see
+                # remove_lock_file_if_free for why this must not be split.
+                is_stale, reason = remove_lock_file_if_free(lock_file, max_age_seconds)
+                if reason.startswith("held"):
+                    reason = _held_reason(lock_file)
+
+            if reason == "lock file doesn't exist":
+                # Removed between the directory listing and the probe (an
+                # acquirer's pre-clean, another sweep): nothing to report.
+                continue
+            if reason.startswith("cannot open"):
+                # Not held, not free: we could not tell. Report it as a failure,
+                # not as a kept lock.
+                errors.append({
+                    "lock_file": str(lock_file.name),
+                    "error": reason
+                })
+            elif is_stale:
                 cleaned.append({
                     "lock_file": str(lock_file.name),
                     "reason": reason
@@ -137,7 +176,9 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
         "errors": len(errors),
         "cleaned_locks": cleaned,
         "kept_locks": kept,
-        "errors": errors,
+        # A separate key: "errors" used to be set twice, the list silently
+        # replacing the count.
+        "error_locks": errors,
         "dry_run": dry_run
     }
 
@@ -149,7 +190,8 @@ def cleanup_stale_state_locks(project_root: Path = None, max_age_seconds: float 
     Args:
         project_root: Project root directory. When omitted, sweep the directory
             StateLockManager writes to (honours UNITARES_LOCK_DIR).
-        max_age_seconds: Maximum age before considering stale
+        max_age_seconds: Minimum age before a free lock file is removed; held
+            locks are never removed
         dry_run: If True, only report what would be cleaned
     
     Returns:
@@ -167,8 +209,8 @@ if __name__ == "__main__":
     # CLI tool for manual cleanup
     import argparse
     
-    parser = argparse.ArgumentParser(description="Clean up stale lock files")
-    parser.add_argument("--max-age", type=float, default=300.0, help="Maximum age in seconds (default: 300 = 5 minutes)")
+    parser = argparse.ArgumentParser(description="Remove lock files that no process holds")
+    parser.add_argument("--max-age", type=float, default=300.0, help="Minimum age in seconds before a FREE lock file is removed (default: 300); held locks are never removed")
     parser.add_argument("--dry-run", action="store_true", help="Only report what would be cleaned")
     parser.add_argument("--lock-dir", type=Path, help="Lock directory (default: auto-detect)")
     
@@ -199,8 +241,14 @@ if __name__ == "__main__":
             print(f"   - {item['lock_file']}: {item['reason']}")
         print()
     
+    if result['errors'] > 0:
+        print("Could not check:")
+        for item in result['error_locks']:
+            print(f"   - {item['lock_file']}: {item['error']}")
+        print()
+
     if result['kept'] > 0:
-        print("✅ Active locks:")
+        print("Kept locks (held, or free but recent):")
         for item in result['kept_locks']:
             print(f"   - {item['lock_file']}: {item['reason']}")
 

@@ -674,8 +674,10 @@ class TestAcquireAgentLockAsyncAdvisory:
         conn = _FakeConn([False])  # never acquires
         monkeypatch.setattr("src.db.get_db", lambda: _FakeDB(conn))
 
+        from src.state_locking import LockTimeoutError
+
         mgr = StateLockManager(lock_dir=tmp_path)
-        with pytest.raises(TimeoutError):
+        with pytest.raises(LockTimeoutError):
             async with mgr.acquire_agent_lock_async("adv_to", timeout=0.1, max_retries=1):
                 pass
 
@@ -683,3 +685,271 @@ class TestAcquireAgentLockAsyncAdvisory:
         assert len([c for c in conn.calls if "pg_try_advisory_lock" in c[0]]) > 1
         # ...and no unlock is issued, because the lock was never held.
         assert not any("pg_advisory_unlock" in c[0] for c in conn.calls)
+
+
+# ============================================================================
+# Orphaned-inode race: a cleaner unlinks the path between an acquirer's
+# open() and its flock(), so the acquirer locks an inode nobody else can see
+# while a newcomer locks a fresh file at the same path.
+# ============================================================================
+
+class TestOrphanedInodeRace:
+
+    def test_holds_current_inode(self, tmp_path):
+        from src.state_locking import holds_current_inode
+
+        lock_file = tmp_path / "a.lock"
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+        try:
+            assert holds_current_inode(fd, lock_file) is True
+            lock_file.unlink()
+            assert holds_current_inode(fd, lock_file) is False
+            lock_file.write_text("")  # a fresh inode at the same path
+            assert holds_current_inode(fd, lock_file) is False
+        finally:
+            os.close(fd)
+
+    def test_remove_lock_file_if_free_never_creates(self, tmp_path):
+        from src.state_locking import remove_lock_file_if_free
+
+        removed, reason = remove_lock_file_if_free(tmp_path / "missing.lock")
+        assert removed is False
+        assert not (tmp_path / "missing.lock").exists()
+
+    def test_cleaner_unlinks_while_its_probe_still_holds_the_lock(self, tmp_path, monkeypatch):
+        """If the cleaner released its probe before unlinking, an acquirer
+        could lock the file in that gap, pass its inode check, and then be
+        left on an orphan when the unlink lands. The four-process test cannot
+        hit that window reliably, so assert the ordering directly: at the
+        moment of unlink the file must still be locked by the probe."""
+        from src.state_locking import remove_lock_file_if_free
+
+        lock_file = tmp_path / "a.lock"
+        lock_file.write_text("{}")
+        real_unlink = Path.unlink
+        seen = []
+
+        def checking_unlink(self, *args, **kwargs):
+            if self == lock_file:
+                fd = os.open(str(self), os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    seen.append("free at unlink")
+                except BlockingIOError:
+                    seen.append("held at unlink")
+                finally:
+                    os.close(fd)
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", checking_unlink)
+        removed, _reason = remove_lock_file_if_free(lock_file)
+        assert removed is True
+        assert seen == ["held at unlink"]
+        assert not lock_file.exists()
+
+    def _unlink_after_first_open(self, lock_file, remove_dir=False):
+        """Patch os.open so the acquirer's first open of lock_file is followed
+        by a cleaner unlinking the path before the acquirer's flock()."""
+        real_open = os.open
+        state = {"fired": False}
+
+        def racing_open(path, flags, *args, **kwargs):
+            fd = real_open(path, flags, *args, **kwargs)
+            if not state["fired"] and str(path) == str(lock_file):
+                state["fired"] = True
+                os.unlink(path)
+                if remove_dir:
+                    os.rmdir(lock_file.parent)
+            return fd
+
+        return patch("src.state_locking.os.open", side_effect=racing_open), state
+
+    def _assert_current_file_is_locked(self, lock_file):
+        fd = os.open(str(lock_file), os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    def test_sync_acquire_reopens_after_unlink(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        lock_file = tmp_path / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file)
+        with racing:
+            with mgr.acquire_agent_lock("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_acquire_reopens_after_unlink(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        lock_file = tmp_path / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file)
+        with racing:
+            async with mgr._acquire_agent_lock_async_fcntl("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+    def test_sync_acquire_recovers_when_the_lock_dir_vanishes_mid_race(self, tmp_path):
+        """Reopening after an orphaned-inode miss re-creates the lock dir; a
+        failed reopen used to be swallowed as contention and then crash
+        flock(None) with a TypeError."""
+        lock_dir = tmp_path / "locks"
+        mgr = StateLockManager(lock_dir=lock_dir, auto_cleanup_stale=False)
+        lock_file = lock_dir / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file, remove_dir=True)
+        with racing:
+            with mgr.acquire_agent_lock("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_acquire_recovers_when_the_lock_dir_vanishes_mid_race(self, tmp_path):
+        lock_dir = tmp_path / "locks"
+        mgr = StateLockManager(lock_dir=lock_dir, auto_cleanup_stale=False)
+        lock_file = lock_dir / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file, remove_dir=True)
+        with racing:
+            async with mgr._acquire_agent_lock_async_fcntl("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+
+
+class TestLockTimeoutErrorType:
+    """Acquisition timeouts raise LockTimeoutError so callers can tell them
+    from a TimeoutError raised by the work done under the lock."""
+
+    def test_sync_acquire_timeout_is_lock_timeout_error(self, tmp_path):
+        from src.state_locking import LockTimeoutError
+
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        fd = os.open(str(tmp_path / "busy.lock"), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(LockTimeoutError):
+                with mgr.acquire_agent_lock("busy", timeout=0.2, max_retries=1):
+                    pass
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_acquire_timeout_is_lock_timeout_error(self, tmp_path):
+        from src.state_locking import LockTimeoutError
+
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        fd = os.open(str(tmp_path / "busy.lock"), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(LockTimeoutError):
+                async with mgr._acquire_agent_lock_async_fcntl("busy", timeout=0.2, max_retries=1):
+                    pass
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+
+class TestBodyExceptionsAreNotContention:
+    """An OSError raised by the caller's code inside the locked section
+    (TimeoutError, ConnectionError, ...) must reach the caller once, with the
+    lock released, not be read as flock contention and re-acquire the lock."""
+
+    @staticmethod
+    def _counting_open():
+        real_open = os.open
+        opens = []
+
+        def counting(path, flags, *args, **kwargs):
+            if str(path).endswith("body.lock"):
+                opens.append(path)
+            return real_open(path, flags, *args, **kwargs)
+
+        return patch("src.state_locking.os.open", side_effect=counting), opens
+
+    def test_sync_body_oserror_propagates_once(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        counting, opens = self._counting_open()
+        with counting:
+            with pytest.raises(ConnectionResetError, match="peer went away"):
+                with mgr.acquire_agent_lock("body", timeout=2.0, max_retries=1):
+                    raise ConnectionResetError("peer went away")
+        assert len(opens) == 1
+        with mgr.acquire_agent_lock("body", timeout=0.5, max_retries=1):
+            pass  # released: re-acquirable at once
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_body_timeout_propagates_once(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        counting, opens = self._counting_open()
+        with counting:
+            with pytest.raises(TimeoutError, match="inner timeout"):
+                async with mgr._acquire_agent_lock_async_fcntl("body", timeout=2.0, max_retries=1):
+                    raise TimeoutError("inner timeout")
+        assert len(opens) == 1
+        async with mgr._acquire_agent_lock_async_fcntl("body", timeout=0.5, max_retries=1):
+            pass
+
+
+_WRITER = """
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from src.state_locking import StateLockManager
+lock_dir, log, n = Path(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+mgr = StateLockManager(lock_dir=lock_dir)
+out = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+for _ in range(n):
+    with mgr.acquire_agent_lock("shared", timeout=60.0, max_retries=1):
+        os.write(out, f"S {os.getpid()}\\n".encode())
+        time.sleep(0.002)
+        os.write(out, f"E {os.getpid()}\\n".encode())
+"""
+
+_CLEANER = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from src.state_locking import StateLockManager
+lock_dir, stop = Path(sys.argv[2]), Path(sys.argv[3])
+mgr = StateLockManager(lock_dir=lock_dir)
+while not stop.exists():
+    mgr._check_and_clean_stale_lock(lock_dir / "shared.lock")
+"""
+
+
+def test_writers_stay_mutually_exclusive_under_a_concurrent_cleaner(tmp_path):
+    """Several processes take the same agent lock while another process runs
+    the stale-lock cleaner in a tight loop. Every critical section must close
+    before the next opens. Before the fix the cleaner released its probe lock
+    and then unlinked, and acquirers never checked which inode they held, so
+    two writers could be inside at once."""
+    import subprocess
+
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    log = tmp_path / "sections.log"
+    stop = tmp_path / "stop"
+    root = str(project_root)
+
+    cleaner = subprocess.Popen([sys.executable, "-c", _CLEANER, root, str(lock_dir), str(stop)])
+    try:
+        writers = [
+            subprocess.Popen([sys.executable, "-c", _WRITER, root, str(lock_dir), str(log), "40"])
+            for _ in range(4)
+        ]
+        for w in writers:
+            assert w.wait(timeout=120) == 0
+    finally:
+        stop.write_text("")
+        cleaner.wait(timeout=30)
+
+    events = log.read_text().split("\n")[:-1]
+    assert len(events) == 4 * 40 * 2
+    for i in range(0, len(events), 2):
+        start, end = events[i].split(), events[i + 1].split()
+        assert start[0] == "S" and end[0] == "E" and start[1] == end[1], (
+            f"overlapping critical sections at event {i}: {events[i:i + 4]}"
+        )
