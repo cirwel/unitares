@@ -225,11 +225,13 @@ def main_listener_ungated(*, public_listener_up: bool, host: str) -> bool:
 def oauth_public_port() -> Optional[int]:
     """Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT).
 
-    When set, the server also listens on ``127.0.0.1:<port>`` for the public
-    tunnel, and the ``/mcp`` OAuth gate applies to that listener only; the
-    main port keeps the posture it had. Unset (or invalid, which is warned
-    about) keeps OAuth on every request, the historical posture, so a typo
-    fails closed rather than open.
+    When set (and an OAuth issuer is configured), the server also listens on
+    ``127.0.0.1:<port>`` for the public tunnel, and the ``/mcp`` OAuth gate
+    applies to that listener only: the main listener is then served as if no
+    OAuth gate were configured. A tunnel still pointed at the main port is
+    therefore served ungated, so repoint it before setting this. Unset (or
+    invalid, which is warned about) keeps OAuth on every request, the
+    historical posture, so a typo fails closed rather than open.
     """
     raw = os.environ.get("UNITARES_OAUTH_PUBLIC_PORT", "").strip()
     if not raw:

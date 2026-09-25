@@ -143,6 +143,12 @@ tool runs:
    The server then also listens on `127.0.0.1:8772`, and the OAuth gate
    applies to that listener alone. Point the tunnel's ingress at
    `http://127.0.0.1:8772` (an explicit IPv4 address, not `localhost`).
+   **Order matters when migrating an existing OAuth deployment:** a tunnel
+   still pointed at the main port is served ungated the moment this variable
+   takes effect, and neither the startup warning nor
+   `UNITARES_OAUTH_REQUIRED` can see it (the main listener is on loopback).
+   Repoint the tunnel first; until the restart it simply gets connection
+   refused on the new port.
 
    The main listener is **not** OAuth-gated in this mode. Anything that
    reaches it — a reverse proxy or tunnel pointed at the main port, or LAN
