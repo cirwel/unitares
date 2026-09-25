@@ -364,3 +364,54 @@ async def test_no_gate_configured_still_serves_open(monkeypatch):
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
     decision = await svc.authorize_mcp_request(_scope(), McpAuthConfig())
     assert decision.allowed is True
+
+
+@pytest.mark.parametrize(
+    "provider,client_id,installed",
+    [(object(), "static", True), (None, "static", False), (object(), None, False)],
+)
+def test_runtime_installs_the_basic_auth_shim_for_a_static_client(
+    monkeypatch, provider, client_id, installed
+):
+    from src.oauth_provider import StaticClientBasicAuthShim
+
+    class _App:
+        def __init__(self):
+            self.middleware = []
+
+        def add_middleware(self, cls, **kwargs):
+            self.middleware.append((cls, kwargs))
+
+    app = _App()
+    monkeypatch.setattr(
+        "src.background_tasks.start_all_background_tasks", lambda **_kwargs: None
+    )
+    monkeypatch.setattr("src.mcp_compat.lowlevel_server", lambda _mcp: object())
+    monkeypatch.setattr(
+        "src.mcp_listen_config.build_streamable_session_manager",
+        lambda _server: object(),
+    )
+    for name in ("_log_transport_security", "_configure_middleware", "_register_application_routes"):
+        monkeypatch.setattr(
+            f"src.services.mcp_transport_service.{name}", lambda *_a, **_k: None
+        )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._create_base_application",
+        lambda _mcp: app,
+    )
+
+    build_transport_runtime(
+        object(),
+        auth_config=McpAuthConfig(oauth_provider=provider, static_client_id=client_id),
+        host="127.0.0.1",
+        port=8767,
+        reload=False,
+        server_ready_fn=lambda: True,
+        set_server_ready=lambda: None,
+        server_start_time=0.0,
+        server_version="test",
+        server_build_sha="test",
+    )
+
+    shims = [kw for cls, kw in app.middleware if cls is StaticClientBasicAuthShim]
+    assert shims == ([{"client_id": client_id}] if installed else [])

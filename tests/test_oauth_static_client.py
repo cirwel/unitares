@@ -448,3 +448,23 @@ def test_required_refuses_an_ungated_main_listener(monkeypatch):
     assert auth_gate_refusal(
         provider_present=True, issuer_set=True, main_listener_ungated=True
     ) is None
+
+
+@pytest.mark.parametrize(
+    "up,host,tokens,expected",
+    [
+        (True, "0.0.0.0", "", True),
+        (True, "192.168.1.151", "", True),
+        (True, "127.0.0.1", "", False),
+        (True, "localhost", "", False),
+        (True, "0.0.0.0", "tok", False),   # a bearer allowlist gates main
+        (False, "0.0.0.0", "", False),     # no public listener: OAuth is everywhere
+    ],
+)
+def test_main_listener_exposure_predicate(monkeypatch, up, host, tokens, expected):
+    """Feeds both the UNITARES_OAUTH_REQUIRED refusal and the startup warning
+    in main(), judged against the parsed --host."""
+    from src.mcp_listen_config import main_listener_ungated
+
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", tokens)
+    assert main_listener_ungated(public_listener_up=up, host=host) is expected

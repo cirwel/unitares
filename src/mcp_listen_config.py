@@ -216,6 +216,12 @@ def mcp_bearer_tokens() -> List[str]:
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
+def main_listener_ungated(*, public_listener_up: bool, host: str) -> bool:
+    """True when OAuth is confined to a running public listener while the main
+    listener binds beyond loopback with no bearer allowlist to gate it."""
+    return public_listener_up and host not in LOOPBACK_HOSTS and not mcp_bearer_tokens()
+
+
 def oauth_public_port() -> Optional[int]:
     """Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT).
 

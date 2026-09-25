@@ -130,8 +130,7 @@ from src.mcp_listen_config import (
     auth_gate_refusal,
     build_transport_security_settings,
     default_listen_host,
-    LOOPBACK_HOSTS,
-    mcp_bearer_tokens,
+    main_listener_ungated,
     oauth_public_port,
 )
 
@@ -374,7 +373,8 @@ async def main():
                 # than serving it open. Scoped to the route: every other
                 # surface on this process keeps its own gate.
                 gate_unavailable=_oauth_setup_error is not None,
-                oauth_public_listener_only=_oauth_public_port is not None,
+                # Same condition as public_port below: no issuer, no listener.
+                oauth_public_listener_only=bool(_oauth_issuer_url and _oauth_public_port),
                 static_client_id=_oauth_static_client_id,
             ),
             host=args.host,
@@ -390,10 +390,8 @@ async def main():
         )
         # Judged here, not at import: --host is only known now, and only the
         # built runtime knows whether the public listener actually bound.
-        _main_ungated = (
-            runtime.public_server is not None
-            and args.host not in LOOPBACK_HOSTS
-            and not mcp_bearer_tokens()
+        _main_ungated = main_listener_ungated(
+            public_listener_up=runtime.public_server is not None, host=args.host
         )
         _refusal = auth_gate_refusal(
             provider_present=_oauth_provider is not None,
