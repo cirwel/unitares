@@ -1208,18 +1208,26 @@ def _doctor_visible_bearer_token() -> str | None:
 
 
 def _public_listener_port() -> "int | None":
-    """UNITARES_OAUTH_PUBLIC_PORT as the server reads it, or None.
+    """The server's public OAuth listener port, if configured and listening.
 
-    The server opens that listener only when an OAuth issuer is configured.
+    The doctor's shell need not match the server's (the server reads its
+    LaunchAgent plist), so neither variable is required alongside the other:
+    an exported UNITARES_OAUTH_PUBLIC_PORT is probed when something answers
+    on it, and ignored when nothing does (no issuer on the server, or the
+    listener failed to bind and the server fell back to gating main).
     """
-    if not os.environ.get("UNITARES_OAUTH_ISSUER_URL", "").strip():
-        return None
     raw = os.environ.get("UNITARES_OAUTH_PUBLIC_PORT", "").strip()
     try:
         port = int(raw)
     except ValueError:
         return None
-    return port if 0 < port < 65536 else None
+    if not 0 < port < 65536:
+        return None
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return port
+    except OSError:
+        return None
 
 
 def check_mcp_route_gate() -> CheckResult:
@@ -1352,10 +1360,13 @@ def check_mcp_route_gate() -> CheckResult:
         return CheckResult(
             name, mode, Status.WARN,
             f"MCP route answers {status} as {external_host} without challenging an anonymous caller",
-            detail=f"{origin} The Host allowlist is fine, but nothing gated the request: no "
-                   "bearer allowlist is active and no OAuth provider was constructed. If "
-                   "UNITARES_OAUTH_ISSUER_URL is set on the server, provider construction "
-                   "failed at startup — check stderr for the NO AUTH GATE warning.",
+            detail=f"{origin} The Host allowlist is fine, but nothing gated the request on "
+                   f"{listener} :{port}: no bearer allowlist is active and no OAuth gate "
+                   "applied. Either no OAuth provider was constructed (if "
+                   "UNITARES_OAUTH_ISSUER_URL is set on the server, check stderr for the "
+                   "NO AUTH GATE warning), or the server confines OAuth to a public "
+                   "listener (UNITARES_OAUTH_PUBLIC_PORT) and this probed the main one, "
+                   "which is ungated by design; export that port here to probe it.",
         )
     if status == 503 and "auth_unavailable" in body:
         return CheckResult(

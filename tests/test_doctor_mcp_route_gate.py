@@ -357,15 +357,54 @@ def test_registered_as_an_operator_check(doctor):
 
 # --- public OAuth listener ----------------------------------------------------
 
-def test_probes_the_public_listener_when_one_is_configured(doctor, monkeypatch):
+@pytest.fixture
+def listening_port():
+    """A real loopback listener standing in for the server's public listener."""
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(8)
+    yield sock.getsockname()[1]
+    sock.close()
+
+
+@pytest.fixture
+def closed_port():
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def test_probes_the_public_listener_when_one_is_listening(doctor, monkeypatch, listening_port):
     """The tunnel reaches the public port and only it carries the OAuth gate;
     probing the ungated main port would misreport a healthy setup."""
     monkeypatch.setenv("UNITARES_OAUTH_ISSUER_URL", "https://gov.example.org")
-    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", str(listening_port))
     result, conn, ctor = _run(doctor, status=401)
-    assert ctor.call_args.args[:2] == ("127.0.0.1", 8772)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", listening_port)
     assert _headers(conn)["Host"] == "gov.example.org"
     assert result.status != doctor.Status.PASS
+
+
+def test_the_doctor_shell_need_not_carry_the_issuer(doctor, monkeypatch, listening_port):
+    """The server reads its plist, not this shell: an exported public port
+    that answers is probed even without UNITARES_OAUTH_ISSUER_URL here."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", str(listening_port))
+    _result, _conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", listening_port)
+
+
+def test_a_public_port_nothing_listens_on_probes_the_main_listener(doctor, monkeypatch, closed_port):
+    """No issuer on the server, or a bind failure that fell back to gating
+    main: the public listener does not exist, so the main one is the route."""
+    monkeypatch.setenv("UNITARES_OAUTH_ISSUER_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", str(closed_port))
+    _result, _conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
 
 
 def test_an_invalid_public_port_probes_the_main_listener(doctor, monkeypatch):
@@ -375,9 +414,10 @@ def test_an_invalid_public_port_probes_the_main_listener(doctor, monkeypatch):
     assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
 
 
-def test_a_public_port_without_an_issuer_probes_the_main_listener(doctor, monkeypatch):
-    """No issuer, no public listener: the server never opens it."""
+def test_an_unchallenged_main_probe_names_the_by_design_case(doctor, monkeypatch):
+    """A 400 on the main listener is not proof that provider construction
+    failed; the message must also name the confined-OAuth layout."""
     monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "https://gov.example.org")
-    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
-    _result, _conn, ctor = _run(doctor, status=400)
-    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
+    result, _conn, _ctor = _run(doctor, status=400)
+    assert result.status == doctor.Status.WARN
+    assert "UNITARES_OAUTH_PUBLIC_PORT" in result.detail
