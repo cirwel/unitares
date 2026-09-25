@@ -198,8 +198,14 @@ def test_write_ack_omits_raw_governance_by_default(friendly, canonical, make, ar
     # write: a repeated store mints a second finding.
     hint = env["raw_governance_hint"]
     assert "Re-call" not in hint
-    # The ack no longer carries the canonical payload's bulk.
-    assert _wire_bytes(env) < _full_form_bytes(friendly, canonical, make, args)
+    # The ack no longer carries the canonical payload's bulk: a large field
+    # that is not on the lift list must not reach the ack. Comparing against
+    # the full form alone cannot fail for the finding writes, whose full form
+    # is this same envelope plus the payload.
+    bulky = make()
+    bulky["_bulk_probe"] = "x" * 5000
+    bulky_env = build_experience_envelope(friendly, canonical, bulky, args)
+    assert _wire_bytes(bulky_env) - _wire_bytes(env) < 200
     assert "agent_signature" not in json.dumps(env)
 
 
