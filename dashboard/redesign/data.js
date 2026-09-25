@@ -448,6 +448,8 @@
           id: s.session_id, phase: s.phase || s.status, type: s.session_type || "review",
           paused: (s.paused_agent || s.paused_agent_id || "").slice(0, 8), reviewer: (s.reviewer || s.reviewer_agent_id || "") ? (s.reviewer || s.reviewer_agent_id).slice(0, 8) : null,
           synthesizer: s.synthesizer, topic: s.topic || s.reason || "", created: s.created || s.created_at, msgs: s.message_count || 0,
+          // The list carries a ~280-char topic preview; get has the full text.
+          topicTruncated: !!s.topic_truncated,
           awaiting: !!s.awaiting_facilitation,
           probe: isProbe(s.paused_agent_label),
           resolution: resolutionOf(s.resolution),
@@ -484,7 +486,7 @@
       return withFallback(async () => {
         const r = await callTool("dialectic", { action: "get", session_id: id });
         if (!r || !Array.isArray(r.transcript)) return null;
-        return { transcript: r.transcript, resolution: r.resolution, reason: r.reason, recommended: r.recommended_action };
+        return { transcript: r.transcript, resolution: r.resolution, reason: r.reason, recommended: r.recommended_action, topic: r.topic };
       }, () => null);
     },
 
