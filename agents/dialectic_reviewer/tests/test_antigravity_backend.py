@@ -82,6 +82,16 @@ def test_empty_reply_after_denied_tool_use_names_the_denied_action(monkeypatch):
     assert "empty reply after denied tool use: RunCommand" in result.error
 
 
+def test_a_malformed_denied_actions_field_never_raises(monkeypatch):
+    for denied in (True, 3, "RunCommand", {"action": "command"}):
+        out = {"status": "SUCCESS", "response": "", "denied_actions": denied}
+        _spawn(monkeypatch, json.dumps(out).encode())
+        assert "no parseable" in asyncio.run(hb.call_antigravity_backend("P")).error
+    _spawn(monkeypatch, json.dumps({"status": "SUCCESS", "response": "",
+                                    "denied_actions": ["RunCommand"]}).encode())
+    assert "denied tool use: RunCommand" in asyncio.run(hb.call_antigravity_backend("P")).error
+
+
 def test_the_size_limit_counts_the_appended_instruction(monkeypatch):
     _spawn(monkeypatch, b"{}")
     monkeypatch.setattr(hb.asyncio, "create_subprocess_exec",

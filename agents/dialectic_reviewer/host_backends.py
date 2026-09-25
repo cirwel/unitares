@@ -547,8 +547,10 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
         # An empty reply after a denied tool call is a different failure from a
         # reply without JSON; name the denied actions so the fallback warning
         # says which one happened.
-        denied = [str(d.get("display_name") or d.get("action") or "?")
-                  for d in (data.get("denied_actions") or []) if isinstance(d, dict)]
+        raw_denied = data.get("denied_actions")
+        denied = [str(d.get("display_name") or d.get("action") or "?") if isinstance(d, dict)
+                  else str(d)
+                  for d in (raw_denied if isinstance(raw_denied, list) else [])]
         error = "Antigravity CLI returned no parseable dialectic verdict"
         if not response.strip() and denied:
             error = ("Antigravity CLI returned an empty reply after denied tool use: "
