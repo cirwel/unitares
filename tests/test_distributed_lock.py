@@ -181,6 +181,34 @@ class TestForceRelease:
         assert released is True
         assert not lock_file.exists()
 
+    @pytest.mark.asyncio
+    async def test_force_release_keeps_a_held_file_lock(self, lock_no_redis, tmp_path):
+        """Deleting a held flock's file does not release the holder; it lets a
+        second holder lock a fresh file at the same path. So a held file lock
+        is kept, and force_release reports it did not release."""
+        import fcntl
+
+        async with lock_no_redis.acquire("held-resource", timeout=1.0):
+            released = await lock_no_redis.force_release("held-resource")
+            assert released is False
+            lock_file = tmp_path / "held-resource.lock"
+            assert lock_file.exists()
+            fd = os.open(str(lock_file), os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
+
+    @pytest.mark.asyncio
+    async def test_file_lock_timeout_is_lock_timeout_error(self, lock_no_redis):
+        from src.state_locking import LockTimeoutError
+
+        async with lock_no_redis.acquire("busy-resource", timeout=1.0):
+            with pytest.raises(LockTimeoutError):
+                async with lock_no_redis.acquire("busy-resource", timeout=0.2):
+                    pass
+
 
 # ============================================================================
 # health_check
