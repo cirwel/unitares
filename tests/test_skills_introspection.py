@@ -56,8 +56,28 @@ def test_handler_parses_known_skill_frontmatter():
     assert "freshness_days" in skill, "frontmatter must surface freshness_days"
     assert "source_files" in skill, "frontmatter must surface source_files"
     assert isinstance(skill["source_files"], list)
-    assert "content" in skill, "skill must include the markdown body"
     assert "content_hash" in skill, "skill must include content_hash for cache invalidation"
+    # A bare call is an index; the body comes from a fetch by name.
+    assert "content" not in skill
+    fetched = _call_handler({"name": "governance-fundamentals"})["skills"][0]
+    assert fetched["content"], "a fetch by name must include the markdown body"
+    assert fetched["content_hash"] == skill["content_hash"]
+
+
+def test_bare_call_is_an_index_and_says_so():
+    """Measured 2026-09-25: a bare call carried every skill's full body, 100 KB."""
+    payload = _call_handler({})
+    assert payload["content_omitted"] is True
+    assert "name=" in payload["fetch"]
+    assert all("content" not in s for s in payload["skills"])
+
+
+def test_since_version_still_returns_content():
+    """since_version is a cache re-fetch, not discovery."""
+    payload = _call_handler({"since_version": "2000-01-01"})
+    assert payload["skills"]
+    assert all(s.get("content") for s in payload["skills"])
+    assert "content_omitted" not in payload
 
 
 def test_handler_returns_registry_version_and_hash():

@@ -224,6 +224,10 @@ def _filter_skills(
 async def handle_skills(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Return server-authored skill bundle for adapter consumption.
 
+    With neither parameter, returns an index: every skill's metadata without
+    its ``content`` (``content_omitted: true``). Either parameter returns
+    full content for the skills it selects.
+
     Parameters:
         name (str, optional): Return only the skill with this exact name.
         since_version (str, optional): ISO date; return only skills with
@@ -252,11 +256,26 @@ async def handle_skills(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     registry_version = _registry_version(all_skills)
     filtered = _filter_skills(all_skills, name=name, since_version=since_version)
 
+    # A bare call is discovery, so it gets an index. Full text went out for
+    # every skill regardless -- 100 KB for seven skills, measured 2026-09-25 --
+    # though the one adapter that reads content (the plugin's _fetch_skills)
+    # always asks by name. name= and since_version= keep returning content:
+    # both are fetches, and registry_hash is over all skills either way.
+    index_only = name is None and since_version is None
+    if index_only:
+        filtered = [
+            {k: v for k, v in skill.items() if k != "content"}
+            for skill in filtered
+        ]
+
     data = {
         "skills": filtered,
         "registry_version": registry_version,
         "registry_hash": registry_hash,
     }
+    if index_only:
+        data["content_omitted"] = True
+        data["fetch"] = "skills(name='<skill>') returns one skill's full content."
     # lite_response=True suppresses the default `agent_signature: {"uuid": None}`
     # block — without it, even an unbound caller gets an identity-shaped field
     # in the response, which violates the §4.5 identity-blindness invariant

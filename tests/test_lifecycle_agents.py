@@ -2733,3 +2733,99 @@ class TestMarkResponseCompleteEdgeCases:
             assert data["success"] is True
             assert "maintenance_prompt" in data
             assert len(data["maintenance_prompt"]["open_discoveries"]) == 2
+
+
+# ============================================================================
+# Defaults and the serializer page cap (measured 2026-09-25: a default agent
+# list built 3,974 agents, the serializer cut them to 100, and shown said 3974)
+# ============================================================================
+
+def _schema_args(**provided):
+    """Arguments as the params step hands them to the handler: validated and
+    dumped, so every omitted Optional field arrives as an explicit None."""
+    from src.mcp_handlers.schemas.lifecycle import AgentParams
+
+    dumped = AgentParams.model_validate({"action": "list", **provided}).model_dump()
+    dumped.pop("action", None)
+    dumped.pop("op", None)
+    return dumped
+
+
+class TestListAgentsDefaultsSurviveTheSchema:
+
+    @pytest.fixture
+    def server(self):
+        return make_mock_server()
+
+    @pytest.mark.asyncio
+    async def test_lite_default_limit_applies_through_the_schema(self, server):
+        recent = datetime.now(timezone.utc).isoformat()
+        server.agent_metadata = {
+            f"agent-{i}": make_agent_meta(label=f"Agent{i}", total_updates=i + 1, last_update=recent)
+            for i in range(30)
+        }
+        args = _schema_args()
+        assert args["limit"] is None and args["recent_days"] is None  # the trap
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            data = _parse(await handle_list_agents(args))
+        assert len(data["agents"]) == data["shown"] == 20
+        assert data["matching"] == 30
+        assert "more" in data
+
+    @pytest.mark.asyncio
+    async def test_lite_default_recency_applies_through_the_schema(self, server):
+        recent = datetime.now(timezone.utc).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        server.agent_metadata = {
+            "recent-one": make_agent_meta(label="Recent", last_update=recent, total_updates=5),
+            "old-one": make_agent_meta(label="Old", last_update=old, total_updates=5),
+        }
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            data = _parse(await handle_list_agents(_schema_args()))
+        ids = [a["id"] for a in data["agents"]]
+        assert "recent-one" in ids and "old-one" not in ids
+
+    @pytest.mark.asyncio
+    async def test_lite_limit_above_the_page_cap_is_capped_and_counted_honestly(self, server):
+        recent = datetime.now(timezone.utc).isoformat()
+        server.agent_metadata = {
+            f"agent-{i}": make_agent_meta(label=f"Agent{i}", total_updates=1, last_update=recent)
+            for i in range(150)
+        }
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            data = _parse(await handle_list_agents({"lite": True, "limit": 500}))
+        assert len(data["agents"]) == data["shown"] == 100
+        assert all(isinstance(a, dict) for a in data["agents"])  # no "... more" marker
+        assert data["matching"] == 150
+
+    @pytest.mark.asyncio
+    async def test_full_mode_without_limit_returns_what_it_counts(self, server):
+        server.agent_metadata = {
+            f"a{i}": make_agent_meta(status="active", label=f"Agent{i}", total_updates=5, notes="")
+            for i in range(130)
+        }
+        health_status = MagicMock()
+        health_status.value = "healthy"
+        server.health_checker = MagicMock()
+        server.health_checker.get_health_status.return_value = (health_status, {})
+        mock_monitor = MagicMock()
+        mock_monitor.state = SimpleNamespace(
+            E=0.7, I=0.3, S=0.5, V=0.0, coherence=0.8,
+            lambda1=0.1, void_active=False, coherence_history=[]
+        )
+        mock_monitor.get_metrics.return_value = {
+            "risk_score": 0.3, "current_risk": 0.3,
+            "phi": 0.5, "verdict": "safe", "mean_risk": 0.3,
+        }
+        server.get_or_create_monitor.return_value = mock_monitor
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            data = _parse(await handle_list_agents(
+                {"lite": False, "grouped": False, "include_metrics": False}
+            ))
+        assert data["summary"]["total"] == 130
+        assert data["summary"]["returned"] == len(data["agents"]) == 100
+        assert all(isinstance(a, dict) for a in data["agents"])

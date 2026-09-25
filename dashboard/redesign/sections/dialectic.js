@@ -63,6 +63,8 @@
       </div>
       ${s.topic ? `<div style="color:var(--ink);font-size:var(--text-base);line-height:var(--leading-body);margin-bottom:var(--space-3)">${esc(s.topic)}</div>`
         : `<div style="color:var(--muted);font-style:italic;font-size:var(--text-sm);margin-bottom:var(--space-3)">(no topic recorded)</div>`}
+      ${s.topicTruncated ? `<details class="dlc-topic" data-sid="${esc(s.id)}" style="margin-bottom:var(--space-3)"><summary style="cursor:pointer;color:var(--muted);font-size:var(--text-sm)">full topic</summary>
+        <div class="dlc-topic-body" style="margin-top:var(--space-2);font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-body);white-space:pre-wrap"><span class="fresh">loading…</span></div></details>` : ""}
       <div style="display:flex;gap:6px;flex-wrap:wrap;${res ? "margin-bottom:var(--space-3)" : ""}">${pills}</div>
       ${res ? `<details><summary style="cursor:pointer;color:var(--muted);font-size:var(--text-sm)">resolution · ${esc(res.action || "—")}${res.conditions ? ` · ${res.conditions} condition${res.conditions === 1 ? "" : "s"}` : ""}</summary>
         <div style="margin-top:var(--space-2);font-size:var(--text-sm);color:var(--ink-2);line-height:var(--leading-body)">
@@ -119,6 +121,17 @@
         const body = d.querySelector(".dlc-tbody");
         const r = await DATA.dialecticSession(d.dataset.sid);
         body.innerHTML = renderTranscript(r.data && r.data.transcript);
+      });
+    });
+    // The list sends a topic preview; fetch the full text on first expand.
+    document.querySelectorAll(".dlc-topic").forEach((d) => {
+      d.addEventListener("toggle", async () => {
+        if (!d.open || d.dataset.loaded) return;
+        d.dataset.loaded = "1";
+        const body = d.querySelector(".dlc-topic-body");
+        const r = await DATA.dialecticSession(d.dataset.sid);
+        const topic = r.data && r.data.topic;
+        body.innerHTML = topic ? esc(topic) : `<span class="fresh">unavailable</span>`;
       });
     });
   }

@@ -698,6 +698,21 @@ async def _load_presence_profiles(
     return profiles
 
 
+#: Most rows one list response can carry intact. The response serializer
+#: (serialization._make_json_serializable) silently cuts any list longer than
+#: this to 100 items plus an in-band "... (N more items)" string, so a page
+#: above it would report counts for rows the caller never receives.
+_LIST_PAGE_CAP = 100
+#: The lite list's documented defaults. The schema declares limit and
+#: recent_days as Optional[...] = None and the params step passes those None
+#: values through, so `arguments.get("limit", 20)` never saw a missing key and
+#: the defaults were dead: every default call built the whole roster (3,974
+#: agents on 2026-09-25), was cut to 100 arbitrary rows, and still reported
+#: shown=3974.
+_LITE_DEFAULT_LIMIT = 20
+_LITE_DEFAULT_RECENT_DAYS = 7
+
+
 async def _list_agents_lite(
     arguments: ToolArgumentsDict,
     *,
@@ -705,7 +720,8 @@ async def _list_agents_lite(
     operator_caller: bool,
 ) -> Sequence[TextContent]:
     # Ultra-compact response - only real agents
-    limit = arguments.get("limit", 20)
+    limit = arguments.get("limit")
+    limit = _LITE_DEFAULT_LIMIT if limit is None else min(int(limit), _LIST_PAGE_CAP)
     status_filter = arguments.get("status_filter", "active")
     include_test_agents = arguments.get("include_test_agents", False)
     # Default: include zero-update agents so newly created agents are discoverable.
@@ -714,7 +730,9 @@ async def _list_agents_lite(
     # Smart default: show labeled agents first; if none, show active unlabeled ones
     named_only = arguments.get("named_only")  # None = auto, True/False = explicit
     # NEW: Filter by recency - default 7 days to reduce noise from stale agents
-    recent_days = arguments.get("recent_days", 7)
+    recent_days = arguments.get("recent_days")
+    if recent_days is None:
+        recent_days = _LITE_DEFAULT_RECENT_DAYS
     filters = AgentListFilters(
         status=status_filter,
         include_test_agents=include_test_agents,
@@ -832,8 +850,8 @@ async def _list_agents_lite(
         a.pop("last_update", None)
 
     result = {
-        "agents": agents[: max(0, int(limit))] if limit is not None else agents,
-        "shown": min(len(agents), int(limit)) if limit else len(agents),
+        "agents": agents[: max(0, limit)],
+        "shown": min(len(agents), max(0, limit)),
         "matching": len(agents),  # How many matched filters
         "total_all": total_all,  # Total agents in system
         "identity_health": {
@@ -844,12 +862,8 @@ async def _list_agents_lite(
         },
     }
 
-    # Add helpful hints. `limit` is None when the caller omits it and the
-    # Pydantic layer injects the null default (the lite-path default of 20
-    # only applies when the key is absent, not when it arrives as None), so
-    # guard int(limit) like the slices above (:470/:471) or the whole list
-    # call crashes with int(NoneType) — the dashboard's read sweep hit this.
-    if limit and len(agents) > int(limit):
+    # Add helpful hints.
+    if len(agents) > limit:
         result["more"] = f"Showing {limit} of {len(agents)} recent. Use limit=50 or recent_days=30 to see more."
     if recent_days:
         result["filter"] = f"Active in last {recent_days} days. Use recent_days=0 for all."
@@ -877,7 +891,13 @@ async def _list_agents_full(
 
     # Pagination support (optimization)
     offset = arguments.get("offset", 0)
-    limit = arguments.get("limit")  # None = no limit (backward compatible)
+    # None used to mean "no limit", but the response serializer cut every list
+    # past _LIST_PAGE_CAP anyway while summary.returned counted the uncut page.
+    # Default to the page that actually arrives, so returned is true; an
+    # explicit limit is honoured as before.
+    limit = arguments.get("limit")
+    if limit is None:
+        limit = _LIST_PAGE_CAP
     filters = AgentListFilters(
         status=status_filter,
         include_test_agents=include_test_agents,
