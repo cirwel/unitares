@@ -662,7 +662,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         # repeat — same pattern as the filtered check-in responses.
         from src.governance_glossary import EISV_INLINE_SUMMARY
         lite_metrics["eisv_contract"] = EISV_INLINE_SUMMARY
-        lite_metrics["_note"] = "Use lite=false for full diagnostics"
+        lite_metrics["_note"] = "Use verbosity='standard' for interpreted state, or verbosity='full' for diagnostics"
         return lite_metrics
 
     # The full read keeps the raw verdict string (its contract), so the decision
