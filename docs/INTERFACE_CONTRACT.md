@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.16.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.17.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.16.0` is the negotiated interface release. Compatible additions
+- `version: 1.17.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -182,7 +182,20 @@ The two identifiers serve different jobs:
   digest move; 1.16.0, 2026-09-25: the `skills` `name` description says a bare
   call returns an index without content, which is what the handler now
   returns; no parameter changes, and `skills`' input digest and the surface
-  digest move).
+  digest move;
+  1.17.0, 2026-09-25, numbered after 1.16.0 (#2435), which merges first: the
+  progressive `tools/list` shrinks from 44,199 to 40,406 bytes.
+  `search_shared_memory` stops advertising six fields only other `knowledge`
+  actions read (`offset`, `epoch_scope`, `scope`, `evidence_ids`,
+  `verification_basis`, `decision_standard`); search never read them, and
+  `knowledge` keeps all six. The EISV field contract rides once on the
+  advertised surface, on `check_working_state`; `sync_state` and
+  `record_result` point at `describe_tool(tool_name='check_working_state')`,
+  and `describe_tool`'s full view of either still appends the contract.
+  Identity briefs, several alias parameter texts and six leaked model
+  docstrings (`inputSchema.description`) are shortened or corrected. Nothing
+  callable is removed or renamed; many input digests and the surface digest
+  move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

@@ -1113,7 +1113,8 @@ async def _try_resume_by_session_key(
 @mcp_tool("identity", timeout=10.0, requires_identity="pre_onboard")
 async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
-    IDENTITY - Who am I? Auto-creates identity if first call.
+    IDENTITY - Resolve this session's bound agent (pass client_session_id),
+    or set a cosmetic display name. A call with no proof argument mints.
 
     Simplified v2 implementation with 3 paths:
     - Redis cache (fast)
