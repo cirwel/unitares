@@ -25,6 +25,7 @@ from .mutation import (
     handle_update_agent_metadata,
     handle_archive_agent,
     handle_delete_agent,
+    handle_release_presence,
 )
 
 # --- Re-export: operational handlers ---

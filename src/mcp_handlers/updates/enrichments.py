@@ -2248,8 +2248,14 @@ def _fork_honest_message(
     parent_uuid: Optional[str],
     spawn_reason: Optional[str],
 ) -> str:
-    """Build the thin process_agent_update fork message from R6 v2."""
-    return fork_honest_message(episode_fork_kind, parent_uuid, spawn_reason)
+    """Build the thin process_agent_update fork message from R6 v2.
+
+    ``ctx.meta`` does not record whether this UUID was minted at its thread
+    position or resumed there, so the sibling text must hold for both.
+    """
+    return fork_honest_message(
+        episode_fork_kind, parent_uuid, spawn_reason, minted_fresh=None
+    )
 
 @enrichment(order=230)
 def enrich_thread_identity(ctx: UpdateContext) -> None:

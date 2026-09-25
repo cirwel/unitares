@@ -103,6 +103,23 @@ class TestSuccessResponse:
         assert d["_param_coercions"]["applied"] == {"complexity": "0.5->0.5"}
         assert "note" in d["_param_coercions"]
 
+    def test_alias_default_alone_is_not_reported_as_a_correction(self):
+        """request_review injects use_brief_as_thesis for an omitted parameter;
+        telling the caller its parameters were auto-corrected is false."""
+        d = self._payload(
+            {"value": 1}, agent_id="a",
+            arguments={"_param_coercions": {"use_brief_as_thesis": {
+                "from": "omitted", "to": True, "interpretation": "alias_default"}}})
+        assert "_param_coercions" not in d
+
+    def test_real_coercion_still_reported_beside_an_alias_default(self):
+        d = self._payload(
+            {"value": 1}, agent_id="a",
+            arguments={"_param_coercions": {
+                "use_brief_as_thesis": {"from": "omitted", "to": True, "interpretation": "alias_default"},
+                "complexity": {"from": "0.5", "to": 0.5, "interpretation": "string_to_float"}}})
+        assert set(d["_param_coercions"]["applied"]) == {"complexity"}
+
     def test_param_coercions_hidden_in_lite(self):
         d = self._payload(
             {"value": 1}, agent_id="a",
