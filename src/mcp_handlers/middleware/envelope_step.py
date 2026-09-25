@@ -1044,12 +1044,15 @@ def _write_ack_raw_policy(
     one records a second outcome.
     """
     if friendly_name == "record_result":
+        # include_semantics is read the way the handler reads it (the schema
+        # lets a string through validation), so the ack keeps the payload
+        # exactly when the handler built the full snapshot for it.
+        from ..observability.outcome_events import _coerce_bool_flag
+
         full_mode = (
             str(arguments.get("response_mode") or "").strip().lower() == "full"
         )
-        wants_full = full_mode or _as_bool(
-            arguments.get("include_semantics"), default=False
-        )
+        wants_full = full_mode or _coerce_bool_flag(arguments.get("include_semantics"))
         identifiable = payload.get("outcome_id") is not None
         hint = (
             "Do not repeat this outcome to read it: without a prediction_id, a "

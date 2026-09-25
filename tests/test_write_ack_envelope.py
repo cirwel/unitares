@@ -438,7 +438,10 @@ async def test_write_ack_omits_raw_governance_after_real_validation(friendly, ar
     assert data["raw_governance_available"] is True
 
 
-def _real_signature() -> dict:
+def _real_signature(
+    session_resolution_source: str = "ip_ua_fingerprint",
+    proof_origin: str = "server_inferred",
+) -> dict:
     """agent_signature as success_response attaches it to a write."""
     from src.services.identity_payloads import build_identity_signature_payload
 
@@ -447,17 +450,21 @@ def _real_signature() -> dict:
         agent_id="Claude_Opus_20260925",
         display_name="probe",
         label_source="claimed",
-        session_resolution_source="ip_ua_fingerprint",
-        proof_origin="server_inferred",
+        session_resolution_source=session_resolution_source,
+        proof_origin=proof_origin,
     )
 
 
-@pytest.mark.parametrize("friendly,canonical,make,args", _WRITE_CASES)
+@pytest.mark.parametrize(
+    "friendly,canonical,make,args",
+    [case for case in _WRITE_CASES if case[0] in _FINDING_WRITES],
+)
 def test_write_ack_says_which_identity_it_was_recorded_under(
     friendly, canonical, make, args
 ):
-    """The finding and outcome payloads carry attribution only in
-    agent_signature. A weakly bound caller must still see who it wrote as."""
+    """The finding payloads carry attribution only in agent_signature, and
+    params_step injects the resolved agent_id, so even a server-inferred
+    (weakly bound) caller's write is signed. It must see who it wrote as."""
     payload = make()
     payload["agent_signature"] = _real_signature()
     env = build_experience_envelope(friendly, canonical, payload, args)
@@ -471,6 +478,45 @@ def test_write_ack_says_which_identity_it_was_recorded_under(
         "proof_origin": "server_inferred",
     }
     assert "identity_context" not in json.dumps(env)
+
+
+def test_record_result_names_its_writer_only_from_a_signature_it_carries():
+    """outcome_event calls success_response without arguments, so
+    compute_agent_signature returns {"uuid": None} for a server-inferred
+    binding; the ack then names no writer. A caller-asserted binding is
+    signed and the ack says who wrote it."""
+
+    weak = _outcome_payload()
+    weak["agent_signature"] = {"uuid": None}
+    env = build_experience_envelope("record_result", "outcome_event", weak, {})
+    assert "agent_uuid" not in env
+    assert "written_as" not in env
+
+    proven = _outcome_payload()
+    proven["agent_signature"] = _real_signature(
+        session_resolution_source="explicit_client_session_id",
+        proof_origin="caller_asserted",
+    )
+    env = build_experience_envelope("record_result", "outcome_event", proven, {})
+    assert env["agent_uuid"] == _UUID
+    assert env["written_as"]["tier"] == "strong"
+    assert env["written_as"]["caller_proven"] is True
+
+
+@pytest.mark.parametrize("value,keeps_raw", [
+    (True, True), ("true", True), ("t", True), ("y", True), ("1", True),
+    (False, False), ("on", False), ("false", False), (None, False),
+])
+def test_include_semantics_is_read_the_way_the_handler_reads_it(value, keeps_raw):
+    """The ack keeps raw_governance exactly when the handler built the full
+    snapshot: both read include_semantics with the handler's coercion."""
+    from src.mcp_handlers.observability.outcome_events import _coerce_bool_flag
+
+    assert _coerce_bool_flag(value) is keeps_raw
+    env = build_experience_envelope(
+        "record_result", "outcome_event", _outcome_payload(), {"include_semantics": value}
+    )
+    assert ("raw_governance" in env) is keeps_raw
 
 
 def test_write_ack_without_a_proven_signature_invents_no_writer():
