@@ -876,6 +876,35 @@ def _antigravity_text(stdout: str) -> str:
     return stdout
 
 
+#: How many times a truncated agy answer is resumed (agy reports its own
+#: retry allowance in the error; this bounds ours).
+AGY_RESUME_LIMIT = 3
+AGY_RESUME_PROMPT = (
+    "Your previous answer was cut off by the output limit before it was delivered "
+    "in full. Send your complete final review again from the beginning: every "
+    "finding, then the VERDICT line. Do not investigate further; write it out."
+)
+
+
+def _agy_output_limited(stdout: str) -> str | None:
+    """The conversation id to resume when agy stopped at its output-token limit.
+
+    Such a run ends with status ERROR and a ``response`` that is only the tail
+    of the answer (its start is lost), so it is never accepted as the review;
+    the conversation is resumed to get the whole answer instead, at the same
+    effort. Returns None for any other outcome."""
+    try:
+        data = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else {}
+    except (ValueError, IndexError):
+        return None
+    if not isinstance(data, dict) or data.get("status") == "SUCCESS":
+        return None
+    if "output token limit" not in str(data.get("error") or "").lower():
+        return None
+    cid = data.get("conversation_id")
+    return cid if isinstance(cid, str) and cid else None
+
+
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tuple[str, str]:
     """Return (final text, status note). Never raises on reviewer failure."""
     last = (out_dir / "last-message.txt").resolve()
@@ -906,36 +935,67 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
         workspace.cleanup()
         return ("temporary workspace sits under a .git/.agents directory; set TMPDIR "
                 "to a plain directory", "skipped: workspace not isolated")
-    with open(log, "w") as fh:
+    deadline = time.monotonic() + budget_s
+
+    def launch(argv: list[str], fh) -> tuple[int | None, str | None]:
+        """Run once; (exit code, None) or (None, failure note)."""
         # antigravity: stdout is the JSON answer, kept apart from stderr.
         out = open(last, "w") if isolated else fh
         try:
             # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
             try:
-                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out,
+                proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
                                         stderr=fh if isolated else subprocess.STDOUT,
                                         cwd=workspace.name if workspace else None,
                                         env=agy_env() if isolated else None,
                                         start_new_session=True)
             except OSError as exc:  # reviewer CLI missing or not executable
-                return str(exc), f"could not start {reviewer}: {exc.__class__.__name__}"
+                return None, f"could not start {reviewer}: {exc.__class__.__name__}|{exc}"
             try:
-                rc = proc.wait(timeout=budget_s)
+                return proc.wait(timeout=max(1, int(deadline - time.monotonic()))), None
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
-                return log.read_text(errors="replace"), f"killed at the {budget_s}s budget"
+                return None, f"killed at the {budget_s}s budget"
         finally:
             if out is not fh:
                 out.close()
-            if workspace:
-                workspace.cleanup()
+
+    resumed = 0
+    try:
+        with open(log, "w") as fh:
+            rc, failure = launch(cmd, fh)
+            while (
+                failure is None and isolated and resumed < AGY_RESUME_LIMIT
+                and time.monotonic() < deadline
+            ):
+                cid = _agy_output_limited(last.read_text(errors="replace") if last.exists() else "")
+                if cid is None:
+                    break
+                resumed += 1
+                fh.write(f"\n[review_gate] agy hit its output limit; resuming {cid} "
+                         f"({resumed}/{AGY_RESUME_LIMIT})\n")
+                fh.flush()
+                rc, failure = launch(
+                    ["agy", "-p", AGY_RESUME_PROMPT, "--conversation", cid, "--mode", "plan",
+                     "--sandbox", "--output-format", "json"], fh)
+    finally:
+        if workspace:
+            workspace.cleanup()
+    if failure is not None:
+        if failure.startswith("could not start"):
+            note, _, detail = failure.partition("|")
+            return detail, note
+        return log.read_text(errors="replace"), failure
     text = last.read_text(errors="replace") if last.exists() else ""
     if isolated:
         text = _antigravity_text(text)
     # An empty answer must surface the log, where auth/quota errors land.
     text = text if text.strip() else log.read_text(errors="replace")
-    return text, ("exit 0" if rc == 0 else f"exit {rc}")
+    note = "exit 0" if rc == 0 else f"exit {rc}"
+    if resumed:
+        note += f" (resumed {resumed}x after output limit)"
+    return text, note
 
 
 def render_body(rec: Record, heading: str, text: str) -> str:

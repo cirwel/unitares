@@ -1604,3 +1604,78 @@ def test_a_workspace_under_a_repo_is_refused(monkeypatch, tmp_path):
     out.mkdir()
     text, note = rg.run_reviewer("antigravity", "P", out, 30)
     assert note == "skipped: workspace not isolated"
+
+
+# --- agy output-limit resume -------------------------------------------------
+
+_AGY_TRUNCATED = (
+    '{"conversation_id":"conv-1","status":"ERROR",'
+    '"response":"...tail of a review\\nVERDICT: CLEAN",'
+    '"error":"Your previous response was cut off because it exceeded the output token limit\\n'
+    'Please continue from where you left off, keeping your response shorter\\nRetries remaining: 3"}\n'
+)
+_AGY_COMPLETE = (
+    '{"conversation_id":"conv-1","status":"SUCCESS",'
+    '"response":"Full review.\\n- [P3] something\\nVERDICT: FINDINGS(1)\\n"}\n'
+)
+
+
+def _fake_agy(monkeypatch, answers):
+    calls = []
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        calls.append({"cmd": cmd, "cwd": cwd, "env": kw.get("env"),
+                      "cwd_exists": Path(cwd).exists() if cwd else None})
+        stdout.write(answers.pop(0))
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    return calls
+
+
+def test_a_truncated_agy_answer_is_resumed_not_accepted(monkeypatch, tmp_path):
+    """agy hit its output limit: the response is only the tail (its start
+    is lost), so resume the conversation for the whole answer, same effort."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert rg.parse_verdict(text) == ("FINDINGS", 1)
+    assert "Full review." in text
+    assert note == "exit 0 (resumed 1x after output limit)"
+    first, second = calls
+    assert "--conversation" not in first["cmd"]
+    i = second["cmd"].index("--conversation")
+    assert second["cmd"][i + 1] == "conv-1"
+    assert {"--sandbox", "plan", "json"} <= set(second["cmd"])
+    assert "--effort" not in second["cmd"]  # no capping
+    # same isolated workspace, still present, same scrubbed environment
+    assert second["cwd"] == first["cwd"] and second["cwd_exists"]
+    assert second["env"] is not None and "GITHUB_TOKEN" not in second["env"]
+    assert not Path(first["cwd"]).exists()  # removed once, at the end
+
+
+def test_resuming_stops_at_the_limit_and_the_tail_is_never_an_answer(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMIT + 1))
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == rg.AGY_RESUME_LIMIT + 1
+    assert rg.parse_verdict(text) != ("CLEAN", 0)
+    assert f"resumed {rg.AGY_RESUME_LIMIT}x" in note
+
+
+def test_other_agy_errors_are_not_resumed(monkeypatch, tmp_path):
+    other = '{"conversation_id":"c","status":"ERROR","error":"permission denied"}\n'
+    calls = _fake_agy(monkeypatch, [other])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 1 and "resumed" not in note
+
+
+def test_output_limit_detection_needs_error_status_and_a_conversation():
+    assert rg._agy_output_limited(_AGY_TRUNCATED) == "conv-1"
+    assert rg._agy_output_limited(_AGY_COMPLETE) is None
+    assert rg._agy_output_limited(_AGY_TRUNCATED.replace('"conversation_id":"conv-1",', "")) is None
+    assert rg._agy_output_limited("not json") is None
