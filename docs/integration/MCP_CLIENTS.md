@@ -327,10 +327,11 @@ implementation response shape is required. Primary workflow responses lift
 `sync_state` check-ins, a plain fresh `start_session` and the write aliases
 `store_finding`, `update_finding` and `record_result` default to a compact
 envelope (`response_shape: "routine"` marks the trimmed lifecycle ones). Read
-the new identity's uuid from `agent_uuid`. Where a compact response has a
-`raw_governance_hint`, it names the full-payload route: `response_mode="full"`
-on `sync_state`, `search_shared_memory`, `record_result` and the
-`start_session` mint, `verbosity="full"` on `check_working_state`, and a
+the new identity's uuid from `agent_uuid`. A plain fresh `start_session` carries
+no `raw_governance_hint`; pass `response_mode="full"` on the mint to keep the
+payload. On the others, `raw_governance_hint` names the full-payload route:
+`response_mode="full"` on `sync_state`, `search_shared_memory` and
+`record_result`, `verbosity="full"` on `check_working_state`, and a
 `knowledge(action="details", discovery_id=...)` read for `store_finding` and
 `update_finding` (`response_mode` does not apply to them; the canonical
 `knowledge` tool returns their payload directly). That read returns the stored

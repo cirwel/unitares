@@ -616,30 +616,29 @@ def test_write_ack_keeps_the_auto_correction_notice(friendly_name, build):
 @pytest.mark.asyncio
 async def test_start_session_ack_is_untouched_by_the_write_ack_change(monkeypatch):
     """This change reshapes only the finding and outcome write acks. Through
-    the real alias and validation steps, start_session's ack is the same with
-    or without the write-ack policy. Its shape belongs to the
-    identity/onboarding surface, which trims a plain fresh mint to the
-    routine shape without raw_governance (#2437); the last assertions follow
-    that surface, and the equality above is what this change has to keep."""
+    the real alias and validation steps, start_session never reaches the
+    write-ack policy. Its shape belongs to the identity/onboarding surface,
+    which trims a plain fresh mint to the routine shape without
+    raw_governance (#2437); the last assertions follow that surface."""
     from src.mcp_handlers.middleware import envelope_step
     from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
 
     assert "start_session" not in envelope_step._COMPACT_WRITE_ALIASES
 
+    def _write_ack_policy_must_not_run(*_args, **_kwargs):
+        raise AssertionError("start_session reached the write-ack policy")
+
+    monkeypatch.setattr(
+        envelope_step, "_write_ack_raw_policy", _write_ack_policy_must_not_run
+    )
+
     ctx = DispatchContext()
     name, arguments, ctx = await resolve_alias("start_session", {"force_new": True}, ctx)
     name, arguments, ctx = await validate_params(name, arguments, ctx)
-    payload = _onboard_payload()
-
-    async def _ack() -> dict:
-        return _parse(await apply_experience_envelope(
-            name, dict(arguments), ctx, _result(payload)
-        ))
-
-    with_policy = await _ack()
-    monkeypatch.setattr(envelope_step, "_COMPACT_WRITE_ALIASES", frozenset())
-    without_policy = await _ack()
-    assert with_policy == without_policy
-    assert with_policy["tool"] == "start_session"
-    assert with_policy["response_shape"] == "routine"
-    assert "raw_governance" not in with_policy
+    ack = _parse(await apply_experience_envelope(
+        name, dict(arguments), ctx, _result(_onboard_payload())
+    ))
+    assert ack["tool"] == "start_session"
+    assert ack["response_shape"] == "routine"
+    assert "raw_governance" not in ack
+    assert "raw_governance_hint" not in ack

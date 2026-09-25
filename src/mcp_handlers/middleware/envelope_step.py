@@ -1064,8 +1064,10 @@ def _knowledge_write_summary(
         "related_to",
     )
     if not summary.get("related_to"):
-        # Ids of similar findings this write auto-linked: worth a pointer when
-        # there are any, noise when there are none.
+        # The record's links: on store_finding, the similar findings this
+        # write auto-linked; on update_finding, the stored record's existing
+        # links (an update does not auto-link). Worth a pointer when there
+        # are any, noise when there are none.
         summary.pop("related_to", None)
     if discovery_id is not None:
         summary["discovery_id"] = discovery_id
