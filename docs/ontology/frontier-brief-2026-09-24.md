@@ -314,7 +314,8 @@ the intended target. Say so in its claim.
 
 ## Operator disposition (2026-09-25)
 
-The five open questions above were put to the operator after this note merged
+The five open questions this note raised (in §1–§3 and *Not done here,
+deliberately*) were put to the operator after this note merged
 (#2400). The operator answered "idk" to each, asked whether a council could
 settle them, and then delegated them in these words: *"proceed best for the
 federation's future."* On resolver identity specifically, the operator said:
@@ -334,4 +335,4 @@ items. The operator can reverse any of them.
 | 2 | First assurance case (§2) | **Adopted.** Drafted as [`docs/evaluations/assurance-cases/outcome-binding-v0.md`](../evaluations/assurance-cases/outcome-binding-v0.md). The claim is scoped to the canonical outcome record within the retention window, and #2247 is disclosed as a limit. | It does not fix #2247, seek outside assessment, or create a runtime `AssuranceCase` object. |
 | 3 | Oversight summary (§1) | **No summary is built.** One principle is recorded for whenever a resolver class is designed: *record who resolved a review truthfully by kind: operator (authenticated by operator credential or passkey), other authenticated human, or AI agent or model. An AI's decision is never recorded as the operator's.* A metric then chooses which kinds count; for now "human-resolved" means operator only. This matches the Sentinel path, where model verdicts stay separate from operator labels. The escalation stream and its denominator stay open. | It does not change the schema or any code, and adds no metric, threshold or dashboard. |
 | 4 | Positioning wording | **Held** until the assurance case in row 2 has been assessed by someone other than the authoring session. | It makes no edit to the README or `PRODUCT_DEFINITION.md`. |
-| 5 | Continuous record view (§1, D5) | **Held.** Most agents do not yet declare a predecessor, so adapters declaring lineage comes first. If the view is built later, it should follow declared lineage only, show forks, label links "declared", mark links the parent has not confirmed, carry no trust or calibration, label `model_type` as self-declared, and return no root ID that can be used as a key. | It makes no change to the identity surface. |
+| 5 | Continuous record view (§1) | **Held.** Most agents do not yet declare a predecessor, so adapters declaring lineage comes first. If the view is built later, it should follow declared lineage only, show forks, label links "declared", mark links the parent has not confirmed, carry no trust or calibration, label `model_type` as self-declared, and return no root ID that can be used as a key. | It makes no change to the identity surface. |

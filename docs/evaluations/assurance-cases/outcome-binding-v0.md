@@ -64,9 +64,12 @@ layer.
 - **Conflict response.** A digest mismatch returns `PREDICTION_REUSE_CONFLICT`
   with the canonical ID (`src/mcp_handlers/observability/outcome_events.py`).
 - **Retention.** `audit.cleanup_outcome_prediction_bindings(p_retention_days
-  DEFAULT 365)` deletes a binding only after its canonical outcome row is gone.
-  Outcome partitions also default to 365 days (`db/postgres/partitions.sql`).
-  So a binding never outlives its outcome.
+  DEFAULT 365)` deletes a binding only when no matching canonical outcome row
+  exists (a `NOT EXISTS` check on `(ts, outcome_id)`). The maintenance path,
+  `audit.drop_old_outcome_partitions` (`db/postgres/partitions.sql`, default
+  365 days), runs this cleanup in the same transaction as the partition drop.
+  So a binding is never deleted while its outcome remains, and on the
+  maintenance path it is retired together with its outcome.
 
 ## 4. Assumptions
 
@@ -119,8 +122,9 @@ cases.
   The pinned test above reproduces it; how often it happens in production is
   not measured. **Knock-on effect:** arm D of the registered coordination
   ablation (`accountable-coordination-ablation-v0`) includes outcome binding, so
-  L1 is a defect specific to arm D in that study. Record it in the enrollment's
-  common-mode analysis.
+  L1 is a defect specific to arm D in that study. The enrollment record should
+  disclose it as an arm-D-specific limit. It is not a common-mode defect in the
+  protocol's sense, which covers repairs applied to every arm.
 - **L2: the claim holds only inside the retention window.** After cleanup, the
   same `prediction_id` can start a new canonical submission. That is intended,
   but it means the claim is not "forever".
