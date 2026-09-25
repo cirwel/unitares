@@ -17,7 +17,10 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ("sync-plugin-skills.sh", "skills_manifest.py", "skills_direction_guard.py")
+SCRIPTS = (
+    "sync-plugin-skills.sh", "skills_manifest.py", "skills_direction_guard.py",
+    "check_plugin_attestation_rule.py",
+)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("rsync") is None or shutil.which("git") is None,
@@ -106,3 +109,151 @@ def test_a_stray_canonical_manifest_is_never_mirrored(trees):
     (canon / "skills" / "SKILLS_MANIFEST.sha256").write_text("stale junk\n")
     assert _sync(canon, plugin).returncode == 0
     assert (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text() == _expected(canon)
+
+
+# A plugin freshness checker whose attestation rule is the pre-port "newest
+# record wins" reading, which canonical's rule disagrees with.
+_DRIFTED_CHECKER = """\
+import hashlib, json
+from pathlib import Path
+
+def skill_text_digest(skill_md):
+    return hashlib.sha256(Path(skill_md).read_bytes()).hexdigest()[:16]
+
+def attested_date(skills_dir, name, skill_digest):
+    adir = Path(skills_dir) / ".attestations" / name
+    for path in sorted(adir.glob("*.json"), reverse=True) if adir.is_dir() else []:
+        try:
+            data = json.loads(path.read_text())
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+            v = data.get("verified_date")
+            return v if isinstance(v, str) and v else None
+    return None
+"""
+
+
+# A faithful port of canonical's rule, as the plugin carries it.
+_PORTED_CHECKER = """\
+import hashlib, json
+from pathlib import Path
+
+def skill_text_digest(skill_md):
+    return hashlib.sha256(Path(skill_md).read_bytes()).hexdigest()[:16]
+
+def attested_date(skills_dir, name, skill_digest):
+    adir = Path(skills_dir) / ".attestations" / name
+    records = []
+    for path in sorted(adir.glob("*.json"), reverse=True) if adir.is_dir() else []:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+            records.append(data)
+    certified = [r for r in records if r.get("skill_digest") == skill_digest]
+    date = None
+    for r in certified or records[:1]:
+        v = r.get("verified_date")
+        if isinstance(v, str) and v and (date is None or v > date):
+            date = v
+    return date
+"""
+
+
+def test_a_drifted_plugin_checker_fails_check_but_not_the_sync(trees):
+    canon, plugin = trees
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_DRIFTED_CHECKER)
+
+    result = _sync(canon, plugin)
+    assert result.returncode == 5, result.stderr + result.stdout
+    assert "disagrees with canonical's attestation rule" in result.stderr
+    # The skills mirror is still written: the checker port is separate work.
+    assert (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text() == _expected(canon)
+
+    # Mirror in sync, checker drifted: its own exit code, so ship.sh can tell
+    # it from mirror drift (which a re-sync fixes and this does not).
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 5
+    assert "in sync" in check.stdout
+    assert "disagrees with canonical's attestation rule" in check.stderr
+
+
+def test_apply_mode_checks_the_rule_against_the_mirror_it_wrote(trees):
+    # This checker agrees everywhere except on skill "live" once it has
+    # attestations, which only the sync itself brings over. A parity result
+    # taken before the write would miss it.
+    canon, plugin = trees
+    live = canon / "skills" / "live"
+    live.mkdir()
+    (live / "SKILL.md").write_text('---\nname: live\nlast_verified: "2026-09-24"\n---\n# Live\n')
+    adir = canon / "skills" / ".attestations" / "live"
+    adir.mkdir(parents=True)
+    (adir / "20260924T000000000000Z-00000000.json").write_text(
+        '{"verified_date": "2026-09-24", "source_digests": {}}'
+    )
+    _git(canon, "add", "skills")
+    _git(canon, "commit", "-q", "-m", "live")
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_PORTED_CHECKER + """
+_ported = attested_date
+def attested_date(skills_dir, name, skill_digest):
+    if name == "live" and (Path(skills_dir) / ".attestations" / name).is_dir():
+        return "1999-01-01"
+    return _ported(skills_dir, name, skill_digest)
+""")
+
+    result = _sync(canon, plugin)
+    assert result.returncode == 5, result.stderr + result.stdout
+    assert "synced skill live" in result.stderr
+
+
+def test_a_checker_that_crashes_warns_without_failing(trees):
+    canon, plugin = trees
+    assert _sync(canon, plugin).returncode == 0
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_PORTED_CHECKER + """
+def attested_date(skills_dir, name, skill_digest):
+    raise RuntimeError("boom")
+""")
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 0, check.stderr
+    assert "rule not checked (exit 2)" in check.stderr and "RuntimeError: boom" in check.stderr
+
+
+def test_a_plugin_without_a_checker_says_the_rule_was_not_checked(trees):
+    # A moved or renamed plugin checker must not make the detector go quiet:
+    # "never compared" is reported, not passed off as agreement.
+    canon, plugin = trees
+    assert _sync(canon, plugin).returncode == 0
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 0, check.stderr
+    assert "plugin attestation rule not checked (exit 3)" in check.stderr
+    assert "nothing compared" in check.stderr
+
+
+def test_a_refused_apply_does_not_compare_and_check_still_reports_the_rule(trees):
+    canon, plugin = trees
+    assert _sync(canon, plugin).returncode == 0
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_DRIFTED_CHECKER)
+    _git(plugin, "add", "-A")
+    _git(plugin, "commit", "-q", "-m", "mirror + drifted checker")
+
+    # Canonical moves on, and the mirror has an uncommitted edit: the apply
+    # refuses (exit 3) before writing, so nothing is compared or claimed.
+    (canon / "skills" / "demo" / "SKILL.md").write_text(
+        '---\nname: demo\nlast_verified: "2026-09-25"\n---\n# Demo v2\n'
+    )
+    _git(canon, "commit", "-q", "-am", "v2")
+    (plugin / "skills" / "demo" / "SKILL.md").write_text("local edit\n")
+    refused = _sync(canon, plugin)
+    assert refused.returncode == 3, refused.stderr + refused.stdout
+    assert "attestation rule" not in refused.stderr
+
+    # --check with mirror drift still exits 1, and still says the rule drifted.
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 1
+    assert "disagrees with canonical's attestation rule" in check.stderr
