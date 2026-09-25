@@ -521,11 +521,12 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
         skill_digest = skill_text_digest(skill_file)
         records = load_attestations(skills_dir, name)
         vouching = vouching_attestations(records, skill_digest)
-        # A transition says the claims held across the change. Only a text
-        # already certified, which the verifier left alone, can say that: an
-        # uncertified text was edited in this re-check, which found the old
-        # wording wrong, so carrying the old wording across would invert it.
-        text_unchanged = bool(certified_attestations(records, skill_digest))
+        # A transition says the claims held across the change. Only a text the
+        # verifier left alone can say that: the newest record here certified
+        # exactly this text, so nothing edited it since the last stamp. Text
+        # edited in this re-check, even back to wording certified earlier,
+        # records none: the re-check found the wording it replaced wrong.
+        text_unchanged = bool(records) and records[0].get("skill_digest") == skill_digest
         _, accepted = effective_record(skills_dir, name, meta, skill_digest)
         edges = recorded_transitions(
             [data for _, data in transition_records(skills_dir, name, skill_digest)])

@@ -474,18 +474,16 @@ def test_a_later_stamp_records_only_the_change_it_re_checked(layout: Layout):
     layout.run("--stamp", "demo")
     layout.source("x = 2\n")
     layout.run("--stamp", "demo")
-    v1_text = layout.skill_file.read_text()
-    layout.skill_file.write_text(v1_text + "v2 prose\n")
-    _attest(layout, "20991230T000000000000Z-bbbbbbbb", _day(0), {src: _digest("x = 1\n")})
-    layout.skill_file.write_text(v1_text)                   # back on master
     layout.source("x = 3\n")
     before = set(_attestations(layout))
-    layout.run("--stamp", "demo")
+    layout.run("--stamp", "demo")                    # master, before the merge
     [stamp] = set(_attestations(layout)) - before
     assert json.loads(stamp.read_text())["superseded_digests"] == {src: [_digest("x = 2\n")]}
-    # Hand-place master's re-check after the branch's stamp, as a merge would.
+    # The merge brings the branch's v2 and its stamp at 1, made after master's
+    # 1 -> 2 re-check but before master's 2 -> 3 one.
     stamp.rename(stamp.parent / "20991231T000000000000Z-cccccccc.json")
-    layout.skill_file.write_text(v1_text + "v2 prose\n")   # the branch after merging
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20991230T000000000000Z-bbbbbbbb", _day(0), {src: _digest("x = 1\n")})
     assert layout.run().returncode == 1
 
 
@@ -525,6 +523,24 @@ def test_a_re_stamp_at_content_already_accepted_records_no_transition(layout: La
     layout.run("--stamp", "demo")
     [stamp] = set(_attestations(layout)) - before
     assert "superseded_digests" not in json.loads(stamp.read_text())
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    assert layout.run().returncode == 1
+
+
+def test_a_stamp_after_editing_back_to_older_certified_text_records_no_transition(layout: Layout):
+    # v1 and then v2 were certified at 1. At 2 the verifier finds v2 wrong and
+    # restores v1, which was certified once. That is still an edit in this
+    # re-check, so it records no transition that would carry v2 to 2.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.skill_file.write_text(v1_text)
+    layout.run("--stamp", "demo")
+    assert "superseded_digests" not in _newest_record(layout)
     layout.skill_file.write_text(v1_text + "v2 prose\n")
     assert layout.run().returncode == 1
 
