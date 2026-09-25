@@ -2005,13 +2005,17 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
             blocks.append(node)
 
     # Tries in those blocks, not crossing into a nested def or lambda: code
-    # there does not run as part of the block.
+    # there does not run as part of the block. Nor into a handler holding the
+    # line: tries there run in that handler, where nested handlers are never
+    # on its path.
     nested: dict[int, Any] = {}
     for block in blocks:
         stack: list[Any] = list(block.body)
         while stack:
             node = stack.pop()
             if isinstance(node, deferred):
+                continue
+            if isinstance(node, ast.ExceptHandler) and _within(node, node.lineno):
                 continue
             if isinstance(node, try_types) and node.lineno > line:
                 nested[id(node)] = node

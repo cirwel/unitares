@@ -643,6 +643,30 @@ def test_try_finally_inside_a_handler_takes_no_nested_handlers(tmp_path):
     assert p006_actually_fires(str(path), 6) is False
 
 
+def test_a_handler_inside_an_enclosing_try_takes_no_nested_handlers(tmp_path):
+    # #2447 review round 2, P3: an unrelated enclosing try block must not
+    # bring in the tries of the handler that holds the cite.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            work()\n"
+        "        except Exception:\n"
+        "            logger.warning('x')\n"
+        "            try:\n"
+        "                cleanup()\n"
+        "            except OSError:\n"
+        "                pass\n"
+        "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 5) is False
+    assert p006_actually_fires(str(path), 6) is False
+    # A cite above that handler still reaches the try in it, as in #2442.
+    assert p006_actually_fires(str(path), 4) is True
+
+
 @pytest.mark.parametrize(
     "above",
     [
