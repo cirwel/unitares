@@ -174,14 +174,24 @@ peer's thresholds; an operator who cannot answer that is asking to be trusted
 rather than verified, which is the one thing a mutually-distrustful exchange
 cannot supply. Tracked in [#1671](https://github.com/cirwel/unitares/issues/1671).
 
-**The attestation half of the same boundary.** Resolution attestations are HMAC
-keyed on each agent's `api_key`. That is a symmetric construction: a verifier
-needs the signing key to recompute a signature, and a party holding that key
-could also forge one. `Resolution.compute_signature` states this in its own
-docstring, and retention of the symmetric stack is a recorded decision rather
-than an oversight (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). It
-is sound for what it deploys against, which is one operator attesting inside
-their own trust boundary. A second principal is exactly the party who cannot be
+**The attestation half of the same boundary.** The party-level resolution
+attestation scheme in the code is HMAC keyed on each agent's `api_key`. That is
+a symmetric construction: a verifier needs the signing key to recompute a
+signature, and a party holding that key could also forge one.
+`Resolution.compute_signature` states this in its own docstring. The recorded
+decision to keep a symmetric stack, with asymmetric DPoP shelved on 2026-04-19,
+covers agent identity (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md));
+it is not a decision to keep the party HMAC. Whether to restore key issuance for
+that scheme or delete it is still open, as the `describe_attestation` docstring
+in `src/dialectic_protocol.py` records. The scheme is designed for one operator
+attesting inside their own trust boundary. As of 2026-09-25 no
+resolution record in the maintainer deployment carries a signature keyed on a
+party's `api_key` under the current scheme: the four 2026 records that carry a
+signature used a uuid-derived fallback key, forgeable from public data and
+removed in #2155, and the most recent records carrying two signatures are
+legacy v1 rows from 2025-12-13 (UTC), which cannot be verified.
+`describe_attestation` reports a record with no signatures as `unsigned`
+rather than as attested. A second principal is exactly the party who cannot be
 given the key, so a resolution record is not today independently verifiable by
 an operator who does not already trust its issuer.
 
