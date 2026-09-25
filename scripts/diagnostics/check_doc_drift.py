@@ -133,6 +133,12 @@ README_VOLATILE_PATTERNS: tuple[tuple[str, str], ...] = (
 # them cannot quietly rename the product. Changing the category is an edit here.
 PRODUCT_CATEGORY: tuple[str, tuple[str, ...]] = ("product category", ("federation kernel",))
 
+# Since 2026-09-25 the headline sentence also carries the noun's scope (docs/dev/
+# CANONICAL_SOURCES.md, "Public product sentence" row): without this pin, a later
+# edit could drop "single-operator" from any one of the five surfaces below and
+# every other check would still pass.
+SINGLE_OPERATOR_SCOPE: tuple[str, tuple[str, ...]] = ("single-operator scope", ("single-operator",))
+
 # The one public product sentence, settled 2026-09-16 and owned by README.md.
 # Surfaces that introduce the product carry it verbatim; the registry row in
 # docs/dev/CANONICAL_SOURCES.md is the prose record. Declared once here so a
@@ -148,6 +154,7 @@ CANONICAL_TAGLINE: tuple[str, tuple[str, ...]] = (
 PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     "README.md": [
         PRODUCT_CATEGORY,
+        SINGLE_OPERATOR_SCOPE,
         CANONICAL_TAGLINE,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
@@ -160,6 +167,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     ],
     "docs/PRODUCT_DEFINITION.md": [
         PRODUCT_CATEGORY,
+        SINGLE_OPERATOR_SCOPE,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -180,6 +188,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     ],
     "docs/CAPABILITIES_AND_DEPLOYMENT.md": [
         PRODUCT_CATEGORY,
+        SINGLE_OPERATOR_SCOPE,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -203,6 +212,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     ],
     "src/tool_modes.py": [
         PRODUCT_CATEGORY,
+        SINGLE_OPERATOR_SCOPE,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
@@ -230,13 +240,14 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     ],
     "pyproject.toml": [
         PRODUCT_CATEGORY,
+        SINGLE_OPERATOR_SCOPE,
         ("claims and evidence", ("claims and evidence",)),
         ("review", ("review",)),
         ("outcomes", ("outcomes",)),
         ("reconstruction", ("reconstruction",)),
     ],
     "docs/deployment/glama.md": [
-        ("self-hostable product", ("self-hostable federation kernel",)),
+        ("self-hostable product", ("self-hostable, single-operator federation kernel",)),
         ("provider-hosted deployment", ("private provider-hosted deployment",)),
         ("fresh-process identity", ("fresh processes receive fresh identities",)),
         ("external-processing boundary", ("optional inference and integrations",)),

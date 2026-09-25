@@ -1,6 +1,6 @@
 # UNITARES Documentation
 
-This is the documentation tree for the
+This is the documentation tree for the single-operator
 [UNITARES federation kernel](../README.md). Start with the repo README for
 the core idea and quickstart, then choose the path below. Canonical references,
 operator runbooks, research provenance, and optional essays are kept separate so
@@ -41,7 +41,7 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 - **[`REVIEWER_GUIDE.md`](REVIEWER_GUIDE.md)** — guided tour for reviewers evaluating the project.
 - **[`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md)** — who this is for, what anchors the signal, and what gaming or robustness remains unproven.
 - **[`PRODUCTION_SNAPSHOT.md`](PRODUCTION_SNAPSHOT.md)** — frozen live metrics and dashboard views.
-- **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named federation blocker. The root README and the public landing page link here rather than summarizing it.
+- **[`EVIDENCE_AND_LIMITS.md`](EVIDENCE_AND_LIMITS.md)** — the full public claim ledger: every claim with its evidence class, the deployment record behind the numbers, the protocol qualification on the outcome read, and the named cross-operator blocker. The root README and the public landing page link here rather than summarizing it.
 - **[`evaluations/review-correction-traces-2026-09-21.md`](evaluations/review-correction-traces-2026-09-21.md)** — a fixed 20-PR retrospective linking review findings to corrective patches, with attribution and causal limits stated beside the result.
 - **[`trust-contract.md`](trust-contract.md)** — what the system guarantees, what it does not, and what honest failure looks like.
 - **[`ontology/eisv-telemetry-envelope-v1.md`](ontology/eisv-telemetry-envelope-v1.md)** — versioned measurement → derivation → policy → enforcement provenance stored with each new state row.

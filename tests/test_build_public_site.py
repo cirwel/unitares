@@ -22,8 +22,8 @@ def test_build_separates_product_landing_from_glossary(tmp_path):
     assert "Accountability infrastructure for long-running AI agents" in landing_text
     readme_text = " ".join((PROJECT_ROOT / "README.md").read_text(encoding="utf-8").split())
     definition = (
-        "Its federation kernel connects independent runtimes to one operator-controlled "
-        "server over MCP or HTTP"
+        "Its single-operator federation kernel connects independent runtimes to one "
+        "operator-controlled server over MCP or HTTP"
     )
     assert definition in readme_text
     assert definition in landing_text

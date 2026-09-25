@@ -141,11 +141,11 @@ Note the inversion: the classes with the most rows have the fewest agents, and
 the class thousands of adopter agents actually land in is the thinnest and the
 stalest. A large `corpus_size` is not breadth.
 
-**Federation consequence.** The commitment is per-principal governance with no
-shared administrative root. A constant measured on one deployment and shipped
+**Multi-principal consequence.** The commitment is per-principal governance
+with no shared administrative root. A constant measured on one deployment and shipped
 as a class-wide norm *is* a shared administrative root for what counts as
 healthy — the homogenization failure one layer up, which is exactly what
-[federation derives from the individuality axiom](../../CLAUDE.md) to prevent.
+multi-principal governance exists to prevent.
 So `ScaleConstant` now records `distinct_agents` / `distinct_principals` and
 derives `population_scope`; a `single_agent` constant reports
 `federation_exportable = False`. Unrecorded breadth is also not exportable —

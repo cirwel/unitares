@@ -111,7 +111,7 @@ def build_server_instructions(mode: str = None) -> str:
         "use_tool remains available but is not needed to reach an omitted "
         "schema. Legacy GOVERNANCE_TOOL_MODE settings remain ignored."
     )
-    return f"""UNITARES: a self-hosted federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. Many independent agent runtimes share one operator-controlled server and authority domain; the kernel provides their shared accountability record and does not replicate state across independent servers.
+    return f"""UNITARES: a self-hosted, single-operator federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. Independent runtimes share one operator-controlled server and authority domain; the kernel keeps their shared accountability record and does not replicate state across independent servers.
 
 Reading needs no identity: search_shared_memory works before start_session and returns what earlier agents found, corrected, and left for a successor, so search first. store_finding / update_finding retain durable claims and corrections; search before you write. Full replacement-link traversal requires the AGE backend.
 
