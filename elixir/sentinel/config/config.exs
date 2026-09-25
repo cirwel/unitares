@@ -115,6 +115,16 @@ config :unitares_sentinel,
   start_websocket: bool_env.("UNITARES_SENTINEL_START_WEBSOCKET", false),
   start_fleet_finding_emitter: bool_env.("UNITARES_SENTINEL_START_FLEET_FINDING_EMITTER", false),
   start_poller: bool_env.("UNITARES_SENTINEL_START_POLLER", false),
+  start_audit_volume_watch: bool_env.("UNITARES_SENTINEL_START_AUDIT_VOLUME_WATCH", false),
+  audit_volume_interval_ms: 300_000,
+  # Comma-separated launchd label prefixes to watch for crash loops
+  # (UnitaresSentinel.LaunchdWatch). Empty by default: a deployment opts in by
+  # naming its own labels; nothing is watched otherwise.
+  launchd_label_prefixes:
+    (System.get_env("UNITARES_SENTINEL_LAUNCHD_LABEL_PREFIXES") || "")
+    |> String.split(",")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "")),
   analysis_interval_ms: 300_000,
   analysis_initial_delay_ms: 5_000,
   analysis_jitter_ms: 5_000,

@@ -29,7 +29,7 @@ import logging
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from src.identity.lineage_semantics import LineageSpawnReason
@@ -392,6 +392,52 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
         reasoning=str(obj.get("reasoning", "")).strip(),
         degraded=False,
         judgment_formed=True,
+    )
+
+
+def withhold_fallback_approval(verdict: Verdict, provenance: dict[str, Any]) -> Verdict:
+    """A FALLBACK MAY OBJECT. IT MAY NEVER APPROVE. Pure.
+
+    ``fallback_from`` means the operator selected a reviewer host, that host
+    produced no verdict, and the local model answered in its place. The
+    operator asked for that host's judgment, so a fallback verdict is a
+    substitute. ``fallback_from`` is what records that; ``degraded`` keeps its
+    existing meaning (could a judgment be extracted) and is not changed here,
+    so the stored field means the same thing on both sides of this change.
+
+    A substitute objection is still filed: it names terms the paused agent can
+    answer, and the session stays open while it does. A substitute APPROVAL
+    can release the paused agent, so it is withheld and the reviewer abstains,
+    leaving the slot open for a reviewer that can judge. The same rule
+    ``run()`` already applies to a repaired reply, for the same reason: an
+    approval must not rest on a model the operator did not choose.
+
+    Live instance, #2379: session 17ca66285f91e61e selected gemini-3.8-flash,
+    which was truncated before its verdict; gemma4 restated the thesis's own
+    conditions as commitments and the session resolved ``agrees: true`` 34
+    seconds after the request, with none of the thesis's four questions
+    addressed.
+    """
+    if (
+        not provenance.get("fallback_from")
+        or not verdict.judgment_formed
+        or not verdict.agrees
+    ):
+        return verdict
+    return replace(
+        verdict,
+        agrees=False,
+        proposed_conditions=[],
+        reasoning=(
+            f"The selected reviewer host ({provenance['fallback_from']}) returned "
+            "no verdict, and the local fallback model approved. A fallback "
+            "approval is withheld rather than filed: the selected host did not "
+            "review this thesis."
+        ),
+        # Not a claim that the fallback model failed to judge. The judgment
+        # the operator selected was not formed, and this one is not accepted
+        # in its place, so the protocol records an abstention.
+        judgment_formed=False,
     )
 
 
@@ -811,19 +857,23 @@ async def continue_after_disagreement(
         except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
             logger.warning("Dialectic continuation model failed: %r", exc)
             return current_verdict
-        next_verdict = _verdict_with_ratified_conditions(
-            parse_reviewer_verdict(model_text), paused_response, current_verdict
+        next_verdict = withhold_fallback_approval(
+            _verdict_with_ratified_conditions(
+                parse_reviewer_verdict(model_text), paused_response, current_verdict
+            ),
+            reviewer_backend_provenance(),
         )
         if not next_verdict.judgment_formed:
             # Same rule as the initial verdict. Filing this would burn a
             # synthesis round and overwrite a REASONED standing rejection with
             # an empty one — the paused agent would lose the objection it was
             # answering. Preserve it, exactly as the timeout and model-failure
-            # branches above already do.
+            # branches above already do. A withheld fallback approval lands
+            # here too: the standing rejection outranks a substitute approval.
             logger.warning(
-                "Dialectic continuation produced no parseable judgment; "
-                "preserving the standing rejection rather than filing a "
-                "non-verdict over it"
+                "Dialectic continuation produced no accepted judgment (%s); "
+                "preserving the standing rejection rather than filing over it",
+                next_verdict.reasoning,
             )
             return current_verdict
         result = await client.call_tool(
@@ -903,6 +953,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     # Read provenance AFTER the last attempt, so it names the backend that
     # actually produced the verdict being filed rather than the first one tried.
     provenance = reviewer_backend_provenance()
+    verdict = withhold_fallback_approval(verdict, provenance)
 
     # ABSTAIN rather than file a non-judgment.
     #
@@ -930,10 +981,11 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     if not verdict.judgment_formed:
         logger.warning(
             "Dialectic reviewer ABSTAINING on session %s: %s produced no "
-            "parseable judgment. The server will record the abstention without "
-            "assuming anything about reviewer-slot ownership.",
+            "accepted judgment (%s). The server will record the abstention "
+            "without assuming anything about reviewer-slot ownership.",
             thesis.session_id,
             _reviewer_audit_text(provenance),
+            verdict.reasoning,
         )
 
     client = GovernanceClient(governance_url)
@@ -1083,7 +1135,7 @@ def main() -> int:
         # and found nothing" and "the producer never ran" are different
         # findings and must not share an exit code.
         print(
-            "reviewer ABSTAINED: no parseable judgment; no verdict filed; "
+            "reviewer ABSTAINED: no accepted judgment; no verdict filed; "
             + (
                 "the reviewer slot remains OPEN"
                 if verdict.reviewer_slot_open is True
