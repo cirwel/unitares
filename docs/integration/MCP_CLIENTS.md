@@ -199,9 +199,15 @@ Two kinds of process do not follow this default. A short dispatched subagent usu
 
 Use raw `onboard(...)` instead when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift
-`agent_uuid`, `client_session_id`, and `next_action`. Read aliases default to a
-compact envelope; request their documented full mode when the canonical payload
-is needed under `raw_governance`.
+`agent_uuid`, `client_session_id`, and `next_action`; `start_session` also lifts
+`agent_id`, `display_name`, and `continuity_token` when one is issued. Read
+aliases and the write aliases except `request_review` default to a compact
+envelope whose `raw_governance_hint` names the full-payload route:
+`response_mode="full"` on `sync_state`, `search_shared_memory`, `start_session`
+and `record_result`, `lite=false` on `check_working_state`, and a
+`knowledge(action="details", discovery_id=...)` read for `store_finding` and
+`update_finding`, whose schemas declare no response mode. Repeating a write to
+see its payload writes again.
 
 For a same-owner rebind to an existing UUID, call `identity(agent_uuid=..., continuity_token=..., resume=true)` with the matching short-lived token. Do not teach clients to use bare `identity(agent_uuid=..., resume=true)`: UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 

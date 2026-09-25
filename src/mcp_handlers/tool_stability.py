@@ -486,9 +486,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "cleared, unless spawn_reason marks a dispatched child or a "
             "compaction continuation. Use identity to inspect or rename an "
             "existing binding. onboard is this same call under its canonical "
-            "name and returns the raw payload; this name adds the digest "
-            "envelope (next_action, state_summary) and keeps the raw payload "
-            "under raw_governance."
+            "name and returns the raw payload; this name returns the digest "
+            "envelope (identifiers, next_action, state_summary) and includes the "
+            "raw payload under raw_governance only with response_mode='full'."
         ),
         experience=True),
     "sync_state": ToolAlias(
@@ -596,8 +596,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "Provenance cannot be self-attested here: verification_source is "
             "forced and provenance keys in detail are stripped. Use store_finding "
             "for durable knowledge. outcome_event is this same write under its "
-            "canonical name and returns the raw payload; this name adds the "
-            "digest envelope and keeps the raw payload under raw_governance. "
+            "canonical name and returns the raw payload; this name returns the "
+            "digest envelope and includes the raw payload under raw_governance "
+            "only with response_mode='full'. "
             f"{EISV_INLINE_SUMMARY}"
         ),
         experience=True),

@@ -74,8 +74,10 @@ set `UNITARES_TOOL_ADVERTISEMENT=full` to advertise every schema up front; old
 a restricted profile; inspect their actual catalog (see governance-lifecycle,
 *MCP Tools Reference*). The full raw
 payload remains available under `raw_governance`; the read aliases
-`check_working_state` and `search_shared_memory` default compact and require
-their documented full-mode option to include it.
+`check_working_state` and `search_shared_memory`, and the write aliases
+`start_session`, `store_finding`, `update_finding` and `record_result`, default
+compact, and each response's `raw_governance_hint` names the route to the full
+payload.
 
 ## Session Continuity
 

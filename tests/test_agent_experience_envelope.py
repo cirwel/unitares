@@ -1,8 +1,8 @@
 """Agent-experience response envelope (middleware/envelope_step.py).
 
 Alias-gated: only calls invoked via an experience alias (start_session,
-sync_state, check_working_state, search_shared_memory, record_result,
-request_review) are reshaped. The two contract guarantees pinned here:
+sync_state, check_working_state, search_shared_memory, store_finding,
+update_finding, record_result, request_review) are reshaped. The two contract guarantees pinned here:
 
 1. Canonical names stay byte-identical - the envelope NEVER touches a
    response unless the invoked name is an experience alias.
@@ -108,7 +108,10 @@ async def test_experience_alias_gets_envelope():
     assert data["tool"] == "start_session"
     assert data["agent_uuid"] == "u-1"
     assert data["client_session_id"] == "s-1"
-    assert data["raw_governance"]["agent_uuid"] == "u-1"
+    # A write ack omits the repeated canonical payload by default; the ids a
+    # caller needs next are lifted above.
+    assert "raw_governance" not in data
+    assert data["raw_governance_available"] is True
     assert "next_action" in data
 
 
@@ -1681,7 +1684,8 @@ def test_store_finding_envelope_reports_write_instead_of_empty_search():
     }
     assert "update_finding(" in env["next_action"]
     assert "No prior discoveries matched" not in env["next_action"]
-    assert env["raw_governance"] is payload
+    assert "raw_governance" not in env
+    assert "discovery_id='d-new'" in env["raw_governance_hint"]
 
 
 def test_update_finding_envelope_reports_terminal_status_and_id():
@@ -1713,7 +1717,8 @@ def test_update_finding_envelope_reports_terminal_status_and_id():
     assert "is now 'resolved'" in env["next_action"]
     assert "knowledge(action='details'" in env["next_action"]
     assert "No prior discoveries matched" not in env["next_action"]
-    assert env["raw_governance"] is payload
+    assert "raw_governance" not in env
+    assert "discovery_id='d-existing'" in env["raw_governance_hint"]
 
 
 def test_update_finding_envelope_falls_back_to_argument_discovery_id():

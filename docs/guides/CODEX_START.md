@@ -31,8 +31,9 @@ If you are not using commands directly, the equivalent raw tool flow is:
 
 Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
 `get_governance_metrics(...)`. Friendly alias calls return the agent-experience
-envelope with `next_action`, compact state fields, and the full canonical
-payload under `raw_governance`.
+envelope with `next_action`, the ids you need next, and compact state fields.
+Most omit the canonical payload by default and say in `raw_governance_hint`
+how to get it; the canonical names above always return it directly.
 
 ## Codex Reality
 

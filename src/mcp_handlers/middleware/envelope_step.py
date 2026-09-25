@@ -28,10 +28,12 @@ Envelope shape (friendly fields first, raw payload available on demand):
 Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
-are omitted. Default read aliases and bounded ``sync_state`` modes omit the
-repeated canonical payload and advertise an explicit full-response escape
-hatch. Other state-changing aliases retain it, and
-``sync_state(response_mode="full")`` restores it explicitly.
+are omitted. Default read aliases, bounded ``sync_state`` modes and the write
+aliases ``start_session``, ``store_finding``, ``update_finding`` and
+``record_result`` omit the repeated canonical payload and advertise an
+explicit full-response escape hatch; the write aliases first lift the ids and
+warnings a caller needs next. ``request_review`` retains it, and
+``response_mode="full"`` restores it explicitly.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -157,6 +159,19 @@ _ACTION_ALIASES = {
 _COMPACT_READ_ALIASES = frozenset({
     "check_working_state",
     "search_shared_memory",
+})
+
+# Write aliases whose acknowledgement omits the repeated canonical payload by
+# default. Each one lifts the identifiers a caller needs next (and the warnings
+# a writer must see) before the omission, so the ack stays self-sufficient.
+# request_review is deliberately absent: its ack carries the review itself
+# (resolution conditions, reviewer dispatch, thesis-failure flags), which the
+# envelope does not project, and it declares no response_mode on /mcp/.
+_COMPACT_WRITE_ALIASES = frozenset({
+    "start_session",
+    "store_finding",
+    "update_finding",
+    "record_result",
 })
 
 
@@ -876,7 +891,12 @@ def _knowledge_write_summary(
         "summary",
         "updated_at",
         "resolved_at",
+        "related_to",
     )
+    if not summary.get("related_to"):
+        # Ids of similar findings this write auto-linked: worth a pointer when
+        # there are any, noise when there are none.
+        summary.pop("related_to", None)
     if discovery_id is not None:
         summary["discovery_id"] = discovery_id
     message = payload.get("message")
@@ -987,15 +1007,82 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return bool(value)
 
 
+def _write_ack_raw_policy(
+    friendly_name: str,
+    arguments: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> tuple[bool, Optional[str]]:
+    """Decide whether a write acknowledgement repeats its canonical payload.
+
+    Default: omit it. The envelope already lifts the ids a caller needs next,
+    so the canonical copy was most of a typical ack and mostly repeated the
+    agent signature, the stored record and the full identity ontology.
+
+    Two things keep the payload inline. An explicit full request does, on the
+    parameter each alias already declares (``response_mode='full'``; onboard's
+    ``verbose`` and outcome_event's ``include_semantics`` are the same request
+    under older names). And a payload whose record id the envelope cannot lift
+    does too, because then the canonical copy is the only place the caller
+    could find out what was written.
+
+    The hint never tells a caller to repeat the write to see the payload: a
+    second store mints a second finding, and a second start_session(force_new)
+    mints a second identity. It names a read instead.
+    """
+    response_mode = str(arguments.get("response_mode") or "").strip().lower()
+    wants_full = response_mode == "full"
+    if friendly_name == "start_session":
+        wants_full = wants_full or _as_bool(arguments.get("verbose"), default=False)
+    elif friendly_name == "record_result":
+        wants_full = wants_full or _as_bool(
+            arguments.get("include_semantics"), default=False
+        )
+
+    if friendly_name == "start_session":
+        uuid = payload.get("uuid") or payload.get("agent_uuid")
+        identifiable = bool(uuid and payload.get("client_session_id"))
+        hint = (
+            "start_session(response_mode='full') returns the complete onboard "
+            "payload inline. To inspect this binding without minting another "
+            "identity, call identity(client_session_id='...') with the "
+            "client_session_id above."
+        )
+    elif friendly_name == "record_result":
+        identifiable = payload.get("outcome_id") is not None
+        hint = (
+            "record_result(response_mode='full') returns the complete outcome "
+            "payload, including the full EISV snapshot semantics. Do not repeat "
+            "an outcome just to read it: without a prediction_id, a repeat "
+            "records a second outcome."
+        )
+    else:
+        discovery = payload.get("discovery")
+        discovery = discovery if isinstance(discovery, dict) else {}
+        discovery_id = (
+            payload.get("discovery_id")
+            or discovery.get("id")
+            or arguments.get("discovery_id")
+        )
+        identifiable = discovery_id is not None
+        target = discovery_id if discovery_id is not None else "..."
+        hint = (
+            "Read the full record with knowledge(action='details', "
+            f"discovery_id='{target}'); do not repeat the write to see it."
+        )
+    return wants_full or not identifiable, hint
+
+
 def _raw_governance_policy(
     friendly_name: str,
     arguments: Optional[Dict[str, Any]],
     payload: Optional[Dict[str, Any]] = None,
 ) -> tuple[bool, Optional[str]]:
-    """Choose whether a friendly read alias should repeat its canonical payload.
+    """Choose whether a friendly alias should repeat its canonical payload.
 
-    Canonical tools are unchanged. Read aliases default to their bounded
-    experience envelope and retain an explicit full-response escape hatch.
+    Canonical tools are unchanged. Read aliases, bounded ``sync_state`` modes
+    and the write aliases in ``_COMPACT_WRITE_ALIASES`` default to their
+    bounded experience envelope and retain an explicit full-response escape
+    hatch. ``request_review`` still repeats its payload.
     """
     if friendly_name == "sync_state":
         arguments = arguments or {}
@@ -1017,6 +1104,9 @@ def _raw_governance_policy(
             "Re-call sync_state(..., response_mode='full') for the complete "
             "canonical diagnostics."
         )
+
+    if friendly_name in _COMPACT_WRITE_ALIASES:
+        return _write_ack_raw_policy(friendly_name, arguments or {}, payload or {})
 
     if friendly_name not in _COMPACT_READ_ALIASES:
         return True, None
@@ -1407,13 +1497,42 @@ def build_experience_envelope(
             "sync_state(response_text='...', complexity=0.5, "
             "client_session_id=...) as you work."
         )
+        # The identity fields clients persist from this response. They used to
+        # be reachable only under raw_governance, which a default ack now
+        # omits: the plugin's post-identity hook and identity sidecar cache
+        # agent_id / display_name / session_resolution_source /
+        # continuity_token_supported, the canaries read display_name, and the
+        # coordination demo reads continuity_token. Lift them rather than
+        # break those readers.
+        envelope.update(_lift(
+            payload,
+            "agent_id",
+            "display_name",
+            "continuity_token",
+            "continuity_token_supported",
+            "session_resolution_source",
+        ))
         state_summary = _lift(
             payload,
             "lineage_state",
             "session_key",
             "onboard_origin",
             "onboard_origin_basis",
+            "is_new",
+            "identity_resolution_outcome",
+            "provisional_lineage",
+            "auto_resumed",
+            "previous_status",
         )
+        assurance = payload.get("identity_assurance")
+        if isinstance(assurance, dict):
+            # Tier and proof, not the coaching prose: the prose is what the
+            # full payload is for, the tier is what a caller acts on.
+            compact_assurance = _lift(
+                assurance, "tier", "score", "caller_proven", "proof_origin", "baseline"
+            )
+            if compact_assurance:
+                state_summary["identity_assurance"] = compact_assurance
         predecessor = (
             payload.get("thread_context", {}).get("predecessor", {})
             if isinstance(payload.get("thread_context"), dict)
@@ -1568,6 +1687,26 @@ def build_experience_envelope(
             envelope["message"] = message
         if discovery_id is not None:
             envelope["discovery_id"] = discovery_id
+        # Write-time warnings and outcomes the handler reports beside the
+        # record. With raw_governance omitted by default these would otherwise
+        # vanish: a failed supersession, truncated content, an anonymous
+        # writer, or a closure that declares no standard.
+        envelope.update(_lift(
+            source_payload,
+            "agent_mode",
+            "_identity_hint",
+            "superseded",
+            "_supersedes_warning",
+            "superseded_by",
+            "supersession_warning",
+            "_name_hint",
+            "_truncated",
+            "_tip",
+            "consolidation_hint",
+            "closure_class_note",
+        ))
+        if "closure_class" in source_payload:
+            envelope["closure_class"] = source_payload["closure_class"]
 
         if friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")
@@ -1687,6 +1826,14 @@ def build_experience_envelope(
             "calibration_excluded",
         )
         state_summary.update(binding)
+        # A replayed prediction_id and claims the grader could not verify
+        # change what the recorded outcome means; the default ack no longer
+        # repeats the canonical payload, so they ride here.
+        for key, value in _lift(
+            source_payload, "is_bad", "idempotent_replay", "unverified_fields"
+        ).items():
+            if value != []:
+                state_summary[key] = value
         next_action = "Outcome recorded - continue, or sync_state to fold it into your working state."
         if binding.get("calibration_excluded"):
             next_action = (
@@ -1810,6 +1957,14 @@ def build_experience_envelope(
     hint = _recovery_hint(source_payload, coherence, risk)
     if hint:
         envelope["recovery_hint"] = hint
+
+    if friendly_name in _COMPACT_WRITE_ALIASES and not include_raw:
+        # A handler-side identity warning (e.g. record_result's
+        # ephemeral_writer) must not vanish with the omitted payload. The
+        # identity-warning step runs after this one and appends to this list.
+        warnings = source_payload.get("identity_warnings")
+        if isinstance(warnings, list) and warnings:
+            envelope["identity_warnings"] = list(warnings)
 
     if include_raw:
         envelope["raw_governance"] = payload

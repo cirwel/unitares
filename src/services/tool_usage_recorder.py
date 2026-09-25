@@ -199,9 +199,11 @@ def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any
 
     Request-side identity always wins. For identity-minting tools with no
     request-side identity, fall back to the UUID in the response payload —
-    top-level ``uuid`` (canonical onboard), ``raw_governance.uuid`` (alias
-    envelope, e.g. start_session), or ``agent_signature.uuid``. Returns the
-    incoming ``agent_id`` unchanged in every other case; never raises.
+    top-level ``uuid`` (canonical onboard), top-level ``agent_uuid`` (alias
+    envelope, e.g. start_session, whose default ack omits raw_governance),
+    ``raw_governance.uuid`` (the same envelope with response_mode='full'), or
+    ``agent_signature.uuid``. Returns the incoming ``agent_id`` unchanged in
+    every other case; never raises.
     """
     if agent_id or not _IDENTITY_MINTING_TOOLS.matches(tool_name):
         return agent_id
@@ -212,6 +214,7 @@ def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any
     signature = payload.get("agent_signature")
     uuid = (
         payload.get("uuid")
+        or payload.get("agent_uuid")
         or (raw.get("uuid") if isinstance(raw, dict) else None)
         or (signature.get("uuid") if isinstance(signature, dict) else None)
     )

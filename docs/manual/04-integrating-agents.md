@@ -54,9 +54,18 @@ its own identity, declare the dispatcher as parent with
 | Record an outcome | `record_result(...)` | `outcome_event` |
 | Request review | `request_review(...)` | `dialectic(action="request")` |
 
-The primary tools return a compact agent-facing envelope. Read aliases and
-bounded `sync_state` modes omit the repeated raw payload by default and expose
-a full-mode escape hatch; other state-changing tools retain it. Interface contract
+The primary tools return a compact agent-facing envelope. Read aliases,
+bounded `sync_state` modes, and the write acknowledgements of `start_session`,
+`store_finding`, `update_finding` and `record_result` omit the repeated raw
+payload by default; `request_review` retains it. `raw_governance_hint` names
+the route back to the full payload. That is `response_mode="full"` on
+`sync_state`, `search_shared_memory`, `start_session` and `record_result`, and
+`lite=false` on `check_working_state`. For
+`store_finding` and `update_finding`, whose `/mcp/` schemas declare no response
+mode, it is a `knowledge(action="details", discovery_id=...)` read. A write
+acknowledgement keeps the ids a caller needs next at the
+top level (`agent_uuid`, `client_session_id`, `continuity_token` when issued,
+`discovery_id`, and `state_summary.outcome_id`). Interface contract
 1.13.0 and later negotiates one complete catalog while initially advertising a
 small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
 `list_tools(lite=true)` reports every capability name and the contract version;
