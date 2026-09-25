@@ -1904,9 +1904,11 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     at any depth: the model may cite the outer ``try:`` line or an early body
     line when the silent handler belongs to a try further down. Tries inside
     a nested def, lambda or class are not taken, nor handlers whose clause
-    carries ``# noqa: BLE001`` or a bare ``# noqa``; and nothing is taken
-    when the line sits in a nested try's handler, ``else`` or ``finally``,
-    which is not above a later swallow but in a branch of its own. This only
+    carries ``# noqa: BLE001`` or a bare ``# noqa``. Nothing is taken when the
+    line sits in a nested def, lambda or class, or in a nested try's handler,
+    ``else`` or ``finally``, which is not above a later swallow but in a
+    region of its own; nor when the block itself lies inside a handler, where
+    nested handlers are never on the path. This only
     adds to a path that already has a handler, so it can keep a finding but
     never drop one: one silent nested handler keeps it, and a line with no
     handler of its own is kept as below.
@@ -1965,6 +1967,15 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
             innermost is None or node.lineno > innermost.lineno
         ):
             innermost = node
+    # Inside a handler, a nested try's handlers are deliberately not on the
+    # path (see `_p006_handler_reacts`), so the step does not run there.
+    if innermost is not None and any(
+        h.lineno <= innermost.lineno <= (h.end_lineno or h.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, try_types)
+        for h in node.handlers
+    ):
+        innermost = None
     if innermost is not None:
         # Tries in the block, not crossing into a nested def, lambda or
         # class: code there does not run as part of the block.
@@ -1979,17 +1990,27 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
                 nested.append(node)
             stack.extend(ast.iter_child_nodes(node))
 
-        def _in_branch(t: Any) -> bool:
-            # A line in a nested try's handler, else or finally (header
-            # included) is not above a swallow; it belongs to that branch.
-            if any(_within(h, h.lineno) for h in t.handlers):
-                return True
-            for block in (t.orelse, t.finalbody):
-                if block and _within(block[-1], block[0].lineno - 1):
-                    return True
-            return False
+        # A line in a nested def, lambda or class, or in a nested try's
+        # handler, else or finally, is not above a later swallow in the
+        # block: it belongs to a region of its own. A branch's span starts
+        # right after the block before it, so its header counts even when
+        # comments separate it from its first statement.
+        barriers: list[tuple[int, int]] = []
+        for stmt in innermost.body:
+            for node in ast.walk(stmt):
+                if isinstance(node, scope_nodes):
+                    barriers.append((node.lineno, node.end_lineno or node.lineno))
+                if not isinstance(node, try_types):
+                    continue
+                barriers.extend((h.lineno, h.end_lineno or h.lineno) for h in node.handlers)
+                prev_end = (node.handlers or node.body)[-1].end_lineno or 0
+                if node.orelse:
+                    barriers.append((prev_end + 1, node.orelse[-1].end_lineno or 0))
+                    prev_end = node.orelse[-1].end_lineno or 0
+                if node.finalbody:
+                    barriers.append((prev_end + 1, node.finalbody[-1].end_lineno or 0))
 
-        if not any(_in_branch(t) for t in nested):
+        if not any(start <= line <= end for start, end in barriers):
             source_lines = source.splitlines()
             for t in nested:
                 if t.lineno <= line:
@@ -2989,6 +3010,7 @@ _P006_TRY_OR_BRANCH = re.compile(r"^\s*(try|else|finally)\s*:")
 _P006_ELSE = re.compile(r"^\s*else\s*:")
 # Headers whose `else:` is not a try's: if/elif, for/async for, while.
 _P006_NON_TRY_ELSE_OWNER = re.compile(r"^\s*(if|elif|for|async\s+for|while)\b")
+_P006_CLOSING_BRACKET = re.compile(r"^\s*[)\]}]")
 
 
 def _p006_else_is_try_branch(
@@ -2997,8 +3019,9 @@ def _p006_else_is_try_branch(
     """True unless the `else:` on ``else_line`` visibly belongs to an
     if/elif/for/while.
 
-    The owner is the nearest earlier line at the same indent: an `except`
-    clause for a try's `else`, an `if`/`elif`/`for`/`while` header otherwise.
+    The owner is the nearest earlier line at the same indent, skipping the
+    closing bracket of a header split over lines: an `except` clause for a
+    try's `else`, an `if`/`elif`/`for`/`while` header otherwise.
     When that line is not visible, or is anything else, the `else` is taken
     to be a try's, which stops the walk and keeps the finding.
     """
@@ -3007,7 +3030,13 @@ def _p006_else_is_try_branch(
     while line_no in snippet_lines_by_num:
         line = snippet_lines_by_num[line_no]
         line_no -= 1
-        if not line.strip() or _indent_of(line) > indent:
+        if (
+            not line.strip()
+            or _indent_of(line) > indent
+            # The closing `):` of a header split over lines (black's layout);
+            # the header itself is further up at this indent.
+            or _P006_CLOSING_BRACKET.match(line)
+        ):
             continue
         if _indent_of(line) < indent:
             return True

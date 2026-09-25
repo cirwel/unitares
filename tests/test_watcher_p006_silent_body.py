@@ -424,6 +424,73 @@ def test_nested_step_skips_scopes_and_acknowledged_clauses(tmp_path, later):
     assert p006_actually_fires(str(path), 3) is False
 
 
+_LATER_SILENT_TRY = "        try:\n            b()\n        except Exception:\n            pass\n"
+
+
+@pytest.mark.parametrize(
+    "region, cites",
+    [
+        # A cite in a nested def runs in another function (round 5, P2).
+        (
+            "        def cb():\n"
+            "            try:\n"
+            "                a()\n"
+            "            except Exception:\n"
+            "                logger.warning('x')\n",
+            (6, 7),
+        ),
+        # A nested else header with a comment before its first statement
+        # (round 5, P3).
+        (
+            "        try:\n"
+            "            a()\n"
+            "        except OSError:\n"
+            "            raise\n"
+            "        else:\n"
+            "            # note\n"
+            "            logger.info('ok')\n",
+            (7, 8, 9),
+        ),
+    ],
+)
+def test_cite_in_a_region_of_its_own_adds_no_later_tries(tmp_path, region, cites):
+    source = (
+        "def f():\n"
+        "    try:\n"
+        + region
+        + _LATER_SILENT_TRY
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    for cite in cites:
+        assert p006_actually_fires(str(path), cite) is False, cite
+    # A cite above everything still reaches the later silent try.
+    assert p006_actually_fires(str(path), 2) is True
+
+
+def test_try_finally_inside_a_handler_takes_no_nested_handlers(tmp_path):
+    # Round 5, P3: citing the handler's log line and citing its clause must
+    # agree; nested handlers are never on a handler's path.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        try:\n"
+        "            logger.warning('x')\n"
+        "            try:\n"
+        "                cleanup()\n"
+        "            except OSError:\n"
+        "                pass\n"
+        "        finally:\n"
+        "            pass\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 4) is False
+    assert p006_actually_fires(str(path), 6) is False
+
+
 @pytest.mark.parametrize(
     "above",
     [
@@ -793,6 +860,23 @@ def test_non_try_else_inside_a_handler_reaches_its_clause(owner):
         5: "            give_up()",
     }
     assert _p006_governing_except(5, lines) == 1
+
+
+def test_else_after_a_black_split_if_reaches_its_clause():
+    """Round 5, P3: black splits a long condition, so the nearest same-indent
+    line before the `else:` is the closing `):`, not the `if (`."""
+    from agents.watcher.agent import _p006_governing_except
+
+    lines = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: "        if (",
+        3: "            retry and budget",
+        4: "        ):",
+        5: "            again()",
+        6: "        else:",
+        7: "            give_up()",
+    }
+    assert _p006_governing_except(7, lines) == 1
 
 
 def test_try_else_still_stops_the_walk():
