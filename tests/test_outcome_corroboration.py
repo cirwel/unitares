@@ -547,6 +547,14 @@ def _public_grade(detail):
     ).grade
 
 
+def test_hint_covers_every_reference_family_the_grader_reads():
+    from src.outcome_corroboration import _CLAIM_FIELD_FAMILIES
+
+    assert set(_REF_EXAMPLE_KEYS) == set(_CLAIM_FIELD_FAMILIES)
+    for family, key in _REF_EXAMPLE_KEYS.items():
+        assert key in _CLAIM_FIELD_FAMILIES[family]
+
+
 @pytest.mark.parametrize("key", list(_REF_EXAMPLE_KEYS.values()))
 def test_every_advertised_reference_key_reaches_self_report_with_refs(key):
     assert _public_grade({key: "x"}) == SELF_REPORT_WITH_REFS

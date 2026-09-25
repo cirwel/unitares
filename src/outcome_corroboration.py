@@ -356,6 +356,26 @@ def _has_substrate_evidence(detail: Mapping[str, Any], verification_source: str 
 #: ``scripts/diagnostics/outcome_evidence_provenance_split.py`` reports it.
 SERVER_SET_TOOL_TRIGGERS = frozenset({"phase5_emitter"})
 
+#: The structural shapes ``tool_observation_triggers`` reads. Named constants
+#: because ``corroboration_upgrade_hint`` states them to callers: one source,
+#: so the advice cannot name a shape the grader does not read.
+_TOOL_OBSERVATION_KINDS = ("test", "command", "lint", "build", "file_op", "tool_call")
+_TOOL_OBSERVATION_PAYLOAD_KEYS = ("tool_results", "command_results", "observed_command", "captured_output")
+
+#: The key the hint shows for each reference family, where one reads better
+#: than the family's alphabetical first. Derived from _CLAIM_FIELD_FAMILIES,
+#: never a separate list: a family without a preference (or whose preferred key
+#: was renamed away) falls back to its own first key, and every family appears.
+_PREFERRED_REF_EXAMPLE = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command", "command": "exit_code"}
+_REF_EXAMPLE_KEYS = {
+    family: (
+        _PREFERRED_REF_EXAMPLE[family]
+        if _PREFERRED_REF_EXAMPLE.get(family) in keys
+        else sorted(keys)[0]
+    )
+    for family, keys in _CLAIM_FIELD_FAMILIES.items()
+}
+
 
 def tool_observation_triggers(detail: Mapping[str, Any]) -> set[str]:
     """Names of the evidence triggers in ``detail`` that reach TOOL_OBSERVED.
@@ -556,14 +576,6 @@ def assess_outcome_corroboration(
         unverified_fields=sorted(unverified),
         reasons=reasons,
     )
-
-
-#: What the structural tool-observation triggers look for, stated for callers.
-#: Kept beside ``tool_observation_triggers`` so the two change together.
-_TOOL_OBSERVATION_KINDS = ("test", "command", "lint", "build", "file_op", "tool_call")
-_TOOL_OBSERVATION_PAYLOAD_KEYS = ("tool_results", "command_results", "observed_command", "captured_output")
-#: One representative key per reference family; any key in the family counts.
-_REF_EXAMPLE_KEYS = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command"}
 
 
 def corroboration_upgrade_hint(grade: str | None, *, ceiling: str | None) -> str | None:
