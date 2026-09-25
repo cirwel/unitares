@@ -260,12 +260,10 @@ def _last_decision_action(meta: Any) -> Optional[str]:
 async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], server=None) -> Dict[str, Any]:
     """Build plain governance metrics data for an agent."""
     server = server or mcp_server
-    verbosity = arguments.get("verbosity")
-    if verbosity and verbosity in ("minimal", "standard", "full"):
-        lite = verbosity == "minimal"
-    else:
-        lite = arguments.get("lite", True)
-        verbosity = "minimal" if lite else "full"
+    from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
+
+    verbosity = resolve_metrics_verbosity(arguments)
+    lite = verbosity == "minimal"
 
     monitor = server.get_or_create_monitor(agent_id)
     # Heal the DB ↔ file persistence split: if the on-disk state file was

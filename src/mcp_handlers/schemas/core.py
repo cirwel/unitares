@@ -237,7 +237,9 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
         if isinstance(self.include_state, str):
             self.include_state = self.include_state.lower() in ('true', '1', 'yes')
         if isinstance(self.lite, str):
-            self.lite = self.lite.lower() in ('true', '1', 'yes')
+            from src.mcp_handlers.support.param_normalization import LITE_TRUE_STRINGS
+
+            self.lite = self.lite.lower() in LITE_TRUE_STRINGS
         return self
 
 

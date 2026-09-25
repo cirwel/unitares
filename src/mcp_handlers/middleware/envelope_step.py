@@ -56,6 +56,7 @@ from src.mcp_handlers.response_formatter import (
 from src.mcp_handlers.support.param_normalization import (
     FRIENDLY_SEARCH_DETAIL_POLICY_KEY,
     FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY,
+    resolve_metrics_verbosity,
 )
 
 logger = get_logger(__name__)
@@ -1004,10 +1005,8 @@ def _raw_governance_policy(
 
     arguments = arguments or {}
     if friendly_name == "check_working_state":
-        verbosity = str(arguments.get("verbosity") or "").strip().lower()
         wants_full = (
-            verbosity in {"standard", "full"}
-            or not _as_bool(arguments.get("lite"), default=True)
+            resolve_metrics_verbosity(arguments) != "minimal"
             or _as_bool(arguments.get("include_state"), default=False)
         )
         return wants_full, (
@@ -1126,13 +1125,8 @@ def _response_options(
             "all_inline_details": "response_mode='full' + include_details=true",
         }
     if friendly_name == "check_working_state":
-        verbosity = str(arguments.get("verbosity") or "").strip().lower()
-        if verbosity in {"minimal", "standard", "full"}:
-            current = verbosity
-        else:
-            current = "full" if not _as_bool(arguments.get("lite"), default=True) else "minimal"
         return {
-            "current": current,
+            "current": resolve_metrics_verbosity(arguments),
             "routine": "verbosity='minimal' (default)",
             "interpreted_state": "verbosity='standard'",
             "complete_diagnostics": "verbosity='full'",
