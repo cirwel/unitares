@@ -172,8 +172,11 @@ The two identifiers serve different jobs:
   the surface digest move; 1.15.0, 2026-09-24: `get_governance_metrics` and
   `check_working_state` declare `verbosity`, which the handler already read;
   undeclared, `/mcp/` dropped it, so the `standard` tier was unreachable there.
-  `lite` keeps its meaning and `verbosity` overrides it when set; both input
-  digests and the surface digest move).
+  `verbosity` overrides `lite` when set. Two `lite` inputs now get a different
+  tier: an explicit `lite: null` gets the default (`minimal`, previously `full`),
+  and on REST a string the schema reads as false, such as `"no"` or `"0"`, gets
+  `full` (previously `minimal`), matching MCP. Both input digests and the surface
+  digest move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

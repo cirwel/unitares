@@ -99,9 +99,13 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # verbosity ("minimal" | "standard" | "full"), which the handler has read since
 # the tiers existed (same class as 1.10.0's list_tools gap). Only lite was
 # declared, so /mcp/ dropped verbosity and the middle tier was unreachable
-# there. Nothing is removed or renamed; lite keeps its meaning and verbosity
-# overrides it when set. Both tools' input_schema_sha256 and the surface digest
-# move.
+# there. Nothing is removed or renamed and verbosity overrides lite when set.
+# Two lite inputs change the tier served, because handler and envelope now
+# resolve it through one function: an explicit lite=null now serves minimal
+# (the default), not full; and on the unvalidated REST path the strings the
+# schema reads as false ("False", "no", "off", "0", ...) now serve full instead
+# of minimal, matching the MCP path. Both tools' input_schema_sha256 and the
+# surface digest move.
 INTERFACE_CONTRACT_VERSION = "1.15.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
