@@ -544,8 +544,11 @@ def build_transport_runtime(
         # No public listener means nothing carries the confined gate, so fall
         # back to gating every request rather than none of them.
         logger.error(
-            "No public OAuth listener is serving; OAuth now gates every /mcp "
-            "request on the main listener"
+            "No public OAuth listener is serving; %s",
+            "OAuth is unavailable, so every /mcp request on the main listener "
+            "answers 503"
+            if auth_config.gate_unavailable
+            else "OAuth now gates every /mcp request on the main listener",
         )
         auth_config = dataclasses.replace(auth_config, oauth_public_listener_only=False)
     if auth_config.oauth_provider is not None and auth_config.static_client_id:

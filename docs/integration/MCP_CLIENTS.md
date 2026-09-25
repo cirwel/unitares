@@ -167,6 +167,8 @@ tool runs:
    error is logged. If OAuth
    setup fails, the public listener answers 503 and the main listener is
    still served, unless `UNITARES_OAUTH_REQUIRED=1`, which refuses to start.
+   If setup fails *and* the public listener cannot bind, nothing confines
+   the failed gate, so every `/mcp` request answers 503.
    `scripts/dev/unitares_doctor.py`'s `mcp_route_gate` probes the public
    listener when `UNITARES_OAUTH_PUBLIC_PORT` and `UNITARES_OAUTH_ISSUER_URL`
    are both set.

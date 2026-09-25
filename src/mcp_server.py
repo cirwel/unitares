@@ -197,7 +197,8 @@ if _oauth_issuer_url:
             "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
             + (
                 f"and is now CLOSED (503) on the public listener :{_oauth_public_port}; "
-                "the main listener is still served"
+                "the main listener is still served, unless the public listener "
+                "cannot bind, in which case every /mcp request answers 503"
                 if _oauth_public_port
                 else "and is now CLOSED (503) rather than served open"
             )

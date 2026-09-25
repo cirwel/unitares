@@ -587,3 +587,22 @@ async def test_build_transport_runtime_stamps_the_public_listener(monkeypatch):
         assert runtime.server.config.app is app
     finally:
         runtime.public_socket.close()
+
+
+def test_follower_exit_tracks_the_leader_without_being_told():
+    """The runtime's finally also sets the follower's flag, so an end-to-end
+    stop cannot show the link; this does. Without it the public listener keeps
+    taking connections through the main server's whole drain."""
+    import uvicorn
+
+    from src.services.mcp_transport_service import _follower_server_class
+
+    leader = uvicorn.Server(uvicorn.Config(lambda *a: None))
+    follower = _follower_server_class()(leader, uvicorn.Config(lambda *a: None))
+    assert follower.should_exit is False
+    leader.should_exit = True
+    assert follower.should_exit is True
+    leader.should_exit = False
+    follower.should_exit = True
+    assert follower.should_exit is True
+    assert leader.should_exit is False
