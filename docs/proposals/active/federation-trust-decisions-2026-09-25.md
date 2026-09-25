@@ -16,7 +16,7 @@ local to this record and unrelated to D1–D7 in
 |---|---|---|---|
 | D3a | Schedule multi-principal trust work? | **Not scheduled** | A real outside party asks to verify a record from this deployment |
 | D3b | Custody for the `drr.v1` receipt key | **Deferred behind D3a**; framing recorded for whoever wakes it | D3a waking |
-| D4 | Peer-review path signs party A's slot with the caller's key | Fixed on its own branch (pointer below) | Its PR's review and merge |
+| D4 | Peer-review path signs party A's slot with the caller's key | Fixed in [#2450](https://github.com/cirwel/unitares/pull/2450) (pointer below) | That PR's review and merge |
 | D5 | Keep, restore or retire party-HMAC signatures | **Retire minting; keep history readable** | Implementation PR after D4 lands ([#2449](https://github.com/cirwel/unitares/issues/2449)) |
 
 ## D3a: multi-principal trust is not scheduled
@@ -150,8 +150,8 @@ provided a new row reads as `unsigned` and no field is added or removed.
 On the peer-review synthesis path, a paused agent with no key on file had
 `signature_a` keyed on the `api_key` the synthesis caller supplied. That is
 usually the reviewer's key, so the record showed a party-A signature party A
-never produced. The fix is on branch `claude/peer-synthesis-signature-fallback`
-and its PR is linked here when opened. It stands on its own until D5 lands,
+never produced. The fix is
+[#2450](https://github.com/cirwel/unitares/pull/2450). It stands on its own until D5 lands,
 since records minted in between should not carry a signature in a slot whose
 party did not produce it.
 
