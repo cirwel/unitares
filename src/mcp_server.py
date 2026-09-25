@@ -333,6 +333,24 @@ async def main():
     """Start the governance server and own its lifecycle."""
     args = parse_args()
 
+    # Judged before bootstrap: bootstrap's lease acquisition SIGTERMs any
+    # running predecessor, so a refusal after it would turn a config mistake
+    # in this process into an outage. Only --host and the environment are
+    # needed; a public listener that later fails to bind falls back to gating
+    # every request, which is stricter than what is judged here.
+    _refusal = auth_gate_refusal(
+        provider_present=_oauth_provider is not None,
+        issuer_set=bool(_oauth_issuer_url),
+        main_listener_ungated=main_listener_ungated(
+            public_listener_up=bool(_oauth_issuer_url and _oauth_public_port),
+            host=args.host,
+        ),
+        main_host=args.host,
+    )
+    if _refusal:
+        print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)
+        raise SystemExit(1)
+
     from src.services.mcp_server_bootstrap import (
         ServerStartupError,
         bootstrap_server,
@@ -360,10 +378,9 @@ async def main():
             build_transport_runtime,
         )
 
-        # Bound and judged before the runtime is built: build_transport_runtime
-        # schedules the background sweepers, and a refusal must come before
-        # any of them (and before the main listener) exists. After bootstrap,
-        # so a still-running predecessor has released the port with its lease.
+        # Bound after bootstrap, so a predecessor has released the port with
+        # its lease, and before the runtime, which is what lets a bind failure
+        # fall back to gating every request.
         _public_socket = (
             bind_public_socket(_oauth_public_port, main_port=args.port)
             if _oauth_issuer_url and _oauth_public_port
@@ -372,17 +389,6 @@ async def main():
         _main_ungated = main_listener_ungated(
             public_listener_up=_public_socket is not None, host=args.host
         )
-        _refusal = auth_gate_refusal(
-            provider_present=_oauth_provider is not None,
-            issuer_set=bool(_oauth_issuer_url),
-            main_listener_ungated=_main_ungated,
-            main_host=args.host,
-        )
-        if _refusal:
-            if _public_socket is not None:
-                _public_socket.close()
-            print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)
-            raise SystemExit(1)
 
         def _set_server_ready() -> None:
             global SERVER_READY, SERVER_STARTUP_TIME

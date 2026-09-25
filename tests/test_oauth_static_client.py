@@ -470,3 +470,36 @@ def test_main_listener_exposure_predicate(monkeypatch, up, host, tokens, expecte
 
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", tokens)
     assert main_listener_ungated(public_listener_up=up, host=host) is expected
+
+
+@pytest.mark.asyncio
+async def test_required_refusal_runs_before_bootstrap(monkeypatch):
+    """Bootstrap's lease acquisition SIGTERMs a running predecessor, so the
+    refusal must come first or a config mistake becomes an outage."""
+    from types import SimpleNamespace
+
+    from src import mcp_server
+
+    bootstrapped = []
+
+    async def _bootstrap(**_kwargs):
+        bootstrapped.append(True)
+        raise AssertionError("bootstrap must not run")
+
+    monkeypatch.setattr(
+        "src.services.mcp_server_bootstrap.bootstrap_server", _bootstrap
+    )
+    monkeypatch.setattr(mcp_server, "_oauth_provider", object())
+    monkeypatch.setattr(mcp_server, "_oauth_issuer_url", "https://gov.example.org")
+    monkeypatch.setattr(mcp_server, "_oauth_public_port", 8772)
+    monkeypatch.setattr(
+        mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(host="0.0.0.0", port=8767, force=False, reload=False),
+    )
+    monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+
+    with pytest.raises(SystemExit):
+        await mcp_server.main()
+    assert bootstrapped == []
