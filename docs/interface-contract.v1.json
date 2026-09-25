@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "b55f8a14edf912543b9fff92354a1ff1affc5cda66beb72df0eccd21a72c6b14",
+  "surface_sha256": "a4fbbe6b5ff76bc92d5306dff14e408967d807dffc7b00ab5b4dc6c9d3841932",
   "capabilities": [
     {
       "name": "start_session",
@@ -521,7 +521,7 @@
       "name": "admin",
       "implementation": "admin",
       "kind": "canonical_tool",
-      "input_schema_sha256": "c7c186f1ab66d67ca88d4bd852de5d8bdf50d72f97b20d9bc54ac90f0cd9881e",
+      "input_schema_sha256": "051e1c36bee0f0789dfecce324aa002773832b52c8fe0f4e300092dce36836ba",
       "transport_names": {
         "mcp_streamable_http": "admin",
         "rest_v1_tools": "admin",

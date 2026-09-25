@@ -6,6 +6,7 @@ import pytest
 
 from src.mcp_handlers.updates.context import UpdateContext
 from src.services.update_workflow_service import run_process_update_workflow
+from src.state_locking import LockTimeoutError
 from tests.helpers import make_agent_meta, make_mock_server, make_monitor, parse_result
 
 
@@ -170,7 +171,7 @@ async def test_run_process_update_workflow_returns_early_exit():
 async def test_run_process_update_workflow_timeout_uses_lock_error_category():
     class _TimeoutLockManager:
         def acquire_agent_lock_async(self, *args, **kwargs):
-            raise TimeoutError("lock timeout")
+            raise LockTimeoutError("lock timeout")
 
     ctx = SimpleNamespace(
         mcp_server=MagicMock(lock_manager=_TimeoutLockManager()),
@@ -198,6 +199,44 @@ async def test_run_process_update_workflow_timeout_uses_lock_error_category():
     assert data["error_code"] == "LOCK_TIMEOUT"
     assert data["error_category"] == "system_error"
     assert data["lock_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_timeout_inside_the_locked_update_is_not_reported_as_lock_contention():
+    """A TimeoutError from the work done under the lock (a slow query, a Redis
+    wait) is not contention: reporting it as LOCK_TIMEOUT would tell the
+    caller to look for another session acting as this agent."""
+    from contextlib import asynccontextmanager
+
+    class _FreeLockManager:
+        @asynccontextmanager
+        async def acquire_agent_lock_async(self, *args, **kwargs):
+            yield
+
+    ctx = SimpleNamespace(
+        mcp_server=MagicMock(lock_manager=_FreeLockManager()),
+        agent_id="agent-123",
+        agent_uuid="uuid-123",
+        arguments={"client_session_id": "agent-123"},
+        identity_assurance={"tier": "strong"},
+        result={},
+        meta=None,
+        is_new_agent=False,
+        key_was_generated=False,
+        api_key_auto_retrieved=False,
+        task_type="mixed",
+        loop=AsyncMock(),
+    )
+
+    with patch("src.mcp_handlers.updates.phases.resolve_identity_and_guards", new=AsyncMock(return_value=None)), \
+         patch("src.mcp_handlers.updates.phases.handle_onboarding_and_resume", new=AsyncMock(return_value=None)), \
+         patch("src.mcp_handlers.updates.phases.transform_inputs", return_value=None), \
+         patch("src.mcp_handlers.updates.phases.prepare_unlocked_inputs", new=AsyncMock()), \
+         patch("src.mcp_handlers.updates.phases.execute_locked_update",
+               new=AsyncMock(side_effect=TimeoutError("pool acquire timed out"))):
+        with pytest.raises(TimeoutError, match="pool acquire timed out") as excinfo:
+            await run_process_update_workflow(ctx)
+    assert not isinstance(excinfo.value, LockTimeoutError)
 
 
 @pytest.mark.asyncio
