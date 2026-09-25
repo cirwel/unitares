@@ -508,7 +508,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "cleared, unless spawn_reason marks a dispatched child or a "
             "compaction continuation. Use identity to inspect or rename an "
             "existing binding. onboard is the canonical twin; this name adds a "
-            "digest envelope and keeps the raw payload under raw_governance."
+            "digest envelope. Read the uuid from agent_uuid; a plain fresh mint "
+            "omits the raw payload, and any other mint or response_mode='full' "
+            "keeps it under raw_governance."
         ),
         experience=True),
     "sync_state": ToolAlias(

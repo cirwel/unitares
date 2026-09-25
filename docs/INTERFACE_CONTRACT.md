@@ -184,7 +184,7 @@ The two identifiers serve different jobs:
   returns; no parameter changes, and `skills`' input digest and the surface
   digest move;
   1.17.0, 2026-09-25, numbered after 1.16.0 (#2435), which merges first: the
-  progressive `tools/list` shrinks from 44,199 to 40,406 bytes.
+  progressive `tools/list` shrinks from 44,199 to 40,506 bytes.
   `search_shared_memory` stops advertising six fields only other `knowledge`
   actions read (`offset`, `epoch_scope`, `scope`, `evidence_ids`,
   `verification_basis`, `decision_standard`); search never read them, and

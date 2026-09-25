@@ -1,0 +1,33 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-fundamentals",
+  "verified_at": "2026-09-25T09:42:13Z",
+  "verified_date": "2026-09-25",
+  "verifier": "Kenny Wang",
+  "source_digests": {
+    "unitares/config/governance_config.py": "78b1adae3cd8ec79",
+    "unitares/governance_core/coherence.py": "ef819003ee72b388",
+    "unitares/governance_core/parameters.py": "84bf47ca540bbc49",
+    "unitares/src/auto_ground_truth.py": "c17109cf5c18f2a4",
+    "unitares/src/behavioral_assessment.py": "9d304a50d0c79a46",
+    "unitares/src/behavioral_sensor.py": "fce77d62fbd7b472",
+    "unitares/src/behavioral_state.py": "e214a51c1d7763c7",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/cold_start_risk_confirmation.py": "0c55f4de5973b884",
+    "unitares/src/confidence.py": "00cc04e1f54278b4",
+    "unitares/src/eisv_telemetry.py": "24f1a47911850263",
+    "unitares/src/governance_glossary.py": "5eed6ae4f7e50203",
+    "unitares/src/governance_monitor.py": "24670fc985c7bb73",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/observability/outcome_events.py": "9acf35521d583afd",
+    "unitares/src/mcp_handlers/response_formatter.py": "c47085d4e24c0774",
+    "unitares/src/mcp_handlers/tool_stability.py": "04dd07353027ecd3",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/monitor_decision.py": "c80f4e13511fe8ba",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/monitor_result.py": "07ef4ae4a00fa05e",
+    "unitares/src/services/runtime_queries.py": "8dd7ca82a9c0411a"
+  },
+  "skill_digest": "18df94e4b5c77c9c"
+}
