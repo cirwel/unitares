@@ -132,8 +132,8 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
 # A ratchet, not a target. Every session pays for the progressive tools/list
 # before its first call, so this ceiling only moves down: lower it when a cut
 # lands, and raise it only with the reason stated in the PR that raises it.
-# Measured 2026-09-25 at 40,406 B on the default schema policy,
-# with ~1.5% headroom so an ordinary parameter addition does not trip it.
+# Measured 2026-09-25 at 40,506 B on the default schema policy,
+# with ~1.2% headroom so an ordinary parameter addition does not trip it.
 PROGRESSIVE_SURFACE_CEILING_BYTES = 41_000
 # Two-sided: a cut this large that leaves the ceiling where it was would let
 # the surface grow back unnoticed, so the test asks for the ceiling to follow.

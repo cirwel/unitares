@@ -387,9 +387,9 @@ class KnowledgeParams(AgentIdentityMixin):
                 "memory_context",
         ),
         "search": (
-                "query", "limit", "offset", "search_mode", "semantic",
+                "query", "limit", "search_mode", "semantic",
                 "include_details", "include_archived", "include_cold",
-                "response_mode", "tags", "status", "scope", "epoch_scope",
+                "response_mode", "tags", "status",
                 "exclude_agent_labels", "min_similarity", "operator",
                 "discovery_type", "severity", "include_provenance",
                 "agent_id_filter", "authority_mode",
