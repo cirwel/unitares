@@ -643,27 +643,52 @@ def test_try_finally_inside_a_handler_takes_no_nested_handlers(tmp_path):
     assert p006_actually_fires(str(path), 6) is False
 
 
-def test_a_handler_inside_an_enclosing_try_takes_no_nested_handlers(tmp_path):
-    # #2447 review round 2, P3: an unrelated enclosing try block must not
-    # bring in the tries of the handler that holds the cite.
+_HANDLER_WITH_NESTED_TRY = (
+    "    try:\n"
+    "        work()\n"
+    "    except Exception:\n"
+    "        logger.warning('x')\n"
+    "        try:\n"
+    "            cleanup()\n"
+    "        except OSError:\n"
+    "            pass\n"
+)
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_an_enclosing_try_does_not_reach_into_handlers(tmp_path, wrapped):
+    # #2447 review rounds 2 and 3: an unrelated enclosing try block must not
+    # change the verdict. Tries in a handler are never on the path, whether
+    # the cite is in that handler or above it in the try block.
+    if wrapped:
+        body = "".join("    " + ln + "\n" for ln in _HANDLER_WITH_NESTED_TRY.splitlines())
+        source = "def f():\n    try:\n" + body + "    except ValueError:\n        raise\n"
+        shift = 1
+    else:
+        source = "def f():\n" + _HANDLER_WITH_NESTED_TRY
+        shift = 0
+    path = _write(tmp_path, source)
+    for cite in (2, 3, 4, 5):
+        assert p006_actually_fires(str(path), cite + shift) is False, (wrapped, cite)
+
+
+def test_a_form_feed_does_not_shift_the_noqa_line(tmp_path):
+    # #2447 review round 3: str.splitlines breaks on a form feed, which the
+    # tokenizer does not count, so the acknowledgement check read the line
+    # above the clause.
     source = (
         "def f():\n"
+        "    \x0c\n"
         "    try:\n"
+        "        y = 1\n"
         "        try:\n"
-        "            work()\n"
+        "            b()  # noqa\n"
         "        except Exception:\n"
-        "            logger.warning('x')\n"
-        "            try:\n"
-        "                cleanup()\n"
-        "            except OSError:\n"
-        "                pass\n"
+        "            pass\n"
         "    except ValueError:\n"
         "        raise\n"
     )
     path = _write(tmp_path, source)
-    assert p006_actually_fires(str(path), 5) is False
-    assert p006_actually_fires(str(path), 6) is False
-    # A cite above that handler still reaches the try in it, as in #2442.
     assert p006_actually_fires(str(path), 4) is True
 
 
