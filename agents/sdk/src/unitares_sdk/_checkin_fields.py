@@ -79,7 +79,8 @@ def resolve_checkin_fields(raw: dict) -> dict[str, Any]:
     )
     # The compact envelope lifts no guidance. What stands in for it depends
     # on the decision: a pause's next_action is the concrete instruction (it
-    # names self_recovery); a guide's is the server's reason. On any other
+    # names the recovery route: self_recovery below the review gate, the
+    # dialectic session above it); a guide's is the server's reason. On any other
     # proceed, next_action is a generic "keep working" prompt, not guidance.
     if verdict == "pause":
         envelope_guidance = _first(raw.get("next_action"), action_summary.get("reason"))

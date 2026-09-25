@@ -12,6 +12,8 @@ config :unitares_sentinel,
   start_fleet_state: false,
   start_websocket: false,
   start_fleet_finding_emitter: false,
+  start_audit_volume_watch: false,
+  launchd_label_prefixes: [],
   emit_checkins: false,
   lease_advisory_enabled: false,
   database_url:

@@ -67,7 +67,6 @@ async def test_bootstrap_releases_process_lease_when_database_init_fails(monkeyp
             host="127.0.0.1",
             port=8767,
             version="test",
-            project_root=bootstrap.Path("."),
             mcp=object(),
         )
 
@@ -132,7 +131,6 @@ async def test_bootstrap_initializes_dependencies_before_announcing(monkeypatch)
         host="127.0.0.1",
         port=8767,
         version="test",
-        project_root=bootstrap.Path("."),
         mcp=object(),
     )
 

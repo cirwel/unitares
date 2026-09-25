@@ -363,9 +363,16 @@ def test_sync_state_envelope_emits_recovery_hint_when_degraded():
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     # Asserted as "names the review path", not as a literal tool name: the
     # literal was `self_recovery_review`, a register=False delegate, so this
-    # test passed while the hint it checked was a dead end.
-    assert "self_recovery(action='review'" in env["recovery_hint"]
+    # test passed while the hint it checked was a dead end. Above
+    # MAX_RISK_FOR_SELF_RECOVERY review records the reflection and then
+    # refuses, so the path named is the dialectic review.
+    assert "request_review" in env["recovery_hint"]
+    assert "self_recovery(" not in env["recovery_hint"]
     assert env["risk_summary"].startswith("risk high")
+
+    payload["metrics"]["risk_score"] = 0.6  # below the review gate
+    env = build_experience_envelope("sync_state", "process_agent_update", payload)
+    assert "self_recovery(action='review'" in env["recovery_hint"]
 
 
 def test_sync_state_envelope_pause_surfaces_action_and_stop_guidance():
@@ -380,7 +387,10 @@ def test_sync_state_envelope_pause_surfaces_action_and_stop_guidance():
     assert env["action_summary"]["action"] == "pause"
     assert env["state_summary"]["action"] == "pause"
     assert "keep working" not in env["next_action"].lower()
-    assert "self_recovery(action='review'" in env["next_action"]
+    # Risk 1.0 is above the review gate: route to a dialectic review, not to
+    # a self_recovery review that records the reflection and then refuses.
+    assert "request_review" in env["next_action"]
+    assert "self_recovery(" not in env["next_action"]
 
 
 def test_sync_state_envelope_proceed_keeps_continuation_guidance():
@@ -1038,7 +1048,7 @@ def test_actionable_auto_sync_state_is_bounded_but_self_sufficient():
     assert env["action_summary"]["action"] == "pause"
     assert env["state_summary"]["nearest_edge"] == "risk_pause"
     assert "stop this line of work" in env["next_action"]
-    assert "self_recovery(action='review'" in env["recovery_hint"]
+    assert "request_review" in env["recovery_hint"]
     assert len(json.dumps(env, ensure_ascii=False).encode("utf-8")) <= 4_000
 
 
@@ -1612,6 +1622,26 @@ def test_search_envelope_counts_nested_raw_governance_payload():
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
     assert "5 prior discoveries matched" in env["next_action"]
     assert env["memory_suggestions"][0]["summary"] == "prior art"
+
+
+def test_store_finding_envelope_keeps_the_callers_summary_verbatim():
+    """Tool-name translation is for hints, not for the caller's own words."""
+    summary = "Plugin auto-onboard labels a session; call onboard() to see it"
+    payload = {
+        "success": True,
+        "message": "Discovery stored for agent 'agent-1'",
+        "discovery_id": "d-words",
+        "discovery": {"id": "d-words", "type": "bug_found", "status": "open", "summary": summary},
+        "_resolve_when_done": (
+            "When this is addressed, close the loop: "
+            "knowledge(action='update', discovery_id='d-words', status='resolved')"
+        ),
+    }
+
+    env = build_experience_envelope("store_finding", "knowledge", payload, {"summary": summary})
+
+    assert env["state_summary"]["summary"] == summary
+    assert "update_finding(" in env["next_action"]
 
 
 def test_store_finding_envelope_reports_write_instead_of_empty_search():

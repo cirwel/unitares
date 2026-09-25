@@ -160,7 +160,7 @@ class TestExplainVerdict:
     def test_known_verdict_includes_meaning_and_next_action(self):
         result = explain_verdict("pause")
         assert result["value"] == "pause"
-        assert "Needs attention" in result["meaning"]
+        assert "refused, not queued" in result["meaning"]
         assert "next_action" in result
 
     def test_unknown_verdict_falls_through(self):
