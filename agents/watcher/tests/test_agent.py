@@ -2299,20 +2299,59 @@ def test_listing_does_not_group_outside_git(watcher_module, tmp_path):
     assert "locations" not in block
 
 
+def _fingerprint_lines(block: str) -> list[str]:
+    return [line for line in block.splitlines() if "(#" in line]
+
+
 def test_display_cap_counts_entries_not_copies(watcher_module, tmp_path):
+    """The 10-row cap bounds fingerprint lines, as it did before grouping:
+    12 medium rows in 2 groups show 10 copies, and the 2 cut copies are
+    summarised, not listed, and not marked shown."""
     trees = _repo_with_worktrees(tmp_path)
     findings = [
-        _copy(f"a{i:015d}", trees["main"], line=i + 1, line_content_hash="aaaa00000000")
+        _copy(f"a{i:07d}00000000", trees["main"], line=i + 1, line_content_hash="aaaa00000000")
         for i in range(6)
     ] + [
-        _copy(f"b{i:015d}", trees["main"], line=i + 1, line_content_hash="bbbb00000000")
+        _copy(f"b{i:07d}00000000", trees["main"], line=i + 1, line_content_hash="bbbb00000000")
         for i in range(6)
     ]
     block, shown = watcher_module._format_findings_block(findings, header="x")
     assert block is not None
-    # 12 medium rows would hit the 10-item cap; as 2 entries all of them show.
-    assert len(shown) == 12
-    assert "Total unresolved: 12 (showing 12 as 2 entries" in block
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
+    assert "+2 more location(s) not shown" in block
+    hidden = {f["fingerprint"] for f in findings} - {f["fingerprint"] for f in shown}
+    assert len(hidden) == 2
+    assert not any(f"(#{fp[:8]})" in block for fp in hidden)
+    assert "Total unresolved: 12 (showing 10 as 2 entries" in block
+
+
+def test_display_cap_bounds_one_large_group(watcher_module, tmp_path):
+    # One file with 30 identical lines is one group; it still shows 10 rows.
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [_copy(f"a{i:015d}", trees["main"], line=i + 1) for i in range(30)]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
+    assert "+20 more location(s) not shown" in block
+
+
+def test_display_cap_leaves_no_room_for_grouped_mediums_after_ten_highs(
+    watcher_module, tmp_path
+):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _make_raw_entry(f"hi_{i:013d}", severity="high") for i in range(10)
+    ] + [
+        _copy("aaaa000000000001", trees["main"]),
+        _copy("bbbb000000000002", trees["feat-a"]),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "[MEDIUM]" not in block
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
 
 
 def test_print_unresolved_groups_copies_without_writing(
@@ -2390,6 +2429,121 @@ def test_worktree_label_for_deleted_dir_inside_a_live_worktree(watcher_module, t
     trees = _repo_with_worktrees(tmp_path, "feat-a")
     deleted = trees["feat-a"] / "newdir" / "sub" / "x.py"
     assert watcher_module._worktree_label(str(deleted), {}) == "feat-a"
+
+
+def _checkout_with_codex_worktrees(root: Path) -> dict[str, Path]:
+    """The live layout: a main checkout ``projects/unitares``, two Codex
+    worktrees ``.codex/worktrees/<id>/unitares`` and ``projects/wt/<name>``.
+    The main checkout and both Codex toplevels are all named ``unitares``."""
+    main = root / "projects" / "unitares"
+    main.mkdir(parents=True)
+    _git("init", "-q", cwd=main)
+    _git("commit", "-q", "--allow-empty", "--no-verify", "-m", "init", cwd=main)
+    trees = {
+        "main": main,
+        "codex-4922": root / ".codex" / "worktrees" / "4922" / "unitares",
+        "codex-9429": root / ".codex" / "worktrees" / "9429" / "unitares",
+        "feat": root / "projects" / "wt" / "unitares-feat",
+    }
+    for key, tree in trees.items():
+        if key != "main":
+            tree.parent.mkdir(parents=True, exist_ok=True)
+            _git("worktree", "add", "-q", "-b", key, str(tree), cwd=main)
+    for tree in trees.values():
+        (tree / "pkg").mkdir(parents=True, exist_ok=True)
+        (tree / "pkg" / "mod.py").write_text("pass\n")
+    return {key: tree.resolve() for key, tree in trees.items()}
+
+
+def test_worktree_label_tells_codex_worktrees_and_main_apart(watcher_module, tmp_path):
+    trees = _checkout_with_codex_worktrees(tmp_path)
+    label = watcher_module._worktree_label
+    assert label(str(trees["main"] / "pkg" / "mod.py"), {}) == "main"
+    assert label(str(trees["codex-4922"] / "pkg" / "mod.py"), {}) == "codex:4922"
+    assert label(str(trees["codex-9429"] / "pkg" / "mod.py"), {}) == "codex:9429"
+    assert label(str(trees["feat"] / "pkg" / "mod.py"), {}) == "unitares-feat"
+    # A deleted directory inside the main checkout still counts as main.
+    assert label(str(trees["main"] / "gone" / "x.py"), {}) == "main"
+
+
+def test_worktree_label_for_a_removed_codex_worktree(watcher_module, tmp_path):
+    gone = tmp_path / ".codex" / "worktrees" / "7777" / "unitares" / "pkg" / "mod.py"
+    (tmp_path / ".codex" / "worktrees").mkdir(parents=True)
+    assert watcher_module._worktree_label(str(gone), {}) == "codex:7777"
+
+
+def test_other_worktree_footer_separates_codex_worktrees_and_main(
+    watcher_module, tmp_path, capsys
+):
+    trees = _checkout_with_codex_worktrees(tmp_path)
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"]),
+            _copy("bbbb000000000002", trees["codex-4922"]),
+            _copy("cccc000000000003", trees["codex-4922"], line=5),
+            _copy("dddd000000000004", trees["codex-9429"]),
+        ],
+    )
+
+    assert watcher_module.print_unresolved(scope_root=trees["feat"]) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        "Plus 4 finding(s) in other worktrees "
+        "(codex:4922=2, codex:9429=1, main=1)"
+    ) in out
+    assert "unitares=" not in out
+
+
+def test_federated_surface_skips_out_of_scope_labels(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    """The federated chime discards the out-of-scope counts, so it must not
+    pay for their labels: no git subprocess runs."""
+    trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["feat-a"]),
+            _copy("bbbb000000000002", trees["feat-b"], rel="tests/test_mod.py"),
+            _copy("cccc000000000003", tmp_path, rel="wt/removed/pkg/mod.py"),
+        ],
+    )
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+        raise OSError("subprocess blocked by test")
+
+    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
+
+    assert (
+        watcher_module.surface_pending(
+            audience="codex:main", scope_root=trees["main"], check_in=False
+        )
+        == 0
+    )
+    assert calls == []
+    assert "other worktrees" not in capsys.readouterr().out
+
+
+def test_partition_without_counts_computes_no_labels(watcher_module, tmp_path, monkeypatch):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [_copy("aaaa000000000001", trees["feat-a"])]
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append(args)
+        raise OSError("subprocess blocked by test")
+
+    monkeypatch.setattr(subprocess, "run", _record)
+    in_scope, counts = watcher_module._partition_findings_by_scope(
+        findings, trees["main"], count_out_of_scope=False
+    )
+    assert in_scope == [] and counts == {}
+    assert calls == []
 
 
 # --- surface_pending (UserPromptSubmit hook, chime mode) -------------------

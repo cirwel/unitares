@@ -2153,9 +2153,12 @@ def surface_pending(
             if f.get("status", "open") in ("open", "surfaced")
             and audience not in _surface_receipts(f)
         ]
+        # The chime shows no footer, so skip the out-of-scope labels: each
+        # one can cost a git subprocess on every prompt.
         pending_findings, _out_of_scope = _partition_findings_by_scope(
             pending_findings,
             scope_root,
+            count_out_of_scope=False,
         )
 
     if audience is None:
