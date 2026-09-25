@@ -38,10 +38,16 @@ empty reviewer key, so its record carries at most `signature_a`: with the
 fallback gone, and no agent created since January 2026 holding an `api_key`, a
 new agent's record carries no party attestation, while an older agent with a
 key on file gets a single-signer attestation. Either way the receipt would
-carry `both_signatures_present: false`. A peer-reviewed session signs with each
-party's key when one is available, so a peer resolution between two parties
-that both hold keys would still produce a bilateral record, and its receipt
-would carry `both_signatures_present: true`.
+carry `both_signatures_present: false`. A peer-reviewed session signs
+`signature_b` with the reviewer's key on file, if any, and `signature_a` with
+the paused agent's key on file. When the paused agent has no key, `signature_a`
+is keyed on whatever `api_key` the synthesis submitter supplied, so a record for
+a keyless agent can still report `single_signer` without that agent holding any
+key; #2155 removed the uuid-derived fallback from the LLM-assisted paths only.
+A peer resolution between two parties that both hold keys would still produce a
+bilateral record, and its receipt would carry `both_signatures_present: true`.
+In every case the flag records that strings were stored, not who held the
+keys.
 
 ## What is built
 
