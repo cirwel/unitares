@@ -57,8 +57,11 @@ logs-err: ## Tail server error logs
 
 # ── Documentation ────────────────────────────────────────
 
-docs: ## Generate tool documentation from @mcp_tool decorators
-	@python3 scripts/generate_tool_docs.py
+docs: ## Regenerate the generated docs (tool reference, tool edge index, flag and port catalogs)
+	@python3 scripts/diagnostics/generate_tool_docs.py
+	@python3 scripts/dev/tool_edge_index.py
+	@python3 scripts/dev/flag_catalog.py
+	@python3 scripts/dev/ports_catalog.py
 
 validate: ## Run CI validation checks locally
 	@python3 scripts/dev/check_ci_python_version_sync.py

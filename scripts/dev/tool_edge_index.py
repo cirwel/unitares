@@ -47,11 +47,15 @@ Exit codes:
     1 — index is stale (--check)
         or the snapshot contains error-severity findings (--lint)
     2 — cannot look: nothing was compared, for one of two reasons.
-        (a) A third-party module the handler walk or the production registrar
-            needs is not installed (``prometheus_client`` on a core-only
-            install). ``missing_dependency`` identifies these.
-        (b) ``src.mcp_handlers`` itself did not import. That one IS a defect in
-            the tree, but it is reported here rather than as a finding because
+        (a) A third-party module that the ``src.mcp_handlers`` import itself,
+            the handler walk, or the production registrar needs is not
+            installed (``mcp`` on a runner with no requirements installed,
+            ``prometheus_client`` on a core-only install).
+            ``missing_dependency`` identifies these.
+        (b) ``src.mcp_handlers`` itself did not import for a reason in the
+            tree (a missing ``src.*`` module, a broken re-export). That one IS
+            a defect in the tree, but it is reported here rather than as a
+            finding because
             it leaves no registry to read: there is no index to render and so
             nothing to compare. The message says so and does not advise
             installing anything.
@@ -67,8 +71,9 @@ Reproducibility — why ``--check`` has to agree across interpreters:
     The committed index must come out byte-identical from every supported
     interpreter, or the freshness gate calls a fresh document stale. Three
     environment factors were measured to move it (2026-09-02, regenerate-and-
-    diff on five interpreter/pydantic/mcp combinations); each is neutralised
-    here, in the generator, rather than by pinning the environment:
+    diff on five interpreter/pydantic/mcp combinations), and a fourth is set
+    by the operator; each is neutralised here, in the generator, rather than
+    by pinning the environment:
 
     1. Entry-point plugins. A ``governance_mcp.plugins`` package installed on
        the machine registers into the same ``_TOOL_DEFINITIONS`` the shipped
@@ -90,6 +95,10 @@ Reproducibility — why ``--check`` has to agree across interpreters:
        ``constraints.txt``. A stale verdict prints the differing lines and the
        running Python/mcp/pydantic versions next to that pin, so the next
        reader sees the factor instead of a bare "stale".
+    4. Timeout variables. Two registered timeouts are computed from
+       environment variables when the handlers import, and a value set in the
+       shell or the repo-root ``.env`` would be committed as if it shipped.
+       ``main`` pins them to their defaults first (``PINNED_TIMEOUT_VARIABLES``).
 
 Line numbers — why the committed document carries none:
     A handler's ``file:line`` moves with every edit above its definition, so
@@ -147,6 +156,33 @@ SURFACE_SOURCE_FILES = (
     "src/tool_registration.py",
     "src/tool_schemas.py",
 )
+
+# Environment variables that move a registered tool's timeout (reproducibility
+# factor 4). The registered timeout each one moves is computed while the handler
+# modules import; the handlers also re-read both at call time for inner
+# budgets, which no generated doc reports. Both readers treat an empty value as
+# unset, so setting each to "" before that import pins the shipped default, and
+# also shadows a repo-root .env: src/agent_metadata_model.py loads it with
+# load_dotenv, which never overrides a variable that is already set.
+PINNED_TIMEOUT_VARIABLES = (
+    # dialectic and its request / thesis delegates:
+    # src/mcp_handlers/dialectic/handlers.py _synthetic_review_budget
+    "UNITARES_DIALECTIC_REVIEW_BUDGET",
+    # call_model: src/mcp_handlers/support/model_inference.py _call_model_timeout
+    "UNITARES_CALL_MODEL_TIMEOUT",
+)
+
+
+def pin_timeout_environment() -> None:
+    """Pin ``PINNED_TIMEOUT_VARIABLES`` to their shipped defaults.
+
+    Effective only before ``src.mcp_handlers`` is imported, which is why each
+    generator's ``main`` calls it and ``_load_registries`` does not: an
+    in-process caller that has already imported the handlers keeps the
+    timeouts its own environment set, and its ``os.environ`` is left alone.
+    """
+    for variable in PINNED_TIMEOUT_VARIABLES:
+        os.environ[variable] = ""
 
 
 @dataclass
@@ -416,11 +452,28 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
     # second fence, for a tool that reached the registry some other way.
     os.environ["UNITARES_DISABLE_PLUGINS"] = "1"
     sys.path.insert(0, str(REPO))
-    import src.mcp_handlers as handlers_pkg  # noqa: E402
+    try:
+        import src.mcp_handlers as handlers_pkg  # noqa: E402
+    except ImportError as exc:
+        # The package's own imports reach third-party modules too (``mcp``
+        # first of all), so an absent one surfaces here before the walk below
+        # starts, and gets the same classification: "cannot look", with the
+        # install remedy. A broken re-export is still re-raised as the tree
+        # defect ``main`` reports it as.
+        missing = missing_dependency(exc)
+        if missing:
+            raise MissingDependency(missing, exc) from exc
+        raise
 
     failures: list[str] = []
+    # walk_packages imports each subpackage a second time to descend into it,
+    # and with no onerror it re-raises anything but ImportError from that
+    # import: a subpackage that raised above would crash the walk and lose the
+    # failure just recorded. The loop body has already recorded it, so the
+    # second report is dropped.
     for info in pkgutil.walk_packages(
-        handlers_pkg.__path__, handlers_pkg.__name__ + "."
+        handlers_pkg.__path__, handlers_pkg.__name__ + ".",
+        onerror=lambda _name: None,
     ):
         try:
             importlib.import_module(info.name)
@@ -1508,6 +1561,7 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    pin_timeout_environment()
     try:
         tools, aliases, failures, unbound = collect()
     except MissingDependency as exc:

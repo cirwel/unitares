@@ -1724,12 +1724,18 @@ def _check_generated_doc_fresh(
     script_rel: str,
     doc_rel: str,
     cannot_look_message: str = "",
+    refused_remedy: str = "",
 ) -> CheckResult:
     """Run a generator's `--check` and report its verdict under the contract above.
 
     `cannot_look_message` is the SKIP message for exit 2. A generator with no
     documented exit-2 path leaves it empty, and an exit 2 from it lands in the
     UNKNOWN branch rather than being read as a decision it never made.
+
+    `refused_remedy` is the advice for exit 3, a generator that read its input
+    and refused to publish it. That is still UNKNOWN, since nothing was
+    compared, but the cause is named in the generator's output and is usually
+    not the generator, so the generic "fix the generator" would misdirect.
     """
     mode = "local"
     script = repo_root / script_rel
@@ -1744,6 +1750,13 @@ def _check_generated_doc_fresh(
         return CheckResult(name, mode, Status.PASS, f"{doc_rel} is up to date")
     if proc.returncode == 2 and cannot_look_message:
         return CheckResult(name, mode, Status.SKIP, cannot_look_message, detail=output)
+    if (proc.returncode == 3 and refused_remedy
+            and not _generator_crashed(proc.stderr or "")):
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{doc_rel} freshness UNKNOWN — {script.name} refused to publish",
+            detail=f"{output}\n  -> exited 3 without comparing {doc_rel}; {refused_remedy}",
+        )
     if proc.returncode != 1 or _generator_crashed(proc.stderr or ""):
         return CheckResult(
             name, mode, Status.WARN,
@@ -1804,6 +1817,37 @@ def check_tool_edge_index_fresh(repo_root: Path) -> CheckResult:
         cannot_look_message=(
             "generator could not look — missing dependency "
             "(requirements-full.txt) or unimportable handler package"
+        ),
+    )
+
+
+def check_tool_reference_fresh(repo_root: Path) -> CheckResult:
+    """FAIL if docs/dev/TOOL_REFERENCE.md has drifted from the live registries.
+
+    The reference states every registered tool's identity class, its timeout
+    and a ceiling on each action's, the names that still reach it, and the
+    description describe_tool serves, all read from the registries after
+    import. A tool, timeout, alias or description changed without regenerating
+    leaves the reference describing a surface that no longer exists.
+
+    Same exit contract as the tool edge index, whose registry loader it shares:
+    exit 2 means the generator could not look and SKIPs, and a crash reports
+    UNKNOWN rather than drift. So does its exit 3, a registry it read but
+    refused to publish (a handler module that did not import, a router action
+    table it could not read, or no first-party tool): nothing was compared, so
+    calling the committed reference stale would be a claim the run never
+    established.
+    """
+    return _check_generated_doc_fresh(
+        "tool_reference_fresh", repo_root,
+        "scripts/diagnostics/generate_tool_docs.py", "docs/dev/TOOL_REFERENCE.md",
+        cannot_look_message=(
+            "generator could not look — missing dependency "
+            "(requirements-full.txt) or unimportable handler package"
+        ),
+        refused_remedy=(
+            "fix the cause it names (usually a handler module that does not "
+            "import), then re-run the doctor"
         ),
     )
 
@@ -3693,6 +3737,8 @@ def build_checks(
               lambda: check_flags_catalog_fresh(repo_root)),
         Check("tool_edge_index_fresh", "local",
               lambda: check_tool_edge_index_fresh(repo_root)),
+        Check("tool_reference_fresh", "local",
+              lambda: check_tool_reference_fresh(repo_root)),
         Check("class_anchors_fresh", "local",
               lambda: check_class_anchors_fresh(repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
