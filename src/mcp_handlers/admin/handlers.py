@@ -780,9 +780,12 @@ async def handle_cleanup_stale_locks(arguments: Dict[str, Any]) -> Sequence[Text
             "lock_dir": str(DEFAULT_LOCK_DIR),
             "cleaned_locks": result.get('cleaned_locks', []),
             "kept_locks": result.get('kept_locks', []),
+            "error_locks": result.get('error_locks', []),
             "message": (
                 f"{'Would remove' if dry_run else 'Removed'} {result['cleaned']} free lock file(s), "
-                f"kept {result['kept']} in {DEFAULT_LOCK_DIR}"
+                f"kept {result['kept']}"
+                f"{', failed on ' + str(result['errors']) + ' (see error_locks)' if result.get('errors') else ''}"
+                f" in {DEFAULT_LOCK_DIR}"
                 f"{' (dry run: nothing removed)' if dry_run else ''}. {note}"
             )
         })

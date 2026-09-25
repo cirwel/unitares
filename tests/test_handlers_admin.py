@@ -121,6 +121,24 @@ class TestCleanupStaleLocks:
             assert call_kwargs[1]["max_age_seconds"] == 600.0 or call_kwargs.kwargs.get("max_age_seconds") == 600.0
 
     @pytest.mark.asyncio
+    async def test_sweep_errors_are_in_the_message(self, tmp_path, monkeypatch):
+        import src.state_locking as state_locking
+
+        monkeypatch.setattr(state_locking, "DEFAULT_LOCK_DIR", tmp_path)
+        free = tmp_path / "stuck.lock"
+        free.write_text("{}")
+        old = time.time() - 600
+        os.utime(free, (old, old))
+
+        from src.mcp_handlers.admin.handlers import handle_cleanup_stale_locks
+        with patch("src.lock_cleanup.remove_lock_file_if_free", side_effect=PermissionError("read-only dir")):
+            data = json.loads((await handle_cleanup_stale_locks({}))[0].text)
+
+        assert data["errors"] == 1
+        assert data["error_locks"][0]["lock_file"] == "stuck.lock"
+        assert "failed on 1 (see error_locks)" in data["message"]
+
+    @pytest.mark.asyncio
     async def test_dry_run_message_says_nothing_was_removed(self, tmp_path, monkeypatch):
         import src.state_locking as state_locking
 

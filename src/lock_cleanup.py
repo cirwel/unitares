@@ -165,7 +165,9 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
         "errors": len(errors),
         "cleaned_locks": cleaned,
         "kept_locks": kept,
-        "errors": errors,
+        # A separate key: "errors" used to be set twice, the list silently
+        # replacing the count.
+        "error_locks": errors,
         "dry_run": dry_run
     }
 

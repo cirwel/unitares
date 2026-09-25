@@ -221,6 +221,13 @@ class TestCleanupStaleLocks:
         assert result["cleaned"] == 2  # free + corrupt
         assert result["kept"] == 1  # held
 
+    def test_removal_errors_are_counted_and_listed(self, tmp_path):
+        _write_lock(tmp_path / "stuck.lock")
+        with patch("src.lock_cleanup.remove_lock_file_if_free", side_effect=PermissionError("read-only dir")):
+            result = cleanup_stale_locks(tmp_path)
+        assert result["errors"] == 1
+        assert result["error_locks"] == [{"lock_file": "stuck.lock", "error": "read-only dir"}]
+
     def test_only_processes_lock_files(self, tmp_path):
         """Non-.lock files should be ignored."""
         (tmp_path / "not_a_lock.txt").write_text("data")
