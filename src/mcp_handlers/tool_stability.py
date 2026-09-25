@@ -618,7 +618,8 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "forced and provenance keys in detail are stripped. Use store_finding "
             "for durable knowledge. outcome_event is the canonical twin; this "
             "name adds a digest envelope and keeps the raw payload under "
-            "raw_governance. "
+            "raw_governance only with response_mode='full' or "
+            "include_semantics=true, or when the write returned no outcome_id. "
             f"{EISV_POINTER}"
         ),
         experience=True),
