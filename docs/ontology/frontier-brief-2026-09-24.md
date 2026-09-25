@@ -309,3 +309,30 @@ the intended target. Say so in its claim.
   embedding, OpenAI's first assessments under the new principles, WorkWorlds
   replication beyond PharmaCo's eight tasks, and RoboHarm with varied wording
   and longer horizons.
+
+---
+
+## Operator disposition (2026-09-25)
+
+The five open questions this note raised (in §1–§3 and *Not done here,
+deliberately*) were put to the operator after this note merged
+(#2400). The operator answered "idk" to each, asked whether a council could
+settle them, and then delegated them in these words: *"proceed best for the
+federation's future."* On resolver identity specifically, the operator said:
+*"im thinking human is operator but maybe so can ai, idk."*
+
+This section records that delegation and how the authoring session used it.
+The session drew on a three-member subagent council (architect, adversarial
+reviewer, live verifier), advisory local consults, and one governed dialectic
+(session `5039af21a55b7d9f`). **None of these is independent review, and
+agreement among them is not operator authorization.** The delegation above is
+the only authority for the dispositions below, and it covers only these five
+items. The operator can reverse any of them.
+
+| # | Question | Disposition | What it does not do |
+|---|---|---|---|
+| 1 | Starting context in the coordination ablation (§3) | **Deferred until an enrollment is scheduled.** Recommended under the delegation, and to be confirmed or reversed when enrollment starts: fix the context regime by a logged pre-enrollment amendment, not by an enrollment digest alone. This departs from §3, which left open whether option (a) needs an amendment at all and did not propose an evidence-access measure. The amendment would also fix matched non-treatment retrieval tools across arms, a frozen truncation policy recorded for each run, evidence access as a descriptive outcome only, and a disclosure that the regime was chosen after the WorkWorlds numbers were read. The council leaned towards full role-visible state; keeping curated context and disclosing it remains a legitimate choice to make then. | It does not amend or re-register `accountable-coordination-ablation-v0`, enroll a cohort, or choose the regime now. |
+| 2 | First assurance case (§2) | **Adopted.** Drafted as [`docs/evaluations/assurance-cases/outcome-binding-v0.md`](../evaluations/assurance-cases/outcome-binding-v0.md). The claim is scoped to the canonical outcome record within the retention window, and #2247 is disclosed as a limit. | It does not fix #2247, seek outside assessment, or create a runtime `AssuranceCase` object. |
+| 3 | Oversight summary (§1) | **No summary is built.** One principle is recorded for whenever a resolver class is designed: *record who resolved a review truthfully by kind: operator (authenticated by operator credential or passkey), other authenticated human, or AI agent or model. An AI's decision is never recorded as the operator's.* A metric then chooses which kinds count; for now "human-resolved" means operator only. This matches the Sentinel path, where model verdicts stay separate from operator labels. The escalation stream and its denominator stay open. | It does not change the schema or any code, and adds no metric, threshold or dashboard. |
+| 4 | Positioning wording | **Held** until the assurance case in row 2 has been assessed by someone other than the authoring session. | It makes no edit to the README or `PRODUCT_DEFINITION.md`. |
+| 5 | Continuous record view (§1) | **Held.** A 2026-06-18 live check found 65% of active agents had no `parent_agent_id` (`docs/proposals/active/principal-rollup-v0.md`), so most chains would be a single node. Under the Strict Identity contract, a process should declare a parent only for a real handoff, so a low declaration rate is largely correct behaviour, not missing wiring. That figure is old, and it has not been split into the four states in *Measurement authority*. It is a reason to hold, not evidence that the view lacks value. If the view is built later, it should follow declared lineage only, show forks, label links "declared", mark links the parent has not confirmed, carry no trust or calibration, label `model_type` as self-declared, and return no root ID that can be used as a key. | It makes no change to the identity surface. |
