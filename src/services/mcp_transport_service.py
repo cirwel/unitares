@@ -32,7 +32,9 @@ from src.mcp_listen_config import (
     check_mcp_bearer,
     check_oauth_bearer,
     cors_extra_origins,
+    is_local_peer,
     mcp_bearer_tokens,
+    normalize_host,
 )
 from src.mcp_transport import Transport503EmissionMiddleware
 
@@ -57,11 +59,12 @@ class McpAuthConfig:
     #: Distinguishes "no gate was configured" from "a configured gate is
     #: missing", which the provider being None cannot express on its own.
     gate_unavailable: bool = False
-    #: Hosts (lowercase, no port) on which the OAuth gate applies. Empty means
-    #: every host, the historical posture. Set to the public tunnel hostname so
-    #: a hosted connector must authenticate while loopback/LAN/tailnet callers
-    #: keep the ungated route they already had. Host, not source IP: behind
-    #: the tunnel every request's IP is the proxy's, but the edge routes by Host.
+    #: Hosts (normalized, see ``oauth_enforce_hosts()``) on which the OAuth
+    #: gate applies. Empty means every host, the historical posture. A request
+    #: skips the gate only when its Host is NOT listed AND its peer is local
+    #: (``is_local_peer``): Host alone is caller-controlled, and peer alone
+    #: cannot tell a tunnelled request from a local one if the proxy forwards
+    #: no client address.
     oauth_enforce_hosts: tuple[str, ...] = ()
     #: Client ID of the pre-registered OAuth client, if one is configured.
     static_client_id: str | None = None
@@ -115,11 +118,7 @@ def _www_authenticate_header(auth_settings: Any) -> str:
 
 def request_host(scope: dict[str, Any]) -> str:
     """Return the request's Host header lowercased with any port removed."""
-    host = (Headers(scope=scope).get("host") or "").strip().lower()
-    if host.startswith("["):
-        end = host.find("]")
-        return host[: end + 1] if end != -1 else host
-    return host.rsplit(":", 1)[0] if ":" in host else host
+    return normalize_host(Headers(scope=scope).get("host") or "")
 
 
 async def authorize_mcp_request(
@@ -127,6 +126,11 @@ async def authorize_mcp_request(
     auth_config: McpAuthConfig,
 ) -> AuthDecision:
     """Evaluate the static/OAuth bearer gate against one allowlist snapshot.
+
+    With ``oauth_enforce_hosts`` set, everything below applies only to
+    requests that are not exempt (unlisted Host from a local peer); an exempt
+    request is served as if no gate were configured, including when the gate
+    failed to build.
 
     Fails closed at the ROUTE when a configured gate could not be built. An
     operator who set ``UNITARES_OAUTH_ISSUER_URL`` asked for a gate; if
@@ -154,12 +158,14 @@ async def authorize_mcp_request(
     """
     bearer_allow = mcp_bearer_tokens()
     # Host scoping narrows only the OAuth gate. A bearer allowlist stays global
-    # by design (check_mcp_bearer has no trusted-network branch), and so does
-    # the closure below on the hosts the operator did ask to gate.
+    # by design (check_mcp_bearer has no trusted-network branch). The exemption
+    # needs both an unlisted Host and a local peer, so neither a forged Host
+    # from a public address nor a tunnel that rewrites Host opens the route.
     if (
         not bearer_allow
         and auth_config.oauth_enforce_hosts
         and request_host(scope) not in auth_config.oauth_enforce_hosts
+        and is_local_peer(scope)
     ):
         return AuthDecision(allowed=True)
     if not bearer_allow and auth_config.gate_unavailable:

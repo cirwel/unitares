@@ -11,6 +11,7 @@ See CLAUDE.md for environment variables.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import os
 import logging
 import time
@@ -211,6 +212,69 @@ def mcp_bearer_tokens() -> List[str]:
     default where no token is configured.
     """
     return split_csv_env(_MCP_BEARER_TOKENS_ENV)
+
+
+def normalize_host(value: str) -> str:
+    """Lowercase a Host value and drop any port or ``:*`` wildcard."""
+    host = (value or "").strip().lower()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[: end + 1] if end != -1 else host
+    if host.count(":") == 1:
+        return host.split(":", 1)[0]
+    return host
+
+
+def oauth_enforce_hosts() -> tuple[str, ...]:
+    """Hosts on which the ``/mcp`` OAuth gate applies (UNITARES_OAUTH_ENFORCE_HOSTS).
+
+    Entries are normalized with :func:`normalize_host`, so the ``host:*`` and
+    ``host:port`` forms taught for ``UNITARES_MCP_ALLOWED_HOSTS`` still match.
+    Empty means every host.
+    """
+    seen: list[str] = []
+    for entry in split_csv_env("UNITARES_OAUTH_ENFORCE_HOSTS"):
+        host = normalize_host(entry)
+        if host and host not in seen:
+            seen.append(host)
+    return tuple(seen)
+
+
+# Peers that may be exempted from a host-scoped OAuth gate: loopback, RFC1918,
+# and the Tailscale ranges. A public peer is never exempt, whatever Host it sends.
+_LOCAL_PEER_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "127.0.0.0/8",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "100.64.0.0/10",       # Tailscale CGNAT
+        "fd7a:115c:a1e0::/48",  # Tailscale IPv6
+    )
+)
+
+
+def is_local_peer(scope) -> bool:
+    """True when the request came over the UDS listener or from a local network.
+
+    Reads ``scope["client"]``, which uvicorn has already rewritten from
+    ``X-Forwarded-For`` for requests arriving through a trusted local proxy, so
+    a tunnelled request carries the caller's public address, not loopback.
+    """
+    if scope.get("unitares_peer_pid") is not None:
+        return True
+    client = scope.get("client")
+    if not client:
+        return False
+    try:
+        addr = ipaddress.ip_address(str(client[0]).strip("[]"))
+    except ValueError:
+        return False
+    if getattr(addr, "ipv4_mapped", None):
+        addr = addr.ipv4_mapped
+    return any(addr in net for net in _LOCAL_PEER_NETWORKS)
 
 
 def mcp_bearer_required() -> bool:

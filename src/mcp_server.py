@@ -130,6 +130,8 @@ from src.mcp_listen_config import (
     auth_gate_refusal,
     build_transport_security_settings,
     default_listen_host,
+    normalize_host,
+    oauth_enforce_hosts,
 )
 
 # --- OAuth 2.1 configuration (optional, enabled by env var) ---
@@ -141,15 +143,14 @@ _OAUTH_REQUIRED_SCOPES = ["mcp:tools"]
 _oauth_setup_error: Exception | None = None
 # Host-scoped gate: read outside the issuer branch so a provider that fails to
 # build still closes only the hosts the operator asked to gate.
-_oauth_enforce_hosts = tuple(
-    h.strip().lower() for h in os.environ.get("UNITARES_OAUTH_ENFORCE_HOSTS", "").split(",") if h.strip()
-)
+_oauth_enforce_hosts = oauth_enforce_hosts()
 _oauth_static_client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID") or None
 
 if _oauth_issuer_url:
     try:
         from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
         from src.oauth_provider import GovernanceOAuthProvider, build_static_client
+        from urllib.parse import urlparse
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
         _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
@@ -184,6 +185,13 @@ if _oauth_issuer_url:
             ),
         )
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
+        _issuer_host = normalize_host(urlparse(_oauth_issuer_url).netloc)
+        if _oauth_enforce_hosts and _issuer_host not in _oauth_enforce_hosts:
+            print(
+                f"[FastMCP] WARNING: UNITARES_OAUTH_ENFORCE_HOSTS does not include the "
+                f"issuer host {_issuer_host!r}; requests to it from a local peer skip OAuth",
+                file=sys.stderr, flush=True,
+            )
         print(
             "[FastMCP] OAuth gate applies to "
             + (", ".join(_oauth_enforce_hosts) if _oauth_enforce_hosts else "every host")
@@ -205,7 +213,13 @@ if _oauth_issuer_url:
         _oauth_setup_error = e
         print(
             "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
-            f"and is now CLOSED (503) rather than served open ({type(e).__name__})",
+            + (
+                f"and is now CLOSED (503) on {', '.join(_oauth_enforce_hosts)} and to "
+                "non-local peers; local peers on other hosts are still served"
+                if _oauth_enforce_hosts
+                else "and is now CLOSED (503) rather than served open"
+            )
+            + f" ({type(e).__name__})",
             file=sys.stderr, flush=True,
         )
         print(

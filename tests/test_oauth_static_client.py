@@ -181,13 +181,23 @@ def test_incomplete_static_client_config_raises(kwargs):
 # --------------------------------------------------------------------------- #
 
 
-def _scope(host: str | None, authorization: str | None = None):
+def _scope(
+    host: str | None,
+    authorization: str | None = None,
+    peer: str | None = "127.0.0.1",
+    peer_pid: int | None = None,
+):
     headers = []
     if host is not None:
         headers.append((b"host", host.encode()))
     if authorization is not None:
         headers.append((b"authorization", authorization.encode()))
-    return {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
+    scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
+    if peer is not None:
+        scope["client"] = (peer, 50000)
+    if peer_pid is not None:
+        scope["unitares_peer_pid"] = peer_pid
+    return scope
 
 
 @pytest.mark.parametrize(
@@ -267,3 +277,53 @@ async def test_failed_gate_closes_only_the_enforced_host(monkeypatch):
     local = await svc.authorize_mcp_request(_scope("localhost:8767"), cfg)
     assert public.response.status_code == 503
     assert local.allowed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host", ["localhost:8767", "gov.example.org"])
+async def test_a_public_peer_is_gated_whatever_host_it_sends(monkeypatch, host):
+    """A forged Host, or a tunnel that rewrites Host, must not open the route."""
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(_scope(host, peer="203.0.113.9"), _SCOPED)
+    assert decision.allowed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peer", ["10.1.2.3", "100.96.201.46", "::1", "::ffff:127.0.0.1"])
+async def test_lan_and_tailnet_peers_are_exempt_on_other_hosts(monkeypatch, peer):
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(_scope("localhost:8767", peer=peer), _SCOPED)
+    assert decision.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_uds_peer_is_exempt_on_other_hosts(monkeypatch):
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(
+        _scope("localhost", peer=None, peer_pid=4242), _SCOPED
+    )
+    assert decision.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_a_peerless_request_is_gated(monkeypatch):
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(_scope("localhost", peer=None), _SCOPED)
+    assert decision.allowed is False
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("gov.example.org:*", ("gov.example.org",)),
+        ("GOV.example.org:443, gov.example.org", ("gov.example.org",)),
+        ("[fd7a::1]:8767", ("[fd7a::1]",)),
+        ("", ()),
+    ],
+)
+def test_enforce_hosts_accepts_the_allowed_hosts_forms(monkeypatch, raw, expected):
+    """The host:* form taught for UNITARES_MCP_ALLOWED_HOSTS must not ungate."""
+    from src.mcp_listen_config import oauth_enforce_hosts
+
+    monkeypatch.setenv("UNITARES_OAUTH_ENFORCE_HOSTS", raw)
+    assert oauth_enforce_hosts() == expected

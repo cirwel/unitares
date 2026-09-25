@@ -134,11 +134,18 @@ tool runs:
 
    OAuth gates `/mcp` on **every** host by default, which locks out local
    clients that do not speak OAuth. To gate only the public hostname, set
-   `UNITARES_OAUTH_ENFORCE_HOSTS="gov.example.org"` (comma-separated, no
-   port). Other hosts — loopback, LAN, tailnet — keep the route they had.
-   The decision keys on `Host`, not source IP: behind a tunnel every
-   request's IP is the proxy's, while the edge routes by `Host`. A bearer
-   allowlist (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.
+   `UNITARES_OAUTH_ENFORCE_HOSTS="gov.example.org"` (comma-separated; a
+   port or `:*` suffix is ignored). A request then skips OAuth only when
+   **both** hold: its `Host` is not listed, and its peer is local — the UDS
+   listener, loopback, RFC1918, or Tailscale. `Host` alone is
+   caller-controlled, so a public peer is gated whatever `Host` it sends,
+   which also covers a tunnel that rewrites `Host` (cloudflared
+   `httpHostHeader`) as long as the tunnel forwards `X-Forwarded-For`, which
+   uvicorn resolves to the caller's address for a loopback proxy. If your
+   proxy forwards neither the original `Host` nor the client address, do not
+   use host scoping. The server warns at startup when the issuer's host is
+   not in the list. A bearer allowlist (`UNITARES_MCP_BEARER_TOKENS`) stays
+   global regardless.
 
 The Host allowlist applies regardless of the auth choice — set it even when
 using "none" locally is fine, but for a public host you need both the
