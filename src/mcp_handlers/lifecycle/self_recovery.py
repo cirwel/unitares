@@ -66,6 +66,8 @@ FORBIDDEN_CONDITIONS = [
 ]
 
 MAX_RISK_FOR_SELF_RECOVERY = 0.65  # Matches lifecycle.py review thresholds
+# operator_resume_agent refuses above this even with force=True (hard limit).
+OPERATOR_RESUME_HARD_RISK_LIMIT = 0.80
 
 # A monitor can hold no risk that any verdict was made from: the resolved pair
 # did not survive a restart and could not be restored from the durable record.
@@ -315,6 +317,24 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
         else False if status == "active"
         else None
     )
+    if status == "paused":
+        # A paused agent cannot write the check-in that would lower its risk,
+        # so "wait for risk to decrease" only ends at expiry; name the exits
+        # that actually accept a paused agent instead.
+        for blocker in blockers:
+            if blocker.get("type") == "high_risk":
+                blocker["resolution"] = (
+                    "Risk stays at the reading that paused you while you are "
+                    "paused; open a dialectic review with request_review, or "
+                    "wait for the pause to expire or an operator to resume you"
+                )
+            elif blocker.get("type") == "no_risk_authority":
+                blocker["resolution"] = (
+                    "A paused agent cannot submit the check-in that would "
+                    "produce a measured risk; open a dialectic review with "
+                    "request_review, or wait for the pause to expire or an "
+                    "operator to resume you"
+                )
     eligible = recovery_needed is True and len(blockers) == 0
     recovery_status = (
         "not_needed" if recovery_needed is False
@@ -346,6 +366,14 @@ async def handle_check_recovery_options(arguments: Dict[str, Any]) -> Sequence[T
             "You're eligible for self-recovery",
             "Call self_recovery(action='review') with a genuine reflection",
             "Include specific conditions you'll follow",
+        ]
+    elif status == "paused":
+        # leave_note is refused while paused (check_agent_can_operate).
+        recommendations = [
+            "Self-recovery not currently available",
+            "Address the blockers listed above",
+            "Use request_review to open a dialectic review of this pause; "
+            "leave_note and other new shared-memory entries are refused while paused",
         ]
     else:
         recommendations = [
@@ -679,9 +707,10 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             context={"void_value": void_value},
         )]
     
-    if risk_score is not None and risk_score > 0.80:
+    if risk_score is not None and risk_score > OPERATOR_RESUME_HARD_RISK_LIMIT:
         return [error_response(
-            f"Cannot resume {target_agent_id}: risk ({risk_score:.2f}) exceeds hard limit (0.80). "
+            f"Cannot resume {target_agent_id}: risk ({risk_score:.2f}) exceeds hard limit "
+            f"({OPERATOR_RESUME_HARD_RISK_LIMIT:.2f}). "
             "This requires human intervention.",
             error_code="RISK_TOO_HIGH",
             error_category="safety_error",

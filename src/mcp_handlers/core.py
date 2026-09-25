@@ -356,6 +356,8 @@ async def handle_simulate_update(arguments: ToolArgumentsDict) -> Sequence[TextC
                 if escalated_decision is not decision:
                     result["decision"] = escalated_decision
                     result["dialectic_escalation"] = True
+                    from .updates.phases import _rewrap_behavioral_verdict
+                    _rewrap_behavioral_verdict(result, escalated_decision)
                 dialectic_warnings.extend(condition_warnings)
         except Exception as e:
             logger.warning(f"Could not enforce post-ODE dialectic conditions: {e}", exc_info=True)

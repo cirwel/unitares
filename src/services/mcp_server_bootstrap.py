@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 from src.logging_utils import get_logger
@@ -192,14 +191,12 @@ def sync_declared_host(mcp: Any, host: str) -> None:
         logger.debug("Could not sync settings.host to %s: %s", host, exc)
 
 
-def _cleanup_stale_agent_locks(project_root: Path) -> None:
+def _cleanup_stale_agent_locks() -> None:
     try:
         from src.lock_cleanup import cleanup_stale_state_locks
 
-        cleanup_result = cleanup_stale_state_locks(
-            project_root=project_root,
-            max_age_seconds=300.0,
-        )
+        # No project_root: sweep the directory StateLockManager writes to.
+        cleanup_result = cleanup_stale_state_locks(max_age_seconds=300.0)
         if cleanup_result.get("cleaned", 0) > 0:
             logger.info(
                 "Cleaned up %d stale agent lock(s) at startup",
@@ -291,7 +288,6 @@ async def bootstrap_server(
     host: str,
     port: int,
     version: str,
-    project_root: Path,
     mcp: Any,
 ) -> ServerBootstrap:
     """Acquire process resources and initialize server dependencies."""
@@ -304,7 +300,7 @@ async def bootstrap_server(
     process_lease = ServerProcessLease.acquire(force=force)
 
     try:
-        _cleanup_stale_agent_locks(project_root)
+        _cleanup_stale_agent_locks()
         db = await _initialize_database()
         await _report_identity_continuity()
         await _seed_event_detector(db)
