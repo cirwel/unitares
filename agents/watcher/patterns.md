@@ -212,8 +212,8 @@ can count, and only when it is a `return` of a literal or variable
 (`return False`, `return -1`) or a log call on a plain logger name whose
 arguments are literals or variables. A `raise` there does not count, nor
 does `return compute()`, `return cache[key]`, `self.logger.warning(...)`,
-anything after a first statement that could raise (`cleanup()` then
-`return False`), or anything in that `try`'s `else`, which is skipped when
+anything after a first statement that could raise
+(`cleanup(); return False`), or anything in that `try`'s `else`, which is skipped when
 the body raised.
 
 Everything else is P006: `pass`, `...`, an empty block, `continue`, `break`,
