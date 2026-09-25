@@ -465,22 +465,21 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
     if ctx.agent_uuid in mcp_server.agent_metadata:
         meta = mcp_server.agent_metadata[ctx.agent_uuid]
         if meta.status == "paused":
-            from ..support.pause_ttl import maybe_auto_expire_pause_async
+            from ..support.pause_ttl import (
+                maybe_auto_expire_pause_async,
+                paused_refusal_recovery,
+            )
             expired = await maybe_auto_expire_pause_async(ctx.agent_uuid, meta)
             if not expired:
                 return [error_response(
-                    "Agent is paused and cannot process updates",
+                    "Agent is paused - check-ins and new shared-memory entries are refused",
                     error_code="AGENT_PAUSED",
                     details={
                         "agent_id": ctx.agent_uuid[:12],
                         "paused_at": meta.paused_at,
                         "status": "paused",
                     },
-                    recovery={
-                        "action": "Use self_recovery(action='quick') for safe states, or self_recovery(action='review', reflection='...') for full recovery",
-                        "note": "Circuit breaker triggered due to governance threshold violation",
-                        "auto_recovery": "Dialectic recovery may already be in progress",
-                    }
+                    recovery=paused_refusal_recovery(meta, ctx.agent_uuid),
                 )]
             # Expired — fall through to normal processing; categorizer
             # will re-pause if state is genuinely degraded.
@@ -688,22 +687,16 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
             )]
 
         elif meta.status == "paused":
+            from ..support.pause_ttl import paused_refusal_recovery
+            recovery = paused_refusal_recovery(meta, ctx.agent_uuid)
+            recovery["related_tools"] = ["get_governance_metrics", "self_recovery"]
             return [error_response(
-                f"Agent '{agent_id}' is paused. Resume it first before processing updates.",
-                recovery={
-                    "action": "Check your state and resume when ready",
-                    "related_tools": ["get_governance_metrics", "self_recovery"],
-                    "workflow": (
-                        "1. Check your state with get_governance_metrics "
-                        "2. Reflect on what triggered the pause "
-                        "3. Use self_recovery(action='quick') if safe (risk < 0.40 and no void), otherwise use self_recovery(action='review', reflection='...')"
-                    )
-                },
+                f"Agent '{agent_id}' is paused - check-ins and new shared-memory entries are refused.",
+                recovery=recovery,
                 context={
                     "agent_id": agent_id,
                     "status": "paused",
-                    "reason": "Circuit breaker triggered - governance threshold exceeded",
-                    "note": "Paused and archived agents both require explicit recovery via self_recovery()."
+                    "reason": recovery["why"],
                 }
             )]
 
@@ -1675,7 +1668,10 @@ def _rewrap_behavioral_verdict(result: dict, decision: dict) -> None:
 
     build_result wrapped it with the decision as it stood then; the escalation
     replaced that decision, so the wrapped next_action would describe the old
-    one (explain_verdict follows the decision it is given).
+    one (explain_verdict follows the decision it is given). The dialectic
+    escalation is capped at guide (dialectic/enforcement.py), so today this
+    re-wraps proceed to the same text; it stays so a later rewriter that can
+    stop the agent cannot leave a stale wrap.
     """
     try:
         assessment = result.get('behavioral', {}).get('assessment', {})

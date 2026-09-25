@@ -19,6 +19,7 @@ from scripts.analysis.eisv_ablation_matrix import (
     format_matrix_report,
     split_rows_by_harness_lane,
 )
+from scripts.analysis import eisv_skeptic_report as skeptic_module
 from scripts.analysis.eisv_skeptic_report import ModelScore, OutcomeRow
 from src.grounding.outcome_anchors import anchored_outcomes_predicate
 
@@ -1224,3 +1225,210 @@ def test_manifest_ambiguity_and_unregistered_ids_fail_closed(monkeypatch):
     monkeypatch.undo()
     with pytest.raises(matrix_module.ReadProtocolError, match="names no protocol"):
         matrix_module.effective_fixture_rule(_registered_args("unregistered-read"))
+
+
+# ---- the stop-rule read's candidate-tuple pin (condition 4 clarification, 2026-09-23) ----
+#
+# The guard compares SOURCE constants. `score_deltas_vs_baseline` binds its
+# `candidate_names` default at definition time, so monkeypatching the module
+# constant does not change what a read would compute; these tests assert
+# refusal only, never a computation change.
+
+STOP_RULE_READ_ID = "eisv-outcome-grounding-2026-12-01"
+
+
+def test_stop_rule_manifest_pins_the_live_candidate_tuple_and_dispersion_feature():
+    """Drift canary: any edit to either constant on master fails here, months before the read."""
+    entry = matrix_module.registered_read_protocol(STOP_RULE_READ_ID)
+    assert entry is not None
+    assert entry.candidate_models == tuple(skeptic_module.EISV_PRIOR_STATE_MODELS)
+    assert entry.dispersion_feature == skeptic_module.DISPERSION_FEATURE
+    assert len(entry.candidate_models) == 7
+    # The pin is literal, not derived from the live tuple: in the manifest's
+    # source both keyword values are literal strings, so an edit to
+    # eisv_skeptic_report cannot silently carry the pin along with it
+    # (`(*EISV_PRIOR_STATE_MODELS,)` or `tuple(...)` would fail here).
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(matrix_module))
+    pinned = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg in {"candidate_models", "dispersion_feature"}:
+            pinned.setdefault(node.arg, []).append(node.value)
+    assert len(pinned.get("candidate_models", [])) == 1
+    assert len(pinned.get("dispersion_feature", [])) == 1
+    models_node = pinned["candidate_models"][0]
+    assert isinstance(models_node, ast.Tuple)
+    assert all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in models_node.elts)
+    feature_node = pinned["dispersion_feature"][0]
+    assert isinstance(feature_node, ast.Constant) and isinstance(feature_node.value, str)
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+    matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID + "-retry-1"), now=now)
+
+
+# The tie-break order recorded in the stop rule's condition-4 clarification:
+# `max` keeps the first maximal element, and candidates reach it in the order
+# `build_model_scores` constructs them.
+RECORDED_CONSTRUCTION_ORDER = (
+    "prior_risk_binned",
+    "previous_bad_plus_prior_risk",
+    "prior_eisv_dispersion_binned",
+    "previous_bad_plus_dispersion",
+    "prior_phi_binned",
+    "prior_s_binned",
+    "prior_verdict",
+)
+
+
+def _tied_score(name, auc=0.7, brier=0.2):
+    keys = tuple(range(10))
+    return skeptic_module.ModelScore(
+        name=name, n_train=20, n_test=10, n_test_scored=10, auc=auc, brier=brier,
+        scored_row_keys=keys, y_true=(0, 1) * 5, y_prob=(0.5,) * 10,
+        y_auc_score=(0.5,) * 10, auc_fitted=auc, n_train_bad=3,
+    )
+
+
+def _all_candidates_fit_rows():
+    """Rows on which every registered candidate fits at the registered
+    min_feature_rows (30): every prior-state feature varies, both classes
+    occur in train and test, and eight agents carry a previous outcome."""
+    rows = []
+    for idx in range(200):
+        bad = (idx * 7) % 10 < 3
+        level = ((idx * 37) % 100) / 100.0
+        rows.append(skeptic_module.OutcomeRow(
+            ts=datetime(2026, 1, 1, tzinfo=timezone.utc) + timedelta(minutes=idx),
+            agent_id=f"agent-{idx % 8}",
+            outcome_type="task_failed" if bad else "task_completed",
+            is_bad=bad,
+            outcome_score=0.0 if bad else 1.0,
+            verification_source="server_observation",
+            reported_confidence=None,
+            reported_complexity=None,
+            detail={},
+            prior_state_age_seconds=30.0,
+            prior_risk=level,
+            prior_phi=1.0 - level,
+            prior_verdict=("high-risk", "caution", "safe")[idx % 3],
+            prior_coherence=0.5,
+            prior_e=0.7,
+            prior_i=0.7,
+            prior_s=((idx * 13) % 100) / 100.0,
+            prior_v=0.0,
+            snapshot_verdict=None,
+            snapshot_e=None,
+            snapshot_i=None,
+            snapshot_s=None,
+            snapshot_v=None,
+            snapshot_phi=None,
+            snapshot_coherence=None,
+            prior_s_disp=((idx * 29) % 100) / 100.0,
+        ))
+    return rows
+
+
+def test_build_model_scores_construction_order_is_the_recorded_tie_break(monkeypatch):
+    """CI canary, not a read-time refusal. An exact tie on the selection key
+    is broken by the order candidates reach `max` in `build_matrix_row`, which
+    the manifest does not pin. The stop rule records that order; this fails if
+    master changes it, at runtime on both halves of the path:
+    (a) the order the real `build_model_scores` returns candidates in, as
+        passed through the real `score_deltas_vs_baseline`, on rows where all
+        seven fit (a reordered construction, a sort, a slice or a reversal of
+        the result all change it);
+    (b) the selection following the order of the deltas it is given (not, say,
+        iterating the candidate tuple), exercised by a forced exact tie
+        through the real `build_matrix_row`."""
+    # (a) What the real scorer hands to the selection, in order.
+    scores = skeptic_module.build_model_scores(_all_candidates_fit_rows())
+    order = tuple(delta.name for delta in skeptic_module.score_deltas_vs_baseline(scores))
+    assert order == RECORDED_CONSTRUCTION_ORDER
+    assert set(order) == set(skeptic_module.EISV_PRIOR_STATE_MODELS)
+
+    # (b) A forced exact tie resolves to the first candidate in the order the
+    # scores arrive, through the real selection in build_matrix_row.
+    def winner(candidate_order):
+        scores = [_tied_score("previous_outcome_bad", auc=0.5, brier=0.25)]
+        scores += [_tied_score(name) for name in candidate_order]
+        monkeypatch.setattr(matrix_module, "build_model_scores", lambda rows, **kw: list(scores))
+        return matrix_module.build_matrix_row(
+            [], scope="task", window_days=365, lead_minutes=0.0).best_candidate
+
+    assert winner(RECORDED_CONSTRUCTION_ORDER) == RECORDED_CONSTRUCTION_ORDER[0]
+    assert winner(tuple(reversed(RECORDED_CONSTRUCTION_ORDER))) == RECORDED_CONSTRUCTION_ORDER[-1]
+
+
+def test_registered_read_refuses_a_moved_candidate_tuple(monkeypatch, tmp_path):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    original = tuple(skeptic_module.EISV_PRIOR_STATE_MODELS)
+
+    # An added candidate.
+    monkeypatch.setattr(skeptic_module, "EISV_PRIOR_STATE_MODELS", (*original, "prior_v_binned"))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple") as exc:
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+    # The message names both the recorded and the live tuple.
+    assert "prior_v_binned" in str(exc.value)
+    assert "prior_eisv_dispersion_binned" in str(exc.value)
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID + "-retry-3"), now=now)
+
+    # Same names, different order: the comparison is exact tuple equality, so a reordered
+    # tuple refuses too. Conservative, not a claim that order selects: the tuple is a
+    # membership filter and ties are broken by build_model_scores' construction order,
+    # which is not pinned.
+    monkeypatch.setattr(skeptic_module, "EISV_PRIOR_STATE_MODELS", tuple(reversed(original)))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+
+    # The refusal happens before the ledger exists: no receipt, no consumed read id.
+    args = _registered_args(STOP_RULE_READ_ID, "--read-ledger-dir", str(tmp_path))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned the candidate tuple"):
+        matrix_module.record_read_receipt(args, exclude_harness_lanes=("beam",), now=now)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_registered_read_refuses_a_swapped_dispersion_feature(monkeypatch, tmp_path):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(skeptic_module, "DISPERSION_FEATURE", "prior_risk_disp")
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned DISPERSION_FEATURE") as exc:
+        matrix_module.validate_read_protocol(_registered_args(STOP_RULE_READ_ID), now=now)
+    assert "prior_s_disp" in str(exc.value)
+    assert "prior_risk_disp" in str(exc.value)
+    args = _registered_args(STOP_RULE_READ_ID, "--read-ledger-dir", str(tmp_path))
+    with pytest.raises(matrix_module.ReadProtocolError, match="pinned DISPERSION_FEATURE"):
+        matrix_module.record_read_receipt(args, exclude_harness_lanes=("beam",), now=now)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_candidate_pin_leaves_exploratory_reproduction_and_operator_reads_alone(monkeypatch):
+    now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(
+        skeptic_module, "EISV_PRIOR_STATE_MODELS", (*skeptic_module.EISV_PRIOR_STATE_MODELS, "prior_v_binned")
+    )
+    monkeypatch.setattr(skeptic_module, "DISPERSION_FEATURE", "prior_risk_disp")
+    # Exploratory and reproduction reads never enter the registered branch.
+    matrix_module.validate_read_protocol(
+        matrix_module.parse_args(
+            ["--read-protocol", "exploratory", "--read-id", "exploratory-20260901-000000",
+             "--acknowledge-contamination"]
+        ),
+        now=now,
+    )
+    matrix_module.validate_read_protocol(
+        matrix_module.parse_args(
+            [
+                "--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-2026-12-01-sensitivity",
+                "--acknowledge-contamination", "--fixture-rule", "corrected", "--as-of", "2026-06-01T00:00:00Z",
+            ]
+        ),
+        now=now,
+    )
+    # The operator-cohort entry records no pin (it freezes the harness by sha256 at enrollment).
+    operator = matrix_module.registered_read_protocol("operator-acme-day58-seed-0")
+    assert operator is not None and operator.candidate_models is None and operator.dispersion_feature is None
+    matrix_module.validate_read_protocol(
+        _registered_args("operator-acme-day58-seed-0", "--uncertainty-seed", "0"), now=now
+    )
