@@ -32,10 +32,12 @@ from __future__ import annotations
 import importlib.util
 import itertools
 import json
+import os
 import random
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -89,12 +91,25 @@ def _record_variants(current_digest: str) -> list[object]:
 
 
 def _fill(adir: Path, records: tuple[object, ...]) -> None:
-    """Write ``records`` so that file-name order is the tuple's order."""
+    """Write ``records`` so that file-name order is the tuple's order and
+    every filesystem timestamp runs the OTHER way.
+
+    Canonical orders attestations by file name. A port that orders by mtime or
+    ctime agrees with it only when the two happen to coincide, and on a real
+    mirror they do not (rsync and git checkout discard mtimes). Writing in
+    reverse name order, with mtimes stamped descending, makes such a port
+    disagree here instead of passing.
+    """
     shutil.rmtree(adir, ignore_errors=True)
     adir.mkdir(parents=True)
-    for i, record in enumerate(records):
+    base_ns = time.time_ns()
+    for i in reversed(range(len(records))):
+        record = records[i]
         body = record if isinstance(record, str) else json.dumps(record)
-        (adir / f"2026010{i}T000000000000Z-{i:08x}.json").write_text(body, encoding="utf-8")
+        path = adir / f"2026010{i}T000000000000Z-{i:08x}.json"
+        path.write_text(body, encoding="utf-8")
+        stamp = base_ns - i * 1_000_000_000
+        os.utime(path, ns=(stamp, stamp))
 
 
 def _load_plugin_checker(plugin_repo: Path):

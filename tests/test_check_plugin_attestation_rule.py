@@ -86,8 +86,17 @@ def test_a_faithful_port_agrees(tmp_path):
     assert status == rule_check.EXIT_OK, lines
 
 
-@pytest.mark.parametrize("checker", [LEXICALLY_NEWEST, LATEST_OF_ALL],
-                         ids=["lexically-newest", "latest-of-all"])
+# Orders by modification time instead of file name: agrees with canonical
+# only while the two coincide, which they do not on an rsync'd mirror.
+NEWEST_BY_MTIME = PORTED.replace(
+    'sorted(adir.glob("*.json"), reverse=True)',
+    'sorted(adir.glob("*.json"), key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)',
+)
+assert NEWEST_BY_MTIME != PORTED
+
+
+@pytest.mark.parametrize("checker", [LEXICALLY_NEWEST, LATEST_OF_ALL, NEWEST_BY_MTIME],
+                         ids=["lexically-newest", "latest-of-all", "newest-by-mtime"])
 def test_a_drifted_rule_is_reported(tmp_path, checker):
     status, lines = rule_check.check(_plugin(tmp_path, checker))
     assert status == rule_check.EXIT_DRIFT
