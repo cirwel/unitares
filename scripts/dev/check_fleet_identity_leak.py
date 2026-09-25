@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail if a named resident identity is hardcoded in shipped source.
+"""Fail if a named resident identity or operator domain is hardcoded in shipped source.
 
 ``check-repo-scope.sh`` already guards VENDOR neutrality — career artifacts,
 per-vendor agent config, operator-local paths. This guards the other axis:
@@ -28,6 +28,13 @@ making it more portable. Docstrings are skipped for the same reason.
 Names live in ``FLEET_IDENTITIES`` below, which is the one place in the repo
 they are allowed to appear — the guard has to know what it is looking for, the
 same way a secret scanner carries patterns.
+
+The operator's own domain is the same leak on a different axis. Until
+2026-09-25 ``src/dashboard_auth.py`` fell back to ``gov.cirwel.org`` as the
+passkey relying party, so every other install got passkey setup that no
+browser would ever complete, and nothing failed. ``OPERATOR_DOMAINS`` holds
+those domains; a string literal CONTAINING one is flagged, because a domain,
+unlike "Sentinel", has no innocent homonym in source.
 
 Usage:
     python3 scripts/dev/check_fleet_identity_leak.py [--paths src agents/sdk/src]
@@ -69,6 +76,10 @@ FLEET_IDENTITIES = (
     "Chronicler",
     "Lumen",
 )
+
+# The operator's domains. Deployment config (plists, docs, ops scripts) names
+# them; shipped source must read them from configuration instead.
+OPERATOR_DOMAINS = ("cirwel.org",)
 
 # Homonyms and protocol values — NOT agent-label dispatch. Exempt, with the
 # reason, because the word is doing a different job in these files.
@@ -125,6 +136,15 @@ def _identity_literal(value: str) -> str | None:
     return stripped if stripped.lower() in _NAMES_LOWER else None
 
 
+def _operator_domain_in(value: str) -> str | None:
+    """Return the operator domain a literal contains, else None."""
+    lowered = value.lower()
+    for domain in OPERATOR_DOMAINS:
+        if domain in lowered:
+            return domain
+    return None
+
+
 def _docstring_nodes(tree: ast.AST) -> set[int]:
     """ids() of Constant nodes that are docstrings, which are exempt."""
     out: set[int] = set()
@@ -151,13 +171,23 @@ def scan_file(path: Path) -> list[str]:
         return [f"  {path}: could not parse ({exc})"]
 
     exempt = _docstring_nodes(tree)
-    rel = path.relative_to(REPO_ROOT).as_posix()
+    try:
+        rel = path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        rel = path.as_posix()
     findings: list[str] = []
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
         if id(node) in exempt:
+            continue
+        domain = _operator_domain_in(node.value)
+        if domain:
+            findings.append(
+                f'  {rel}:{node.lineno}: hardcoded operator domain "{domain}" '
+                f"in a string literal"
+            )
             continue
         found = _identity_literal(node.value)
         if not found:
@@ -167,6 +197,22 @@ def scan_file(path: Path) -> list[str]:
             f"in a string literal"
         )
     return findings
+
+
+def triage(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
+    """Split one file's hits into (failing, known-but-deferred).
+
+    ``NOT_IDENTITIES`` and ``KNOWN_COUPLINGS`` are exemptions for resident
+    NAMES — homonyms, and couplings not yet fixed. Neither covers the
+    operator's domain, so a domain hit fails the build in every file.
+    """
+    domain = [h for h in hits if "operator domain" in h]
+    names = [h for h in hits if "operator domain" not in h]
+    if rel in NOT_IDENTITIES:
+        return domain, []
+    if rel in KNOWN_COUPLINGS:
+        return domain, names
+    return domain + names, []
 
 
 def main() -> int:
@@ -183,16 +229,13 @@ def main() -> int:
             continue
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(REPO_ROOT).as_posix()
-            if rel in NOT_IDENTITIES:
-                continue
             scanned += 1
             hits = scan_file(path)
             if not hits:
                 continue
-            if rel in KNOWN_COUPLINGS:
-                known.extend(hits)
-            else:
-                findings.extend(hits)
+            failing, deferred = triage(rel, hits)
+            findings.extend(failing)
+            known.extend(deferred)
 
     # Always printed, pass or fail: this repo has known coupling and the guard
     # must not imply otherwise.
@@ -215,7 +258,8 @@ def main() -> int:
         print(line)
     print(
         "\nShipped source must read the roster from UNITARES_RESIDENTS "
-        "(src/grounding/class_indicator.py), never name a resident.\n"
+        "(src/grounding/class_indicator.py), never name a resident, and must "
+        "read hostnames from configuration, never name the operator's domain.\n"
         "Provenance in a COMMENT is fine and is not flagged — only string "
         "literals in executable code are.\n"
         "See docs/operations/resident-roster.md."
