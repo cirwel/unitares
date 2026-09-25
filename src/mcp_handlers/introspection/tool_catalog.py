@@ -292,7 +292,8 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
     },
     "check_working_state": {
         "basic": "check_working_state()",
-        "full": "check_working_state(lite=false)",
+        "standard": "check_working_state(verbosity=\"standard\")",
+        "full": "check_working_state(verbosity=\"full\")",
     },
     "search_shared_memory": {
         "by_query": "search_shared_memory(query=\"identity continuity\", limit=5)",

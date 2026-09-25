@@ -56,6 +56,7 @@ from src.mcp_handlers.response_formatter import (
 from src.mcp_handlers.support.param_normalization import (
     FRIENDLY_SEARCH_DETAIL_POLICY_KEY,
     FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY,
+    resolve_metrics_verbosity,
 )
 
 logger = get_logger(__name__)
@@ -1019,14 +1020,14 @@ def _raw_governance_policy(
 
     arguments = arguments or {}
     if friendly_name == "check_working_state":
-        verbosity = str(arguments.get("verbosity") or "").strip().lower()
         wants_full = (
-            verbosity in {"standard", "full"}
-            or not _as_bool(arguments.get("lite"), default=True)
+            resolve_metrics_verbosity(arguments) != "minimal"
             or _as_bool(arguments.get("include_state"), default=False)
         )
         return wants_full, (
-            "Re-call check_working_state(lite=false) for the canonical diagnostics."
+            "Re-call check_working_state(verbosity='standard') for EISV, verdict "
+            "and basin with their meanings, or verbosity='full' for the complete "
+            "canonical diagnostics."
         )
 
     response_mode = str(
@@ -1139,11 +1140,12 @@ def _response_options(
             "all_inline_details": "response_mode='full' + include_details=true",
         }
     if friendly_name == "check_working_state":
-        current = "full" if not _as_bool(arguments.get("lite"), default=True) else "lite"
         return {
-            "current": current,
-            "routine": "lite=true",
-            "complete_diagnostics": "lite=false",
+            "current": resolve_metrics_verbosity(arguments),
+            "routine": "verbosity='minimal' (default)",
+            "interpreted_state": "verbosity='standard'",
+            "complete_diagnostics": "verbosity='full'",
+            "compatibility_aliases": "lite=true is minimal; lite=false is full",
         }
     return None
 
@@ -1191,8 +1193,13 @@ def _attach_response_size(
             )
         elif friendly_name == "start_session":
             metadata["reduce_with"] = "Use response_mode='minimal'."
+        elif friendly_name == "check_working_state" and current == "full":
+            metadata["reduce_with"] = (
+                "Use verbosity='standard' for EISV, verdict, risk_score, basin "
+                "and mode without the diagnostics, or verbosity='minimal'."
+            )
         elif friendly_name == "check_working_state":
-            metadata["reduce_with"] = "Use lite=true."
+            metadata["reduce_with"] = "Use verbosity='minimal'."
     envelope["_response_size"] = metadata
 
 
@@ -1663,6 +1670,7 @@ def build_experience_envelope(
             "evidence_weight",
             "claim_risk",
             "corroboration_reasons",
+            "corroboration_hint",
         )
         snapshot = payload.get("eisv_snapshot")
         if isinstance(snapshot, dict):

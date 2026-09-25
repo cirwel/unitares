@@ -230,7 +230,7 @@ responses answer it directly from your seat:
   terminal"`.
 - **`next_call`** — a ready-to-use call template, present only when the move is
   actually yours. If `next_call` is null, you are waiting on someone else.
-- **`wait_assessment`** — `{elapsed_s, expected_by_s, assessment, note}`. The
+- **`wait_assessment`** — `{elapsed_s, expected_by_s, assessment, poll_after_s, note}`. The
   same misreading recurs on the time axis: a session awaiting an orchestrated
   reviewer looked identical at 72 seconds and at 72 minutes until this field
   existed, and on 2026-09-13 that produced two wrong "the reviewer is absent"
@@ -242,7 +242,9 @@ responses answer it directly from your seat:
   `too_early` means the wait is unremarkable — **not** that the reviewer is
   alive. A reviewer inside its budget may already be gone and merely not yet
   late, so an absence read here is not evidence. Only `overdue` is evidence, and
-  it is evidence to look rather than to conclude.
+  it is evidence to look rather than to conclude. `poll_after_s` is the
+  remaining budget as a number to wait on, set only while `too_early`; it is
+  null when overdue (look, don't poll again) and whenever no budget exists.
 
   A deadline is asserted only when somebody actually owes the move and the
   server can say who and since when: an identified orchestrated reviewer holds

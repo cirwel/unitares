@@ -1,3 +1,5 @@
+import pytest
+
 from src.outcome_corroboration import (
     NO_CEILING,
     SERVER_SET_TOOL_TRIGGERS,
@@ -517,3 +519,77 @@ class TestVouchedProvenanceIsNotAWarrantForItsPayload:
         assert assess_outcome_corroboration(
             "task_completed", payload, "server_observation", ceiling=NO_CEILING
         ).grade == "externally_verified"
+
+
+# --- corroboration_upgrade_hint ------------------------------------------------
+#
+# An external agent told "task_completed completion claim has no corroborating
+# detail" guessed test_exit_code / artifact_hash / external_verifier_id, none of
+# which the grader reads (2026-09-24). The hint names the reference keys that do
+# count, pinned here to the grader. It deliberately does NOT name the shapes that
+# reach tool_observed: that grade is the calibration admission weight, and a
+# caller can reach it by description alone (SERVER_SET_TOOL_TRIGGERS), which is
+# an open operator decision the hint must not pre-empt.
+
+from src.outcome_corroboration import (  # noqa: E402
+    CLAIM_ONLY,
+    GRADE_WEIGHTS,
+    SELF_REPORT_WITH_REFS,
+    SUBSTRATE_OBSERVED,
+    TOOL_OBSERVED,
+    _CLAIM_FIELD_FAMILIES,
+    _REF_EXAMPLE_KEYS,
+    corroboration_upgrade_hint,
+)
+from src.mcp_handlers.observability.outcome_events import (  # noqa: E402
+    _MIN_TACTICAL_EVIDENCE_WEIGHT,
+)
+
+
+def _public_grade(detail):
+    return assess_outcome_corroboration(
+        "task_completed", detail, "agent_reported_tool_result", ceiling=TOOL_OBSERVED
+    ).grade
+
+
+def test_hint_covers_every_reference_family_the_grader_reads():
+    assert set(_REF_EXAMPLE_KEYS) == set(_CLAIM_FIELD_FAMILIES)
+    for family, key in _REF_EXAMPLE_KEYS.items():
+        assert key in _CLAIM_FIELD_FAMILIES[family]
+
+
+@pytest.mark.parametrize("key", list(_REF_EXAMPLE_KEYS.values()))
+def test_every_advertised_reference_key_reaches_self_report_with_refs(key):
+    assert _public_grade({key: "x"}) == SELF_REPORT_WITH_REFS
+
+
+def test_what_the_hint_advertises_stays_below_the_calibration_floor():
+    """The whole point of stopping at references."""
+    assert GRADE_WEIGHTS[SELF_REPORT_WITH_REFS] < _MIN_TACTICAL_EVIDENCE_WEIGHT
+
+
+def test_claim_only_hint_names_references_and_the_cap_but_no_tool_recipe():
+    hint = corroboration_upgrade_hint(CLAIM_ONLY, ceiling=TOOL_OBSERVED)
+    for key in _REF_EXAMPLE_KEYS.values():
+        assert key in hint
+    assert f"capped at {TOOL_OBSERVED}" in hint
+    for recipe_word in ("exit_code", "returncode", "captured_output", "tool_results", "kind"):
+        assert recipe_word not in hint
+
+
+@pytest.mark.parametrize("grade", [SELF_REPORT_WITH_REFS, TOOL_OBSERVED])
+def test_no_hint_above_claim_only(grade):
+    assert corroboration_upgrade_hint(grade, ceiling=TOOL_OBSERVED) is None
+
+
+@pytest.mark.parametrize("ceiling", [SUBSTRATE_OBSERVED, NO_CEILING, None, "bogus"])
+def test_no_hint_off_the_self_attested_path(ceiling):
+    """The cap sentence is only true for the public path; nobody else gets it."""
+    assert corroboration_upgrade_hint(CLAIM_ONLY, ceiling=ceiling) is None
+
+
+def test_the_guessed_keys_really_do_not_count():
+    """The failure that motivated the hint, pinned so it stays documented."""
+    assert _public_grade(
+        {"test_exit_code": 0, "artifact_hash": "abc", "external_verifier_id": "v"}
+    ) == CLAIM_ONLY
