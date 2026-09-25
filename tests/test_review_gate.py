@@ -7,6 +7,7 @@ pass a new diff)."""
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import subprocess
 import sys
@@ -1417,6 +1418,31 @@ def test_a_disabled_provider_is_skipped_unless_asked_for(monkeypatch, capsys):
     assert ran == ["codex"]
 
 
-def test_the_tracked_provider_file_parses():
-    got = real_disabled_providers()  # the committed file, not the autouse pin
-    assert isinstance(got, dict) and all(isinstance(v, str) for v in got.values())
+def test_every_provider_the_tracked_file_lists_is_disabled():
+    # The committed file, not the autouse pin: a shape the parser drops would
+    # silently re-enable the provider in every checkout.
+    listed = json.loads(rg.PROVIDERS_FILE.read_text()).get("disabled") or {}
+    names = listed if isinstance(listed, list) else [n for n, v in listed.items() if v]
+    assert set(names) <= set(real_disabled_providers())
+
+
+@pytest.mark.parametrize("content,expected", [
+    ('{"disabled": {"codex": {"reason": "r"}}}', {"codex": "r"}),
+    ('{"disabled": {"codex": "suspended"}}', {"codex": "suspended"}),
+    ('{"disabled": {"codex": true}}', {"codex": "disabled"}),
+    ('{"disabled": ["codex"]}', {"codex": "disabled"}),
+    ('{"disabled": {"codex": false}}', {}),
+    ('{}', {}),
+])
+def test_provider_entry_shapes(monkeypatch, tmp_path, content, expected):
+    f = tmp_path / "p.json"
+    f.write_text(content)
+    monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
+    assert real_disabled_providers() == expected
+
+
+def test_a_malformed_provider_file_warns(monkeypatch, tmp_path, capsys):
+    f = tmp_path / "p.json"
+    f.write_text("{not json")
+    monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
+    assert real_disabled_providers() == {} and "malformed" in capsys.readouterr().err

@@ -553,14 +553,33 @@ def disabled_providers() -> dict[str, str]:
 
     One committed switch every session reads, so an outage stops every
     checkout from routing to the dead provider, instead of each session
-    failing once per hour of per-machine cooldown. Missing or unreadable
-    file: nothing is disabled.
+    failing once per hour of per-machine cooldown.
+
+    An entry may be an object with a "reason", a reason string, or `true`;
+    `false`/null leave the provider enabled, and a plain list of names works
+    too. A missing file disables nothing. A file that exists but cannot be
+    parsed disables nothing AND warns, so a bad hand edit is never silent.
     """
     try:
-        data = json.loads(PROVIDERS_FILE.read_text())
-        return {name: str((info or {}).get("reason", "disabled"))
-                for name, info in (data.get("disabled") or {}).items()}
-    except (OSError, ValueError, AttributeError, TypeError):
+        raw = PROVIDERS_FILE.read_text()
+    except OSError:
+        return {}
+    try:
+        entries = json.loads(raw).get("disabled") or {}
+        if isinstance(entries, list):
+            entries = {name: True for name in entries}
+        out = {}
+        for name, info in entries.items():
+            if isinstance(info, dict):
+                out[str(name)] = str(info.get("reason", "disabled"))
+            elif isinstance(info, str):
+                out[str(name)] = info
+            elif info:
+                out[str(name)] = "disabled"
+        return out
+    except (ValueError, AttributeError, TypeError) as exc:
+        print(f"[review] WARNING: {PROVIDERS_FILE.name} is malformed ({exc}); "
+              "treating no provider as disabled", file=sys.stderr)
         return {}
 
 
