@@ -2303,10 +2303,11 @@ def _fingerprint_lines(block: str) -> list[str]:
     return [line for line in block.splitlines() if "(#" in line]
 
 
-def test_display_cap_counts_entries_not_copies(watcher_module, tmp_path):
-    """The 10-row cap bounds fingerprint lines, as it did before grouping:
-    12 medium rows in 2 groups show 10 copies, and the 2 cut copies are
-    summarised, not listed, and not marked shown."""
+def test_display_cap_admits_entries_and_fills_rows_with_copies(watcher_module, tmp_path):
+    """Medium entries are admitted by count and the 10-row cap is then filled
+    with further copies in entry order: 12 medium rows in 2 groups show both
+    entries and 10 copies, and the 2 cut copies are summarised, not listed,
+    and not marked shown."""
     trees = _repo_with_worktrees(tmp_path)
     findings = [
         _copy(f"a{i:07d}00000000", trees["main"], line=i + 1, line_content_hash="aaaa00000000")
@@ -2317,13 +2318,98 @@ def test_display_cap_counts_entries_not_copies(watcher_module, tmp_path):
     ]
     block, shown = watcher_module._format_findings_block(findings, header="x")
     assert block is not None
+    assert sum(1 for line in block.splitlines() if line.startswith("  [")) == 2
     assert len(shown) == 10
     assert len(_fingerprint_lines(block)) == 10
     assert "+2 more location(s) not shown" in block
     hidden = {f["fingerprint"] for f in findings} - {f["fingerprint"] for f in shown}
-    assert len(hidden) == 2
+    assert hidden == {"b000000400000000", "b000000500000000"}
     assert not any(f"(#{fp[:8]})" in block for fp in hidden)
     assert "Total unresolved: 12 (showing 10 as 2 entries" in block
+
+
+def test_display_cap_never_hides_a_distinct_finding_behind_copies(
+    watcher_module, tmp_path
+):
+    """Copies grouped at their oldest member's place must not push distinct,
+    older findings out: A0 (01-01), D0-D4 (02-xx), then nine copies of A
+    (03-xx). Ungrouped, the 10 oldest rows were A0, all of D and four A
+    copies; grouped, the same rows show as A's entry plus five D entries."""
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("a000000000000000", trees["main"], line=1, detected_at="2026-01-01T00:00:00Z")
+    ] + [
+        _copy(
+            f"d{i:015d}",
+            trees["main"],
+            line=100 + i,
+            line_content_hash=f"d{i:011d}",
+            detected_at=f"2026-02-0{i + 1}T00:00:00Z",
+        )
+        for i in range(5)
+    ] + [
+        _copy(
+            f"a{i + 1:015d}",
+            trees["main"],
+            line=i + 2,
+            detected_at=f"2026-03-0{i + 1}T00:00:00Z",
+        )
+        for i in range(9)
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    shown_fps = {f["fingerprint"] for f in shown}
+    assert {f"d{i:015d}" for i in range(5)} <= shown_fps
+    assert {f"a{i:015d}" for i in range(5)} <= shown_fps
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
+    assert sum(1 for line in block.splitlines() if line.startswith("  [")) == 6
+    assert "+5 more location(s) not shown" in block
+    assert "Total unresolved: 15 (showing 10 as 6 entries" in block
+
+
+def test_critical_copies_still_count_as_rows_against_the_medium_allowance(
+    watcher_module, tmp_path
+):
+    """The medium allowance is 10 minus the critical/high rows, as it was
+    ungrouped: one critical line copied ten times leaves no room for medium,
+    even though it renders as a single entry."""
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy(f"c{i:015d}", trees["main"], line=i + 1, severity="critical",
+              detected_at=f"2026-01-0{i % 9 + 1}T00:00:00Z")
+        for i in range(10)
+    ] + [
+        _copy(f"m{i:015d}", trees["main"], line=100 + i, severity="medium",
+              line_content_hash=f"m{i:011d}", detected_at="2026-02-01T00:00:00Z")
+        for i in range(3)
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert {f["severity"] for f in shown} == {"critical"}
+    assert len(_fingerprint_lines(block)) == 10
+
+
+def test_listing_runs_no_git_for_low_findings(watcher_module, tmp_path, monkeypatch):
+    """Low findings are never displayed, so grouping must not place them in a
+    worktree: a low-only listing starts no git subprocess."""
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"], severity="low"),
+        _copy("bbbb000000000002", trees["feat-a"], severity="low"),
+    ]
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+        raise OSError("subprocess blocked by test")
+
+    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert calls == []
+    assert shown == []
+    assert block is None or "(#" not in block
 
 
 def test_display_cap_bounds_one_large_group(watcher_module, tmp_path):

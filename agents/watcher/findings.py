@@ -1086,17 +1086,22 @@ def _format_findings_block(
 
     Severity rules for the displayed subset:
       - critical/high: always shown
-      - medium: shown only if there's room under the 10-row display cap
+      - medium: shown only if there's room under the 10-item display cap
         reserved for critical+high (keeps session context from drowning in
         medium-severity noise while still surfacing some)
       - low: never shown (file-only signal)
 
     Copies of the same flagged code (see ``_group_copies``) render as one
     entry that lists each displayed copy's location and fingerprint. The
-    display cap still counts rows, that is fingerprint lines, not entries, so
-    grouping never shows more rows than the ungrouped listing did: a medium
-    group that does not fit shows the copies that do plus a "+K more" line.
-    ``shown`` holds exactly the copies whose fingerprint was on screen.
+    medium allowance is what the ungrouped listing had: 10 minus the
+    critical/high rows. It admits medium entries, not rows, so every distinct
+    finding the ungrouped listing would have shown is still shown, whatever
+    the number of copies ahead of it. Each admitted entry lists its first
+    copy; the allowance left over goes to further copies in entry order, so
+    the block never has more rows than the ungrouped listing, and a group's
+    cut copies are summarised in a "+K more" line.
+    ``shown`` holds exactly the copies whose fingerprint was on screen, so a
+    cut copy, or an entry past the cap, is never marked surfaced.
 
     ``out_of_scope_groups`` is an optional ``{worktree_label: count}`` map
     of findings the caller is *not* surfacing in the body (typically:
@@ -1136,24 +1141,30 @@ def _format_findings_block(
     )
 
     cache: GitCache = {} if git_cache is None else git_cache
+    # Low findings are never shown, so they are not grouped either: placing
+    # a finding in a worktree can cost a git subprocess.
+    displayable = [
+        f for f in findings if f.get("severity") in ("critical", "high", "medium")
+    ]
     # Findings are sorted, so a group's first member is its most severe.
-    entries = _group_copies(findings, cache)
+    entries = _group_copies(displayable, cache)
     critical_high = [
         g for g in entries if g[0].get("severity") in ("critical", "high")
     ]
+    # Medium entries are admitted by count, so copies never take the place of
+    # a distinct finding; the rows left under the cap then go to extra copies
+    # in entry order. (group, displayed members).
     medium = [g for g in entries if g[0].get("severity") == "medium"]
-    # (group, displayed members). The cap budgets rows, as it did before
-    # grouping, so a large medium group cannot flood the block.
+    allowance = max(0, 10 - sum(len(g) for g in critical_high))
+    medium = medium[:allowance]
+    spare = allowance - len(medium)
     shown_entries: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = [
         (g, g) for g in critical_high
     ]
-    budget = 10 - sum(len(g) for g in critical_high)
     for group in medium:
-        if budget <= 0:
-            break
-        members = group[:budget]
-        shown_entries.append((group, members))
-        budget -= len(members)
+        extra = max(0, min(len(group) - 1, spare))
+        shown_entries.append((group, group[: 1 + extra]))
+        spare -= extra
     shown = [f for _group, members in shown_entries for f in members]
 
     out_of_scope_total = (
