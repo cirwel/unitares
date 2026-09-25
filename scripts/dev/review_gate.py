@@ -886,23 +886,33 @@ AGY_RESUME_PROMPT = (
 )
 
 
-def _agy_output_limited(stdout: str) -> str | None:
-    """The conversation id to resume when agy stopped at its output-token limit.
+#: A resume needs at least this much budget left to be worth starting.
+AGY_RESUME_MIN_SECONDS = 5.0
 
-    Such a run ends with status ERROR and a ``response`` that is only the tail
-    of the answer (its start is lost), so it is never accepted as the review;
-    the conversation is resumed to get the whole answer instead, at the same
-    effort. Returns None for any other outcome."""
+
+def _agy_truncation(stdout: str) -> tuple[bool, str | None]:
+    """(truncated, conversation id) for an agy JSON result.
+
+    A run that stopped at its output-token limit ends with status ERROR and a
+    ``response`` that is only the tail of the answer (its start is lost), so
+    it is never accepted as the review. With a conversation id it can be
+    resumed for the whole answer, at the same effort; without one it is a
+    failure."""
     try:
         data = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else {}
     except (ValueError, IndexError):
-        return None
+        return False, None
     if not isinstance(data, dict) or data.get("status") == "SUCCESS":
-        return None
+        return False, None
     if "output token limit" not in str(data.get("error") or "").lower():
-        return None
+        return False, None
     cid = data.get("conversation_id")
-    return cid if isinstance(cid, str) and cid else None
+    return True, (cid if isinstance(cid, str) and cid else None)
+
+
+def _agy_output_limited(stdout: str) -> str | None:
+    """The conversation id to resume, or None (see _agy_truncation)."""
+    return _agy_truncation(stdout)[1]
 
 
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tuple[str, str]:
@@ -968,7 +978,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
             rc, failure = launch(cmd, fh, budget_s)
             while (
                 failure is None and isolated and resumed < AGY_RESUME_LIMIT
-                and time.monotonic() < deadline
+                and deadline - time.monotonic() >= AGY_RESUME_MIN_SECONDS
             ):
                 cid = _agy_output_limited(last.read_text(errors="replace") if last.exists() else "")
                 if cid is None:
@@ -981,15 +991,15 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
                 # change there can never miss the resumed run.
                 rc, failure = launch(
                     ["agy", "-p", AGY_RESUME_PROMPT, "--conversation", cid, *cmd[3:]], fh,
-                    max(1.0, deadline - time.monotonic()))
+                    deadline - time.monotonic())
     finally:
         if workspace:
             workspace.cleanup()
     if failure is None and isolated:
         final = last.read_text(errors="replace") if last.exists() else ""
-        if _agy_output_limited(final) is not None:
-            # Still truncated after the last resume, or the budget ran out:
-            # a failure, never "exit 0" (which callers accept as a review).
+        if _agy_truncation(final)[0]:
+            # Still truncated after the last resume, too little budget left to
+            # resume, or no conversation to resume: a failure, never "exit 0".
             failure = (f"output limit not recovered after {resumed} resume(s)"
                        + ("" if resumed < AGY_RESUME_LIMIT else f" (limit {AGY_RESUME_LIMIT})"))
     if failure is not None:

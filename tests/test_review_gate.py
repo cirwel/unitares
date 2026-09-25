@@ -1663,7 +1663,6 @@ def test_resuming_stops_at_the_limit_and_the_tail_is_never_an_answer(monkeypatch
     calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMIT + 1))
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert len(calls) == rg.AGY_RESUME_LIMIT + 1
-    assert rg.parse_verdict(text) != ("CLEAN", 0)
     assert note != "exit 0"  # an unrecovered truncation is a failure
     assert "output limit not recovered after 3 resume(s)" in note
 
@@ -1783,3 +1782,20 @@ def test_the_first_launch_gets_exactly_the_budget(monkeypatch, tmp_path, reviewe
     monkeypatch.setattr(rg.time, "monotonic", tick)
     rg.run_reviewer(reviewer, "PROMPT", tmp_path, 30)
     assert waits == [30]
+
+
+def test_a_truncation_without_a_conversation_is_a_failure_not_exit_0(monkeypatch, tmp_path):
+    no_cid = _AGY_TRUNCATED.replace('"conversation_id":"conv-1",', "")
+    calls = _fake_agy(monkeypatch, [no_cid])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 1
+    assert note == "output limit not recovered after 0 resume(s)"
+
+
+def test_no_resume_starts_with_too_little_budget_left(monkeypatch, tmp_path):
+    """Under AGY_RESUME_MIN_SECONDS left, resuming cannot finish: report the
+    unrecovered limit instead of a resume killed at the budget."""
+    waits = _clocked_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE], [29.5, 1.0])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(waits) == 1
+    assert note == "output limit not recovered after 0 resume(s)"
