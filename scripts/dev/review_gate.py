@@ -992,10 +992,11 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
         text = _antigravity_text(text)
     # An empty answer must surface the log, where auth/quota errors land.
     text = text if text.strip() else log.read_text(errors="replace")
-    note = "exit 0" if rc == 0 else f"exit {rc}"
     if resumed:
-        note += f" (resumed {resumed}x after output limit)"
-    return text, note
+        # Reported beside the note, never in it: callers accept a review only
+        # when the note is exactly "exit 0".
+        print(f"[review] {reviewer} resumed {resumed}x after its output limit", file=sys.stderr)
+    return text, ("exit 0" if rc == 0 else f"exit {rc}")
 
 
 def render_body(rec: Record, heading: str, text: str) -> str:

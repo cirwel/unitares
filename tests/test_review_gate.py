@@ -1646,7 +1646,7 @@ def test_a_truncated_agy_answer_is_resumed_not_accepted(monkeypatch, tmp_path):
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert rg.parse_verdict(text) == ("FINDINGS", 1)
     assert "Full review." in text
-    assert note == "exit 0 (resumed 1x after output limit)"
+    assert note == "exit 0"  # callers accept only exactly this
     first, second = calls
     assert "--conversation" not in first["cmd"]
     i = second["cmd"].index("--conversation")
@@ -1664,14 +1664,14 @@ def test_resuming_stops_at_the_limit_and_the_tail_is_never_an_answer(monkeypatch
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert len(calls) == rg.AGY_RESUME_LIMIT + 1
     assert rg.parse_verdict(text) != ("CLEAN", 0)
-    assert f"resumed {rg.AGY_RESUME_LIMIT}x" in note
+    assert rg.parse_verdict(text) is None or note != "exit 0"
 
 
 def test_other_agy_errors_are_not_resumed(monkeypatch, tmp_path):
     other = '{"conversation_id":"c","status":"ERROR","error":"permission denied"}\n'
     calls = _fake_agy(monkeypatch, [other])
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
-    assert len(calls) == 1 and "resumed" not in note
+    assert len(calls) == 1
 
 
 def test_output_limit_detection_needs_error_status_and_a_conversation():
@@ -1679,3 +1679,19 @@ def test_output_limit_detection_needs_error_status_and_a_conversation():
     assert rg._agy_output_limited(_AGY_COMPLETE) is None
     assert rg._agy_output_limited(_AGY_TRUNCATED.replace('"conversation_id":"conv-1",', "")) is None
     assert rg._agy_output_limited("not json") is None
+
+
+def test_a_resumed_agy_review_is_recorded_end_to_end(tmp_path, monkeypatch, capsys):
+    """Through _review_locked, not run_reviewer alone: a resumed success must
+    land as a real verdict, not FAILED/UNREVIEWED."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff --git a/x b/x\n+x\n")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    monkeypatch.setattr(rg, "antigravity_prompt", lambda *args, **kw: "PROMPT")
+    _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE])
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "antigravity")
+    assert rc == 1, capsys.readouterr()
+    assert records[0][1].verdict == "FINDINGS" and records[0][1].reviewer == "antigravity"
+    assert "resumed 1x" in capsys.readouterr().err
