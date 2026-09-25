@@ -555,8 +555,9 @@ PROVIDER_ORDER = ("codex", "antigravity", "claude")
 # launch failure with a cooldown, not a silent skip).
 OPTIONAL_CLI = {"antigravity": "agy"}
 # Antigravity reviews an inlined prompt from an empty workspace, so the whole
-# prompt rides in argv; stay well under macOS's 1 MiB ARG_MAX.
-ANTIGRAVITY_PROMPT_LIMIT = 400_000
+# prompt rides in ONE argv element: Linux caps that at 128 KiB (MAX_ARG_STRLEN)
+# and macOS caps all of argv+env at 1 MiB. Bytes, not characters.
+ANTIGRAVITY_PROMPT_LIMIT = 120_000
 
 ANTIGRAVITY_PROMPT = """\
 You are reviewing a pull request to a repository you cannot see: your working
@@ -791,30 +792,57 @@ def remember_unavailable(reviewer: str, text: str, note: str) -> None:
     os.replace(f.name, path)
 
 
-def antigravity_prompt(diff: str, base: str, head: str, root: Path = Path(".")) -> str | None:
-    """A self-contained review prompt: the diff plus each changed file's full
-    post-change text, read here (never executed). None when even the diff
-    alone would not fit, so the caller fails over instead of reviewing part."""
-    paths = []
-    for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            paths.append(line[len("+++ b/"):])
-    files = ""
-    for p in paths:
-        f = (root / p)
-        try:
-            body = f.read_text(errors="replace") if f.is_file() else None
-        except OSError:
-            body = None
-        if body is None:
+def _changed_blobs(base: str) -> list[tuple[str, str]]:
+    """(path, committed text) for each changed regular file at HEAD.
+
+    Everything comes from git objects, never the working tree: paths from
+    `git diff --name-only` (not from diff text, where an added line can forge
+    a `+++ b/` header), content from `git show HEAD:<path>` (a symlink's
+    target is never followed, uncommitted edits never leak in). Symlinks,
+    submodules and any path that is not clean and relative are skipped, so
+    nothing outside the repository can be read into a prompt that leaves the
+    machine.
+    """
+    out = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames",
+                          "--diff-filter=d", f"{base}...HEAD"],
+                         capture_output=True, check=False).stdout
+    blobs = []
+    for raw in out.split(b"\0"):
+        path = raw.decode("utf-8", "replace")
+        parts = Path(path).parts
+        if not path or Path(path).is_absolute() or ".." in parts:
             continue
-        block = f"\n===== FILE {p} (post-change) =====\n{body}"
-        if len(diff) + len(files) + len(block) + 3000 > ANTIGRAVITY_PROMPT_LIMIT:
-            files += f"\n===== FILE {p} omitted: prompt size limit =====\n"
+        ls = subprocess.run(["git", "ls-tree", "-z", "HEAD", "--", path],
+                            capture_output=True, check=False).stdout.decode("utf-8", "replace")
+        if not ls.startswith("100"):  # 100644/100755 only: no 120000 symlink, 160000 submodule
+            continue
+        show = subprocess.run(["git", "show", f"HEAD:{path}"], capture_output=True, check=False)
+        if show.returncode == 0:
+            blobs.append((path, show.stdout.decode("utf-8", "replace")))
+    return blobs
+
+
+def antigravity_prompt(diff: str, base: str, head: str) -> str | None:
+    """A self-contained review prompt: the diff plus each changed file's full
+    committed text. None when even the diff alone would not fit, so the caller
+    fails over instead of reviewing part of the change."""
+    def size(s: str) -> int:
+        return len(s.encode("utf-8"))
+
+    skeleton = ANTIGRAVITY_PROMPT.format(base=base, head=head, diff=diff, files="")
+    budget = ANTIGRAVITY_PROMPT_LIMIT - size(skeleton)
+    if budget < 0:
+        return None
+    files = ""
+    for path, body in _changed_blobs(base):
+        block = f"\n===== FILE {path} (post-change) =====\n{body}"
+        if size(files) + size(block) > budget:
+            note = f"\n===== FILE {path} omitted: prompt size limit =====\n"
+            if size(files) + size(note) <= budget:
+                files += note
             continue
         files += block
-    prompt = ANTIGRAVITY_PROMPT.format(base=base, head=head, diff=diff, files=files)
-    return prompt if len(prompt) <= ANTIGRAVITY_PROMPT_LIMIT else None
+    return ANTIGRAVITY_PROMPT.format(base=base, head=head, diff=diff, files=files)
 
 
 def _antigravity_text(stdout: str) -> str:
@@ -853,6 +881,12 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     log = out_dir / "reviewer.log"
     isolated = reviewer == "antigravity"
     workspace = tempfile.TemporaryDirectory(prefix="review-agy-") if isolated else None
+    if workspace and any((d / m).exists() for d in Path(workspace.name).resolve().parents
+                         for m in (".git", ".agents")):
+        # agy may discover project config by walking up from its cwd.
+        workspace.cleanup()
+        return ("temporary workspace sits under a .git/.agents directory; set TMPDIR "
+                "to a plain directory", "skipped: workspace not isolated")
     with open(log, "w") as fh:
         # antigravity: stdout is the JSON answer, kept apart from stderr.
         out = open(last, "w") if isolated else fh

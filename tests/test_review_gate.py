@@ -1498,21 +1498,49 @@ def test_fallback_after_codex_is_now_antigravity_not_claude(monkeypatch):
     assert ran == ["codex", "antigravity"]
 
 
-def test_antigravity_prompt_inlines_the_diff_and_changed_files(tmp_path):
-    (tmp_path / "a.py").write_text("print('after')\n")
-    diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n-print('before')\n+print('after')\n"
-    prompt = rg.antigravity_prompt(diff, "origin/master", "abc123", root=tmp_path)
-    assert diff in prompt and "===== FILE a.py (post-change) =====\nprint('after')" in prompt
-    assert prompt.rstrip().endswith("print('after')") and "cannot see" in prompt
+def _agy_prompt(repo):
+    diff = rg.diff_text("master", "HEAD")
+    return diff, rg.antigravity_prompt(diff, "master", "h")
 
 
-def test_antigravity_prompt_omits_files_past_the_limit_and_refuses_an_oversized_diff(tmp_path, monkeypatch):
-    monkeypatch.setattr(rg, "ANTIGRAVITY_PROMPT_LIMIT", 6000)
-    (tmp_path / "big.txt").write_text("x" * 5000)
-    diff = "+++ b/big.txt\n+x\n"
-    prompt = rg.antigravity_prompt(diff, "b", "h", root=tmp_path)
-    assert "big.txt omitted: prompt size limit" in prompt and "x" * 5000 not in prompt
-    assert rg.antigravity_prompt("+" * 7000, "b", "h", root=tmp_path) is None
+def test_antigravity_prompt_inlines_committed_changed_files(repo):
+    diff, prompt = _agy_prompt(repo)
+    assert diff in prompt and "===== FILE a.txt (post-change) =====\na changed\n" in prompt
+    assert "cannot see" in prompt and "b.txt" not in prompt.split("===== DIFF =====")[1].split(diff)[1]
+
+
+def test_antigravity_prompt_reads_git_objects_not_the_filesystem(repo, tmp_path):
+    # Review of 965e9bc (P1): paths were taken from '+++ b/' text anywhere in
+    # the diff, joined without normalising, and symlinks were followed, so a
+    # PR could inline files from outside the repository into a third-party
+    # prompt. Now: git's own path list, committed blobs, no symlinks.
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP-SECRET\n")
+    (repo / "forge.txt").write_text(f"++ b/{secret}\n++ b/../../secret.txt\n")
+    (repo / "link").symlink_to(secret)
+    _git(repo, "add", "forge.txt", "link")
+    _git(repo, "commit", "-qm", "attempt")
+    (repo / "a.txt").write_text("uncommitted edit\n")  # working tree must not leak in
+    diff, prompt = _agy_prompt(repo)
+    assert f"+++ b/{secret}" in diff  # the forged header really is in the diff
+    assert "TOP-SECRET" not in prompt and "uncommitted edit" not in prompt
+    assert "===== FILE link" not in prompt and "===== FILE forge.txt (post-change) =====" in prompt
+
+
+def test_antigravity_prompt_limit_is_in_bytes_and_refuses_an_oversized_diff(repo, monkeypatch):
+    # 3000 characters but 6000 bytes: counted in characters it would fit a
+    # 4500-unit budget; counted in bytes (what argv limits) it must not.
+    (repo / "big.txt").write_text("é" * 3000)
+    _git(repo, "add", "big.txt")
+    _git(repo, "commit", "-qm", "big")
+    diff = rg.diff_text("master", "HEAD")
+    skeleton = rg.ANTIGRAVITY_PROMPT.format(base="master", head="h", diff=diff, files="")
+    monkeypatch.setattr(rg, "ANTIGRAVITY_PROMPT_LIMIT", len(skeleton.encode()) + 4500)
+    prompt = rg.antigravity_prompt(diff, "master", "h")
+    assert "big.txt omitted: prompt size limit" in prompt and "é" * 3000 not in prompt.split("===== DIFF =====")[1].split(diff)[1]
+    assert len(prompt.encode()) <= rg.ANTIGRAVITY_PROMPT_LIMIT
+    monkeypatch.setattr(rg, "ANTIGRAVITY_PROMPT_LIMIT", 100)
+    assert rg.antigravity_prompt("+" * 200, "b", "h") is None
 
 
 def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path):
@@ -1552,7 +1580,7 @@ def test_a_failed_antigravity_run_returns_raw_output_and_cools_down(monkeypatch,
     monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert "RESOURCE_EXHAUSTED" in text and note == "exit 3"
-    rg.remember_unavailable("antigravity", text, note)
+    rg.remember_unavailable("antigravity", text, note)  # the new quota keyword
     assert rg.provider_cooldown("antigravity") == "quota"
 
 
@@ -1560,3 +1588,13 @@ def test_antigravity_json_that_is_not_success_is_not_an_answer():
     assert rg._antigravity_text('{"status":"ERROR","response":"VERDICT: CLEAN"}') \
         == '{"status":"ERROR","response":"VERDICT: CLEAN"}'
     assert rg._antigravity_text("not json") == "not json"
+
+
+def test_a_workspace_under_a_repo_is_refused(monkeypatch, tmp_path):
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(rg.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(rg.subprocess, "Popen", lambda *a, **k: pytest.fail("launched agy"))
+    out = tmp_path / "out"
+    out.mkdir()
+    text, note = rg.run_reviewer("antigravity", "P", out, 30)
+    assert note == "skipped: workspace not isolated"
