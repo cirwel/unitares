@@ -79,6 +79,12 @@ SILENT_BODIES = [
     # contextlib.suppress swallows a raise the same way (independent review).
     "with contextlib.suppress(Exception):\n    raise RuntimeError('x')",
     "with suppress(ValueError):\n    raise",
+    # A return whose value calls something can raise into the nested handler
+    # (#2424 final review, P3 2).
+    "try:\n    return compute()\nexcept Exception:\n    pass",
+    "try:\n    return {'error': str(exc)}\nexcept Exception:\n    pass",
+    "try:\n    return await fetch()\nexcept Exception:\n    pass",
+    "with contextlib.suppress(Exception):\n    return compute()",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
     "parser.error('bad input')",
@@ -162,8 +168,12 @@ def test_nested_try_body_and_finally_count_for_the_handler(tmp_path, body):
         "try:\n    raise RuntimeError('wrapped') from exc\nfinally:\n    cleanup()",
         # The nested else runs outside the nested handlers.
         "try:\n    cleanup()\nexcept OSError:\n    pass\nelse:\n    raise",
-        # A non-None return is not caught by the nested handler.
-        "try:\n    return {'error': str(exc)}\nexcept Exception:\n    pass",
+        # A non-None return whose value calls nothing cannot raise into the
+        # nested handler.
+        "try:\n    return {'error': 'failed', 'exc': exc}\nexcept Exception:\n    pass",
+        "try:\n    return False\nexcept Exception:\n    pass",
+        # Outside a caught body a call in the value is fine.
+        "try:\n    cleanup()\nexcept OSError:\n    pass\nreturn {'error': str(exc)}",
         # A log call under suppress() still runs; only a raise is swallowed.
         "with contextlib.suppress(Exception):\n    logger.error('x')",
         # A with block that is not suppress() lets a raise escape.
@@ -290,6 +300,55 @@ def test_flag_on_the_try_line_uses_its_handlers(tmp_path):
     assert p006_actually_fires(str(loud), 4) is False
 
 
+def _outer_with_nested(inner_body: str) -> str:
+    """Line 2 is the outer `try:`, 3 `y = 1`, 4 the nested `try:`, 6 the
+    nested clause, 7 its body; the outer handler (8-9) re-raises."""
+    return (
+        "def f():\n"
+        "    try:\n"
+        "        y = 1\n"
+        "        try:\n"
+        "            x()\n"
+        "        except Exception:\n"
+        f"            {inner_body}\n"
+        "    except ValueError:\n"
+        "        raise\n"
+    )
+
+
+@pytest.mark.parametrize("flagged", [2, 3, 4, 6, 7])
+def test_cite_above_a_nested_silent_try_is_kept(tmp_path, flagged):
+    # #2424 final review, P3 1: citing the outer `try:` (2) or an early body
+    # line (3) once examined only the outer re-raising handler and dropped
+    # the finding, though the nested `except Exception: pass` swallows.
+    path = _write(tmp_path, _outer_with_nested("pass"))
+    assert p006_actually_fires(str(path), flagged) is True
+
+
+@pytest.mark.parametrize("flagged", [2, 3, 4, 6, 7])
+def test_cite_above_a_nested_reacting_try_is_dropped(tmp_path, flagged):
+    path = _write(tmp_path, _outer_with_nested("logger.warning('x')"))
+    assert p006_actually_fires(str(path), flagged) is False
+
+
+def test_nested_try_above_the_cited_line_is_not_added(tmp_path):
+    # Only tries starting below the cited line are brought in.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            x()\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "        y = 1\n"
+        "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 7) is False
+    assert p006_actually_fires(str(path), 2) is True
+
+
 @pytest.mark.parametrize("block", ["else", "finally"])
 def test_else_and_finally_lines_are_not_governed_by_the_try(tmp_path, block):
     source = (
@@ -404,6 +463,9 @@ NOT_LOGGER_RECEIVERS = [
     "dialog",
     "self.catalog",
     "blog",
+    # Ends in "logger" without being one (#2424 final review, P3 3).
+    "blogger",
+    "self.blogger",
     "login",
     "self.backlog",
 ]
@@ -418,6 +480,8 @@ LOGGER_RECEIVERS = [
     "self.log",
     "self._log",
     "self.app_logger",
+    "APP_LOGGER",
+    "self._logger",
     "structlog.get_logger()",
     "logging.getLogger(__name__)",
 ]
@@ -609,3 +673,37 @@ def test_noqa_on_an_earlier_try_does_not_cover_a_later_one():
         3: "            again()",
     }
     assert _p006_governing_except(3, nested) == 1
+
+
+@pytest.mark.parametrize("owner", ["if retry:", "for item in items:", "while pending:"])
+def test_non_try_else_inside_a_handler_reaches_its_clause(owner):
+    """#2424 final review, P3 4: the `else:` of an if/for/while inside a
+    handler once stopped the walk-back, so `# noqa: BLE001` on the handler's
+    clause was missed and the finding kept."""
+    from agents.watcher.agent import _p006_governing_except
+
+    lines = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: f"        {owner}",
+        3: "            again()",
+        4: "        else:",
+        5: "            give_up()",
+    }
+    assert _p006_governing_except(5, lines) == 1
+
+
+def test_try_else_still_stops_the_walk():
+    from agents.watcher.agent import _p006_governing_except
+
+    lines = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: "        try:",
+        3: "            again()",
+        4: "        except OSError:",
+        5: "            logger.warning('x')",
+        6: "        else:",
+        7: "            give_up()",
+    }
+    assert _p006_governing_except(7, lines) is None
+    # An else whose owner is not visible is taken to be a try's.
+    assert _p006_governing_except(2, {1: "    else:", 2: "        work()"}) is None

@@ -1681,9 +1681,10 @@ def _p006_receiver_is_logger(expr: Any) -> bool:
 
     The last name in the receiver must be one of ``_P006_LOGGER_NAMES``
     (``logger``, ``self.log``, ``self._logger``, ``LOG``, ``logging`` ...) or
-    end in ``logger`` (``app_logger``, ``structlog.get_logger()``,
-    ``logging.getLogger(__name__)``). A name that merely contains "log", such
-    as ``dialog``, ``catalog``, ``blog``, ``login`` or ``backlog``, does not
+    end in ``_logger``, ``_LOGGER`` or ``Logger`` (``app_logger``,
+    ``structlog.get_logger()``, ``logging.getLogger(__name__)``). A name that
+    merely contains or ends in "log" or "logger", such as ``dialog``,
+    ``catalog``, ``blog``, ``blogger``, ``login`` or ``backlog``, does not
     count. This also keeps ``task.exception()`` (the asyncio API, which only
     returns the stored exception) or ``parser.error(...)`` from counting as
     logging.
@@ -1698,7 +1699,7 @@ def _p006_receiver_is_logger(expr: Any) -> bool:
         name = expr.id
     else:
         return False
-    return name in _P006_LOGGER_NAMES or name.lower().endswith("logger")
+    return name in _P006_LOGGER_NAMES or name.endswith(("_logger", "_LOGGER", "Logger"))
 
 
 def _p006_is_loud_log_call(node: Any) -> bool:
@@ -1754,9 +1755,13 @@ def _p006_handler_reacts(handler: Any) -> bool:
     handler may catch it and the failure is then swallowed after all. The
     rule is conservative on purpose: it does not work out whether the
     handler's type matches the raised one, or whether the handler re-raises
-    (its body is skipped, as above), so such a finding is kept. A log call or
-    a non-None ``return`` in that body still counts; neither is caught. The
-    body of a ``with ...suppress(...)`` block is treated the same way.
+    (its body is skipped, as above), so such a finding is kept. A log call in
+    that body still counts: it runs before anything there can be caught. A
+    non-None ``return`` there counts only when its value contains no call
+    (``return False`` or ``return {"error": msg}``, not ``return compute()``
+    or ``return str(exc)``), because a call in the value can raise into that
+    handler and the failure is swallowed. The body of a
+    ``with ...suppress(...)`` block is treated the same way.
     """
     import ast
 
@@ -1790,9 +1795,21 @@ def _p006_handler_reacts(handler: Any) -> bool:
             if not raise_caught:
                 return True
             continue
-        if isinstance(node, ast.Return) and not (
-            node.value is None
-            or (isinstance(node.value, ast.Constant) and node.value.value is None)
+        if (
+            isinstance(node, ast.Return)
+            and not (
+                node.value is None
+                or (isinstance(node.value, ast.Constant) and node.value.value is None)
+            )
+            # In a caught body, a call in the value can raise into a handler
+            # that swallows it.
+            and not (
+                raise_caught
+                and any(
+                    isinstance(sub, (ast.Call, ast.Await))
+                    for sub in ast.walk(node.value)
+                )
+            )
         ):
             return True
         if _p006_is_loud_log_call(node):
@@ -1839,6 +1856,12 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     an inner try body under ``except KeyError: logger.warning(...)`` is still
     kept when an outer ``except Exception: pass`` would catch anything else.
 
+    When the line sits in a ``try`` block, the path also takes the handlers of
+    every try nested in the innermost such block that starts below the line,
+    at any depth: the model may cite the outer ``try:`` line or an early body
+    line when the silent handler belongs to a try further down. This is
+    conservative, so one silent nested handler keeps the finding.
+
     Kept (returns True) whenever the check cannot show a reaction: no handler
     on the path (a line inside no try, or only in try/finally), an unreadable,
     non-Python or unparseable file.
@@ -1874,6 +1897,25 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
             on_path.extend(node.handlers)
             continue
         on_path.extend(h for h in node.handlers if _within(h, h.lineno))
+
+    # A cite in a try block may point above the swallow it means: at the
+    # `try:` line or an early body line, with the silent handler on a try
+    # nested further down that block. Add the handlers of every try nested
+    # in the innermost such block that starts after the cited line.
+    innermost = None
+    for node in ast.walk(tree):
+        if not isinstance(node, try_types):
+            continue
+        body_end = getattr(node.body[-1], "end_lineno", None) or node.body[-1].lineno
+        if node.lineno <= line <= body_end and (
+            innermost is None or node.lineno > innermost.lineno
+        ):
+            innermost = node
+    if innermost is not None:
+        for stmt in innermost.body:
+            for node in ast.walk(stmt):
+                if isinstance(node, try_types) and node.lineno > line:
+                    on_path.extend(node.handlers)
 
     if not on_path:
         return True
@@ -2858,8 +2900,36 @@ def _indent_of(line: str) -> int:
 
 
 # A header that opens a try block or one of its non-handler branches: a line
-# under it is not in a handler's body.
+# under it is not in a handler's body. An `else:` matches here too, but it only
+# stops the walk when `_p006_else_is_try_branch` says it belongs to a try.
 _P006_TRY_OR_BRANCH = re.compile(r"^\s*(try|else|finally)\s*:")
+_P006_ELSE = re.compile(r"^\s*else\s*:")
+# Headers whose `else:` is not a try's: if/elif, for/async for, while.
+_P006_NON_TRY_ELSE_OWNER = re.compile(r"^\s*(if|elif|for|async\s+for|while)\b")
+
+
+def _p006_else_is_try_branch(
+    else_line: int, snippet_lines_by_num: dict[int, str]
+) -> bool:
+    """True unless the `else:` on ``else_line`` visibly belongs to an
+    if/elif/for/while.
+
+    The owner is the nearest earlier line at the same indent: an `except`
+    clause for a try's `else`, an `if`/`elif`/`for`/`while` header otherwise.
+    When that line is not visible, or is anything else, the `else` is taken
+    to be a try's, which stops the walk and keeps the finding.
+    """
+    indent = _indent_of(snippet_lines_by_num.get(else_line, ""))
+    line_no = else_line - 1
+    while line_no in snippet_lines_by_num:
+        line = snippet_lines_by_num[line_no]
+        line_no -= 1
+        if not line.strip() or _indent_of(line) > indent:
+            continue
+        if _indent_of(line) < indent:
+            return True
+        return not _P006_NON_TRY_ELSE_OWNER.match(line)
+    return True
 
 
 def _p006_governing_except(
@@ -2872,11 +2942,12 @@ def _p006_governing_except(
     The model cites either the clause itself or a line in its body (usually
     the `logger.debug(...)` call). Walk back out through the enclosing blocks
     (each line indented less than the block walked so far): the first such
-    line that is an except clause governs the flagged line. Reaching a `try:`,
-    `else:` or `finally:` header, or a def, first means the line is not in a
-    handler's body, for instance in the body of a later try whose own handler
-    comes after it. None when no clause is visible, in which case the finding
-    is left alone.
+    line that is an except clause governs the flagged line. Reaching a `try:`
+    or `finally:` header, a try's `else:`, or a def, first means the line is
+    not in a handler's body, for instance in the body of a later try whose own
+    handler comes after it. The `else:` of an if/for/while inside a handler
+    does not stop the walk (see ``_p006_else_is_try_branch``). None when no
+    clause is visible, in which case the finding is left alone.
     """
     src = snippet_lines_by_num.get(flagged_line, "")
     if _P006_EXCEPT_CLAUSE.match(src):
@@ -2893,7 +2964,9 @@ def _p006_governing_except(
             continue
         if _P006_EXCEPT_CLAUSE.match(line):
             return line_no
-        if _P006_TRY_OR_BRANCH.match(line):
+        if _P006_TRY_OR_BRANCH.match(line) and (
+            not _P006_ELSE.match(line) or _p006_else_is_try_branch(line_no, snippet_lines_by_num)
+        ):
             return None
         block_indent = indent
     return None
