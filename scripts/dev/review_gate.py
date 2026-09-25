@@ -937,7 +937,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
                 "to a plain directory", "skipped: workspace not isolated")
     deadline = time.monotonic() + budget_s
 
-    def launch(argv: list[str], fh) -> tuple[int | None, str | None]:
+    def launch(argv: list[str], fh, timeout: float) -> tuple[int | None, str | None]:
         """Run once; (exit code, None) or (None, failure note)."""
         # antigravity: stdout is the JSON answer, kept apart from stderr.
         out = open(last, "w") if isolated else fh
@@ -952,7 +952,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
             except OSError as exc:  # reviewer CLI missing or not executable
                 return None, f"could not start {reviewer}: {exc.__class__.__name__}|{exc}"
             try:
-                return proc.wait(timeout=max(1, int(deadline - time.monotonic()))), None
+                return proc.wait(timeout=timeout), None
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
@@ -964,7 +964,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     resumed = 0
     try:
         with open(log, "w") as fh:
-            rc, failure = launch(cmd, fh)
+            # The first launch gets exactly the budget, as before resumes existed.
+            rc, failure = launch(cmd, fh, budget_s)
             while (
                 failure is None and isolated and resumed < AGY_RESUME_LIMIT
                 and time.monotonic() < deadline
@@ -979,7 +980,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
                 # Same flags as the first launch (cmd[3:]), so an isolation
                 # change there can never miss the resumed run.
                 rc, failure = launch(
-                    ["agy", "-p", AGY_RESUME_PROMPT, "--conversation", cid, *cmd[3:]], fh)
+                    ["agy", "-p", AGY_RESUME_PROMPT, "--conversation", cid, *cmd[3:]], fh,
+                    max(1.0, deadline - time.monotonic()))
     finally:
         if workspace:
             workspace.cleanup()

@@ -1756,3 +1756,30 @@ def test_an_unrecovered_truncation_is_recorded_as_failed_not_clean(tmp_path, mon
     rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "antigravity")
     assert rc == rg.UNREVIEWED
     assert records[0][1].verdict == "FAILED"
+
+
+@pytest.mark.parametrize("reviewer", ["codex", "claude", "antigravity"])
+def test_the_first_launch_gets_exactly_the_budget(monkeypatch, tmp_path, reviewer):
+    """With a clock that moves, the first wait is still the whole budget (no
+    flooring); only resumes get the remainder."""
+    waits = []
+    clock = {"t": 0.0}
+
+    def tick():
+        clock["t"] += 0.37
+        return clock["t"]
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        stdout.write('{"status":"SUCCESS","response":"ok\\nVERDICT: CLEAN\\n"}\n')
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    monkeypatch.setattr(rg.time, "monotonic", tick)
+    rg.run_reviewer(reviewer, "PROMPT", tmp_path, 30)
+    assert waits == [30]
