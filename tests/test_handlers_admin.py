@@ -121,6 +121,24 @@ class TestCleanupStaleLocks:
             assert call_kwargs[1]["max_age_seconds"] == 600.0 or call_kwargs.kwargs.get("max_age_seconds") == 600.0
 
     @pytest.mark.asyncio
+    async def test_dry_run_message_says_nothing_was_removed(self, tmp_path, monkeypatch):
+        import src.state_locking as state_locking
+
+        monkeypatch.setattr(state_locking, "DEFAULT_LOCK_DIR", tmp_path)
+        free = tmp_path / "free.lock"
+        free.write_text("{}")
+        old = time.time() - 600
+        os.utime(free, (old, old))
+
+        from src.mcp_handlers.admin.handlers import handle_cleanup_stale_locks
+        data = json.loads((await handle_cleanup_stale_locks({"dry_run": True}))[0].text)
+
+        assert free.exists()
+        assert data["cleaned"] == 1
+        assert data["message"].startswith("Would remove 1 free lock file(s)")
+        assert "dry run: nothing removed" in data["message"]
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(("backend", "reported"), [
         ("advisory", "advisory"),
         ("fcntl", "fcntl"),
@@ -148,6 +166,7 @@ class TestCleanupStaleLocks:
         assert not free.exists()
         assert data["lock_backend"] == reported
         assert data["lock_dir"] == str(tmp_path)
+        assert data["message"].startswith("Removed 1 free lock file(s)")
         if reported == "advisory":
             assert "no agent lock files are expected" in data["message"]
         else:
