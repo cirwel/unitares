@@ -145,8 +145,7 @@ stalest. A large `corpus_size` is not breadth.
 with no shared administrative root. A constant measured on one deployment and shipped
 as a class-wide norm *is* a shared administrative root for what counts as
 healthy — the homogenization failure one layer up, which is exactly what
-[multi-principal governance derives from the individuality axiom](../../CLAUDE.md)
-to prevent.
+multi-principal governance exists to prevent.
 So `ScaleConstant` now records `distinct_agents` / `distinct_principals` and
 derives `population_scope`; a `single_agent` constant reports
 `federation_exportable = False`. Unrecorded breadth is also not exportable —

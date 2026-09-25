@@ -14,8 +14,8 @@ through MCP/HTTP.
 
 Here federation means many independent runtimes and harnesses sharing one
 operator-controlled server and authority domain; that is what single-operator
-means. Where these documents mean several operators or authority domains, they
-say cross-operator or multi-principal instead. “Kernel” describes that shared
+means. The sense with several operators or authority domains is
+cross-operator or multi-principal. “Kernel” describes that shared
 accountability boundary. It is not a claim that UNITARES owns execution,
 replicates state across independent servers, or has proved better outcomes than
 a structured handoff. Runtimes interoperate with each other over their own
