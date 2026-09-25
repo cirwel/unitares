@@ -85,7 +85,7 @@ The decision engine (`src/monitor_decision.py`) returns one of two actions, `pro
 |---------|---------|-------------|
 | `proceed` | State is healthy | Continue working |
 | `guide` | `proceed` with guidance — slightly off track or at a basin boundary | Read guidance, adjust approach |
-| `pause` | Needs attention | Stop, reflect, consider `self_recovery` or dialectic review |
+| `pause` | A hard stop: check-ins and new shared-memory entries are refused, not queued | Stop, read the reason, `self_recovery(action="check")` for self-recovery eligibility |
 
 `reject` is no longer an action: it appears as a `sub_action` of `pause` on the risk-threshold path, and is accepted as a legacy input alias that normalizes to `pause`.
 

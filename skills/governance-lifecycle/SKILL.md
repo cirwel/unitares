@@ -206,7 +206,7 @@ watched less, or from a busy one that you have already reported.
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause / reject** | Stop your current task. Reflect on what is flagged. Consider requesting a dialectic review |
+| **pause / reject** | Check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so self-recovery rarely applies; a dialectic review opened for the pause, an operator, or re-evaluation at expiry usually ends it (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
@@ -230,7 +230,10 @@ Strong ownership proof is better than implicit continuity. If the runtime falls 
 
 ## Recovery
 
-When you are paused, stuck, or need intervention:
+When you are paused, stuck, or need intervention. A paused agent cannot write
+the check-in that would lower its risk, so quick and review succeed only when
+the reading that paused it is already under their gates; otherwise the dialectic
+review opened for the pause, an operator, or re-evaluation at expiry ends it.
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
@@ -238,7 +241,7 @@ When you are paused, stuck, or need intervention:
 | Clearly safe self-resume | `self_recovery(action="quick")` | Requires low risk and no active void |
 | Moderate state with reflection | `self_recovery(action="review", reflection="...")` | Requires a genuine reflection; may accept conditions |
 | Disagree with verdict, want structured review | `request_review(issue_description="...")` | One-call request + thesis by default; pass `use_brief_as_thesis=false` for a neutral two-call flow |
-| Human/operator override | `agent(action="resume", agent_id="...")` | Privileged lifecycle mutation; not ordinary self-recovery |
+| Human/operator override | `operator_resume_agent(target_agent_id="...", reason="...")` | Operator-only. Refuses an active void or risk above 0.80 ("requires human intervention"), and needs `force=true` above 0.60. Never resume your own pause through an operator path |
 
 Recovery is not a shortcut. Its authoritative checks are risk, active void, status,
 ownership, and (for review recovery) reflection/persistence evidence. Legacy

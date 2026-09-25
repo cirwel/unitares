@@ -173,6 +173,19 @@ def _attach_monitor_transients(monitor: UNITARESMonitor, state_data: dict) -> No
         last_update = getattr(monitor, "last_update", None)
         if last_update is not None:
             state_data["last_update_iso"] = last_update.isoformat()
+
+        # Open check-in forecasts, so a restart between a check-in and its
+        # outcome does not orphan the prediction_id the agent was given.
+        open_predictions = getattr(monitor, "_open_predictions", None)
+        if open_predictions:
+            from src.monitor_prediction import serialize_open_predictions
+
+            rows = serialize_open_predictions(
+                open_predictions,
+                float(getattr(monitor, "_prediction_ttl_seconds", 3600.0)),
+            )
+            if rows:
+                state_data["open_predictions"] = rows
     except Exception:  # noqa: BLE001 — never let a snapshot serialization break the save
         logger.debug("Monitor transient serialization skipped during save", exc_info=True)
 
