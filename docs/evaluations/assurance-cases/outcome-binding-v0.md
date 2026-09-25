@@ -30,7 +30,9 @@ about the **outcome record** only, and makes no claim about the following:
   and is outside the claim. See limit L1.
 - **Behaviour after the binding expires.** An expired prediction ID can start a
   new canonical submission, by design. See limit L2.
-- **Outcomes submitted without a `prediction_id`.**
+- **Outcomes submitted without a `prediction_id`, or with an empty one.** The
+  schema accepts `prediction_id=""`, and the handler treats it as absent: it
+  takes the unbound path but still writes `""` into `detail`.
 - **Outcome rows written before the A5 cutoff** (before migration 070 was
   applied, or by a pre-070 server still running after it). Those rows have no
   binding and are not canonical records. See limit L5.
@@ -97,7 +99,10 @@ layer, not this case.
   logs. The claim and its falsifiers cover only rows written at or after the
   later of the two times, called the *A5 cutoff*. If the restart time is
   unknown, an assessor must pick a conservative (later) cutoff and state
-  it.
+  it. A5 also assumes that from the cutoff onward only post-070 revisions
+  wrote to the database: no rollback to a pre-070 revision, and no second
+  pre-070 server pointed at the same database. If either happened, the
+  assessor must exclude that period or move the cutoff past it.
 
 ## 5. Evidence manifest
 
@@ -165,7 +170,7 @@ Any of the following, observed at the frozen revision within the retention
 window with the assumptions holding:
 
 1. Two rows in `audit.outcome_events`, both with `ts` at or after the A5
-   cutoff, with equal `agent_id` and equal non-null
+   cutoff, with equal `agent_id` and equal non-null, non-empty
    `detail->>'prediction_id'`. (The handler writes `prediction_id` into
    `detail`; it is not a column of that table.) Rows written before the A5
    cutoff are excluded; see L5.
