@@ -369,3 +369,28 @@ def test_external_consult_does_not_inherit_runner_timeout():
     with patch.object(ctx, "get_context_agent_id", return_value="A"):
         out = handlers._build_dialectic_actionability(data)
     assert out["wait_assessment"]["assessment"] is None
+
+
+# --- poll_after_s: the budget as a number a poller can sleep on --------------
+
+
+def test_too_early_carries_the_remaining_budget_as_poll_after_s():
+    out = wa.assess_wait(elapsed_s=72.0, awaiting="verdict", orchestrated=True)
+    assert out["poll_after_s"] == pytest.approx(out["expected_by_s"] - 72.0, abs=0.1)
+    assert out["poll_after_s"] > 0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"elapsed_s": 10_000.0, "awaiting": "verdict", "orchestrated": True},  # overdue
+        {"elapsed_s": None, "awaiting": "verdict", "orchestrated": True},  # no clock
+        {"elapsed_s": 72.0, "awaiting": "verdict", "orchestrated": False},  # no budget
+        {"elapsed_s": 72.0, "awaiting": None, "orchestrated": True},  # no obligation
+    ],
+)
+def test_poll_after_s_is_never_invented_outside_a_running_budget(kwargs):
+    """Overdue calls for a look, not another timed poll; no budget, no number."""
+    out = wa.assess_wait(**kwargs)
+    assert "poll_after_s" in out
+    assert out["poll_after_s"] is None

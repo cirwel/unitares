@@ -84,7 +84,7 @@ that posture deliberately: `pre-edit` then fails closed when leases are absent.
 | `pre-governance-call` | PreToolUse on governance tools | Silent no-op | 0.12s |
 | `post-checkin` | PostToolUse on check-ins | Silent no-op | 0.04s |
 | `post-identity` | PostToolUse on onboarding | Silent no-op | 0.07s |
-| `pre-push` | PreToolUse Bash | Queries PR state through the proxy-authenticated `gh`; still fails open if lookup fails | 0.06s |
+| `pre-push` | PreToolUse Bash | Queries PR state through `gh` where the image has it (not every hosted image does); fails open if the lookup fails or `gh` is absent | 0.06s |
 | `post-stop` | Stop | Attempts a check-in, gives up | 0.37s |
 | `session-end` | SessionEnd | Local cleanup only | 0.13s |
 
@@ -105,9 +105,12 @@ Two things that could have blocked portability and do not:
 What is lost while OFFLINE is therefore exactly the network-dependent
 behavior — auto-onboard, the per-turn substrate check-in, KG recall, file
 leases — and nothing else. Hook presence alone still buys the SessionStart
-skill pointers and the merged-PR push guard. Anthropic-hosted cloud images
-include `gh`; a self-hosted environment depends on the tools in its runner
-image.
+skill pointers and, where the image has `gh`, the merged-PR push guard. Not
+every Anthropic-hosted image has it: this runbook's audit found a
+proxy-authenticated `gh`, and a hosted session on 2026-09-25 had none, only
+the GitHub connector. Without `gh` the guard allows every push, because
+`merged_pr_guard.py` fails open by design. A self-hosted environment depends
+on the tools in its runner image.
 
 ## Wiring
 
@@ -227,29 +230,45 @@ only the automatic lifecycle is absent.
 ## Review from hosted sessions
 
 A third gap, in the same family and worth knowing before shipping cloud-session
-work: the hosted image can read and update the PR, but it does not include every
-heterogeneous reviewer CLI.
+work: the hosted image can read and update the PR, but it may not have the
+tools `review.sh` needs.
 
-- Anthropic-hosted images include proxy-authenticated `gh`, so `gh pr view`,
-  `gh pr comment`, `review.sh record`, and the merged-PR push guard work for
-  repositories attached to the session. The proxy supports the PR operations
-  these paths use, although it restricts unrelated GraphQL operations.
-- Local review prefers the other model: `default_reviewer` picks `codex`
-  for branches not named `codex/*`. If that CLI is absent or unavailable,
-  `review.sh` tries the other provider in a fresh reviewer session. With
-  `git config review.native true`, it can instead request and join native
-  GitHub Codex review without needing a local Codex CLI.
+- **`gh` is not guaranteed.** Where the image has the proxy-authenticated
+  `gh` this runbook's audit found, `gh pr view`, `gh pr comment`,
+  `review.sh record`, and the merged-PR push guard work for repositories
+  attached to the session. The proxy supports the PR operations these paths
+  use, although it restricts unrelated GraphQL operations. The hosted session
+  of 2026-09-25 had no `gh`; its only PR channel was the GitHub connector.
+  Check with `command -v gh` rather than assuming either.
+- **Reviewer CLIs vary too.** Local review prefers the other model:
+  `default_reviewer` picks `codex` for branches not named `codex/*`. If that
+  CLI is absent or unavailable, `review.sh` tries the other provider in a
+  fresh reviewer session. With `git config review.native true`, it can instead
+  request and join native GitHub Codex review without needing a local Codex
+  CLI. The 2026-09-25 session had the `claude` CLI and no `codex`.
+
+Without `gh`, the session still completes its own review gate. Run the review
+in a fresh context that did not write the diff: a fresh `claude -p` session
+given only the diff and `REVIEW_PROMPT` from `review_gate.py`, a subagent, or
+a council reviewer. Render the record with
+`./scripts/dev/review.sh record <file> --independent --emit --reviewer-name <honest-name>`,
+which needs no `gh`, and post the printed body verbatim through the connector.
+The steps, and the operator decision that lets a same-session subagent review
+complete the gate, are in
+[Recording a review without gh](github-workflow-conventions.md#recording-a-review-without-gh).
+#2425 was reviewed this way.
 
 The author cannot substitute their own self-check for independent review.
 `cmd_record` requires an explicit independence attestation; it does not infer
 independence from a provider name or branch prefix. A separate reviewer using
-the same model is valid. The cloud session can record an actual independent
-human or model code review with
-`./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
-or another machine with the reviewer CLI can run `./scripts/dev/review.sh`.
+the same model is valid, though it is the weakest reviewer the gate accepts,
+so name it honestly. An independent human or model code review done elsewhere
+is recorded the same way, with
+`./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`
+(plus `--emit` without `gh`), or another machine with the reviewer CLI can run `./scripts/dev/review.sh`.
 Consult advice alone is not a code review. If no reviewer completes, the
-command returns UNREVIEWED and the author reports the blocker; CI shows a
-neutral warning. The author keeps the PR draft until review is complete.
+author reports the blocker; CI shows a neutral warning. The author keeps the
+PR draft until review is complete.
 
 The record is keyed on the diff, so it can be produced at any later point
 without re-pushing.
