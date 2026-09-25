@@ -129,7 +129,9 @@ REST call and 401 on `snapshot.js`. `window.SNAPSHOT` is then undefined: the
 `withFallback` and can take the whole view down (observed 2026-08-28 on the
 Overview headline cards). Write the fallback defensively —
 `() => (S().x || {}).y ?? null` — as `stats` does. Separately, a same-origin
-401 with no bearer redirects to `/auth/signin` rather than falling back.
+401 with no bearer redirects to `/auth/signin` rather than falling back. On an
+install with no `UNITARES_DASHBOARD_RP_ID`, passkey sign-in is off and that page
+answers 503 naming the keys to set, so the redirect ends there.
 
 ## Theme-aware charts (Item 9) — the real chart trap here
 
@@ -208,6 +210,10 @@ read-only. Two areas intentionally mutate state:
   the **last** active passkey additionally needs a fresh (step-up) passkey
   sign-in or the `X-Unitares-Operator` credential. Minting an enrollment code
   needs the operator credential only (`POST /auth/enroll`, 403 otherwise).
+  All of these passkey ceremonies (sign-in, enrollment in both methods, and the
+  four `/auth/webauthn/*` steps) first require a configured RP id: with
+  `UNITARES_DASHBOARD_RP_ID` unset they answer 503 before any credential check.
+  A passkey is bound to one domain, so there is no default.
 
 The operator credential can be provisioned once via `?operator_token=…`
 (persisted to localStorage and scrubbed from the URL by
