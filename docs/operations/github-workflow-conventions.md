@@ -285,6 +285,38 @@ attempt per hour of cooldown. Agents without local tooling read the same file
 before posting `@codex review`. An explicit `review.sh --reviewer <name>`
 still tries a disabled provider. Re-enable it by deleting its entry.
 
+**Antigravity (`agy`) as a reviewer.** `review.sh` can review with Google's
+Antigravity CLI on the operator's subscription login, with no API key. It is
+used only when the `agy` command is installed. The ordering prefers a model
+family other than the branch's author prefix: for a `claude/` branch it is
+Codex, then Antigravity, then Claude, minus anything disabled above.
+
+It is deliberately **not** run inside the checkout. A PR can carry
+`.agents/` hooks, rules and project permission rules, and `agy` loads those
+from its working directory. That is the same class of hole that ruled out the
+Gemini CLI (#2423, reverted). So `agy` runs in an **empty temporary
+workspace** with `--mode plan --sandbox`, and `review.sh` inlines the diff plus
+the full post-change text of every changed file into the prompt. It reads
+those files itself and never executes them. The trade-off is that the
+reviewer cannot browse the rest of the repository. The whole prompt,
+including the instructions and the inlined files, is capped at about 120 KB,
+counted in bytes, because it is passed as one command-line argument. Files that
+do not fit are marked as omitted. A diff that does not fit on its own is
+refused rather than reviewed in part, and the next reviewer runs instead.
+Content is read only from committed git objects: symlinks, submodules and paths
+outside the repository never reach the prompt. The dialectic reviewer has the
+same backend: set `UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the
+orchestrator's environment. Setup on a machine:
+
+```bash
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+agy        # once, interactively: sign in, then /exit
+./scripts/dev/review.sh --reviewer antigravity   # or let the default pick it
+```
+
+Antigravity's terms let Google collect interaction data unless you opt out in
+its settings. A review sends the diff and the changed files.
+
 Operator, 2026-09-25: Codex is unavailable indefinitely (the OpenAI account
 was suspended). Until that entry is removed, review with a fresh-context
 Claude subagent or council, or another model such as Gemini, and record it

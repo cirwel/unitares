@@ -210,7 +210,7 @@ class SetThresholdsParams(AgentIdentityMixin):
 
 class CleanupStaleLocksParams(AgentIdentityMixin):
     """Parameters for cleanup_stale_locks"""
-    max_age_seconds: float = Field(300.0, description="Maximum age in seconds before considering stale (default: 300 = 5 minutes)")
+    max_age_seconds: float = Field(300.0, description="Minimum age in seconds before a free lock file is removed (default: 300 = 5 minutes). Held locks are never removed.")
     dry_run: bool = Field(False, description="If True, only report what would be cleaned (default: False)")
 
 
@@ -335,7 +335,7 @@ class AdminParams(AgentIdentityMixin):
     # cleanup_locks
     max_age_seconds: float = Field(
         300.0,
-        description="Max age in seconds before a lock is stale (for action=cleanup_locks). Default 300.",
+        description="Minimum age in seconds before a free lock file is removed (for action=cleanup_locks). Default 300. Held locks are never removed.",
     )
     dry_run: bool = Field(
         False,

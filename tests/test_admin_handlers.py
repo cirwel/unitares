@@ -321,7 +321,7 @@ class TestCleanupStaleLocks:
             assert data["success"] is True
             assert data["cleaned"] == 2
             assert data["kept"] == 1
-            assert "Cleaned 2" in data["message"]
+            assert "Removed 2" in data["message"]
 
     @pytest.mark.asyncio
     async def test_cleanup_dry_run(self, patch_context_agent_id):
