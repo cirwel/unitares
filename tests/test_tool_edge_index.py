@@ -810,6 +810,42 @@ def test_every_mode_declines_with_exit_2_when_the_registrar_dependency_is_absent
     assert unitares_doctor._generator_crashed(result.stderr) is False
 
 
+def test_timeout_overrides_do_not_reach_the_committed_index():
+    """The index prints every tool's timeout, and two of them are computed from
+    environment variables at import. With both overridden, --check must still
+    find the committed index current: the overrides are pinned away first."""
+    overrides = {
+        "UNITARES_DIALECTIC_REVIEW_BUDGET": "70",
+        "UNITARES_CALL_MODEL_TIMEOUT": "999",
+    }
+    assert set(overrides) == set(tei.PINNED_TIMEOUT_VARIABLES)
+    result = subprocess.run(
+        [sys.executable, str(GENERATOR), "--check"],
+        capture_output=True, text=True, cwd=str(REPO), timeout=300,
+        env=dict(os.environ, **overrides),
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_a_dependency_the_handler_package_imports_first_is_reported_as_missing(
+    tmp_path,
+):
+    """``mcp`` is imported by ``src.mcp_handlers`` itself, before the submodule
+    walk starts, so it failed outside the walk's classification and was
+    reported as a defect in the tree — telling a machine that only lacked the
+    install that its code was broken. It is the same "cannot look" as any
+    other absent dependency, and gets the install remedy."""
+    result = _run_shim(_generator_shim(tmp_path), "--check", blocked="mcp")
+    assert result.returncode == 2, (
+        f"expected 2, got {result.returncode}\nstderr: {result.stderr}"
+    )
+    last = [line for line in result.stderr.splitlines() if line.strip()][-1]
+    assert last.startswith("cannot look:"), last
+    assert re.search(r"\bmcp(\.\w+)* is not installed", last), last
+    assert tei.INSTALL_REMEDY in last
+    assert "defect in the tree" not in last
+
+
 def test_an_unimportable_handler_package_is_not_reported_as_a_missing_dependency(
     tmp_path,
 ):

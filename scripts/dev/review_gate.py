@@ -97,6 +97,7 @@ ROUND_CAP = 3
 SEVERE_BADGE_RE = re.compile(r"!\[P[01] Badge\]|\[P[01]\]")
 SEVERITY_LABEL_RE = re.compile(r"!\[P[0-3] Badge\]|\[P[0-3]\]")
 
+REVIEWER_NAME_RE = re.compile(r"[A-Za-z0-9_.:@/+-]+")
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
     r"<!--\s*" + re.escape(MARKER) + r"\s+(?P<attrs>[^>]*?)\s*-->"
@@ -544,8 +545,61 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     return snapshot
 
 
+PROVIDERS_FILE = Path(__file__).resolve().with_name("review_providers.json")
+KNOWN_PROVIDERS = {"codex", "claude"}
+
+
+def disabled_providers() -> dict[str, str]:
+    """Providers the repo marks unavailable, name -> reason (tracked file).
+
+    One committed switch every session reads, so an outage stops every
+    checkout from routing to the dead provider, instead of each session
+    failing once per hour of per-machine cooldown.
+
+    An entry may be an object with a "reason", a reason string, or `true`;
+    `false`/null leave the provider enabled, and a plain list of names works
+    too. A missing file disables nothing. A file that exists but cannot be
+    parsed disables nothing AND warns, so a bad hand edit is never silent.
+    """
+    try:
+        raw = PROVIDERS_FILE.read_text()
+    except OSError:
+        return {}
+    def warn(what: str) -> None:
+        print(f"[review] WARNING: {PROVIDERS_FILE.name}: {what}", file=sys.stderr)
+
+    try:
+        data = json.loads(raw)
+        unknown_keys = set(data) - {"_doc", "disabled"}
+        if unknown_keys or "disabled" not in data:
+            warn(f"expected a 'disabled' key (found {sorted(data)}); a misspelled key "
+                 "disables nothing")
+        entries = data.get("disabled") or {}
+        if isinstance(entries, list):
+            entries = {name: True for name in entries}
+        out = {}
+        for name, info in entries.items():
+            key = str(name).strip().lower()  # "Codex" must still disable codex
+            if key not in KNOWN_PROVIDERS:
+                warn(f"unknown provider {name!r} (known: {', '.join(sorted(KNOWN_PROVIDERS))})")
+            if isinstance(info, dict):
+                out[key] = str(info.get("reason") or "disabled")
+            elif isinstance(info, str):
+                out[key] = info or "disabled"
+            elif info:
+                out[key] = "disabled"
+        return out
+    except (ValueError, AttributeError, TypeError) as exc:
+        print(f"[review] WARNING: {PROVIDERS_FILE.name} is malformed ({exc}); "
+              "treating no provider as disabled", file=sys.stderr)
+        return {}
+
+
 def native_enabled() -> bool:
     # Operator opt-in: no cloud/model service is required by a default install.
+    # Native review is Codex, so a repo-wide Codex outage switches it off too.
+    if "codex" in disabled_providers():
+        return False
     return git("config", "--bool", "review.native", check=False).strip() == "true"
 
 
@@ -643,7 +697,9 @@ def current_pr() -> dict | None:
 def default_reviewer(branch: str) -> str:
     # Prefer diversity, but independence is a fresh reviewer context, not a
     # provider name. A quota outage must not prohibit the available reviewer.
-    return "claude" if branch.startswith("codex/") else "codex"
+    preferred, other = ("claude", "codex") if branch.startswith("codex/") else ("codex", "claude")
+    disabled = disabled_providers()
+    return other if preferred in disabled and other not in disabled else preferred
 
 
 def provider_state_path(reviewer: str) -> Path:
@@ -720,8 +776,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     return text, ("exit 0" if rc == 0 else f"exit {rc}")
 
 
-def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
-    require_open(pr)  # a local reviewer may have finished after the merge
+def render_body(rec: Record, heading: str, text: str) -> str:
+    """The exact comment body a record is posted as (and `--emit` prints)."""
     body = f"{render_marker(rec)}\n### Review record — {heading}\n\n"
     body += f"Diff key `{rec.key[:12]}` · reviewer `{rec.reviewer}`\n\n"
     if len(text) > COMMENT_LIMIT:
@@ -729,9 +785,47 @@ def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     body += text.strip() + "\n"
     # Evidence is not a new bot command. Native footers include example
     # mentions that dispatch cloud tasks when copied by the author's account.
-    body = re.sub(r"@codex\b", "Codex", body, flags=re.I)
+    return re.sub(r"@codex\b", "Codex", body, flags=re.I)
+
+
+def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
+    require_open(pr)  # a local reviewer may have finished after the merge
     _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"],
-            input=body, text=True, check=True, capture_output=True)
+            input=render_body(rec, heading, text), text=True, check=True, capture_output=True)
+
+
+def _resolve_offline(args) -> str:
+    """Diff key for HEAD without gh, for `--emit`. Refuses an unpushed HEAD.
+
+    CI keys the PR head against its base, so the emitted record is only valid
+    if HEAD is exactly what `<remote>/<current branch>` holds, read live with
+    ls-remote. `@{upstream}` is deliberately not consulted: it may track the
+    base or be stale. The caller posts the
+    body through whatever GitHub client it has (an MCP connector, the REST
+    API); the gate then reads it like any other record.
+    """
+    base = args.base or DEFAULT_BASE
+    remote, _, branch = base.partition("/")
+    git("fetch", "--quiet", remote, f"+refs/heads/{branch}:refs/remotes/{base}", check=False)
+    head = git("rev-parse", "HEAD").strip()
+    # Compare against the remote branch of the same name, read live: a
+    # stale tracking ref, or one tracking the base, would pass a head CI never sees.
+    mine = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    # ls-remote exits 2 when the branch does not exist, anything else nonzero
+    # on a transport failure; neither may fall back to a local tracking ref.
+    probe = _launch(["git", "ls-remote", "--exit-code", remote, f"refs/heads/{mine}"],
+                    text=True, capture_output=True)
+    if probe.returncode not in (0, 2):
+        raise SystemExit(f"review_gate: --emit could not read {remote}/{mine} "
+                         f"({probe.stderr.strip()[:200]}); refusing to trust a local ref")
+    pushed = probe.stdout.split()[0] if probe.returncode == 0 and probe.stdout.strip() else ""
+    if pushed != head:
+        raise SystemExit(f"review_gate: --emit needs HEAD pushed: {remote}/{mine} is "
+                         f"{pushed[:12] or 'missing'}, HEAD is {head[:12]}. Push first, or the "
+                         "record would describe a diff CI never sees")
+    print(f"[review] keyed against {base}; this must be the PR's base branch "
+          "(pass --base origin/<base> otherwise)", file=sys.stderr)
+    return diff_key(base, head)
 
 
 def _resolve(args) -> tuple[int, str, str, str]:
@@ -1076,7 +1170,12 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     providers = [preferred, "codex" if preferred == "claude" else "claude"]
     deadline = time.monotonic() + args.budget
     available = []
+    disabled = disabled_providers()
     for provider in providers:
+        if provider in disabled and getattr(args, "reviewer", None) != provider:
+            print(f"[review] skipping {provider}: disabled repo-wide "
+                  f"({disabled[provider]}); see {PROVIDERS_FILE.name}")
+            continue
         if (provider in getattr(args, "failed_providers", set())
                 and getattr(args, "reviewer", None) != provider):
             print(f"[review] {provider} exhausted retries for this diff; "
@@ -1146,24 +1245,39 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
 
 
 def cmd_record(args) -> int:
-    pr, repo, key, branch = _resolve(args)
     if not args.independent:
         raise SystemExit("review_gate: record requires --independent to attest that a "
                          "separate reviewer examined this diff. Consult advice alone is not a code review.")
+    # Without --emit, gh is resolved first: a machine without it is UNREVIEWED
+    # (exit 2) before any input is read.
+    resolved = None if args.emit else _resolve(args)
     text = Path(args.file).read_text()
     parsed = parse_verdict(text)
     if parsed is None:
         raise SystemExit("review_gate: the review text needs a final "
                          "'VERDICT: CLEAN' or 'VERDICT: FINDINGS(n)' line")
     verdict, n = parsed
+    if not REVIEWER_NAME_RE.fullmatch(args.reviewer_name):
+        raise SystemExit("review_gate: --reviewer-name must match [A-Za-z0-9_.:@/+-]+ "
+                         "(it is a field in the record marker; whitespace or '>' would break it)")
+    heading = (f"{verdict if verdict == 'CLEAN' else f'FINDINGS({n})'} "
+               f"(recorded, reviewed by {args.reviewer_name})")
+    if args.emit:
+        rec = Record(_resolve_offline(args), verdict, n, False, args.reviewer_name)
+        sys.stdout.write(render_body(rec, heading, text))
+        print(f"[review] emitted, not posted: post the body above verbatim as a PR comment "
+              f"({rec.status()[1]})", file=sys.stderr)
+        return 0
+    pr, repo, key, branch = resolved
     rec = Record(key, verdict, n, False, args.reviewer_name)
-    post_record(pr, rec, f"{verdict if verdict == 'CLEAN' else f'FINDINGS({n})'} "
-                f"(recorded, reviewed by {args.reviewer_name})", text)
+    post_record(pr, rec, heading, text)
     print(f"[review] recorded: {rec.status()[1]}")
     return 0
 
 
 def cmd_dispose(args) -> int:
+    if getattr(args, "emit", False):
+        return _dispose_emit(args)
     pr, repo, key, _ = _resolve(args)
     prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(), pr_comments(repo, pr))
     if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
@@ -1175,6 +1289,39 @@ def cmd_dispose(args) -> int:
     rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer)
     post_record(pr, rec, f"dispositions for FINDINGS({prior.findings}) — {prior.url}", text)
     print(f"[review] {rec.status()[1]}")
+    return 0
+
+
+def _dispose_emit(args) -> int:
+    """`dispose --emit`: the disposition body, without gh.
+
+    Offline there is no way to read the open FINDINGS record, so the caller
+    names it: its finding count, its reviewer and its URL, all as shown on the
+    PR. CI checks only the diff key, the count, and a native-review URL
+    (`_cited_native_review`); a wrong count or key leaves the findings open.
+    Any other cite, and the reviewer, are NOT verified: CI answers the latest
+    open FINDINGS record with the same count, and the check shows whatever
+    reviewer was passed. Copy both from the open record exactly.
+    """
+    missing = [f for f in ("findings", "reviewer", "cites") if getattr(args, f, None) in (None, "")]
+    if missing:
+        raise SystemExit("review_gate: dispose --emit needs --findings N, --reviewer NAME and "
+                         "--cites URL of the open FINDINGS record (missing: " + ", ".join(missing) + ")")
+    if args.findings < 1:
+        raise SystemExit("review_gate: --findings must be at least 1")
+    if not REVIEWER_NAME_RE.fullmatch(args.reviewer):
+        raise SystemExit("review_gate: --reviewer must match [A-Za-z0-9_.:@/+-]+ "
+                         "(the open record's reviewer, as its marker shows it)")
+    if re.search(r"\s", args.cites):
+        raise SystemExit("review_gate: --cites must be a single URL")
+    text = Path(args.file).read_text()
+    if not dispositions_complete(text, args.findings):
+        raise SystemExit(f"review_gate: dispositions need a numbered entry for each of the "
+                         f"{args.findings} finding(s) — `1. <fixed in …|rebutted: why>` …")
+    rec = Record(_resolve_offline(args), "FINDINGS", args.findings, True, args.reviewer)
+    sys.stdout.write(render_body(rec, f"dispositions for FINDINGS({args.findings}) — {args.cites}", text))
+    print(f"[review] emitted, not posted: post the body above verbatim as a PR comment "
+          f"({rec.status()[1]})", file=sys.stderr)
     return 0
 
 
@@ -1379,9 +1526,23 @@ def main(argv: list[str] | None = None) -> int:
     rc.add_argument("--reviewer-name", required=True)
     rc.add_argument("--independent", action="store_true",
                     help="attest this is a separate review of the current diff, not the author's self-check")
+    # SUPPRESS keeps the top-level --base when this one is not given.
+    rc.add_argument("--base", default=argparse.SUPPRESS,
+                    help="base ref for --emit's key (default origin/master); must be the PR's base")
+    rc.add_argument("--emit", action="store_true",
+                    help="print the record body instead of posting it (no gh needed); "
+                         "post it verbatim with any GitHub client")
 
     d = sub.add_parser("dispose", help="post dispositions for a FINDINGS record")
     d.add_argument("file")
+    d.add_argument("--base", default=argparse.SUPPRESS,
+                   help="base ref for --emit's key (default origin/master); must be the PR's base")
+    d.add_argument("--emit", action="store_true",
+                   help="print the disposition body instead of posting it (no gh needed); "
+                        "needs --findings, --reviewer and --cites from the open record")
+    d.add_argument("--findings", type=int, help="with --emit: the open record's finding count")
+    d.add_argument("--reviewer", help="with --emit: the open record's reviewer")
+    d.add_argument("--cites", help="with --emit: the open record's URL (comment or native review)")
 
     sub.add_parser("key", help="print the diff key for HEAD")
 
@@ -1411,7 +1572,12 @@ def main(argv: list[str] | None = None) -> int:
         # FileNotFoundError traceback used to report.
         print(f"[review] UNREVIEWED: {exc}, so review evidence can be neither "
               "read nor posted from here. Run review.sh where gh is available, "
-              "or hand off explicitly.")
+              "request native review (`@codex review` on the PR), or run an "
+              "independent review and render its record with `review.sh record "
+              "FILE --reviewer-name NAME --independent --emit`, then post the "
+              "printed body verbatim through your GitHub connector "
+              "(docs/operations/github-workflow-conventions.md, "
+              "#recording-a-review-without-gh).")
         return UNREVIEWED
 
 
