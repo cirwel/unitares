@@ -1624,6 +1624,26 @@ def test_search_envelope_counts_nested_raw_governance_payload():
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 
+def test_store_finding_envelope_keeps_the_callers_summary_verbatim():
+    """Tool-name translation is for hints, not for the caller's own words."""
+    summary = "Plugin auto-onboard labels a session; call onboard() to see it"
+    payload = {
+        "success": True,
+        "message": "Discovery stored for agent 'agent-1'",
+        "discovery_id": "d-words",
+        "discovery": {"id": "d-words", "type": "bug_found", "status": "open", "summary": summary},
+        "_resolve_when_done": (
+            "When this is addressed, close the loop: "
+            "knowledge(action='update', discovery_id='d-words', status='resolved')"
+        ),
+    }
+
+    env = build_experience_envelope("store_finding", "knowledge", payload, {"summary": summary})
+
+    assert env["state_summary"]["summary"] == summary
+    assert "update_finding(" in env["next_action"]
+
+
 def test_store_finding_envelope_reports_write_instead_of_empty_search():
     payload = {
         "success": True,
