@@ -90,6 +90,12 @@ SILENT_BODIES = [
     "try:\n    return total / count\nexcept Exception:\n    pass",
     "try:\n    return f'{exc}'\nexcept Exception:\n    pass",
     "try:\n    return {**extra}\nexcept Exception:\n    pass",
+    # Something before the reaction can raise into the nested handler, or
+    # the log call's own arguments can (#2442 review, round 3).
+    "try:\n    cleanup()\n    return False\nexcept Exception:\n    pass",
+    "try:\n    cleanup()\n    logger.warning('x')\nexcept Exception:\n    pass",
+    "try:\n    logger.warning('x %s', compute())\nexcept Exception:\n    pass",
+    "with contextlib.suppress(Exception):\n    cleanup()\n    return False",
     "with contextlib.suppress(Exception):\n    return compute()",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
@@ -178,6 +184,11 @@ def test_nested_try_body_and_finally_count_for_the_handler(tmp_path, body):
         # nested handler.
         "try:\n    return {'error': 'failed', 'exc': exc}\nexcept Exception:\n    pass",
         "try:\n    return False\nexcept Exception:\n    pass",
+        # A signed number is a literal too (#2442 review, round 3).
+        "try:\n    return -1\nexcept Exception:\n    pass",
+        # A first-statement log call with inert arguments runs before
+        # anything can be caught.
+        "try:\n    logger.warning('x %s', exc)\n    cleanup()\nexcept Exception:\n    pass",
         # Outside a caught body a call in the value is fine.
         "try:\n    cleanup()\nexcept OSError:\n    pass\nreturn {'error': str(exc)}",
         # A log call under suppress() still runs; only a raise is swallowed.

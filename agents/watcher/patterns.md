@@ -206,10 +206,13 @@ contains at least one of:
 
 A `raise` or log inside a nested `try`'s own handler does not count: it
 reacts to a different exception, and when the nested code succeeds the
-caught one is still swallowed. Nor does a `raise` in the body of a nested
-`try` that has a handler, which may catch it, or a `return` there whose value
-does more than name a variable or build a literal (`return compute()`,
-`return cache[key]`), since evaluating it may raise into that handler.
+caught one is still swallowed. In the body of a nested `try` that has a
+handler, which may catch whatever is raised there, only the first statement
+can count, and only when it is a `return` of a literal or variable
+(`return False`, `return -1`) or a log call whose arguments are literals or
+variables. A `raise` there does not count, nor does `return compute()`,
+`return cache[key]`, or anything after a first statement that could raise
+(`cleanup()` then `return False`).
 
 Everything else is P006: `pass`, `...`, an empty block, `continue`, `break`,
 a bare `return` or `return None`, assigning `None` or another fallback to

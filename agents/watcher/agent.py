@@ -1739,18 +1739,26 @@ def _p006_callee_name(func: Any) -> str:
 
 
 def _p006_value_is_inert(value: Any) -> bool:
-    """True when evaluating ``value`` is taken not to raise: a literal, a
-    name, or a tuple, list or dict built only from those, with literal dict
-    keys. A call, await, subscript, attribute access, operator, f-string,
-    set, comprehension or ``*``/``**`` unpacking can raise, so any of them
-    makes it not inert. (A name lookup could raise NameError; that is
-    accepted.)"""
+    """True when evaluating ``value`` is taken not to raise: a literal
+    (a signed number such as ``-1`` included), a name, or a tuple, list or
+    dict built only from those, with literal dict keys. A call, await,
+    subscript, attribute access, other operator, f-string, set,
+    comprehension or ``*``/``**`` unpacking can raise, so any of them makes
+    it not inert. (A name lookup could raise NameError; that is accepted.)"""
     import ast
 
     for node in ast.walk(value):
         if isinstance(node, ast.Dict):
             if not all(isinstance(k, ast.Constant) for k in node.keys):
                 return False
+        elif isinstance(node, ast.UnaryOp):
+            if not (
+                isinstance(node.op, (ast.USub, ast.UAdd))
+                and isinstance(node.operand, ast.Constant)
+            ):
+                return False
+        elif isinstance(node, (ast.USub, ast.UAdd)):
+            continue
         elif not isinstance(
             node, (ast.Constant, ast.Name, ast.Tuple, ast.List, ast.expr_context)
         ):
@@ -1769,20 +1777,22 @@ def _p006_handler_reacts(handler: Any) -> bool:
     run when the handler does. So are the handlers of a ``try`` nested inside
     this handler: they react to a different exception (say, one from cleanup
     code), and when that code succeeds the caught exception is still
-    swallowed. The nested try's body, ``else`` and ``finally`` do run on this
-    handler's path and are searched, with one exception: a ``raise`` in the
-    body of a nested try that has any handler does not count, because that
-    handler may catch it and the failure is then swallowed after all. The
-    rule is conservative on purpose: it does not work out whether the
-    handler's type matches the raised one, or whether the handler re-raises
-    (its body is skipped, as above), so such a finding is kept. A log call in
-    that body still counts: it runs before anything there can be caught. A
-    non-None ``return`` there counts only when its value is inert (see
-    ``_p006_value_is_inert``: ``return False`` or ``return {"error": msg}``,
-    not ``return compute()``, ``return str(exc)`` or ``return cache[key]``),
-    because evaluating anything else can raise into that handler and the
-    failure is swallowed. The body of a ``with ...suppress(...)`` block is
-    treated the same way.
+    swallowed. The nested try's ``else`` and ``finally`` run outside its
+    handlers and are searched like the rest of this handler.
+
+    The body of a nested try that has any handler is a caught body: whatever
+    raises there may be caught and swallowed, so evidence in it counts only
+    when nothing can raise before it takes effect. Only its first statement
+    is examined, and it counts only when it is a ``return`` of an inert
+    non-None value or a loud log call whose arguments are all inert (see
+    ``_p006_value_is_inert``). So ``return False`` or ``return {"error":
+    msg}`` counts; ``return compute()``, ``return cache[key]``, a ``raise``
+    (the nested handler may catch it), and anything after a first statement
+    that could raise (``cleanup(); return False``) do not. The body of a
+    ``with ...suppress(...)`` block is treated the same way. The rule is
+    conservative on purpose: it does not work out whether a nested handler's
+    type matches what was raised, or whether that handler re-raises (its body
+    is skipped, as above), so such a finding is kept.
     """
     import ast
 
@@ -1790,46 +1800,59 @@ def _p006_handler_reacts(handler: Any) -> bool:
     try_types = tuple(
         t for t in (ast.Try, getattr(ast, "TryStar", None)) if t is not None
     )
-    # (node, raise_caught): raise_caught is True inside the body of a nested
-    # try that has handlers, where a `raise` does not escape to the caller.
-    stack = [(node, False) for node in handler.body]
+    stack = list(handler.body)
     while stack:
-        node, raise_caught = stack.pop()
+        node = stack.pop()
         if isinstance(node, scope_nodes):
             continue
         if isinstance(node, try_types):
-            body_caught = raise_caught or bool(node.handlers)
-            stack.extend((child, body_caught) for child in node.body)
-            stack.extend(
-                (child, raise_caught) for child in [*node.orelse, *node.finalbody]
-            )
+            if node.handlers:
+                if _p006_caught_first_reacts(node.body[0]):
+                    return True
+            else:
+                stack.extend(node.body)
+            stack.extend([*node.orelse, *node.finalbody])
             continue
         if isinstance(node, (ast.With, ast.AsyncWith)) and any(
             isinstance(item.context_expr, ast.Call)
             and _p006_callee_name(item.context_expr.func) == "suppress"
             for item in node.items
         ):
-            stack.extend((item, raise_caught) for item in node.items)
-            stack.extend((child, True) for child in node.body)
+            if _p006_caught_first_reacts(node.body[0]):
+                return True
+            stack.extend(node.items)
             continue
         if isinstance(node, ast.Raise):
-            if not raise_caught:
-                return True
-            continue
-        if (
-            isinstance(node, ast.Return)
-            and not (
-                node.value is None
-                or (isinstance(node.value, ast.Constant) and node.value.value is None)
-            )
-            # In a caught body, evaluating the value can raise into a handler
-            # that swallows it.
-            and (not raise_caught or _p006_value_is_inert(node.value))
+            return True
+        if isinstance(node, ast.Return) and not (
+            node.value is None
+            or (isinstance(node.value, ast.Constant) and node.value.value is None)
         ):
             return True
         if _p006_is_loud_log_call(node):
             return True
-        stack.extend((child, raise_caught) for child in ast.iter_child_nodes(node))
+        stack.extend(ast.iter_child_nodes(node))
+    return False
+
+
+def _p006_caught_first_reacts(stmt: Any) -> bool:
+    """True when ``stmt``, the first statement of a caught body, reacts
+    without anything that can raise first: ``return <inert non-None value>``
+    or a loud log call whose arguments are all inert."""
+    import ast
+
+    if isinstance(stmt, ast.Return):
+        value = stmt.value
+        return (
+            value is not None
+            and not (isinstance(value, ast.Constant) and value.value is None)
+            and _p006_value_is_inert(value)
+        )
+    if isinstance(stmt, ast.Expr) and _p006_is_loud_log_call(stmt.value):
+        call = stmt.value
+        return all(_p006_value_is_inert(arg) for arg in call.args) and all(
+            _p006_value_is_inert(kw.value) for kw in call.keywords
+        )
     return False
 
 
