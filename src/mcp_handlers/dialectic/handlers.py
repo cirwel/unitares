@@ -2004,6 +2004,19 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
             recovery=get_session_exception_recovery(),
         )]
 
+#: Characters of a session topic a list row shows before it is cut.
+LIST_TOPIC_PREVIEW_CHARS = 280
+
+
+def _preview_topic(session: Dict[str, Any]) -> None:
+    """Shorten a list row's topic in place, saying so when it does."""
+    topic = session.get("topic")
+    if isinstance(topic, str) and len(topic) > LIST_TOPIC_PREVIEW_CHARS:
+        session["topic"] = topic[:LIST_TOPIC_PREVIEW_CHARS].rstrip() + "…"
+        session["topic_truncated"] = True
+        session["topic_chars"] = len(topic)
+
+
 @mcp_tool("list_dialectic_sessions", timeout=15.0, register=False)
 async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -2082,6 +2095,13 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
                 {k: sess[k] for k in keep if k in sess}
                 for sess in sessions
             ]
+        elif not include_transcript:
+            # A list row carries a preview of the topic, not the whole issue
+            # description: topics run to ~12 KB, and 50 untruncated rows made
+            # the default list 173 KB (measured 2026-09-25). get, or
+            # include_transcript=true, still returns the full text.
+            for sess in sessions:
+                _preview_topic(sess)
 
         return success_response({
             "success": True,
@@ -3407,7 +3427,15 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 paused_meta = mcp_server.agent_metadata.get(session.paused_agent_id)
                 reviewer_meta = mcp_server.agent_metadata.get(session.reviewer_agent_id)
     
-                api_key_a = paused_meta.api_key if paused_meta and paused_meta.api_key else api_key
+                # ⛔No fallback to `api_key`. That is the SYNTHESIS CALLER's
+                # argument -- usually the reviewer -- so falling back to it
+                # signed party A's slot with party B's key: a "paused agent
+                # signature" the paused agent never produced. Same rule #2155
+                # set at the synthetic-reviewer and LLM-assisted finalize
+                # sites: no key on file means an empty key, compute_signature
+                # returns "", and describe_attestation reports the record as
+                # `unsigned` -- which is the truth.
+                api_key_a = paused_meta.api_key if paused_meta and paused_meta.api_key else ""
                 api_key_b = reviewer_meta.api_key if reviewer_meta and reviewer_meta.api_key else ""
     
                 resolution = session.finalize_resolution(api_key_a, api_key_b)

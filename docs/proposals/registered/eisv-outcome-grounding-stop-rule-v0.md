@@ -3,7 +3,8 @@
 Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17;
 power-characterisation correction, 2026-08-23; condition 4 clarification
 and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
-merge
+merge; reopening-clause clarification, drafted 2026-09-25, effective at merge,
+and its pre-data narrowing correction, 2026-09-25, effective at merge
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -566,6 +567,192 @@ by declaration, exactly as the gate already provides; and `REFUTED` is
 unreachable for this read. The slot is not closed for the future: a later
 read under a new premise carries its own declaration. No numeric effect
 size is substituted for the unfilled slot.
+
+### Pre-read clarification — drafted 2026-09-25, effective at merge: what the reopening clause's "new premise" excludes
+
+The kill criterion above says that after a FAIL, "Reopening requires a *new
+premise* — a materially different label channel or measurement process — not
+simply more of the same labels." The registered text excludes more labels on
+the same channel. It does not say whether a new estimator fitted or learned on
+that channel is a new premise, and nothing else in this document or its code
+decides it. This block settles that boundary before the registered read
+exists. It is a clarification of the reopening clause, not a change to any
+PASS condition, threshold, cohort, cutoff, date, estimator, command, pinned
+candidate, or `REGISTERED_READ_MANIFEST` entry. It applies only if the read
+FAILs; it says nothing about which branch the read will take.
+
+**Definition.** The *label channel* is the outcome labels the registered read
+scores: the `task` scope under `--anchor-scope trusted` and
+`--fixture-rule registered`, or more labels of the same kind. The channel is
+fixed by the labels' kind and provenance, not by flag values: the
+`TASK_OUTCOMES` outcome types, from the exogenous verification sources the
+trusted anchor scope admits. That scope is `anchored_outcomes_predicate` in
+`src/grounding/outcome_anchors.py` at its default (`include_soft=False`),
+which requires both trusted-tier provenance (`verification_source =
+'external_signal'`, at this writing the only source the anchor registry maps
+to `TRUSTED_EXTERNAL`) and a joinable prior-state snapshot
+(`JOINABLE_SNAPSHOT_SQL`: `eisv_e` present and `detail.snapshot_missing` not
+true). Re-scoring those rows, or a subset or re-filtering
+of them (another fixture rule, a stricter scope, a row filter), gains no new
+label channel by that alone. Re-scoring under a wider scope gains none
+either. `--anchor-scope soft` adds `agent_reported_tool_result`, which the
+anchor registry tiers `SOFT_SELF_ATTESTED` because the agent attests its own
+result; `--anchor-scope all` is the contaminated cohort this document
+withdraws; and admitting any other self-attested, excluded, or
+unknown-provenance source, or dropping the joinable-snapshot requirement, is
+the same kind of change. Each widens the label definition, which "Do not
+widen the label definition to raise the count" below forbids; none is a new
+label channel. The only labels that can be a genuinely different label
+channel while carrying the same outcome types are labels from a new
+exogenous, trusted-tier verification source: a `verification_source` value
+that was not in the anchor registry (`_TIER_BY_SOURCE` in
+`src/grounding/outcome_anchors.py`) at the registered read and carried no
+outcome row up to the read's cutoff, whose verification happens outside the
+governance loop, and which the registry, once amended, maps to
+`TRUSTED_EXTERNAL`, so that `is_exogenous_anchor` at its default and
+`EXOGENOUS_OUTCOMES_SQL` admit it. Re-tiering or renaming a source that was
+in the registry at the read, or re-tiering rows the read excluded as
+unknown provenance, does not make a new source. Labels from such a new
+source are assessed on their merits as below.
+An estimator *fitted or learned on that channel* is one whose parameters or
+selection are chosen against those labels: fitted blend weights, a learned readout from
+EISV or prior state to an outcome, or any other fitted function of
+measurements the deployed producers already record. Such an estimator does
+not, by itself, constitute a "materially different label channel or
+measurement process" under the reopening clause. A fitted readout whose
+inputs come from a genuinely new measurement process, or which is scored
+against a genuinely different label channel (for labels of the same outcome
+types, only a new exogenous, trusted-tier source as defined above), remains
+a candidate new premise.
+It is assessed on that new process or channel, not on the fact that it was
+fitted.
+
+**How it is applied.** A proposal to reopen a closed question names its new
+premise. If the only new element is the estimator — its weights, its
+functional form, or its training — while the labels and the measurements it
+reads are the ones this read used, the proposal does not meet the reopening
+clause on that ground. Whether a new measurement process or label channel is
+"materially different" remains a judgement made on its merits. The
+operator-judgement clause above ("If condition 3 fails on the registered
+cohort, whether a corrected instrument and producer contract are the
+'materially different measurement process' the reopening clause requires is
+the operator's judgment") shares part of its subject with this block, so the
+division is stated here. The fixture-rule example in the definition above
+settles only the label-channel half: a corrected fixture rule, applied to
+the same rows, gains no new label channel by that alone. The
+operator-judgement clause remains unchanged in what it reserves, which is
+the judgement of whether a real change to what is measured, a corrected
+instrument and producer contract, is the materially different measurement
+process. On the measurement half this block states only that a pure refit
+is not such a change. What a change is called
+does not move it out of this block. A change that only refits parameters of
+the deployed producers against these labels, such as their blend weights,
+is a fitted estimator under this block whatever it is called, on every FAIL
+branch. A correction that changes what is measured can be a new premise
+because of that change, never because of its tuning: it is judged under the
+operator-judgement clause when condition 3 fails, and otherwise, like any
+other proposed new measurement process, on its merits.
+
+**Why this reading.** (1) The clause's own exclusion is "more of the same
+labels": the evidence a fitted estimator on this channel brings is those
+labels, used again. (2) The registered candidates in
+`EISV_PRIOR_STATE_MODELS` are already readouts from prior state to these
+labels, so a fitted readout on this channel is another candidate of the same
+kind. Admitting it as a new premise after a FAIL would widen the candidate set
+after the read and re-read, which is the selection loop "Why this needs a
+stop rule at all" describes: the best of several candidates, re-run until a
+positive maximum appears. (3) It is decidable from the proposal alone, by
+asking what is new besides the fit, with no read of any outcome data. (4) It
+is conservative against a false reopening. It is not conservative against a
+missed signal; the cost below states that.
+
+**Named cost.** If the read FAILs, a fitted estimator that would in fact
+discriminate better on this channel cannot reopen the question by itself.
+It can still be proposed together with a new measurement process or label
+channel, and this document can be amended by pull request. The trade is
+accepted: a reopening clause that a re-fit cannot satisfy, rather than one
+that any new estimator satisfies.
+
+**Disclosure of what was known when this was written.** Drafted 2026-09-25,
+before the registered read and before any 2026-12-01 data exists. No outcome
+read, dry run, or discrimination analysis was performed to prepare it. The
+facts disclosed in the condition-4 block above were in view when it was
+written, so it is a pre-read choice, not a pre-evidence one. It restricts
+what can reopen the question after a FAIL; it loosens nothing. It was
+written alongside a placement note in
+`docs/ontology/eisv-proprioception-contract.md` ("Fitted and learned
+estimators — which bucket they sit in") that first proposed this reading.
+
+**What this block does not do.** It does not alter any of the four PASS
+conditions, the 150-block threshold, the 0.05 level, the 400-resample null,
+the cohort, the fixture rule, the cutoff, the date, the command, the
+condition-4 clarification, the smallest-relevant-effect declaration, the
+pinned candidate tuple, `DISPERSION_FEATURE`, or any estimator in
+`eisv_ablation_matrix.py` or `eisv_skeptic_report.py`. It authorises no read
+before 2026-12-01 and no fitted estimator before or after it. It narrows no
+condition of the read.
+
+**How it was decided.** The operator gave a general direction on
+2026-09-25, "proceed best for the future of the federation", and so
+delegated the choice; an agent selected and drafted this reading under that
+delegation, following an adversarial design review of the alternatives. It
+is ratified on merge, which makes it the operator's decision. Merging remains
+the operator's act, so the decision is reversible until merge. The trace is
+this block, PR #2440 that added it, and PR #2455 that narrowed it
+(correction note below). The federation decision record in open PR #2452
+does not cover this decision, and no separate decision-packet item exists
+for it.
+Leaving the boundary open until a reopening proposal arrived would have
+decided it after the read's outcome was known; deciding it now avoids that.
+
+**Attestation.** Attested by the operator on merge as a clarification of the
+reopening clause, not a weakening of the registered protocol (`CLAUDE.md`,
+"Measurement authority — what a number may decide", exemption for
+pre-registered scientific stop rules).
+
+**Correction 2026-09-25, pre-data: narrowing only.** Made the same day, after
+PR #2440 merged this block and before any 2026-12-01 data exists. No outcome
+read, dry run, or discrimination analysis was performed for it. An
+independent re-read after merge found four problems, corrected in place
+above; the superseded wording is kept here so the change stays legible.
+
+1. *Definition.* Superseded: "Labels from a verification source the
+   registered read did not admit, such as a new exogenous verifier added to
+   the anchor registry, can be a genuinely different label channel even when
+   they carry the same outcome types, and are assessed on their merits as
+   below." Read literally, it made a wider scope a candidate new channel:
+   `--anchor-scope soft` admits the self-attested `agent_reported_tool_result`,
+   and `all` is the cohort this document withdraws, and both admit sources
+   the registered read did not. The corrected definition admits only a new
+   exogenous, trusted-tier source that carried no outcome row up to the
+   read's cutoff, and names re-scoring under a wider scope, or re-tiering an
+   existing or excluded source, as widening the label definition; the
+   candidate-new-premise sentence that follows it now points to that
+   restriction. It also replaces "which filters on `verification_source`"
+   with the predicate's full description, which includes the
+   joinable-snapshot requirement.
+2. *How it is applied.* Superseded: "... is unchanged: a corrected
+   instrument changes what is measured, which this block does not address."
+   The block decides part of that clause's subject (the label-channel half,
+   and that a pure refit is not a change to what is measured), so an
+   unqualified "unchanged" was inaccurate. The corrected text states the
+   division.
+3. *How it was decided.* Superseded: "Operator direction, 2026-09-25:
+   'proceed best for the future of the federation', given after an
+   adversarial design review of these decisions recommended the option
+   recorded here." It did not say who selected the option. The corrected text
+   follows the 2026-09-23 precedent above: the operator delegated the choice,
+   an agent selected and drafted it, and merge ratifies it.
+4. The pointer summaries in `docs/ontology/eisv-proprioception-contract.md`
+   and `docs/ROADMAP.md` are corrected to match.
+
+Every change either restricts what can reopen the question after a FAIL or
+corrects the record of how this block was made. None loosens anything. No
+PASS condition, threshold, cohort, cutoff, date, command, estimator, pinned
+candidate, or `REGISTERED_READ_MANIFEST` entry changes, and nothing here
+anticipates which branch the read takes. The operator attests this
+correction on merge as a narrowing of the clarification, under the same
+exemption as the block.
 
 ## What continues regardless
 

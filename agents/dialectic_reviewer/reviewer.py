@@ -38,6 +38,7 @@ from src.identity.lineage_semantics import LineageSpawnReason
 
 from .host_backends import (
     HostReviewResult,
+    call_antigravity_backend,
     call_claude_backend,
     call_openai_compat_backend,
     resolve_host_cli,
@@ -631,6 +632,11 @@ async def call_claude_reviewer(prompt: str) -> HostReviewResult:
     return await call_claude_backend(prompt)
 
 
+async def call_antigravity_reviewer(prompt: str) -> HostReviewResult:
+    """Run the Antigravity CLI (agy) subscription backend from an empty workspace."""
+    return await call_antigravity_backend(prompt)
+
+
 async def call_external_reviewer(prompt: str) -> HostReviewResult:
     """Run an operator-configured OpenAI-compatible backend (base_url + model
     + key env name). This is the third-family seam: Gemini, an OpenAI endpoint,
@@ -665,6 +671,13 @@ async def obtain_reviewer_text(prompt: str) -> str:
             return text
         fallback_from = "codex:host-adapter"
         fallback_warning = "Codex backend unavailable or returned no verdict"
+    elif host in ("antigravity", "agy", "antigravity:host-adapter"):
+        result = await call_antigravity_reviewer(prompt)
+        if result.text is not None:
+            _record_reviewer_provenance(result.provenance())
+            return result.text
+        fallback_from = result.host_id
+        fallback_warning = result.error
     elif host in ("external", "openai_compat", "openai-compatible", "gemini"):
         # ``gemini`` is accepted as an ALIAS for the configured external host —
         # it selects no vendor logic, only this path. Misconfiguration surfaces

@@ -195,7 +195,7 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
         "${UNITARES_HTTP_CORS_EXTRA_ORIGINS:-}"
     ) in compose
     assert (
-        "UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-gov.cirwel.org}"
+        "UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-}"
     ) in compose
     assert "UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}" in compose
     assert (

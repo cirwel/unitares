@@ -213,6 +213,53 @@ def mcp_bearer_tokens() -> List[str]:
     return split_csv_env(_MCP_BEARER_TOKENS_ENV)
 
 
+def oauth_dynamic_registration_enabled() -> bool:
+    """Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION).
+
+    On by default, as before. Open DCR with auto-approve lets any caller mint a
+    token, so a deployment that wants the OAuth gate to exclude anyone should
+    turn it off and admit only pre-registered clients, opening it briefly to
+    add a connector if needed. An unparseable value reads as off.
+    """
+    raw = os.environ.get("UNITARES_OAUTH_DYNAMIC_REGISTRATION", "true").strip().lower()
+    return raw in _TRUTHY
+
+
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def main_listener_ungated(*, public_listener_up: bool, host: str) -> bool:
+    """True when OAuth is confined to a running public listener while the main
+    listener binds beyond loopback with no bearer allowlist to gate it."""
+    return public_listener_up and host not in LOOPBACK_HOSTS and not mcp_bearer_tokens()
+
+
+def oauth_public_port() -> Optional[int]:
+    """Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT).
+
+    When set (and an OAuth issuer is configured), the server also listens on
+    ``127.0.0.1:<port>`` for the public tunnel, and the ``/mcp`` OAuth gate
+    applies to that listener only: the main listener is then served as if no
+    OAuth gate were configured. A tunnel still pointed at the main port is
+    therefore served ungated, so repoint it before setting this. Unset (or
+    invalid, which is warned about) keeps OAuth on every request, the
+    historical posture, so a typo fails closed rather than open.
+    """
+    raw = os.environ.get("UNITARES_OAUTH_PUBLIC_PORT", "").strip()
+    if not raw:
+        return None
+    try:
+        port = int(raw)
+    except ValueError:
+        port = 0
+    if not 0 < port < 65536:
+        logger.warning(
+            "UNITARES_OAUTH_PUBLIC_PORT is not a valid port; OAuth stays on every request"
+        )
+        return None
+    return port
+
+
 def mcp_bearer_required() -> bool:
     """True when a ``/mcp`` bearer allowlist is configured (gate is ON)."""
     return bool(mcp_bearer_tokens())
@@ -235,6 +282,8 @@ def auth_gate_refusal(
     provider_present: bool,
     issuer_set: bool,
     setup_error_name: Optional[str] = None,
+    main_listener_ungated: bool = False,
+    main_host: Optional[str] = None,
 ) -> Optional[str]:
     """The startup refusal message, or ``None`` to serve.
 
@@ -246,10 +295,26 @@ def auth_gate_refusal(
     A bearer allowlist satisfies the requirement. What the flag demands is an
     auth gate on the MCP route, not OAuth specifically, so an operator who has
     rotated to a bearer credential is not held down by it.
+
+    ``main_listener_ungated`` is True when OAuth is confined to a public
+    listener (UNITARES_OAUTH_PUBLIC_PORT): a provider exists, but the main
+    listener's route has no OAuth gate, on loopback as much as beyond it (a
+    tunnel still pointed at it, or any local process, reaches it). That is the
+    state this flag exists to refuse unless a bearer allowlist gates it.
     """
     if not oauth_gate_required():
         return None
-    if provider_present or mcp_bearer_tokens():
+    if mcp_bearer_tokens():
+        return None
+    if provider_present and main_listener_ungated:
+        return (
+            "UNITARES_OAUTH_REQUIRED is set but the main MCP listener "
+            f"({main_host or 'main host'}) has no auth gate: UNITARES_OAUTH_PUBLIC_PORT "
+            "confines OAuth to the public listener, and UNITARES_MCP_BEARER_TOKENS is "
+            "empty. Set a bearer allowlist to gate the main listener, or unset "
+            "UNITARES_OAUTH_PUBLIC_PORT to gate every request with OAuth."
+        )
+    if provider_present:
         return None
     if setup_error_name:
         cause = f"OAuth provider construction failed ({setup_error_name})"

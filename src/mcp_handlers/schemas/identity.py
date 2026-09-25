@@ -6,7 +6,7 @@ from .core import BootstrapStateParams
 
 class IdentityParams(AgentIdentityMixin):
     """
-    Who am I? Auto-creates identity if first call.
+    Resolve this session's bound agent (pass client_session_id), or set a cosmetic display name.
     """
     agent_uuid: Optional[str] = Field(
         default=None,

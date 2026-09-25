@@ -3,9 +3,9 @@
 *Many agents, one record.*
 
 UNITARES is self-hosted accountability infrastructure for operators running
-multiple AI agents. Its federation kernel connects independent runtimes to one
-operator-controlled server over MCP or HTTP, where they share a durable record
-while keeping their own models, tools, and runtimes. Agent
+multiple AI agents. Its single-operator federation kernel connects independent
+runtimes to one operator-controlled server over MCP or HTTP, where they share a
+durable record while keeping their own models, tools, and runtimes. Agent
 work should remain attributable, reviewable, and recoverable even when the
 process that started it is gone. It runs beside evals, guardrails, and
 sandboxes and replaces none of them.
@@ -86,7 +86,7 @@ The [evidence ledger](https://github.com/cirwel/unitares/blob/master/docs/EVIDEN
 lists measured results with their evidence status: what has run, what was
 measured, and what is still open, with the data behind each.
 
-## Federation across operators
+## Cross-operator trust
 
 Today one operator runs a deployment, and many independent runtimes share its
 record. Trust between operators is the research direction. The architecture

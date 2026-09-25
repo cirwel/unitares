@@ -536,3 +536,25 @@ class TestProcessAgentUpdateAcceptsRecentToolResults:
         )
         assert len(params.recent_tool_results) == 1
         assert params.recent_tool_results[0].kind == "test"
+
+
+# check_working_state's middle tier was honoured by the handler but not
+# advertised; these pin it into the published schema.
+
+
+def test_governance_metrics_schema_advertises_verbosity():
+    from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
+
+    props = GetGovernanceMetricsParams.model_json_schema()["properties"]
+    assert "verbosity" in props
+    assert GetGovernanceMetricsParams(verbosity="standard").verbosity == "standard"
+    assert GetGovernanceMetricsParams().verbosity is None
+
+
+def test_governance_metrics_schema_rejects_unknown_verbosity():
+    import pydantic
+
+    from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
+
+    with pytest.raises(pydantic.ValidationError):
+        GetGovernanceMetricsParams(verbosity="everything")

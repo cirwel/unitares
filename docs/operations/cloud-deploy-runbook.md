@@ -80,7 +80,8 @@ both believing they are canonical.
      public dashboard hostname and exact HTTPS origin (for example,
      `governance.example.com` and `https://governance.example.com`). Passkey
      enrollment and sign-in are bound to this pair. If `_ORIGIN` is empty it
-     defaults to `https://` plus the RP id.
+     defaults to `https://` plus the RP id. With no RP id, passkey sign-in is
+     off and its endpoints answer 503 naming these settings.
    - `UNITARES_MCP_BEARER_TOKEN` — the singular client credential used by the
      lease plane for governance REST calls. Set it to one exact member of the
      plural `UNITARES_MCP_BEARER_TOKENS` allowlist above.

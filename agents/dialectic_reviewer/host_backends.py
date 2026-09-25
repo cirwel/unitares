@@ -6,7 +6,11 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import signal
+import tempfile
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -395,3 +399,162 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
         finish_reason=finish_reason,
         backend="external",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Antigravity CLI (agy) reviewer host: the operator's Google subscription.
+#
+# agy loads a working directory's .agents/ hooks, rules and project permission
+# rules, so it never runs in a repository: its cwd is an EMPTY temporary
+# directory, refused if any parent holds .git/.agents. The dialectic prompt is
+# self-contained, so nothing is lost. --mode plan and --sandbox are defence in
+# depth. Verified against agy 1.2.11: `agy -p … --mode plan --sandbox
+# --output-format json` prints {"status":"SUCCESS","response":…,"usage":{…}}.
+# --------------------------------------------------------------------------- #
+
+ANTIGRAVITY_HOST_ID = "antigravity:host-adapter"
+# agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
+# untrusted text (a PR diff, a paused agent's thesis), and an injected "print
+# your environment" must find no UNITARES_*/GitHub token to echo. Kept: what a
+# CLI needs to find its home, locale, proxy and agy's OWN optional Google
+# credentials. Its subscription login lives in the system keyring, not env.
+AGY_ENV_ALLOWLIST = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
+    "LANG", "LC_ALL", "LC_CTYPE",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
+)
+
+
+def agy_env() -> dict[str, str]:
+    return {k: os.environ[k] for k in AGY_ENV_ALLOWLIST if k in os.environ}
+
+# One argv element: Linux caps it at 128 KiB. A dialectic prompt is far smaller.
+_ANTIGRAVITY_PROMPT_BYTES = 120_000
+
+# agy is an agent, not a completion endpoint: handed the review prompt alone it
+# reaches for a tool, --mode plan denies it, and the turn ends SUCCESS with an
+# empty response and denied_actions=[RunCommand] -- every live review fell back
+# to the local model this way (agy 1.2.11, 2026-09-25). Saying up front that the
+# prompt is self-contained and the answer is text makes it reply in the turn.
+_ANTIGRAVITY_TEXT_ONLY = (
+    "\n\nDo not run commands, read files, or use any tools. Everything you need "
+    "is above. Answer directly with the JSON object as your final text reply."
+)
+
+
+def resolve_antigravity_cli() -> Optional[str]:
+    """Operator override, then PATH, then the per-user/Homebrew locations a
+    sparse launchd PATH misses (the agy installer writes ~/.local/bin)."""
+    override = os.getenv("UNITARES_ANTIGRAVITY_CLI", "").strip()
+    if override:
+        path = os.path.abspath(os.path.expanduser(override))
+        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+    found = shutil.which("agy")
+    if found:
+        return os.path.abspath(found)
+    for candidate in (Path.home() / ".local" / "bin" / "agy",
+                      Path("/opt/homebrew/bin/agy"), Path("/usr/local/bin/agy")):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+async def _reap_group(proc: Any) -> None:
+    """Kill agy's whole process group and wait briefly; never raises."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=5)
+    except Exception:  # noqa: BLE001 - best-effort reap after a kill
+        pass
+
+
+async def call_antigravity_backend(prompt: str) -> HostReviewResult:
+    """Run agy headless from an empty workspace; never raises."""
+    host_id = ANTIGRAVITY_HOST_ID
+
+    def fail(error: str, **kw: Any) -> HostReviewResult:
+        return HostReviewResult(text=None, host_id=host_id, backend="antigravity",
+                                error=error, **kw)
+
+    cli_path = resolve_antigravity_cli()
+    if cli_path is None:
+        return fail("Antigravity CLI (agy) not found or not executable")
+    prompt += _ANTIGRAVITY_TEXT_ONLY
+    if len(prompt.encode("utf-8")) > _ANTIGRAVITY_PROMPT_BYTES:
+        return fail("Antigravity prompt exceeds the argv size limit")
+    try:
+        timeout_s = float(os.getenv("UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S", "420"))
+    except (TypeError, ValueError):
+        timeout_s = 420.0
+    timeout_s = max(1.0, timeout_s)
+
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="dialectic-agy-") as workspace:
+        if any((d / m).exists() for d in Path(workspace).resolve().parents
+               for m in (".git", ".agents")):
+            return fail("Antigravity workspace is not isolated (a parent holds .git/.agents)")
+        try:
+            # exec, not a shell: the prompt is one argv element, never parsed.
+            proc = await asyncio.create_subprocess_exec(
+                cli_path, "-p", prompt, "--mode", "plan", "--sandbox",
+                "--output-format", "json",
+                cwd=workspace,
+                env=agy_env(),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                # Own process group: a timeout must reach agy's sandbox children,
+                # or one holding stdout keeps communicate() waiting forever.
+                start_new_session=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
+            return fail(f"Antigravity CLI spawn failed: {type(exc).__name__}")
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            await _reap_group(proc)
+            return fail(f"Antigravity CLI exceeded {timeout_s:g}s timeout",
+                        latency_ms=int((time.monotonic() - started) * 1000))
+        except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
+            await _reap_group(proc)
+            return fail(f"Antigravity CLI communication failed: {type(exc).__name__}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if proc.returncode != 0:
+        return fail(f"Antigravity CLI exited {proc.returncode}", latency_ms=latency_ms)
+    raw = stdout.decode(errors="replace").strip()
+    try:
+        data = json.loads(raw.splitlines()[-1]) if raw else {}
+    except (ValueError, IndexError):
+        data = {}
+    if not isinstance(data, dict) or data.get("status") != "SUCCESS":
+        return fail("Antigravity CLI reported no successful result", latency_ms=latency_ms)
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    try:
+        tokens = int(usage.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    warnings = ["Antigravity CLI does not report an exact model identifier"]
+    response = data.get("response") if isinstance(data.get("response"), str) else ""
+    verdict_text = _extract_verdict(response)
+    if verdict_text is None:
+        # An empty reply after a denied tool call is a different failure from a
+        # reply without JSON; name the denied actions so the fallback warning
+        # says which one happened.
+        raw_denied = data.get("denied_actions")
+        denied = [str(d.get("display_name") or d.get("action") or "?") if isinstance(d, dict)
+                  else str(d)
+                  for d in (raw_denied if isinstance(raw_denied, list) else [])]
+        error = "Antigravity CLI returned no parseable dialectic verdict"
+        if not response.strip() and denied:
+            error = ("Antigravity CLI returned an empty reply after denied tool use: "
+                     + ", ".join(denied))
+        return fail(error, tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)
+    return HostReviewResult(text=verdict_text, host_id=host_id, backend="antigravity",
+                            tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)

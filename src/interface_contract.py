@@ -95,7 +95,40 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.14.0 (2026-09-24): agent gains action="release_presence", which releases
 # the caller's own presence lease at a clean exit. Nothing is removed or
 # renamed; agent's input_schema_sha256 and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.14.0"
+# 1.15.0 (2026-09-24): get_governance_metrics and check_working_state declare
+# verbosity ("minimal" | "standard" | "full"), which the handler has read since
+# the tiers existed (same class as 1.10.0's list_tools gap). Only lite was
+# declared, so /mcp/ dropped verbosity and the middle tier was unreachable
+# there. Nothing is removed or renamed and verbosity overrides lite when set.
+# Behavior that changes for existing inputs: validated routes (/mcp/ and REST
+# check_working_state) now refuse an off-list verbosity ("Standard", "bogus")
+# that they used to pass through and ignore, as 1.8.0 did for cirs_protocol.
+# Handler and envelope now resolve the tier through one function, so an
+# explicit lite=null serves minimal (the default), not full; and on the one
+# unvalidated route, REST get_governance_metrics, strings the schema reads as
+# false ("False", "no", "off", "0", ...) now serve full instead of minimal, as
+# every validated route already did. Both tools' input_schema_sha256 and the
+# surface digest move.
+# 1.16.0 (2026-09-25): the skills `name` parameter description now says a
+# call with neither name nor since_version returns an index without content
+# (it said "the full bundle", which the handler no longer returns). No
+# parameter is added, removed, retyped or renamed; skills' input_schema_sha256
+# and the surface digest move.
+# 1.17.0 (2026-09-25): the progressive tools/list shrinks from 44,199 to
+# 40,455 bytes, the cost every session pays before its first call.
+# search_shared_memory stops advertising six fields that only other knowledge
+# actions read (offset, epoch_scope, scope, evidence_ids, verification_basis,
+# decision_standard); search never read them, so a caller that sent one sees no
+# change in behavior, and knowledge keeps all six. The EISV field contract
+# rides once on the advertised surface, on check_working_state; sync_state and
+# record_result carry a pointer to describe_tool(tool_name=
+# 'check_working_state'), and describe_tool's full view of either still
+# appends the contract. Identity briefs, several alias parameter texts and
+# six leaked model docstrings (inputSchema.description) are shortened or
+# corrected. Numbered after 1.16.0 (#2435). Nothing
+# callable is removed or renamed; many input digests and the surface digest
+# move.
+INTERFACE_CONTRACT_VERSION = "1.17.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

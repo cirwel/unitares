@@ -1971,7 +1971,9 @@ class TestHandleListDialecticSessions:
 
     @pytest.mark.asyncio
     async def test_default_list_shape_is_unchanged(self, mock_context_agent):
-        """The Dialectic tab renders detail, so omitting fields must not shrink."""
+        """The Dialectic tab renders detail, so omitting fields must not shrink
+        (a long topic is previewed; see test_default_list_previews_a_long_topic,
+        and the tab fetches the full text from get)."""
         from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
 
         fat = [{"session_id": "s1", "phase": "resolved",
@@ -1983,6 +1985,44 @@ class TestHandleListDialecticSessions:
             sess = parse_result(result)["sessions"][0]
             assert sess["resolution"] == {"reasoning": "keep me"}
             assert sess["topic"] == "keep me too"
+
+    @pytest.mark.asyncio
+    async def test_default_list_previews_a_long_topic(self, mock_context_agent):
+        """50 untruncated topics (up to ~12 KB each) made the default list
+        173 KB, measured 2026-09-25. A list row now carries a preview and says
+        so; get still returns the full text."""
+        from src.mcp_handlers.dialectic.handlers import (
+            LIST_TOPIC_PREVIEW_CHARS,
+            handle_list_dialectic_sessions,
+        )
+
+        long_topic = "word " * 2000
+        rows = [{"session_id": "s1", "phase": "resolved", "topic": long_topic},
+                {"session_id": "s2", "phase": "resolved", "topic": "short"}]
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[dict(r) for r in rows]), mock_context_agent:
+            result = await handle_list_dialectic_sessions({})
+        long_row, short_row = parse_result(result)["sessions"]
+        assert len(long_row["topic"]) <= LIST_TOPIC_PREVIEW_CHARS + 1
+        assert long_row["topic"].endswith("…")
+        assert long_row["topic_truncated"] is True
+        assert long_row["topic_chars"] == len(long_topic)
+        assert short_row["topic"] == "short"
+        assert "topic_truncated" not in short_row
+
+    @pytest.mark.asyncio
+    async def test_include_transcript_keeps_the_full_topic(self, mock_context_agent):
+        """Asking for transcripts is asking for detail; the topic stays whole."""
+        from src.mcp_handlers.dialectic.handlers import handle_list_dialectic_sessions
+
+        long_topic = "word " * 2000
+        with patch(f"{DIALECTIC}.list_all_sessions", new_callable=AsyncMock,
+                   return_value=[{"session_id": "s1", "topic": long_topic, "transcript": []}]), \
+             mock_context_agent:
+            result = await handle_list_dialectic_sessions({"include_transcript": True})
+        row = parse_result(result)["sessions"][0]
+        assert row["topic"] == long_topic
+        assert "topic_truncated" not in row
 
     @pytest.mark.asyncio
     async def test_empty_results(self, mock_context_agent):

@@ -74,6 +74,11 @@ EXCEPTIONS: dict[str, str] = {
         "the experience envelope is chosen by the friendly name the caller used; "
         "a canonical call gets no envelope on purpose"
     ),
+    "src/mcp_handlers/middleware/envelope_step.py::_COMPACT_WRITE_ALIASES": (
+        "same rule as _COMPACT_READ_ALIASES for write acknowledgements: the "
+        "friendly name decides the bounded ack, and a canonical call returns the "
+        "full payload on purpose"
+    ),
     "src/services/http_tool_service.py::_DIRECT_HTTP_TOOL_HANDLERS": (
         "REST shortcut keyed on the invoked name; an alias deliberately takes the full pipeline"
     ),

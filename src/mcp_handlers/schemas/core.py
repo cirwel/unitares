@@ -221,7 +221,15 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
     )
     lite: Union[bool, str, None] = Field(
         default=True,
-        description="If true (default), returns minimal essential metrics only. Set lite=false for full diagnostic data."
+        description="If true (default), returns minimal essential metrics only. Set lite=false for full diagnostic data. verbosity, when given, takes precedence."
+    )
+    # The handler has always honoured three tiers, but only the boolean `lite`
+    # was advertised, so an agent wanting more than the minimum could only
+    # reach `full` (~15 KB, with convergence and trajectory diagnostics it did
+    # not ask for). Advertising the middle tier is the whole fix.
+    verbosity: Optional[Literal["minimal", "standard", "full"]] = Field(
+        default=None,
+        description="Response tier: 'minimal' (same as lite=true), 'standard' (EISV, verdict, risk_score, basin and mode with their meanings, no diagnostics), or 'full' (same as lite=false). Overrides lite when set."
     )
 
     @model_validator(mode='after')
@@ -229,7 +237,9 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
         if isinstance(self.include_state, str):
             self.include_state = self.include_state.lower() in ('true', '1', 'yes')
         if isinstance(self.lite, str):
-            self.lite = self.lite.lower() in ('true', '1', 'yes')
+            from src.mcp_handlers.support.param_normalization import LITE_TRUE_STRINGS
+
+            self.lite = self.lite.lower() in LITE_TRUE_STRINGS
         return self
 
 
@@ -343,7 +353,7 @@ class ToolResultEvidence(BaseModel):
 
 class ProcessAgentUpdateParams(AgentIdentityMixin):
     """
-    Share your work and get supportive feedback. Your main tool for checking in.
+    Record a work check-in and get a governance decision.
     """
     parameters: List[float] = Field(
         default_factory=list,
@@ -579,7 +589,7 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
 
 
 class OutcomeEventParams(AgentIdentityMixin):
-    """Parameters for outcome_event"""
+    """Outcome record parameters."""
     outcome_type: Literal["drawing_completed", "drawing_abandoned", "test_passed", "test_failed", "tool_rejected", "task_completed", "task_failed", "trajectory_validated", "dialectic_resolved", "watcher_finding_confirmed", "watcher_finding_dismissed"] = Field(..., description="Type of outcome event")
     outcome_score: Optional[float] = Field(None, description="Quality score 0.0 (worst) to 1.0 (best). Inferred from type if omitted.")
     is_bad: Optional[bool] = Field(None, description="Whether this is a negative outcome. Inferred from type if omitted.")
