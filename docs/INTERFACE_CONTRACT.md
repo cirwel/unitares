@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.17.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.18.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.17.0` is the negotiated interface release. Compatible additions
+- `version: 1.18.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -195,7 +195,16 @@ The two identifiers serve different jobs:
   Identity briefs, several alias parameter texts and six leaked model
   docstrings (`inputSchema.description`) are shortened or corrected. Nothing
   callable is removed or renamed; many input digests and the surface digest
-  move).
+  move; 1.18.0, 2026-09-25: identity plumbing leaves the advertised surface
+  where no caller uses it. `continuity_token` is no longer advertised on
+  `check_working_state`, `consult`, `describe_tool`, `list_tools`, `use_tool`,
+  `search_shared_memory`, `store_finding`, `record_result`, `request_review`
+  and `self_recovery`, and the `start_session` alias stops advertising
+  `process_fingerprint`, `trajectory_signature`, `thread_id`, `orchestrated`,
+  `onboard_origin`, `agent_id`, `continuity_token` and `client_hint`. Every
+  field stays on its model and on the canonical tool, so REST and canonical
+  callers are unaffected; the progressive `tools/list` shrinks from 40,455 to
+  37,432 bytes. Nothing callable is removed or renamed).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

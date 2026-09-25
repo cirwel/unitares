@@ -700,7 +700,14 @@ class TestToolSchemaClientSessionId:
                 f"Tool '{tool_name}': client_session_id should accept type 'string'"
             )
 
-    @pytest.mark.parametrize("tool_name", CRITICAL_TOOLS)
+    # self_recovery stops ADVERTISING continuity_token (2026-09-25): PATH 0
+    # ownership proof runs on identity/onboard, which keep it, and no /mcp/
+    # caller sends it to self_recovery. Its model still accepts it for REST
+    # callers (Sentinel-BEAM); test_hidden_token_is_still_accepted_by_the_model
+    # pins that.
+    TOKEN_ADVERTISED_TOOLS = [t for t in CRITICAL_TOOLS if t != "self_recovery"]
+
+    @pytest.mark.parametrize("tool_name", TOKEN_ADVERTISED_TOOLS)
     def test_critical_tool_has_continuity_token(self, tool_schemas, tool_name):
         """Critical tools expose continuity_token for PATH 0 ownership proof."""
         assert tool_name in tool_schemas, f"Tool '{tool_name}' not found in TOOL_SCHEMAS"
@@ -710,6 +717,15 @@ class TestToolSchemaClientSessionId:
         assert "continuity_token" in props, (
             f"Tool '{tool_name}' is missing continuity_token in inputSchema.properties."
         )
+
+    def test_hidden_token_is_still_accepted_by_the_model(self):
+        """Hiding continuity_token from the advertisement must not stop a REST
+        caller (which passes undeclared keys through) from sending it."""
+        from src.mcp_handlers.schemas.lifecycle import SelfRecoveryParams
+        model = SelfRecoveryParams.model_validate(
+            {"action": "check", "continuity_token": "v1.x"}
+        )
+        assert model.continuity_token == "v1.x"
 
     def test_no_critical_tool_missing(self, tool_schemas):
         """Sanity check: all critical tools exist in the schema registry."""

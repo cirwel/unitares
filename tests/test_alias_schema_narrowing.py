@@ -43,6 +43,7 @@ from src.tool_registration import (
     _ALIAS_ALWAYS_KEEP,
     build_alias_input_schema,
 )
+from src.alias_schema import ALIAS_ADVERTISED_DROP
 from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 from src.tool_schemas import get_tool_definitions
 
@@ -128,7 +129,7 @@ def test_request_review_wire_schema_is_only_the_friendly_one_call_contract():
 
     assert properties == (
         ALIAS_SCHEMA_KEEP["request_review"] | _ALIAS_ALWAYS_KEEP
-    )
+    ) - ALIAS_ADVERTISED_DROP["request_review"]
     assert {
         "action",
         "session_id",
@@ -153,7 +154,7 @@ async def test_describe_request_review_uses_friendly_wire_schema_and_authority()
 
     assert properties == (
         ALIAS_SCHEMA_KEEP["request_review"] | _ALIAS_ALWAYS_KEEP
-    )
+    ) - ALIAS_ADVERTISED_DROP["request_review"]
     # The alias describes itself with the text tools/list serves for it (its
     # migration note, via build_alias_tool_definition); that text is where the
     # authority claim lives. Until 2026-09-12 a catalog override supplied a

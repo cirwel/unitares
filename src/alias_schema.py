@@ -234,6 +234,60 @@ _ALIAS_ALWAYS_KEEP = frozenset({
 })
 
 
+# Advertised-only narrowing for any alias, router or not, applied after the
+# keep/drop above. The fields stay on the Pydantic model and on the canonical
+# tool, so REST callers (which pass undeclared keys through) and canonical
+# callers are unaffected; only the /mcp/ advertisement, whose argument model
+# drops undeclared keys, stops offering them. Audited 2026-09-25 against every
+# code caller (SDK, plugin, residents, BEAM, dispatch_beam, anima, Hermes) and
+# the /mcp/ TOOL_WRAPPER logs since early July.
+#
+# continuity_token: a same-live-process rebind proof, not a per-call field
+# (docs/ontology/identity.md). No code caller sends it to these aliases over
+# /mcp/; the logs show 8 such calls since 2026-08-19 and none since 09-15.
+# Rebinds go through identity(agent_uuid=..., continuity_token=...,
+# resume=true), which keeps it. sync_state keeps it too: the Python SDK's
+# strict-refusal retry attaches it there, and process_agent_update's /mcp/
+# passthrough (EXTRA_ARGUMENT_PASSTHROUGH_TOOLS) would keep it regardless.
+#
+# start_session: every code caller that sets its plumbing sends it to canonical
+# onboard, which keeps every field (plugin onboard_helper over REST, the host
+# adapter and Hermes' vendored copy over /mcp/, SyncGovernanceClient, the
+# Discord bridge, dispatch_beam). Dropped from the alias:
+#   process_fingerprint, trajectory_signature, thread_id - no alias caller,
+#     0 in the /mcp/ logs;
+#   orchestrated - the orchestrated anchor is set by adapters on onboard;
+#   onboard_origin - an observability label; unset reads default_unmarked_call;
+#   agent_id - an alias mint names no existing agent;
+#   continuity_token - token resume is retired (S1-c); rebinds use identity;
+#   client_hint - cosmetic; the transport-detected hint fills it.
+# Kept on the alias: initial_state (a capability models use; usage never
+#   retires a capability, CLAUDE.md "Measurement authority"), model_type (the
+#   plugin's governance-start tells models to send it; User-Agent inference is
+#   unverified for claude.ai and Hermes), client_session_id (the plugin's
+#   governance_call_inject anchors orchestrated children through it), resume
+#   (server recovery hints name it), and the identity-choice fields
+#   (force_new, parent_agent_id, spawn_reason, name, response_mode).
+_TOKEN = frozenset({"continuity_token"})
+ALIAS_ADVERTISED_DROP = {
+    "check_working_state": _TOKEN,
+    "search_shared_memory": _TOKEN,
+    "store_finding": _TOKEN,
+    "record_result": _TOKEN,
+    "request_review": _TOKEN,
+    "start_session": frozenset({
+        "process_fingerprint",
+        "trajectory_signature",
+        "thread_id",
+        "orchestrated",
+        "onboard_origin",
+        "agent_id",
+        "continuity_token",
+        "client_hint",
+    }),
+}
+
+
 def apply_alias_schema_property_overrides(
     alias_name: str,
     schema: dict,
@@ -261,6 +315,27 @@ def apply_alias_schema_property_overrides(
                     updates, field_descriptions, budget=budget
                 )
             )
+
+
+def _prune_unreferenced_defs(schema: dict) -> None:
+    """Drop $defs entries nothing in the schema references any more."""
+    defs = schema.get("$defs")
+    if not isinstance(defs, dict) or not defs:
+        return
+    import json as _json
+    body = {key: value for key, value in schema.items() if key != "$defs"}
+    live, frontier = set(), [body]
+    while frontier:
+        text = _json.dumps(frontier.pop())
+        for name in defs:
+            if name not in live and f'"#/$defs/{name}"' in text:
+                live.add(name)
+                frontier.append(defs[name])
+    for name in list(defs):
+        if name not in live:
+            defs.pop(name)
+    if not defs:
+        schema.pop("$defs", None)
 
 
 def build_alias_input_schema(
@@ -300,6 +375,17 @@ def build_alias_input_schema(
                 for value in required
                 if value != "action" and value not in dropped
             ]
+    advertised_drop = ALIAS_ADVERTISED_DROP.get(alias_name)
+    if advertised_drop and alias_schema:
+        properties = alias_schema.get("properties", {})
+        for parameter in advertised_drop:
+            properties.pop(parameter, None)
+        if "required" in alias_schema:
+            alias_schema["required"] = [
+                value for value in alias_schema["required"]
+                if value not in advertised_drop
+            ]
+        _prune_unreferenced_defs(alias_schema)
     apply_alias_schema_property_overrides(
         alias_name,
         alias_schema,

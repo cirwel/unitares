@@ -128,7 +128,19 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # corrected. Numbered after 1.16.0 (#2435). Nothing
 # callable is removed or renamed; many input digests and the surface digest
 # move.
-INTERFACE_CONTRACT_VERSION = "1.17.0"
+# 1.18.0 (2026-09-25): identity plumbing leaves the advertised surface where
+# no caller uses it. continuity_token is no longer advertised on
+# check_working_state, consult, describe_tool, list_tools, use_tool,
+# search_shared_memory, store_finding, record_result, request_review and
+# self_recovery; start_session's alias stops advertising process_fingerprint,
+# trajectory_signature, thread_id, orchestrated, onboard_origin, agent_id,
+# continuity_token and client_hint. Every field stays on its model and on the
+# canonical tool (identity, sync_state, onboard and the routers keep the
+# token), so REST and canonical callers are unaffected; an /mcp/ caller that
+# sends one to a narrowed alias has it dropped. The progressive tools/list
+# shrinks from 40,455 to 37,432 bytes. Nothing callable is removed or renamed;
+# the narrowed tools' input digests and the surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.18.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
