@@ -1671,12 +1671,36 @@ _P006_LOUD_LOG_LEVELS = frozenset(
 )
 
 
+def _p006_receiver_is_logger(expr: Any) -> bool:
+    """True when the object a method is called on is named like a logger.
+
+    ``logger``, ``log``, ``self._logger``, ``logging``, ``LOG``,
+    ``structlog.get_logger()``: the last name in the receiver contains "log".
+    This keeps ``task.exception()`` (the asyncio API, which only returns the
+    stored exception) or ``parser.error(...)`` from counting as logging.
+    """
+    import ast
+
+    while isinstance(expr, ast.Call):
+        expr = expr.func
+    if isinstance(expr, ast.Attribute):
+        name = expr.attr
+    elif isinstance(expr, ast.Name):
+        name = expr.id
+    else:
+        return False
+    return "log" in name.lower()
+
+
 def _p006_is_loud_log_call(node: Any) -> bool:
-    """``<x>.info/warning/error/exception/critical(...)`` or ``<x>.log(LEVEL, ...)``
-    with LEVEL at INFO or above."""
+    """``<logger>.info/warning/error/exception/critical(...)`` or
+    ``<logger>.log(LEVEL, ...)`` with LEVEL at INFO or above, where the
+    receiver is named like a logger (see ``_p006_receiver_is_logger``)."""
     import ast
 
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    if not _p006_receiver_is_logger(node.func.value):
         return False
     method = node.func.attr
     if method in _P006_LOUD_LOG_METHODS:
@@ -1695,18 +1719,30 @@ def _p006_is_loud_log_call(node: Any) -> bool:
 def _p006_handler_reacts(handler: Any) -> bool:
     """True when ``handler``'s body, nested blocks included, has positive
     evidence of reacting: a ``raise``, a logging call at info level or above,
-    or a ``return`` whose value is not ``None``.
+    or a ``return`` whose value is not ``None``. Any non-None return counts,
+    a fallback such as ``return []`` included: the rule does not try to tell
+    an error value from a default.
 
     Nested function, lambda and class bodies are skipped: code there does not
-    run when the handler does.
+    run when the handler does. So are the handlers of a ``try`` nested inside
+    this handler: they react to a different exception (say, one from cleanup
+    code), and when that code succeeds the caught exception is still
+    swallowed. The nested try's body, ``else`` and ``finally`` do run on this
+    handler's path and are searched.
     """
     import ast
 
     scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+    try_types = tuple(
+        t for t in (ast.Try, getattr(ast, "TryStar", None)) if t is not None
+    )
     stack = list(handler.body)
     while stack:
         node = stack.pop()
         if isinstance(node, scope_nodes):
+            continue
+        if isinstance(node, try_types):
+            stack.extend([*node.body, *node.orelse, *node.finalbody])
             continue
         if isinstance(node, ast.Raise):
             return True

@@ -68,6 +68,14 @@ SILENT_BODIES = [
     "with lock:\n    pass",
     "for item in items:\n    logger.debug(item)",
     "try:\n    cleanup()\nexcept OSError:\n    pass",
+    # A nested try's own handler reacts to a different exception: when
+    # cleanup() succeeds, the caught exception is still swallowed.
+    "try:\n    cleanup()\nexcept OSError:\n    raise",
+    "try:\n    cleanup()\nexcept OSError:\n    logger.error('cleanup failed')",
+    # Methods named like log levels on something that is not a logger.
+    "task.exception()",
+    "parser.error('bad input')",
+    "self.status.info('x')",
     # Code in a nested scope does not run when the handler does.
     "def later():\n    raise RuntimeError('x')\npass",
     "callback = lambda: logger.error('x')",
@@ -96,7 +104,13 @@ LOUD_BODIES = [
     "if VERBOSE:\n    logger.warning('x')",
     "if retryable(exc):\n    return retry()\nraise",
     "with lock:\n    raise",
-    "try:\n    cleanup()\nexcept OSError:\n    logger.error('cleanup failed')",
+    # Any non-None return counts, a fallback included (the chosen standard).
+    "return []",
+    "return default",
+    # Logger receivers in other shapes.
+    "self._logger.warning('x')",
+    "LOG.error('x')",
+    "structlog.get_logger().error('x')",
 ]
 
 
@@ -113,6 +127,22 @@ def test_silent_body_is_kept(tmp_path, body, flagged):
 def test_reacting_body_is_dropped(tmp_path, body, flagged):
     path = _write(tmp_path, _handler(body))
     assert p006_actually_fires(str(path), flagged) is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "try:\n    logger.error('failed')\n    cleanup()\nexcept OSError:\n    pass",
+        "try:\n    cleanup()\nexcept OSError:\n    pass\nfinally:\n    raise",
+    ],
+)
+def test_nested_try_body_and_finally_count_for_the_handler(tmp_path, body):
+    # The nested try's body and finally run on the handler's own path, so
+    # evidence there counts when the outer clause (6) is cited. A cite inside
+    # the nested try (7) also reaches its silent `except OSError`, so it stays.
+    path = _write(tmp_path, _handler(body))
+    assert p006_actually_fires(str(path), 6) is False
+    assert p006_actually_fires(str(path), 7) is True
 
 
 @pytest.mark.parametrize("body", ["continue", "break"])
@@ -205,8 +235,8 @@ def test_nested_handlers_that_all_react_are_dropped(tmp_path, flagged):
 
 
 def test_outer_silent_handler_with_nested_try_in_its_body_is_kept(tmp_path):
-    # The outer handler is judged on its own evidence: a warning inside a
-    # nested try's handler counts, a bare `pass` does not.
+    # The outer handler's nested try has only a silent handler, so nothing on
+    # the outer handler's path reacts.
     source = (
         "def f():\n"
         "    try:\n"

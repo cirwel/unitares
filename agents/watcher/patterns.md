@@ -199,11 +199,18 @@ the failure. A handler reacts only if its body, nested blocks included,
 contains at least one of:
 
 - a `raise` / `throw`
-- a logging call at info, warning, error, exception or critical level
-- a `return` with a value other than `None` / `null` / `undefined`
+- a logging call at info, warning, error, exception or critical level, on a
+  logger (`logger.warning(...)`, not `task.exception()`)
+- a `return` with a value other than `None` / `null` / `undefined`; any such
+  value counts, a fallback like `return []` included
+
+A `raise` or log inside a nested `try`'s own handler does not count: it
+reacts to a different exception, and when the nested code succeeds the
+caught one is still swallowed.
 
 Everything else is P006: `pass`, `...`, an empty block, `continue`, `break`,
-a bare `return` or `return None`, assigning `None` or another fallback,
+a bare `return` or `return None`, assigning `None` or another fallback to
+a variable,
 collecting the error, or logging only at debug level (`logger.debug(...)`,
 `console.debug(...)`). Hides real bugs and makes debugging impossible.
 
