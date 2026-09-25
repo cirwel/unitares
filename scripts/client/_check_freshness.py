@@ -33,7 +33,7 @@ against the changed sources, writes ONE NEW FILE per skill:
 `skill_digest` (added 2026-09-24, optional for readers) names the skill text
 the record certified. `superseded_digests` (added 2026-09-25, optional) lists,
 per source whose content changed since the skill was last verified, the
-digests it had been verified at: the stamp records that its verifier
+digest it was last verified at and any it had since been carried to: the stamp records that its verifier
 re-checked the skill across that change. See Recorded transitions below.
 
 It never edits SKILL.md. Until 2026-09-24 a stamp rewrote the `last_verified`
@@ -104,7 +104,9 @@ fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
 when skill content moves. Old attestations can be removed with `--prune`,
 which keeps the newest N per skill plus every record that still vouches for
 the current SKILL.md text with a source digest no other kept record carries,
-and every record whose transition leads to a cited source's current content; deleting a file never conflicts with another PR adding one.
+and every record inside the AGING window whose transition leads to a cited
+source's current content; deleting a file never conflicts with another PR
+adding one.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
 into an attestation dated with that skill's `last_verified`.
@@ -329,6 +331,22 @@ def recorded_transitions(records: list[dict]) -> dict[str, dict[str, set[str]]]:
     return edges
 
 
+def last_verified_at(vouching: list[dict], meta: dict, src: str) -> set[str]:
+    """The digest a source was last verified at for this text: the newest
+    vouching record's, else the legacy frontmatter block's.
+
+    Only this, never every digest the text was ever certified at, is what a
+    stamp moves on from. Listing the older ones too would record transitions
+    its verifier never checked (1 -> 3 when it saw 2 -> 3), and those would
+    carry a text certified at 1 past a 1 -> 2 re-check that predates it."""
+    for record in vouching:
+        digest = record["source_digests"].get(src)
+        if digest is not None:
+            return {str(digest)}
+    legacy = meta["source_digests"].get(src)
+    return {legacy} if legacy else set()
+
+
 def carried_forward(accepted: set[str], edges: dict[str, set[str]]) -> set[str]:
     """``accepted`` plus every digest reachable from it through recorded transitions."""
     reached = set(accepted)
@@ -493,7 +511,7 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
             rc = 1
             continue
         skill_digest = skill_text_digest(skill_file)
-        _, accepted = effective_record(skills_dir, name, meta, skill_digest)
+        vouching = vouching_attestations(load_attestations(skills_dir, name), skill_digest)
         edges = recorded_transitions(
             [data for _, data in transition_records(skills_dir, name, skill_digest)])
         digests: dict[str, str] = {}
@@ -505,7 +523,8 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
                 digests[src] = content_digest(full_path)
                 # What the check accepted until now. If the content moved on
                 # from all of it, this stamp is the re-check across the change.
-                prior = carried_forward(accepted.get(src, set()), edges.get(src, {}))
+                prior = carried_forward(
+                    last_verified_at(vouching, meta, src), edges.get(src, {}))
                 if prior and digests[src] not in prior:
                     superseded[src] = sorted(prior)
             elif (carried := carried_digest(skills_dir, name, src, skill_digest)) is not None:
@@ -579,7 +598,7 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
     current content, whichever skill text is on disk here.
 
     Not only the text in this checkout: an open branch holding another version
-    of the skill needs the carrier as much, and a prune on master would
+    of the skill may need the carrier as much, and a prune on master would
     otherwise delete it as soon as master re-stamped its own text directly.
     For a source absent from this checkout the current digest is unknown, so
     every such record with a transition for it is kept.
@@ -588,7 +607,9 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
     it was written after that text's certification, and a text certified
     before the window reads AGING whatever carries it, so an older carrier can
     never make a skill FRESH; keeping it would stop prune removing any history
-    for a skill whose sources keep changing."""
+    for a skill whose sources keep changing. The window is this checkout's; a
+    branch whose own text sets a longer one can lose a carrier it still
+    needed, and then reads STALE and re-stamps, the cost before this existed."""
     meta = parse_frontmatter((skills_dir / name / "SKILL.md").read_text())
     if not meta:
         return set()
@@ -644,8 +665,9 @@ def prune_attestations(root: str, projects_root: str, keep: int) -> int:
     lets `rsync --delete` remove, so a prune never leaves the sync refusing,
     and a source whose digest is not visible here keeps its voucher too.
     A record whose recorded transition leads to a cited source's current
-    content is kept as well, whatever text it certified: a branch holding
-    another version of the skill may depend on it (see _transition_records).
+    content is kept as well, whatever text it certified, while it is inside
+    the AGING window: a branch holding another version of the skill may
+    depend on it (see _transition_records for the window's limit).
     """
     skills_dir = Path(root) / "skills"
     base = skills_dir / ATTESTATIONS_DIR

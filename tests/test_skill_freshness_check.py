@@ -443,6 +443,31 @@ def test_a_branch_stamped_after_masters_re_check_still_re_stamps(layout: Layout)
     assert layout.run().returncode == 1
 
 
+def test_a_later_stamp_records_only_the_change_it_re_checked(layout: Layout):
+    # v2 stamped at 1 after master's 1 -> 2 re-check stays STALE on 2. Master
+    # then moves to 3 and re-stamps v1: it moved on from 2, not from 1, so v2
+    # is still not carried past the 1 -> 2 re-check that predates it.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    _attest(layout, "20991230T000000000000Z-bbbbbbbb", _day(0), {src: _digest("x = 1\n")})
+    layout.skill_file.write_text(v1_text)                   # back on master
+    layout.source("x = 3\n")
+    before = set(_attestations(layout))
+    layout.run("--stamp", "demo")
+    [stamp] = set(_attestations(layout)) - before
+    assert json.loads(stamp.read_text())["superseded_digests"] == {src: [_digest("x = 2\n")]}
+    # Hand-place master's re-check after the branch's stamp, as a merge would.
+    stamp.rename(stamp.parent / "20991231T000000000000Z-cccccccc.json")
+    layout.skill_file.write_text(v1_text + "v2 prose\n")   # the branch after merging
+    assert layout.run().returncode == 1
+
+
 def test_a_transition_recorded_before_the_current_text_was_verified_does_not_carry(layout: Layout):
     # v1 was re-checked across 1 -> 2, the source reverted, a branch edited
     # the skill (v2) and stamped it at 1, then re-landed 2 without stamping.
