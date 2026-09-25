@@ -353,7 +353,7 @@ class ToolResultEvidence(BaseModel):
 
 class ProcessAgentUpdateParams(AgentIdentityMixin):
     """
-    Share your work and get supportive feedback. Your main tool for checking in.
+    Record a work check-in and get a governance decision.
     """
     parameters: List[float] = Field(
         default_factory=list,
@@ -589,7 +589,7 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
 
 
 class OutcomeEventParams(AgentIdentityMixin):
-    """Parameters for outcome_event"""
+    """Outcome record parameters."""
     outcome_type: Literal["drawing_completed", "drawing_abandoned", "test_passed", "test_failed", "tool_rejected", "task_completed", "task_failed", "trajectory_validated", "dialectic_resolved", "watcher_finding_confirmed", "watcher_finding_dismissed"] = Field(..., description="Type of outcome event")
     outcome_score: Optional[float] = Field(None, description="Quality score 0.0 (worst) to 1.0 (best). Inferred from type if omitted.")
     is_bad: Optional[bool] = Field(None, description="Whether this is a negative outcome. Inferred from type if omitted.")

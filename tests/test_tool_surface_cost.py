@@ -127,3 +127,59 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
         {"type": "string"}, {"type": "number"}, {"type": "null"},
     ]}}}
     assert cost._without_null_unions(schema) == schema
+
+
+# A ratchet, not a target. Every session pays for the progressive tools/list
+# before its first call, so this ceiling only moves down: lower it when a cut
+# lands, and raise it only with the reason stated in the PR that raises it.
+# Measured 2026-09-25 at 40,406 B on the default schema policy,
+# with ~1.5% headroom so an ordinary parameter addition does not trip it.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 41_000
+# Two-sided: a cut this large that leaves the ceiling where it was would let
+# the surface grow back unnoticed, so the test asks for the ceiling to follow.
+PROGRESSIVE_SURFACE_SLACK_BYTES = 2_000
+
+# Every flag the measurement reads. The field-description mode is applied
+# when schemas are registered and the title/null-default policy per listing,
+# so the test pins all of them to their defaults (unset) rather than
+# measuring whatever the developer's shell exports.
+_SURFACE_POLICY_ENV = (
+    "UNITARES_TOOL_SCHEMA_FIELD_DESCRIPTIONS",
+    "UNITARES_TOOL_SCHEMA_STRIP_FIELD_DESCRIPTIONS",
+    "UNITARES_TOOL_SCHEMA_PROPERTY_TITLES",
+    "UNITARES_TOOL_SCHEMA_NULL_DEFAULTS",
+    "UNITARES_TOOL_SCHEMA_BRIEF_BUDGET",
+    "UNITARES_TOOL_SCHEMA_VERBOSITY",
+    "UNITARES_TOOL_ADVERTISEMENT",
+    "CLAUDE_DESKTOP",
+    "ANTHROPIC_CLAUDE",
+)
+
+
+def test_progressive_surface_stays_under_its_ratchet(monkeypatch):
+    for name in _SURFACE_POLICY_ENV:
+        monkeypatch.delenv(name, raising=False)
+
+    # The catalog is rebuilt per call under the pinned policy. The mounted
+    # /mcp/ listing was registered at import, so equality also proves this
+    # process registered its schemas under the default policy.
+    catalog = cost.measure_profile("progressive", "catalog")
+    mounted = cost.measure_profile("progressive")
+    assert catalog.available and mounted.available
+    assert mounted.total_bytes == catalog.total_bytes, (
+        "the mounted listing was registered under a non-default schema policy; "
+        "unset the UNITARES_TOOL_SCHEMA_* flags and re-run"
+    )
+
+    measured = catalog.total_bytes
+    assert measured <= PROGRESSIVE_SURFACE_CEILING_BYTES, (
+        f"progressive tools/list is {measured:,} B, over the "
+        f"{PROGRESSIVE_SURFACE_CEILING_BYTES:,} B ratchet. Trim the growth, or "
+        "raise the ceiling and say why in the PR."
+    )
+    assert measured >= PROGRESSIVE_SURFACE_CEILING_BYTES - PROGRESSIVE_SURFACE_SLACK_BYTES, (
+        f"progressive tools/list is {measured:,} B, more than "
+        f"{PROGRESSIVE_SURFACE_SLACK_BYTES:,} B under the "
+        f"{PROGRESSIVE_SURFACE_CEILING_BYTES:,} B ratchet. Lower "
+        "PROGRESSIVE_SURFACE_CEILING_BYTES to lock in the cut."
+    )
