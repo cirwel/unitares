@@ -866,6 +866,25 @@ def _git_budget_spent(cache: GitCache) -> bool:
     return len(cache) >= _GIT_LOOKUP_LIMIT
 
 
+# Footer label for a finding the budget left unplaced: one honest bucket,
+# rather than a guessed worktree or a label from a different naming scheme.
+_UNPLACED_LABEL = "unplaced"
+
+
+def _git_skipped(directory: Path, cache: GitCache) -> bool:
+    """True when placing ``directory`` would need a git lookup the spent
+    budget no longer allows (an existing directory not already looked up)."""
+    try:
+        resolved = directory.resolve()
+    except OSError:
+        return False
+    return (
+        _git_budget_spent(cache)
+        and str(resolved) not in cache
+        and resolved.is_dir()
+    )
+
+
 def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | None:
     """Return ``(common_dir, toplevel)`` for an existing directory, or None.
 
@@ -1372,13 +1391,20 @@ def _worktree_label(file_path: str, cache: GitCache) -> str:
     if location is not None:
         return _label_for_worktree_root(location[1], location[0])
     path = Path(file_path) if file_path else None
+    if path is not None and path.is_absolute() and _git_skipped(path.parent, cache):
+        return _UNPLACED_LABEL
     if path is not None and path.is_absolute() and ".worktrees" not in path.parts:
         missing = path.parent
         while not missing.parent.is_dir() and missing.parent != missing:
             missing = missing.parent
         if not missing.is_dir() and missing.parent != missing:
+            if _git_skipped(missing.parent, cache):
+                return _UNPLACED_LABEL
             info = _git_worktree_of_dir(missing.parent, cache)
-            if info is not None and not _git_ignores(missing, cache):
+            ignored = _git_ignores(missing, cache) if info is not None else True
+            if ignored is None:
+                return _UNPLACED_LABEL
+            if info is not None and not ignored:
                 return _label_for_worktree_root(info[1], info[0])
             # Outside git, or an ignored directory inside a checkout (a
             # worktree kept under `.claude/worktrees/`): the missing
@@ -1387,7 +1413,7 @@ def _worktree_label(file_path: str, cache: GitCache) -> str:
     return _label_for_other_worktree(file_path)
 
 
-def _git_ignores(path: Path, cache: GitCache) -> bool:
+def _git_ignores(path: Path, cache: GitCache) -> bool | None:
     """True when git ignores ``path`` in the checkout around its parent.
 
     Nested worktree directories (``.claude/worktrees/<name>``) are ignored
@@ -1398,7 +1424,7 @@ def _git_ignores(path: Path, cache: GitCache) -> bool:
     if key in cache:
         return bool(cache[key])
     if _git_budget_spent(cache):
-        return False
+        return None
     try:
         result = subprocess.run(
             [
@@ -1469,10 +1495,10 @@ def print_unresolved(scope_root: Path | None = None) -> int:
             # removed. Mark only the display copy so SessionStart remains
             # strictly read-only; the next lifecycle sweep persists path_gone.
             findings.append({**finding, "path_gone": True})
+    # Labels and grouping each get their own budget, so a wide out-of-scope
+    # backlog cannot spend the lookups the in-scope grouping needs.
+    in_scope, out_groups = _partition_findings_by_scope(findings, scope_root, {})
     git_cache: GitCache = {}
-    in_scope, out_groups = _partition_findings_by_scope(
-        findings, scope_root, git_cache
-    )
 
     block, _shown = _format_findings_block(
         in_scope,

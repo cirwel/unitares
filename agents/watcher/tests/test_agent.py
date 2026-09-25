@@ -5622,3 +5622,60 @@ def test_group_never_mixes_severities(watcher_module, tmp_path):
     assert "locations" not in block
     assert "(#bbbb0000)" not in block  # low is never shown
     assert [f["fingerprint"] for f in shown] == ["aaaa000000000001"]
+
+
+def test_spent_git_budget_never_labels_a_removed_worktree_as_its_checkout(
+    watcher_module, tmp_path
+):
+    """Past the git budget, "cannot tell whether git ignores it" must not read
+    as "not ignored": a removed `.claude/worktrees/<name>` would then be
+    counted under the enclosing checkout (independent review, P2)."""
+    from agents.watcher.findings import _GIT_LOOKUP_LIMIT
+
+    trees = _repo_with_worktrees(tmp_path)
+    (trees["main"] / ".gitignore").write_text(".claude/worktrees/\n")
+    (trees["main"] / ".claude" / "worktrees").mkdir(parents=True)
+    cache: dict = {}
+    labels = [
+        watcher_module._worktree_label(
+            str(trees["main"] / ".claude" / "worktrees" / f"wt{i}" / "m.py"), cache
+        )
+        for i in range(_GIT_LOOKUP_LIMIT + 3)
+    ]
+    assert "main" not in labels
+    assert set(labels) <= {f"wt{i}" for i in range(_GIT_LOOKUP_LIMIT + 3)} | {"unplaced"}
+
+
+def test_print_unresolved_groups_despite_a_wide_out_of_scope_backlog(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    """Footer labels and in-scope grouping have separate git budgets, so out-of-
+    scope findings across many directories cannot turn grouping off on the
+    SessionStart path (independent review, P2)."""
+    from agents.watcher.findings import _GIT_LOOKUP_LIMIT
+
+    trees = _repo_with_worktrees(tmp_path / "repo", "feat-a")
+    elsewhere = _repo_with_worktrees(tmp_path / "other")
+    out_of_scope = []
+    for i in range(_GIT_LOOKUP_LIMIT + 2):
+        d = elsewhere["main"] / f"d{i}"
+        d.mkdir()
+        (d / "m.py").write_text("try:\n    work()\nexcept Exception:\n    pass\n")
+        out_of_scope.append(
+            _copy(f"o{i:015d}", elsewhere["main"], rel=f"d{i}/m.py",
+                  line_content_hash=f"o{i:011d}")
+        )
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"], line=3),
+            _copy("bbbb000000000002", trees["main"], line=9),
+            *out_of_scope,
+        ],
+    )
+    assert watcher_module.print_unresolved(scope_root=trees["main"]) == 0
+    out = capsys.readouterr().out
+    assert "(2 locations, same line text" in out
+    # Past the label budget, rows go to one bucket, not a mix of schemes.
+    footer = next(l for l in out.splitlines() if "other worktrees" in l)
+    assert "d9=" not in footer and "d8=" not in footer
