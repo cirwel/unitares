@@ -186,8 +186,9 @@ def _scope(
     authorization: str | None = None,
     peer: str | None = "127.0.0.1",
     peer_pid: int | None = None,
+    extra: tuple[tuple[bytes, bytes], ...] = (),
 ):
-    headers = []
+    headers = list(extra)
     if host is not None:
         headers.append((b"host", host.encode()))
     if authorization is not None:
@@ -327,3 +328,34 @@ def test_enforce_hosts_accepts_the_allowed_hosts_forms(monkeypatch, raw, expecte
 
     monkeypatch.setenv("UNITARES_OAUTH_ENFORCE_HOSTS", raw)
     assert oauth_enforce_hosts() == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "header",
+    [b"x-forwarded-for", b"X-Forwarded-For", b"forwarded", b"cf-connecting-ip"],
+)
+async def test_a_relayed_request_from_a_private_peer_is_gated(monkeypatch, header):
+    """Docker port forwarding delivers tunnel traffic from a 172.x bridge address
+    uvicorn does not trust, so the address alone would read it as local."""
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(
+        _scope("localhost", peer="172.17.0.1", extra=((header, b"203.0.113.9"),)),
+        _SCOPED,
+    )
+    assert decision.allowed is False
+
+
+def test_an_oversized_basic_token_request_is_refused_before_buffering():
+    """The client_id is public; an anonymous Basic caller must not make the
+    shim buffer an unbounded body ahead of the SDK's own limit."""
+    client = TestClient(_app(_provider()))
+    resp = client.post(
+        "/token",
+        content=b"grant_type=authorization_code&code=" + b"x" * (128 * 1024),
+        headers={
+            "Authorization": _basic(CLIENT_ID, "wrong"),
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    assert resp.status_code == 413

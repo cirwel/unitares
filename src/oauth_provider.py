@@ -21,6 +21,7 @@ from mcp.server.auth.provider import (
     OAuthToken,
 )
 from mcp.shared.auth import OAuthClientInformationFull
+from starlette.responses import JSONResponse
 
 
 @dataclass
@@ -298,7 +299,9 @@ class StaticClientBasicAuthShim:
             await self.app(scope, receive, send)
             return
 
-        body = b""
+        # The client_id is public, so this runs for anonymous callers before the
+        # SDK's own body limit. A token request is a few hundred bytes.
+        body = bytearray()
         more = True
         while more:
             message = await receive()
@@ -307,9 +310,15 @@ class StaticClientBasicAuthShim:
                 await self.app(scope, _replay([message]), send)
                 return
             body += message.get("body", b"")
+            if len(body) > _MAX_TOKEN_BODY:
+                await JSONResponse(
+                    {"error": "invalid_request", "error_description": "request body too large"},
+                    status_code=413,
+                )(scope, receive, send)
+                return
             more = message.get("more_body", False)
 
-        fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+        fields = parse_qsl(bytes(body).decode("utf-8", errors="replace"), keep_blank_values=True)
         present = {k for k, _ in fields}
         if "client_id" not in present:
             fields.append(("client_id", creds[0]))
@@ -328,6 +337,9 @@ class StaticClientBasicAuthShim:
             _replay([{"type": "http.request", "body": new_body, "more_body": False}]),
             send,
         )
+
+
+_MAX_TOKEN_BODY = 64 * 1024
 
 
 def _basic_credentials(scope) -> tuple[str, str] | None:

@@ -256,15 +256,26 @@ _LOCAL_PEER_NETWORKS = tuple(
 )
 
 
-def is_local_peer(scope) -> bool:
-    """True when the request came over the UDS listener or from a local network.
+# A client that connects directly never sends these; a proxy or tunnel does
+# (cloudflared sends all three it knows). Their presence marks a request as
+# relayed, whatever address it arrived from.
+_FORWARDING_HEADERS = (b"x-forwarded-for", b"forwarded", b"cf-connecting-ip")
 
-    Reads ``scope["client"]``, which uvicorn has already rewritten from
-    ``X-Forwarded-For`` for requests arriving through a trusted local proxy, so
-    a tunnelled request carries the caller's public address, not loopback.
+
+def is_local_peer(scope) -> bool:
+    """True when the request came over the UDS listener or from a local network
+    and was not relayed by a proxy.
+
+    A relayed request is never local: behind Docker port forwarding or a proxy
+    on a LAN/tailnet address, the peer is a private address uvicorn does not
+    trust for ``X-Forwarded-For``, so the address alone would read a public
+    caller as local. For a trusted loopback proxy uvicorn has already rewritten
+    ``scope["client"]`` to the caller's address, which this also rejects.
     """
     if scope.get("unitares_peer_pid") is not None:
         return True
+    if any(k.lower() in _FORWARDING_HEADERS for k, _ in scope.get("headers", [])):
+        return False
     client = scope.get("client")
     if not client:
         return False
