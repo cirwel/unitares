@@ -367,3 +367,150 @@ def test_parse_findings_keeps_p006_on_an_outer_silent_handler(tmp_path):
     path = _write(tmp_path, _nested("pass"))
     parsed = parse_findings(_model_reply(4), str(path), "test", 1)
     assert [(f.pattern, f.line) for f, _ in parsed] == [("P006", 4)]
+
+
+# The receiver's last name must be a logger name, not merely contain "log".
+NOT_LOGGER_RECEIVERS = [
+    "dialog",
+    "self.catalog",
+    "blog",
+    "login",
+    "self.backlog",
+]
+LOGGER_RECEIVERS = [
+    "logger",
+    "log",
+    "_logger",
+    "_log",
+    "LOGGER",
+    "LOG",
+    "logging",
+    "self.log",
+    "self._log",
+    "self.app_logger",
+    "structlog.get_logger()",
+    "logging.getLogger(__name__)",
+]
+
+
+@pytest.mark.parametrize("receiver", NOT_LOGGER_RECEIVERS)
+@pytest.mark.parametrize("flagged", [6, 7])
+def test_receiver_that_only_contains_log_is_not_a_logger(tmp_path, receiver, flagged):
+    path = _write(tmp_path, _handler(f"{receiver}.warning('x')"))
+    assert p006_actually_fires(str(path), flagged) is True
+
+
+@pytest.mark.parametrize("receiver", LOGGER_RECEIVERS)
+def test_logger_named_receiver_counts(tmp_path, receiver):
+    path = _write(tmp_path, _handler(f"{receiver}.warning('x')"))
+    assert p006_actually_fires(str(path), 6) is False
+
+
+# End to end: the AST filter is the single authority for a .py file that
+# parses. The older line-based re-raise check in _verify_finding_against_source
+# must not drop what p006_actually_fires kept (review round 2, finding 1).
+_NESTED_HANDLER_RERAISES = (
+    "def f():\n"
+    "    try:\n"
+    "        work()\n"
+    "    except Exception:\n"
+    "        try:\n"
+    "            cleanup()\n"
+    "        except OSError:\n"
+    "            raise\n"
+)
+_SILENT_OUTER_INNER_RERAISES = (
+    "def f():\n"
+    "    try:\n"
+    "        try:\n"
+    "            work()\n"
+    "        except KeyError:\n"
+    "            raise\n"
+    "    except Exception:\n"
+    "        pass\n"
+)
+_RAISE_IN_NESTED_DEF = (
+    "def f():\n"
+    "    try:\n"
+    "        work()\n"
+    "    except Exception:\n"
+    "        def later():\n"
+    "            raise RuntimeError('x')\n"
+    "        pass\n"
+)
+END_TO_END_CASES = [
+    *[(_NESTED_HANDLER_RERAISES, line) for line in (4, 5, 6, 7, 8)],
+    *[(_SILENT_OUTER_INNER_RERAISES, line) for line in (5, 6)],
+    *[(_RAISE_IN_NESTED_DEF, line) for line in (4, 5)],
+]
+
+
+def _stub_model(monkeypatch, tmp_path: Path, reply: str) -> None:
+    from agents.watcher import agent as watcher_agent
+
+    # Only the model call is stubbed; the pattern library is the real one, so
+    # parse_findings sees P006 as a known pattern.
+    monkeypatch.setattr(watcher_agent, "build_prompt", lambda *a, **k: "stub")
+    monkeypatch.setattr(
+        watcher_agent,
+        "call_model",
+        lambda _p: {"text": reply, "tokens_used": 0, "model_used": "stub"},
+    )
+    # Keep the scan away from the live model-failure state file.
+    state_dir = tmp_path / "watcher-state"
+    monkeypatch.setattr(watcher_agent, "watcher_state_dir", lambda: state_dir)
+    monkeypatch.setattr(watcher_agent, "_clear_model_failures", lambda *a, **k: None)
+
+    def _no_failure(exc, *a, **k):
+        raise AssertionError(f"scan recorded a model failure: {exc}")
+
+    monkeypatch.setattr(watcher_agent, "_record_model_failure", _no_failure)
+
+
+@pytest.mark.parametrize("source,flagged", END_TO_END_CASES)
+def test_scan_file_keeps_p006_the_ast_filter_keeps(tmp_path, monkeypatch, source, flagged):
+    """scan_file runs parse_findings and _verify_finding_against_source for real.
+
+    scan_file's snippet map strips each line's indentation, so the line-based
+    re-raise check cannot see a nested body here and these pass with or
+    without the fix. The next test keeps the indentation and is the one that
+    fails if that check overrides the AST filter again.
+    """
+    from agents.watcher.agent import scan_file
+
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), flagged) is True
+    _stub_model(monkeypatch, tmp_path, _model_reply(flagged))
+    found = scan_file(str(path), persist=False)
+    assert [(f.pattern, f.line) for f in found] == [("P006", flagged)]
+
+
+@pytest.mark.parametrize("source,flagged", END_TO_END_CASES)
+def test_verification_does_not_override_the_ast_filter(tmp_path, source, flagged):
+    """With indentation kept in the snippet, the line-based re-raise check would
+    see the nested `raise` and drop these. For a .py file that parses it must
+    not run."""
+    from agents.watcher.agent import _verify_finding_against_source
+
+    path = _write(tmp_path, source)
+    snippet = {i: text for i, text in enumerate(source.splitlines(), start=1)}
+    [(finding, evidence)] = parse_findings(_model_reply(flagged), str(path), "test", 1)
+    assert _verify_finding_against_source(finding, evidence, snippet) is True
+
+
+def test_line_based_reraise_check_still_runs_for_unparseable_files(tmp_path):
+    from agents.watcher.agent import Finding, _verify_finding_against_source
+
+    source = _NESTED_HANDLER_RERAISES + "def broken(:\n"
+    path = _write(tmp_path, source)
+    snippet = {i: text for i, text in enumerate(source.splitlines(), start=1)}
+    finding = Finding(
+        pattern="P006",
+        file=str(path),
+        line=4,
+        hint="silent swallow",
+        severity="medium",
+        detected_at="2026-09-24T00:00:00Z",
+        model_used="test",
+    )
+    assert _verify_finding_against_source(finding, "", snippet) is False

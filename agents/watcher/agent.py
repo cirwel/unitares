@@ -1671,13 +1671,22 @@ _P006_LOUD_LOG_LEVELS = frozenset(
 )
 
 
+_P006_LOGGER_NAMES = frozenset(
+    {"logger", "log", "_logger", "_log", "LOGGER", "LOG", "logging"}
+)
+
+
 def _p006_receiver_is_logger(expr: Any) -> bool:
     """True when the object a method is called on is named like a logger.
 
-    ``logger``, ``log``, ``self._logger``, ``logging``, ``LOG``,
-    ``structlog.get_logger()``: the last name in the receiver contains "log".
-    This keeps ``task.exception()`` (the asyncio API, which only returns the
-    stored exception) or ``parser.error(...)`` from counting as logging.
+    The last name in the receiver must be one of ``_P006_LOGGER_NAMES``
+    (``logger``, ``self.log``, ``self._logger``, ``LOG``, ``logging`` ...) or
+    end in ``logger`` (``app_logger``, ``structlog.get_logger()``,
+    ``logging.getLogger(__name__)``). A name that merely contains "log", such
+    as ``dialog``, ``catalog``, ``blog``, ``login`` or ``backlog``, does not
+    count. This also keeps ``task.exception()`` (the asyncio API, which only
+    returns the stored exception) or ``parser.error(...)`` from counting as
+    logging.
     """
     import ast
 
@@ -1689,7 +1698,7 @@ def _p006_receiver_is_logger(expr: Any) -> bool:
         name = expr.id
     else:
         return False
-    return "log" in name.lower()
+    return name in _P006_LOGGER_NAMES or name.lower().endswith("logger")
 
 
 def _p006_is_loud_log_call(node: Any) -> bool:
@@ -1755,6 +1764,22 @@ def _p006_handler_reacts(handler: Any) -> bool:
             return True
         stack.extend(ast.iter_child_nodes(node))
     return False
+
+
+def _p006_ast_checkable(file_path: str) -> bool:
+    """True when ``p006_actually_fires`` can judge the file: a ``.py`` file
+    that reads and parses. For such files the AST filter is the single
+    authority on re-raising; the line-based ``_p006_body_reraises`` is only
+    the fallback for files it cannot check."""
+    import ast
+
+    if not file_path.endswith(".py"):
+        return False
+    try:
+        ast.parse(Path(file_path).read_text(), filename=file_path)
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return False
+    return True
 
 
 def p006_actually_fires(file_path: str, line: int) -> bool:
@@ -3124,7 +3149,10 @@ def _verify_finding_against_source(
         return False
     # P006 specifically: the governing `except` clause is acknowledged with
     # `# noqa: BLE001` / bare `# noqa`, or its body re-raises. Either way the
-    # "silent swallow" the rule describes is not there.
+    # "silent swallow" the rule describes is not there. The re-raise check is
+    # line-based and blind to nested handlers and nested defs, so it only runs
+    # when the AST filter in parse_findings (p006_actually_fires) could not
+    # check the file: for a .py file that parses, that filter already decided.
     if finding.pattern == "P006":
         except_line = _p006_governing_except(finding.line, snippet_lines_by_num)
         if except_line is not None:
@@ -3136,7 +3164,9 @@ def _verify_finding_against_source(
                     "warning",
                 )
                 return False
-            if _p006_body_reraises(except_line, snippet_lines_by_num):
+            if not _p006_ast_checkable(finding.file) and _p006_body_reraises(
+                except_line, snippet_lines_by_num
+            ):
                 log(
                     f"drop P006 {finding.file}:{finding.line} — except body at line "
                     f"{except_line} re-raises (not a swallow)",
