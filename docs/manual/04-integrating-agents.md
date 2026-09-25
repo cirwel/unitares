@@ -61,8 +61,9 @@ payload by default; `request_review` retains it. `raw_governance_hint` names
 the route back to the full payload. That is `response_mode="full"` on
 `sync_state`, `search_shared_memory` and `record_result`, and
 `verbosity="full"` on `check_working_state`. For
-`store_finding` and `update_finding`, whose `/mcp/` schemas declare no response
-mode, it is a `knowledge(action="details", discovery_id=...)` read. For
+`store_finding` and `update_finding`, where `response_mode` does not apply, it
+is a `knowledge(action="details", discovery_id=...)` read; the canonical
+`knowledge` tool also returns their payload directly. For
 `start_session` it is an `identity(client_session_id=...)` read, because a
 second `start_session(force_new=true)` mints a second identity; pass
 `response_mode="full"` on the first call when the full onboard payload is

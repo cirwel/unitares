@@ -206,7 +206,8 @@ envelope whose `raw_governance_hint` names the full-payload route:
 `response_mode="full"` on `sync_state`, `search_shared_memory` and
 `record_result`, `verbosity="full"` on `check_working_state`, a
 `knowledge(action="details", discovery_id=...)` read for `store_finding` and
-`update_finding`, whose schemas declare no response mode, and an
+`update_finding` (`response_mode` does not apply to them; the canonical
+`knowledge` tool returns their payload directly), and an
 `identity(client_session_id=...)` read for `start_session`. Repeating a write to
 see its payload writes again, and a second `start_session(force_new=true)` mints
 a second identity; pass `response_mode="full"` on the first `start_session` call

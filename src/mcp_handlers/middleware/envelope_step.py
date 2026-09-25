@@ -33,7 +33,8 @@ aliases ``start_session``, ``store_finding``, ``update_finding`` and
 ``record_result`` omit the repeated canonical payload and advertise an
 explicit full-response escape hatch; the write aliases first lift the ids and
 warnings a caller needs next. ``request_review`` retains it, and
-``response_mode="full"`` restores it explicitly.
+``response_mode="full"`` restores it explicitly, except on the finding writes,
+whose route back is a ``knowledge(action="details")`` read.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -1019,8 +1020,8 @@ def _write_ack_raw_policy(
     so the canonical copy was most of a typical ack and mostly repeated the
     agent signature, the stored record and the full identity ontology.
 
-    Two things keep the payload inline. An explicit full request does, on the
-    parameter each alias already declares (``response_mode='full'``;
+    Two things keep the payload inline. An explicit full request does, on
+    start_session and record_result (``response_mode='full'``;
     outcome_event's ``include_semantics`` is the same request under an older
     name and survives ``/mcp/`` validation). onboard's ``verbose`` is honoured
     here too, but only REST and stdio deliver it: the ``/mcp/`` argument model
@@ -1029,19 +1030,31 @@ def _write_ack_raw_policy(
     does too, because then the canonical copy is the only place the caller
     could find out what was written.
 
+    store_finding and update_finding have no full request here. This step sees
+    the arguments after canonical validation, and KnowledgeParams fills
+    ``response_mode='full'`` by default (the search alias works around the
+    same default in normalize_compact_search_details), so a caller's explicit
+    'full' and an omitted parameter arrive identical. Their full routes are a
+    knowledge(action='details') read, or the canonical knowledge tool, which
+    returns the payload directly. onboard validates to 'minimal' and
+    outcome_event to None, so on those two an arriving 'full' was the caller's.
+
     The hint never tells a caller to repeat the write to see the payload: a
     second store mints a second finding, and a second start_session(force_new)
-    mints a second identity. It names a read instead. For start_session it does
-    not name start_session at all, not even with response_mode='full': an agent
-    that re-sends its original force_new arguments plus that flag mints a
-    second identity.
+    mints a second identity. For the finding writes it names a details read.
+    For start_session it names an identity read and does not name
+    start_session at all, not even with response_mode='full': an agent that
+    re-sends its original force_new arguments plus that flag mints a second
+    identity. record_result has no read by outcome id, so its hint names the
+    full-mode parameter for a later outcome and warns that repeating this one
+    records a second outcome.
     """
-    response_mode = str(arguments.get("response_mode") or "").strip().lower()
-    wants_full = response_mode == "full"
+    full_mode = str(arguments.get("response_mode") or "").strip().lower() == "full"
+    wants_full = False  # the finding writes: see above
     if friendly_name == "start_session":
-        wants_full = wants_full or _as_bool(arguments.get("verbose"), default=False)
+        wants_full = full_mode or _as_bool(arguments.get("verbose"), default=False)
     elif friendly_name == "record_result":
-        wants_full = wants_full or _as_bool(
+        wants_full = full_mode or _as_bool(
             arguments.get("include_semantics"), default=False
         )
 
@@ -1059,10 +1072,10 @@ def _write_ack_raw_policy(
     elif friendly_name == "record_result":
         identifiable = payload.get("outcome_id") is not None
         hint = (
-            "record_result(response_mode='full') returns the complete outcome "
-            "payload, including the full EISV snapshot semantics. Do not repeat "
-            "an outcome just to read it: without a prediction_id, a repeat "
-            "records a second outcome."
+            "Do not repeat this outcome to read it: without a prediction_id, a "
+            "repeat records a second outcome. To get the complete payload "
+            "(including the full EISV snapshot semantics) inline on a later "
+            "outcome, pass response_mode='full' with it."
         )
     else:
         discovery = payload.get("discovery")

@@ -170,6 +170,30 @@ def _wire_bytes(value: dict) -> int:
     return len(json.dumps(value, ensure_ascii=False).encode("utf-8"))
 
 
+_FINDING_WRITES = ("store_finding", "update_finding")
+
+
+def _full_form_bytes(friendly, canonical, make, args) -> int:
+    """Bytes of the response that carries the whole payload.
+
+    start_session and record_result: the alias with response_mode='full'.
+    The finding writes have no full request at the alias (see
+    test_finding_write_response_mode_is_not_a_full_request), so their full
+    form is the ack as it was before the omission: the same envelope with
+    the canonical payload under raw_governance.
+    """
+    if friendly in _FINDING_WRITES:
+        payload = make()
+        env = build_experience_envelope(friendly, canonical, payload, args)
+        env.pop("raw_governance_available", None)
+        env.pop("raw_governance_hint", None)
+        env["raw_governance"] = payload
+        return _wire_bytes(env)
+    return _wire_bytes(build_experience_envelope(
+        friendly, canonical, make(), {**args, "response_mode": "full"}
+    ))
+
+
 @pytest.mark.parametrize("friendly,canonical,make,args", _WRITE_CASES)
 def test_write_ack_omits_raw_governance_by_default(friendly, canonical, make, args):
     payload = make()
@@ -186,10 +210,7 @@ def test_write_ack_omits_raw_governance_by_default(friendly, canonical, make, ar
     hint = env["raw_governance_hint"]
     assert "Re-call" not in hint
     # The ack no longer carries the canonical payload's bulk.
-    full = build_experience_envelope(
-        friendly, canonical, make(), {**args, "response_mode": "full"}
-    )
-    assert _wire_bytes(env) < _wire_bytes(full)
+    assert _wire_bytes(env) < _full_form_bytes(friendly, canonical, make, args)
     assert "agent_signature" not in json.dumps(env)
 
 
@@ -198,13 +219,13 @@ def test_write_ack_is_under_half_its_full_form(friendly, canonical, make, args):
     """start_session and store_finding carry the bulk (identity ontology,
     signature, related findings); the default ack sheds most of it."""
     env = build_experience_envelope(friendly, canonical, make(), args)
-    full = build_experience_envelope(
-        friendly, canonical, make(), {**args, "response_mode": "full"}
-    )
-    assert _wire_bytes(env) * 2 < _wire_bytes(full)
+    assert _wire_bytes(env) * 2 < _full_form_bytes(friendly, canonical, make, args)
 
 
-@pytest.mark.parametrize("friendly,canonical,make,args", _WRITE_CASES)
+@pytest.mark.parametrize(
+    "friendly,canonical,make,args",
+    [case for case in _WRITE_CASES if case[0] not in _FINDING_WRITES],
+)
 def test_write_ack_full_mode_restores_raw_governance(friendly, canonical, make, args):
     payload = make()
     env = build_experience_envelope(
@@ -213,6 +234,23 @@ def test_write_ack_full_mode_restores_raw_governance(friendly, canonical, make, 
     assert env["raw_governance"] is payload
     assert "raw_governance_available" not in env
     assert "raw_governance_hint" not in env
+
+
+@pytest.mark.parametrize(
+    "friendly,canonical,make,args",
+    [case for case in _WRITE_CASES if case[0] in _FINDING_WRITES],
+)
+def test_finding_write_response_mode_is_not_a_full_request(
+    friendly, canonical, make, args
+):
+    """KnowledgeParams fills response_mode='full' by default, so after
+    validation an explicit 'full' and an omitted one are indistinguishable.
+    Honouring it would keep raw_governance on every finding write."""
+    env = build_experience_envelope(
+        friendly, canonical, make(), {**args, "response_mode": "full"}
+    )
+    assert "raw_governance" not in env
+    assert "knowledge(action='details'" in env["raw_governance_hint"]
 
 
 def test_write_ack_older_full_spellings_restore_raw_governance():
@@ -483,12 +521,12 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
     FastMCP validates alias arguments against the registered argument model
     and silently discards undeclared keys. store_finding and update_finding
     keep a narrowed schema (ALIAS_SCHEMA_KEEP) that declares no response_mode,
-    so over /mcp/ a response_mode='full' on them never reaches the envelope;
-    only REST and stdio, which dispatch without that model, carry it. Their
-    hint therefore names a knowledge details read, which works on every
-    transport. Declaring response_mode on them would change the advertised
-    input schema and so the interface contract digest; if that is ever done,
-    this test flips and the hint should name it.
+    so over /mcp/ a response_mode='full' on them never reaches the envelope.
+    On REST and stdio it reaches validation, but KnowledgeParams defaults it
+    to 'full' anyway, so the envelope cannot tell it from an omitted one and
+    does not treat it as a request (see
+    test_finding_write_response_mode_is_not_a_full_request). Their hint
+    therefore names a knowledge details read, which works on every transport.
     """
     from src import mcp_server
 
@@ -515,7 +553,9 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
         assert f"identity(client_session_id='{_SID}')" in hint
         assert "response_mode" not in hint
     elif declares_full:
-        assert f"{friendly}(response_mode='full')" in hint
+        # Named for a later outcome, after the warning not to repeat this one.
+        assert "response_mode='full'" in hint
+        assert hint.startswith("Do not repeat this outcome")
     else:
         assert "response_mode" not in hint
         assert "knowledge(action='details'" in hint
@@ -544,3 +584,38 @@ def test_older_full_spellings_as_the_mcp_transport_delivers_them(
     canonical = {case[0]: case[1] for case in _WRITE_CASES}[friendly]
     env = build_experience_envelope(friendly, canonical, make(), validated)
     assert ("raw_governance" in env) is delivered
+
+
+# -- through the real dispatch steps ----------------------------------------
+
+_PIPELINE_CASES = [
+    ("start_session", {"force_new": True}, _onboard_payload),
+    ("store_finding", {"summary": "write ack bug", "discovery_type": "bug_found"}, _store_payload),
+    ("update_finding", {"discovery_id": "d-existing", "status": "resolved"}, _update_payload),
+    ("record_result", {"outcome_type": "task_completed"}, _outcome_payload),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("friendly,args,make", _PIPELINE_CASES)
+async def test_write_ack_omits_raw_governance_after_real_validation(friendly, args, make):
+    """The envelope step sees arguments after resolve_alias and
+    validate_params, not what the caller sent. Canonical validation fills
+    schema defaults (KnowledgeParams.response_mode='full'), so a test that
+    hands build_experience_envelope the caller's arguments cannot see a
+    default that flips the policy. This one runs the real steps."""
+    from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
+
+    ctx = DispatchContext()
+    resolved = await resolve_alias(friendly, dict(args), ctx)
+    assert isinstance(resolved, tuple), resolved
+    name, arguments, ctx = resolved
+    validated = await validate_params(name, arguments, ctx)
+    assert isinstance(validated, tuple), validated
+    name, arguments, ctx = validated
+
+    out = await apply_experience_envelope(name, arguments, ctx, _result(make()))
+    data = _parse(out)
+    assert data["tool"] == friendly
+    assert "raw_governance" not in data, arguments
+    assert data["raw_governance_available"] is True
