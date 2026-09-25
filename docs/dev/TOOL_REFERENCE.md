@@ -16,17 +16,21 @@ The default progressive `tools/list` starts with 13 of them; `list_tools`,
   action=...)` returns a tool's schema, narrowed to one action on a router.
 - **Where the code is:** [`TOOL_EDGE_INDEX.md`](TOOL_EDGE_INDEX.md) maps every
   tool, action and alias to the function that runs.
-- **Identity** is the class each call is declared with. The identity gates on
-  MCP dispatch and on REST exempt `pre_onboard` calls. What an unbound
-  `required` call meets depends on the transport and on
-  `STRICT_IDENTITY_REQUIRED`, and a handler can add checks of its own; see
-  [`identity.md`](../ontology/identity.md).
+- **Identity** is the class each call is declared with. The unbound-caller
+  gates on MCP dispatch and on REST exempt `pre_onboard` calls. Rejected
+  proof is not an unbound caller: on MCP dispatch, a call whose session
+  proof the server refuses to resume (a continuity token for an agent that
+  is no longer active, for example) is refused before its handler runs,
+  whatever its class. What an unbound `required` call meets depends on the
+  transport and on `STRICT_IDENTITY_REQUIRED`, and a handler can add checks
+  of its own; see [`identity.md`](../ontology/identity.md).
 - **Timeouts** are the limits each tool's `@mcp_tool` wrapper enforces, at the
   shipped defaults. On a running server these variables change some of them:
   `UNITARES_DIALECTIC_REVIEW_BUDGET`, `UNITARES_CALL_MODEL_TIMEOUT`.
-  REST `/v1/tools/call` answers `get_governance_metrics`, `health_check`
-  through direct handlers that skip that wrapper, so there they run
-  with no server-side limit.
+  REST `/v1/tools/call` answers a call by the exact name
+  `get_governance_metrics` or `health_check` through a direct handler that
+  skips that wrapper, so it runs with no server-side limit; the same
+  tool called by another of its names keeps its limit.
   `use_tool` sets no limit of its own: the call it forwards
   goes back through the same transport as a call to its target,
   with the limit a direct call to that tool has.
@@ -308,7 +312,7 @@ EISV FIELD CONTRACT:
 
 - **Tier** common · **operation** read · **stability** stable
 - **Identity:** `pre_onboard`
-- **Timeout:** 10s; not applied on REST (see Timeouts above)
+- **Timeout:** 10s; not applied to a REST call by this exact name (see Timeouts above)
 - **Workflow alias:** `check_working_state`
 - **Older names:** `check_status`, `metrics`, `my_status`, `state`, `status`
 - **Related:** `process_agent_update`, `observe(action='agent')`, `export(action='history')`
@@ -1460,7 +1464,7 @@ System administration, health checks, and diagnostics
 
 - **Tier** essential · **operation** read · **stability** stable
 - **Identity:** `pre_onboard`
-- **Timeout:** 5s; not applied on REST (see Timeouts above)
+- **Timeout:** 5s; not applied to a REST call by this exact name (see Timeouts above)
 - **Related:** `admin(action='server_info')`, `admin(action='telemetry')`
 
 Reads the last cached snapshot of this governance server's own subsystems. Nothing is probed at call time, so the answer lags the ~30s refresh, is flagged stale past 90s, and before the first probe lands the call returns an error instead of a snapshot. Needs no identity binding. For the host checkout and MCP config files use get_workspace_health; for one agent's governance state use get_governance_metrics.

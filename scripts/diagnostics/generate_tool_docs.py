@@ -240,9 +240,10 @@ def _load_registries():
     except edge_index.MissingDependency:
         raise
     except ImportError as exc:
-        # Only the loader's own import failure means "cannot look". An
-        # ImportError later in collect() or render() is this generator out of
-        # step with the tree, and propagates as the crash it is.
+        # The loader's own import failure means "cannot look". An ImportError
+        # later in collect() or render() is this generator out of step with
+        # the tree, and propagates as the crash it is, unless it is a
+        # third-party module that is not installed (build() classifies that).
         raise RegistryDidNotImport(exc) from exc
 
 
@@ -457,7 +458,7 @@ def _timeout_line(tool: ToolEntry) -> str:
     if tool.routed and any(a.timeout != tool.timeout for a in tool.actions):
         text += " for the router; some actions stop sooner (table below)"
     if tool.rest_unbounded:
-        text += "; not applied on REST (see Timeouts above)"
+        text += "; not applied to a REST call by this exact name (see Timeouts above)"
     return text
 
 
@@ -516,11 +517,14 @@ description `describe_tool` serves. Regenerate with `make docs`.
   action=...)` returns a tool's schema, narrowed to one action on a router.
 - **Where the code is:** [`TOOL_EDGE_INDEX.md`](TOOL_EDGE_INDEX.md) maps every
   tool, action and alias to the function that runs.
-- **Identity** is the class each call is declared with. The identity gates on
-  MCP dispatch and on REST exempt `pre_onboard` calls. What an unbound
-  `required` call meets depends on the transport and on
-  `STRICT_IDENTITY_REQUIRED`, and a handler can add checks of its own; see
-  [`identity.md`](../ontology/identity.md).
+- **Identity** is the class each call is declared with. The unbound-caller
+  gates on MCP dispatch and on REST exempt `pre_onboard` calls. Rejected
+  proof is not an unbound caller: on MCP dispatch, a call whose session
+  proof the server refuses to resume (a continuity token for an agent that
+  is no longer active, for example) is refused before its handler runs,
+  whatever its class. What an unbound `required` call meets depends on the
+  transport and on `STRICT_IDENTITY_REQUIRED`, and a handler can add checks
+  of its own; see [`identity.md`](../ontology/identity.md).
 - **Timeouts** are the limits each tool's `@mcp_tool` wrapper enforces, at the
   shipped defaults. On a running server these variables change some of them:
   {variables}.{rest}{forwarding}
@@ -552,10 +556,13 @@ def render(reference: Reference) -> str:
     )
     rest = ""
     if reference.rest_unbounded:
+        names = [f"`{name}`" for name in reference.rest_unbounded]
+        either = names[-1] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
         rest = (
-            f"\n  REST `/v1/tools/call` answers {_codes(reference.rest_unbounded)}"
-            "\n  through direct handlers that skip that wrapper, so there they run"
-            "\n  with no server-side limit."
+            f"\n  REST `/v1/tools/call` answers a call by the exact name"
+            f"\n  {either} through a direct handler that"
+            "\n  skips that wrapper, so it runs with no server-side limit; the same"
+            "\n  tool called by another of its names keeps its limit."
         )
     no_limit = sorted(t.name for t in tools if t.timeout is None)
     forwarding = ""
@@ -646,8 +653,9 @@ def stale_verdict() -> str:
 def stale_report(current: str, generated: str, *, limit: int = DIFF_LINE_LIMIT) -> str:
     """The differing lines, then the verdict as the LAST line.
 
-    The doctor tells a verdict from a crash by the last line alone
-    (``unitares_doctor._generator_crashed``), so nothing may follow it.
+    The doctor tells a verdict from a crash by the last line
+    (``unitares_doctor._generator_crashed``; a traceback header anywhere also
+    reads as a crash), so nothing may follow it.
     """
     rel = _shown(OUT)
     diff = list(
@@ -671,15 +679,28 @@ def build() -> tuple[int, str | None]:
         return 0, render(collect())
     except edge_index.MissingDependency as exc:
         return edge_index._cannot_look(f"{exc} — {INSTALL_REMEDY}"), None
+    except ModuleNotFoundError as exc:
+        # collect() imports more of src/ once the registry has loaded, and
+        # that can reach a third-party module the handler walk never needed
+        # (httpx, through the REST service). That is still "cannot look".
+        missing = edge_index.missing_dependency(exc)
+        if missing is None:
+            raise
+        return edge_index._cannot_look(
+            f"{edge_index.MissingDependency(missing, exc)} — {INSTALL_REMEDY}"
+        ), None
     except RegistryDidNotImport as exc:
         return edge_index._cannot_look(
             f"the tool registry did not import ({exc}) — this is a defect in "
             "the tree, not a missing dependency; no reference could be built"
         ), None
     except RegistryUnfit as exc:
-        # The doctor reads the LAST stderr line alone, and a module's exception
-        # message can span lines, so the detail goes first and the verdict is
-        # flattened onto one final line.
+        # The doctor calls a run a crash when its last non-empty stderr line
+        # looks like an exception, or when a traceback header appears anywhere
+        # (unitares_doctor._generator_crashed). Each failure is a one-line
+        # `module: Type: message` summary with no traceback, but a message can
+        # span lines, so the detail goes first and the verdict is flattened
+        # onto one final line.
         if exc.detail:
             print(exc.detail, file=sys.stderr)
         verdict = " ".join(exc.summary.split())

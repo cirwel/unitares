@@ -466,8 +466,14 @@ def _load_registries() -> tuple[dict, dict, dict, list[str]]:
         raise
 
     failures: list[str] = []
+    # walk_packages imports each subpackage a second time to descend into it,
+    # and with no onerror it re-raises anything but ImportError from that
+    # import: a subpackage that raised above would crash the walk and lose the
+    # failure just recorded. The loop body has already recorded it, so the
+    # second report is dropped.
     for info in pkgutil.walk_packages(
-        handlers_pkg.__path__, handlers_pkg.__name__ + "."
+        handlers_pkg.__path__, handlers_pkg.__name__ + ".",
+        onerror=lambda _name: None,
     ):
         try:
             importlib.import_module(info.name)

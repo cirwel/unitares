@@ -373,7 +373,26 @@ def test_rest_direct_handlers_that_skip_the_wrapper_are_named(reference, markdow
     assert set(reference.rest_unbounded) == bypass
     for name in bypass:
         assert f"`{name}`" in _intro(markdown)
-        assert "not applied on REST" in _field(_block(markdown, name), "Timeout")
+        assert "not applied to a REST call by this exact name" in _field(
+            _block(markdown, name), "Timeout"
+        )
+
+
+def test_only_the_exact_name_skips_the_limit_on_rest(reference, markdown):
+    """REST looks the direct handler up by the raw request name, so any other
+    name for the tool (workflow alias, older name) reaches the wrapper and its
+    limit. The page says so; this holds the runtime to it."""
+    from src.services.http_tool_service import _DIRECT_HTTP_TOOL_HANDLERS
+
+    entries = _entries(reference)
+    others = []
+    for name in reference.rest_unbounded:
+        tool = entries[name]
+        others += [alias for alias, _action in tool.workflow_aliases] + tool.older_names
+        others += [old for action in tool.actions for old in action.older_names]
+    assert others, "no other name to check; the test would pass vacuously"
+    assert not set(others) & set(_DIRECT_HTTP_TOOL_HANDLERS), others
+    assert "keeps its limit" in _intro(markdown)
 
 
 def test_an_action_table_that_cannot_be_read_is_refused(monkeypatch):
@@ -522,7 +541,7 @@ def test_an_import_error_after_loading_is_a_crash_not_cannot_look(monkeypatch):
     [
         ["src.mcp_handlers.probe: ImportError: boom"],
         # A module's message can span lines, and its last line can look like
-        # an exception; the doctor reads only the last line.
+        # an exception, which is what the doctor checks the last line for.
         ["src.mcp_handlers.probe: RuntimeError: boom\nValueError: while handling it:"],
     ],
     ids=["one-line", "multi-line"],
@@ -549,6 +568,52 @@ def test_a_handler_that_did_not_import_is_refused_not_published(
     last = [line for line in err.splitlines() if line.strip()][-1]
     assert last.startswith("refusing to generate"), last
     assert not unitares_doctor._generator_crashed(err)
+
+
+def test_a_subpackage_that_raises_is_refused_not_a_crash(
+    isolated_out, monkeypatch, capsys, tmp_path
+):
+    """The real walk, not a patched loader. walk_packages imports a subpackage
+    a second time to descend into it; that import must not re-raise past the
+    failure the loop already recorded (``middleware/`` and ``updates/`` are
+    subpackages the package does not import eagerly)."""
+    import src.mcp_handlers as handlers_pkg
+
+    probe = tmp_path / "zz_probe_subpackage"
+    probe.mkdir()
+    (probe / "__init__.py").write_text("raise RuntimeError('boom in a subpackage')\n")
+    monkeypatch.setattr(handlers_pkg, "__path__", [*handlers_pkg.__path__, str(tmp_path)])
+    failure = "src.mcp_handlers.zz_probe_subpackage: RuntimeError: boom in a subpackage"
+
+    assert failure in gen.edge_index._load_registries()[3]
+    isolated_out.write_text("SENTINEL\n")
+    assert gen.main([]) == gen.EXIT_REFUSED
+    assert isolated_out.read_text() == "SENTINEL\n"
+    assert failure in capsys.readouterr().err
+
+
+def test_a_dependency_missing_after_the_registry_loads_is_cannot_look(tmp_path):
+    """collect() imports the REST service once the registry has loaded, and it
+    needs httpx, which the handler walk does not import. That is still
+    "cannot look" (exit 2, install remedy), not a crash."""
+    real = REPO / "scripts" / "diagnostics" / "generate_tool_docs.py"
+    shim = tmp_path / "shim.py"
+    shim.write_text(
+        textwrap.dedent(
+            f"""
+            import runpy, sys
+            sys.modules["httpx"] = None
+            sys.argv = [{str(real)!r}, "--check"]
+            runpy.run_path({str(real)!r}, run_name="__main__")
+            """
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, str(shim)], capture_output=True, text=True, cwd=str(REPO), timeout=300
+    )
+    assert result.returncode == 2, result.stderr[-2000:]
+    assert "httpx is not installed" in result.stderr
+    assert gen.INSTALL_REMEDY in result.stderr
 
 
 # --- the committed file carries shipped defaults ---------------------------------
@@ -640,4 +705,6 @@ def test_the_doctor_reports_a_refusal_as_unknown_with_its_own_remedy(tmp_path):
     assert result.status == unitares_doctor.Status.WARN, (result.message, result.detail)
     assert "UNKNOWN" in result.message and "stale" not in result.message
     assert "fix the generator" not in (result.detail or "")
-    assert "handler module" in (result.detail or "")
+    # The cause reaches the operator: the module the generator named, not
+    # only the doctor's own remedy text.
+    assert "src.mcp_handlers.probe: RuntimeError: boom" in (result.detail or "")
