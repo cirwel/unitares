@@ -221,7 +221,15 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
     )
     lite: Union[bool, str, None] = Field(
         default=True,
-        description="If true (default), returns minimal essential metrics only. Set lite=false for full diagnostic data."
+        description="If true (default), returns minimal essential metrics only. Set lite=false for full diagnostic data. verbosity, when given, takes precedence."
+    )
+    # The handler has always honoured three tiers, but only the boolean `lite`
+    # was advertised, so an agent wanting more than the minimum could only
+    # reach `full` (~15 KB, with convergence and trajectory diagnostics it did
+    # not ask for). Advertising the middle tier is the whole fix.
+    verbosity: Optional[Literal["minimal", "standard", "full"]] = Field(
+        default=None,
+        description="Response tier: 'minimal' (same as lite=true), 'standard' (EISV, verdict, risk_score, basin and mode with their meanings, no diagnostics), or 'full' (same as lite=false). Overrides lite when set."
     )
 
     @model_validator(mode='after')

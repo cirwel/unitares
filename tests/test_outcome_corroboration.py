@@ -1,3 +1,5 @@
+import pytest
+
 from src.outcome_corroboration import (
     NO_CEILING,
     SERVER_SET_TOOL_TRIGGERS,
@@ -517,3 +519,80 @@ class TestVouchedProvenanceIsNotAWarrantForItsPayload:
         assert assess_outcome_corroboration(
             "task_completed", payload, "server_observation", ceiling=NO_CEILING
         ).grade == "externally_verified"
+
+
+# --- corroboration_upgrade_hint ------------------------------------------------
+#
+# An external agent told "task_completed completion claim has no corroborating
+# detail" guessed test_exit_code / artifact_hash / external_verifier_id, none of
+# which the grader reads (2026-09-24). The hint names the keys that do count, so
+# these tests pin the hint to the grader: every key it advertises must move the
+# grade it says it moves.
+
+from src.outcome_corroboration import (  # noqa: E402
+    CLAIM_ONLY,
+    SELF_REPORT_WITH_REFS,
+    SUBSTRATE_OBSERVED,
+    TOOL_OBSERVED,
+    _REF_EXAMPLE_KEYS,
+    _TOOL_OBSERVATION_KINDS,
+    _TOOL_OBSERVATION_PAYLOAD_KEYS,
+    corroboration_upgrade_hint,
+)
+
+
+def _public_grade(detail):
+    return assess_outcome_corroboration(
+        "task_completed", detail, "agent_reported_tool_result", ceiling=TOOL_OBSERVED
+    ).grade
+
+
+@pytest.mark.parametrize("key", list(_REF_EXAMPLE_KEYS.values()))
+def test_every_advertised_reference_key_reaches_self_report_with_refs(key):
+    assert _public_grade({key: "x"}) == SELF_REPORT_WITH_REFS
+
+
+@pytest.mark.parametrize("kind", _TOOL_OBSERVATION_KINDS)
+def test_every_advertised_kind_with_exit_code_reaches_tool_observed(kind):
+    assert _public_grade({"kind": kind, "exit_code": 0}) == TOOL_OBSERVED
+
+
+@pytest.mark.parametrize("key", _TOOL_OBSERVATION_PAYLOAD_KEYS)
+def test_every_advertised_payload_key_reaches_tool_observed(key):
+    assert _public_grade({key: ["ran"]}) == TOOL_OBSERVED
+
+
+def test_tool_with_return_code_reaches_tool_observed():
+    assert _public_grade({"tool": "pytest", "exit_code": 0}) == TOOL_OBSERVED
+    assert _public_grade({"tool": "pytest", "returncode": 0}) == TOOL_OBSERVED
+
+
+def test_claim_only_hint_names_references_structure_and_the_cap():
+    hint = corroboration_upgrade_hint(CLAIM_ONLY, ceiling=TOOL_OBSERVED)
+    for key in _REF_EXAMPLE_KEYS.values():
+        assert key in hint
+    assert "exit_code" in hint
+    assert f"capped at {TOOL_OBSERVED}" in hint
+
+
+def test_self_report_hint_skips_the_reference_step_it_already_took():
+    hint = corroboration_upgrade_hint(SELF_REPORT_WITH_REFS, ceiling=TOOL_OBSERVED)
+    assert "References" not in hint
+    assert "exit_code" in hint
+
+
+def test_no_hint_once_the_cap_is_reached():
+    assert corroboration_upgrade_hint(TOOL_OBSERVED, ceiling=TOOL_OBSERVED) is None
+
+
+@pytest.mark.parametrize("ceiling", [SUBSTRATE_OBSERVED, NO_CEILING, None, "bogus"])
+def test_no_hint_off_the_self_attested_path(ceiling):
+    """The cap sentence is only true for the public path; nobody else gets it."""
+    assert corroboration_upgrade_hint(CLAIM_ONLY, ceiling=ceiling) is None
+
+
+def test_the_guessed_keys_really_do_not_count():
+    """The failure that motivated the hint, pinned so it stays documented."""
+    assert _public_grade(
+        {"test_exit_code": 0, "artifact_hash": "abc", "external_verifier_id": "v"}
+    ) == CLAIM_ONLY

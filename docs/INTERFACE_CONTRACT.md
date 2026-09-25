@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.14.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.15.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.14.0` is the negotiated interface release. Compatible additions
+- `version: 1.15.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -169,7 +169,11 @@ The two identifiers serve different jobs:
   2026-09-24: `agent` gains `action="release_presence"`, which releases the
   caller's own presence lease at a clean exit so a successor can declare it as
   parent right away. Nothing is removed or renamed; `agent`'s input digest and
-  the surface digest move).
+  the surface digest move; 1.15.0, 2026-09-24: `get_governance_metrics` and
+  `check_working_state` declare `verbosity`, which the handler already read;
+  undeclared, `/mcp/` dropped it, so the `standard` tier was unreachable there.
+  `lite` keeps its meaning and `verbosity` overrides it when set; both input
+  digests and the surface digest move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

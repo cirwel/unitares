@@ -372,11 +372,11 @@ def tool_observation_triggers(detail: Mapping[str, Any]) -> set[str]:
     if any(marker in source for marker in _TRUSTED_TOOL_SOURCES):
         triggers.add("trusted_tool_source")
     kind = str(detail.get("kind") or "").lower()
-    if kind in {"test", "command", "lint", "build", "file_op", "tool_call"} and "exit_code" in detail:
+    if kind in _TOOL_OBSERVATION_KINDS and "exit_code" in detail:
         triggers.add("kind_with_exit_code")
     if detail.get("tool") and ("exit_code" in detail or "returncode" in detail):
         triggers.add("tool_with_return_code")
-    for key in ("tool_results", "command_results", "observed_command", "captured_output"):
+    for key in _TOOL_OBSERVATION_PAYLOAD_KEYS:
         if _nonempty(detail.get(key)):
             triggers.add(f"payload:{key}")
     return triggers
@@ -556,6 +556,55 @@ def assess_outcome_corroboration(
         unverified_fields=sorted(unverified),
         reasons=reasons,
     )
+
+
+#: What the structural tool-observation triggers look for, stated for callers.
+#: Kept beside ``tool_observation_triggers`` so the two change together.
+_TOOL_OBSERVATION_KINDS = ("test", "command", "lint", "build", "file_op", "tool_call")
+_TOOL_OBSERVATION_PAYLOAD_KEYS = ("tool_results", "command_results", "observed_command", "captured_output")
+#: One representative key per reference family; any key in the family counts.
+_REF_EXAMPLE_KEYS = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command"}
+
+
+def corroboration_upgrade_hint(grade: str | None, *, ceiling: str | None) -> str | None:
+    """Tell a caller what ``detail`` would have to carry to grade higher.
+
+    The reasons say what was missing; without this, an agent told its claim
+    had "no corroborating detail" guessed at key names the grader does not
+    read (test_exit_code, artifact_hash, external_verifier_id -- an external
+    agent's actual guesses, 2026-09-24). Stating the recognised keys is safe
+    because it is not an escalation path: every self-attested row is capped
+    at ``ceiling`` whatever it carries, and the hint says so, so no one reads
+    the key list as a route to a grade the submitting path cannot reach.
+
+    Only self-attested rows (ceiling TOOL_OBSERVED, the public path's cap) get
+    a hint: a vouched in-process emitter is not an agent reading advice, and
+    the cap sentence would be false for it. Returns None otherwise, and once
+    the grade has reached the cap.
+    """
+    if grade not in _GRADE_RANK or ceiling != TOOL_OBSERVED:
+        return None
+    if _GRADE_RANK[grade] >= _GRADE_RANK[TOOL_OBSERVED]:
+        return None
+    parts: list[str] = []
+    if grade == CLAIM_ONLY:
+        ref_keys = ", ".join(_REF_EXAMPLE_KEYS.values())
+        parts.append(
+            f"References in detail ({ref_keys}) raise this to "
+            f"{SELF_REPORT_WITH_REFS}."
+        )
+    parts.append(
+        f"A structured result reaches {TOOL_OBSERVED}: "
+        f"kind (one of {', '.join(_TOOL_OBSERVATION_KINDS)}) with exit_code, "
+        f"tool with exit_code or returncode, or a non-empty "
+        f"{' / '.join(_TOOL_OBSERVATION_PAYLOAD_KEYS)}."
+    )
+    parts.append(
+        f"Self-attested detail is capped at {TOOL_OBSERVED} whatever it carries; "
+        f"higher grades need server_observation or external_signal provenance, "
+        f"which a caller cannot set."
+    )
+    return " ".join(parts)
 
 
 def enrich_detail_with_corroboration(

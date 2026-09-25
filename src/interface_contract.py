@@ -95,7 +95,14 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.14.0 (2026-09-24): agent gains action="release_presence", which releases
 # the caller's own presence lease at a clean exit. Nothing is removed or
 # renamed; agent's input_schema_sha256 and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.14.0"
+# 1.15.0 (2026-09-24): get_governance_metrics and check_working_state declare
+# verbosity ("minimal" | "standard" | "full"), which the handler has read since
+# the tiers existed (same class as 1.10.0's list_tools gap). Only lite was
+# declared, so /mcp/ dropped verbosity and the middle tier was unreachable
+# there. Nothing is removed or renamed; lite keeps its meaning and verbosity
+# overrides it when set. Both tools' input_schema_sha256 and the surface digest
+# move.
+INTERFACE_CONTRACT_VERSION = "1.15.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

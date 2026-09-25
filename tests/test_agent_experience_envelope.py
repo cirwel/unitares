@@ -2032,3 +2032,38 @@ def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
         "check_working_state", "get_governance_metrics", {"risk_score": risk}
     )
     assert envelope["risk_summary"] == f"risk {band} ({risk:.2f})"
+
+
+# --- check_working_state verbosity tiers ---------------------------------------
+#
+# The handler has always honoured minimal / standard / full, but only boolean
+# `lite` was advertised, so an agent wanting more than the minimum reached `full`
+# (~15 KB) and was then told to go back to lite=true (external agent, 2026-09-24).
+
+
+@pytest.mark.parametrize(
+    "arguments, current",
+    [
+        ({}, "minimal"),
+        ({"lite": True}, "minimal"),
+        ({"lite": False}, "full"),
+        ({"verbosity": "standard"}, "standard"),
+        ({"verbosity": "full", "lite": True}, "full"),
+        ({"verbosity": "minimal", "lite": False}, "minimal"),
+    ],
+)
+def test_metrics_response_options_report_the_tier_actually_served(arguments, current):
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    options = env["response_options"]
+    assert options["current"] == current
+    assert "verbosity='standard'" in options["interpreted_state"]
+
+
+def test_oversized_full_metrics_point_at_the_standard_tier():
+    payload = {"success": True, "padding": "x" * 6_000}
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, {"lite": False}
+    )
+    assert "verbosity='standard'" in env["_response_size"]["reduce_with"]
