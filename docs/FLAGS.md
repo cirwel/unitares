@@ -150,13 +150,14 @@ additions merge cleanly. -->
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_ENFORCE_HOSTS` | `[] (via split_csv_env)` | Hosts on which the ``/mcp`` OAuth gate applies (UNITARES_OAUTH_ENFORCE_HOSTS) | src/mcp_listen_config.py |
+| `UNITARES_OAUTH_EXEMPT_NETWORKS` | `[] (via split_csv_env)` | Peer networks a host-scoped OAuth gate may exempt (UNITARES_OAUTH_EXEMPT_NETWORKS) | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_REQUIRED` | `False (via env_truthy)` | True when the operator demanded an auth gate on ``/mcp`` or no service | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_RESOURCE_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_SECRET` | `None (no reader fallback)` | — | src/mcp_server.py |
-| `UNITARES_OAUTH_STATIC_CLIENT_ID` | `None (no reader fallback)` | — | src/mcp_server.py |
-| `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | — | src/mcp_server.py |
-| `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_STATIC_CLIENT_ID` | varies: `None (no reader fallback)` (src/mcp_server.py); `''` (src/oauth_provider.py) | Build the static client from the environment, or none if unconfigured | src/mcp_server.py, src/oauth_provider.py |
+| `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
+| `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
 | `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Base URL of the local Ollama endpoint | src/mcp_handlers/support/inference_registry.py |
 | `UNITARES_OLLAMA_BASE_URL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'http://localhost:11434/v1'` (agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | — | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |

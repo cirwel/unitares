@@ -130,23 +130,35 @@ tool runs:
      its tokens do not, and the connector reconnects after one. The token
      endpoint accepts its secret either in the form body or as HTTP Basic.
      An incomplete static-client configuration fails OAuth setup, which
-     closes the gated route rather than opening it.
+     closes the gated route rather than opening it (see below).
 
    OAuth gates `/mcp` on **every** host by default, which locks out local
    clients that do not speak OAuth. To gate only the public hostname, set
    `UNITARES_OAUTH_ENFORCE_HOSTS="gov.example.org"` (comma-separated; a
    port or `:*` suffix is ignored). A request then skips OAuth only when
-   **all** hold: its `Host` is not listed; its peer is local — the UDS
-   listener, loopback, RFC1918, or Tailscale; and it carries no proxy
-   forwarding header (`X-Forwarded-For`, `Forwarded`, `CF-Connecting-IP`).
-   `Host` is caller-controlled and a proxy's own address is usually private,
-   so the last condition is what keeps a relayed request gated — including
-   through Docker port forwarding or a tunnel that rewrites `Host`
-   (cloudflared `httpHostHeader`). It holds only if your proxy sends one of
-   those headers; cloudflared does. A proxy that rewrites `Host` and strips
-   all forwarding headers defeats host scoping, so do not combine the two.
-   The server warns at startup when the issuer's host is not in the list. A
-   bearer allowlist (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.
+   **all** hold: its `Host` is not listed; it carries no proxy forwarding
+   header (`X-Forwarded-For`, `Forwarded`, `CF-Connecting-IP`); and it
+   arrived over the UDS listener or from a network in
+   `UNITARES_OAUTH_EXEMPT_NETWORKS` (CIDRs; **loopback only** by default).
+
+   `Host` is caller-controlled, so the exemption rests on the other two, and
+   both are only as good as your network path:
+   - The forwarding-header check keeps HTTP proxies and tunnels gated —
+     including cloudflared with `httpHostHeader` and Docker port forwarding,
+     where the relayed peer is a private address — because they add
+     `X-Forwarded-For`. A proxy that strips all of them defeats it.
+   - A **layer-4** forwarder (Docker Desktop or rootless port publishing, an
+     SNAT load balancer, kube-proxy) delivers internet traffic from its own
+     address and adds no header. If that address falls in an exempt network,
+     an internet caller that sends `Host: localhost` is served ungated. Keep
+     such a forwarder's address out of `UNITARES_OAUTH_EXEMPT_NETWORKS`, and
+     add a LAN or tailnet range only on a host where nothing forwards public
+     traffic from it.
+
+   An incomplete static-client configuration (any of the three variables
+   without the others) fails OAuth setup. The server warns at startup when
+   the issuer's host is not in the enforce list. A bearer allowlist
+   (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.
 
 The Host allowlist applies regardless of the auth choice — set it even when
 using "none" locally is fine, but for a public host you need both the

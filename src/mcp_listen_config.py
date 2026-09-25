@@ -240,42 +240,48 @@ def oauth_enforce_hosts() -> tuple[str, ...]:
     return tuple(seen)
 
 
-# Peers that may be exempted from a host-scoped OAuth gate: loopback, RFC1918,
-# and the Tailscale ranges. A public peer is never exempt, whatever Host it sends.
-_LOCAL_PEER_NETWORKS = tuple(
-    ipaddress.ip_network(n)
-    for n in (
-        "127.0.0.0/8",
-        "::1/128",
-        "10.0.0.0/8",
-        "172.16.0.0/12",
-        "192.168.0.0/16",
-        "100.64.0.0/10",       # Tailscale CGNAT
-        "fd7a:115c:a1e0::/48",  # Tailscale IPv6
-    )
-)
+_DEFAULT_OAUTH_EXEMPT_NETWORKS = ("127.0.0.0/8", "::1/128")
+
+
+def oauth_exempt_networks() -> tuple:
+    """Peer networks a host-scoped OAuth gate may exempt (UNITARES_OAUTH_EXEMPT_NETWORKS).
+
+    Loopback only by default. Adding a LAN or tailnet range trusts network
+    position: anything that delivers internet traffic from inside that range
+    without a forwarding header (a layer-4 port forwarder, an SNAT load
+    balancer) is then exempt too. An unparseable entry is skipped with a
+    warning, which narrows the exemption rather than widening it.
+    """
+    raw = split_csv_env("UNITARES_OAUTH_EXEMPT_NETWORKS") or list(_DEFAULT_OAUTH_EXEMPT_NETWORKS)
+    networks = []
+    for entry in raw:
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            logger.warning("UNITARES_OAUTH_EXEMPT_NETWORKS: ignoring invalid network %r", entry)
+    return tuple(networks)
 
 
 # A client that connects directly never sends these; a proxy or tunnel does
 # (cloudflared sends all three it knows). Their presence marks a request as
-# relayed, whatever address it arrived from.
+# relayed, whatever address or socket it arrived on.
 _FORWARDING_HEADERS = (b"x-forwarded-for", b"forwarded", b"cf-connecting-ip")
 
 
-def is_local_peer(scope) -> bool:
-    """True when the request came over the UDS listener or from a local network
-    and was not relayed by a proxy.
+def is_local_peer(scope, networks=None) -> bool:
+    """True when the request was not relayed by a proxy and came over the UDS
+    listener or from an exempt network (see :func:`oauth_exempt_networks`).
 
     A relayed request is never local: behind Docker port forwarding or a proxy
-    on a LAN/tailnet address, the peer is a private address uvicorn does not
-    trust for ``X-Forwarded-For``, so the address alone would read a public
-    caller as local. For a trusted loopback proxy uvicorn has already rewritten
+    on a private address, the peer is one uvicorn does not trust for
+    ``X-Forwarded-For``, so the address alone would read a public caller as
+    local. For a trusted loopback proxy uvicorn has already rewritten
     ``scope["client"]`` to the caller's address, which this also rejects.
     """
-    if scope.get("unitares_peer_pid") is not None:
-        return True
     if any(k.lower() in _FORWARDING_HEADERS for k, _ in scope.get("headers", [])):
         return False
+    if scope.get("unitares_peer_pid") is not None:
+        return True
     client = scope.get("client")
     if not client:
         return False
@@ -285,7 +291,9 @@ def is_local_peer(scope) -> bool:
         return False
     if getattr(addr, "ipv4_mapped", None):
         addr = addr.ipv4_mapped
-    return any(addr in net for net in _LOCAL_PEER_NETWORKS)
+    if networks is None:
+        networks = oauth_exempt_networks()
+    return any(addr in net for net in networks)
 
 
 def mcp_bearer_required() -> bool:

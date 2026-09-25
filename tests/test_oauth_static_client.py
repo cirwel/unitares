@@ -290,11 +290,94 @@ async def test_a_public_peer_is_gated_whatever_host_it_sends(monkeypatch, host):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("peer", ["10.1.2.3", "100.96.201.46", "::1", "::ffff:127.0.0.1"])
-async def test_lan_and_tailnet_peers_are_exempt_on_other_hosts(monkeypatch, peer):
+@pytest.mark.parametrize("peer", ["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+async def test_loopback_peers_are_exempt_by_default(monkeypatch, peer):
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    monkeypatch.delenv("UNITARES_OAUTH_EXEMPT_NETWORKS", raising=False)
     decision = await svc.authorize_mcp_request(_scope("localhost:8767", peer=peer), _SCOPED)
     assert decision.allowed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peer", ["10.1.2.3", "192.168.1.151", "100.96.201.46", "172.17.0.1"])
+async def test_private_peers_are_gated_unless_configured(monkeypatch, peer):
+    """A layer-4 forwarder (Docker Desktop, SNAT) delivers internet traffic from
+    a private address with no forwarding header, so private ranges are opt-in."""
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    monkeypatch.delenv("UNITARES_OAUTH_EXEMPT_NETWORKS", raising=False)
+    decision = await svc.authorize_mcp_request(_scope("localhost", peer=peer), _SCOPED)
+    assert decision.allowed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("peer", ["192.168.1.151", "100.96.201.46"])
+async def test_configured_networks_are_exempt(monkeypatch, peer):
+    import ipaddress
+
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    cfg = McpAuthConfig(
+        oauth_provider=_Provider(),
+        oauth_enforce_hosts=("gov.example.org",),
+        oauth_exempt_networks=(
+            ipaddress.ip_network("192.168.0.0/16"),
+            ipaddress.ip_network("100.64.0.0/10"),
+        ),
+    )
+    decision = await svc.authorize_mcp_request(_scope("localhost", peer=peer), cfg)
+    assert decision.allowed is True
+
+
+def test_exempt_networks_env_skips_invalid_entries(monkeypatch):
+    from src.mcp_listen_config import oauth_exempt_networks
+
+    monkeypatch.setenv("UNITARES_OAUTH_EXEMPT_NETWORKS", "127.0.0.0/8, not-a-net, 100.64.0.0/10")
+    assert [str(n) for n in oauth_exempt_networks()] == ["127.0.0.0/8", "100.64.0.0/10"]
+
+
+@pytest.mark.asyncio
+async def test_a_relayed_request_over_uds_is_gated(monkeypatch):
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(
+        _scope("localhost", peer=None, peer_pid=4242, extra=((b"x-forwarded-for", b"203.0.113.9"),)),
+        _SCOPED,
+    )
+    assert decision.allowed is False
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"UNITARES_OAUTH_STATIC_CLIENT_SECRET": "s", "UNITARES_OAUTH_STATIC_REDIRECT_URIS": REDIRECT},
+        {"UNITARES_OAUTH_STATIC_CLIENT_ID": "c", "UNITARES_OAUTH_STATIC_REDIRECT_URIS": REDIRECT},
+        {"UNITARES_OAUTH_STATIC_CLIENT_ID": "c", "UNITARES_OAUTH_STATIC_CLIENT_SECRET": "s"},
+    ],
+)
+def test_partial_static_client_env_fails_loudly(monkeypatch, env):
+    """A misspelled or missing variable must not silently register nothing."""
+    from src.oauth_provider import static_clients_from_env
+
+    for key in (
+        "UNITARES_OAUTH_STATIC_CLIENT_ID",
+        "UNITARES_OAUTH_STATIC_CLIENT_SECRET",
+        "UNITARES_OAUTH_STATIC_REDIRECT_URIS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        static_clients_from_env()
+
+
+def test_static_client_env_unset_registers_nothing(monkeypatch):
+    from src.oauth_provider import static_clients_from_env
+
+    for key in (
+        "UNITARES_OAUTH_STATIC_CLIENT_ID",
+        "UNITARES_OAUTH_STATIC_CLIENT_SECRET",
+        "UNITARES_OAUTH_STATIC_REDIRECT_URIS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    assert static_clients_from_env() == []
 
 
 @pytest.mark.asyncio

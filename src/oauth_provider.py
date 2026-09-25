@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import os
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -268,6 +269,27 @@ def build_static_client(
         response_types=["code"],
         scope="mcp:tools",
     )
+
+
+def static_clients_from_env() -> list[OAuthClientInformationFull]:
+    """Build the static client from the environment, or none if unconfigured.
+
+    Any one of the three variables set means the operator asked for a static
+    client, so an incomplete set raises (failing OAuth setup, which closes the
+    gated route) instead of silently registering nothing.
+    """
+    client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID", "")
+    client_secret = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_SECRET", "")
+    redirects = os.environ.get("UNITARES_OAUTH_STATIC_REDIRECT_URIS", "")
+    if not (client_id or client_secret or redirects):
+        return []
+    return [
+        build_static_client(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uris=[u.strip() for u in redirects.split(",") if u.strip()],
+        )
+    ]
 
 
 class StaticClientBasicAuthShim:

@@ -132,6 +132,7 @@ from src.mcp_listen_config import (
     default_listen_host,
     normalize_host,
     oauth_enforce_hosts,
+    oauth_exempt_networks,
 )
 
 # --- OAuth 2.1 configuration (optional, enabled by env var) ---
@@ -144,12 +145,13 @@ _oauth_setup_error: Exception | None = None
 # Host-scoped gate: read outside the issuer branch so a provider that fails to
 # build still closes only the hosts the operator asked to gate.
 _oauth_enforce_hosts = oauth_enforce_hosts()
+_oauth_exempt_networks = oauth_exempt_networks()
 _oauth_static_client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID") or None
 
 if _oauth_issuer_url:
     try:
         from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
-        from src.oauth_provider import GovernanceOAuthProvider, build_static_client
+        from src.oauth_provider import GovernanceOAuthProvider, static_clients_from_env
         from urllib.parse import urlparse
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
@@ -158,17 +160,7 @@ if _oauth_issuer_url:
             os.environ.get("UNITARES_OAUTH_RESOURCE_URL")
             or f"{_oauth_issuer_url.rstrip('/')}/mcp"
         )
-        _static_clients = []
-        if _oauth_static_client_id:
-            _static_clients.append(build_static_client(
-                client_id=_oauth_static_client_id,
-                client_secret=os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_SECRET", ""),
-                redirect_uris=[
-                    u.strip()
-                    for u in os.environ.get("UNITARES_OAUTH_STATIC_REDIRECT_URIS", "").split(",")
-                    if u.strip()
-                ],
-            ))
+        _static_clients = static_clients_from_env()
         _oauth_provider = GovernanceOAuthProvider(
             secret=_oauth_secret,
             auto_approve=_auto_approve,
@@ -195,7 +187,8 @@ if _oauth_issuer_url:
         print(
             "[FastMCP] OAuth gate applies to "
             + (", ".join(_oauth_enforce_hosts) if _oauth_enforce_hosts else "every host")
-            + ("; static client configured" if _oauth_static_client_id else ""),
+            + ("; static client configured" if _oauth_static_client_id else "")
+            + "; exempt peers: " + ", ".join(str(n) for n in _oauth_exempt_networks),
             file=sys.stderr, flush=True,
         )
     except Exception as e:
@@ -392,6 +385,7 @@ async def main():
                 # surface on this process keeps its own gate.
                 gate_unavailable=_oauth_setup_error is not None,
                 oauth_enforce_hosts=_oauth_enforce_hosts,
+                oauth_exempt_networks=_oauth_exempt_networks,
                 static_client_id=_oauth_static_client_id,
             ),
             host=args.host,

@@ -62,10 +62,12 @@ class McpAuthConfig:
     #: Hosts (normalized, see ``oauth_enforce_hosts()``) on which the OAuth
     #: gate applies. Empty means every host, the historical posture. A request
     #: skips the gate only when its Host is NOT listed AND its peer is local
-    #: (``is_local_peer``): Host alone is caller-controlled, and peer alone
+    #: (``is_local_peer``, loopback by default): Host alone is caller-controlled, and peer alone
     #: cannot tell a tunnelled request from a local one if the proxy forwards
     #: no client address.
     oauth_enforce_hosts: tuple[str, ...] = ()
+    #: Peer networks eligible for the exemption; None reads the environment.
+    oauth_exempt_networks: tuple | None = None
     #: Client ID of the pre-registered OAuth client, if one is configured.
     static_client_id: str | None = None
 
@@ -165,7 +167,7 @@ async def authorize_mcp_request(
         not bearer_allow
         and auth_config.oauth_enforce_hosts
         and request_host(scope) not in auth_config.oauth_enforce_hosts
-        and is_local_peer(scope)
+        and is_local_peer(scope, auth_config.oauth_exempt_networks)
     ):
         return AuthDecision(allowed=True)
     if not bearer_allow and auth_config.gate_unavailable:
