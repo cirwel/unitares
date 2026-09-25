@@ -522,18 +522,45 @@ def test_follower_never_installs_signal_handlers():
         assert signal.getsignal(signal.SIGTERM) is before
 
 
-def test_a_port_held_on_all_interfaces_counts_as_in_use():
-    """SO_REUSEADDR lets macOS bind 127.0.0.1:P over another 0.0.0.0:P."""
+def test_a_port_held_on_all_interfaces_counts_as_in_use(monkeypatch):
+    """SO_REUSEADDR lets macOS bind 127.0.0.1:P over another 0.0.0.0:P, so
+    the bind alone cannot detect it; Linux refuses that bind, which would hide
+    a missing probe in CI. Simulate the macOS case directly: the bind would
+    succeed, but something answers on the port, so it must be refused."""
     import socket
 
-    other = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    other.bind(("0.0.0.0", 0))
-    other.listen(1)
-    try:
-        port = other.getsockname()[1]
-        assert bind_public_socket(port, main_port=8767) is None
-    finally:
-        other.close()
+    from src.services import mcp_transport_service as svc
+
+    bound = []
+
+    class _Sock:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def settimeout(self, *_a):
+            pass
+
+        def connect_ex(self, _addr):
+            return 0  # something already answers
+
+        def setsockopt(self, *_a):
+            pass
+
+        def bind(self, addr):
+            bound.append(addr)  # would succeed, as on macOS
+
+        def listen(self, *_a):
+            pass
+
+        def setblocking(self, *_a):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(socket, "socket", _Sock)
+    assert svc.bind_public_socket(8772, main_port=8767) is None
+    assert bound == []
 
 
 @pytest.mark.asyncio
