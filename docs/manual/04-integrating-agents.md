@@ -56,14 +56,17 @@ its own identity, declare the dispatcher as parent with
 
 The primary tools return a compact agent-facing envelope. Read aliases,
 bounded `sync_state` modes, and the write acknowledgements of `store_finding`,
-`update_finding` and `record_result` omit the repeated raw payload by default;
-other state-changing tools retain it. `raw_governance_hint` names the route
-back to the full payload. That is `response_mode="full"` on `sync_state`,
+`update_finding` and `record_result` omit the repeated raw payload by default,
+as does a plain fresh `start_session` (pass `response_mode="full"` on the mint
+to keep it); other state-changing tools retain it. `raw_governance_hint` names
+where to read more. That is `response_mode="full"` on `sync_state`,
 `search_shared_memory` and `record_result`, and `verbosity="full"` on
 `check_working_state`. For `store_finding` and `update_finding`, where
 `response_mode` does not apply, it is a
-`knowledge(action="details", discovery_id=...)` read; the canonical
-`knowledge` tool also returns their payload directly. These three write
+`knowledge(action="details", discovery_id=...)` read, which returns the stored
+record; write-time warnings and a bounded `related_discoveries` snapshot stay
+in the ack because that read does not return them. The canonical `knowledge`
+tool returns their whole payload directly. These three write
 acknowledgements keep the ids a caller needs next (`discovery_id`,
 `state_summary.outcome_id`). The finding writes also carry `agent_uuid` and
 `written_as`, the writer's `agent_id`, `display_name` and assurance tier, so a

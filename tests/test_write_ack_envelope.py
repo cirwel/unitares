@@ -609,10 +609,10 @@ def test_write_ack_keeps_the_auto_correction_notice():
 async def test_start_session_ack_is_untouched_by_the_write_ack_change(monkeypatch):
     """This change reshapes only the finding and outcome write acks. Through
     the real alias and validation steps, start_session's ack is the same with
-    or without the write-ack policy, and today that ack still carries the
-    canonical payload under raw_governance by default. (Its shape belongs to
-    the identity/onboarding surface; if that surface changes the default, the
-    last assertion follows it, and the equality above still has to hold.)"""
+    or without the write-ack policy. Its shape belongs to the
+    identity/onboarding surface, which trims a plain fresh mint to the
+    routine shape without raw_governance (#2437); the last assertions follow
+    that surface, and the equality above is what this change has to keep."""
     from src.mcp_handlers.middleware import envelope_step
     from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
 
@@ -633,4 +633,5 @@ async def test_start_session_ack_is_untouched_by_the_write_ack_change(monkeypatc
     without_policy = await _ack()
     assert with_policy == without_policy
     assert with_policy["tool"] == "start_session"
-    assert with_policy["raw_governance"] == payload
+    assert with_policy["response_shape"] == "routine"
+    assert "raw_governance" not in with_policy
