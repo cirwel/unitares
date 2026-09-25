@@ -166,7 +166,9 @@ _ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
 # tells agents to confirm the binding from tier and session_source here.
 # The minimal onboard payload carries its source only here (it has no
 # top-level session_resolution_source), so session_source stays.
-_ONBOARD_ASSURANCE_KEYS = ("tier", "session_source", "caller_proven")
+# baseline stays: "fresh_identity" is what says a weak mint binding is
+# expected, not a deficiency to fix.
+_ONBOARD_ASSURANCE_KEYS = ("tier", "session_source", "caller_proven", "baseline")
 
 _ACTION_ALIASES = {
     "approve": ("proceed", None),
@@ -2041,7 +2043,10 @@ def build_experience_envelope(
 
     if include_raw:
         envelope["raw_governance"] = payload
-    else:
+    elif friendly_name != "start_session":
+        # A routine start_session's record cannot be fetched afterwards (only
+        # another mint would produce one), so it does not claim one is
+        # available.
         envelope["raw_governance_available"] = True
         if raw_hint:
             envelope["raw_governance_hint"] = raw_hint
