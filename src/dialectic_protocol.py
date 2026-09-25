@@ -493,9 +493,12 @@ def describe_attestation(resolution) -> Optional[Dict[str, Any]]:
     Measured 2026-09-08 on the live corpus, which is why it is worth stating:
     no agent has been minted with an api_key since 2026-01-29 (0 of the 1,223
     agents created in the preceding 30 days carry one), so 104 of 122 stored
-    resolutions are ``unsigned``, and none has been signed since 2026-06-23.
+    resolutions are ``unsigned``. The only 2026 resolutions that do carry a
+    signature (four, 2026-06-17 to 2026-06-24 UTC, all LLM-assisted) were keyed on
+    the uuid-derived fallback that #2155 removed; anyone who could read the
+    session could recompute them, so they are not attestations either.
     Party-level HMAC attestation therefore has no key material and has produced
-    nothing for seven months. Naming that state is NOT a decision to keep the
+    no genuine signature in 2026. Naming that state is NOT a decision to keep the
     scheme: the choice between restoring key issuance and deleting the party
     HMAC outright is tracked as its own issue, because a descriptor that makes
     an inert mechanism read as handled would be worse than the silence.
