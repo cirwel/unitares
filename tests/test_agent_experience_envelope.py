@@ -2150,3 +2150,12 @@ async def test_envelope_reports_the_tier_the_real_handler_built(arguments):
         "check_working_state", "get_governance_metrics", {"success": True}, arguments
     )
     assert env["response_options"]["current"] == _tier_built(data)
+
+
+def test_metrics_verbosity_is_matched_exactly_like_the_handler_always_did():
+    """No case folding: a REST caller's "Standard" keeps falling through to lite."""
+    from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
+
+    assert resolve_metrics_verbosity({"verbosity": "Standard"}) == "minimal"
+    assert resolve_metrics_verbosity({"verbosity": " full", "lite": False}) == "full"
+    assert resolve_metrics_verbosity({"verbosity": "Full", "lite": True}) == "minimal"

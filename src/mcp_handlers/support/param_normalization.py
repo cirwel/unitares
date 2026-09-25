@@ -220,8 +220,11 @@ def resolve_metrics_verbosity(arguments: Dict[str, Any] | None) -> str:
     the default (minimal); a string follows the schema's coercion exactly.
     """
     arguments = arguments or {}
-    verbosity = str(arguments.get("verbosity") or "").strip().lower()
-    if verbosity in METRICS_VERBOSITY_TIERS:
+    # Exact match, as the handler always did: no case folding or stripping, so a
+    # REST caller's "Standard" still falls through to lite as before (over /mcp/
+    # the schema's Literal refuses it outright).
+    verbosity = arguments.get("verbosity")
+    if isinstance(verbosity, str) and verbosity in METRICS_VERBOSITY_TIERS:
         return verbosity
     lite = arguments.get("lite")
     if lite is None:
