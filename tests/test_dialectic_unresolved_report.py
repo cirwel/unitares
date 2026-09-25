@@ -184,7 +184,9 @@ def ledger(tmp_path, monkeypatch):
 
 def _ack_line(session_id, disposition="superseded", **over):
     row = dict(session_id=session_id, disposition=disposition, reason="PR merged",
-               acknowledged_by="op", timestamp="2026-09-24T00:00:00+00:00")
+               acknowledged_by="op", timestamp="2026-09-24T00:00:00+00:00",
+               # bound to _row()'s default state; see ack_still_applies
+               session_updated_at="2026-09-03T12:00:00+00:00", session_standing_since=None)
     row.update(over)
     return json.dumps(row)
 
@@ -291,7 +293,9 @@ class TestAckCommand:
         rows = [json.loads(ln) for ln in ledger.read_text().splitlines()]
         assert [r["session_id"] for r in rows] == ["4444bbbb55556666", "7777cccc88889999"]
         for r in rows:
-            assert set(r) == {"session_id", "disposition", "reason", "acknowledged_by", "timestamp"}
+            assert set(r) == {"session_id", "disposition", "reason", "acknowledged_by", "timestamp",
+                              "session_updated_at", "session_standing_since"}
+            assert r["session_updated_at"] == "2026-09-03T12:00:00+00:00"
             assert r["disposition"] == "superseded"
             assert r["reason"] == "PR #2025 merged"
             assert r["acknowledged_by"] == "kenny"
@@ -464,3 +468,52 @@ class TestNeverWritesTheDatabase:
         """A typed `_` or `%` must not widen the match to an unnamed session."""
         assert "starts_with" in report.MATCH_QUERY
         assert "LIKE" not in report.MATCH_QUERY.upper()
+
+
+class TestAckBoundToSessionState:
+    """Review on #2428: reassign reopens the SAME session id, so an ack keyed
+    only on the id would hide a new objection forever."""
+
+    def test_an_ack_hides_the_session_it_was_taken_on(self):
+        row = _row(session_id="s1")
+        ack = json.loads(_ack_line("s1"))
+        visible, hidden = report.partition([row], {"s1": ack})
+        assert visible == [] and len(hidden) == 1
+
+    def test_a_session_updated_after_the_ack_is_listed_again(self):
+        row = _row(session_id="s1", updated_at=dt.datetime(2026, 9, 25, 9, 0))
+        ack = json.loads(_ack_line("s1"))
+        visible, hidden = report.partition([row], {"s1": ack})
+        assert [r["session_id"] for r in visible] == ["s1"] and hidden == []
+
+    def test_a_newer_objection_is_listed_again(self):
+        row = _row(session_id="s1", standing_since=dt.datetime(2026, 9, 26))
+        ack = json.loads(_ack_line("s1", session_standing_since="2026-09-02T00:00:00+00:00"))
+        visible, _ = report.partition([row], {"s1": ack})
+        assert [r["session_id"] for r in visible] == ["s1"]
+
+    def test_an_ack_without_state_marks_hides_nothing(self):
+        row = _row(session_id="s1")
+        ack = json.loads(_ack_line("s1", session_updated_at=None))
+        visible, _ = report.partition([row], {"s1": ack})
+        assert [r["session_id"] for r in visible] == ["s1"]
+
+
+class TestAckWriteAndInputEdges:
+    def test_a_short_write_raises_instead_of_reporting_success(self, ledger, monkeypatch):
+        monkeypatch.setattr(report.os, "write", lambda fd, data: 0)
+        with pytest.raises(OSError):
+            report.append_acks([{"session_id": "x"}])
+
+    def test_partial_writes_are_completed(self, ledger, monkeypatch):
+        real = report.os.write
+        monkeypatch.setattr(report.os, "write", lambda fd, data: real(fd, data[:5]))
+        report.append_acks([{"session_id": "abcdef0123456789", "disposition": "stale"}])
+        assert json.loads(ledger.read_text())["session_id"] == "abcdef0123456789"
+
+    def test_whitespace_only_ids_are_refused(self, ledger, monkeypatch, capsys):
+        _mock_db(monkeypatch, [], [])
+        rc = report.main(["ack", " ", "--disposition", "stale", "--reason", "x", "--by", "op"])
+        assert rc == 2
+        assert "no session ids" in capsys.readouterr().err
+        assert not ledger.exists()

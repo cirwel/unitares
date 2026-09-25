@@ -26,8 +26,9 @@ machine use.
 
 Acknowledging a review (``ack``)
 --------------------------------
-Every row here is already ``status='failed'`` and nothing can close it, so
-without an escape hatch the list re-prints forever. Triage on 2026-09-24 found
+Every row here is already ``status='failed'``, and short of a reassign (which
+reopens the SAME session id) nothing takes it off the list, so without an escape
+hatch the list re-prints forever. Triage on 2026-09-24 found
 46 listed, of which 31 were superseded (the reviewed PR merged, or a later
 same-subject review resolved), 8 stale, 5 test sessions, and 2 that genuinely
 needed the operator. The 2 were lost in the 44.
@@ -46,6 +47,10 @@ append-only ledger (``~/.unitares/dialectic-acks.jsonl``, overridable with
   decision is itself on a record rather than a silent deletion.
 * The default listing says how many acknowledged reviews it hid, so nothing
   vanishes silently; ``--all`` shows them with their dispositions.
+* An acknowledgement is bound to the session AS IT WAS when acknowledged: the
+  ledger row records the session's ``updated_at`` and newest objection time.
+  If either has moved since (a reassign reopened it, a new objection landed),
+  the acknowledgement no longer applies and the session is listed again.
 
 Session ids may be given as unambiguous prefixes. A prefix matching more than
 one session is refused, never guessed, and a batch with any bad id writes
@@ -255,7 +260,11 @@ def load_acks(path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
 
 
 def append_acks(rows: Iterable[Dict[str, Any]], path: Optional[str] = None) -> str:
-    """Append rows in ONE write, so a batch lands whole or not at all."""
+    """Append a batch and verify every byte landed; a short write raises OSError.
+
+    A torn trailing line is skipped by ``load_acks`` (hiding nothing), and the
+    caller reports failure instead of success.
+    """
     path = path or ledger_path()
     parent = os.path.dirname(path)
     if parent:
@@ -263,7 +272,13 @@ def append_acks(rows: Iterable[Dict[str, Any]], path: Optional[str] = None) -> s
     payload = "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows)
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
-        os.write(fd, payload.encode("utf-8"))
+        data = payload.encode("utf-8")
+        written = 0
+        while written < len(data):
+            n = os.write(fd, data[written:])
+            if n <= 0:
+                raise OSError(f"short write to {path}: {written} of {len(data)} bytes")
+            written += n
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -301,9 +316,36 @@ def resolve_ids(
     return resolved, errors
 
 
+def _as_utc(value: Any) -> Optional[dt.datetime]:
+    """Parse a DB datetime or ISO string to an aware UTC datetime, else None."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = dt.datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, dt.datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc)
+
+
+def _state_marks(row: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """The two timestamps an acknowledgement is bound to."""
+    marks = {}
+    for key in ("updated_at", "standing_since"):
+        t = _as_utc(row.get(key))
+        marks[f"session_{key}"] = t.isoformat() if t else None
+    return marks
+
+
 def build_ack_rows(session_ids: Sequence[str], disposition: str, reason: str,
-                   acknowledged_by: str, now: Optional[dt.datetime] = None) -> List[Dict[str, Any]]:
+                   acknowledged_by: str, now: Optional[dt.datetime] = None,
+                   session_rows: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     ts = (now or dt.datetime.now(dt.timezone.utc)).isoformat()
+    session_rows = session_rows or {}
     return [
         {
             "session_id": sid,
@@ -311,9 +353,26 @@ def build_ack_rows(session_ids: Sequence[str], disposition: str, reason: str,
             "reason": reason,
             "acknowledged_by": acknowledged_by,
             "timestamp": ts,
+            **_state_marks(session_rows.get(sid, {})),
         }
         for sid in session_ids
     ]
+
+
+def ack_still_applies(row: Dict[str, Any], ack: Dict[str, Any]) -> bool:
+    """True only if the session has not moved since it was acknowledged.
+
+    Fails toward SHOWING: an ack without state marks, or a session whose
+    ``updated_at`` or newest objection is later than recorded, is not hidden.
+    """
+    for key in ("updated_at", "standing_since"):
+        recorded = _as_utc(ack.get(f"session_{key}"))
+        current = _as_utc(row.get(key))
+        if current is None:
+            continue
+        if recorded is None or current > recorded:
+            return False
+    return True
 
 
 def partition(rows: List[Dict[str, Any]], acks: Dict[str, Dict[str, Any]]) -> tuple:
@@ -321,7 +380,7 @@ def partition(rows: List[Dict[str, Any]], acks: Dict[str, Dict[str, Any]]) -> tu
     visible, hidden = [], []
     for r in rows:
         ack = acks.get(r["session_id"])
-        if ack:
+        if ack and ack_still_applies(r, ack):
             hidden.append({**r, "acknowledgement": ack})
         else:
             visible.append(r)
@@ -447,9 +506,14 @@ def ack_main(argv: Sequence[str]) -> int:
         return 2
 
     prefixes = list(dict.fromkeys(s.strip() for s in args.session_ids if s.strip()))
+    if not prefixes:
+        print("dialectic_unresolved ack: no session ids given, nothing written",
+              file=sys.stderr)
+        return 2
     try:
         matches = fetch_matching_session_ids(args.dsn, prefixes)
-        backlog = [r["session_id"] for r in fetch(args.dsn, ACK_WINDOW_DAYS)]
+        backlog_rows = {r["session_id"]: r for r in fetch(args.dsn, ACK_WINDOW_DAYS)}
+        backlog = list(backlog_rows)
     except Exception as exc:  # noqa: BLE001
         print(f"dialectic_unresolved ack: query failed, nothing written: "
               f"{type(exc).__name__}: {exc}", file=sys.stderr)
@@ -462,7 +526,7 @@ def ack_main(argv: Sequence[str]) -> int:
             print(f"  {e}", file=sys.stderr)
         return 1
 
-    rows = build_ack_rows(resolved, args.disposition, reason, by)
+    rows = build_ack_rows(resolved, args.disposition, reason, by, session_rows=backlog_rows)
     try:
         path = append_acks(rows)
     except OSError as exc:
@@ -528,9 +592,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "count": len(shown),
                 "window_days": args.window_days,
                 "reviews": shown,
-                # Consumers (the SessionStart hook) read `reviews`; these say
-                # what was left out of it and why, so a shorter list is never
-                # mistaken for a smaller backlog.
+                # `reviews` excludes acknowledged sessions. These fields say what
+                # was left out and why. The SessionStart hook currently reads only
+                # `reviews`; a consumer that reports a backlog size should add
+                # `acknowledged_hidden`.
                 "acknowledged_hidden": 0 if args.show_all else len(hidden),
                 "acknowledged_by_disposition": dict(
                     Counter(r["acknowledgement"]["disposition"] for r in hidden)),
