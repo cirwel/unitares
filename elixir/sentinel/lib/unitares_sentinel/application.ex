@@ -33,7 +33,9 @@ defmodule UnitaresSentinel.Application do
       postgrex_children() ++
         finch_children() ++
         fleet_state_children() ++
-        websocket_children() ++ fleet_finding_emitter_children() ++ poller_children()
+        websocket_children() ++
+        fleet_finding_emitter_children() ++
+        poller_children() ++ audit_volume_watch_children() ++ launchd_watch_children()
 
     result =
       Supervisor.start_link(children, strategy: :one_for_one, name: UnitaresSentinel.Supervisor)
@@ -72,6 +74,44 @@ defmodule UnitaresSentinel.Application do
       [UnitaresSentinel.ForcedReleasePoller]
     else
       []
+    end
+  end
+
+  defp audit_volume_watch_children do
+    if Application.get_env(:unitares_sentinel, :start_audit_volume_watch, false) do
+      [
+        {UnitaresSentinel.AuditVolumeWatch,
+         interval_ms: Application.get_env(:unitares_sentinel, :audit_volume_interval_ms, 300_000)}
+        |> with_self_agent_id()
+      ]
+    else
+      []
+    end
+  end
+
+  # Opt-in by naming label prefixes; empty (the default) or a host without
+  # launchctl starts nothing. See UnitaresSentinel.LaunchdWatch.
+  defp launchd_watch_children do
+    prefixes = Application.get_env(:unitares_sentinel, :launchd_label_prefixes, [])
+
+    if UnitaresSentinel.LaunchdWatch.enabled?(prefixes) do
+      [{UnitaresSentinel.LaunchdWatch, [prefixes: prefixes] |> with_self_agent_id()}]
+    else
+      []
+    end
+  end
+
+  # Findings from the watch GenServers fingerprint on the same agent id as the
+  # fleet emitter, so all of this resident's findings share one identity.
+  defp with_self_agent_id({module, opts}), do: {module, with_self_agent_id(opts)}
+
+  defp with_self_agent_id(opts) when is_list(opts) do
+    case UnitaresSentinel.SessionAnchor.load() do
+      {:ok, %{"agent_uuid" => uuid}} when is_binary(uuid) and uuid != "" ->
+        Keyword.put_new(opts, :findings_opts, agent_id: uuid)
+
+      _ ->
+        opts
     end
   end
 
