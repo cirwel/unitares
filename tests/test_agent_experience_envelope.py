@@ -108,8 +108,17 @@ async def test_experience_alias_gets_envelope():
     assert data["tool"] == "start_session"
     assert data["agent_uuid"] == "u-1"
     assert data["client_session_id"] == "s-1"
-    assert data["raw_governance"]["agent_uuid"] == "u-1"
+    # The default mint does not repeat the canonical record beneath the lifts;
+    # it says where the record is instead.
+    assert "raw_governance" not in data
+    assert data["raw_governance_available"] is True
+    assert "response_mode='full'" in data["raw_governance_hint"]
     assert "next_action" in data
+
+    full = _parse(await apply_experience_envelope(
+        "onboard", {"response_mode": "full"}, _ctx("start_session"), raw
+    ))
+    assert full["raw_governance"]["agent_uuid"] == "u-1"
 
 
 @pytest.mark.asyncio
@@ -285,7 +294,14 @@ def test_onboard_envelope_does_not_turn_sibling_predecessor_into_parent():
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
     assert "co-location does not establish lineage" in env["next_action"]
     assert "Do not use its uuid as parent_agent_id" in env["next_action"]
-    assert env["raw_governance"] is payload
+    # A thread with a predecessor is the case the caller must read, so the
+    # thread_context rides at the top level even though raw_governance does not.
+    assert env["thread_context"] is payload["thread_context"]
+    assert "raw_governance" not in env
+    full = build_experience_envelope(
+        "start_session", "onboard", payload, {"response_mode": "full"}
+    )
+    assert full["raw_governance"] is payload
 
 
 def test_onboard_envelope_does_not_redeclare_recorded_lineage():

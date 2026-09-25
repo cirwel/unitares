@@ -42,11 +42,11 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-09-08
+**Last Updated:** 2026-09-25
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases and bounded `sync_state` modes omit the repeated canonical payload and explain how to request it explicitly; other state-changing aliases preserve it under `raw_governance`. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases, bounded `sync_state` modes and a default `start_session` omit the repeated canonical payload and explain how to request it explicitly (`response_mode="full"`); other state-changing aliases preserve it under `raw_governance`. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
@@ -133,8 +133,11 @@ call `sync_state(..., response_mode="full")` to retain it under
 
 ### What You Get Back
 
-The friendly tools return a normalized envelope. Read `action_summary` when
-present for the action, verdict, and evidence maturity, then `next_action`,
+The friendly tools return a normalized envelope. Read the action from
+`state_summary.action`; `action_summary` carries the named `reason`, and on a
+guide, pause or provisional verdict also the action, verdict and evidence
+maturity. A clean proceed states each fact once, so its `action_summary` may
+hold only the reason. Then read `next_action`,
 `state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
 present. `check_working_state()` and `search_shared_memory()` omit the repeated
 canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
