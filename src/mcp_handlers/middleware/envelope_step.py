@@ -33,8 +33,10 @@ aliases ``store_finding``, ``update_finding`` and ``record_result`` omit the
 repeated canonical payload and advertise an explicit full-response escape
 hatch; the write aliases first lift the ids and warnings a caller needs next.
 Other state-changing aliases retain it, and ``response_mode="full"`` restores
-it explicitly, except on the finding writes, whose route back is a
-``knowledge(action="details")`` read.
+it explicitly, except on the finding writes, whose route to the stored
+record is a ``knowledge(action="details")`` read. That read returns the record
+as stored, not the ack: write-time warnings and the store-time similarity
+snapshot are lifted into the ack itself because no later read returns them.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -139,6 +141,12 @@ _MEMORY_SUMMARY_PREVIEW_CHARS = 240
 # would silently name nobody (or the wrong writer).
 _MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
+# store_finding's related_discoveries is the store-time similarity snapshot:
+# the findings this write resembled when it was stored. The ack keeps a bounded
+# pointer list (ids and short summary previews); each record is one details
+# read away.
+_RELATED_DISCOVERY_LIMIT = 5
+_RELATED_SUMMARY_PREVIEW_CHARS = 120
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
 
@@ -758,6 +766,58 @@ _UNKNOWN_WRITER = "unknown"
 _DIGEST_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
 
 
+def _summary_preview(summary: str, limit: int) -> tuple[str, bool]:
+    """Collapse whitespace and bound a summary at a word boundary.
+
+    Returns the preview and whether it was cut, so a bounded preview can say
+    so rather than posing as the complete summary.
+    """
+    compact = " ".join(summary.split())
+    if len(compact) <= limit:
+        return compact, False
+    cutoff = compact.rfind(" ", 0, limit - 1)
+    if cutoff < limit // 2:
+        cutoff = limit - 1
+    return compact[:cutoff].rstrip() + "…", True
+
+
+def _compact_related_discoveries(
+    payload: Dict[str, Any],
+) -> tuple[Optional[List[Dict[str, Any]]], Optional[int]]:
+    """Bound store_finding's store-time similarity snapshot for the ack.
+
+    The canonical ``related_discoveries`` rows are whole records (minus
+    details). The ack keeps only what a writer needs to decide whether to open
+    or supersede one: its id and a short summary preview. Returns the compact
+    rows and, when rows were dropped, the snapshot's full length.
+    """
+    related = payload.get("related_discoveries")
+    if not isinstance(related, list) or not related:
+        return None, None
+    rows: List[Dict[str, Any]] = []
+    for item in related[:_RELATED_DISCOVERY_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        row: Dict[str, Any] = {}
+        discovery_id = item.get("id") or item.get("discovery_id")
+        if discovery_id is not None:
+            row["discovery_id"] = discovery_id
+        summary = item.get("summary")
+        if isinstance(summary, str):
+            preview, truncated = _summary_preview(
+                summary, _RELATED_SUMMARY_PREVIEW_CHARS
+            )
+            row["summary"] = preview
+            if truncated:
+                row["preview_truncated"] = True
+        if row:
+            rows.append(row)
+    if not rows:
+        return None, None
+    total = len(related) if len(related) > _RELATED_DISCOVERY_LIMIT else None
+    return rows, total
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -821,15 +881,12 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
 
             summary = item.get("summary")
             if isinstance(summary, str):
-                compact = " ".join(summary.split())
-                if len(compact) > _MEMORY_SUMMARY_PREVIEW_CHARS:
-                    cutoff = compact.rfind(" ", 0, _MEMORY_SUMMARY_PREVIEW_CHARS - 1)
-                    if cutoff < _MEMORY_SUMMARY_PREVIEW_CHARS // 2:
-                        cutoff = _MEMORY_SUMMARY_PREVIEW_CHARS - 1
-                    suggestion["summary"] = compact[:cutoff].rstrip() + "…"
+                preview, truncated = _summary_preview(
+                    summary, _MEMORY_SUMMARY_PREVIEW_CHARS
+                )
+                suggestion["summary"] = preview
+                if truncated:
                     suggestion["preview_truncated"] = True
-                else:
-                    suggestion["summary"] = compact
 
             tags = item.get("tags")
             if isinstance(tags, list):
@@ -1032,10 +1089,13 @@ def _write_ack_raw_policy(
     the arguments after canonical validation, and KnowledgeParams fills
     ``response_mode='full'`` by default (the search alias works around the
     same default in normalize_compact_search_details), so a caller's explicit
-    'full' and an omitted parameter arrive identical. Their full routes are a
-    knowledge(action='details') read, or the canonical knowledge tool, which
-    returns the payload directly. outcome_event validates response_mode to
-    None, so on record_result an arriving 'full' was the caller's.
+    'full' and an omitted parameter arrive identical. A later
+    knowledge(action='details') read returns the stored record, not
+    everything this ack carried: the write-time warnings and a bounded
+    related_discoveries snapshot are lifted into the ack for that reason. The
+    canonical knowledge tool still returns the whole payload directly.
+    outcome_event validates response_mode to None, so on record_result an
+    arriving 'full' was the caller's.
 
     The hint never tells a caller to repeat the write to see the payload: a
     second store mints a second finding. For the finding writes it names a
@@ -1690,6 +1750,14 @@ def build_experience_envelope(
         ))
         if "closure_class" in source_payload:
             envelope["closure_class"] = source_payload["closure_class"]
+        # The store-time similarity snapshot is the one write-time field the
+        # details read cannot reproduce later, so a bounded form of it stays in
+        # the ack (consolidation_hint, lifted above, summarizes the same set).
+        related, related_total = _compact_related_discoveries(source_payload)
+        if related:
+            envelope["related_discoveries"] = related
+            if related_total is not None:
+                envelope["related_discoveries_total"] = related_total
 
         if friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")

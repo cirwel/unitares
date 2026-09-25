@@ -96,7 +96,23 @@ def _store_payload() -> dict:
             "summary": "write ack bug",
             "related_to": ["d-old-1", "d-old-2"],
         },
-        "related_discoveries": [{"id": "d-old-1", "summary": "x" * 300}],
+        # The handler's rows are whole records minus details
+        # (Discovery.to_dict(include_details=False)).
+        "related_discoveries": [{
+            "id": "d-old-1",
+            "agent_id": "probe-older",
+            "type": "bug_found",
+            "summary": "x" * 300,
+            "tags": ["envelope", "write-ack", "size"],
+            "severity": "medium",
+            "timestamp": "2026-09-20T10:00:00",
+            "created_at": "2026-09-20T10:00:00",
+            "status": "open",
+            "related_to": [],
+            "references_files": ["src/example.py"],
+            "resolved_at": None,
+            "updated_at": None,
+        }],
         "_supersedes_warning": "supersedes target 'd-gone' not found",
         "_truncated": {"summary": True},
         "agent_signature": {"uuid": _UUID, "identity_context": {"x": "y" * 400}},
@@ -251,6 +267,53 @@ def test_knowledge_write_acks_keep_ids_and_write_warnings():
     assert env["discovery_id"] == "d-existing"
     assert env["closure_class"] is None
     assert env["closure_class_note"] == "This closure declares no standard."
+
+
+def test_store_ack_keeps_a_bounded_related_discoveries_snapshot():
+    # related_discoveries is the store-time similarity snapshot: no later
+    # details read returns it, so the ack keeps ids and short previews.
+    payload = _store_payload()
+    payload["related_discoveries"] = [
+        {
+            "id": f"d-old-{i}",
+            "agent_id": "someone",
+            "type": "bug_found",
+            "status": "open",
+            "tags": ["t"] * 20,
+            "summary": ("word " * 80) if i == 0 else f"short {i}",
+        }
+        for i in range(8)
+    ]
+    payload["consolidation_hint"] = "This issue has been found 8 times"
+    env = build_experience_envelope("store_finding", "knowledge", payload, {})
+
+    assert "raw_governance" not in env
+    related = env["related_discoveries"]
+    assert [row["discovery_id"] for row in related] == [
+        f"d-old-{i}" for i in range(5)
+    ]
+    assert env["related_discoveries_total"] == 8
+    assert env["consolidation_hint"] == "This issue has been found 8 times"
+    first = related[0]
+    assert set(first) == {"discovery_id", "summary", "preview_truncated"}
+    assert len(first["summary"]) <= 120
+    assert first["summary"].endswith("…")
+    assert related[1] == {"discovery_id": "d-old-1", "summary": "short 1"}
+
+
+def test_store_ack_related_discoveries_is_omitted_when_absent_and_uncounted_when_small():
+    payload = _store_payload()
+    env = build_experience_envelope("store_finding", "knowledge", payload, {})
+    assert env["related_discoveries"][0]["discovery_id"] == "d-old-1"
+    assert "related_discoveries_total" not in env
+
+    payload.pop("related_discoveries")
+    env = build_experience_envelope("store_finding", "knowledge", payload, {})
+    assert "related_discoveries" not in env
+
+    payload["related_discoveries"] = ["not-a-row", {}]
+    env = build_experience_envelope("store_finding", "knowledge", payload, {})
+    assert "related_discoveries" not in env
 
 
 def test_store_ack_omits_empty_related_to():
