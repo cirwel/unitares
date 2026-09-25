@@ -31,6 +31,8 @@ about the **outcome record** only, and makes no claim about the following:
 - **Behaviour after the binding expires.** An expired prediction ID can start a
   new canonical submission, by design. See limit L2.
 - **Outcomes submitted without a `prediction_id`.**
+- **Outcome rows written before migration 070 was applied.** Those rows have
+  no binding and are not canonical records. See limit L5.
 - **Orchestrator spawn idempotency** (#1939, #1942, #1953; migration 068). That
   mechanism also rejects conflicting key reuse, but it is separate and needs its
   own case.
@@ -86,6 +88,9 @@ layer, not this case.
   the scope of the claim.
 - **A4.** Nothing writes to `audit.outcome_prediction_bindings` or
   `audit.outcome_events` outside the application path.
+- **A5.** The deployment records when migration 070 was applied, in
+  `core.schema_migrations` (version 70, `applied_at`). The claim and its
+  falsifiers cover only rows written at or after that time.
 
 ## 5. Evidence manifest
 
@@ -136,15 +141,26 @@ cases.
 - **L4: no production measurement.** There is no count of observed conflicts,
   replays or L1 occurrences. Following *Measurement authority* in `CLAUDE.md`,
   a zero from an unmeasured surface is not evidence that nothing happened.
+- **L5: older, unbound rows.** Before migration 070 (commit `6e42ea3`,
+  2026-09-14), the handler wrote `detail["prediction_id"]` on a plain insert
+  with no uniqueness, so a lost-ack retry or a reused prediction ID could write
+  a second row. Migration 070 does not create bindings for existing outcome
+  rows. On a database upgraded from before 070, older duplicate rows can
+  therefore exist inside the retention window, and a prediction ID whose only
+  row predates 070 can gain a second, bound row after it. Neither case
+  contradicts the claim, which covers only rows written after 070 was applied
+  (A5), but an assessor must exclude them. They age out with outcome retention.
 
 ## 7. What would falsify the claim
 
 Any of the following, observed at the frozen revision within the retention
 window with the assumptions holding:
 
-1. Two rows in `audit.outcome_events` with equal `agent_id` and equal
-   non-null `detail->>'prediction_id'` (the handler writes `prediction_id` into
-   `detail`; it is not a column of that table).
+1. Two rows in `audit.outcome_events`, both with `ts` at or after migration
+   070's `applied_at` (A5), with equal `agent_id` and equal non-null
+   `detail->>'prediction_id'`. (The handler writes `prediction_id` into
+   `detail`; it is not a column of that table.) Rows written before 070 are
+   excluded; see L5.
 2. A conflicting retry that writes an outcome row, or returns success.
 3. An identical retry whose response differs from the stored canonical record.
 
