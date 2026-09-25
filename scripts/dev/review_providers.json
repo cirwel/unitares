@@ -1,0 +1,9 @@
+{
+  "_doc": "Repo-wide review provider availability, read by review_gate.py in every checkout. A provider listed under disabled is skipped by the default reviewer choice, the local fallback and native review; an explicit `review.sh --reviewer <name>` still tries it. An entry may be an object with a reason, a reason string, or true. Re-enable by deleting its entry. See docs/operations/github-workflow-conventions.md#review-provider-availability.",
+  "disabled": {
+    "codex": {
+      "since": "2026-09-25",
+      "reason": "operator: Codex unavailable indefinitely (OpenAI account suspended); use a Claude subagent/council review, Gemini, or another reviewer, recorded honestly"
+    }
+  }
+}
