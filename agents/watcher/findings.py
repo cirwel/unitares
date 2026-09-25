@@ -855,6 +855,16 @@ def _apply_floor_to_finding(
 # toplevel) or None}`` plus ``{"ignored:<path>": bool}`` from ``_git_ignores``.
 GitCache = dict[str, Any]
 
+# Each cache entry is one git subprocess, so the cache size is the number
+# spawned for this render. The listing runs on every prompt, so the total is
+# capped: past it, placement and labels fall back to the ungrouped row and the
+# path heuristic instead of spawning more.
+_GIT_LOOKUP_LIMIT = 8
+
+
+def _git_budget_spent(cache: GitCache) -> bool:
+    return len(cache) >= _GIT_LOOKUP_LIMIT
+
 
 def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | None:
     """Return ``(common_dir, toplevel)`` for an existing directory, or None.
@@ -866,6 +876,8 @@ def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | 
     key = str(directory)
     if key in cache:
         return cache[key]
+    if _git_budget_spent(cache):
+        return None
     info: tuple[str, str] | None = None
     try:
         result = subprocess.run(
@@ -1385,6 +1397,8 @@ def _git_ignores(path: Path, cache: GitCache) -> bool:
     key = f"ignored:{path}"
     if key in cache:
         return bool(cache[key])
+    if _git_budget_spent(cache):
+        return False
     try:
         result = subprocess.run(
             [

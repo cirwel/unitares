@@ -2444,6 +2444,60 @@ def test_listing_places_only_findings_that_could_be_copies(
     assert len(shown) == 10
 
 
+def test_git_lookups_are_capped_per_render(watcher_module, tmp_path, monkeypatch):
+    """Grouping and footer labels share one git budget per render, so a
+    backlog spread over many directories cannot put an unbounded number of
+    git subprocesses on the per-prompt path (independent review, P2)."""
+    trees = _repo_with_worktrees(tmp_path)
+    findings = []
+    for i in range(30):
+        d = trees["main"] / f"d{i}"
+        d.mkdir()
+        # Two rows per directory with the same line: each could be a copy.
+        for j in range(2):
+            findings.append(
+                _copy(f"{i:08d}{j:08d}", trees["main"], rel=f"d{i}/m.py", line=j + 1)
+            )
+    real_run = subprocess.run
+    git_calls: list = []
+
+    def _counting(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args")
+        if cmd and cmd[0] == "git":
+            git_calls.append(cmd)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _counting)
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert len(shown) == 10
+    from agents.watcher.findings import _GIT_LOOKUP_LIMIT
+
+    assert 0 < len(git_calls) <= _GIT_LOOKUP_LIMIT
+
+
+def test_medium_copy_never_rides_on_a_high_entry(watcher_module, tmp_path):
+    """Severity is part of the group key: with ten high rows the medium
+    allowance is zero, so a medium copy of a high line must not be shown, or
+    marked surfaced, under the high entry."""
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy(f"h{i:015d}", trees["main"], line=10 + i, severity="high",
+              line_content_hash=f"h{i:011d}")
+        for i in range(9)
+    ] + [
+        _copy("s000000000000001", trees["main"], severity="high"),
+        _copy("s000000000000002", trees["feat-a"], severity="medium"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "s000000000000002" not in {f["fingerprint"] for f in shown}
+    assert "s0000000" not in "".join(
+        line for line in block.splitlines() if "(#s0000000)" in line and "MEDIUM" in line
+    )
+    assert {f["severity"] for f in shown} == {"high"}
+
+
 def test_display_cap_bounds_one_large_group(watcher_module, tmp_path):
     # One file with 30 identical lines is one group; it still shows 10 rows.
     trees = _repo_with_worktrees(tmp_path)
