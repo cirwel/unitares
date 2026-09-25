@@ -265,8 +265,10 @@ def load_acks(path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
 def append_acks(rows: Iterable[Dict[str, Any]], path: Optional[str] = None) -> str:
     """Append a batch and verify every byte landed; a short write raises OSError.
 
-    A torn trailing line is skipped by ``load_acks`` (hiding nothing), and the
-    caller reports failure instead of success.
+    Not atomic across rows: if a write fails partway, rows written before the
+    failure are valid and take effect, and a torn trailing line is skipped by
+    ``load_acks``. The caller reports failure and says some rows may have
+    landed; re-running the same ack is safe because the latest row wins.
     """
     path = path or ledger_path()
     parent = os.path.dirname(path)
@@ -563,7 +565,9 @@ def ack_main(argv: Sequence[str]) -> int:
     try:
         path = append_acks(rows)
     except OSError as exc:
-        print(f"dialectic_unresolved ack: could not write the ledger: {exc}", file=sys.stderr)
+        print(f"dialectic_unresolved ack: could not write the ledger: {exc}. Some of this "
+              f"batch may already be recorded (the listing's hidden count shows it); "
+              f"re-running the same ack is safe.", file=sys.stderr)
         return 2
     print(f"Acknowledged {len(rows)} review(s) as {args.disposition} in {path}:")
     for r in rows:
