@@ -5,7 +5,7 @@ from ..support.coerce import coerce_bool
 
 class ListToolsParams(AgentIdentityMixin):
     """
-    List all available governance tools with descriptions and categories.
+    List the governance capability catalog; the lite default returns names only.
     """
     essential_only: Union[bool, str, None] = Field(
         default=False,
@@ -13,7 +13,7 @@ class ListToolsParams(AgentIdentityMixin):
     )
     verbose: Union[bool, str, None] = Field(
         default=False,
-        description="If true, include full schema parameters."
+        description="Ignored; accepted for compatibility.",
     )
     category: Optional[str] = Field(
         default=None,
@@ -38,11 +38,10 @@ class ListToolsParams(AgentIdentityMixin):
     )
     lite: Union[bool, str, None] = Field(
         default=True,
-        # Kept byte-stable in this response-only change because parameter
-        # descriptions are part of the versioned input-schema digest. The
-        # accurate response split is served by the tool description itself;
-        # update this sentence with the next negotiated contract release.
-        description="If true (default), return minimal response (names + descriptions only, ~500B vs ~4KB)."
+        description=(
+            "If true (default), return capability names and the interface "
+            "contract; false adds descriptions, categories and tiers."
+        ),
     )
 
     @model_validator(mode='after')
@@ -210,7 +209,7 @@ class SetThresholdsParams(AgentIdentityMixin):
 
 class CleanupStaleLocksParams(AgentIdentityMixin):
     """Parameters for cleanup_stale_locks"""
-    max_age_seconds: float = Field(300.0, description="Maximum age in seconds before considering stale (default: 300 = 5 minutes)")
+    max_age_seconds: float = Field(300.0, description="Minimum age in seconds before a free lock file is removed (default: 300 = 5 minutes). Held locks are never removed.")
     dry_run: bool = Field(False, description="If True, only report what would be cleaned (default: False)")
 
 
@@ -335,7 +334,7 @@ class AdminParams(AgentIdentityMixin):
     # cleanup_locks
     max_age_seconds: float = Field(
         300.0,
-        description="Max age in seconds before a lock is stale (for action=cleanup_locks). Default 300.",
+        description="Minimum age in seconds before a free lock file is removed (for action=cleanup_locks). Default 300. Held locks are never removed.",
     )
     dry_run: bool = Field(
         False,

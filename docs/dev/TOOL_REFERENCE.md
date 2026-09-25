@@ -1559,7 +1559,7 @@ RESPONSE WRAPPER FIELDS:
 - **Timeout:** 10s
 - **Related:** `describe_tool`
 
-Discover the complete governance capability catalog, including names omitted from the initial progressive tools/list advertisement. The default lite=true response is the compact federation handshake: every public capability appears once as a name-only record beside the interface contract. Use lite=false for descriptions, categories, tiers, workflows, relationships, and direct-advertisement status. Category, tier, essential_only, and include_advanced narrow either view; progressive orders the result by recent usage. Use describe_tool for one capability's parameters, then use_tool to invoke a capability absent from the initial listing. verbose is accepted for compatibility but ignored. Callable before an identity is bound.
+Discover the complete governance capability catalog, including names omitted from the initial progressive tools/list advertisement. The default lite=true response is the compact federation handshake: every public capability appears once as a name-only record beside the interface contract. Use lite=false for descriptions, categories, tiers, workflows, relationships, and direct-advertisement status. Use describe_tool for one capability's parameters, then use_tool to invoke a capability absent from the initial listing. Callable before an identity is bound.
 
 ~~~text
 LITE RESPONSE:
@@ -1591,7 +1591,7 @@ RETURNS:
 - **Depends on:** `list_tools`, `describe_tool`
 - **Related:** `list_tools`, `describe_tool`
 
-Invoke one public capability omitted from the initial progressive tools/list advertisement. Find the exact name with list_tools and inspect its arguments with describe_tool, then pass that argument object here. The target's normal identity, validation, authorization, timeout and response middleware all run; this is a discovery gateway, not an authorization bypass. The gateway adds no shorter timeout of its own. It refuses recursive use_tool calls. Set UNITARES_TOOL_ADVERTISEMENT=full when the client should receive every schema up front.
+Invoke one public capability omitted from the initial progressive tools/list advertisement. Find the exact name with list_tools and inspect its arguments with describe_tool, then pass that argument object here. The target's normal identity, validation, authorization, timeout and response middleware all run; this is a discovery gateway, not an authorization bypass. It refuses recursive use_tool calls.
 
 ### `skills`
 
@@ -1609,7 +1609,7 @@ Returns the server-authored governance skill bundle, read fresh from disk on eve
 - **Timeout:** 20s for the router; some actions stop sooner (table below)
 - **Related:** `health_check`, `observe`, `config`
 
-Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health grades the checkout and client config files on the machine the server runs on, never the caller's. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks unlinks lock files whose owner process is gone or that are older than max_age_seconds (dry_run previews); validate_path only warns, never blocks; reset_monitor drops just the in-memory monitor, which rebuilds from persisted state.
+Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health grades the checkout and client config files on the machine the server runs on, never the caller's. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks removes agent lock files that no process holds and that are older than max_age_seconds (dry_run previews), and never a held lock; validate_path only warns, never blocks; reset_monitor drops just the in-memory monitor, which rebuilds from persisted state.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|

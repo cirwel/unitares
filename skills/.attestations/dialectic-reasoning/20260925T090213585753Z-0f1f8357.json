@@ -1,0 +1,22 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-09-25T09:02:13Z",
+  "verified_date": "2026-09-25",
+  "verifier": "Kenny Wang",
+  "source_digests": {
+    "unitares/src/dialectic_protocol.py": "51d15277f4cdf825",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "04b02fdcc1e2b85c",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "a69289a47c6d9c60",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "87cd7dbc224dc325",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "183603f3918b1896",
+    "unitares/src/mcp_handlers/dialectic/session.py": "eb5ed22eb5684038",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "776439b33c67a397",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "56b8b36fb7b8ea4c",
+    "unitares/src/mcp_handlers/tool_stability.py": "6c653e1770b9c64a"
+  },
+  "skill_digest": "fbc3833e02e65b63"
+}

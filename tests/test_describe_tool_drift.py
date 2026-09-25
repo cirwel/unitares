@@ -232,12 +232,41 @@ async def test_workflow_alias_descriptions_carry_eisv_contract(tool_name):
 
 
 def test_registered_workflow_alias_notes_carry_eisv_contract():
-    from src.mcp_handlers.tool_stability import resolve_tool_alias
+    """The advertised surface carries the EISV contract once (#1434).
 
-    for tool_name in ("sync_state", "check_working_state", "record_result"):
+    Every alias description is paid for on every tools/list, so the full
+    contract rides on check_working_state, whose envelope returns E/I/S/V, and
+    the other two aliases carry a pointer that is itself a call. A client that
+    defers tool loading may never load check_working_state's description, so
+    the pointer names describe_tool, whose full view appends the contract
+    (test_workflow_alias_descriptions_carry_eisv_contract) and whose lite view
+    of check_working_state carries it on the first line
+    (test_eisv_pointer_resolves_in_lite_describe).
+    """
+    from src.mcp_handlers.tool_stability import EISV_POINTER, resolve_tool_alias
+
+    _, alias = resolve_tool_alias("check_working_state")
+    assert alias is not None
+    _assert_eisv_contract(alias.migration_note or "")
+    for tool_name in ("sync_state", "record_result"):
         _, alias = resolve_tool_alias(tool_name)
         assert alias is not None
-        _assert_eisv_contract(alias.migration_note or "")
+        assert EISV_POINTER in (alias.migration_note or "")
+
+
+@pytest.mark.asyncio
+async def test_eisv_pointer_resolves_in_lite_describe():
+    """Following the pointer returns the contract even in describe_tool's lite view.
+
+    Explicit lite=true for sync_state/record_result shows only the first line,
+    which is now the pointer rather than the contract; the pointer's target
+    must therefore carry it on its first line.
+    """
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    result = await handle_describe_tool({"tool_name": "check_working_state", "lite": True})
+    _assert_eisv_contract(json.loads(result[0].text)["description"])
 
 
 @pytest.mark.asyncio
