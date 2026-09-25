@@ -323,20 +323,26 @@ Two kinds of process do not follow this default. A short dispatched subagent usu
 
 Use raw `onboard(...)` instead when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift
-`agent_uuid`, `client_session_id`, and `next_action`. Read aliases and the
-write aliases `store_finding`, `update_finding` and `record_result` default to
-a compact envelope whose `raw_governance_hint` names the full-payload route:
-`response_mode="full"` on `sync_state`, `search_shared_memory` and
-`record_result`, `verbosity="full"` on `check_working_state`, and a
+`agent_uuid`, `client_session_id`, and `next_action`. Read aliases, routine
+`sync_state` check-ins, a plain fresh `start_session` and the write aliases
+`store_finding`, `update_finding` and `record_result` default to a compact
+envelope (`response_shape: "routine"` marks the trimmed lifecycle ones). Read
+the new identity's uuid from `agent_uuid`. Where a compact response has a
+`raw_governance_hint`, it names the full-payload route: `response_mode="full"`
+on `sync_state`, `search_shared_memory`, `record_result` and the
+`start_session` mint, `verbosity="full"` on `check_working_state`, and a
 `knowledge(action="details", discovery_id=...)` read for `store_finding` and
 `update_finding` (`response_mode` does not apply to them; the canonical
-`knowledge` tool returns their payload directly). Repeating a write to see its
-payload writes again. The finding writes take `agent_uuid` from the response's
-signature and add `written_as` (the writer's `agent_id`, `display_name` and
-assurance tier), so a caller can see which identity a write was recorded under.
-`record_result` carries them only when its binding was not server-inferred
-(for example, the call passed `client_session_id`): `outcome_event` signs
-nothing for a server-inferred binding, so such an ack names no writer.
+`knowledge` tool returns their payload directly). That read returns the stored
+record; write-time warnings and a bounded `related_discoveries` snapshot are
+kept in the ack itself because the read does not return them. Repeating a write
+to see its payload writes again. The finding writes take `agent_uuid` from the
+response's signature and add `written_as` (the writer's `agent_id`,
+`display_name` and assurance tier), so a caller can see which identity a write
+was recorded under. `record_result` carries them only when its binding was not
+server-inferred (for example, the call passed `client_session_id`):
+`outcome_event` signs nothing for a server-inferred binding, so such an ack
+names no writer.
 
 For a same-owner rebind to an existing UUID, call `identity(agent_uuid=..., continuity_token=..., resume=true)` with the matching short-lived token. Do not teach clients to use bare `identity(agent_uuid=..., resume=true)`: UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 

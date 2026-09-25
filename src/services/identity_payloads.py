@@ -276,8 +276,10 @@ def build_identity_signature_payload(
             # This envelope is attached to every response, including plain
             # validation errors, and no response_mode reaches the error path.
             # The provenance record is the bulk of it and restates harness
-            # context the caller itself supplied; the flat fields beside it
-            # survive, and a rejected value keeps the full record.
+            # context the caller itself supplied. In the full record the flat
+            # harness fields beside it survive and a rejected value keeps the
+            # whole record; a routine signature drops harness_context entirely
+            # (below).
             provenance_detail=False,
         )
         # One assurance block per response, not two. It was emitted both
@@ -285,13 +287,80 @@ def build_identity_signature_payload(
         # _neutral_denial_signature (response_base.py) reads the top-level
         # one, so that is the copy that stays.
         identity_context.pop("identity_assurance", None)
-        payload["identity_context"] = identity_context
-        payload["identity_assurance"] = _identity_assurance_from_source(
+        identity_assurance = _identity_assurance_from_source(
             _normalize_source(session_resolution_source),
             proof_origin,
         )
+        if _signature_is_routine(identity_assurance, identity_context):
+            # The normal case: a caller-proven strong binding with nothing
+            # rejected and no discontinuity. The registry/public_handle/label
+            # blocks restate the flat fields above, and harness_context restates
+            # the harness and model the caller itself declared, on every
+            # response the caller makes, so they are left out. The role declarations stay, and the
+            # plugin's identity-contract auditor requires `schema` and
+            # `agent_id_is`. continuity_claim stays too: it is computed per
+            # call and is the tell for a discontinuity. Anything abnormal keeps
+            # the full record.
+            identity_context = {
+                key: identity_context[key]
+                for key in (
+                    "schema",
+                    "identity_is",
+                    "label_is",
+                    "agent_id_is",
+                    "harness_is",
+                    "continuity_claim",
+                )
+                if key in identity_context
+            }
+            identity_context["detail"] = "compact"
+            identity_assurance = {
+                key: identity_assurance[key]
+                for key in ("tier", "caller_proven", "proof_origin", "session_source")
+                if key in identity_assurance
+            }
+        payload["identity_context"] = identity_context
+        payload["identity_assurance"] = identity_assurance
 
     return payload
+
+
+# Continuity claims a caller-proven strong binding produces in normal use.
+# Anything else is a discontinuity worth the full record.
+# A UUID-direct resume is left out on purpose: a UUID is a copyable string that
+# appears in shared memory and logs, yet that route scores strong.
+_ROUTINE_CONTINUITY_CLAIMS = frozenset({
+    "resumed_by_explicit_session",
+    "resumed_by_continuity_token",
+    "fresh_uuid_minted_by_force_new",
+    "fresh_uuid_minted",
+})
+
+
+def _signature_is_routine(
+    identity_assurance: Mapping[str, Any],
+    identity_context: Mapping[str, Any],
+) -> bool:
+    """True when a signature has nothing to explain.
+
+    A caller-proven strong binding is the expected state. A weak, medium or
+    server-inferred binding is not, and a rejected runtime-provenance value
+    (#1872) is diagnostic, so either keeps the full record. So does a
+    continuity_claim that reports a discontinuity (a mint after a resume miss,
+    a reactivated archive, a heuristic or unknown-source resolution).
+    """
+    if identity_context.get("continuity_claim") not in _ROUTINE_CONTINUITY_CLAIMS:
+        return False
+    if identity_assurance.get("tier") != "strong":
+        return False
+    if identity_assurance.get("caller_proven") is not True:
+        return False
+    harness = identity_context.get("harness_context")
+    provenance = harness.get("runtime_provenance") if isinstance(harness, Mapping) else None
+    if not isinstance(provenance, Mapping):
+        return True
+    # provenance_detail=False inlines the full record only for a rejected value.
+    return provenance.get("detail") == "omitted" or provenance.get("available") is False
 
 
 def build_onboard_response_data(
@@ -648,9 +717,12 @@ def build_identity_response_context(
     those deliberately, so ``has_rejected_value`` keeps the full record
     regardless of this flag.
 
-    The ontology itself is untouched: ``agent_id_is``, which the plugin's
-    identity-contract auditor requires, and the registry/public_handle/label
-    blocks it cross-checks the flat fields against, are all still emitted.
+    This builder always emits the full ontology: ``agent_id_is``, which the
+    plugin's identity-contract auditor requires, and the
+    registry/public_handle/label blocks it cross-checks the flat fields
+    against. ``build_identity_signature_payload`` then compacts a routine
+    (caller-proven strong, continuous) signature to the role declarations and
+    marks it ``detail: "compact"``.
     """
     source_key = _normalize_source(session_resolution_source)
     identity_assurance = _identity_assurance_from_source(source_key, proof_origin)
