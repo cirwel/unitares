@@ -146,7 +146,15 @@ _ONBOARD_RAW_MODES = frozenset({"full", "verbose", "standard"})
 # plugin's post-identity hook and identity_sidecar read agent_id/display_name
 # from the top level or from raw_governance, so lifting them is what lets the
 # default response drop raw_governance.
-_ONBOARD_LIFT_KEYS = ("agent_id", "display_name", "is_new", "continuity_token")
+_ONBOARD_LIFT_KEYS = ("agent_id", "display_name", "is_new", "identity_resolution_outcome")
+# The resolution outcomes of a mint that went as asked. A resume miss, a
+# reactivated archive or any resumed binding is not routine: the envelope then
+# carries the whole onboard record, because those facts exist only in the
+# mint's own response (identity() re-reads the binding, not how it was made).
+_ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
+# Compact identity_assurance for a mint that went as asked. The operator guide
+# tells agents to confirm the binding from tier and session_source here.
+_ONBOARD_ASSURANCE_KEYS = ("tier", "session_source", "caller_proven")
 
 _ACTION_ALIASES = {
     "approve": ("proceed", None),
@@ -478,17 +486,21 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
     state = envelope.get("state_summary")
     if not isinstance(state, dict) or state.get("action") != "proceed":
         return False
+    # Positive evidence only: a missing health, margin or verdict is not
+    # routine, so a producer regression that drops one cannot be trimmed
+    # into the same shape as a clean proceed.
+    health = [state.get(key) for key in ("status", "health_status") if key in state]
+    if not health or any(value != "healthy" for value in health):
+        return False
+    if state.get("margin") != "comfortable":
+        return False
     if state.get("sub_action") not in (None, "approve"):
         return False
     if state.get("verdict_provisional") or envelope.get("verdict_caveat"):
         return False
     if envelope.get("recovery_hint"):
         return False
-    if state.get("margin") not in (None, "comfortable"):
-        return False
     if state.get("nearest_edge") or state.get("unmeasurable_edges"):
-        return False
-    if any(state.get(key) not in (None, "healthy") for key in ("status", "health_status")):
         return False
     summary = envelope.get("action_summary")
     summary = summary if isinstance(summary, dict) else {}
@@ -497,44 +509,36 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
     if summary.get("sub_action") not in (None, "approve"):
         return False
     verdict = summary.get("verdict")
-    return verdict is None or str(verdict).lower() in _ROUTINE_VERDICTS
+    return verdict is not None and str(verdict).lower() in _ROUTINE_VERDICTS
 
 
 def _drop_routine_proceed_duplicates(envelope: Dict[str, Any]) -> None:
-    """Say each fact of a clean proceed once.
+    """Say each fact of a clean proceed once, and say that it was trimmed.
 
-    A routine proceed carried the action three times (action_summary,
-    state_summary.action, status/health_status "healthy"), the risk three
-    times and the sub_action twice. state_summary is the copy the Python SDK
+    action_summary keeps action, reason and risk_score: it is the documented
+    first read (docs/manual/04-integrating-agents.md), and the integration
+    samples read action_summary.action. state_summary keeps what the Python SDK
     reads (agents/sdk/.../_checkin_fields.py: action, sub_action, coherence,
-    risk_score), and action_summary.reason is the named reason, so those stay
-    and the restatements go. A margin is dropped only when it is comfortable
-    and no edge is near or unassessed: that is the one case where it says
-    nothing the action does not.
+    risk_score). What goes are the restatements: the approve sub_action and
+    safe verdict in action_summary, an unspecified verdict_confidence, the
+    "healthy" status pair and a comfortable margin. _is_routine_proceed
+    admits only positive evidence of each, so the marker below distinguishes
+    "trimmed because routine" from "missing because of a bug".
     """
     summary = envelope.get("action_summary")
     if isinstance(summary, dict):
-        for key in ("action", "sub_action", "verdict", "risk_score"):
+        for key in ("sub_action", "verdict"):
             summary.pop(key, None)
         if summary.get("verdict_confidence") == "unspecified":
             summary.pop("verdict_confidence", None)
-        if not summary:
-            envelope.pop("action_summary", None)
 
     state = envelope.get("state_summary")
-    if not isinstance(state, dict):
-        return
-    health = [state[key] for key in ("status", "health_status") if key in state]
-    if health and all(value == "healthy" for value in health):
+    if isinstance(state, dict):
         state.pop("status", None)
         state.pop("health_status", None)
-    if (
-        state.get("margin") == "comfortable"
-        and not state.get("nearest_edge")
-        and not state.get("unmeasurable_edges")
-    ):
         state.pop("margin", None)
         state.pop("margin_scope", None)
+    envelope["response_shape"] = "routine"
 
 
 def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1086,6 +1090,28 @@ def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
     return assurance.get("baseline") != "fresh_identity"
 
 
+def _is_routine_mint(payload: Dict[str, Any]) -> bool:
+    """A fresh mint that went as asked: nothing about it needs explaining.
+
+    Positive evidence only. A missing outcome is not routine, so a producer
+    regression that drops the field shows the full record instead of looking
+    like a clean mint.
+    """
+    if payload.get("is_new") is not True:
+        return False
+    if payload.get("identity_resolution_outcome") not in _ROUTINE_MINT_OUTCOMES:
+        return False
+    for key in ("auto_resumed", "previous_status", "trajectory", "provisional_lineage"):
+        if payload.get(key):
+            return False
+    thread_context = payload.get("thread_context")
+    if isinstance(thread_context, dict) and (
+        thread_context.get("predecessor") or thread_context.get("is_fork")
+    ):
+        return False
+    return not _onboard_assurance_is_abnormal(payload.get("identity_assurance"))
+
+
 def _raw_governance_policy(
     friendly_name: str,
     arguments: Optional[Dict[str, Any]],
@@ -1112,27 +1138,31 @@ def _raw_governance_policy(
         include_raw = requested_mode == "full" or (
             requested_mode == "auto" and resolved_mode is None
         )
+        # Re-calling sync_state writes another check-in, so the hint names
+        # the next call rather than a re-call.
         return include_raw, (
-            "Re-call sync_state(..., response_mode='full') for the complete "
-            "canonical diagnostics."
+            "Pass response_mode='full' on the next sync_state for diagnostics."
         )
 
     if friendly_name == "start_session":
-        # The envelope lifts every field a caller or adapter reads (uuid,
-        # client_session_id, agent_id, display_name, is_new, continuity_token)
-        # and the abnormal-only identity blocks, so repeating the whole onboard
-        # payload beneath them was the same record twice. The canonical record
-        # rides along only when asked for, on the same signals onboard uses to
-        # pick its own verbose shape (_derive_onboard_response_mode).
+        # A mint that went as asked is fully described by the lifted fields,
+        # so repeating the whole onboard record beneath them was the same
+        # record twice. Anything else about the mint (resume miss, reactivated
+        # archive, lineage, trajectory, abnormal assurance) keeps the record:
+        # those facts exist only here. An explicit request uses the signals
+        # onboard uses to pick its own verbose shape
+        # (_derive_onboard_response_mode).
         arguments = arguments or {}
+        payload = payload or {}
         requested = str(arguments.get("response_mode") or "").strip().lower()
-        include_raw = requested in _ONBOARD_RAW_MODES or (
-            not requested and _as_bool(arguments.get("verbose"), default=False)
+        include_raw = (
+            requested in _ONBOARD_RAW_MODES
+            or (not requested and _as_bool(arguments.get("verbose"), default=False))
+            or not _is_routine_mint(payload)
         )
         return include_raw, (
-            "Pass response_mode='full' to start_session for the complete onboard "
-            "record. Do not re-mint to read it: identity(client_session_id=...) "
-            "re-reads this binding."
+            "The full onboard record comes with response_mode='full'; do not "
+            "re-mint to read it."
         )
 
     if friendly_name not in _COMPACT_READ_ALIASES:
@@ -1539,17 +1569,24 @@ def build_experience_envelope(
         # Lifted in every mode, so a client reading the top-level fields does
         # not lose them when it asks for response_mode='full'.
         envelope.update(_lift(payload, *_ONBOARD_LIFT_KEYS))
-        if not include_raw:
-            if payload.get("provisional_lineage") is True:
-                envelope["provisional_lineage"] = True
-            assurance = payload.get("identity_assurance")
-            if _onboard_assurance_is_abnormal(assurance):
-                envelope["identity_assurance"] = assurance
-            thread_context = payload.get("thread_context")
-            if isinstance(thread_context, dict) and (
-                thread_context.get("predecessor") or thread_context.get("is_fork")
-            ):
-                envelope["thread_context"] = thread_context
+        if payload.get("display_name"):
+            envelope["label_is"] = "social_or_cosmetic"
+        assurance = payload.get("identity_assurance")
+        if isinstance(assurance, dict):
+            envelope["identity_assurance"] = (
+                assurance
+                if _onboard_assurance_is_abnormal(assurance)
+                else _lift(assurance, *_ONBOARD_ASSURANCE_KEYS)
+            )
+        token = payload.get("continuity_token")
+        if isinstance(token, str) and token:
+            # Grouped with its caveat: the token is an advanced same-process
+            # rebind proof, not something to attach to ordinary calls.
+            envelope["rebind"] = {
+                "continuity_token": token,
+                "use_only_for": "identity(agent_uuid=..., continuity_token=..., resume=true)",
+            }
+        envelope["response_shape"] = "full" if include_raw else "routine"
         if isinstance(predecessor, dict) and predecessor.get("uuid"):
             state_summary["predecessor_uuid"] = predecessor["uuid"]
             fork_kind = payload.get("thread_context", {}).get("episode_fork_kind")
