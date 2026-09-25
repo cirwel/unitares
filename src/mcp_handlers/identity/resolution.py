@@ -88,8 +88,10 @@ _resolve_miss_clock = time.monotonic
 
 
 def _resolve_miss_wallclock() -> str:
-    # Same clock AuditEntry uses for its own timestamp.
-    return datetime.now().isoformat()
+    # Same clock AuditEntry uses for its own timestamp, but with the local UTC
+    # offset attached, so a reader in a different time zone (or across a DST
+    # change) places the suppressed misses at the right instant.
+    return datetime.now().astimezone().isoformat()
 
 
 def _reset_resolve_miss_audit_throttle() -> None:
