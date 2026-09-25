@@ -111,11 +111,131 @@ tool runs:
    - **OAuth 2.1.** Set `UNITARES_OAUTH_ISSUER_URL` to the public base URL. The
      server then advertises Dynamic Client Registration, so a DCR-capable
      client (e.g. Claude.ai custom connector) leaves client_id/client_secret
-     blank and self-registers. Note: client registrations are in-memory and
-     reset on restart. The protected MCP resource defaults to
+     blank and self-registers. Client registrations and issued tokens are
+     kept in Redis (keys `unitares:oauth:*`, token keys are SHA-256 digests,
+     TTLs follow token lifetimes), so a restart does not sign connectors out;
+     with Redis unavailable they fall back to memory and reset on restart.
+     The protected MCP resource defaults to
      `<UNITARES_OAUTH_ISSUER_URL>/mcp`; set `UNITARES_OAUTH_RESOURCE_URL` only
      if a reverse proxy exposes the MCP resource at a different public URL.
      See `src/oauth_provider.py`.
+
+     A connector that cannot self-register asks for a client ID and secret
+     instead (Google's custom MCP connector does this, and shows a redirect
+     URI to allow). Pre-register one:
+
+     ```bash
+     export UNITARES_OAUTH_STATIC_CLIENT_ID="$(python3 -c 'import secrets; print("unitares_" + secrets.token_hex(12))')"
+     export UNITARES_OAUTH_STATIC_CLIENT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+     export UNITARES_OAUTH_STATIC_REDIRECT_URIS="<redirect URI the connector shows>"
+     ```
+
+     The static client comes from the environment on every start (it is
+     never written to Redis, so rotating its secret takes effect on the next
+     restart); its tokens persist like any other. The token
+     endpoint accepts its secret either in the form body or as HTTP Basic.
+     An incomplete static-client configuration fails OAuth setup, which
+     closes the gated route rather than opening it (see below).
+
+     **Close registration if the gate should exclude anyone.** Sign-in is
+     auto-approved, so while dynamic registration is open any caller can
+     register a client and mint a token. Set
+     `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false` to admit only
+     pre-registered clients. Set it (like every `UNITARES_OAUTH_*` variable)
+     in the LaunchAgent plist or process environment: it is read at import,
+     before `~/.env.mcp` loads, and a value that arrives only from
+     `~/.env.mcp` leaves registration open (startup logs an error; the
+     OAuth startup line states whether registration is open). One static client can serve several
+     connectors: list each connector's redirect URI in
+     `UNITARES_OAUTH_STATIC_REDIRECT_URIS` (comma-separated) and paste the
+     same ID and secret into each (claude.ai: the custom connector's
+     advanced settings). Connectors sharing a static client share its
+     `oauth:<client_id>` session attribution, and if you enable token
+     revocation (it is not mounted by default), revoking one connector's
+     **access** token stops every connector on that client from refreshing,
+     across restarts (their current access tokens still work until they
+     expire, up to an hour); revoking a **refresh** token ends only that one. Give each connector its own client via DCR
+     if either matters. Alternatively, open registration briefly to add a
+     DCR connector and close it again: a registration that received a token
+     is kept in Redis, so it stays connected. `POST /register` alone writes
+     nothing to Redis, but while registration is open and sign-in is
+     auto-approved, anyone can still register, sign in and obtain a token,
+     which writes a client and its tokens to Redis; only closing
+     registration bounds that. Closing it bounds **new** registrations
+     only: a DCR client that already holds a token stays admitted (each
+     refresh renews it). To evict every client and token, **stop** the
+     server, delete the OAuth keys, then start it. Deleting while it runs
+     does not work: the process still holds the tokens in memory and writes
+     them back on the next refresh or sign-in. With launchd (KeepAlive
+     would respawn it, so unload rather than kill):
+
+     ```bash
+     launchctl bootout gui/$(id -u)/com.unitares.governance-mcp
+     R="${REDIS_URL:-redis://localhost:6379/0}"   # the server's REDIS_URL
+     redis-cli -u "$R" --scan --pattern 'unitares:oauth:*' | xargs -r redis-cli -u "$R" del
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
+     ```
+
+     Run `bootout` and `bootstrap` as separate commands, not chained on one
+     line. The deletion is targeted (never flush Redis, which holds the live
+     session store); pre-registered connectors simply sign in again.
+
+   OAuth gates `/mcp` on **every** request by default, which locks out
+   local clients that do not speak OAuth. To keep them working, give the
+   public tunnel its own listener:
+
+   ```bash
+   export UNITARES_OAUTH_PUBLIC_PORT=8772   # loopback only
+   ```
+
+   The server then also listens on `127.0.0.1:8772`, and the OAuth gate
+   applies to that listener alone. Point the tunnel's ingress at
+   `http://127.0.0.1:8772` (an explicit IPv4 address, not `localhost`).
+   **Order matters when migrating an existing OAuth deployment:** a tunnel
+   still pointed at the main port is served ungated the moment this variable
+   takes effect. The startup warning cannot see that (the main listener is
+   on loopback); `UNITARES_OAUTH_REQUIRED=1` refuses the combination unless
+   a bearer allowlist gates the main listener.
+   Repoint the tunnel first; until the restart it simply gets connection
+   refused on the new port.
+
+   The main listener is **not** OAuth-gated in this mode. Anything that
+   reaches it — a reverse proxy or tunnel pointed at the main port, or LAN
+   and tailnet callers when `UNITARES_BIND_ALL_INTERFACES=1` — gets `/mcp`
+   without a credential, as with no OAuth configured. The server warns at
+   startup when the main listener binds beyond loopback (`--host` included)
+   with no bearer allowlist. `UNITARES_OAUTH_REQUIRED=1` ("a gate on `/mcp`
+   or no service") refuses to serve with a public port and no bearer
+   allowlist whatever the host, since a loopback main listener is still
+   reachable by local processes and by a tunnel left on the main port. The
+   refusal runs before bootstrap, so it never stops a running predecessor.
+   The flag itself is read at import (a `UNITARES_OAUTH_REQUIRED` set only in
+   `~/.env.mcp` does not reach it); the bearer allowlist is read when `main()`
+   runs, after `~/.env.mcp`, as the per-request gate reads it. The public entry point belongs on the public port. The
+   listener is identified by the socket that accepted the connection, which
+   nothing in a request can forge, unlike `Host`, the peer address or
+   forwarding headers. REST routes reached through the public listener never
+   get the trusted-network bypass.
+
+   On the main listener a presented OAuth token is still checked, so a
+   local OAuth client keeps its session attribution; a bad token there is
+   ignored rather than refused. An invalid `UNITARES_OAUTH_PUBLIC_PORT`
+   is warned about and leaves OAuth on every request. So does a public port
+   that cannot be bound (in use, or equal to the main port): with no public
+   listener serving, OAuth gates every request on the main listener, and the
+   error is logged. If OAuth
+   setup fails, the public listener answers 503 and the main listener is
+   still served, unless `UNITARES_OAUTH_REQUIRED=1`, which refuses to start.
+   If setup fails *and* the public listener cannot bind, nothing confines
+   the failed gate, so every `/mcp` request answers 503.
+   `scripts/dev/unitares_doctor.py`'s `mcp_route_gate` probes the public
+   listener when `UNITARES_OAUTH_PUBLIC_PORT` is exported in its shell and
+   that port's `/health` names the same server process as the main
+   listener's; otherwise (nothing listening, no issuer on the server, or
+   another service on the port) it probes the main listener.
+   An incomplete static-client configuration (any of the three variables
+   without the others) fails OAuth setup. A bearer allowlist
+   (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.
 
 The Host allowlist applies regardless of the auth choice — set it even when
 using "none" locally is fine, but for a public host you need both the
@@ -166,8 +286,12 @@ Three things make a lockout harder than it needs to be:
   network position; for REST specifically, `UNITARES_REST_STRICT=0` restores the
   bypass.
 
-OAuth state cannot strand you across a restart: client registrations and tokens
-are in-memory and reset when the process does (`src/oauth_provider.py`).
+OAuth state now survives a restart (`src/oauth_provider.py`, `RedisOAuthStore`),
+so a restart is no longer a way to clear it. To sign every OAuth client out,
+stop the server, delete the `unitares:oauth:*` keys, then start it (targeted —
+never flush Redis, which holds the live session store; steps above). Deleting
+while it runs is undone by its next token issuance. There is no per-client
+sign-out by default: the revocation endpoint is not mounted.
 
 If provider construction fails, `/mcp` **closes rather than opening**. The route
 answers `503 auth_unavailable`, because serving it unauthenticated would answer a
