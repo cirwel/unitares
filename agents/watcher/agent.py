@@ -1681,9 +1681,10 @@ def _p006_receiver_is_logger(expr: Any) -> bool:
 
     The last name in the receiver must be one of ``_P006_LOGGER_NAMES``
     (``logger``, ``self.log``, ``self._logger``, ``LOG``, ``logging`` ...) or
-    end in ``logger`` (``app_logger``, ``structlog.get_logger()``,
-    ``logging.getLogger(__name__)``). A name that merely contains "log", such
-    as ``dialog``, ``catalog``, ``blog``, ``login`` or ``backlog``, does not
+    end in ``_logger``, ``_LOGGER`` or ``Logger`` (``app_logger``,
+    ``structlog.get_logger()``, ``logging.getLogger(__name__)``). A name that
+    merely contains or ends in "log" or "logger", such as ``dialog``,
+    ``catalog``, ``blog``, ``blogger``, ``login`` or ``backlog``, does not
     count. This also keeps ``task.exception()`` (the asyncio API, which only
     returns the stored exception) or ``parser.error(...)`` from counting as
     logging.
@@ -1698,7 +1699,7 @@ def _p006_receiver_is_logger(expr: Any) -> bool:
         name = expr.id
     else:
         return False
-    return name in _P006_LOGGER_NAMES or name.lower().endswith("logger")
+    return name in _P006_LOGGER_NAMES or name.endswith(("_logger", "_LOGGER", "Logger"))
 
 
 def _p006_is_loud_log_call(node: Any) -> bool:
@@ -1737,6 +1738,34 @@ def _p006_callee_name(func: Any) -> str:
     return ""
 
 
+def _p006_value_is_inert(value: Any) -> bool:
+    """True when evaluating ``value`` is taken not to raise: a literal
+    (a signed number such as ``-1`` included), a name, or a tuple, list or
+    dict built only from those, with literal dict keys. A call, await,
+    subscript, attribute access, other operator, f-string, set,
+    comprehension or ``*``/``**`` unpacking can raise, so any of them makes
+    it not inert. (A name lookup could raise NameError; that is accepted.)"""
+    import ast
+
+    for node in ast.walk(value):
+        if isinstance(node, ast.Dict):
+            if not all(isinstance(k, ast.Constant) for k in node.keys):
+                return False
+        elif isinstance(node, ast.UnaryOp):
+            if not (
+                isinstance(node.op, (ast.USub, ast.UAdd))
+                and isinstance(node.operand, ast.Constant)
+            ):
+                return False
+        elif isinstance(node, (ast.USub, ast.UAdd)):
+            continue
+        elif not isinstance(
+            node, (ast.Constant, ast.Name, ast.Tuple, ast.List, ast.expr_context)
+        ):
+            return False
+    return True
+
+
 def _p006_handler_reacts(handler: Any) -> bool:
     """True when ``handler``'s body, nested blocks included, has positive
     evidence of reacting: a ``raise``, a logging call at info level or above,
@@ -1748,15 +1777,25 @@ def _p006_handler_reacts(handler: Any) -> bool:
     run when the handler does. So are the handlers of a ``try`` nested inside
     this handler: they react to a different exception (say, one from cleanup
     code), and when that code succeeds the caught exception is still
-    swallowed. The nested try's body, ``else`` and ``finally`` do run on this
-    handler's path and are searched, with one exception: a ``raise`` in the
-    body of a nested try that has any handler does not count, because that
-    handler may catch it and the failure is then swallowed after all. The
-    rule is conservative on purpose: it does not work out whether the
-    handler's type matches the raised one, or whether the handler re-raises
-    (its body is skipped, as above), so such a finding is kept. A log call or
-    a non-None ``return`` in that body still counts; neither is caught. The
-    body of a ``with ...suppress(...)`` block is treated the same way.
+    swallowed. The nested try's ``finally`` runs on every path and is
+    searched like the rest of this handler. Its ``else`` is not searched: it
+    is skipped exactly when the nested body raised into a handler.
+
+    The body of a nested try that has any handler is a caught body: whatever
+    raises there may be caught and swallowed, so evidence in it counts only
+    when nothing can raise before it takes effect. Only its first statement
+    is examined, and it counts only when it is a ``return`` of an inert
+    non-None value or a loud log call whose arguments are all inert (see
+    ``_p006_value_is_inert``). So ``return False`` or ``return {"error":
+    msg}`` counts; ``return compute()``, ``return cache[key]``, a ``raise``
+    (the nested handler may catch it), and anything after a first statement
+    that could raise (``cleanup(); return False``) do not. The body of a
+    ``with ...suppress(...)`` block is treated the same way, and counts only
+    when ``suppress()`` is the last context manager: one entered after it
+    can raise into it before the body runs. The rule is
+    conservative on purpose: it does not work out whether a nested handler's
+    type matches what was raised, or whether that handler re-raises (its body
+    is skipped, as above), so such a finding is kept.
     """
     import ast
 
@@ -1764,32 +1803,40 @@ def _p006_handler_reacts(handler: Any) -> bool:
     try_types = tuple(
         t for t in (ast.Try, getattr(ast, "TryStar", None)) if t is not None
     )
-    # (node, raise_caught): raise_caught is True inside the body of a nested
-    # try that has handlers, where a `raise` does not escape to the caller.
-    stack = [(node, False) for node in handler.body]
+    stack = list(handler.body)
     while stack:
-        node, raise_caught = stack.pop()
+        node = stack.pop()
         if isinstance(node, scope_nodes):
             continue
         if isinstance(node, try_types):
-            body_caught = raise_caught or bool(node.handlers)
-            stack.extend((child, body_caught) for child in node.body)
-            stack.extend(
-                (child, raise_caught) for child in [*node.orelse, *node.finalbody]
-            )
+            if node.handlers:
+                # The else is skipped when the body raised into a handler,
+                # so evidence there does not count either.
+                if _p006_caught_first_reacts(node.body[0]):
+                    return True
+            else:
+                stack.extend(node.body)
+            stack.extend(node.finalbody)
             continue
         if isinstance(node, (ast.With, ast.AsyncWith)) and any(
             isinstance(item.context_expr, ast.Call)
             and _p006_callee_name(item.context_expr.func) == "suppress"
             for item in node.items
         ):
-            stack.extend((item, raise_caught) for item in node.items)
-            stack.extend((child, True) for child in node.body)
+            # Context managers entered after suppress() can raise into it
+            # before the body runs, so the body counts only when suppress()
+            # is the last item.
+            last = node.items[-1].context_expr
+            if (
+                isinstance(last, ast.Call)
+                and _p006_callee_name(last.func) == "suppress"
+                and _p006_caught_first_reacts(node.body[0])
+            ):
+                return True
+            stack.extend(node.items)
             continue
         if isinstance(node, ast.Raise):
-            if not raise_caught:
-                return True
-            continue
+            return True
         if isinstance(node, ast.Return) and not (
             node.value is None
             or (isinstance(node.value, ast.Constant) and node.value.value is None)
@@ -1797,7 +1844,32 @@ def _p006_handler_reacts(handler: Any) -> bool:
             return True
         if _p006_is_loud_log_call(node):
             return True
-        stack.extend((child, raise_caught) for child in ast.iter_child_nodes(node))
+        stack.extend(ast.iter_child_nodes(node))
+    return False
+
+
+def _p006_caught_first_reacts(stmt: Any) -> bool:
+    """True when ``stmt``, the first statement of a caught body, reacts
+    without anything that can raise first: ``return <inert non-None value>``
+    or a loud log call on a plain name (``logger.warning``, not
+    ``self.logger.warning`` or ``getLogger(n).warning``, whose receiver can
+    raise) with all arguments inert."""
+    import ast
+
+    if isinstance(stmt, ast.Return):
+        value = stmt.value
+        return (
+            value is not None
+            and not (isinstance(value, ast.Constant) and value.value is None)
+            and _p006_value_is_inert(value)
+        )
+    if isinstance(stmt, ast.Expr) and _p006_is_loud_log_call(stmt.value):
+        call = stmt.value
+        return isinstance(call.func.value, ast.Name) and all(_p006_value_is_inert(arg) for arg in call.args) and all(
+            # kw.arg is None for `**mapping`, which can raise.
+            kw.arg is not None and _p006_value_is_inert(kw.value)
+            for kw in call.keywords
+        )
     return False
 
 
@@ -1839,6 +1911,20 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     an inner try body under ``except KeyError: logger.warning(...)`` is still
     kept when an outer ``except Exception: pass`` would catch anything else.
 
+    When the line sits in a ``try`` block, the path also takes the handlers of
+    every try nested in the innermost such block that starts below the line,
+    at any depth: the model may cite the outer ``try:`` line or an early body
+    line when the silent handler belongs to a try further down. Tries inside
+    a nested def, lambda or class are not taken, nor handlers whose clause
+    carries ``# noqa: BLE001`` or a bare ``# noqa``. Nothing is taken when the
+    line sits in a nested def or class, or in a nested try's handler,
+    ``else`` or ``finally``, which is not above a later swallow but in a
+    region of its own; nor when the block itself lies inside a handler, where
+    nested handlers are never on the path. This only
+    adds to a path that already has a handler, so it can keep a finding but
+    never drop one: one silent nested handler keeps it, and a line with no
+    handler of its own is kept as below.
+
     Kept (returns True) whenever the check cannot show a reaction: no handler
     on the path (a line inside no try, or only in try/finally), an unreadable,
     non-Python or unparseable file.
@@ -1875,8 +1961,94 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
             continue
         on_path.extend(h for h in node.handlers if _within(h, h.lineno))
 
+    # Checked before the nested step below, which only ever adds handlers
+    # to a non-empty path: a line with no handler of its own stays kept.
     if not on_path:
         return True
+
+    # A cite in a try block may point above the swallow it means: at the
+    # `try:` line or an early body line, with the silent handler on a try
+    # nested further down that block. Add the handlers of every try nested
+    # in the innermost such block that starts after the cited line.
+    innermost = None
+    for node in ast.walk(tree):
+        if not isinstance(node, try_types):
+            continue
+        body_end = getattr(node.body[-1], "end_lineno", None) or node.body[-1].lineno
+        if node.lineno <= line <= body_end and (
+            innermost is None or node.lineno > innermost.lineno
+        ):
+            innermost = node
+    scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+    def _runs_in_handler(target: Any) -> bool:
+        # True when `target` runs as part of some handler's body: reached
+        # from it without crossing a def, lambda or class.
+        for node in ast.walk(tree):
+            if not isinstance(node, try_types):
+                continue
+            for h in node.handlers:
+                stack: list[Any] = list(h.body)
+                while stack:
+                    child = stack.pop()
+                    if child is target:
+                        return True
+                    if not isinstance(child, scope_nodes):
+                        stack.extend(ast.iter_child_nodes(child))
+        return False
+
+    # Inside a handler, a nested try's handlers are deliberately not on the
+    # path (see `_p006_handler_reacts`), so the step does not run there.
+    if innermost is not None and _runs_in_handler(innermost):
+        innermost = None
+    if innermost is not None:
+        # Tries in the block, not crossing into a nested def, lambda or
+        # class: code there does not run as part of the block.
+        nested: list[Any] = []
+        stack: list[Any] = list(innermost.body)
+        while stack:
+            node = stack.pop()
+            if isinstance(node, scope_nodes):
+                continue
+            if isinstance(node, try_types):
+                nested.append(node)
+            stack.extend(ast.iter_child_nodes(node))
+
+        # A line in a nested def, lambda or class, or in a nested try's
+        # handler, else or finally, is not above a later swallow in the
+        # block: it belongs to a region of its own. A branch's span starts
+        # right after the block before it, so its header counts even when
+        # comments separate it from its first statement.
+        barriers: list[tuple[int, int]] = []
+        for stmt in innermost.body:
+            for node in ast.walk(stmt):
+                # A lambda shares its line with code that runs in the block,
+                # so only statement scopes are barriers.
+                if isinstance(node, scope_nodes) and not isinstance(node, ast.Lambda):
+                    barriers.append((node.lineno, node.end_lineno or node.lineno))
+                if not isinstance(node, try_types):
+                    continue
+                barriers.extend((h.lineno, h.end_lineno or h.lineno) for h in node.handlers)
+                prev_end = (node.handlers or node.body)[-1].end_lineno or 0
+                if node.orelse:
+                    barriers.append((prev_end + 1, node.orelse[-1].end_lineno or 0))
+                    prev_end = node.orelse[-1].end_lineno or 0
+                if node.finalbody:
+                    barriers.append((prev_end + 1, node.finalbody[-1].end_lineno or 0))
+
+        if not any(start <= line <= end for start, end in barriers):
+            source_lines = source.splitlines()
+            for t in nested:
+                if t.lineno <= line:
+                    continue
+                # A nested clause the author acknowledged with `# noqa:
+                # BLE001` (or a bare `# noqa`) does not keep the finding.
+                on_path.extend(
+                    h
+                    for h in t.handlers
+                    if not _P006_ACKNOWLEDGED.search(source_lines[h.lineno - 1])
+                )
+
     return not all(_p006_handler_reacts(h) for h in on_path)
 
 
@@ -2858,8 +3030,44 @@ def _indent_of(line: str) -> int:
 
 
 # A header that opens a try block or one of its non-handler branches: a line
-# under it is not in a handler's body.
+# under it is not in a handler's body. An `else:` matches here too, but it only
+# stops the walk when `_p006_else_is_try_branch` says it belongs to a try.
 _P006_TRY_OR_BRANCH = re.compile(r"^\s*(try|else|finally)\s*:")
+_P006_ELSE = re.compile(r"^\s*else\s*:")
+# Headers whose `else:` is not a try's: if/elif, for/async for, while.
+_P006_NON_TRY_ELSE_OWNER = re.compile(r"^\s*(if|elif|for|async\s+for|while)\b")
+_P006_CLOSING_BRACKET = re.compile(r"^\s*[)\]}]")
+
+
+def _p006_else_is_try_branch(
+    else_line: int, snippet_lines_by_num: dict[int, str]
+) -> bool:
+    """True unless the `else:` on ``else_line`` visibly belongs to an
+    if/elif/for/while.
+
+    The owner is the nearest earlier line at the same indent, skipping the
+    closing bracket of a header split over lines: an `except` clause for a
+    try's `else`, an `if`/`elif`/`for`/`while` header otherwise.
+    When that line is not visible, or is anything else, the `else` is taken
+    to be a try's, which stops the walk and keeps the finding.
+    """
+    indent = _indent_of(snippet_lines_by_num.get(else_line, ""))
+    line_no = else_line - 1
+    while line_no in snippet_lines_by_num:
+        line = snippet_lines_by_num[line_no]
+        line_no -= 1
+        if (
+            not line.strip()
+            or _indent_of(line) > indent
+            # The closing `):` of a header split over lines (black's layout);
+            # the header itself is further up at this indent.
+            or _P006_CLOSING_BRACKET.match(line)
+        ):
+            continue
+        if _indent_of(line) < indent:
+            return True
+        return not _P006_NON_TRY_ELSE_OWNER.match(line)
+    return True
 
 
 def _p006_governing_except(
@@ -2872,11 +3080,12 @@ def _p006_governing_except(
     The model cites either the clause itself or a line in its body (usually
     the `logger.debug(...)` call). Walk back out through the enclosing blocks
     (each line indented less than the block walked so far): the first such
-    line that is an except clause governs the flagged line. Reaching a `try:`,
-    `else:` or `finally:` header, or a def, first means the line is not in a
-    handler's body, for instance in the body of a later try whose own handler
-    comes after it. None when no clause is visible, in which case the finding
-    is left alone.
+    line that is an except clause governs the flagged line. Reaching a `try:`
+    or `finally:` header, a try's `else:`, or a def, first means the line is
+    not in a handler's body, for instance in the body of a later try whose own
+    handler comes after it. The `else:` of an if/for/while inside a handler
+    does not stop the walk (see ``_p006_else_is_try_branch``). None when no
+    clause is visible, in which case the finding is left alone.
     """
     src = snippet_lines_by_num.get(flagged_line, "")
     if _P006_EXCEPT_CLAUSE.match(src):
@@ -2893,7 +3102,9 @@ def _p006_governing_except(
             continue
         if _P006_EXCEPT_CLAUSE.match(line):
             return line_no
-        if _P006_TRY_OR_BRANCH.match(line):
+        if _P006_TRY_OR_BRANCH.match(line) and (
+            not _P006_ELSE.match(line) or _p006_else_is_try_branch(line_no, snippet_lines_by_num)
+        ):
             return None
         block_indent = indent
     return None
