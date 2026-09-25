@@ -700,7 +700,7 @@ def _install_scan_stubs(watcher_module, monkeypatch, findings_to_return):
     monkeypatch.setattr(
         watcher_module,
         "_verify_finding_against_source",
-        lambda _f, _ev, _lines: True,
+        lambda _f, _ev, _lines, _indented=None: True,
     )
 
 

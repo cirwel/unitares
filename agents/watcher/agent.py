@@ -1737,7 +1737,13 @@ def _p006_handler_reacts(handler: Any) -> bool:
     this handler: they react to a different exception (say, one from cleanup
     code), and when that code succeeds the caught exception is still
     swallowed. The nested try's body, ``else`` and ``finally`` do run on this
-    handler's path and are searched.
+    handler's path and are searched, with one exception: a ``raise`` in the
+    body of a nested try that has any handler does not count, because that
+    handler may catch it and the failure is then swallowed after all. The
+    rule is conservative on purpose: it does not work out whether the
+    handler's type matches the raised one, or whether the handler re-raises
+    (its body is skipped, as above), so such a finding is kept. A log call or
+    a non-None ``return`` in that body still counts; neither is caught.
     """
     import ast
 
@@ -1745,16 +1751,24 @@ def _p006_handler_reacts(handler: Any) -> bool:
     try_types = tuple(
         t for t in (ast.Try, getattr(ast, "TryStar", None)) if t is not None
     )
-    stack = list(handler.body)
+    # (node, raise_caught): raise_caught is True inside the body of a nested
+    # try that has handlers, where a `raise` does not escape to the caller.
+    stack = [(node, False) for node in handler.body]
     while stack:
-        node = stack.pop()
+        node, raise_caught = stack.pop()
         if isinstance(node, scope_nodes):
             continue
         if isinstance(node, try_types):
-            stack.extend([*node.body, *node.orelse, *node.finalbody])
+            body_caught = raise_caught or bool(node.handlers)
+            stack.extend((child, body_caught) for child in node.body)
+            stack.extend(
+                (child, raise_caught) for child in [*node.orelse, *node.finalbody]
+            )
             continue
         if isinstance(node, ast.Raise):
-            return True
+            if not raise_caught:
+                return True
+            continue
         if isinstance(node, ast.Return) and not (
             node.value is None
             or (isinstance(node.value, ast.Constant) and node.value.value is None)
@@ -1762,7 +1776,7 @@ def _p006_handler_reacts(handler: Any) -> bool:
             return True
         if _p006_is_loud_log_call(node):
             return True
-        stack.extend(ast.iter_child_nodes(node))
+        stack.extend((child, raise_caught) for child in ast.iter_child_nodes(node))
     return False
 
 
@@ -1992,12 +2006,16 @@ def parse_findings(
         # P006 post-filter: drop only when every handler that governs the
         # line re-raises, logs at info or above, or returns a non-None value.
         # Only a line the model actually cited can be checked; the
-        # region_start fallback for a missing line is not one.
-        if (
-            pattern == "P006"
-            and line_in_snippet > 0
-            and not p006_actually_fires(file_path, line)
-        ):
+        # region_start fallback for a missing line is not one, so such a
+        # finding is kept unjudged (the verifier's line-based re-raise check
+        # does not run for a .py file that parses either).
+        if pattern == "P006" and line_in_snippet <= 0:
+            log(
+                f"P006 at {file_path} has no cited line; kept without the "
+                f"handler check",
+                "debug",
+            )
+        elif pattern == "P006" and not p006_actually_fires(file_path, line):
             log(
                 f"suppressing P006 false-positive at {file_path}:{line} "
                 f"(every governing handler re-raises, logs, or returns a value)",
@@ -2938,9 +2956,17 @@ def _is_p016_inside_inner_assertion_helper(
 
 
 def _verify_finding_against_source(
-    finding: Finding, raw_evidence: str, snippet_lines_by_num: dict[int, str]
+    finding: Finding,
+    raw_evidence: str,
+    snippet_lines_by_num: dict[int, str],
+    indented_lines_by_num: dict[int, str] | None = None,
 ) -> bool:
     """Drop a finding if it can't be substantiated against actual code.
+
+    ``indented_lines_by_num`` is the same snippet with each line's original
+    indentation kept. The P006 clause and body checks read indentation, and
+    ``scan_file``'s ``snippet_lines_by_num`` strips it; callers that already
+    pass indented lines (tests) can omit it.
 
     Returns True if the finding survives verification.
     """
@@ -3151,12 +3177,19 @@ def _verify_finding_against_source(
     # `# noqa: BLE001` / bare `# noqa`, or its body re-raises. Either way the
     # "silent swallow" the rule describes is not there. The re-raise check is
     # line-based and blind to nested handlers and nested defs, so it only runs
-    # when the AST filter in parse_findings (p006_actually_fires) could not
-    # check the file: for a .py file that parses, that filter already decided.
+    # when the AST filter in parse_findings (p006_actually_fires) cannot check
+    # the file. For a .py file that parses it never runs: the AST filter judged
+    # the finding if the model cited a line, and a finding with no cited line
+    # (placed at region_start) is judged by neither re-raise check and kept.
     if finding.pattern == "P006":
-        except_line = _p006_governing_except(finding.line, snippet_lines_by_num)
+        p006_lines = (
+            indented_lines_by_num
+            if indented_lines_by_num is not None
+            else snippet_lines_by_num
+        )
+        except_line = _p006_governing_except(finding.line, p006_lines)
         if except_line is not None:
-            clause = snippet_lines_by_num.get(except_line, "")
+            clause = p006_lines.get(except_line, "")
             if _P006_ACKNOWLEDGED.search(clause):
                 log(
                     f"drop P006 {finding.file}:{finding.line} — except clause at line "
@@ -3165,7 +3198,7 @@ def _verify_finding_against_source(
                 )
                 return False
             if not _p006_ast_checkable(finding.file) and _p006_body_reraises(
-                except_line, snippet_lines_by_num
+                except_line, p006_lines
             ):
                 log(
                     f"drop P006 {finding.file}:{finding.line} — except body at line "
@@ -3256,6 +3289,9 @@ def scan_file(
     # Build a line_number → raw line content lookup so verification can compare
     # findings against the actual source.
     snippet_lines_by_num: dict[int, str] = {}
+    # The same lines with their indentation kept, for the P006 checks that
+    # need it. read_file_region writes each line as f"{i:4d}: {line}".
+    indented_lines_by_num: dict[int, str] = {}
     for raw in code_snippet.splitlines():
         head, _, rest = raw.partition(":")
         try:
@@ -3263,6 +3299,7 @@ def scan_file(
         except ValueError:
             continue
         snippet_lines_by_num[n] = rest.lstrip()
+        indented_lines_by_num[n] = rest[1:] if rest.startswith(" ") else rest
 
     patterns_md = load_patterns()
     prompt = build_prompt(patterns_md, file_path, code_snippet)
@@ -3298,7 +3335,9 @@ def scan_file(
     _clear_model_failures()
     findings: list[Finding] = []
     for f, raw_evidence in parsed:
-        if not _verify_finding_against_source(f, raw_evidence, snippet_lines_by_num):
+        if not _verify_finding_against_source(
+            f, raw_evidence, snippet_lines_by_num, indented_lines_by_num
+        ):
             continue
         # Stamp a content hash onto the finding so its fingerprint encodes
         # WHAT the code looked like, not just where it lived. Fixes the

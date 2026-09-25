@@ -72,6 +72,10 @@ SILENT_BODIES = [
     # cleanup() succeeds, the caught exception is still swallowed.
     "try:\n    cleanup()\nexcept OSError:\n    raise",
     "try:\n    cleanup()\nexcept OSError:\n    logger.error('cleanup failed')",
+    # A raise in the body of a nested try that has a handler may be caught by
+    # it, and then the failure is swallowed (review round 3, finding 1).
+    "try:\n    raise RuntimeError('wrapped') from exc\nexcept Exception:\n    pass",
+    "try:\n    if bad:\n        raise\nexcept ValueError:\n    pass",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
     "parser.error('bad input')",
@@ -140,9 +144,28 @@ def test_nested_try_body_and_finally_count_for_the_handler(tmp_path, body):
     # The nested try's body and finally run on the handler's own path, so
     # evidence there counts when the outer clause (6) is cited. A cite inside
     # the nested try (7) also reaches its silent `except OSError`, so it stays.
+    # A log call counts in the nested body: it runs before anything can be
+    # caught. A raise there does not (see SILENT_BODIES); one in `finally`
+    # escapes the nested handlers and does.
     path = _write(tmp_path, _handler(body))
     assert p006_actually_fires(str(path), 6) is False
     assert p006_actually_fires(str(path), 7) is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # try/finally has no handler to catch the raise.
+        "try:\n    raise RuntimeError('wrapped') from exc\nfinally:\n    cleanup()",
+        # The nested else runs outside the nested handlers.
+        "try:\n    cleanup()\nexcept OSError:\n    pass\nelse:\n    raise",
+        # A non-None return is not caught by the nested handler.
+        "try:\n    return {'error': str(exc)}\nexcept Exception:\n    pass",
+    ],
+)
+def test_escaping_reaction_in_nested_try_counts(tmp_path, body):
+    path = _write(tmp_path, _handler(body))
+    assert p006_actually_fires(str(path), 6) is False
 
 
 @pytest.mark.parametrize("body", ["continue", "break"])
@@ -469,13 +492,10 @@ def _stub_model(monkeypatch, tmp_path: Path, reply: str) -> None:
 
 @pytest.mark.parametrize("source,flagged", END_TO_END_CASES)
 def test_scan_file_keeps_p006_the_ast_filter_keeps(tmp_path, monkeypatch, source, flagged):
-    """scan_file runs parse_findings and _verify_finding_against_source for real.
-
-    scan_file's snippet map strips each line's indentation, so the line-based
-    re-raise check cannot see a nested body here and these pass with or
-    without the fix. The next test keeps the indentation and is the one that
-    fails if that check overrides the AST filter again.
-    """
+    """scan_file runs parse_findings and _verify_finding_against_source for real,
+    with the indented lines the P006 checks read. The line-based re-raise check
+    would see the nested `raise` and drop these; for a .py file that parses it
+    must not run."""
     from agents.watcher.agent import scan_file
 
     path = _write(tmp_path, source)
@@ -498,19 +518,58 @@ def test_verification_does_not_override_the_ast_filter(tmp_path, source, flagged
     assert _verify_finding_against_source(finding, evidence, snippet) is True
 
 
-def test_line_based_reraise_check_still_runs_for_unparseable_files(tmp_path):
-    from agents.watcher.agent import Finding, _verify_finding_against_source
+def test_line_based_reraise_check_still_runs_for_unparseable_files(tmp_path, monkeypatch):
+    """For a .py file the AST filter cannot parse, the line-based re-raise
+    check is the only one, and it must work on scan_file's own snippet lines
+    (review round 3, finding 2: it once read the indentation-stripped map and
+    never fired)."""
+    from agents.watcher.agent import scan_file
 
-    source = _NESTED_HANDLER_RERAISES + "def broken(:\n"
-    path = _write(tmp_path, source)
-    snippet = {i: text for i, text in enumerate(source.splitlines(), start=1)}
-    finding = Finding(
-        pattern="P006",
-        file=str(path),
-        line=4,
-        hint="silent swallow",
-        severity="medium",
-        detected_at="2026-09-24T00:00:00Z",
-        model_used="test",
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        raise\n"
+        "def broken(:\n"
     )
-    assert _verify_finding_against_source(finding, "", snippet) is False
+    path = _write(tmp_path, source)
+    for flagged in (4, 5):
+        _stub_model(monkeypatch, tmp_path, _model_reply(flagged))
+        assert scan_file(str(path), persist=False) == []
+
+
+def test_unparseable_silent_handler_is_kept(tmp_path, monkeypatch):
+    from agents.watcher.agent import scan_file
+
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "    raise ValueError('after the handler')\n"
+        "def broken(:\n"
+    )
+    path = _write(tmp_path, source)
+    _stub_model(monkeypatch, tmp_path, _model_reply(4))
+    found = scan_file(str(path), persist=False)
+    assert [(f.pattern, f.line) for f in found] == [("P006", 4)]
+
+
+def test_scan_file_keeps_p006_without_a_cited_line(tmp_path, monkeypatch):
+    """No cited line: neither re-raise check judges the region_start fallback,
+    so the finding is kept even where region_start is a re-raising clause."""
+    from agents.watcher.agent import scan_file
+
+    source = (
+        "try:\n"
+        "    work()\n"
+        "except Exception:\n"
+        "    raise\n"
+    )
+    path = _write(tmp_path, source)
+    reply = json.dumps({"findings": [{"pattern": "P006", "hint": "silent swallow"}]})
+    _stub_model(monkeypatch, tmp_path, reply)
+    found = scan_file(str(path), region="3-4", persist=False)
+    assert [(f.pattern, f.line) for f in found] == [("P006", 3)]
