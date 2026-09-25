@@ -179,7 +179,8 @@ def cleanup_stale_state_locks(project_root: Path = None, max_age_seconds: float 
     Args:
         project_root: Project root directory. When omitted, sweep the directory
             StateLockManager writes to (honours UNITARES_LOCK_DIR).
-        max_age_seconds: Maximum age before considering stale
+        max_age_seconds: Minimum age before a free lock file is removed; held
+            locks are never removed
         dry_run: If True, only report what would be cleaned
     
     Returns:
@@ -197,8 +198,8 @@ if __name__ == "__main__":
     # CLI tool for manual cleanup
     import argparse
     
-    parser = argparse.ArgumentParser(description="Clean up stale lock files")
-    parser.add_argument("--max-age", type=float, default=300.0, help="Maximum age in seconds (default: 300 = 5 minutes)")
+    parser = argparse.ArgumentParser(description="Remove lock files that no process holds")
+    parser.add_argument("--max-age", type=float, default=300.0, help="Minimum age in seconds before a FREE lock file is removed (default: 300); held locks are never removed")
     parser.add_argument("--dry-run", action="store_true", help="Only report what would be cleaned")
     parser.add_argument("--lock-dir", type=Path, help="Lock directory (default: auto-detect)")
     
