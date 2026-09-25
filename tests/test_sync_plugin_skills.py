@@ -17,7 +17,10 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ("sync-plugin-skills.sh", "skills_manifest.py", "skills_direction_guard.py")
+SCRIPTS = (
+    "sync-plugin-skills.sh", "skills_manifest.py", "skills_direction_guard.py",
+    "check_plugin_attestation_rule.py",
+)
 
 pytestmark = pytest.mark.skipif(
     shutil.which("rsync") is None or shutil.which("git") is None,
@@ -106,3 +109,43 @@ def test_a_stray_canonical_manifest_is_never_mirrored(trees):
     (canon / "skills" / "SKILLS_MANIFEST.sha256").write_text("stale junk\n")
     assert _sync(canon, plugin).returncode == 0
     assert (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text() == _expected(canon)
+
+
+# A plugin freshness checker whose attestation rule is the pre-port "newest
+# record wins" reading, which canonical's rule disagrees with.
+_DRIFTED_CHECKER = """\
+import hashlib, json
+from pathlib import Path
+
+def skill_text_digest(skill_md):
+    return hashlib.sha256(Path(skill_md).read_bytes()).hexdigest()[:16]
+
+def attested_date(skills_dir, name, skill_digest):
+    adir = Path(skills_dir) / ".attestations" / name
+    for path in sorted(adir.glob("*.json"), reverse=True) if adir.is_dir() else []:
+        try:
+            data = json.loads(path.read_text())
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+            v = data.get("verified_date")
+            return v if isinstance(v, str) and v else None
+    return None
+"""
+
+
+def test_a_drifted_plugin_checker_fails_check_but_not_the_sync(trees):
+    canon, plugin = trees
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_DRIFTED_CHECKER)
+
+    result = _sync(canon, plugin)
+    assert result.returncode == 5, result.stderr + result.stdout
+    assert "disagrees with canonical's attestation rule" in result.stderr
+    # The skills mirror is still written: the checker port is separate work.
+    assert (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text() == _expected(canon)
+
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 1
+    assert "in sync" in check.stdout
+    assert "disagrees with canonical's attestation rule" in check.stderr

@@ -22,6 +22,13 @@
 #   UNITARES_PLUGIN_REPO=/path/to/plugin ./scripts/dev/sync-plugin-skills.sh
 #   ./scripts/dev/sync-plugin-skills.sh --check                 # diff-only, exit 1 on mismatch
 #
+# Both modes also compare the plugin's freshness checker with canonical's
+# attestation rule (scripts/dev/check_plugin_attestation_rule.py). The plugin
+# keeps its own copy of that rule because it cannot import unitares, and a
+# copy drifts silently. Disagreement fails --check (exit 1) and, in apply
+# mode, is reported after the mirror is written (exit 5): the skills still
+# sync, but the checker needs a port that this script cannot make.
+#
 # Environment:
 #   UNITARES_PLUGIN_REPO  — path to unitares-governance-plugin checkout.
 #                           Default: $(git rev-parse --show-toplevel)/../unitares-governance-plugin
@@ -58,6 +65,32 @@ fi
 MANIFEST_NAME="SKILLS_MANIFEST.sha256"
 MANIFEST_TOOL="${UNITARES_ROOT}/scripts/dev/skills_manifest.py"
 
+# Attestation-rule parity. Computed once, reported at every exit below that
+# would otherwise claim success. `set -e` would abort on the check's non-zero
+# exit before the status could be read, so the capture is unguarded.
+set +e
+RULE_OUT=$(python3 "${UNITARES_ROOT}/scripts/dev/check_plugin_attestation_rule.py" "$PLUGIN_REPO" 2>&1)
+RULE_STATUS=$?
+set -e
+
+# Prints the parity result; returns 1 only on a real disagreement. A checker
+# that cannot be loaded is a warning: this is a drift detector, not a guard
+# against data loss, so it does not block the skills sync.
+report_rule_parity() {
+    case "$RULE_STATUS" in
+        0) return 0 ;;
+        1)
+            echo "[sync-plugin-skills] plugin freshness checker disagrees with canonical's attestation rule:" >&2
+            echo "$RULE_OUT" | sed 's/^/  /' >&2
+            echo "[sync-plugin-skills] port src/skill_attestations.py THE RULE into $PLUGIN_REPO/scripts/_check_freshness.py" >&2
+            return 1 ;;
+        *)
+            echo "[sync-plugin-skills] warning: could not compare the plugin's attestation rule (exit $RULE_STATUS):" >&2
+            echo "$RULE_OUT" | sed 's/^/  /' >&2
+            return 0 ;;
+    esac
+}
+
 # Diff first — same operation either way. The manifest is compared separately:
 # it exists only on the mirror side, and what matters is that it matches the
 # fingerprint computed from canonical now.
@@ -70,6 +103,10 @@ fi
 
 if [[ -z "$DIFF_OUT" ]]; then
     echo "[sync-plugin-skills] in sync — nothing to do"
+    if ! report_rule_parity; then
+        [[ "$CHECK_ONLY" == 1 ]] && exit 1
+        exit 5
+    fi
     exit 0
 fi
 
@@ -78,6 +115,7 @@ if [[ "$CHECK_ONLY" == 1 ]]; then
     echo "$DIFF_OUT" | sed 's/^/  /'
     echo
     echo "[sync-plugin-skills] run: ./scripts/dev/sync-plugin-skills.sh"
+    report_rule_parity || true
     exit 1
 fi
 
@@ -160,3 +198,6 @@ echo "[sync-plugin-skills] done. Plugin status:"
 git -C "$PLUGIN_REPO" status --short -- skills/ | sed 's/^/  /'
 echo
 echo "[sync-plugin-skills] next: cd $PLUGIN_REPO && commit + push the mirror update"
+if ! report_rule_parity; then
+    exit 5
+fi
