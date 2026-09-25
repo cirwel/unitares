@@ -850,8 +850,9 @@ def _apply_floor_to_finding(
 # each row can still be resolved or dismissed on its own.
 # ---------------------------------------------------------------------------
 
-# ``{directory: (git common dir, worktree toplevel) or None}``, per render.
-GitCache = dict[str, "tuple[str, str] | None"]
+# Per-render cache of git lookups: ``{directory: (git common dir, worktree
+# toplevel) or None}`` plus ``{"ignored:<path>": bool}`` from ``_git_ignores``.
+GitCache = dict[str, Any]
 
 
 def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | None:
@@ -929,22 +930,42 @@ def _git_location(
     return common_dir, toplevel, rel
 
 
+# Patterns whose ``line_content_hash`` is not a hash of the source line.
+# Review findings (R000) hash the hint text, so two unrelated lines with the
+# same observation would otherwise look like copies of one line.
+_UNGROUPED_PATTERNS = frozenset({"R000"})
+
+
 def _group_copies(
     findings: list[dict[str, Any]], cache: GitCache
 ) -> list[list[dict[str, Any]]]:
     """Group findings that are copies of the same flagged code.
 
     Copies share the repository (git common dir), the repo-relative path, the
-    pattern and the line content hash. Findings with no content hash, or that
-    cannot be placed in a git worktree, stay on their own. Groups keep the
-    order of their first member, and members keep the input order.
+    pattern, the line content hash and the displayed severity. Findings with
+    no content hash, with a pattern in ``_UNGROUPED_PATTERNS``, or that cannot
+    be placed in a git worktree stay on their own. Groups keep the order of
+    their first member, and members keep the input order.
     """
     groups: dict[Any, list[dict[str, Any]]] = {}
     for index, f in enumerate(findings):
         content_hash = str(f.get("line_content_hash") or "")
-        location = _git_location(str(f.get("file") or ""), cache)
+        pattern = f.get("pattern", "")
+        location = (
+            None
+            if pattern in _UNGROUPED_PATTERNS
+            else _git_location(str(f.get("file") or ""), cache)
+        )
         if content_hash and location is not None:
-            key: Any = (location[0], location[2], f.get("pattern", ""), content_hash)
+            # Severity is part of the key so a group never shows, and marks
+            # surfaced, a row the display rules would have hidden.
+            key: Any = (
+                location[0],
+                location[2],
+                pattern,
+                content_hash,
+                f.get("severity", "low"),
+            )
         else:
             key = ("single", index)
         groups.setdefault(key, []).append(f)
@@ -988,8 +1009,13 @@ def _format_group_lines(group: list[dict[str, Any]], cache: GitCache) -> list[st
         loc = _git_location(str(f.get("file") or ""), cache)
         label = Path(loc[1]).name if loc else "?"
         fp = str(f.get("fingerprint", ""))[:8]
+        # Every row in the group is marked surfaced, so a hint that differs
+        # from the entry's must reach the screen too.
+        own_hint = f.get("hint", "")
+        hint_note = f" — {own_hint}" if own_hint != hint else ""
         lines.append(
-            f"    {label}: {f.get('file', '?')}:{f.get('line', '?')}  (#{fp}){_status_marker(f)}"
+            f"    {label}: {f.get('file', '?')}:{f.get('line', '?')}{hint_note}"
+            f"  (#{fp}){_status_marker(f)}"
         )
     snapshot_source = next(
         (f for f in group if f.get("path_gone") and f.get("line_content")), None
@@ -1247,10 +1273,46 @@ def _worktree_label(file_path: str, cache: GitCache) -> str:
             missing = missing.parent
         if not missing.is_dir() and missing.parent != missing:
             info = _git_worktree_of_dir(missing.parent, cache)
-            if info is not None:
+            if info is not None and not _git_ignores(missing, cache):
                 return Path(info[1]).name or "(root)"
+            # Outside git, or an ignored directory inside a checkout (a
+            # worktree kept under `.claude/worktrees/`): the missing
+            # directory is the removed worktree, not the enclosing checkout.
             return missing.name
     return _label_for_other_worktree(file_path)
+
+
+def _git_ignores(path: Path, cache: GitCache) -> bool:
+    """True when git ignores ``path`` in the checkout around its parent.
+
+    Nested worktree directories (``.claude/worktrees/<name>``) are ignored
+    by the enclosing checkout; a deleted source directory normally is not.
+    Errors count as not ignored.
+    """
+    key = f"ignored:{path}"
+    if key in cache:
+        return bool(cache[key])
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(path.parent),
+                "check-ignore",
+                "-q",
+                "--no-index",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
+        ignored = result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        ignored = False
+    cache[key] = ignored
+    return ignored
 
 
 def _label_for_other_worktree(file_path: str) -> str:

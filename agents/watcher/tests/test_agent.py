@@ -5240,3 +5240,59 @@ def test_busy_region_warns_but_does_not_count_as_a_failure(
 
     assert not watcher_module._model_failure_path(detector).exists()
     assert any("1 of 2 regions were skipped (model busy)" in m for m in logged)
+
+
+def test_worktree_label_for_removed_worktree_nested_in_a_checkout(
+    watcher_module, tmp_path
+):
+    # Worktrees kept under an ignored directory of the main checkout
+    # (`.claude/worktrees/<name>`) must not be counted under the checkout.
+    trees = _repo_with_worktrees(tmp_path)
+    (trees["main"] / ".gitignore").write_text(".claude/worktrees/\n")
+    (trees["main"] / ".claude" / "worktrees").mkdir(parents=True)
+    gone = trees["main"] / ".claude" / "worktrees" / "gone-x" / "tests" / "t.py"
+    assert watcher_module._worktree_label(str(gone), {}) == "gone-x"
+
+
+def test_group_shows_each_copy_hint_that_differs(watcher_module, tmp_path):
+    # Every row in a displayed group is marked surfaced, so each row's own
+    # hint has to be on screen when it differs from the entry's.
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("aaaa000000000001", trees["main"], line=3, hint="swallows DB error"),
+        _copy("bbbb000000000002", trees["main"], line=9, hint="hides timeout"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "— swallows DB error  (2 locations" in block
+    copy_b = next(l for l in block.splitlines() if "(#bbbb0000)" in l)
+    assert "— hides timeout" in copy_b
+    copy_a = next(l for l in block.splitlines() if "(#aaaa0000)" in l)
+    assert "—" not in copy_a
+    assert len(shown) == 2
+
+
+def test_review_findings_are_never_grouped(watcher_module, tmp_path):
+    # R000 hashes the hint, not the source line: equal hashes do not mean
+    # equal code.
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("aaaa000000000001", trees["main"], line=3, pattern="R000"),
+        _copy("bbbb000000000002", trees["main"], line=9, pattern="R000"),
+    ]
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+def test_group_never_mixes_severities(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"], severity="high"),
+        _copy("bbbb000000000002", trees["feat-a"], severity="low"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+    assert "(#bbbb0000)" not in block  # low is never shown
+    assert [f["fingerprint"] for f in shown] == ["aaaa000000000001"]
