@@ -220,4 +220,15 @@ def attested_date(skills_dir, name, skill_digest):
 """)
     check = _sync(canon, plugin, "--check")
     assert check.returncode == 0, check.stderr
-    assert "could not compare" in check.stderr and "RuntimeError: boom" in check.stderr
+    assert "rule not checked (exit 2)" in check.stderr and "RuntimeError: boom" in check.stderr
+
+
+def test_a_plugin_without_a_checker_says_the_rule_was_not_checked(trees):
+    # A moved or renamed plugin checker must not make the detector go quiet:
+    # "never compared" is reported, not passed off as agreement.
+    canon, plugin = trees
+    assert _sync(canon, plugin).returncode == 0
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 0, check.stderr
+    assert "plugin attestation rule not checked (exit 3)" in check.stderr
+    assert "nothing compared" in check.stderr

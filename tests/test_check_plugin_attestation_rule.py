@@ -135,6 +135,9 @@ def test_a_checker_that_raises_is_not_reported_as_drift(tmp_path):
     assert lines == ["comparison raised RuntimeError: boom"]
 
 
-def test_a_plugin_without_a_checker_has_nothing_to_compare(tmp_path):
-    status, _ = rule_check.check(_plugin(tmp_path, None))
-    assert status == rule_check.EXIT_OK
+def test_a_plugin_without_a_checker_is_not_reported_as_agreement(tmp_path):
+    # "Never compared" must not read as "the rules agree", or a moved plugin
+    # checker would leave the detector silently blind.
+    status, lines = rule_check.check(_plugin(tmp_path, None))
+    assert status == rule_check.EXIT_NOT_COMPARED
+    assert "nothing compared" in lines[0]

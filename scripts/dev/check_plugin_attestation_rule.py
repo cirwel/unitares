@@ -18,10 +18,13 @@ checkouts are present.
 Usage:
     python3 scripts/dev/check_plugin_attestation_rule.py <plugin_repo>
 
-Exits 0 when the rules agree (or the plugin has no freshness checker to
-compare), 1 on disagreement, 2 when the comparison could not be made: the
-plugin's checker fails to load, or either side raises while comparing. A crash
-is never reported as drift. Findings go to stdout.
+Exits 0 only when a comparison ran and the rules agree; 1 on disagreement;
+2 when the comparison could not be made (the plugin's checker fails to load,
+or either side raises while comparing); 3 when there was nothing to compare
+because the plugin has no checker at the expected path. A crash is never
+reported as drift, and "never compared" is never reported as agreement: a
+moved or renamed plugin checker must not leave the detector silently blind.
+Findings go to stdout.
 """
 
 from __future__ import annotations
@@ -55,6 +58,7 @@ except Exception as exc:  # noqa: BLE001
 EXIT_OK = 0
 EXIT_DRIFT = 1
 EXIT_UNUSABLE = 2
+EXIT_NOT_COMPARED = 3
 
 PLUGIN_CHECKER = Path("scripts") / "_check_freshness.py"
 SKILL = "demo"
@@ -116,7 +120,8 @@ def check(plugin_repo: Path) -> tuple[int, list[str]]:
         err = _CANONICAL_IMPORT_ERROR
         return EXIT_UNUSABLE, [f"cannot load canonical src/skill_attestations.py: {type(err).__name__}: {err}"]
     if not (plugin_repo / PLUGIN_CHECKER).is_file():
-        return EXIT_OK, [f"no {PLUGIN_CHECKER} in plugin; nothing to compare"]
+        return EXIT_NOT_COMPARED, [f"no {PLUGIN_CHECKER} in plugin; nothing compared "
+                                   "(if the checker moved, update PLUGIN_CHECKER)"]
     try:
         plugin = _load_plugin_checker(plugin_repo)
     except Exception as exc:  # the plugin's module is foreign code; any failure is "cannot load"

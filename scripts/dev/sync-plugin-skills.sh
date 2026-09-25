@@ -80,8 +80,9 @@ check_rule_parity() {
 check_rule_parity
 
 # Prints the parity result; returns 1 only on a real disagreement. A checker
-# that cannot be loaded or raises is a warning: this is a drift detector, not
-# a guard against data loss, so it does not block the skills sync.
+# that cannot be loaded, raises, or is missing is a printed warning, never
+# silence: this is a drift detector, not a guard against data loss, so it does
+# not block the skills sync, but "not checked" must not look like "agrees".
 report_rule_parity() {
     case "$RULE_STATUS" in
         0) return 0 ;;
@@ -91,7 +92,9 @@ report_rule_parity() {
             echo "[sync-plugin-skills] port src/skill_attestations.py THE RULE into $PLUGIN_REPO/scripts/_check_freshness.py" >&2
             return 1 ;;
         *)
-            echo "[sync-plugin-skills] warning: could not compare the plugin's attestation rule (exit $RULE_STATUS), not checked:" >&2
+            # 2: comparison failed; 3: plugin has no checker at the expected
+            # path. Either way the rule was NOT checked, which must be said.
+            echo "[sync-plugin-skills] warning: plugin attestation rule not checked (exit $RULE_STATUS):" >&2
             echo "$RULE_OUT" | sed 's/^/  /' >&2
             return 0 ;;
     esac
