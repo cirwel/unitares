@@ -1207,6 +1207,16 @@ def _doctor_visible_bearer_token() -> str | None:
     return None
 
 
+def _public_listener_port() -> "int | None":
+    """UNITARES_OAUTH_PUBLIC_PORT as the server reads it, or None."""
+    raw = os.environ.get("UNITARES_OAUTH_PUBLIC_PORT", "").strip()
+    try:
+        port = int(raw)
+    except ValueError:
+        return None
+    return port if 0 < port < 65536 else None
+
+
 def check_mcp_route_gate() -> CheckResult:
     """Which gate, if any, is closed on /mcp/ for a client arriving externally.
 
@@ -1261,9 +1271,13 @@ def check_mcp_route_gate() -> CheckResult:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    url = f"http://127.0.0.1:{MCP_PORT}{MCP_ROUTE_PATH}"
+    # With a public OAuth listener the tunnel reaches that port, not the main
+    # one, and only that port carries the OAuth gate.
+    port = _public_listener_port() or MCP_PORT
+    listener = "public OAuth listener" if port != MCP_PORT else "loopback listener"
+    url = f"http://127.0.0.1:{port}{MCP_ROUTE_PATH}"
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", MCP_PORT, timeout=5)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         try:
             conn.request("GET", MCP_ROUTE_PATH, headers=headers)
             resp = conn.getresponse()
@@ -1287,7 +1301,7 @@ def check_mcp_route_gate() -> CheckResult:
     except (ConnectionError, OSError, http.client.HTTPException, ValueError) as e:
         return CheckResult(
             name, mode, Status.FAIL,
-            f"{url} unreachable on the loopback listener",
+            f"{url} unreachable on the {listener}",
             detail=str(e),
         )
 

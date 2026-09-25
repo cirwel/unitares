@@ -142,10 +142,15 @@ tool runs:
 
    The server then also listens on `127.0.0.1:8772`, and the OAuth gate
    applies to that listener alone. Point the tunnel's ingress at
-   `http://127.0.0.1:8772` (an explicit IPv4 address, not `localhost`). The
-   main port keeps the posture it had, so anything you expose through the
-   main port — a reverse proxy, another tunnel — is exposed ungated exactly
-   as before; the public entry point belongs on the public port. The
+   `http://127.0.0.1:8772` (an explicit IPv4 address, not `localhost`).
+
+   The main listener is **not** OAuth-gated in this mode. Anything that
+   reaches it — a reverse proxy or tunnel pointed at the main port, or LAN
+   and tailnet callers when `UNITARES_BIND_ALL_INTERFACES=1` — gets `/mcp`
+   without a credential, as with no OAuth configured. The server warns at
+   startup when the main listener binds beyond loopback, and
+   `UNITARES_OAUTH_REQUIRED=1` refuses to start in that state unless a bearer
+   allowlist is set. The public entry point belongs on the public port. The
    listener is identified by the socket that accepted the connection, which
    nothing in a request can forge, unlike `Host`, the peer address or
    forwarding headers. REST routes reached through the public listener never
@@ -154,8 +159,13 @@ tool runs:
    On the main listener a presented OAuth token is still checked, so a
    local OAuth client keeps its session attribution; a bad token there is
    ignored rather than refused. An invalid `UNITARES_OAUTH_PUBLIC_PORT`
-   is warned about and leaves OAuth on every request. If OAuth setup fails,
-   the public listener answers 503 and the main listener is still served.
+   is warned about and leaves OAuth on every request. A public port that
+   cannot be bound (in use, or equal to the main port) is logged and leaves
+   the public entry point closed; the main listener keeps serving. If OAuth
+   setup fails, the public listener answers 503 and the main listener is
+   still served, unless `UNITARES_OAUTH_REQUIRED=1`, which refuses to start.
+   `scripts/dev/unitares_doctor.py`'s `mcp_route_gate` probes the public
+   listener when `UNITARES_OAUTH_PUBLIC_PORT` is set.
    An incomplete static-client configuration (any of the three variables
    without the others) fails OAuth setup. A bearer allowlist
    (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.

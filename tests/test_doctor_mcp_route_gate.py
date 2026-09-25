@@ -38,6 +38,7 @@ _GATE_ENV = (
     "UNITARES_DOCTOR_PUBLIC_URL",
     "UNITARES_OAUTH_ISSUER_URL",
     "UNITARES_MCP_BEARER_TOKENS",
+    "UNITARES_OAUTH_PUBLIC_PORT",
 )
 
 
@@ -352,3 +353,23 @@ def test_registered_as_an_operator_check(doctor):
     gate = [c for c in checks if c.name == "mcp_route_gate"]
     assert len(gate) == 1
     assert gate[0].mode == "operator"
+
+
+# --- public OAuth listener ----------------------------------------------------
+
+def test_probes_the_public_listener_when_one_is_configured(doctor, monkeypatch):
+    """The tunnel reaches the public port and only it carries the OAuth gate;
+    probing the ungated main port would misreport a healthy setup."""
+    monkeypatch.setenv("UNITARES_OAUTH_ISSUER_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
+    result, conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", 8772)
+    assert _headers(conn)["Host"] == "gov.example.org"
+    assert result.status != doctor.Status.PASS
+
+
+def test_an_invalid_public_port_probes_the_main_listener(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_OAUTH_ISSUER_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "nope")
+    _result, _conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)

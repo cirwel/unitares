@@ -213,6 +213,9 @@ def mcp_bearer_tokens() -> List[str]:
     return split_csv_env(_MCP_BEARER_TOKENS_ENV)
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 def oauth_public_port() -> Optional[int]:
     """Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT).
 
@@ -260,6 +263,7 @@ def auth_gate_refusal(
     provider_present: bool,
     issuer_set: bool,
     setup_error_name: Optional[str] = None,
+    main_listener_ungated: bool = False,
 ) -> Optional[str]:
     """The startup refusal message, or ``None`` to serve.
 
@@ -271,10 +275,25 @@ def auth_gate_refusal(
     A bearer allowlist satisfies the requirement. What the flag demands is an
     auth gate on the MCP route, not OAuth specifically, so an operator who has
     rotated to a bearer credential is not held down by it.
+
+    ``main_listener_ungated`` is True when OAuth is confined to the public
+    listener while the main listener binds beyond loopback: a provider exists,
+    but the route reachable on the main port has no gate, which is the state
+    this flag exists to refuse.
     """
     if not oauth_gate_required():
         return None
-    if provider_present or mcp_bearer_tokens():
+    if mcp_bearer_tokens():
+        return None
+    if provider_present and main_listener_ungated:
+        return (
+            "UNITARES_OAUTH_REQUIRED is set but the main MCP listener has no auth "
+            "gate: UNITARES_OAUTH_PUBLIC_PORT confines OAuth to the public listener "
+            "while the main listener binds beyond loopback "
+            "(UNITARES_BIND_ALL_INTERFACES), and UNITARES_MCP_BEARER_TOKENS is "
+            "empty. Bind the main listener to loopback or set a bearer allowlist."
+        )
+    if provider_present:
         return None
     if setup_error_name:
         cause = f"OAuth provider construction failed ({setup_error_name})"

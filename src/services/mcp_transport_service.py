@@ -87,13 +87,15 @@ class McpTransportRuntime:
     session_manager: Any
     server: Any
     public_server: Any = None
+    public_socket: Any = None
 
     async def serve(self) -> None:
         uds_socket_path, uds_task = await _start_uds_listener(self.app)
         public_task = None
         if self.public_server is not None:
             public_task = asyncio.create_task(
-                self.public_server.serve(), name="unitares-public-oauth-listener"
+                _serve_public_listener(self.public_server, self.public_socket),
+                name="unitares-public-oauth-listener",
             )
         try:
             async with self.session_manager.run():
@@ -570,13 +572,17 @@ def build_transport_runtime(
         ws="websockets-sansio",
     )
     public_server = None
+    public_socket = None
     if public_port is not None:
+        public_socket = _bind_public_socket(public_port, main_port=port)
+    if public_socket is not None:
         # Loopback only: the tunnel connector runs on this host. Same proxy
         # header trust as the main listener, so REST/dashboard gates keep
         # seeing the caller's forwarded address, not the connector's.
         public_server = uvicorn.Server(
             uvicorn.Config(
                 mark_public_listener(app),
+                # Informational: serve() is handed the pre-bound socket.
                 host="127.0.0.1",
                 port=public_port,
                 log_level="info",
@@ -595,7 +601,51 @@ def build_transport_runtime(
         session_manager=session_manager,
         server=uvicorn.Server(config),
         public_server=public_server,
+        public_socket=public_socket,
     )
+
+
+def _bind_public_socket(public_port: int, *, main_port: int) -> Any:
+    """Bind the public listener's loopback socket, or return None.
+
+    Bound here rather than by uvicorn: uvicorn's startup calls ``sys.exit`` on
+    a bind error, which escapes an asyncio task and would take the main
+    listener down with it. A public port that cannot be bound leaves the
+    public entry point closed and the main listener serving.
+    """
+    import socket
+
+    if public_port == main_port:
+        logger.error(
+            "Public OAuth listener NOT started: UNITARES_OAUTH_PUBLIC_PORT equals "
+            "the main port %d; the public entry point is closed",
+            main_port,
+        )
+        return None
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", public_port))
+        sock.listen(2048)
+        sock.setblocking(False)
+    except OSError as exc:
+        sock.close()
+        logger.error(
+            "Public OAuth listener NOT started on 127.0.0.1:%d (%s); the public "
+            "entry point is closed, the main listener is unaffected",
+            public_port,
+            exc,
+        )
+        return None
+    return sock
+
+
+async def _serve_public_listener(server: Any, sock: Any) -> None:
+    try:
+        await server.serve(sockets=[sock])
+    except SystemExit:
+        # Belt and braces for any other startup exit: never the main listener's.
+        logger.error("Public OAuth listener exited during startup; main listener unaffected")
 
 
 async def _start_uds_listener(app: Any) -> tuple[str | None, asyncio.Task[None] | None]:

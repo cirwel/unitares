@@ -380,3 +380,71 @@ def test_static_client_env_unset_registers_nothing(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     assert static_clients_from_env() == []
+
+
+# --------------------------------------------------------------------------- #
+# Public listener lifecycle and the main listener's posture
+# --------------------------------------------------------------------------- #
+
+
+def test_an_unbindable_public_port_leaves_the_main_listener_alone():
+    """uvicorn exits the process on a bind error; binding ourselves keeps a
+    busy public port from taking the main listener down with it."""
+    import socket
+
+    from src.services.mcp_transport_service import _bind_public_socket
+
+    busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    busy.bind(("127.0.0.1", 0))
+    busy.listen(1)
+    try:
+        port = busy.getsockname()[1]
+        assert _bind_public_socket(port, main_port=8767) is None
+    finally:
+        busy.close()
+
+
+def test_a_public_port_equal_to_the_main_port_is_refused():
+    from src.services.mcp_transport_service import _bind_public_socket
+
+    assert _bind_public_socket(8767, main_port=8767) is None
+
+
+def test_a_free_public_port_binds_loopback():
+    from src.services.mcp_transport_service import _bind_public_socket
+
+    sock = _bind_public_socket(0, main_port=8767)
+    try:
+        assert sock.getsockname()[0] == "127.0.0.1"
+    finally:
+        sock.close()
+
+
+@pytest.mark.asyncio
+async def test_a_public_listener_startup_exit_does_not_escape():
+    from src.services.mcp_transport_service import _serve_public_listener
+
+    class _Exits:
+        async def serve(self, sockets):
+            raise SystemExit(1)
+
+    await _serve_public_listener(_Exits(), object())
+
+
+def test_required_refuses_an_ungated_main_listener(monkeypatch):
+    """UNITARES_OAUTH_REQUIRED means a gate on /mcp or no service; a provider
+    confined to the public listener does not gate a bind-all main listener."""
+    from src.mcp_listen_config import auth_gate_refusal
+
+    monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
+    assert auth_gate_refusal(
+        provider_present=True, issuer_set=True, main_listener_ungated=True
+    )
+    assert auth_gate_refusal(
+        provider_present=True, issuer_set=True, main_listener_ungated=False
+    ) is None
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "tok")
+    assert auth_gate_refusal(
+        provider_present=True, issuer_set=True, main_listener_ungated=True
+    ) is None

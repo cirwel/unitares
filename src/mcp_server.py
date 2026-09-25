@@ -130,6 +130,7 @@ from src.mcp_listen_config import (
     auth_gate_refusal,
     build_transport_security_settings,
     default_listen_host,
+    LOOPBACK_HOSTS,
     oauth_public_port,
 )
 
@@ -235,6 +236,9 @@ _auth_refusal = auth_gate_refusal(
     provider_present=_oauth_provider is not None,
     issuer_set=bool(_oauth_issuer_url),
     setup_error_name=type(_oauth_setup_error).__name__ if _oauth_setup_error else None,
+    main_listener_ungated=(
+        _oauth_public_port is not None and default_listen_host() not in LOOPBACK_HOSTS
+    ),
 )
 if _auth_refusal:
     raise RuntimeError(_auth_refusal)
@@ -386,6 +390,14 @@ async def main():
             # Without a provider there is nothing for the listener to gate.
             public_port=_oauth_public_port if _oauth_issuer_url else None,
         )
+        if _oauth_issuer_url and _oauth_public_port and args.host not in LOOPBACK_HOSTS:
+            print(
+                f"[FastMCP] WARNING: the main listener on {args.host}:{args.port} is NOT "
+                "OAuth-gated (UNITARES_OAUTH_PUBLIC_PORT confines OAuth to the public "
+                "listener); anything that reaches it gets /mcp without a credential. "
+                "Bind it to loopback or set UNITARES_MCP_BEARER_TOKENS if that is not intended.",
+                file=sys.stderr, flush=True,
+            )
         await runtime.serve()
     except ImportError:
         print(
