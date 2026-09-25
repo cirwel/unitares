@@ -38,6 +38,7 @@ import shutil
 import sys
 import tempfile
 import time
+import types
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -112,13 +113,49 @@ def _fill(adir: Path, records: tuple[object, ...]) -> None:
         os.utime(path, ns=(stamp, stamp))
 
 
+_ABSENT = object()
+
+
+class _MissingYaml(types.ModuleType):
+    """Stands in for PyYAML while loading the plugin's checker.
+
+    The plugin's checker imports yaml at module level for its sidecar and
+    frontmatter parsing, but the two functions compared here do not use it.
+    Without this, a python3 lacking PyYAML (a stock Homebrew one, say) could
+    never load the checker, and every sync would print "not checked": blind,
+    loudly, forever. Any real use of yaml still raises, and a raise during
+    the comparison is reported as "not checked", never as agreement or drift.
+    """
+
+    def __getattr__(self, name: str):
+        raise ModuleNotFoundError(
+            f"PyYAML is not installed, and the plugin's attestation rule used yaml.{name}"
+        )
+
+
 def _load_plugin_checker(plugin_repo: Path):
     path = plugin_repo / PLUGIN_CHECKER
     spec = importlib.util.spec_from_file_location("_plugin_check_freshness", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    placeholder = None
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        placeholder = _MissingYaml("yaml")
+        prior = sys.modules.get("yaml", _ABSENT)
+        sys.modules["yaml"] = placeholder
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        # Put the module table back exactly as it was, including an explicit
+        # None entry (which is what makes `import yaml` fail on purpose).
+        if placeholder is not None and sys.modules.get("yaml") is placeholder:
+            if prior is _ABSENT:
+                del sys.modules["yaml"]
+            else:
+                sys.modules["yaml"] = prior
     return module
 
 

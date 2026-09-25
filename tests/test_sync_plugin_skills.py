@@ -232,3 +232,28 @@ def test_a_plugin_without_a_checker_says_the_rule_was_not_checked(trees):
     assert check.returncode == 0, check.stderr
     assert "plugin attestation rule not checked (exit 3)" in check.stderr
     assert "nothing compared" in check.stderr
+
+
+def test_a_refused_apply_does_not_compare_and_check_still_reports_the_rule(trees):
+    canon, plugin = trees
+    assert _sync(canon, plugin).returncode == 0
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_DRIFTED_CHECKER)
+    _git(plugin, "add", "-A")
+    _git(plugin, "commit", "-q", "-m", "mirror + drifted checker")
+
+    # Canonical moves on, and the mirror has an uncommitted edit: the apply
+    # refuses (exit 3) before writing, so nothing is compared or claimed.
+    (canon / "skills" / "demo" / "SKILL.md").write_text(
+        '---\nname: demo\nlast_verified: "2026-09-25"\n---\n# Demo v2\n'
+    )
+    _git(canon, "commit", "-q", "-am", "v2")
+    (plugin / "skills" / "demo" / "SKILL.md").write_text("local edit\n")
+    refused = _sync(canon, plugin)
+    assert refused.returncode == 3, refused.stderr + refused.stdout
+    assert "attestation rule" not in refused.stderr
+
+    # --check with mirror drift still exits 1, and still says the rule drifted.
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 1
+    assert "disagrees with canonical's attestation rule" in check.stderr

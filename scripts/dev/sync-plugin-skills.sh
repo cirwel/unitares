@@ -22,15 +22,17 @@
 #   UNITARES_PLUGIN_REPO=/path/to/plugin ./scripts/dev/sync-plugin-skills.sh
 #   ./scripts/dev/sync-plugin-skills.sh --check                 # diff-only, exit 1 on mismatch
 #
-# Both modes also compare the plugin's freshness checker with canonical's
+# The plugin's freshness checker is also compared with canonical's
 # attestation rule (scripts/dev/check_plugin_attestation_rule.py). The plugin
 # keeps its own copy of that rule because it cannot import unitares, and a
-# copy drifts silently. Disagreement exits 5 in both modes, a code of its
-# own so a caller (ship.sh) can tell it from mirror drift (exit 1): re-running
-# the sync cannot fix it, the checker needs a port this script cannot make. In
-# apply mode the skills still sync, and the rule is checked against the mirror
-# as written. When the mirror has drifted too, --check exits 1 and still
-# prints the rule result.
+# copy drifts silently. The comparison runs wherever this script would
+# otherwise report success: --check (in sync or not), an in-sync apply, and an
+# apply after the mirror is written, so the rule is judged against the mirror
+# as written. A refused apply (exit 3 or 4) writes nothing and does not
+# compare. Disagreement exits 5, a code of its own so a caller (ship.sh) can
+# tell it from mirror drift (exit 1): re-running the sync cannot fix it, the
+# checker needs a port this script cannot make. When the mirror has drifted
+# too, --check exits 1 and still prints the rule result.
 #
 # Environment:
 #   UNITARES_PLUGIN_REPO  — path to unitares-governance-plugin checkout.
@@ -68,16 +70,16 @@ fi
 MANIFEST_NAME="SKILLS_MANIFEST.sha256"
 MANIFEST_TOOL="${UNITARES_ROOT}/scripts/dev/skills_manifest.py"
 
-# Attestation-rule parity. Its "synced skills" part reads the mirror, so
-# apply mode re-runs it after writing. `set -e` would abort on the check's
-# non-zero exit before the status could be read, so the capture is unguarded.
+# Attestation-rule parity. Its "synced skills" part reads the mirror, so it
+# runs only where its result is reported, after any write. `set -e` would
+# abort on the check's non-zero exit before the status could be read, so the
+# capture is unguarded.
 check_rule_parity() {
     set +e
     RULE_OUT=$(python3 "${UNITARES_ROOT}/scripts/dev/check_plugin_attestation_rule.py" "$PLUGIN_REPO" 2>&1)
     RULE_STATUS=$?
     set -e
 }
-check_rule_parity
 
 # Prints the parity result; returns 1 only on a real disagreement. A checker
 # that cannot be loaded, raises, or is missing is a printed warning, never
@@ -112,6 +114,7 @@ fi
 
 if [[ -z "$DIFF_OUT" ]]; then
     echo "[sync-plugin-skills] in sync — nothing to do"
+    check_rule_parity
     if ! report_rule_parity; then
         exit 5
     fi
@@ -123,6 +126,7 @@ if [[ "$CHECK_ONLY" == 1 ]]; then
     echo "$DIFF_OUT" | sed 's/^/  /'
     echo
     echo "[sync-plugin-skills] run: ./scripts/dev/sync-plugin-skills.sh"
+    check_rule_parity
     report_rule_parity || true
     exit 1
 fi

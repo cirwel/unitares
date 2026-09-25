@@ -150,3 +150,27 @@ def test_a_plugin_without_a_checker_is_not_reported_as_agreement(tmp_path):
     status, lines = rule_check.check(_plugin(tmp_path, None))
     assert status == rule_check.EXIT_NOT_COMPARED
     assert "nothing compared" in lines[0]
+
+
+def test_a_checker_that_imports_yaml_loads_without_pyyaml(tmp_path, monkeypatch):
+    # The plugin's real checker imports yaml at module level; the compared
+    # functions do not use it. A python3 without PyYAML must still compare.
+    import sys
+    monkeypatch.setitem(sys.modules, "yaml", None)  # makes `import yaml` fail
+    status, lines = rule_check.check(_plugin(tmp_path, "import yaml\n" + PORTED))
+    assert status == rule_check.EXIT_OK, lines
+    assert sys.modules["yaml"] is None  # the stand-in was removed again
+
+
+def test_a_rule_that_really_uses_yaml_without_pyyaml_is_not_checked(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    checker = "import yaml\n" + PORTED + textwrap.dedent('''
+        _ported = attested_date
+        def attested_date(skills_dir, name, skill_digest):
+            yaml.safe_load("a: 1")
+            return _ported(skills_dir, name, skill_digest)
+    ''')
+    status, lines = rule_check.check(_plugin(tmp_path, checker))
+    assert status == rule_check.EXIT_UNUSABLE
+    assert "PyYAML is not installed" in lines[0]
