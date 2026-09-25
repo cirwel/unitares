@@ -46,7 +46,7 @@ source_files:
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases, bounded `sync_state` modes and a default `start_session` omit the repeated canonical payload and explain how to request it explicitly (`response_mode="full"`); other state-changing aliases preserve it under `raw_governance`. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases and bounded `sync_state` modes omit the repeated canonical payload and explain how to request it explicitly (`response_mode="full"`); a plain fresh `start_session` omits it too (`response_shape: "routine"`, pass `response_mode="full"` on the mint to keep it); other state-changing aliases preserve it under `raw_governance`. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|

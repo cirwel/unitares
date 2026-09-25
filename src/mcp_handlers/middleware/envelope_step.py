@@ -28,10 +28,11 @@ Envelope shape (friendly fields first, raw payload available on demand):
 Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
-are omitted. Default read aliases, bounded ``sync_state`` modes and a default
-``start_session`` omit the repeated canonical payload and advertise an
-explicit full-response escape hatch. Other state-changing aliases retain it,
-and ``response_mode="full"`` restores it explicitly. A routine ``sync_state``
+are omitted. Default read aliases and bounded ``sync_state`` modes omit the
+repeated canonical payload and advertise an explicit full-response escape
+hatch. A plain fresh ``start_session`` omits it too, without a hint, because
+the only way to act on one would be another mint. Other state-changing
+aliases retain it, and ``response_mode="full"`` restores it explicitly. A routine ``sync_state``
 proceed also says each fact once (``_drop_routine_proceed_duplicates``);
 guide, pause and provisional responses keep their full shape.
 Error payloads (success=False / "error") pass through unchanged: the raw
@@ -510,6 +511,11 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
     if state.get("verdict_provisional") or envelope.get("verdict_caveat"):
         return False
     if envelope.get("recovery_hint"):
+        return False
+    if envelope.get("review_suggested") or "request_review" in str(
+        envelope.get("next_action") or ""
+    ):
+        # A review nudge asks the agent to act.
         return False
     if state.get("nearest_edge") or state.get("unmeasurable_edges"):
         return False

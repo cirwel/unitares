@@ -361,8 +361,8 @@ def test_comfortable_margin_with_an_unassessed_edge_is_kept():
     assert env["state_summary"]["margin_scope"] == "measured_edges_only"
     assert env["state_summary"]["unmeasurable_edges"] == ["coherence"]
     # An unassessed edge makes the proceed non-routine as a whole.
-    assert env["action_summary"]["action"] == "proceed"
-    assert env["action_summary"]["risk_score"] == 0.27
+    assert "response_shape" not in env
+    assert env["action_summary"]["sub_action"] == "approve"
 
 
 def test_near_edge_proceed_is_not_trimmed():
@@ -372,7 +372,8 @@ def test_near_edge_proceed_is_not_trimmed():
         "sync_state", "process_agent_update", payload, {"response_mode": "auto"}
     )
     assert env["state_summary"]["nearest_edge"] == "risk"
-    assert env["action_summary"]["action"] == "proceed"
+    assert "response_shape" not in env
+    assert env["state_summary"]["margin"] == "comfortable"
 
 
 def test_guide_keeps_the_full_action_summary():
@@ -437,3 +438,14 @@ def test_a_proceed_missing_its_evidence_is_not_trimmed(drop):
 
     assert "response_shape" not in env
     assert env["action_summary"]["action"] == "proceed"
+
+
+def test_a_proceed_carrying_a_review_nudge_is_not_trimmed():
+    # The formatter attaches review_suggested itself; injected after it here.
+    payload = format_response(deepcopy(_sync_source()), {"response_mode": "auto"})
+    payload["review_suggested"] = {"trigger": "low_confidence"}
+    env = build_experience_envelope(
+        "sync_state", "process_agent_update", payload, {"response_mode": "auto"}
+    )
+    assert "request_review" in env["next_action"]
+    assert "response_shape" not in env
