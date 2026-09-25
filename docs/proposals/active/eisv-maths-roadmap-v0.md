@@ -219,9 +219,10 @@ completes); (3)+(4) are the justification (need §0).
 
 **Placement note, 2026-09-25.** A fitted or outcome-learned version of B or C
 (fitted blend weights, a learned readout) is efficacy work gated by the
-registered 2026-12-01 outcome read, and one fitted to the same label channel is
-not a new premise under that read's reopen clause (the contract's reading; the
-registered text is unchanged). Label-free work
+registered 2026-12-01 outcome read. The contract records a proposed reading,
+pending operator decision, that one fitted to the same label channel would not
+by itself constitute a new premise under that read's reopen clause; the
+registered text is unchanged. Label-free work
 (self-predictability, windowed baselines, system identification) may proceed
 offline; live-path changes wait for the read's report. See
 `docs/ontology/eisv-proprioception-contract.md`, "Fitted and learned
