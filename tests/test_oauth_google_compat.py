@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from mcp.server.auth.routes import create_auth_routes
+
+import src.oauth_provider as _op
 from mcp.server.auth.settings import ClientRegistrationOptions
 from pydantic import AnyHttpUrl
 from starlette.applications import Starlette
@@ -28,6 +30,11 @@ from src.oauth_provider import (
 )
 
 CID, SECRET = "google", "s3cret"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_log_budget(monkeypatch):
+    monkeypatch.setattr(_op, "_LOG_BUDGET", _op._LineBudget())
 REDIRECT = "https://oauth-redirect.googleusercontent.com/r/example"
 
 
@@ -394,18 +401,61 @@ def test_a_failure_describing_the_request_never_changes_the_response(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_a_disconnect_mid_body_is_handled_quietly():
-    called = []
+async def test_a_disconnect_mid_body_passes_through_unchanged():
+    """The app sees the same stream it would without the logger."""
+    seen = []
 
     async def inner(scope, receive, send):
-        called.append(True)
+        while True:
+            message = await receive()
+            seen.append(message["type"])
+            if message["type"] != "http.request" or not message.get("more_body"):
+                break
+
+    stream = [{"type": "http.request", "body": b"grant_type=", "more_body": True},
+              {"type": "http.disconnect"}]
 
     async def receive():
-        return {"type": "http.disconnect"}
+        return stream.pop(0)
 
     async def send(_message):
-        raise AssertionError("nothing should be sent to a gone client")
+        pass
 
     scope = {"type": "http", "method": "POST", "path": "/token", "headers": [], "query_string": b""}
     await OAuthAttemptLogger(inner)(scope, receive, send)
-    assert called == []
+    assert seen == ["http.request", "http.disconnect"]
+
+
+@pytest.mark.parametrize("grant", ["authorization_code", "refresh_token"])
+def test_an_oversized_body_gets_the_sdks_answer_not_the_loggers(grant):
+    """The logger reads a prefix only; the SDK still answers (its limit is
+    4 MiB), so a 100 KB body is not turned into a 413."""
+    plain = TestClient(Starlette(routes=create_auth_routes(
+        GovernanceOAuthProvider(static_clients=[build_static_client(CID, SECRET, [REDIRECT])]),
+        issuer_url=AnyHttpUrl("https://gov.example.org"),
+    )))
+    padded = {"grant_type": grant, "client_id": CID, "client_secret": SECRET,
+              "code": "x", "refresh_token": "x", "pad": "p" * 100_000}
+    a = _app(compat=False).post("/token", data=padded)
+    b = plain.post("/token", data=padded)
+    assert a.status_code == b.status_code != 413
+
+
+def test_log_lines_are_rate_limited_and_drops_counted(monkeypatch, caplog):
+    monkeypatch.setattr(_op, "_LOG_BUDGET", _op._LineBudget(per_window=3, window=3600))
+    client = _app(compat=False)
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        for _ in range(6):
+            client.get("/authorize", params={"response_type": "code", "client_id": CID,
+                                             "redirect_uri": REDIRECT}, follow_redirects=False)
+    lines = [r.getMessage() for r in caplog.records if r.name == "src.oauth_provider"]
+    assert sum(1 for l in lines if l.startswith("[OAUTH] authorize")) == 3
+
+
+def test_line_budget_reports_drops_on_the_next_logged_line():
+    budget = _op._LineBudget(per_window=1, window=0.0)
+    assert budget.take() == 0
+    budget._window = 3600
+    assert budget.take() is None and budget.take() is None
+    budget._window = 0.0
+    assert budget.take() == 2

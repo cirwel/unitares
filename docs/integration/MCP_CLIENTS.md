@@ -142,9 +142,13 @@ tool runs:
      `mcp:tools` are narrowed away rather than refused, on every static-client
      sign-in and refresh. A client's own PKCE is never altered, and no other client gets
      either allowance.
-     Every `/authorize` and `/token` request is logged as one `[OAUTH]` line
-     (client, PKCE and scope facts, status, OAuth error; never a secret or
-     code), which is where to look when a connector fails to link.
+     Each GET or POST to `/authorize` and `/token` is logged as one `[OAUTH]`
+     line (client, PKCE and scope facts, status, OAuth error; never a secret
+     or code), which is where to look when a connector fails to link. Other
+     methods (CORS preflight, HEAD) are not logged, a body over 64 KiB is
+     logged without its fields, and lines are capped at 60 a minute with a
+     count of any dropped, so an anonymous caller cannot grow the log at
+     request rate.
      An incomplete static-client configuration fails OAuth setup, which
      closes the gated route rather than opening it (see below).
 

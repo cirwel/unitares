@@ -777,6 +777,67 @@ def _attempt_facts(path: str, values: dict, basic) -> dict:
     return facts
 
 
+async def _peek_body(receive, limit: int):
+    """Buffer up to ``limit`` bytes of a request body without consuming it.
+
+    Returns (messages seen, body prefix, whether the whole body was read, a
+    receive callable that replays the seen messages and then continues the
+    original stream)."""
+    seen: list[dict] = []
+    body = bytearray()
+    complete = False
+    while True:
+        message = await receive()
+        seen.append(message)
+        if message["type"] != "http.request":
+            break
+        body += message.get("body", b"")
+        if not message.get("more_body", False):
+            complete = True
+            break
+        if len(body) > limit:
+            break
+    pending = list(seen)
+    exhausted = complete or seen[-1]["type"] != "http.request"
+
+    async def chained():
+        if pending:
+            return pending.pop(0)
+        if exhausted:
+            return {"type": "http.disconnect"}
+        return await receive()
+
+    return seen, bytes(body), complete and len(body) <= limit, chained
+
+
+class _LineBudget:
+    """At most ``per_window`` [OAUTH] lines per ``window`` seconds, so anyone
+    who can reach /authorize or /token cannot grow the log at request rate.
+    ``take`` returns None when the line must be dropped, else the number of
+    lines dropped since the last one logged."""
+
+    def __init__(self, per_window: int = 60, window: float = 60.0):
+        self._per_window = per_window
+        self._window = window
+        self._start = 0.0
+        self._used = 0
+        self._dropped = 0
+
+    def take(self) -> int | None:
+        now = time.monotonic()
+        if now - self._start >= self._window:
+            self._start, self._used = now, 0
+        if self._used >= self._per_window:
+            self._dropped += 1
+            return None
+        self._used += 1
+        dropped, self._dropped = self._dropped, 0
+        return dropped
+
+
+_LOG_BUDGET = _LineBudget()
+
+
 class OAuthAttemptLogger:
     """Log one line per ``/authorize`` and ``/token`` request: client, PKCE
     and scope facts, the auth style, the status and any OAuth error.
@@ -785,7 +846,10 @@ class OAuthAttemptLogger:
     access log). Never logs a secret, a code, a verifier, a token, URL
     userinfo or a URL query. Installed outside ``StaticClientBasicAuthShim``
     so it sees what the client actually sent, not the compat rewrite (other
-    outer layers ignore these paths). Never changes a response.
+    outer layers ignore these paths). Never changes a response: it only reads
+    a prefix of a POST body and passes the whole stream on. GET and POST are
+    logged; other methods (CORS preflight, HEAD) are not. Lines are
+    rate-limited (``_LineBudget``); drops are counted in the next line.
     """
 
     def __init__(self, app):
@@ -799,18 +863,14 @@ class OAuthAttemptLogger:
         if method == "GET":
             fields = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
         elif method == "POST":
-            body, early = await _read_body(receive, _MAX_TOKEN_BODY)
-            if early == "too_large":
-                logger.info("[OAUTH] %s -> 413 (body over %d bytes)", path.strip("/"), _MAX_TOKEN_BODY)
-                await JSONResponse(
-                    {"error": "invalid_request", "error_description": "request body too large"},
-                    status_code=413,
-                )(scope, receive, send)
-                return
-            if early == "disconnect":
-                return
-            receive = _replay([_body_message(body)])
-            fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+            # Read a prefix only, then hand the SDK the whole stream untouched:
+            # an oversize body or a mid-body disconnect reaches it exactly as
+            # it would without this logger.
+            seen, body, complete, receive = await _peek_body(receive, _MAX_TOKEN_BODY)
+            fields = (
+                parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+                if complete else [("body", "unparsed (over cap or disconnected)")]
+            )
         else:
             await self.app(scope, receive, send)
             return
@@ -846,6 +906,11 @@ class OAuthAttemptLogger:
         try:
             await self.app(scope, receive, logging_send)
         finally:
+            suppressed = _LOG_BUDGET.take()
+            if suppressed is None:
+                return
+            if suppressed:
+                logger.info("[OAUTH] %d attempt line(s) suppressed by the rate limit", suppressed)
             logger.info(
                 "[OAUTH] %s %s -> %s%s",
                 path.strip("/"),
