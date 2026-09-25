@@ -64,8 +64,9 @@ branch vouch for v2 because its file happens to sort newest.
 Recorded transitions
 --------------------
 A digest certified for the current text also carries forward along the
-transitions later stamps recorded, even when those stamps certified another
-version of the skill text. This is the base-merge case: a branch edits and
+transitions that stamps written after the current text's newest
+certification recorded, even when those stamps certified another version of
+the skill text. This is the base-merge case: a branch edits and
 stamps a skill; master then changes a source the skill cites and re-stamps its
 own version of the text; merging master brings in the new source content, and
 the branch's text had only its own record, made against the old content, so
@@ -82,7 +83,8 @@ Only a recorded transition carries a digest forward, never a record's mere
 existence. A stamp from a branch cut before the change records the OLD
 content and no transition, and a source reverting to content some other text
 was verified against has no transition from what the current text was
-verified at, so neither case is accepted. Content no stamp has recorded, such
+verified at, so neither case is accepted; nor is a transition recorded before the current
+text was verified, which says nothing about it. Content no stamp has recorded, such
 as a branch's own unstamped change or both sides editing one file, is STALE
 as before.
 
@@ -264,20 +266,59 @@ def effective_record(skills_dir: Path, name: str, meta: dict,
     return date, accepted
 
 
+def _transitions_of(record: dict) -> dict[str, tuple[str, list[str]]]:
+    """source -> (digest re-checked at, digests it had been verified at), from
+    one record's `superseded_digests`; a malformed field records nothing."""
+    superseded = record.get("superseded_digests")
+    if not isinstance(superseded, dict):
+        return {}
+    found: dict[str, tuple[str, list[str]]] = {}
+    for src, olds in superseded.items():
+        new = record["source_digests"].get(src)
+        if new is not None and isinstance(olds, list):
+            found[str(src)] = (str(new), [str(o) for o in olds])
+    return found
+
+
+def transition_records(skills_dir: Path, name: str,
+                       skill_digest: str | None) -> list[tuple[Path, dict]]:
+    """The attestation files whose recorded transitions may carry the current
+    text forward: those written AFTER the newest record that certified it (or,
+    if none did, after the newest record, which alone vouches then).
+
+    A transition recorded before the current text was verified says nothing
+    about it. Without this cut, v1 re-checked across x = 1 -> 2, the source
+    reverted, v2 verified at x = 1, and the change re-landed unstamped would
+    read FRESH on v1's old re-check. File names lead with a microsecond UTC
+    timestamp, so name order is write order."""
+    adir = skills_dir / ATTESTATIONS_DIR / name
+    if not adir.is_dir():
+        return []
+    named: list[tuple[Path, dict]] = []
+    for path in sorted(adir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+            named.append((path, data))
+    if not named:
+        return []
+    certified = [path for path, data in named
+                 if skill_digest is not None and data.get("skill_digest") == skill_digest]
+    cutoff = max(certified) if certified else named[-1][0]
+    return [(path, data) for path, data in named
+            if path.name > cutoff.name and _transitions_of(data)]
+
+
 def recorded_transitions(records: list[dict]) -> dict[str, dict[str, set[str]]]:
     """source -> digest it had been verified at -> digests a later stamp
     re-checked the skill against (each record's `superseded_digests`)."""
     edges: dict[str, dict[str, set[str]]] = {}
     for record in records:
-        superseded = record.get("superseded_digests")
-        if not isinstance(superseded, dict):
-            continue
-        for src, olds in superseded.items():
-            new = record["source_digests"].get(src)
-            if new is None or not isinstance(olds, list):
-                continue
+        for src, (new, olds) in _transitions_of(record).items():
             for old in olds:
-                edges.setdefault(str(src), {}).setdefault(str(old), set()).add(str(new))
+                edges.setdefault(src, {}).setdefault(old, set()).add(new)
     return edges
 
 
@@ -325,9 +366,10 @@ def check_skills(root: str, projects_root: str) -> int:
             print(f"  [{YELLOW}-{NC}] {skill_name}: no freshness metadata")
             continue
 
-        verified_date, accepted = effective_record(
-            skills_dir, skill_name, meta, skill_text_digest(skill_file))
-        edges = recorded_transitions(load_attestations(skills_dir, skill_name))
+        skill_digest = skill_text_digest(skill_file)
+        verified_date, accepted = effective_record(skills_dir, skill_name, meta, skill_digest)
+        edges = recorded_transitions(
+            [data for _, data in transition_records(skills_dir, skill_name, skill_digest)])
 
         # Anchor to UTC so a CI runner (UTC) and a local machine (e.g. Mountain
         # Time) agree about day boundaries.
@@ -445,7 +487,8 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
             continue
         skill_digest = skill_text_digest(skill_file)
         _, accepted = effective_record(skills_dir, name, meta, skill_digest)
-        edges = recorded_transitions(load_attestations(skills_dir, name))
+        edges = recorded_transitions(
+            [data for _, data in transition_records(skills_dir, name, skill_digest)])
         digests: dict[str, str] = {}
         superseded: dict[str, list[str]] = {}
         absent: list[str] = []
@@ -524,44 +567,40 @@ def _pairs(record: dict) -> set[tuple[str, str]]:
     return {(str(k), str(v)) for k, v in record.get("source_digests", {}).items()}
 
 
-def _transition_records(root: str, projects_root: str, skills_dir: Path, name: str,
-                        paths: list[Path]) -> set[Path]:
+def _transition_records(root: str, projects_root: str, skills_dir: Path, name: str) -> set[Path]:
     """Attestation files whose recorded transition is on a path carrying a
     cited source's current digest forward from what the current text was
-    verified at."""
+    verified at. For a source absent from this checkout the current digest is
+    unknown, so every eligible record with a transition for it is kept."""
     skill_md = skills_dir / name / "SKILL.md"
     meta = parse_frontmatter(skill_md.read_text())
     if not meta:
         return set()
-    _, accepted = effective_record(skills_dir, name, meta, skill_text_digest(skill_md))
-    by_path: list[tuple[Path, dict]] = []
-    for path in paths:
-        try:
-            data = json.loads(path.read_text())
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
-            by_path.append((path, data))
-    edges = recorded_transitions([data for _, data in by_path])
+    skill_digest = skill_text_digest(skill_md)
+    _, accepted = effective_record(skills_dir, name, meta, skill_digest)
+    eligible = transition_records(skills_dir, name, skill_digest)
+    edges = recorded_transitions([data for _, data in eligible])
     needed: set[Path] = set()
     for src in load_source_files(skills_dir / name, meta["source_files"]):
         full_path = resolve_source(root, projects_root, src)
         recorded = accepted.get(src, set())
-        if not full_path.exists() or not recorded:
+        if not recorded:
             continue
-        current = content_digest(full_path)
         src_edges = edges.get(src, {})
         reach = carried_forward(recorded, src_edges)
-        if current in recorded or current not in reach:
+        current = content_digest(full_path) if full_path.exists() else None
+        if current is not None and (current in recorded or current not in reach):
             continue
-        for path, data in by_path:
-            new = data["source_digests"].get(src)
-            olds = (data.get("superseded_digests") or {}).get(src)
-            if new is None or not isinstance(olds, list):
+        for path, data in eligible:
+            transition = _transitions_of(data).get(src)
+            if transition is None:
                 continue
-            # On a path: its source end is reachable, and the current
-            # digest is reachable from its destination.
-            if any(str(o) in reach for o in olds) and current in carried_forward({str(new)}, src_edges):
+            new, olds = transition
+            if not any(o in reach for o in olds):
+                continue
+            # On a path: its source end is reachable, and the current digest
+            # is reachable from its destination (unknown when absent: keep).
+            if current is None or current in carried_forward({new}, src_edges):
                 needed.add(path)
     return needed
 
@@ -614,7 +653,7 @@ def prune_attestations(root: str, projects_root: str, keep: int) -> int:
                     if _pairs(data) - covered:
                         kept.add(path)
                         covered |= _pairs(data)
-                kept |= _transition_records(root, projects_root, skills_dir, adir.name, paths)
+                kept |= _transition_records(root, projects_root, skills_dir, adir.name)
             for path in paths:
                 if path not in kept:
                     path.unlink()

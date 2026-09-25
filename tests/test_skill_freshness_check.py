@@ -378,10 +378,74 @@ def test_prune_keeps_the_record_that_carries_a_source_forward(layout: Layout):
     layout.run("--stamp", "demo")
     carrier = _attestations(layout)[-1]
     layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
-    _attest(layout, "20991231T000000000000Z-ffffffff", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {src: _digest("x = 2\n")},
+            skill_digest="0123456789abcdef")         # newest, other text, no transition
     assert layout.run().returncode == 0
     assert layout.run("--prune", "1").returncode == 0
     assert carrier in _attestations(layout)
+    assert layout.run().returncode == 0
+
+
+def test_a_transition_recorded_before_the_current_text_was_verified_does_not_carry(layout: Layout):
+    # v1 was re-checked across 1 -> 2, the source reverted, a branch edited
+    # the skill (v2) and stamped it at 1, then re-landed 2 without stamping.
+    # The only 1 -> 2 re-check predates v2, so it says nothing about v2.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.source("x = 1\n")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    assert "STALE" in result.stdout
+
+
+def test_prune_keeps_the_carrier_of_a_source_absent_where_it_runs(layout: Layout):
+    ext = "elsewhere/src/bot.py"
+    bot = layout.projects / "elsewhere" / "src" / "bot.py"
+    bot.parent.mkdir(parents=True)
+    bot.write_text("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None, source=ext)
+    layout.run("--stamp", "demo")
+    bot.write_text("x = 2\n")
+    layout.run("--stamp", "demo")
+    carrier = _attestations(layout)[-1]
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {ext: _digest("x = 1\n")})
+    assert layout.run().returncode == 0
+    elsewhere = layout.projects / "empty-projects"
+    elsewhere.mkdir()
+    pruned = subprocess.run(
+        [sys.executable, str(CHECKER), str(layout.repo), str(elsewhere), "--prune", "1"],
+        capture_output=True, text=True)
+    assert pruned.returncode == 0, pruned.stderr
+    assert carrier in _attestations(layout)
+    assert layout.run().returncode == 0
+
+
+def test_a_malformed_transition_field_is_ignored_by_check_and_prune(layout: Layout):
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    (adir / "20991231T000000000000Z-ffffffff.json").write_text(json.dumps({
+        "schema": "unitares.skill_attestation.v1", "skill": "demo",
+        "verified_at": f"{_day(1)}T00:00:00Z", "verified_date": _day(1), "verifier": "test",
+        "source_digests": {src: _digest("x = 2\n")}, "skill_digest": "0123456789abcdef",
+        "superseded_digests": ["not", "a", "map"]}))
+    assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0, result.stderr
     assert layout.run().returncode == 0
 
 
