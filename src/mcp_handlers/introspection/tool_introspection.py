@@ -231,7 +231,7 @@ def _registered_public_tool_names() -> list[str]:
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """List all available governance tools with descriptions and categories
+    """List the governance capability catalog (lite: names only; full: descriptions and categories).
     
     Parameters:
         essential_only (bool): If true, return only Tier 1 (essential) tools (default: false)
@@ -240,6 +240,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
         lite (bool): If true, return the compact federation handshake: one name-only record per public capability, the interface contract and continuation hints (default: true)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
+        verbose (bool): Ignored; accepted for compatibility.
     """
     
     # Get actual registered tools from TOOL_HANDLERS registry. Entry-point

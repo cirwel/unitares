@@ -5,7 +5,7 @@ from ..support.coerce import coerce_bool
 
 class ListToolsParams(AgentIdentityMixin):
     """
-    List all available governance tools with descriptions and categories.
+    List the governance capability catalog; the lite default returns names only.
     """
     essential_only: Union[bool, str, None] = Field(
         default=False,

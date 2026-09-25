@@ -180,17 +180,19 @@ The two identifiers serve different jobs:
   reads as false, such as `"no"` or `"0"`, gets `full` (previously `minimal`),
   as every validated route already did. Both input digests and the surface
   digest move;
-  1.17.0, 2026-09-25, numbered after 1.15.0 and 1.16.0
-  which merge first: the progressive `tools/list` shrinks from @@BEFORE@@ to
-  @@AFTER@@ bytes. `search_shared_memory` stops advertising six fields only other
-  `knowledge` actions read (`offset`, `epoch_scope`, `scope`, `evidence_ids`,
+  1.17.0, 2026-09-25, numbered after 1.16.0 (#2435), which merges first: the
+  progressive `tools/list` shrinks from 44,199 to 40,406 bytes.
+  `search_shared_memory` stops advertising six fields only other `knowledge`
+  actions read (`offset`, `epoch_scope`, `scope`, `evidence_ids`,
   `verification_basis`, `decision_standard`); search never read them, and
   `knowledge` keeps all six. The EISV field contract rides once on the
   advertised surface, on `check_working_state`; `sync_state` and
-  `record_result` point at it and `describe_tool` still returns it in full.
-  Identity-parameter briefs are shorter, and `list_tools`' `verbose` and `lite`
-  descriptions now say what the handler does. Nothing callable is removed or
-  renamed; many input digests and the surface digest move).
+  `record_result` point at `describe_tool(tool_name='check_working_state')`,
+  and `describe_tool`'s full view of either still appends the contract.
+  Identity briefs, several alias parameter texts and six leaked model
+  docstrings (`inputSchema.description`) are shortened or corrected. Nothing
+  callable is removed or renamed; many input digests and the surface digest
+  move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

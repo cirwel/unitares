@@ -210,15 +210,18 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         },
     },
     # The router's agent_id text describes the read actions ("Filter by
-    # agent"). On the store alias it is the writer: the store handler resolves
-    # it through require_registered_agent for high/critical severity.
+    # agent"). On the store alias it names the writer, and an unbound call
+    # honors it verbatim for a low/medium write (params_step keeps an explicit
+    # agent_id when no session is bound), so the text steers callers away
+    # from setting it. High/critical severity is refused unless the session is
+    # bound to the writer (_authorize_store_discovery -> verify_agent_ownership).
     "store_finding": {
         "agent_id": {
             "description": (
-                "Writer agent id. Optional when the session is bound; "
-                "high/critical severity requires a registered agent."
+                "Leave unset; the bound session is the writer. high/critical "
+                "severity needs a session bound to the writing agent."
             ),
-            "brief": "Writer agent id; optional when session-bound.",
+            "brief": "Leave unset; the bound session is the writer.",
         },
     },
 }
