@@ -96,7 +96,8 @@ layer, not this case.
   is not recorded by the migration. It has to come from deployment or restart
   logs. The claim and its falsifiers cover only rows written at or after the
   later of the two times, called the *A5 cutoff*. If the restart time is
-  unknown, an assessor must pick a conservative cutoff and state it.
+  unknown, an assessor must pick a conservative (later) cutoff and state
+  it.
 
 ## 5. Evidence manifest
 
@@ -166,8 +167,8 @@ window with the assumptions holding:
 1. Two rows in `audit.outcome_events`, both with `ts` at or after the A5
    cutoff, with equal `agent_id` and equal non-null
    `detail->>'prediction_id'`. (The handler writes `prediction_id` into
-   `detail`; it is not a column of that table.) Rows written before 070 are
-   excluded; see L5.
+   `detail`; it is not a column of that table.) Rows written before the A5
+   cutoff are excluded; see L5.
 2. A conflicting retry that writes an outcome row, or returns success.
 3. An identical retry whose response differs from the stored canonical record.
 
