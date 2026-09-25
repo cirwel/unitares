@@ -9,9 +9,10 @@ requires the decision producer's complete versioned hard-stop provenance.
 The two-observation confirmation policy in this module does not actuate: it
 evaluates, in shadow, whether a pause would be the first or second adjacent
 fallback-owned observation and returns a fully serializable provenance record.
-A separate stateless epistemic-authority guard can turn one exact non-authored
-cold-start pause into guidance.  That transition is fail-closed and does not
-promote the dormant confirmation policy.
+A separate stateless epistemic-authority guard can turn one exact risk-only
+cold-start pause into guidance: a non-authored row always, and an agent's own
+report when ``include_authored`` is set.  That transition is fail-closed and
+does not promote the dormant confirmation policy.
 """
 
 from __future__ import annotations
@@ -47,6 +48,10 @@ NON_AUTHORED_COLD_START_RECOVERY_SCHEMA = "eisv.cold-start-recovery.v1"
 NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS = (
     "non_authored_phi_cold_start_deferred"
 )
+# The same guard applied to an agent's own report (include_authored). A
+# distinct basis keeps authored and non-authored deferrals separable in
+# enforcement records and telemetry.
+AUTHORED_COLD_START_ENFORCEMENT_BASIS = "authored_phi_cold_start_deferred"
 NON_AUTHORED_COLD_START_RECOVERY_BASIS = (
     "non_authored_phi_cold_start_trap"
 )
@@ -614,21 +619,31 @@ def apply_non_authored_cold_start_guard(
     *,
     epistemic_class: Any,
     enabled: bool,
+    include_authored: bool = False,
 ) -> dict[str, Any]:
     """Downgrade a non-authoritative Phi cold-start pause to guidance.
 
+    ``include_authored`` extends the guard to an agent's own report
+    (``epistemic_class == 'agent_report'``) under exactly the same maturity,
+    provenance and risk-only conditions. The prior owns the verdict for the
+    first check-ins whoever wrote them, and an authored first report is the
+    one place a pause from it was still delivered (2026-09-21). Default False
+    keeps the original authority boundary for direct callers; the monitor
+    passes the configured value.
+
     This is deliberately separate from the two-observation confirmation shadow.
     It has no counter and promotes none of that shadow's dormant actuation.  The
-    guard asks a narrower authority question: may a non-agent-authored row, whose
-    verdict is still owned by the non-discriminative Phi cold-start fallback,
-    hard-pause the identity before it has authored a report?  When provenance is
-    exact, the answer is no; the raw pause remains in audit/history while runtime
-    enforcement receives ``proceed/guide``.
+    guard asks a narrower authority question: may a row whose verdict is still
+    owned by the non-discriminative Phi cold-start fallback hard-pause the
+    identity on risk alone?  For a non-agent-authored row, and for an agent's own
+    report when ``include_authored`` is set, the answer is no when provenance is
+    exact; the raw pause remains in audit/history while runtime enforcement
+    receives ``proceed/guide``.
 
     Unknown or incomplete provenance fails closed and leaves the pause intact.
-    Agent-authored reports, behaviorally ready rows, independent verification,
-    incomplete hard-stop provenance, and any simultaneous non-risk hard stop are
-    also untouched.
+    Behaviorally ready rows, independent verification, incomplete hard-stop
+    provenance, any simultaneous non-risk hard stop, and (without
+    ``include_authored``) agent-authored reports are untouched.
     """
     guarded = dict(decision)
     action = guarded.get("action")
@@ -662,12 +677,13 @@ def apply_non_authored_cold_start_guard(
         and epistemic_class in _KNOWN_EPISTEMIC_CLASSES
     )
     non_authoring = epistemic_class in NON_AUTHORING_EPISTEMIC_CLASSES
+    authored_included = bool(include_authored) and epistemic_class == "agent_report"
 
     if not enabled:
         ineligibility_reason = "guard_disabled"
     elif not epistemic_class_known:
         ineligibility_reason = "epistemic_class_missing_or_unknown"
-    elif not non_authoring:
+    elif not (non_authoring or authored_included):
         ineligibility_reason = "agent_authored_report"
     elif not maturity_gate:
         ineligibility_reason = "maturity_provenance_missing"
@@ -718,6 +734,7 @@ def apply_non_authored_cold_start_guard(
         "epistemic_class": epistemic_class,
         "agent_authored": epistemic_class == "agent_report",
         "non_authoring": non_authoring,
+        "include_authored": bool(include_authored),
         "primary_driver": primary_driver,
         "primary_eisv_source": primary_eisv_source,
         "measurement_ready": measurement_ready,
@@ -731,7 +748,12 @@ def apply_non_authored_cold_start_guard(
             else None
         ),
         "enforcement_basis": (
-            NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS if applied else None
+            (
+                AUTHORED_COLD_START_ENFORCEMENT_BASIS
+                if authored_included
+                else NON_AUTHORED_COLD_START_ENFORCEMENT_BASIS
+            )
+            if applied else None
         ),
         "original_decision": {
             "action": action,
@@ -745,8 +767,13 @@ def apply_non_authored_cold_start_guard(
             ),
         },
         "note": (
-            "A non-agent-authored Phi cold-start fallback is advisory until "
-            "agent-authored or behaviorally authoritative evidence exists."
+            (
+                "A Phi cold-start fallback is advisory until behaviorally "
+                "authoritative evidence exists, whoever wrote the check-in."
+                if include_authored else
+                "A non-agent-authored Phi cold-start fallback is advisory until "
+                "agent-authored or behaviorally authoritative evidence exists."
+            )
             if applied else
             "Guard did not apply; the original policy decision remains intact."
         ),
@@ -760,24 +787,36 @@ def apply_non_authored_cold_start_guard(
     guarded["cold_start_epistemic_deferred"] = True
     guarded["action"] = "proceed"
     guarded["sub_action"] = "guide"
-    # Agent-facing text. It leads with why this check-in did not pause, then
-    # keeps the overridden reason: that same reading on an agent-authored
-    # check-in is not guarded and can pause, which is the one thing the agent
-    # needs to know before its next sync_state.
-    # Kept under the envelope's 240-character reason line with a typical
-    # original reason: the facts that matter come first.
-    guarded["reason"] = (
-        f"Cold start, guidance only: not agent-authored, behavioral confidence "
-        f"{confidence:.1f} < 0.3. Your own report on this reading can pause "
-        f"(was: {original_reason})"
-    )
-    guarded["guidance"] = (
-        "This estimate is the cold-start prior, not a measurement of this agent's "
-        "behavior. Until behavioral confidence reaches 0.3 (the third check-in), "
-        "an agent-authored sync_state is scored on the same prior and can pause "
-        "at this risk; behaviorally ready, independently verified, structural, "
-        "and runtime-safety evidence can pause at any time."
-    )
+    # Agent-facing text: why this check-in did not pause, what can still pause,
+    # and the overridden reason. Kept under the envelope's 240-character reason
+    # line with a typical original reason: the facts that matter come first.
+    if include_authored:
+        guarded["reason"] = (
+            f"Cold start, guidance only: behavioral confidence {confidence:.1f} "
+            f"< 0.3, so a risk-only cold-start estimate does not pause "
+            f"(was: {original_reason})"
+        )
+        guarded["guidance"] = (
+            "This estimate is the cold-start prior, not a measurement of this "
+            "agent's behavior. From behavioral confidence 0.3 (the third "
+            "check-in) the behavioral estimate takes over. Structural and "
+            "runtime-safety stops, and independently verified evidence, can "
+            "pause at any time."
+        )
+    else:
+        guarded["reason"] = (
+            f"Cold start, guidance only: not agent-authored, behavioral "
+            f"confidence {confidence:.1f} < 0.3. Your own report on this reading "
+            f"can pause (was: {original_reason})"
+        )
+        guarded["guidance"] = (
+            "This estimate is the cold-start prior, not a measurement of this "
+            "agent's behavior. Until behavioral confidence reaches 0.3 (the "
+            "third check-in), an agent-authored sync_state is scored on the same "
+            "prior and can pause at this risk; behaviorally ready, independently "
+            "verified, structural, and runtime-safety evidence can pause at any "
+            "time."
+        )
     return guarded
 
 
