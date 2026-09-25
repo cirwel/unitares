@@ -421,9 +421,11 @@ def test_runtime_installs_the_basic_auth_shim_for_a_static_client(
 
     loggers = [cls for cls, _ in app.middleware if cls is OAuthAttemptLogger]
     assert len(loggers) == (1 if provider is not None else 0)
-    if loggers:
-        # outermost: added last, so it logs what the client actually sent
-        assert app.middleware[-1][0] is OAuthAttemptLogger
+    if loggers and installed:
+        # outside the compat shim (added after it), so it logs what the
+        # client actually sent, not the rewrite
+        order = [cls for cls, _ in app.middleware]
+        assert order.index(OAuthAttemptLogger) > order.index(StaticClientBasicAuthShim)
 
 
 def _free_port() -> int:

@@ -579,8 +579,8 @@ class StaticClientBasicAuthShim:
     PKCE guards a public client's code in transit; this client must present
     its secret to redeem a code, which OAuth 2.0 accepts in place of PKCE for
     confidential clients. A request's own PKCE is never altered; scope
-    narrowing applies to every static-client ``/authorize`` request. Every
-    other client passes through untouched.
+    narrowing applies to every static-client ``/authorize`` and
+    refresh-token request. Every other client passes through untouched.
     """
 
     def __init__(self, app, *, client_id: str, pkce_verifier: str | None = None,
@@ -734,11 +734,47 @@ def _log_safe(value) -> str:
 
 
 def _strip_queries(text):
-    """Drop URL query strings from an error description (the SDK echoes an
-    unregistered redirect URI in full)."""
+    """Drop URL query strings and userinfo from an error description (the SDK
+    echoes an unregistered redirect URI in full)."""
     if not text:
         return text
-    return re.sub(r"\?[^\s'\"]*", "?…", str(text))
+    text = re.sub(r"//[^/\s'\"@]*@", "//", str(text))
+    return re.sub(r"\?[^\s'\"]*", "?...", text)
+
+
+def _url_for_log(url: str | None, *, host_only: bool = False) -> str:
+    """A caller-supplied URL reduced to what is safe to log: no userinfo, no
+    query or fragment. Unparseable input is named as such, never raised."""
+    if not url:
+        return "-"
+    try:
+        parts = urlparse(url)
+        host = parts.netloc.rsplit("@", 1)[-1]
+    except ValueError:
+        return "unparseable"
+    if host_only:
+        return host or "-"
+    return f"{parts.scheme}://{host}{parts.path}" if parts.scheme else (host + parts.path or "-")
+
+
+def _attempt_facts(path: str, values: dict, basic) -> dict:
+    facts = {
+        "client": values.get("client_id") or (basic[0] if basic else None),
+        "auth": "basic" if basic else ("post" if "client_secret" in values else "none"),
+    }
+    if path == "/authorize":
+        facts.update(
+            pkce="yes" if values.get("code_challenge") else "no",
+            scope=values.get("scope") or "-",
+            redirect_host=_url_for_log(values.get("redirect_uri"), host_only=True),
+            resource=_url_for_log(values.get("resource")),
+        )
+    else:
+        facts.update(
+            grant=values.get("grant_type") or "-",
+            verifier="yes" if values.get("code_verifier") else "no",
+        )
+    return facts
 
 
 class OAuthAttemptLogger:
@@ -746,8 +782,10 @@ class OAuthAttemptLogger:
     and scope facts, the auth style, the status and any OAuth error.
 
     Without it a failed connector sign-in leaves no trace (the server keeps no
-    access log). Never logs a secret, a code, a verifier or a token.
-    Sits outermost so it sees what the client actually sent.
+    access log). Never logs a secret, a code, a verifier, a token, URL
+    userinfo or a URL query. Installed outside ``StaticClientBasicAuthShim``
+    so it sees what the client actually sent, not the compat rewrite (other
+    outer layers ignore these paths). Never changes a response.
     """
 
     def __init__(self, app):
@@ -776,24 +814,12 @@ class OAuthAttemptLogger:
         else:
             await self.app(scope, receive, send)
             return
-        values = dict(fields)
-        basic = _basic_credentials(scope)
-        facts = {
-            "client": values.get("client_id") or (basic[0] if basic else None),
-            "auth": "basic" if basic else ("post" if "client_secret" in values else "none"),
-        }
-        if path == "/authorize":
-            facts.update(
-                pkce="yes" if values.get("code_challenge") else "no",
-                scope=values.get("scope") or "-",
-                redirect_host=urlparse(values.get("redirect_uri") or "").netloc or "-",
-                resource=values.get("resource") or "-",
-            )
-        else:
-            facts.update(
-                grant=values.get("grant_type") or "-",
-                verifier="yes" if values.get("code_verifier") else "no",
-            )
+        # Observing must never change the response: any failure to describe
+        # the request degrades the log line, not the request.
+        try:
+            facts = _attempt_facts(path, dict(fields), _basic_credentials(scope))
+        except Exception as exc:
+            facts = {"facts": f"unavailable ({type(exc).__name__})"}
 
         outcome = {"status": None, "error": None, "error_description": None}
 
@@ -802,7 +828,10 @@ class OAuthAttemptLogger:
                 outcome["status"] = message.get("status")
                 for k, v in message.get("headers", []):
                     if k.lower() == b"location":
-                        q = dict(parse_qsl(urlparse(v.decode("latin-1")).query))
+                        try:
+                            q = dict(parse_qsl(urlparse(v.decode("latin-1")).query))
+                        except ValueError:
+                            q = {}
                         outcome["error"] = q.get("error")
                         outcome["error_description"] = q.get("error_description")
             elif message["type"] == "http.response.body" and outcome["status"] and outcome["status"] >= 400:

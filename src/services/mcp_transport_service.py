@@ -567,7 +567,8 @@ def build_transport_runtime(
     if auth_config.oauth_provider is not None:
         from src.oauth_provider import OAuthAttemptLogger
 
-        # Added last, so outermost: it logs what the client actually sent.
+        # Added after the shim, so outside it: it logs what the client
+        # actually sent, not the compat rewrite.
         app.add_middleware(OAuthAttemptLogger)
     start_all_background_tasks(set_ready=set_server_ready)
     _register_application_routes(

@@ -291,3 +291,33 @@ def test_a_logged_value_cannot_fake_another_field(caplog):
     assert 'client="bogus auth=basic -> 200"' in line
     assert 'scope="x pkce=yes -> 200"' in line
     assert 'pkce="no"' in line
+
+
+@pytest.mark.parametrize("bad", ["http://[::1", "http://[zz]/cb", "https://%zz"])
+def test_the_logger_never_changes_a_response(bad):
+    """A malformed redirect_uri must get the SDK's own 400, not a 500."""
+    with_log = _app(compat=False)
+    plain = Starlette(routes=create_auth_routes(
+        GovernanceOAuthProvider(static_clients=[build_static_client(CID, SECRET, [REDIRECT])]),
+        issuer_url=AnyHttpUrl("https://gov.example.org"),
+    ))
+    params = {"response_type": "code", "client_id": CID, "redirect_uri": bad,
+              "code_challenge": "c" * 43, "code_challenge_method": "S256"}
+    a = with_log.get("/authorize", params=params, follow_redirects=False)
+    b = TestClient(plain).get("/authorize", params=params, follow_redirects=False)
+    assert a.status_code == b.status_code != 500
+
+
+def test_userinfo_and_resource_queries_stay_out_of_the_log(caplog):
+    client = _app(compat=False)
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        client.get("/authorize", params={
+            "response_type": "code", "client_id": CID,
+            "redirect_uri": "https://user:hunter2@evil.example/cb",
+            "resource": "https://gov.example.org/mcp?token=RESOURCESECRET",
+            "code_challenge": "c" * 43, "code_challenge_method": "S256",
+        }, follow_redirects=False)
+    ours = "\n".join(r.getMessage() for r in caplog.records if r.name == "src.oauth_provider")
+    assert "[OAUTH] authorize" in ours
+    assert "hunter2" not in ours and "RESOURCESECRET" not in ours
+    assert 'redirect_host="evil.example"' in ours
