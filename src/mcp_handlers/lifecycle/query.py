@@ -698,6 +698,21 @@ async def _load_presence_profiles(
     return profiles
 
 
+#: Most rows one list response can carry intact. The response serializer
+#: (serialization._make_json_serializable) silently cuts any list longer than
+#: this to 100 items plus an in-band "... (N more items)" string, so a page
+#: above it would report counts for rows the caller never receives.
+_LIST_PAGE_CAP = 100
+#: The lite list's documented defaults. The schema declares limit and
+#: recent_days as Optional[...] = None and the params step passes those None
+#: values through, so `arguments.get("limit", 20)` never saw a missing key and
+#: the defaults were dead: every default call built the whole roster (3,974
+#: agents on 2026-09-25), was cut to 100 arbitrary rows, and still reported
+#: shown=3974.
+_LITE_DEFAULT_LIMIT = 20
+_LITE_DEFAULT_RECENT_DAYS = 7
+
+
 async def _list_agents_lite(
     arguments: ToolArgumentsDict,
     *,
@@ -705,7 +720,8 @@ async def _list_agents_lite(
     operator_caller: bool,
 ) -> Sequence[TextContent]:
     # Ultra-compact response - only real agents
-    limit = arguments.get("limit", 20)
+    limit = arguments.get("limit")
+    limit = _LITE_DEFAULT_LIMIT if limit is None else min(int(limit), _LIST_PAGE_CAP)
     status_filter = arguments.get("status_filter", "active")
     include_test_agents = arguments.get("include_test_agents", False)
     # Default: include zero-update agents so newly created agents are discoverable.
@@ -714,7 +730,9 @@ async def _list_agents_lite(
     # Smart default: show labeled agents first; if none, show active unlabeled ones
     named_only = arguments.get("named_only")  # None = auto, True/False = explicit
     # NEW: Filter by recency - default 7 days to reduce noise from stale agents
-    recent_days = arguments.get("recent_days", 7)
+    recent_days = arguments.get("recent_days")
+    if recent_days is None:
+        recent_days = _LITE_DEFAULT_RECENT_DAYS
     filters = AgentListFilters(
         status=status_filter,
         include_test_agents=include_test_agents,
@@ -830,10 +848,16 @@ async def _list_agents_lite(
         if caller_uuid and a["id"] == caller_uuid and "you" not in a:
             a["you"] = True
         a.pop("last_update", None)
+    # "Always include the requesting agent" has to survive the page slice
+    # below. A fresh caller sorts last (few updates) or was appended last, so
+    # once the limit applies it would be cut; lead with it instead.
+    own = next((i for i, a in enumerate(agents) if a.get("you")), None)
+    if own:
+        agents.insert(0, agents.pop(own))
 
     result = {
-        "agents": agents[: max(0, int(limit))] if limit is not None else agents,
-        "shown": min(len(agents), int(limit)) if limit else len(agents),
+        "agents": agents[: max(0, limit)],
+        "shown": min(len(agents), max(0, limit)),
         "matching": len(agents),  # How many matched filters
         "total_all": total_all,  # Total agents in system
         "identity_health": {
@@ -844,13 +868,23 @@ async def _list_agents_lite(
         },
     }
 
-    # Add helpful hints. `limit` is None when the caller omits it and the
-    # Pydantic layer injects the null default (the lite-path default of 20
-    # only applies when the key is absent, not when it arrives as None), so
-    # guard int(limit) like the slices above (:470/:471) or the whole list
-    # call crashes with int(NoneType) — the dashboard's read sweep hit this.
-    if limit and len(agents) > int(limit):
-        result["more"] = f"Showing {limit} of {len(agents)} recent. Use limit=50 or recent_days=30 to see more."
+    # Add helpful hints.
+    if len(agents) > limit:
+        if limit >= _LIST_PAGE_CAP:
+            result["more"] = (
+                f"Showing {limit} of {len(agents)}; a lite page stops at {_LIST_PAGE_CAP}. "
+                "Narrow recent_days or min_updates, or page with lite=false plus "
+                f"limit (at most {_LIST_PAGE_CAP}; a larger page is cut in transit), "
+                f"offset and recent_days={recent_days} (full mode applies no recency "
+                "window unless given one, and does not hide ghost agents)."
+            )
+        else:
+            # lite=true must ride along: a bare `limit` makes the schema
+            # switch the call to full mode (coerce_list_options).
+            result["more"] = (
+                f"Showing {limit} of {len(agents)} recent. Pass lite=true with "
+                f"limit up to {_LIST_PAGE_CAP} to see more."
+            )
     if recent_days:
         result["filter"] = f"Active in last {recent_days} days. Use recent_days=0 for all."
 
@@ -877,7 +911,18 @@ async def _list_agents_full(
 
     # Pagination support (optimization)
     offset = arguments.get("offset", 0)
-    limit = arguments.get("limit")  # None = no limit (backward compatible)
+    # None used to mean "no limit", but the response serializer cut each list
+    # past _LIST_PAGE_CAP while summary.returned counted the uncut page. With
+    # grouped=False that was the whole page; with grouped=True (the default)
+    # each status group was cut separately, so up to 100 rows per group went
+    # out. Default to one honest page of _LIST_PAGE_CAP rows in total, taken
+    # before grouping, so returned is true. This narrows grouped no-limit
+    # calls; an explicit limit is honoured as before.
+    limit = arguments.get("limit")
+    # summary_only returns no rows, so a default page would only make its
+    # returned/limit fields describe a page that is never sent.
+    if limit is None and not summary_only:
+        limit = _LIST_PAGE_CAP
     filters = AgentListFilters(
         status=status_filter,
         include_test_agents=include_test_agents,
@@ -1107,6 +1152,15 @@ async def _list_agents_full(
     # how many LOGICAL workers these process-instances represent. Additive —
     # `total`/`participated` are unchanged. See _principal_rollup.
     principal_counts = _principal_rollup(agents_list)
+    # Health split over the same pre-pagination population as total and
+    # by_status. It used to be counted over the returned page, which only
+    # agreed with the other counts while a call without a limit was never
+    # paged; with a default page it would sum to 100 beside a total of
+    # thousands.
+    health_counts = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0, "error": 0}
+    for agent in agents_list:
+        health = agent.get("health_status", "unknown")
+        health_counts[health] = health_counts.get(health, 0) + 1
 
     # Apply pagination (optimization)
     if limit is not None:
@@ -1149,13 +1203,7 @@ async def _list_agents_full(
 
         # Add health breakdown if include_metrics
         if include_metrics:
-            response_data["summary"]["by_health"] = {
-                "healthy": sum(1 for a in agents_list if a.get("health_status") == "healthy"),
-                "moderate": sum(1 for a in agents_list if a.get("health_status") == "moderate"),
-                "critical": sum(1 for a in agents_list if a.get("health_status") == "critical"),
-                "unknown": sum(1 for a in agents_list if a.get("health_status") == "unknown"),
-                "error": sum(1 for a in agents_list if a.get("health_status") == "error")
-            }
+            response_data["summary"]["by_health"] = dict(health_counts)
     else:
         response_data = {
             "success": True,
@@ -1178,11 +1226,7 @@ async def _list_agents_full(
         }
 
         if include_metrics:
-            health_statuses = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0, "error": 0}
-            for agent in agents_list:
-                status = agent.get("health_status", "unknown")
-                health_statuses[status] = health_statuses.get(status, 0) + 1
-            response_data["summary"]["by_health"] = health_statuses
+            response_data["summary"]["by_health"] = dict(health_counts)
 
     if summary_only:
         return success_response(response_data["summary"])
