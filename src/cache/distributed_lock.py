@@ -148,7 +148,7 @@ class DistributedLock:
             if elapsed >= timeout:
                 # Get lock holder info for error message
                 holder = await redis.get(key)
-                raise TimeoutError(
+                raise LockTimeoutError(
                     f"Lock timeout for '{resource_id}' after {timeout:.1f}s. "
                     f"Held by: {holder}"
                 )
@@ -220,7 +220,7 @@ class DistributedLock:
                     # Check timeout
                     elapsed = time.monotonic() - start_time
                     if elapsed >= timeout:
-                        raise TimeoutError(
+                        raise LockTimeoutError(
                             f"File lock timeout for '{resource_id}' after {timeout:.1f}s"
                         )
 
@@ -299,6 +299,11 @@ class DistributedLock:
 
         Only use for recovering from stuck locks when you're certain
         no process is actively using the resource.
+
+        The Redis lock is deleted outright. A file lock is removed only if no
+        process holds it: deleting a held flock's file does not release the
+        holder, it only lets a second holder lock a fresh file at the same
+        path. A held file lock is released when its holder exits.
         """
         released = False
 
@@ -315,14 +320,20 @@ class DistributedLock:
                 logger.warning(f"Failed to force-release Redis lock: {e}")
 
         # Try file-based
+        from src.state_locking import remove_lock_file_if_free
+
         lock_file = self.lock_dir / f"{resource_id}.lock"
         if lock_file.exists():
-            try:
-                lock_file.unlink()
+            removed, reason = remove_lock_file_if_free(lock_file)
+            if removed:
                 released = True
                 logger.warning(f"Force-released file lock: {resource_id}")
-            except OSError as e:
-                logger.warning(f"Failed to force-release file lock: {e}")
+            else:
+                logger.warning(
+                    f"Did not remove file lock {resource_id}: {reason}. A held "
+                    f"file lock is released when its holder exits; removing it "
+                    f"would admit a second holder."
+                )
 
         return released
 
