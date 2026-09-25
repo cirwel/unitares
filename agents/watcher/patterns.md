@@ -234,7 +234,7 @@ under a `tests/` directory. For Python files that parse, an AST check also
 drops the finding when you cite a line and every handler governing it shows
 one of the three reactions above (citing a `try:` line or a line in its
 block also brings in the handlers of tries nested further down that block,
-so cite the silent handler's own `except` line when you can); for any other
+or further down any `try` block enclosing it, so cite the silent handler's own `except` line when you can); for any other
 `except` clause only a
 cruder line-based `raise` check runs. The optional side-effect exemption
 below is still your call.

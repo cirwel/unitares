@@ -8,9 +8,14 @@ verdicts (the lifetime record has 0 confirmed P006, see
 test_watcher_noise_narrowing.py).
 
 ``p006_actually_fires`` drops a finding only when every handler on the path
-from the flagged line outward contains, anywhere in its body, a ``raise``, a
-logging call at info level or above, or a ``return`` with a non-None value.
-Every other case keeps it; ``parse_findings`` applies the rule.
+from the flagged line outward reacts: its body, nested blocks included, holds
+a ``raise``, a logging call at info level or above on a logger, or a
+``return`` with a non-None value. Inside the body of a nested ``try`` that has
+a handler, only the first statement can count, and only a ``return`` of a
+literal or variable or a log on a plain logger name with literal or variable
+arguments; that ``try``'s ``else`` is skipped, since it does not run when the
+body raised. Evidence in a nested ``try``'s own handler never counts. Every
+other case keeps it; ``parse_findings`` applies the rule.
 """
 
 from __future__ import annotations
@@ -485,6 +490,88 @@ def test_a_lambda_on_the_cited_line_is_not_a_barrier(tmp_path):
     )
     path = _write(tmp_path, source)
     assert p006_actually_fires(str(path), 3) is True
+
+
+def test_a_class_body_runs_in_the_block(tmp_path):
+    # #2442 round 8, P3 1: a class body runs at definition time, so a try in
+    # it is below the cite and a cite in it is not in a region of its own.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        y = 1\n"
+        "        class K:\n"
+        "            z = 2\n"
+        "            try:\n"
+        "                b()\n"
+        "            except Exception:\n"
+        "                pass\n"
+        "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    for cite in (2, 3, 5):
+        assert p006_actually_fires(str(path), cite) is True, cite
+
+
+def test_a_later_try_in_the_same_else_is_below_the_cite(tmp_path):
+    # #2442 round 8, P3 2: a nested else is a region of its own, but a try
+    # further down that same else still runs after the cited line.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            a()\n"
+        "        except OSError:\n"
+        "            raise\n"
+        "        else:\n"
+        "            y = 1\n"
+        "            try:\n"
+        "                b()\n"
+        "            except Exception:\n"
+        "                pass\n"
+        "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 8) is True
+    # A try later in the block but outside the else is still not taken.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            a()\n"
+        "        except OSError:\n"
+        "            raise\n"
+        "        else:\n"
+        "            y = 1\n"
+        + _LATER_SILENT_TRY
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 8) is False
+
+
+def test_a_cite_in_an_inner_try_block_reaches_later_tries_outside_it(tmp_path):
+    # #2442 round 8, P3 3: the cite's innermost try block is the inner
+    # try/finally, but the silent try further down the enclosing block
+    # still runs after it.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            y = 1\n"
+        "        finally:\n"
+        "            pass\n"
+        + _LATER_SILENT_TRY
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 4) is True
+    assert p006_actually_fires(str(path), 2) is True
+    # The inner finally is a region of its own.
+    assert p006_actually_fires(str(path), 6) is False
 
 
 def test_a_def_inside_a_handler_is_its_own_scope(tmp_path):
