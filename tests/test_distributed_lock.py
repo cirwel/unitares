@@ -220,6 +220,34 @@ class TestForceRelease:
         assert released is False
 
     @pytest.mark.asyncio
+    async def test_file_lock_reopens_when_a_cleaner_unlinks_before_flock(self, lock_no_redis, tmp_path):
+        """If the path is unlinked between open() and flock(), the fallback must
+        not keep a lock on the orphaned inode: it reopens, so the file now at
+        the path is the one held."""
+        import fcntl
+
+        lock_file = tmp_path / "raced-resource.lock"
+        real_open = os.open
+        fired = []
+
+        def racing_open(path, flags, *args, **kwargs):
+            fd = real_open(path, flags, *args, **kwargs)
+            if not fired and str(path) == str(lock_file):
+                fired.append(True)
+                os.unlink(path)
+            return fd
+
+        with patch("src.cache.distributed_lock.os.open", side_effect=racing_open):
+            async with lock_no_redis.acquire("raced-resource", timeout=2.0):
+                assert fired
+                fd = real_open(str(lock_file), os.O_RDWR)
+                try:
+                    with pytest.raises(BlockingIOError):
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(fd)
+
+    @pytest.mark.asyncio
     async def test_file_lock_timeout_is_lock_timeout_error(self, lock_no_redis):
         from src.state_locking import LockTimeoutError
 
