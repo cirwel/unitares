@@ -1698,14 +1698,50 @@ def test_a_resumed_agy_review_is_recorded_end_to_end(tmp_path, monkeypatch, caps
     assert "resumed 1x" in capsys.readouterr().err
 
 
-def test_a_budget_that_runs_out_mid_resume_is_a_failure(monkeypatch, tmp_path):
-    """Still truncated when the time budget ends: never reported as exit 0."""
-    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_TRUNCATED])
-    ticks = iter([0.0, 0.0, 100.0, 100.0, 100.0, 100.0])
-    monkeypatch.setattr(rg.time, "monotonic", lambda: next(ticks, 100.0))
+def _clocked_agy(monkeypatch, answers, durations):
+    """Fake agy whose runs each take durations[i] seconds of a fake clock,
+    recording the wait timeout every launch was given."""
+    now = {"t": 0.0}
+    waits = []
+    runs = iter(durations)
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            now["t"] += next(runs)
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        stdout.write(answers.pop(0))
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    monkeypatch.setattr(rg.time, "monotonic", lambda: now["t"])
+    return waits
+
+
+def test_a_resume_gets_only_the_remaining_budget(monkeypatch, tmp_path):
+    """--budget bounds the whole review, resumes included."""
+    waits = _clocked_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE], [20.0, 1.0])
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
-    assert note.startswith("output limit not recovered")
-    assert note != "exit 0"
+    assert note == "exit 0"
+    assert waits[0] == 30 and waits[1] == 10
+
+
+def test_a_budget_that_runs_out_mid_resume_is_a_failure(monkeypatch, tmp_path):
+    """First resume runs, is still truncated, and the budget is then spent."""
+    waits = _clocked_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_TRUNCATED], [20.0, 15.0])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(waits) == 2  # it did resume once
+    assert note == "output limit not recovered after 1 resume(s)"
+
+
+def test_a_resume_carries_every_flag_of_the_first_launch(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE])
+    rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    first, second = calls
+    assert second["cmd"][-len(first["cmd"][3:]):] == first["cmd"][3:]
 
 
 def test_an_unrecovered_truncation_is_recorded_as_failed_not_clean(tmp_path, monkeypatch):

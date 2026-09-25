@@ -976,9 +976,10 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
                 fh.write(f"\n[review_gate] agy hit its output limit; resuming {cid} "
                          f"({resumed}/{AGY_RESUME_LIMIT})\n")
                 fh.flush()
+                # Same flags as the first launch (cmd[3:]), so an isolation
+                # change there can never miss the resumed run.
                 rc, failure = launch(
-                    ["agy", "-p", AGY_RESUME_PROMPT, "--conversation", cid, "--mode", "plan",
-                     "--sandbox", "--output-format", "json"], fh)
+                    ["agy", "-p", AGY_RESUME_PROMPT, "--conversation", cid, *cmd[3:]], fh)
     finally:
         if workspace:
             workspace.cleanup()
