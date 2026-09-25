@@ -349,6 +349,34 @@ def test_nested_try_above_the_cited_line_is_not_added(tmp_path):
     assert p006_actually_fires(str(path), 2) is True
 
 
+@pytest.mark.parametrize(
+    "above",
+    [
+        "",
+        "        try:\n            w()\n        except Exception:\n            pass\n",
+    ],
+)
+def test_nested_reacting_try_never_drops_a_line_with_no_handler(tmp_path, above):
+    # PR review: in a try/finally the cited line has no handler of its own,
+    # which keeps the finding; the nested step must not turn that path into
+    # one whose handlers all react and so drop it.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        + above
+        + "        y = 1\n"
+        "        try:\n"
+        "            z()\n"
+        "        except Exception:\n"
+        "            logger.warning('x')\n"
+        "    finally:\n"
+        "        cleanup()\n"
+    )
+    path = _write(tmp_path, source)
+    cited = 3 + above.count("\n")
+    assert p006_actually_fires(str(path), cited) is True
+
+
 @pytest.mark.parametrize("block", ["else", "finally"])
 def test_else_and_finally_lines_are_not_governed_by_the_try(tmp_path, block):
     source = (

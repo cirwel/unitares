@@ -1859,8 +1859,10 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     When the line sits in a ``try`` block, the path also takes the handlers of
     every try nested in the innermost such block that starts below the line,
     at any depth: the model may cite the outer ``try:`` line or an early body
-    line when the silent handler belongs to a try further down. This is
-    conservative, so one silent nested handler keeps the finding.
+    line when the silent handler belongs to a try further down. This only
+    adds to a path that already has a handler, so it can keep a finding but
+    never drop one: one silent nested handler keeps it, and a line with no
+    handler of its own is kept as below.
 
     Kept (returns True) whenever the check cannot show a reaction: no handler
     on the path (a line inside no try, or only in try/finally), an unreadable,
@@ -1898,6 +1900,11 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
             continue
         on_path.extend(h for h in node.handlers if _within(h, h.lineno))
 
+    # Checked before the nested step below, which only ever adds handlers
+    # to a non-empty path: a line with no handler of its own stays kept.
+    if not on_path:
+        return True
+
     # A cite in a try block may point above the swallow it means: at the
     # `try:` line or an early body line, with the silent handler on a try
     # nested further down that block. Add the handlers of every try nested
@@ -1917,8 +1924,6 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
                 if isinstance(node, try_types) and node.lineno > line:
                     on_path.extend(node.handlers)
 
-    if not on_path:
-        return True
     return not all(_p006_handler_reacts(h) for h in on_path)
 
 
