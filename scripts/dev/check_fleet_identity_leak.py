@@ -199,6 +199,22 @@ def scan_file(path: Path) -> list[str]:
     return findings
 
 
+def triage(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
+    """Split one file's hits into (failing, known-but-deferred).
+
+    ``NOT_IDENTITIES`` and ``KNOWN_COUPLINGS`` are exemptions for resident
+    NAMES — homonyms, and couplings not yet fixed. Neither covers the
+    operator's domain, so a domain hit fails the build in every file.
+    """
+    domain = [h for h in hits if "operator domain" in h]
+    names = [h for h in hits if "operator domain" not in h]
+    if rel in NOT_IDENTITIES:
+        return domain, []
+    if rel in KNOWN_COUPLINGS:
+        return domain, names
+    return domain + names, []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--paths", nargs="*", default=list(DEFAULT_PATHS))
@@ -213,16 +229,13 @@ def main() -> int:
             continue
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(REPO_ROOT).as_posix()
-            if rel in NOT_IDENTITIES:
-                continue
             scanned += 1
             hits = scan_file(path)
             if not hits:
                 continue
-            if rel in KNOWN_COUPLINGS:
-                known.extend(hits)
-            else:
-                findings.extend(hits)
+            failing, deferred = triage(rel, hits)
+            findings.extend(failing)
+            known.extend(deferred)
 
     # Always printed, pass or fail: this repo has known coupling and the guard
     # must not imply otherwise.

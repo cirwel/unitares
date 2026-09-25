@@ -55,3 +55,17 @@ def test_shipped_tree_carries_no_operator_domain():
         for path in sorted((repo / root).rglob("*.py")):
             hits += [h for h in guard.scan_file(path) if "operator domain" in h]
     assert hits == []
+
+
+def test_name_exemptions_do_not_exempt_the_domain():
+    # NOT_IDENTITIES / KNOWN_COUPLINGS exist for resident-name homonyms and
+    # deferred couplings. A domain hit in those files must still fail.
+    exempt = next(iter(guard.NOT_IDENTITIES))
+    coupled = next(iter(guard.KNOWN_COUPLINGS))
+    domain_hit = f'  {exempt}:1: hardcoded operator domain "cirwel.org" in a string literal'
+    name_hit = f'  {exempt}:2: hardcoded fleet identity "Sentinel" in a string literal'
+
+    assert guard.triage(exempt, [domain_hit, name_hit]) == ([domain_hit], [])
+    failing, deferred = guard.triage(coupled, [domain_hit, name_hit])
+    assert failing == [domain_hit] and deferred == [name_hit]
+    assert guard.triage("src/other.py", [name_hit]) == ([name_hit], [])
