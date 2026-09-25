@@ -2547,7 +2547,7 @@ def check_verification_floor_shadow_recorded(db_url: str) -> CheckResult:
 
 
 def check_cold_start_pause_canary(db_url: str) -> CheckResult:
-    """WARN if a non-authored Phi cold-start pause fires again after #1819.
+    """WARN if a Phi cold-start pause fires again after #1819 (and its extension).
 
     A brand-new identity has no behavioral evidence, so the verdict is owned by
     the Phi cold-start prior, which the result envelope itself labels
@@ -2557,20 +2557,24 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
     session's last recorded act. #1819 downgrades a *proven* risk-only
     cold-start hard stop to guidance, so the expected steady state is zero.
 
-    Only NON-authored decisions count. The guard is ineligible, by design,
-    when the check-in is the agent's own report (`epistemic_class =
-    'agent_report'`, `ineligibility_reason: agent_authored_report`): an agent
-    that tells governance it is high-risk keeps that verdict. Counting those
-    pauses made the canary warn for days on 2026-09-21's single pause, a
-    Codex session's self-authored second check-in with the guard deployed
-    and on. Authorship is read from the row's top-level `epistemic_class`,
-    the field the guard itself decides on, because it is on every decision;
-    the guard's own `epistemic_gate` block is attached to risk-routed pauses
-    only, so it cannot classify the denominator. A row whose class is absent
-    counts as non-authored, since authorship cannot be shown for it.
-    Authored pauses are still reported, uncounted. The denominator is
-    filtered the same way: a window whose cold starts were all
-    agent-authored never exercised the guard, so it SKIPs, never PASSes.
+    Every cold-start pause counts, with one exception. Until 2026-09-24 the
+    guard was ineligible, by design, for an agent's own report (`epistemic_class
+    = 'agent_report'`), and counting those pauses made the canary warn for days
+    on 2026-09-21's single pause. The guard now covers authored reports
+    (COLD_START_GUARD_INCLUDE_AUTHORED). An authored pause is therefore left
+    uncounted only when its row shows the guard evaluated it WITHOUT that
+    extension: an `epistemic_gate` record whose `include_authored` is absent
+    (written before the change) or false (flag off). Those are reported, never
+    dropped. An authored pause with no `epistemic_gate` at all was not
+    risk-routed (void, coherence, basin, non-risk CIRS), so it counts exactly as
+    a non-authored one does. The denominator is every cold-start decision
+    except the same known-unwatched rows the numerator leaves uncounted: an
+    authored row whose gate record shows the guard evaluated it without the
+    extension. The guard attaches its record only to risk-routed pauses, so a
+    cold start that never produced a pause verdict has none and is counted,
+    authored or not; a PASS then means "cold starts happened and none of them
+    paused". Under the rollback flag, a window whose only cold starts are
+    authored pause verdicts SKIPs, with those pauses named in the note.
 
     Zero is also what this check sees when nothing is looking, which is the
     whole reason it exists. The denominator is cold-start *decisions* of any
@@ -2589,45 +2593,53 @@ def check_cold_start_pause_canary(db_url: str) -> CheckResult:
         "WITH d AS ("
         "  SELECT state_json->'eisv_telemetry'#>>'{policy_evaluation,action}' AS act,"
         "         state_json->'eisv_telemetry'#>>'{policy_evaluation,inputs,verdict_source}' AS vsrc,"
-        "         state_json->>'epistemic_class' AS eclass"
+        "         state_json->>'epistemic_class' AS eclass,"
+        "         state_json->'eisv_telemetry'#>>'{policy_evaluation,epistemic_gate,include_authored}' AS incl,"
+        "         (state_json->'eisv_telemetry'#>'{policy_evaluation,epistemic_gate}') IS NOT NULL AS gated"
         "  FROM core.agent_state"
         "  WHERE recorded_at > now() - interval '7 days'"
         "    AND state_json ? 'eisv_telemetry')"
         "SELECT count(*) FILTER (WHERE vsrc = 'phi_cold_start'"
-        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
+        "                          AND NOT (eclass IS NOT DISTINCT FROM 'agent_report'"
+        "                                   AND gated"
+        "                                   AND incl IS DISTINCT FROM 'true')),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
-        "                          AND eclass IS DISTINCT FROM 'agent_report'),"
+        "                          AND NOT (eclass IS NOT DISTINCT FROM 'agent_report'"
+        "                                   AND gated"
+        "                                   AND incl IS DISTINCT FROM 'true')),"
         "       count(*) FILTER (WHERE vsrc = 'phi_cold_start' AND act = 'pause'"
-        "                          AND eclass = 'agent_report')"
+        "                          AND eclass IS NOT DISTINCT FROM 'agent_report'"
+        "                          AND gated AND incl IS DISTINCT FROM 'true')"
         " FROM d"
     ))
     if row is None or len(row) < 3:
         return CheckResult(name, mode, Status.SKIP, "core.agent_state not queryable")
     cold_starts, pauses, authored = int(row[0]), int(row[1]), int(row[2])
     authored_note = (
-        f" ({authored} agent-authored cold-start pause(s) not counted: the "
-        "guard deliberately leaves an agent's own report in force)"
+        f" ({authored} agent-authored cold-start pause(s) not counted: their "
+        "rows predate the guard's extension to authored reports, or it is off)"
         if authored else ""
     )
     if cold_starts == 0:
         return CheckResult(
             name, mode, Status.SKIP,
-            "no non-authored phi_cold_start decisions in 7d — nothing to "
+            "no watched phi_cold_start decisions in 7d — nothing to "
             "observe, so a zero here would not mean the guard is working"
             + authored_note,
         )
     if pauses:
         return CheckResult(
             name, mode, Status.WARN,
-            f"{pauses} non-authored phi_cold_start pause(s) in 7d across "
-            f"{cold_starts} non-authored cold-start decisions — #1819 downgrades a proven "
-            "risk-only cold start to guidance, so check in order: is #1819 "
-            "actually DEPLOYED (compare the running build_sha, not master), is "
-            "GOVERNANCE_NON_AUTHORED_COLD_START_GUARD on, and did an "
+            f"{pauses} phi_cold_start pause(s) in 7d across "
+            f"{cold_starts} cold-start decisions — the cold-start "
+            "guard downgrades a proven risk-only cold start to guidance, so "
+            "check in order: is the guard actually DEPLOYED (compare the running "
+            "build_sha, not master), are GOVERNANCE_NON_AUTHORED_COLD_START_GUARD "
+            "and GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED on, and did an "
             "independent hard stop legitimately fire" + authored_note,
         )
     return CheckResult(name, mode, Status.PASS,
-                       f"0 pauses across {cold_starts} non-authored cold-start "
+                       f"0 pauses across {cold_starts} cold-start "
                        f"decisions in 7d" + authored_note)
 
 
