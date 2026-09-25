@@ -546,6 +546,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
 
 
 PROVIDERS_FILE = Path(__file__).resolve().with_name("review_providers.json")
+KNOWN_PROVIDERS = {"codex", "claude"}
 
 
 def disabled_providers() -> dict[str, str]:
@@ -564,18 +565,29 @@ def disabled_providers() -> dict[str, str]:
         raw = PROVIDERS_FILE.read_text()
     except OSError:
         return {}
+    def warn(what: str) -> None:
+        print(f"[review] WARNING: {PROVIDERS_FILE.name}: {what}", file=sys.stderr)
+
     try:
-        entries = json.loads(raw).get("disabled") or {}
+        data = json.loads(raw)
+        unknown_keys = set(data) - {"_doc", "disabled"}
+        if unknown_keys or "disabled" not in data:
+            warn(f"expected a 'disabled' key (found {sorted(data)}); a misspelled key "
+                 "disables nothing")
+        entries = data.get("disabled") or {}
         if isinstance(entries, list):
             entries = {name: True for name in entries}
         out = {}
         for name, info in entries.items():
+            key = str(name).strip().lower()  # "Codex" must still disable codex
+            if key not in KNOWN_PROVIDERS:
+                warn(f"unknown provider {name!r} (known: {', '.join(sorted(KNOWN_PROVIDERS))})")
             if isinstance(info, dict):
-                out[str(name)] = str(info.get("reason", "disabled"))
+                out[key] = str(info.get("reason") or "disabled")
             elif isinstance(info, str):
-                out[str(name)] = info
+                out[key] = info or "disabled"
             elif info:
-                out[str(name)] = "disabled"
+                out[key] = "disabled"
         return out
     except (ValueError, AttributeError, TypeError) as exc:
         print(f"[review] WARNING: {PROVIDERS_FILE.name} is malformed ({exc}); "

@@ -1432,6 +1432,8 @@ def test_every_provider_the_tracked_file_lists_is_disabled():
     ('{"disabled": {"codex": true}}', {"codex": "disabled"}),
     ('{"disabled": ["codex"]}', {"codex": "disabled"}),
     ('{"disabled": {"codex": false}}', {}),
+    ('{"disabled": {"Codex": true}}', {"codex": "disabled"}),
+    ('{"disabled": {"codex": ""}}', {"codex": "disabled"}),
     ('{}', {}),
 ])
 def test_provider_entry_shapes(monkeypatch, tmp_path, content, expected):
@@ -1439,6 +1441,23 @@ def test_provider_entry_shapes(monkeypatch, tmp_path, content, expected):
     f.write_text(content)
     monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
     assert real_disabled_providers() == expected
+
+
+@pytest.mark.parametrize("content,warning", [
+    ('{"disable": {"codex": true}}', "misspelled key"),
+    ('{"disabled": {"codx": true}}', "unknown provider"),
+])
+def test_a_provider_file_typo_warns(monkeypatch, tmp_path, capsys, content, warning):
+    f = tmp_path / "p.json"
+    f.write_text(content)
+    monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
+    real_disabled_providers()
+    assert warning in capsys.readouterr().err
+
+
+def test_the_committed_provider_file_parses_without_warnings(capsys):
+    real_disabled_providers()
+    assert "WARNING" not in capsys.readouterr().err
 
 
 def test_a_malformed_provider_file_warns(monkeypatch, tmp_path, capsys):
