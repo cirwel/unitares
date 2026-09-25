@@ -97,6 +97,33 @@ def test_a_source_whose_content_changed_is_stale_and_named(layout: Layout):
     assert "--stamp demo" in result.stdout
 
 
+def test_stale_names_every_drifting_source_not_only_the_first(layout: Layout):
+    # Until 2026-09-25 the report stopped at the first drift, which on #2430
+    # named a file master changed rather than one the branch did.
+    (layout.repo / "src" / "other.py").write_text("y = 2\n")
+    layout.source("x = 2\n")
+    layout.skill_file.write_text(textwrap.dedent(f'''\
+        ---
+        name: demo
+        last_verified: "{_day(1)}"
+        freshness_days: 14
+        source_files:
+          - unitares/src/thing.py
+          - unitares/src/other.py
+        source_digests:
+          unitares/src/thing.py: "{_digest("x = 1\n")}"
+          unitares/src/other.py: "{_digest("y = 1\n")}"
+        ---
+        # Demo
+        '''))
+    result = layout.run()
+    assert result.returncode == 1
+    assert result.stdout.count("STALE") == 2, result.stdout
+    assert "unitares/src/thing.py changed since" in result.stdout
+    assert "unitares/src/other.py changed since" in result.stdout
+    assert "re-check the claims that cite them" in result.stdout
+
+
 def test_a_cited_source_without_a_digest_is_stale(layout: Layout):
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(1), digest=None)
