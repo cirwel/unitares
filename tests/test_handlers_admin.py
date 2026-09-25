@@ -7,6 +7,7 @@ handle_validate_file_path with mocked backends.
 
 import pytest
 import json
+import time
 import sys
 import os
 from pathlib import Path
@@ -118,6 +119,76 @@ class TestCleanupStaleLocks:
             # Verify max_age was passed through
             call_kwargs = mock_fn.call_args
             assert call_kwargs[1]["max_age_seconds"] == 600.0 or call_kwargs.kwargs.get("max_age_seconds") == 600.0
+
+    @pytest.mark.asyncio
+    async def test_sweep_errors_are_in_the_message(self, tmp_path, monkeypatch):
+        import src.state_locking as state_locking
+
+        monkeypatch.setattr(state_locking, "DEFAULT_LOCK_DIR", tmp_path)
+        free = tmp_path / "stuck.lock"
+        free.write_text("{}")
+        old = time.time() - 600
+        os.utime(free, (old, old))
+
+        from src.mcp_handlers.admin.handlers import handle_cleanup_stale_locks
+        with patch("src.lock_cleanup.remove_lock_file_if_free", side_effect=PermissionError("read-only dir")):
+            data = json.loads((await handle_cleanup_stale_locks({}))[0].text)
+
+        assert data["errors"] == 1
+        assert data["error_locks"][0]["lock_file"] == "stuck.lock"
+        assert "failed on 1 (see error_locks)" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_dry_run_message_says_nothing_was_removed(self, tmp_path, monkeypatch):
+        import src.state_locking as state_locking
+
+        monkeypatch.setattr(state_locking, "DEFAULT_LOCK_DIR", tmp_path)
+        free = tmp_path / "free.lock"
+        free.write_text("{}")
+        old = time.time() - 600
+        os.utime(free, (old, old))
+
+        from src.mcp_handlers.admin.handlers import handle_cleanup_stale_locks
+        data = json.loads((await handle_cleanup_stale_locks({"dry_run": True}))[0].text)
+
+        assert free.exists()
+        assert data["cleaned"] == 1
+        assert data["message"].startswith("Would remove 1 free lock file(s)")
+        assert "dry run: nothing removed" in data["message"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("backend", "reported"), [
+        ("advisory", "advisory"),
+        ("fcntl", "fcntl"),
+        # The dispatcher runs fcntl for any value other than "advisory".
+        ("postgres", "fcntl"),
+    ])
+    async def test_cleanup_sweeps_the_writers_dir_and_names_the_backend(self, tmp_path, monkeypatch, backend, reported):
+        """The tool used to pass src/ as the project root and sweep a directory
+        nothing writes to, reporting "Cleaned 0" as success. It now sweeps
+        StateLockManager's directory, which is safe because only lock files no
+        process holds are removed, and says which backend is in force."""
+        import src.state_locking as state_locking
+
+        monkeypatch.setenv("UNITARES_AGENT_LOCK_BACKEND", backend)
+        monkeypatch.setattr(state_locking, "DEFAULT_LOCK_DIR", tmp_path)
+        free = tmp_path / "free.lock"
+        free.write_text("{}")
+        old = time.time() - 600
+        os.utime(free, (old, old))
+
+        from src.mcp_handlers.admin.handlers import handle_cleanup_stale_locks
+        data = json.loads((await handle_cleanup_stale_locks({}))[0].text)
+
+        assert data["cleaned"] == 1
+        assert not free.exists()
+        assert data["lock_backend"] == reported
+        assert data["lock_dir"] == str(tmp_path)
+        assert data["message"].startswith("Removed 1 free lock file(s)")
+        if reported == "advisory":
+            assert "no agent lock files are expected" in data["message"]
+        else:
+            assert "never by this tool" in data["message"]
 
 
 # ============================================================================

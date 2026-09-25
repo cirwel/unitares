@@ -181,6 +181,93 @@ class TestForceRelease:
         assert released is True
         assert not lock_file.exists()
 
+    @pytest.mark.asyncio
+    async def test_force_release_keeps_a_held_file_lock(self, lock_no_redis, tmp_path):
+        """Deleting a held flock's file does not release the holder; it lets a
+        second holder lock a fresh file at the same path. So a held file lock
+        is kept, and force_release reports it did not release."""
+        import fcntl
+
+        async with lock_no_redis.acquire("held-resource", timeout=1.0):
+            released = await lock_no_redis.force_release("held-resource")
+            assert released is False
+            lock_file = tmp_path / "held-resource.lock"
+            assert lock_file.exists()
+            fd = os.open(str(lock_file), os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
+
+    @pytest.mark.asyncio
+    async def test_file_open_error_is_not_reported_as_contention(self, lock_no_redis):
+        """A failed open() is an I/O error, not a live holder: it must surface
+        as itself, not after the timeout as LockTimeoutError."""
+        from src.state_locking import LockTimeoutError
+
+        with patch("src.cache.distributed_lock.os.open", side_effect=PermissionError("denied")):
+            with pytest.raises(PermissionError, match="denied") as excinfo:
+                async with lock_no_redis.acquire("perm", timeout=5.0):
+                    pass
+        assert not isinstance(excinfo.value, LockTimeoutError)
+
+    @pytest.mark.asyncio
+    async def test_force_release_reports_an_os_error_instead_of_raising(self, lock_no_redis, tmp_path):
+        (tmp_path / "ro-resource.lock").touch()
+        with patch("src.state_locking.remove_lock_file_if_free", side_effect=PermissionError("read-only")):
+            released = await lock_no_redis.force_release("ro-resource")
+        assert released is False
+
+    @pytest.mark.asyncio
+    async def test_file_lock_reopens_when_a_cleaner_unlinks_before_flock(self, lock_no_redis, tmp_path):
+        """If the path is unlinked between open() and flock(), the fallback must
+        not keep a lock on the orphaned inode: it reopens, so the file now at
+        the path is the one held."""
+        import fcntl
+
+        lock_file = tmp_path / "raced-resource.lock"
+        real_open = os.open
+        fired = []
+
+        def racing_open(path, flags, *args, **kwargs):
+            fd = real_open(path, flags, *args, **kwargs)
+            if not fired and str(path) == str(lock_file):
+                fired.append(True)
+                os.unlink(path)
+            return fd
+
+        with patch("src.cache.distributed_lock.os.open", side_effect=racing_open):
+            async with lock_no_redis.acquire("raced-resource", timeout=2.0):
+                assert fired
+                fd = real_open(str(lock_file), os.O_RDWR)
+                try:
+                    with pytest.raises(BlockingIOError):
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(fd)
+
+    @pytest.mark.asyncio
+    async def test_inode_mismatch_retries_are_bounded_by_the_timeout(self, lock_no_redis):
+        """If the path changes on every pass, acquire() must still honour its
+        timeout (and yield to the loop) rather than spin forever."""
+        from src.state_locking import LockTimeoutError
+
+        with patch("src.state_locking.holds_current_inode", return_value=False):
+            with pytest.raises(LockTimeoutError):
+                await asyncio.wait_for(
+                    lock_no_redis.acquire("churn", timeout=0.3).__aenter__(), timeout=5.0
+                )
+
+    @pytest.mark.asyncio
+    async def test_file_lock_timeout_is_lock_timeout_error(self, lock_no_redis):
+        from src.state_locking import LockTimeoutError
+
+        async with lock_no_redis.acquire("busy-resource", timeout=1.0):
+            with pytest.raises(LockTimeoutError):
+                async with lock_no_redis.acquire("busy-resource", timeout=0.2):
+                    pass
+
 
 # ============================================================================
 # health_check
@@ -231,6 +318,17 @@ class TestFileFallback:
             lock_file = tmp_path / "pid-test.lock"
             content = lock_file.read_text()
             assert str(os.getpid()) in content
+
+    @pytest.mark.asyncio
+    async def test_body_oserror_is_not_contention(self, lock_no_redis, tmp_path):
+        """An OSError from the locked body must reach the caller once, with the
+        lock released, not be retried as flock contention (which re-acquired
+        the lock and surfaced as RuntimeError from asynccontextmanager)."""
+        with pytest.raises(TimeoutError, match="inner timeout"):
+            async with lock_no_redis.acquire("body-test", timeout=2.0):
+                raise TimeoutError("inner timeout")
+        async with lock_no_redis.acquire("body-test", timeout=0.5):
+            pass  # released: re-acquirable at once
 
     @pytest.mark.asyncio
     async def test_is_locked_file_fallback(self, lock_no_redis, tmp_path):

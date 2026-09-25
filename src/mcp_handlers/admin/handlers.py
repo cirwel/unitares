@@ -744,25 +744,46 @@ async def handle_reset_monitor(arguments: Dict[str, Any]) -> Sequence[TextConten
 # before handler lookup -- see the "one name, one home" note in tool_stability.py.
 @mcp_tool("cleanup_stale_locks", timeout=15.0, register=False)
 async def handle_cleanup_stale_locks(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """Clean up stale lock files that are no longer held by active processes"""
+    """Remove agent lock files that no process holds; report the held ones."""
     try:
         from src.lock_cleanup import cleanup_stale_state_locks
-        
+        from src.state_locking import DEFAULT_LOCK_DIR, lock_backend
+
         max_age = arguments.get('max_age_seconds', 300.0)
         dry_run = arguments.get('dry_run', False)
-        
-        project_root = Path(__file__).parent.parent.parent
-        result = cleanup_stale_state_locks(project_root=project_root, max_age_seconds=max_age, dry_run=dry_run)
-        
+        # The same selection the dispatcher uses (state_locking.lock_backend).
+        backend = lock_backend()
+
+        # No project_root: sweep the directory StateLockManager writes to.
+        # Safe because removal requires the lock to be free (a held lock is
+        # never removed); deriving a root from this file used to give src/.
+        result = cleanup_stale_state_locks(max_age_seconds=max_age, dry_run=dry_run)
+
+        if backend == "advisory":
+            note = ("Agent locks use Postgres advisory locks on this server, so no agent "
+                    "lock files are expected here; a held advisory lock belongs to a live "
+                    "session and is released when that session ends.")
+        else:
+            note = ("Only lock files no process holds are removed. A held lock is released "
+                    "when its holder finishes or exits, never by this tool.")
         return success_response({
             "cleaned": result['cleaned'],
             "kept": result['kept'],
             "errors": result['errors'],
             "dry_run": dry_run,
             "max_age_seconds": max_age,
+            "lock_backend": backend,
+            "lock_dir": str(DEFAULT_LOCK_DIR),
             "cleaned_locks": result.get('cleaned_locks', []),
             "kept_locks": result.get('kept_locks', []),
-            "message": f"Cleaned {result['cleaned']} stale lock(s), kept {result['kept']} active lock(s)"
+            "error_locks": result.get('error_locks', []),
+            "message": (
+                f"{'Would remove' if dry_run else 'Removed'} {result['cleaned']} free lock file(s), "
+                f"kept {result['kept']}"
+                f"{', failed on ' + str(result['errors']) + ' (see error_locks)' if result.get('errors') else ''}"
+                f" in {DEFAULT_LOCK_DIR}"
+                f"{' (dry run: nothing removed)' if dry_run else ''}. {note}"
+            )
         })
     except Exception as e:
         return [error_response(f"Error cleaning stale locks: {str(e)}")]

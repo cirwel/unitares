@@ -33,6 +33,7 @@ from mcp.types import TextContent
 # Helpers
 # ============================================================================
 
+from src.state_locking import LockTimeoutError
 from tests.helpers import parse_result
 
 
@@ -516,7 +517,7 @@ class TestProcessAgentUpdate:
         # Make lock acquisition raise TimeoutError
         @asynccontextmanager
         async def _timeout_lock(*args, **kwargs):
-            raise TimeoutError("Lock acquisition timed out")
+            raise LockTimeoutError("Lock acquisition timed out")
             yield  # pragma: no cover
 
         mock_server.lock_manager.acquire_agent_lock_async = MagicMock(side_effect=_timeout_lock)
@@ -2359,46 +2360,49 @@ class TestProcessAgentUpdateExtended:
     # Lines 2049-2051: Emergency lock cleanup exception
     # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    async def test_lock_timeout_cleanup_exception(self, mock_server, mock_monitor):
-        """Emergency lock cleanup failure is caught gracefully."""
-        agent_uuid = "test-uuid-lock-cleanup"
+    async def test_timeout_inside_the_locked_update_is_an_unexpected_error(self, mock_server, mock_monitor):
+        """A TimeoutError from the work under the lock is neither lock
+        contention (LOCK_TIMEOUT) nor a whole-tool timeout: the handler's
+        fail-open branch reports it as an unexpected error, so the tool
+        decorator's timeout path (and its coordination_failure event) never
+        sees it."""
+        agent_uuid = "test-uuid-body-timeout"
         meta = _make_metadata(status="active", total_updates=5)
         mock_server.agent_metadata = {agent_uuid: meta}
         mock_server.get_or_create_monitor.return_value = mock_monitor
         mock_server.monitors = {agent_uuid: mock_monitor}
 
         @asynccontextmanager
-        async def _timeout_lock(*args, **kwargs):
-            raise TimeoutError("Lock timeout")
-            yield  # pragma: no cover
+        async def _free_lock(*args, **kwargs):
+            yield
 
-        mock_server.lock_manager.acquire_agent_lock_async = MagicMock(side_effect=_timeout_lock)
+        mock_server.lock_manager.acquire_agent_lock_async = MagicMock(side_effect=_free_lock)
 
         p = self._common_patches(mock_server, agent_uuid=agent_uuid)
         with self._apply_patches(p), \
-             patch.dict("sys.modules", {
-                 "src.lock_cleanup": MagicMock(
-                     cleanup_stale_state_locks=MagicMock(side_effect=RuntimeError("cleanup failed"))
-                 ),
-             }):
+             patch("src.mcp_handlers.updates.phases.execute_locked_update",
+                   new=AsyncMock(side_effect=TimeoutError("pool acquire timed out"))), \
+             patch("src.coordination_failure_emit.emit_coordination_failure_sync") as emit:
 
             from src.mcp_handlers.core import handle_process_agent_update
             result = await handle_process_agent_update({
-                "response_text": "test lock cleanup error",
+                "response_text": "test body timeout",
                 "complexity": 0.5,
             })
 
             data = parse_result(result)
-            # Should still return error about lock, not crash
-            assert "error" in data or "lock" in json.dumps(data).lower()
+            assert data.get("error_code") != "LOCK_TIMEOUT"
+            assert data["error_type"] == "unexpected_error"
+            assert "pool acquire timed out" in data["error"]
+            emit.assert_not_called()
 
-    # ------------------------------------------------------------------
-    # Lines 2049: Emergency lock cleanup success
-    # ------------------------------------------------------------------
     @pytest.mark.asyncio
-    async def test_lock_timeout_cleanup_success(self, mock_server, mock_monitor):
-        """Successful emergency lock cleanup after timeout."""
-        agent_uuid = "test-uuid-lock-clean-ok"
+    async def test_lock_timeout_never_removes_lock_files(self, mock_server, mock_monitor, monkeypatch):
+        """A lock timeout means a live holder. Removing its lock file would
+        admit a second writer, so the timeout path must not sweep, even on the
+        fcntl backend, and must not advise a sweep either."""
+        monkeypatch.setenv("UNITARES_AGENT_LOCK_BACKEND", "fcntl")
+        agent_uuid = "test-uuid-lock-timeout"
         meta = _make_metadata(status="active", total_updates=5)
         mock_server.agent_metadata = {agent_uuid: meta}
         mock_server.get_or_create_monitor.return_value = mock_monitor
@@ -2406,27 +2410,27 @@ class TestProcessAgentUpdateExtended:
 
         @asynccontextmanager
         async def _timeout_lock(*args, **kwargs):
-            raise TimeoutError("Lock timeout")
+            raise LockTimeoutError("Lock timeout")
             yield  # pragma: no cover
 
         mock_server.lock_manager.acquire_agent_lock_async = MagicMock(side_effect=_timeout_lock)
+        sweep = MagicMock(return_value={"cleaned": 0})
 
         p = self._common_patches(mock_server, agent_uuid=agent_uuid)
         with self._apply_patches(p), \
-             patch.dict("sys.modules", {
-                 "src.lock_cleanup": MagicMock(
-                     cleanup_stale_state_locks=MagicMock(return_value={"cleaned": 2})
-                 ),
-             }):
+             patch("src.lock_cleanup.cleanup_stale_state_locks", sweep):
 
             from src.mcp_handlers.core import handle_process_agent_update
             result = await handle_process_agent_update({
-                "response_text": "test lock cleanup success",
+                "response_text": "test lock timeout",
                 "complexity": 0.5,
             })
 
             data = parse_result(result)
-            assert "error" in data or "lock" in json.dumps(data).lower()
+            assert data["error_code"] == "LOCK_TIMEOUT"
+            assert "released when that holder finishes or exits" in data["error"]
+            assert "cleanup_stale_locks" not in json.dumps(data)
+            sweep.assert_not_called()
 
     # ------------------------------------------------------------------
     # Lines 1549, 1559, 1570, 1585: Convergence guidance detailed paths
