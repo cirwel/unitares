@@ -31,8 +31,10 @@ If you are not using commands directly, the equivalent raw tool flow is:
 
 Canonical/raw equivalents are `onboard(...)`, `process_agent_update(...)`, and
 `get_governance_metrics(...)`. Friendly alias calls return the agent-experience
-envelope with `next_action`, compact state fields, and the full canonical
-payload under `raw_governance`.
+envelope with `next_action` and compact state fields. Read the uuid from
+`agent_uuid`: a plain fresh `start_session` (`response_shape: "routine"`) does
+not repeat the canonical payload, and any other mint, or `response_mode="full"`,
+also carries it under `raw_governance`.
 
 ## Codex Reality
 

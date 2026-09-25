@@ -37,7 +37,8 @@ def test_runs_read_only_from_an_empty_workspace_and_parses_the_verdict(monkeypat
            "usage": {"total_tokens": 1234}}
     _spawn(monkeypatch, json.dumps(out).encode(), seen=seen)
     result = asyncio.run(hb.call_antigravity_backend("PROMPT"))
-    assert seen["argv"][:3] == ("/Users/op/.local/bin/agy", "-p", "PROMPT")
+    assert seen["argv"][:2] == ("/Users/op/.local/bin/agy", "-p")
+    assert seen["argv"][2] == "PROMPT" + hb._ANTIGRAVITY_TEXT_ONLY
     assert {"--sandbox", "plan", "json"} <= set(seen["argv"])
     assert seen["listing"] == [] and not Path(seen["cwd"]).exists()
     assert json.loads(result.text)["agrees"] is False
@@ -57,6 +58,46 @@ def test_no_verdict_and_missing_cli_fall_back(monkeypatch):
     assert "no parseable" in asyncio.run(hb.call_antigravity_backend("P")).error
     monkeypatch.setattr(hb, "resolve_antigravity_cli", lambda: None)
     assert "not found" in asyncio.run(hb.call_antigravity_backend("P")).error
+
+
+def test_prompt_tells_agy_to_answer_in_text_without_tools(monkeypatch):
+    # agy 1.2.11 given the review prompt alone reached for a tool, plan mode
+    # denied it, and the turn ended with an empty reply; the instruction is
+    # what makes it answer.
+    seen = {}
+    _spawn(monkeypatch, json.dumps({"status": "SUCCESS", "response": json.dumps(VERDICT)}).encode(),
+           seen=seen)
+    asyncio.run(hb.call_antigravity_backend("PROMPT"))
+    sent = seen["argv"][2]
+    assert sent.startswith("PROMPT") and "Do not run commands" in sent
+    assert "JSON object" in sent
+
+
+def test_empty_reply_after_denied_tool_use_names_the_denied_action(monkeypatch):
+    out = {"status": "SUCCESS", "response": "",
+           "denied_actions": [{"action": "command", "display_name": "RunCommand"}]}
+    _spawn(monkeypatch, json.dumps(out).encode())
+    result = asyncio.run(hb.call_antigravity_backend("P"))
+    assert result.text is None
+    assert "empty reply after denied tool use: RunCommand" in result.error
+
+
+def test_a_malformed_denied_actions_field_never_raises(monkeypatch):
+    for denied in (True, 3, "RunCommand", {"action": "command"}):
+        out = {"status": "SUCCESS", "response": "", "denied_actions": denied}
+        _spawn(monkeypatch, json.dumps(out).encode())
+        assert "no parseable" in asyncio.run(hb.call_antigravity_backend("P")).error
+    _spawn(monkeypatch, json.dumps({"status": "SUCCESS", "response": "",
+                                    "denied_actions": ["RunCommand"]}).encode())
+    assert "denied tool use: RunCommand" in asyncio.run(hb.call_antigravity_backend("P")).error
+
+
+def test_the_size_limit_counts_the_appended_instruction(monkeypatch):
+    _spawn(monkeypatch, b"{}")
+    monkeypatch.setattr(hb.asyncio, "create_subprocess_exec",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
+    at_limit = "x" * hb._ANTIGRAVITY_PROMPT_BYTES
+    assert "size limit" in asyncio.run(hb.call_antigravity_backend(at_limit)).error
 
 
 def test_oversized_prompt_is_refused_before_spawning(monkeypatch):

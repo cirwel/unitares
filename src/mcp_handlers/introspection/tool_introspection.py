@@ -231,7 +231,7 @@ def _registered_public_tool_names() -> list[str]:
 
 @mcp_tool("list_tools", timeout=10.0, requires_identity="pre_onboard")
 async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """List all available governance tools with descriptions and categories
+    """List the governance capability catalog (lite: names only; full: descriptions and categories).
     
     Parameters:
         essential_only (bool): If true, return only Tier 1 (essential) tools (default: false)
@@ -240,6 +240,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         category (str): Filter by catalog category, for example "dialectic" or "knowledge" (default: "all")
         lite (bool): If true, return the compact federation handshake: one name-only record per public capability, the interface contract and continuation hints (default: true)
         progressive (bool): If true, order tools by usage frequency (most used first). Works with all filter modes. Default false.
+        verbose (bool): Ignored; accepted for compatibility.
     """
     
     # Get actual registered tools from TOOL_HANDLERS registry. Entry-point
@@ -874,7 +875,11 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         # LITE-FIRST: Simpler schemas by default for local models
         lite = arguments.get("lite", True)
 
-        from ..tool_stability import get_tool_stability, resolve_tool_alias
+        from ..tool_stability import (
+            expand_description_pointers,
+            get_tool_stability,
+            resolve_tool_alias,
+        )
         tool_name, alias_info = resolve_tool_alias(requested_tool_name)
         from ..decorators import is_tool_hidden
 
@@ -971,7 +976,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
             # and cannot put a second description on an advertised one.
             description = (
                 tool_catalog.TOOL_DESCRIPTION_OVERRIDES.get(requested_tool_name)
-                or alias_info.migration_note
+                or expand_description_pointers(alias_info.migration_note)
                 or description
             )
 

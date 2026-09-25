@@ -28,10 +28,20 @@ Envelope shape (friendly fields first, raw payload available on demand):
 Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
-are omitted. Default read aliases and bounded ``sync_state`` modes omit the
+are omitted. Default read aliases, bounded ``sync_state`` modes and the write
+aliases ``store_finding``, ``update_finding`` and ``record_result`` omit the
 repeated canonical payload and advertise an explicit full-response escape
-hatch. Other state-changing aliases retain it, and
-``sync_state(response_mode="full")`` restores it explicitly.
+hatch; the write aliases first lift the ids and warnings a caller needs next.
+A plain fresh ``start_session`` omits it too, without a hint, because the only
+way to act on one would be another mint. Other state-changing aliases retain
+it. The documented full mode restores it explicitly (``verbosity="full"`` on
+``check_working_state``, ``response_mode="full"`` elsewhere), except on the
+finding writes, whose route to the stored record is a
+``knowledge(action="details")`` read. That read returns the record as stored, not the ack: write-time warnings
+and the store-time similarity snapshot are lifted into the ack itself because
+no later read returns them. A routine ``sync_state`` proceed also says each
+fact once (``_drop_routine_proceed_duplicates``); guide, pause and provisional
+responses keep their full shape.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -136,8 +146,43 @@ _MEMORY_SUMMARY_PREVIEW_CHARS = 240
 # would silently name nobody (or the wrong writer).
 _MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
+# store_finding's related_discoveries is the store-time similarity snapshot:
+# the findings this write resembled when it was stored. Its ids are also the
+# stored record's related_to, so the write-time content a details read cannot
+# give back is the summary previews. The ack keeps a bounded list of ids and
+# short previews; each record is one details read away.
+_RELATED_DISCOVERY_LIMIT = 5
+_RELATED_SUMMARY_PREVIEW_CHARS = 120
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
+# Default start_session. continuity_token alone is ~330 B of it.
+_START_SESSION_BUDGET_BYTES = 1_200
+_ONBOARD_RAW_MODES = frozenset({"full", "verbose", "standard"})
+# Onboard fields a caller or adapter reads off the friendly envelope. The
+# plugin's post-identity hook and identity_sidecar read agent_id/display_name
+# from the top level or from raw_governance, so lifting them is what lets the
+# default response drop raw_governance.
+# session_resolution_source, when a payload carries it, is what the plugin's
+# post-identity hook caches and its identity-contract audit checks.
+_ONBOARD_LIFT_KEYS = (
+    "agent_id",
+    "display_name",
+    "is_new",
+    "identity_resolution_outcome",
+    "session_resolution_source",
+)
+# The resolution outcomes of a mint that went as asked. A resume miss, a
+# reactivated archive or any resumed binding is not routine: the envelope then
+# carries the whole onboard record, because those facts exist only in the
+# mint's own response (identity() re-reads the binding, not how it was made).
+_ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
+# Compact identity_assurance for a mint that went as asked. The operator guide
+# tells agents to confirm the binding from tier and session_source here.
+# The minimal onboard payload carries its source only here (it has no
+# top-level session_resolution_source), so session_source stays.
+# baseline stays: "fresh_identity" is what says a weak mint binding is
+# expected, not a deficiency to fix.
+_ONBOARD_ASSURANCE_KEYS = ("tier", "session_source", "caller_proven", "baseline")
 
 _ACTION_ALIASES = {
     "approve": ("proceed", None),
@@ -158,6 +203,20 @@ _ACTION_ALIASES = {
 _COMPACT_READ_ALIASES = frozenset({
     "check_working_state",
     "search_shared_memory",
+})
+
+# Write aliases whose acknowledgement omits the repeated canonical payload by
+# default. Each one lifts the identifiers a caller needs next (and the warnings
+# a writer must see) before the omission, so the ack stays self-sufficient.
+# request_review is deliberately absent: its ack carries the review itself
+# (resolution conditions, reviewer dispatch, thesis-failure flags), which the
+# envelope does not project, and it declares no response_mode on /mcp/.
+# start_session is absent too: its ack shape is decided separately, with the
+# rest of the identity/onboarding surface.
+_COMPACT_WRITE_ALIASES = frozenset({
+    "store_finding",
+    "update_finding",
+    "record_result",
 })
 
 
@@ -456,6 +515,79 @@ def _action_summary(
     return summary or None
 
 
+_ROUTINE_VERDICTS = frozenset({"safe", "proceed", "approve"})
+
+
+def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
+    """A clean proceed: nothing in the envelope asks the agent to act.
+
+    Anything else — a guide, a pause, a provisional or caveated verdict, a
+    near or unassessed edge, a recovery hint — keeps the full shape, because
+    those are the responses where the repeated fields carry meaning.
+    """
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict) or state.get("action") != "proceed":
+        return False
+    # Positive evidence only: a missing health, margin or verdict is not
+    # routine, so a producer regression that drops one cannot be trimmed
+    # into the same shape as a clean proceed.
+    health = [state.get(key) for key in ("status", "health_status") if key in state]
+    if not health or any(value != "healthy" for value in health):
+        return False
+    if state.get("margin") != "comfortable":
+        return False
+    if state.get("sub_action") not in (None, "approve"):
+        return False
+    if state.get("verdict_provisional") or envelope.get("verdict_caveat"):
+        return False
+    if envelope.get("recovery_hint"):
+        return False
+    if envelope.get("review_suggested") or "request_review" in str(
+        envelope.get("next_action") or ""
+    ):
+        # A review nudge asks the agent to act.
+        return False
+    if state.get("nearest_edge"):
+        return False
+    summary = envelope.get("action_summary")
+    summary = summary if isinstance(summary, dict) else {}
+    if summary.get("headline") or summary.get("verdict_confidence") == "provisional":
+        return False
+    if summary.get("sub_action") not in (None, "approve"):
+        return False
+    verdict = summary.get("verdict")
+    return verdict is not None and str(verdict).lower() in _ROUTINE_VERDICTS
+
+
+def _drop_routine_proceed_duplicates(envelope: Dict[str, Any]) -> None:
+    """Drop what restates a clean proceed, and say that it was trimmed.
+
+    action_summary keeps action, reason and risk_score: it is the documented
+    first read (docs/manual/04-integrating-agents.md), and the integration
+    samples read action_summary.action. state_summary keeps what the Python SDK
+    reads (agents/sdk/.../_checkin_fields.py: action, sub_action, coherence,
+    risk_score) and the margin with its scope and unassessed edges: today the
+    coherence edge is unassessed for every agent, so "comfortable" is only
+    honest beside what it did not measure. What goes are the restatements: the
+    approve sub_action and safe verdict in action_summary, an unspecified
+    verdict_confidence, and the "healthy" status pair. _is_routine_proceed
+    admits only positive evidence of each, so the marker below distinguishes
+    "trimmed because routine" from "missing because of a bug".
+    """
+    summary = envelope.get("action_summary")
+    if isinstance(summary, dict):
+        for key in ("sub_action", "verdict"):
+            summary.pop(key, None)
+        if summary.get("verdict_confidence") == "unspecified":
+            summary.pop("verdict_confidence", None)
+
+    state = envelope.get("state_summary")
+    if isinstance(state, dict):
+        state.pop("status", None)
+        state.pop("health_status", None)
+    envelope["response_shape"] = "routine"
+
+
 def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Separate legacy ODE controller telemetry from behavioral verdict evidence."""
     metrics = payload.get("metrics")
@@ -741,6 +873,62 @@ _UNKNOWN_WRITER = "unknown"
 _DIGEST_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
 
 
+def _summary_preview(summary: str, limit: int) -> tuple[str, bool]:
+    """Collapse whitespace and bound a summary at a word boundary.
+
+    Returns the preview and whether it was cut, so a bounded preview can say
+    so rather than posing as the complete summary.
+    """
+    compact = " ".join(summary.split())
+    if len(compact) <= limit:
+        return compact, False
+    cutoff = compact.rfind(" ", 0, limit - 1)
+    if cutoff < limit // 2:
+        cutoff = limit - 1
+    return compact[:cutoff].rstrip() + "…", True
+
+
+def _compact_related_discoveries(
+    payload: Dict[str, Any],
+) -> tuple[Optional[List[Dict[str, Any]]], Optional[int]]:
+    """Bound store_finding's store-time similarity snapshot for the ack.
+
+    The canonical ``related_discoveries`` rows are whole records (minus
+    details). The ack keeps only what a writer needs to decide whether to open
+    or supersede one: its id and a short summary preview. Returns the compact
+    rows and, when rows were dropped, the snapshot's full length.
+
+    The store handler already stops its similarity scan at five rows, so the
+    total is not reachable today; the cap here keeps the ack bounded if that
+    handler limit is ever raised.
+    """
+    related = payload.get("related_discoveries")
+    if not isinstance(related, list) or not related:
+        return None, None
+    rows: List[Dict[str, Any]] = []
+    for item in related[:_RELATED_DISCOVERY_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        row: Dict[str, Any] = {}
+        discovery_id = item.get("id") or item.get("discovery_id")
+        if discovery_id is not None:
+            row["discovery_id"] = discovery_id
+        summary = item.get("summary")
+        if isinstance(summary, str):
+            preview, truncated = _summary_preview(
+                summary, _RELATED_SUMMARY_PREVIEW_CHARS
+            )
+            row["summary"] = preview
+            if truncated:
+                row["preview_truncated"] = True
+        if row:
+            rows.append(row)
+    if not rows:
+        return None, None
+    total = len(related) if len(related) > _RELATED_DISCOVERY_LIMIT else None
+    return rows, total
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -804,15 +992,12 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
 
             summary = item.get("summary")
             if isinstance(summary, str):
-                compact = " ".join(summary.split())
-                if len(compact) > _MEMORY_SUMMARY_PREVIEW_CHARS:
-                    cutoff = compact.rfind(" ", 0, _MEMORY_SUMMARY_PREVIEW_CHARS - 1)
-                    if cutoff < _MEMORY_SUMMARY_PREVIEW_CHARS // 2:
-                        cutoff = _MEMORY_SUMMARY_PREVIEW_CHARS - 1
-                    suggestion["summary"] = compact[:cutoff].rstrip() + "…"
+                preview, truncated = _summary_preview(
+                    summary, _MEMORY_SUMMARY_PREVIEW_CHARS
+                )
+                suggestion["summary"] = preview
+                if truncated:
                     suggestion["preview_truncated"] = True
-                else:
-                    suggestion["summary"] = compact
 
             tags = item.get("tags")
             if isinstance(tags, list):
@@ -877,7 +1062,15 @@ def _knowledge_write_summary(
         "summary",
         "updated_at",
         "resolved_at",
+        "related_to",
     )
+    if not summary.get("related_to"):
+        # The record's links: on store_finding, the similar findings this
+        # write auto-linked; on update_finding, the stored record's existing
+        # links (an update does not auto-link). Worth a pointer when there
+        # are any, noise when there are none. A store_finding ack that lifts
+        # related_discoveries drops this copy (same ids; see the caller).
+        summary.pop("related_to", None)
     if discovery_id is not None:
         summary["discovery_id"] = discovery_id
     message = payload.get("message")
@@ -988,15 +1181,174 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return bool(value)
 
 
+def _write_ack_raw_policy(
+    friendly_name: str,
+    arguments: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> tuple[bool, Optional[str]]:
+    """Decide whether a write acknowledgement repeats its canonical payload.
+
+    Default: omit it. The envelope already lifts the ids a caller needs next,
+    so the canonical copy was most of a typical ack and mostly repeated the
+    agent signature and the stored record.
+
+    Two things keep the payload inline. An explicit full request does, on
+    record_result (``response_mode='full'``; outcome_event's
+    ``include_semantics`` is the same request under an older name and survives
+    ``/mcp/`` validation). And a payload whose record id the envelope cannot
+    lift does too, because then the canonical copy is the only place the
+    caller could find out what was written.
+
+    store_finding and update_finding have no full request here. This step sees
+    the arguments after canonical validation, and KnowledgeParams fills
+    ``response_mode='full'`` by default (the search alias works around the
+    same default in normalize_compact_search_details), so a caller's explicit
+    'full' and an omitted parameter arrive identical. A later
+    knowledge(action='details') read returns the stored record, not
+    everything this ack carried: the write-time warnings and a bounded
+    related_discoveries snapshot (for its summary previews) are lifted into
+    the ack for that reason. The
+    canonical knowledge tool still returns the whole payload directly.
+    outcome_event validates response_mode to None, so on record_result an
+    arriving 'full' was the caller's.
+
+    The hint never tells a caller to repeat the write to see the payload: a
+    second store mints a second finding. For the finding writes it names a
+    details read, which returns the stored record. record_result has no read
+    by outcome id, so its hint names the full-mode parameter for a later
+    outcome and warns that repeating this one records a second outcome.
+    Neither route fetches the omitted payload, so these acks do not set
+    raw_governance_available.
+    """
+    if friendly_name == "record_result":
+        # include_semantics is read the way the handler reads it (the schema
+        # lets a string through validation), so the ack keeps the payload
+        # exactly when the handler built the full snapshot for it.
+        from ..observability.outcome_events import _coerce_bool_flag
+
+        full_mode = (
+            str(arguments.get("response_mode") or "").strip().lower() == "full"
+        )
+        wants_full = full_mode or _coerce_bool_flag(arguments.get("include_semantics"))
+        identifiable = payload.get("outcome_id") is not None
+        hint = (
+            "This outcome's full payload cannot be read again: there is no "
+            "read by outcome id, and without a prediction_id a repeat records "
+            "a second outcome. To get the complete payload (including the full "
+            "EISV snapshot semantics) inline, pass response_mode='full' on a "
+            "later outcome."
+        )
+        return wants_full or not identifiable, hint
+
+    # store_finding / update_finding: no full request (see above).
+    discovery = payload.get("discovery")
+    discovery = discovery if isinstance(discovery, dict) else {}
+    discovery_id = (
+        payload.get("discovery_id")
+        or discovery.get("id")
+        or arguments.get("discovery_id")
+    )
+    target = discovery_id if discovery_id is not None else "..."
+    hint = (
+        f"knowledge(action='details', discovery_id='{target}') returns the "
+        "stored record, not this ack's payload; do not repeat the write to "
+        "see it."
+    )
+    return discovery_id is None, hint
+
+
+def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
+    """Whether a mint's identity_assurance block says something to act on.
+
+    A just-minted identity is server-inferred by construction: the minting
+    call cannot carry the client_session_id it is about to receive, so the
+    block reports weak/not caller-proven and then explains that this is the
+    expected baseline. Repeating that on every mint is a lecture, not a
+    signal. Any other weak binding keeps the whole block, reason and
+    how_to_strengthen included.
+    """
+    if not isinstance(assurance, dict):
+        return False
+    if assurance.get("caller_proven") is True and assurance.get("tier") == "strong":
+        return False
+    return assurance.get("baseline") != "fresh_identity"
+
+
+# Every key a plain fresh minimal onboard carries (live shape, 2026-09-25).
+# An allowlist, not a denylist: onboard adds keys after building the record
+# (label_renamed, resident_registration, bootstrap, deprecations, ...), and a
+# key this list does not know about must show the full record rather than be
+# dropped as routine.
+_ROUTINE_MINT_KEYS = frozenset({
+    "success",
+    "server_time",
+    "welcome",
+    "uuid",
+    "agent_uuid",
+    "agent_id",
+    "display_name",
+    "is_new",
+    "client_session_id",
+    "session_key",
+    "identity_assurance",
+    "next_step",
+    "response_mode",
+    "identity_resolution_outcome",
+    "onboard_origin",
+    "onboard_origin_basis",
+    "lineage_state",
+    "continuity_token",
+    "thread_context",
+    "provisional_lineage",
+    "_response_size",
+})
+
+
+def _is_routine_mint(payload: Dict[str, Any]) -> bool:
+    """A fresh mint that went as asked: nothing about it needs explaining.
+
+    Positive evidence only. A missing outcome is not routine, so a producer
+    regression that drops the field shows the full record instead of looking
+    like a clean mint. Any non-empty key outside _ROUTINE_MINT_KEYS (a label
+    rename, a resident-registration notice, a bootstrap write, a deprecation)
+    also keeps the record.
+    """
+    if payload.get("is_new") is not True:
+        return False
+    if payload.get("identity_resolution_outcome") not in _ROUTINE_MINT_OUTCOMES:
+        return False
+    if payload.get("lineage_state") not in (None, "no_lineage_declared"):
+        # Declared, provisional or rejected lineage is something to read.
+        return False
+    if payload.get("provisional_lineage"):
+        return False
+    for key, value in payload.items():
+        if key not in _ROUTINE_MINT_KEYS and value not in (None, False, "", [], {}):
+            return False
+    thread_context = payload.get("thread_context")
+    if isinstance(thread_context, dict) and (
+        thread_context.get("predecessor") or thread_context.get("is_fork")
+    ):
+        return False
+    assurance = payload.get("identity_assurance")
+    if not isinstance(assurance, dict):
+        # Positive evidence: a mint whose assurance block is missing is shown
+        # whole, not trimmed into a response with no assurance at all.
+        return False
+    return not _onboard_assurance_is_abnormal(assurance)
+
+
 def _raw_governance_policy(
     friendly_name: str,
     arguments: Optional[Dict[str, Any]],
     payload: Optional[Dict[str, Any]] = None,
 ) -> tuple[bool, Optional[str]]:
-    """Choose whether a friendly read alias should repeat its canonical payload.
+    """Choose whether a friendly alias should repeat its canonical payload.
 
-    Canonical tools are unchanged. Read aliases default to their bounded
-    experience envelope and retain an explicit full-response escape hatch.
+    Canonical tools are unchanged. Read aliases, bounded ``sync_state`` modes
+    and the write aliases in ``_COMPACT_WRITE_ALIASES`` default to their
+    bounded experience envelope and retain an explicit full-response escape
+    hatch. Other state-changing aliases still repeat their payload.
     """
     if friendly_name == "sync_state":
         arguments = arguments or {}
@@ -1014,10 +1366,34 @@ def _raw_governance_policy(
         include_raw = requested_mode == "full" or (
             requested_mode == "auto" and resolved_mode is None
         )
+        # Re-calling sync_state writes another check-in, so the hint names
+        # the next call rather than a re-call.
         return include_raw, (
-            "Re-call sync_state(..., response_mode='full') for the complete "
-            "canonical diagnostics."
+            "Pass response_mode='full' on the next sync_state for diagnostics."
         )
+
+    if friendly_name in _COMPACT_WRITE_ALIASES:
+        return _write_ack_raw_policy(friendly_name, arguments or {}, payload or {})
+
+    if friendly_name == "start_session":
+        # A mint that went as asked is fully described by the lifted fields,
+        # so repeating the whole onboard record beneath them was the same
+        # record twice. Anything else about the mint (resume miss, reactivated
+        # archive, lineage, trajectory, abnormal assurance) keeps the record:
+        # those facts exist only here. An explicit request uses the signals
+        # onboard uses to pick its own verbose shape
+        # (_derive_onboard_response_mode).
+        arguments = arguments or {}
+        payload = payload or {}
+        requested = str(arguments.get("response_mode") or "").strip().lower()
+        include_raw = (
+            requested in _ONBOARD_RAW_MODES
+            or (not requested and _as_bool(arguments.get("verbose"), default=False))
+            or not _is_routine_mint(payload)
+        )
+        # No hint: the only way to act on one is another mint, and a mint that
+        # was not routine already carries the record.
+        return include_raw, None
 
     if friendly_name not in _COMPACT_READ_ALIASES:
         return True, None
@@ -1426,6 +1802,27 @@ def build_experience_envelope(
             if isinstance(payload.get("thread_context"), dict)
             else {}
         )
+        # Lifted in every mode, so a client reading the top-level fields does
+        # not lose them when it asks for response_mode='full'.
+        envelope.update(_lift(payload, *_ONBOARD_LIFT_KEYS))
+        if payload.get("display_name"):
+            envelope["label_is"] = "social_or_cosmetic"
+        assurance = payload.get("identity_assurance")
+        if isinstance(assurance, dict):
+            envelope["identity_assurance"] = (
+                assurance
+                if _onboard_assurance_is_abnormal(assurance)
+                else _lift(assurance, *_ONBOARD_ASSURANCE_KEYS)
+            )
+        token = payload.get("continuity_token")
+        if isinstance(token, str) and token:
+            # Grouped with its caveat: the token is an advanced same-process
+            # rebind proof, not something to attach to ordinary calls.
+            envelope["rebind"] = {
+                "continuity_token": token,
+                "use_only_for": "identity(agent_uuid=..., continuity_token=..., resume=true)",
+            }
+        envelope["response_shape"] = "full" if include_raw else "routine"
         if isinstance(predecessor, dict) and predecessor.get("uuid"):
             state_summary["predecessor_uuid"] = predecessor["uuid"]
             fork_kind = payload.get("thread_context", {}).get("episode_fork_kind")
@@ -1507,15 +1904,15 @@ def build_experience_envelope(
                     "resumption."
                 )
         elif prediction_id:
-            # The id already sits in the canonical payload; naming it here is
-            # what makes registry-bound record_result discoverable — otherwise
-            # the outcome grades a confidence borrowed from an unrelated
-            # earlier turn (fallback binding dominates calibration rows).
+            # Naming prediction_id here is what makes registry-bound
+            # record_result discoverable — otherwise the outcome grades a
+            # confidence borrowed from an unrelated earlier turn (fallback
+            # binding dominates calibration rows, #2123). The id itself is
+            # lifted beside this text, so it is named rather than repeated.
             next_action = (
-                "Keep working - sync_state again after your next substantial "
-                "step. When an outcome lands, record_result(outcome_type=..., "
-                f"prediction_id='{prediction_id}') so it grades this check-in's "
-                "confidence rather than a fallback."
+                "Keep working; sync_state after your next substantial step. When "
+                "an outcome lands, pass this prediction_id to record_result so it "
+                "grades this check-in."
             )
         else:
             next_action = (
@@ -1575,6 +1972,39 @@ def build_experience_envelope(
             envelope["message"] = message
         if discovery_id is not None:
             envelope["discovery_id"] = discovery_id
+        # Write-time warnings and outcomes the handler reports beside the
+        # record. With raw_governance omitted by default these would otherwise
+        # vanish: a failed supersession, truncated content, an anonymous
+        # writer, or a closure that declares no standard.
+        envelope.update(_lift(
+            source_payload,
+            "agent_mode",
+            "_identity_hint",
+            "superseded",
+            "_supersedes_warning",
+            "superseded_by",
+            "supersession_warning",
+            "_name_hint",
+            "_truncated",
+            "_tip",
+            "consolidation_hint",
+            "closure_class_note",
+        ))
+        if "closure_class" in source_payload:
+            envelope["closure_class"] = source_payload["closure_class"]
+        # The store-time similarity snapshot. Its ids are the stored record's
+        # related_to, which a details read returns; its summary previews are
+        # what the details read cannot give back, so a bounded form stays in
+        # the ack (consolidation_hint, lifted above, summarizes the same set).
+        related, related_total = _compact_related_discoveries(source_payload)
+        if related:
+            envelope["related_discoveries"] = related
+            if related_total is not None:
+                envelope["related_discoveries_total"] = related_total
+            if friendly_name == "store_finding":
+                # store sets discovery.related_to to exactly these rows' ids,
+                # so the summary copy would carry the same list twice.
+                state_summary.pop("related_to", None)
 
         if friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")
@@ -1695,6 +2125,14 @@ def build_experience_envelope(
             "calibration_excluded",
         )
         state_summary.update(binding)
+        # A replayed prediction_id and claims the grader could not verify
+        # change what the recorded outcome means; the default ack no longer
+        # repeats the canonical payload, so they ride here.
+        for key, value in _lift(
+            source_payload, "is_bad", "idempotent_replay", "unverified_fields"
+        ).items():
+            if value != []:
+                state_summary[key] = value
         next_action = "Outcome recorded - continue, or sync_state to fold it into your working state."
         if binding.get("calibration_excluded"):
             next_action = (
@@ -1819,13 +2257,53 @@ def build_experience_envelope(
     if hint:
         envelope["recovery_hint"] = hint
 
+    if friendly_name in _COMPACT_WRITE_ALIASES and not include_raw:
+        # A handler-side identity warning (e.g. record_result's
+        # ephemeral_writer) must not vanish with the omitted payload. The
+        # identity-warning step runs after this one and appends to this list.
+        warnings = source_payload.get("identity_warnings")
+        if isinstance(warnings, list) and warnings:
+            envelope["identity_warnings"] = list(warnings)
+        # Who the write was recorded under. The finding and outcome payloads
+        # carry no top-level uuid: their attribution is success_response's
+        # agent_signature, which rode only under raw_governance. A caller that
+        # bound weakly (no client_session_id, a transport-fingerprint pin) has
+        # to be able to see which identity it wrote as, and how well that
+        # binding was proven, without asking for the full payload.
+        if "agent_uuid" not in envelope:
+            signature = source_payload.get("agent_signature")
+            if isinstance(signature, dict) and signature.get("uuid"):
+                envelope["agent_uuid"] = signature["uuid"]
+                written_as = _lift(signature, "agent_id", "display_name")
+                assurance = signature.get("identity_assurance")
+                if isinstance(assurance, dict):
+                    written_as.update(_lift(
+                        assurance, "tier", "caller_proven", "proof_origin"
+                    ))
+                if written_as:
+                    envelope["written_as"] = written_as
+
     if include_raw:
         envelope["raw_governance"] = payload
     else:
-        envelope["raw_governance_available"] = True
+        # raw_governance_available promises a way to fetch the omitted
+        # payload. A routine start_session's record cannot be fetched
+        # afterwards (only another mint would produce one), so it does not
+        # claim one. The write acks are in the same position: record_result
+        # has no read by outcome id, and a finding's details read returns the
+        # stored record, not this ack's payload. Their hint says what is
+        # reachable instead.
+        if (
+            friendly_name != "start_session"
+            and friendly_name not in _COMPACT_WRITE_ALIASES
+        ):
+            envelope["raw_governance_available"] = True
         if raw_hint:
             envelope["raw_governance_hint"] = raw_hint
+    if routine_sync and _is_routine_proceed(envelope):
+        _drop_routine_proceed_duplicates(envelope)
     bounded_search = friendly_name == "search_shared_memory" and not include_raw
+    bounded_start = friendly_name == "start_session" and not include_raw
     if bounded_search:
         _enforce_search_projection_budget(envelope)
 
@@ -1841,6 +2319,10 @@ def build_experience_envelope(
     elif bounded_search:
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         if measured_bytes > _SEARCH_LEAN_BUDGET_BYTES:
+            _attach_response_size(envelope, friendly_name)
+    elif bounded_start:
+        measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+        if measured_bytes > _START_SESSION_BUDGET_BYTES:
             _attach_response_size(envelope, friendly_name)
     else:
         _attach_response_size(envelope, friendly_name)

@@ -16,16 +16,38 @@ administrative root, cross-principal interaction via verifiable attestation).
 
 ## The gap
 
-A dialectic resolution carries two attestations, one per party, each an
-HMAC-SHA256 over the canonical payload keyed on that party's `api_key`. Inside
-one operator's trust boundary that is sound, and it is unchanged here. It is
-symmetric: whoever can verify can also forge, so the key can never be handed to
-a second principal. The threat model states the consequence: a resolution record
-is not independently verifiable by an operator who does not already trust its
-issuer. It also says the decision upstream of any exchange work is *which
-verification semantics a multi-principal deployment requires*, and names three
-constructions: issuer non-repudiation, a transparency log, and a witness that
-signs a receipt third parties verify.
+The code's scheme gives a dialectic resolution two attestations, one per party,
+each an HMAC-SHA256 over the canonical payload keyed on that party's `api_key`.
+It is designed for one operator's trust boundary, and it is unchanged here. It
+is symmetric: whoever can verify can also forge, so the key can never be handed
+to a second principal. The threat model states the consequence: a resolution
+record is not independently verifiable by an operator who does not already
+trust its issuer. It also says the decision upstream of any exchange work is
+*which verification semantics a multi-principal deployment requires*, and names
+three constructions: issuer non-repudiation, a transparency log, and a witness
+that signs a receipt third parties verify.
+
+The party scheme has also gone unexercised: as of 2026-09-25 no resolution
+record in the maintainer deployment carries a signature keyed on a party's
+`api_key` under the current scheme. The four 2026 records that carry a
+signature used a uuid-derived fallback key, forgeable from public data and
+removed in #2155; the most recent records carrying two signatures are legacy
+v1 rows from 2025-12-13 (UTC), which cannot be verified. What a receipt minted
+today would countersign depends on the path. An LLM-assisted session passes an
+empty reviewer key, so its record carries at most `signature_a`: with the
+fallback gone, and no agent created since January 2026 holding an `api_key`, a
+new agent's record carries no party attestation, while an older agent with a
+key on file gets a single-signer attestation. Either way the receipt would
+carry `both_signatures_present: false`. A peer-reviewed session signs
+`signature_b` with the reviewer's key on file, if any, and `signature_a` with
+the paused agent's key on file. When the paused agent has no key, `signature_a`
+is keyed on whatever `api_key` the synthesis submitter supplied, so a record for
+a keyless agent can still report `single_signer` without that agent holding any
+key; #2155 removed the uuid-derived fallback from the LLM-assisted paths only.
+A peer resolution between two parties that both hold keys would still produce a
+bilateral record, and its receipt would carry `both_signatures_present: true`.
+In every case the flag records that strings were stored, not who held the
+keys.
 
 ## What is built
 
@@ -104,7 +126,8 @@ resolution's standing.
    flag keeps that failure from arriving by accident: a key configured for
    identity attestations alone does not turn receipts on.
 
-   The wake criteria, stated once so the registry and this packet agree:
+   The custody-and-key wake criteria, stated once so the registry and this
+   packet agree (the registry adds reason 4's second principal as a fifth):
    non-exportable custody for the key; an independent channel for a peer to
    pin the public key; retained and published key history; and a revocation
    or transparency policy that bounds back-dating. Nothing short of all four
@@ -133,8 +156,11 @@ resolution's standing.
    costs about four hundred lines and no new configuration surface.
 
 The dormant-capability registry carries the matching `KEEP-DORMANT` entry with
-the wake condition: non-exportable custody for the attestation key and a second
-principal to pin it.
+the same five preconditions: the four wake criteria under reason 1
+(non-exportable custody for the key, an independent pinning channel, retained
+and published key history, and a revocation or transparency policy that bounds
+back-dating) plus reason 4, a second principal that exists and has a reason to
+check a record.
 
 ## Canonical form
 
