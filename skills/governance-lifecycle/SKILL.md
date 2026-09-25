@@ -283,7 +283,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `store_finding(...)` — Store a durable discovery, root cause, or correction
 - `update_finding(discovery_id=..., ...)` — Revise or close an existing finding
 - `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
-- `self_recovery(action="check"|"quick"|"review")` — Get moving again after a pause. The pause and auth-refusal responses name this tool by hand, and it is advertised by default so a schema-driven client can actually call it.
+- `self_recovery(action="check"|"quick"|"review")` — Get moving again after a pause while risk is below its gates (review refuses at risk 0.65 and above, except for the legacy cold-start trap). The check-in envelope names it for a pause below those gates and names the dialectic session above them. It is advertised by default so a schema-driven client can actually call it.
 
 ### Common (use when needed)
 

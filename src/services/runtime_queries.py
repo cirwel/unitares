@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from numbers import Real
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from config.governance_config import GovernanceConfig
 from src.governance_glossary import describe_eisv_value, get_eisv_glossary
@@ -213,6 +213,50 @@ def _generate_contextual_reflection(metrics: dict, interpreted: dict) -> str | N
     return None
 
 
+def _last_decision_action(meta: Any) -> Optional[str]:
+    """The decision this agent's verdict last rode on, for explain_verdict.
+
+    The lifecycle status decides whether a stop is in force. Paused wins over
+    the check-in history. When the agent is active, a recorded stop is stale:
+    pause expiry (support/pause_ttl.py) and dialectic resolution set the status
+    back to active without touching `recent_decisions`, while every
+    _resume_with_persistence path (quick and reviewed self_recovery, operator
+    resume, agent(action='resume'), the automatic resumes) clears it. Either
+    way a resumed agent proceeds until its next check-in decides. That is
+    reported as "resumed" (not "proceed": no check-in decided proceed), which
+    explain_verdict words as nothing blocking now; reporting nothing would
+    fall back to the glossary's "Pause, reflect" and tell a resumed agent to
+    pause. An agent that never checked in reports None, keeping its
+    "uninitialized" wording.
+    An EMPTY history on an agent that has checked in is "not_paused", not
+    "resumed". `recent_decisions` is persisted with `total_updates` on every
+    check-in (agent_loop_detection -> increment_update_count) and reloaded at
+    startup, so a restart does not empty it. It is emptied in memory by
+    clear_loop_detector_state on a recovery or resume, and it is also empty
+    for an identity record that carries no persisted history. Neither case
+    proves a resume, so this says only what the status establishes: nothing
+    blocks the agent now.
+    Any status other than paused or active (archived, deleted, waiting_input)
+    refuses or holds writes for its own reasons, so no decision is reported
+    there.
+    """
+    if meta is None:
+        return None
+    status = getattr(meta, "status", None)
+    if status == "paused":
+        return "pause"
+    if status != "active":
+        return None
+    recent_decisions = getattr(meta, "recent_decisions", None) or []
+    if not recent_decisions:
+        # Never checked in: no decision exists, keep "uninitialized" wording.
+        # Checked in before but no history: a recovery/resume cleared it, or
+        # the identity record carries none. Claim only "not paused".
+        return "not_paused" if (getattr(meta, "total_updates", 0) or 0) > 0 else None
+    last = str(recent_decisions[-1]).lower()
+    return "resumed" if last in {"pause", "reject"} else last
+
+
 async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], server=None) -> Dict[str, Any]:
     """Build plain governance metrics data for an agent."""
     server = server or mcp_server
@@ -268,6 +312,9 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     public_agent_id, unique_handle, display_name = _resolve_agent_identity_view(
         agent_id, meta
     )
+    # An uninitialized monitor (no state, or a lost state file the DB could
+    # not hydrate) has no decision to report, whatever meta's history says.
+    last_decision_action = None if is_uninitialized else _last_decision_action(meta)
     # `agent_id` carries the public structured handle, never the claimed label.
     # A label is caller-asserted and has no uniqueness constraint, so feeding it
     # back as a target selector resolves through find_agent_by_label(), which
@@ -442,6 +489,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             "verdict": explain_verdict(
                 metrics.get("verdict", "uninitialized"),
                 evidence_source=standardized_metrics.get("primary_eisv_source"),
+                decision_action=last_decision_action,
             ),
             "risk_score": metrics.get("risk_score"),
             "primary_eisv_source": standardized_metrics.get("primary_eisv_source"),
@@ -584,6 +632,7 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         lite_metrics["verdict"] = explain_verdict(
             metrics.get("verdict"),
             evidence_source=standardized_metrics.get("primary_eisv_source"),
+            decision_action=last_decision_action,
         )
         # mode/basin are assessments — withheld for uninitialized agents
         # (the pending state dict carries no mode/basin keys).
@@ -617,6 +666,12 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         lite_metrics["eisv_contract"] = EISV_INLINE_SUMMARY
         lite_metrics["_note"] = "Use lite=false for full diagnostics"
         return lite_metrics
+
+    # The full read keeps the raw verdict string (its contract), so the decision
+    # that verdict rode on travels beside it; the envelope reads it before the
+    # verdict value, which a guided "high-risk" would otherwise alias to pause.
+    if last_decision_action is not None:
+        standardized_metrics["last_decision_action"] = last_decision_action
 
     # Circuit breaker telemetry (full verbosity only)
     try:
