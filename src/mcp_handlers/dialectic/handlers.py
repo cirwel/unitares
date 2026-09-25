@@ -2004,6 +2004,19 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
             recovery=get_session_exception_recovery(),
         )]
 
+#: Characters of a session topic a list row shows before it is cut.
+LIST_TOPIC_PREVIEW_CHARS = 280
+
+
+def _preview_topic(session: Dict[str, Any]) -> None:
+    """Shorten a list row's topic in place, saying so when it does."""
+    topic = session.get("topic")
+    if isinstance(topic, str) and len(topic) > LIST_TOPIC_PREVIEW_CHARS:
+        session["topic"] = topic[:LIST_TOPIC_PREVIEW_CHARS].rstrip() + "…"
+        session["topic_truncated"] = True
+        session["topic_chars"] = len(topic)
+
+
 @mcp_tool("list_dialectic_sessions", timeout=15.0, register=False)
 async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -2082,6 +2095,13 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
                 {k: sess[k] for k in keep if k in sess}
                 for sess in sessions
             ]
+        elif not include_transcript:
+            # A list row carries a preview of the topic, not the whole issue
+            # description: topics run to ~12 KB, and 50 untruncated rows made
+            # the default list 173 KB (measured 2026-09-25). get, or
+            # include_transcript=true, still returns the full text.
+            for sess in sessions:
+                _preview_topic(sess)
 
         return success_response({
             "success": True,
