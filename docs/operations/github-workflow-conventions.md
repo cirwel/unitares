@@ -348,8 +348,11 @@ Codex usage limit left such sessions with no way to finish a PR (#2423).
 
    The file needs one numbered entry per finding (`1. fixed in <sha>` or
    `1. rebutted: <why>`). Offline the tool cannot read the open record, so you
-   name it; CI pairs the disposition with that record on the same diff key,
-   and a wrong count or key leaves the findings open.
+   name it. CI checks the diff key, the count, and a native-review
+   (`#pullrequestreview-…`) URL; a wrong one leaves the findings open. It does
+   **not** verify `--reviewer` or any other `--cites`: it answers the latest
+   open record with that count and displays the reviewer you passed. Copy both
+   from the open record exactly, or the record misattributes.
 
 A same-model subagent is the weakest reviewer this gate accepts: it shares the
 author's model and blind spots. Prefer native Codex or another model when one

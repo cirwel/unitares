@@ -1237,8 +1237,11 @@ def _dispose_emit(args) -> int:
 
     Offline there is no way to read the open FINDINGS record, so the caller
     names it: its finding count, its reviewer and its URL, all as shown on the
-    PR. The body is only a claim until CI pairs it with that open record on the
-    same diff key; a wrong count or key leaves the findings open (fails closed).
+    PR. CI checks only the diff key, the count, and a native-review URL
+    (`_cited_native_review`); a wrong count or key leaves the findings open.
+    Any other cite, and the reviewer, are NOT verified: CI answers the latest
+    open FINDINGS record with the same count, and the check shows whatever
+    reviewer was passed. Copy both from the open record exactly.
     """
     missing = [f for f in ("findings", "reviewer", "cites") if getattr(args, f, None) in (None, "")]
     if missing:
