@@ -204,7 +204,7 @@ implementation response shape is required. Primary workflow responses lift
 aliases and the write aliases except `request_review` default to a compact
 envelope whose `raw_governance_hint` names the full-payload route:
 `response_mode="full"` on `sync_state`, `search_shared_memory` and
-`record_result`, `lite=false` on `check_working_state`, a
+`record_result`, `verbosity="full"` on `check_working_state`, a
 `knowledge(action="details", discovery_id=...)` read for `store_finding` and
 `update_finding`, whose schemas declare no response mode, and an
 `identity(client_session_id=...)` read for `start_session`. Repeating a write to

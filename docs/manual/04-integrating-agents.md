@@ -60,7 +60,7 @@ bounded `sync_state` modes, and the write acknowledgements of `start_session`,
 payload by default; `request_review` retains it. `raw_governance_hint` names
 the route back to the full payload. That is `response_mode="full"` on
 `sync_state`, `search_shared_memory` and `record_result`, and
-`lite=false` on `check_working_state`. For
+`verbosity="full"` on `check_working_state`. For
 `store_finding` and `update_finding`, whose `/mcp/` schemas declare no response
 mode, it is a `knowledge(action="details", discovery_id=...)` read. For
 `start_session` it is an `identity(client_session_id=...)` read, because a
