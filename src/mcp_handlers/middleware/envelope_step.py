@@ -34,9 +34,10 @@ repeated canonical payload and advertise an explicit full-response escape
 hatch; the write aliases first lift the ids and warnings a caller needs next.
 A plain fresh ``start_session`` omits it too, without a hint, because the only
 way to act on one would be another mint. Other state-changing aliases retain
-it, and ``response_mode="full"`` restores it explicitly, except on the finding
-writes, whose route to the stored record is a ``knowledge(action="details")``
-read. That read returns the record as stored, not the ack: write-time warnings
+it. The documented full mode restores it explicitly (``verbosity="full"`` on
+``check_working_state``, ``response_mode="full"`` elsewhere), except on the
+finding writes, whose route to the stored record is a
+``knowledge(action="details")`` read. That read returns the record as stored, not the ack: write-time warnings
 and the store-time similarity snapshot are lifted into the ack itself because
 no later read returns them. A routine ``sync_state`` proceed also says each
 fact once (``_drop_routine_proceed_duplicates``); guide, pause and provisional

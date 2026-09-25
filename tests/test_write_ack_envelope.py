@@ -590,16 +590,24 @@ def test_write_ack_without_a_proven_signature_invents_no_writer():
     assert "written_as" not in env
 
 
-def test_write_ack_keeps_the_auto_correction_notice():
+@pytest.mark.parametrize("friendly_name, build", [
+    ("store_finding", _store_payload),
+    ("update_finding", _update_payload),
+])
+def test_write_ack_keeps_the_auto_correction_notice(friendly_name, build):
+    # The finding handlers wrap with success_response(..., arguments=
+    # request.arguments), which is how _param_coercions reaches a live ack.
+    # outcome_event wraps without arguments, so record_result never carries it.
     from src.mcp_handlers.response_base import success_response
 
-    coercions = {"confidence": {"from": "0.5", "to": 0.5}}
+    coercions = {"severity": {"from": "MEDIUM", "to": "medium"}}
     wrapped = success_response(
-        _outcome_payload(), agent_id=None, arguments={"_param_coercions": coercions}
+        build(), agent_id=None, arguments={"_param_coercions": coercions}
     )
     payload = json.loads(wrapped[0].text)
     assert payload["_param_coercions"]["applied"] == coercions
-    env = build_experience_envelope("record_result", "outcome_event", payload, {})
+    env = build_experience_envelope(friendly_name, "knowledge", payload, {})
+    assert "raw_governance" not in env
     assert env["_param_coercions"] == payload["_param_coercions"]
 
 
