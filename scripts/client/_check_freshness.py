@@ -641,7 +641,7 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
     try:
         meta = parse_frontmatter((skills_dir / name / "SKILL.md").read_text())
         sources = load_source_files(skills_dir / name, meta["source_files"]) if meta else []
-    except (OSError, ValueError, yaml.YAMLError):
+    except (OSError, ValueError, TypeError, yaml.YAMLError):
         # Unreadable metadata (the check fails on it too): keep every record
         # that carries anything rather than stop halfway through a prune.
         return {path for path in adir.glob("*.json") if _carries(path)}
