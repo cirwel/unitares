@@ -50,8 +50,12 @@ Within scope, the claim must survive these conditions:
 | T7 | A retry reuses a prediction ID with a different payload | Silent overwrite, or a second record |
 
 Out of scope: a malicious operator with database write access, a compromised
-host, and loss of the database itself. None of these can be defended at this
-layer.
+host, and loss of the database itself, none of which this layer can defend
+against. Also out of scope is whether the writer truly owns the `agent_id`. The
+claim is about uniqueness per key, not authorship: when there is no session
+context, the handler accepts an explicitly supplied `agent_id`, so a caller who
+does not own a key could claim it first. Authorship belongs to the identity
+layer, not this case.
 
 ## 3. Mechanism
 
@@ -75,8 +79,8 @@ layer.
 
 - **A1.** Clients pass the `prediction_id` returned by `process_agent_update` /
   `sync_state`.
-- **A2.** PostgreSQL provides serializable uniqueness on a primary key and
-  atomic transactions, as documented.
+- **A2.** PostgreSQL enforces primary-key uniqueness under concurrent inserts
+  and commits transactions atomically, as documented.
 - **A3.** The operator runs cleanup with the default retention or longer. The
   retention window is a setting the operator controls; a shorter window shortens
   the scope of the claim.
@@ -138,7 +142,9 @@ cases.
 Any of the following, observed at the frozen revision within the retention
 window with the assumptions holding:
 
-1. Two rows in `audit.outcome_events` for one `(agent_id, prediction_id)`.
+1. Two rows in `audit.outcome_events` with equal `agent_id` and equal
+   non-null `detail->>'prediction_id'` (the handler writes `prediction_id` into
+   `detail`; it is not a column of that table).
 2. A conflicting retry that writes an outcome row, or returns success.
 3. An identical retry whose response differs from the stored canonical record.
 
