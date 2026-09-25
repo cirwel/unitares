@@ -934,7 +934,13 @@ def test_uuid_direct_resume_is_not_routine():
     ["minted_after_resume_miss"],
 )
 def test_discontinuity_keeps_the_full_record_even_when_strong(outcome):
-    """A caller-proven strong binding that reports a discontinuity is not routine."""
+    """A caller-proven strong binding that reports a discontinuity is not routine.
+
+    Builder-level: the production signature caller (agent_auth) passes no
+    identity_resolution_outcome, so on the wire a resume miss or reactivation
+    surfaces in the start_session envelope (which keeps the whole onboard
+    record for any mint that was not plain), not in agent_signature.
+    """
     payload = _sig(identity_resolution_outcome=outcome)
     context = payload["identity_context"]
 
@@ -944,7 +950,3 @@ def test_discontinuity_keeps_the_full_record_even_when_strong(outcome):
     for key in CONTRACT_KEYS:
         assert key in context
 
-
-def test_reactivated_archive_keeps_the_full_record():
-    payload = _sig(identity_status="reactivated", session_resolution_source="unknown_source")
-    assert "detail" not in payload["identity_context"]
