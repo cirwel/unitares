@@ -597,7 +597,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # `reviews`; a consumer that reports a backlog size should add
                 # `acknowledged_hidden`.
                 "acknowledged_hidden": 0 if args.show_all else len(hidden),
-                "acknowledged_by_disposition": dict(
+                "acknowledged_by_disposition": {} if args.show_all else dict(
                     Counter(r["acknowledgement"]["disposition"] for r in hidden)),
                 "ledger_path": ledger_path(),
             },

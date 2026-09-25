@@ -517,3 +517,16 @@ class TestAckWriteAndInputEdges:
         assert rc == 2
         assert "no session ids" in capsys.readouterr().err
         assert not ledger.exists()
+
+
+def test_all_json_reports_nothing_hidden_by_disposition(ledger, monkeypatch, capsys):
+    """--all hides nothing, so the per-disposition hidden counts must be empty
+    too, not a count of acknowledged rows that are in fact shown."""
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(_ack_line("abc123") + "\n")
+    monkeypatch.setattr(report, "fetch", lambda dsn, window_days: [_row()])
+    assert report.main(["--json", "--all"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["acknowledged_hidden"] == 0
+    assert out["acknowledged_by_disposition"] == {}
+    assert out["count"] == 1
