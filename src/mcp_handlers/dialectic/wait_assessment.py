@@ -105,12 +105,20 @@ def assess_wait(
     means the clock could not be established — reported as such rather than
     defaulted, because a missing reading and a short one are different findings
     and only one of them is reassuring.
+
+    ``poll_after_s`` is the note's "poll again after the budget" as a number a
+    poller can sleep on; before it existed the seconds lived only in prose
+    (an external agent asked for exactly this, 2026-09-24). It is set only
+    while TOO_EARLY. Everywhere else it is None on purpose: an overdue wait
+    calls for investigation, not another timed poll, and an unclassified wait
+    has no budget to count down, so any number there would be invented.
     """
     if awaiting not in {"verdict", "reconsideration"}:
         return {
             "elapsed_s": None,
             "expected_by_s": None,
             "assessment": None,
+            "poll_after_s": None,
             "note": (
                 "No outstanding reviewer obligation is identified for this wait; "
                 "terminal sessions and the caller's own turn have no reviewer deadline."
@@ -133,6 +141,7 @@ def assess_wait(
             "elapsed_s": round(elapsed_s, 1) if elapsed_s is not None else None,
             "expected_by_s": None,
             "assessment": None,
+            "poll_after_s": None,
             "note": (
                 "An orchestrated reviewer budget could not be established for "
                 "this assignment, so this wait is unclassified."
@@ -145,6 +154,7 @@ def assess_wait(
             "elapsed_s": None,
             "expected_by_s": budget,
             "assessment": None,
+            "poll_after_s": None,
             "note": (
                 "Elapsed time could not be established from the transcript, so "
                 "this wait is unclassified. Do not read that as either healthy "
@@ -158,6 +168,7 @@ def assess_wait(
             "elapsed_s": round(elapsed_s, 1),
             "expected_by_s": round(budget, 1),
             "assessment": TOO_EARLY,
+            "poll_after_s": round(remaining, 1),
             "note": (
                 f"Waiting {elapsed_s:.0f}s of a {budget:.0f}s reviewer budget "
                 f"({remaining:.0f}s left). A reviewer mid-model-call looks "
@@ -170,6 +181,7 @@ def assess_wait(
         "elapsed_s": round(elapsed_s, 1),
         "expected_by_s": round(budget, 1),
         "assessment": OVERDUE,
+        "poll_after_s": None,
         "note": (
             f"Waiting {elapsed_s:.0f}s, past the {budget:.0f}s the reviewer is "
             f"allowed for this step. That is worth investigating; it is not by "

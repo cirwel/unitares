@@ -65,7 +65,7 @@ note for why the raw rendering is not.
 
 | Public name | Canonical | Wire params | Describe-only | Wire schema hash |
 |---|---|---:|---|---|
-| `check_working_state` | `get_governance_metrics` | 4 | — | `sha256:e94e167be72e8f627d43bd10502906e00d7ccc0f6ef6526bea421f8646666e23` |
+| `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:25dc5f02a64764777cd071e63c1598143b44c3ddfbcad68ee5d1e44e413ff3ee` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:16db80fdb6373ac45fb5578d6696deb9161ef433fab350c005b5586bab144f1d` |
 | `request_review` | `dialectic` | 9 | — | `sha256:ef0ec0a2ec8c3a11f7f4747bda14003f470a5e420e91e175d4ac0e3735ba5dbb` |
 | `search_shared_memory` | `knowledge` | 27 | — | `sha256:912a5fbb8c5ba493591393ed20b79c9f6b31407387c3723ef094d450bddcbda8` |
