@@ -17,13 +17,17 @@ except ImportError:
     PSUTIL_AVAILABLE = False
 
 
+# Module-level so the test suite can redirect it (tests/conftest.py); the
+# env var does the same for subprocess-spawned servers.
+DEFAULT_PID_DIR = Path(os.environ.get("UNITARES_PROCESS_DIR") or Path(__file__).parent.parent / "data" / "processes")
+
+
 class ProcessManager:
     """Manage MCP server processes and prevent zombies"""
     
     def __init__(self, pid_dir: Path = None):
         if pid_dir is None:
-            project_root = Path(__file__).parent.parent
-            pid_dir = project_root / "data" / "processes"
+            pid_dir = DEFAULT_PID_DIR
         self.pid_dir = pid_dir
         self.pid_dir.mkdir(parents=True, exist_ok=True)
         self.current_pid = os.getpid()
