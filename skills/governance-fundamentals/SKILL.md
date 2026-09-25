@@ -30,30 +30,6 @@ source_files:
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
   - unitares/src/mcp_handlers/dialectic/enforcement.py
   - unitares/src/mcp_handlers/observability/outcome_events.py
-source_digests:
-  unitares/config/governance_config.py: "eb8aa8754755729f"
-  unitares/governance_core/coherence.py: "ef819003ee72b388"
-  unitares/governance_core/parameters.py: "84bf47ca540bbc49"
-  unitares/src/auto_ground_truth.py: "c17109cf5c18f2a4"
-  unitares/src/governance_monitor.py: "e6122a72dbd2694c"
-  unitares/src/monitor_calibration.py: "c99375f368dd98aa"
-  unitares/src/governance_glossary.py: "251e06209e038a13"
-  unitares/src/behavioral_state.py: "e214a51c1d7763c7"
-  unitares/src/behavioral_sensor.py: "fce77d62fbd7b472"
-  unitares/src/behavioral_assessment.py: "2cbeea287b81399e"
-  unitares/src/cold_start_risk_confirmation.py: "fccd80e216d63b6e"
-  unitares/src/monitor_decision.py: "c80f4e13511fe8ba"
-  unitares/src/monitor_metrics.py: "ea5e54b19fa1d903"
-  unitares/src/monitor_result.py: "ee4882b7694afa9e"
-  unitares/src/coherence_provenance.py: "f41f8d84e58fa321"
-  unitares/src/confidence.py: "00cc04e1f54278b4"
-  unitares/src/eisv_telemetry.py: "24f1a47911850263"
-  unitares/src/services/runtime_queries.py: "f948bb168a59aad4"
-  unitares/src/mcp_handlers/response_formatter.py: "48ccdfafb0cdb8bb"
-  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/mcp_handlers/dialectic/enforcement.py: "135a7345ad47d5bf"
-  unitares/src/mcp_handlers/observability/outcome_events.py: "703e6a57b8e4f770"
 ---
 
 # Governance Fundamentals
@@ -213,7 +189,7 @@ The system tracks whether your stated confidence matches evidence. Over time thi
 
 - Grounding comes from objective signals: test pass/fail, command exit codes, lint results, file operations. These feed calibration automatically via `auto_ground_truth.py` and the `outcome_event` hook. Human validation is not required for deterministic evidence.
 - What that grounding is WORTH depends on who observed it. An outcome you submit yourself is graded `tool_observed` (evidence weight 0.65) at best, because the public path caps a caller attesting its own result — and 0.65 is exactly the calibration admission floor, so a self-described tool call is admitted at the boundary, not above it. Rows the server or an external signal observed can grade higher (0.85 / 1.00). The grade is not a score of your work; it is a statement about who checked.
-- While the binding ledger is retained, prediction-bound outcomes are database-idempotent per `(agent_id, prediction_id)`: an identical retry returns the first canonical outcome without retraining calibration, while conflicting reuse is rejected. After both the canonical outcome and binding expire, a new canonical submission may be established. The in-memory prediction registry is only a cache; durable binding authority lives in the database. Calibration remains a non-durable post-commit side effect, so this persistence guarantee does not imply exactly-once calibration delivery.
+- While the binding ledger is retained, prediction-bound outcomes are database-idempotent per `(agent_id, prediction_id)`: an identical retry returns the first canonical outcome without retraining calibration, while conflicting reuse is rejected. After both the canonical outcome and binding expire, a new canonical submission may be established. The prediction registry is only a cache, carried in the monitor's state snapshot so an open forecast survives a server restart; durable binding authority lives in the database. Calibration remains a non-durable post-commit side effect, so this persistence guarantee does not imply exactly-once calibration delivery.
 - Overconfidence is tracked and can lower Integrity / raise uncertainty through the check-in pipeline
 - When an agent omits confidence, the deployed compatibility estimator still gives legacy `C(V_ODE)` 55% of its base weight. Responses expose this as `confidence_reliability.coherence_dependency=ode_control_feedback`; it is known causal debt, not independent confidence evidence. Do not reweight it without prospective outcome calibration because confidence history can feed later entropy penalties.
 - That derived estimate stays internal: omitted confidence does not mint an agent tactical prediction or become an agent-reported calibration observation. Earlier explicit predictions remain available for their eventual outcomes. Simulation restores prediction bookkeeping and does not write trajectory calibration observations.

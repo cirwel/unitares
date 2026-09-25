@@ -70,8 +70,11 @@
       PYTHON_BIN scripts/ops/doctor_findings.py (pass the dry-run flag)
 
     Optional env:
-      DOCTOR_FINDINGS_COOLDOWN  re-alert window per (check, status)
-                                (default 21600 = 6h)
+      DOCTOR_FINDINGS_COOLDOWN  base re-alert window per (check, status);
+                                each later repeat of the same open
+                                condition doubles it (default 86400 = 24h)
+      DOCTOR_FINDINGS_MAX_COOLDOWN  cap on that doubling
+                                (default 604800 = 7d)
       DOCTOR_FINDINGS_SKIP      comma-separated checks to leave to other
                                 watchdogs (default http_listening,http_health,pid_file)
       DOCTOR_FINDINGS_STATE     open/resolved state file

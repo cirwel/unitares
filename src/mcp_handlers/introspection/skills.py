@@ -25,6 +25,7 @@ import yaml
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
+from src.skill_attestations import load_attestations, skill_text_digest, vouching_date
 
 from ..decorators import mcp_tool
 from ..response_base import success_response
@@ -91,6 +92,16 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
         last_verified = last_verified.isoformat()
     elif last_verified is not None:
         last_verified = str(last_verified)
+    # Re-verifications are recorded as attestation files, not by editing
+    # SKILL.md (see scripts/client/_check_freshness.py). The effective date
+    # comes only from the attestations that vouch for THIS text, or the
+    # frontmatter date if later: the CI checker's rule, shared through
+    # src/skill_attestations.py. It drives the served `last_verified`,
+    # `version` and `stale`, and through them `since_version` filtering and
+    # `registry_version`.
+    attested = _attested_date(skill_dir.parent, skill_dir.name, skill_md)
+    if attested and (not last_verified or attested > last_verified):
+        last_verified = attested
 
     source_files = meta.get("source_files") or []
     if not isinstance(source_files, list):
@@ -115,6 +126,19 @@ def _load_skill(skill_dir: Path) -> Optional[Dict[str, Any]]:
     return skill
 
 
+def _attested_date(skills_root: Path, name: str, skill_md: Path) -> Optional[str]:
+    """Newest `verified_date` among the attestations that vouch for the
+    served SKILL.md text (src/skill_attestations.py): those whose
+    `skill_digest` matches it, else the newest record alone. A newer stamp
+    for different skill text, e.g. from a stale branch, never refreshes it.
+    """
+    try:
+        digest = skill_text_digest(skill_md)
+    except OSError:
+        digest = None
+    return vouching_date(load_attestations(skills_root, name), digest)
+
+
 def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
     """Compute stale flag based on age of last_verified vs freshness_days.
 
@@ -122,8 +146,9 @@ def _compute_stale(last_verified: Optional[str], freshness_days: Any) -> bool:
     git-log staleness is a future enhancement; the date check covers the
     common case (skill not touched in N days).
 
-    UTC, because `scripts/client/_check_freshness.py` stamps `last_verified`
-    in UTC. Reading it back with a local `date.today()` made a skill stamped
+    UTC, because `scripts/client/_check_freshness.py` records verified
+    dates (frontmatter `last_verified` and attestation `verified_date`) in
+    UTC. Reading them back with a local `date.today()` made a skill stamped
     after 00:00 UTC report a negative age on any host behind UTC, quietly
     widening the freshness window by a day.
     """

@@ -38,24 +38,6 @@ source_files:
   # descriptions are abridged and names describe_tool as where the full text
   # lives. The trim rule is here; if it changes, that claim drifts silently.
   - unitares/src/schema_brief.py
-source_digests:
-  unitares/src/mcp_handlers/core.py: "ee90a3f276b48b99"
-  unitares/src/mcp_handlers/identity/handlers.py: "ec60c763a8bc243e"
-  unitares/src/mcp_handlers/admin/handlers.py: "47a6f753b0ed1132"
-  unitares/src/mcp_handlers/tool_stability.py: "9049a8db3938541a"
-  unitares/src/mcp_handlers/middleware/envelope_step.py: "f5c881194d51f538"
-  unitares/src/mcp_handlers/middleware/identity_step.py: "f50ccc2629ef7832"
-  unitares/src/mcp_handlers/updates/phases.py: "d8d32bccff74956b"
-  unitares/src/governance_monitor.py: "e6122a72dbd2694c"
-  unitares/src/monitor_calibration.py: "c99375f368dd98aa"
-  unitares/src/mcp_handlers/updates/enrichments.py: "0aec78c062f4af99"
-  unitares/src/mcp_handlers/dialectic/handlers.py: "2b6f70a94a7361f5"
-  unitares/src/mcp_handlers/lifecycle/self_recovery.py: "8997fbde709169e0"
-  unitares/src/mcp_handlers/lifecycle/recovery_policy.py: "3d108c675fb24421"
-  unitares/src/tool_modes.py: "703dd2ca10000c92"
-  unitares/src/tool_mode_listing.py: "7f50ce631689ce55"
-  unitares/src/mcp_handlers/introspection/tool_introspection.py: "0ffd2f7bc93fba79"
-  unitares/src/schema_brief.py: "401bbce563c30439"
 ---
 
 # Agent Lifecycle
@@ -224,7 +206,7 @@ watched less, or from a busy one that you have already reported.
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause / reject** | Stop your current task. Reflect on what is flagged. Consider requesting a dialectic review |
+| **pause / reject** | Check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so self-recovery rarely applies; a dialectic review opened for the pause, an operator, or re-evaluation at expiry usually ends it (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
@@ -233,7 +215,7 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 
 - UUID is an identity anchor, not proof that the current process owns that identity
 - Session binding can happen via transport session, `client_session_id`, or short-lived continuity token
-- Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. Your identity is unchanged; retry from a client that sends its own session identifier.
+- Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. A destination that is another agent's stable `agent-...` session id (for example one sent in an `X-Session-ID` header) is refused the same way, as `rebind_refused: "foreign_stable_session_id"`, whichever transport header carried it. Your identity is unchanged; retry from a client that sends its own session identifier.
 - When continuity seems unclear, call `identity(client_session_id="<your client_session_id>")`. Do not call it with no arguments: a call carrying no proof signal at all is gated to a fresh mint (`[FRESH_INSTANCE]`, S13), so it answers with a newly created identity rather than reporting on yours, and leaves a spurious record behind. The gate is what keeps the unauthenticated read off the User-Agent pin path; passing your own `client_session_id` is what makes the answer about you.
 - Trust the answer only when `identity_assurance.caller_proven` is true; a `weak` tier with `proof_origin: "server_inferred"` means the server guessed.
 - Inspect:
@@ -248,7 +230,10 @@ Strong ownership proof is better than implicit continuity. If the runtime falls 
 
 ## Recovery
 
-When you are paused, stuck, or need intervention:
+When you are paused, stuck, or need intervention. A paused agent cannot write
+the check-in that would lower its risk, so quick and review succeed only when
+the reading that paused it is already under their gates; otherwise the dialectic
+review opened for the pause, an operator, or re-evaluation at expiry ends it.
 
 | Situation | Tool | Notes |
 |-----------|------|-------|
@@ -256,7 +241,7 @@ When you are paused, stuck, or need intervention:
 | Clearly safe self-resume | `self_recovery(action="quick")` | Requires low risk and no active void |
 | Moderate state with reflection | `self_recovery(action="review", reflection="...")` | Requires a genuine reflection; may accept conditions |
 | Disagree with verdict, want structured review | `request_review(issue_description="...")` | One-call request + thesis by default; pass `use_brief_as_thesis=false` for a neutral two-call flow |
-| Human/operator override | `agent(action="resume", agent_id="...")` | Privileged lifecycle mutation; not ordinary self-recovery |
+| Human/operator override | `operator_resume_agent(target_agent_id="...", reason="...")` | Operator-only. Refuses an active void or risk above 0.80 ("requires human intervention"), and needs `force=true` above 0.60. Never resume your own pause through an operator path |
 
 Recovery is not a shortcut. Its authoritative checks are risk, active void, status,
 ownership, and (for review recovery) reflection/persistence evidence. Legacy
@@ -301,7 +286,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `store_finding(...)` — Store a durable discovery, root cause, or correction
 - `update_finding(discovery_id=..., ...)` — Revise or close an existing finding
 - `knowledge(action="note", ...)` — Quick contribution to the knowledge graph
-- `self_recovery(action="check"|"quick"|"review")` — Get moving again after a pause. The pause and auth-refusal responses name this tool by hand, and it is advertised by default so a schema-driven client can actually call it.
+- `self_recovery(action="check"|"quick"|"review")` — Get moving again after a pause while risk is below its gates (review refuses at risk 0.65 and above, except for the legacy cold-start trap). The check-in envelope names it for a pause below those gates and names the dialectic session above them. It is advertised by default so a schema-driven client can actually call it.
 
 ### Common (use when needed)
 

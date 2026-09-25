@@ -194,8 +194,40 @@ acquisitions without a paired release in a `finally:` or `async with` context.
 
 ### P006 — Silent exception swallow (severity: medium, violation_class: VOI)
 
-`except Exception: pass` or `except Exception: logger.warning(...)` without
-re-raising. Hides real bugs and makes debugging impossible.
+An exception handler (`except`, `catch`) that shows no sign of reacting to
+the failure. A handler reacts only if its body, nested blocks included,
+contains at least one of:
+
+- a `raise` / `throw`
+- a logging call at info, warning, error, exception or critical level, on a
+  logger (`logger.warning(...)`, not `task.exception()`)
+- a `return` with a value other than `None` / `null` / `undefined`; any such
+  value counts, a fallback like `return []` included
+
+A `raise` or log inside a nested `try`'s own handler does not count: it
+reacts to a different exception, and when the nested code succeeds the
+caught one is still swallowed. Nor does a `raise` in the body of a nested
+`try` that has a handler, which may catch it.
+
+Everything else is P006: `pass`, `...`, an empty block, `continue`, `break`,
+a bare `return` or `return None`, assigning `None` or another fallback to
+a variable,
+collecting the error, or logging only at debug level (`logger.debug(...)`,
+`console.debug(...)`). Hides real bugs and makes debugging impossible.
+
+When handlers are nested, every handler that could catch the exception must
+react. An inner `except KeyError: logger.warning(...)` inside an outer
+`except Exception: pass` is still P006, because the outer handler silently
+swallows every other exception.
+
+After you report, checks that never add a finding drop some P006 findings,
+in any language: the governing `except` clause carries `# noqa: BLE001` or a
+bare `# noqa`, or the cited line is a comment, outside the scanned lines, or
+under a `tests/` directory. For Python files that parse, an AST check also
+drops the finding when you cite a line and every handler governing it shows
+one of the three reactions above; for any other `except` clause only a
+cruder line-based `raise` check runs. The optional side-effect exemption
+below is still your call.
 
 **SAFE — DO NOT FLAG:**
 ```python
@@ -213,7 +245,7 @@ primary logic path does NOT depend on its result — it is intentional.
 Only flag when the swallow is on the main logic path or could mask a
 failure the caller needs to know about.
 
-**Hint template:** `silent swallow — log and re-raise or narrow the except`
+**Hint template:** `silent swallow — log at info or above, re-raise, or return an error value`
 
 <!-- P007 has been demoted to the EXPERIMENTAL section below.
      Detecting it requires reasoning about temporal flow (which pool was
@@ -323,7 +355,96 @@ relative to what the operator means, rather than failing outright.
 
 **Hint template:** `docker postgres-age is the quickstart DB, not this deployment's — use homebrew psql on 5432`
 
-### P016 — Nested-success-false swallowed in envelope parsing (severity: high, violation_class: INT)
+<!-- P016 has been demoted to the EXPERIMENTAL section below (2026-09-24).
+     82 findings lifetime, 0 confirmed by a human, 17 dismissed; 63 of the 82
+     landed on test assertions. See the experimental section. -->
+
+
+### P017 — Bare await in daemon/launchd script without timeout (severity: high, violation_class: REC)
+
+Any `await` on a network call (MCP, HTTP, WebSocket) inside a script intended
+to run under launchd or as a `--once` daemon, without wrapping in
+`asyncio.wait_for(coro, timeout=...)`. If the remote never responds, launchd's
+`StartInterval` will skip subsequent invocations while the prior instance is
+still alive — the daemon silently stops running.
+
+**Seen in:** `heartbeat_agent.py --once` parked on an MCP call for days under
+launchd (2026-04 incident). Fixed with `asyncio.wait_for(CYCLE_TIMEOUT)`.
+
+**SAFE — DO NOT FLAG:**
+```python
+await asyncio.wait_for(self._bounded_analysis_cycle(), timeout=CYCLE_TIMEOUT)
+```
+
+Only flag bare `await some_network_call()` without a surrounding
+`wait_for` or `async_timeout` in files that are entry points for
+launchd plists or `--once` CLI modes.
+
+**Hint template:** `bare await in daemon — needs asyncio.wait_for timeout`
+
+## Experimental patterns
+
+These are real bug shapes that the 8B local model cannot reliably detect
+without false-positiving on the FIX for the bug. They're documented here so
+the knowledge isn't lost. Re-promote them once we have either (a) a structural
+verifier in `watcher_agent.py` or (b) a larger model with stronger temporal
+reasoning.
+
+### EXP-P007 — Path acquired from one pool, released to another (high, violation_class: REC)
+
+Using `postgres_backend.py` pool helpers where `acquired_pool` is not tracked
+and the connection gets released to a different pool than it was acquired from.
+
+**Why disabled:** Detecting this requires distinguishing the bad shape (no
+`acquired_pool` field) from the fix shape (`acquired_pool` is tracked and
+release is gated on `current_pool is acquired_pool`). The local model flags
+both as P007. Needs an AST-based verifier that walks the class and confirms
+no per-pool tracking exists. See `src/db/postgres_backend.py:170-205` for the
+post-fix reference shape.
+
+**Seen in:** `src/db/postgres_backend.py` pool mismatch bug
+
+### EXP-P008 — Unchecked shell input (critical, violation_class: VOI)
+
+Fire **only** when both conditions hold:
+1. The call is `subprocess.*(..., shell=True)` OR `os.system(...)` OR `os.popen(...)`.
+2. The command string includes user/external input without `shlex.quote`.
+
+List-form subprocess calls (`subprocess.run(["wc", "-l"] + files)`) bypass the
+shell entirely and must NOT be flagged.
+
+**Why disabled (2026-06-12):** the local model cannot reliably distinguish
+shell-form from list-form subprocess calls — both historical findings
+(chronicler/scrapers.py:63 and :71, 2026-04-23) flagged lines NEAR safe
+list-form calls, neither of which used `shell=True`. 100% dismiss rate, zero
+true positives in 2 months. The deterministic `p008_actually_fires` AST
+post-filter in `agent.py` (commit d37c1b57) correctly suppressed every FP and
+remains active as defense-in-depth. Re-promote when a model can apply
+condition (1) — i.e. actually verify `shell=True` is present — or replace
+with a pure-AST detector that doesn't need the LLM at all (the post-filter is
+already 90% of one).
+
+**Seen in:** no true positives to date; rule imported from generic security
+practice rather than a project incident.
+
+**Hint template:** `shell injection — use shlex.quote or list-form subprocess`
+
+### EXP-P016 — Nested-success-false swallowed in envelope parsing (high, violation_class: INT)
+
+**Why disabled (2026-09-24):** the rule's own escape hatch, invoked. Over its
+lifetime in `~/.unitares/watcher/findings.jsonl` it produced **82 findings, 0
+confirmed by a human, 17 dismissed**, the rest aged out or never adjudicated.
+**63 of the 82** landed on test files, mostly `assert data["success"] is True`,
+where a single-layer check is the test's whole point. Four structural-verifier
+rounds (2026-04-14, 05-04, 05-20, 08-23) each closed one false-positive shape
+and the next shape arrived. The only true positive on record is the incident
+the rule was seeded from (fix commit 718ccd3, 2026-04-11). The
+structural verifiers (`_P016_GETATTR_SUCCESS`,
+`_is_p016_followed_by_inner_layer_check`,
+`_is_p016_inside_inner_assertion_helper`) stay in `agent.py` as defense in
+depth. Re-promote when a verifier can confirm that a nested `result.success`
+layer actually exists in the parsed response.
+
 
 Parsing a wrapped response that has BOTH an outer envelope success flag and a
 nested inner success flag, but only checking ONE layer. The outer envelope can
@@ -447,75 +568,6 @@ APIs that genuinely use `data.get("success")` once), move this to
 experimental.
 
 **Hint template:** `nested result.success not checked — outer envelope lies`
-
-### P017 — Bare await in daemon/launchd script without timeout (severity: high, violation_class: REC)
-
-Any `await` on a network call (MCP, HTTP, WebSocket) inside a script intended
-to run under launchd or as a `--once` daemon, without wrapping in
-`asyncio.wait_for(coro, timeout=...)`. If the remote never responds, launchd's
-`StartInterval` will skip subsequent invocations while the prior instance is
-still alive — the daemon silently stops running.
-
-**Seen in:** `heartbeat_agent.py --once` parked on an MCP call for days under
-launchd (2026-04 incident). Fixed with `asyncio.wait_for(CYCLE_TIMEOUT)`.
-
-**SAFE — DO NOT FLAG:**
-```python
-await asyncio.wait_for(self._bounded_analysis_cycle(), timeout=CYCLE_TIMEOUT)
-```
-
-Only flag bare `await some_network_call()` without a surrounding
-`wait_for` or `async_timeout` in files that are entry points for
-launchd plists or `--once` CLI modes.
-
-**Hint template:** `bare await in daemon — needs asyncio.wait_for timeout`
-
-## Experimental patterns
-
-These are real bug shapes that the 8B local model cannot reliably detect
-without false-positiving on the FIX for the bug. They're documented here so
-the knowledge isn't lost. Re-promote them once we have either (a) a structural
-verifier in `watcher_agent.py` or (b) a larger model with stronger temporal
-reasoning.
-
-### EXP-P007 — Path acquired from one pool, released to another (high, violation_class: REC)
-
-Using `postgres_backend.py` pool helpers where `acquired_pool` is not tracked
-and the connection gets released to a different pool than it was acquired from.
-
-**Why disabled:** Detecting this requires distinguishing the bad shape (no
-`acquired_pool` field) from the fix shape (`acquired_pool` is tracked and
-release is gated on `current_pool is acquired_pool`). The local model flags
-both as P007. Needs an AST-based verifier that walks the class and confirms
-no per-pool tracking exists. See `src/db/postgres_backend.py:170-205` for the
-post-fix reference shape.
-
-**Seen in:** `src/db/postgres_backend.py` pool mismatch bug
-
-### EXP-P008 — Unchecked shell input (critical, violation_class: VOI)
-
-Fire **only** when both conditions hold:
-1. The call is `subprocess.*(..., shell=True)` OR `os.system(...)` OR `os.popen(...)`.
-2. The command string includes user/external input without `shlex.quote`.
-
-List-form subprocess calls (`subprocess.run(["wc", "-l"] + files)`) bypass the
-shell entirely and must NOT be flagged.
-
-**Why disabled (2026-06-12):** the local model cannot reliably distinguish
-shell-form from list-form subprocess calls — both historical findings
-(chronicler/scrapers.py:63 and :71, 2026-04-23) flagged lines NEAR safe
-list-form calls, neither of which used `shell=True`. 100% dismiss rate, zero
-true positives in 2 months. The deterministic `p008_actually_fires` AST
-post-filter in `agent.py` (commit d37c1b57) correctly suppressed every FP and
-remains active as defense-in-depth. Re-promote when a model can apply
-condition (1) — i.e. actually verify `shell=True` is present — or replace
-with a pure-AST detector that doesn't need the LLM at all (the post-filter is
-already 90% of one).
-
-**Seen in:** no true positives to date; rule imported from generic security
-practice rather than a project incident.
-
-**Hint template:** `shell injection — use shlex.quote or list-form subprocess`
 
 ## Adding new patterns
 

@@ -74,6 +74,7 @@ def _isolate_watcher_state(tmp_path, monkeypatch, watcher_module):
     monkeypatch.setattr(watcher_findings, "FINDINGS_FILE", tmp_state / "findings.jsonl")
     monkeypatch.setattr(watcher_findings, "DEDUP_FILE", tmp_state / "dedup.json")
     monkeypatch.setattr(watcher_util, "LOG_FILE", tmp_log)
+    monkeypatch.setenv("UNITARES_WATCHER_LOG_FILE", str(tmp_log))
 
     # Re-exported names on the agent module — patched so any caller that
     # reads them through `watcher_module.FINDINGS_FILE` / the real agent
@@ -699,7 +700,7 @@ def _install_scan_stubs(watcher_module, monkeypatch, findings_to_return):
     monkeypatch.setattr(
         watcher_module,
         "_verify_finding_against_source",
-        lambda _f, _ev, _lines: True,
+        lambda _f, _ev, _lines, _indented=None: True,
     )
 
 

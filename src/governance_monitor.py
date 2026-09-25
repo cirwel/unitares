@@ -427,6 +427,16 @@ class UNITARESMonitor:
                 # GovernanceState.from_dict does not see an unknown key).
                 self._last_sensor_divergence = data.pop('sensor_divergence', None)
                 # Restore bounded divergence trend history (pop for the same reason).
+                open_rows = data.pop('open_predictions', None)
+                if open_rows:
+                    from src.monitor_prediction import restore_open_predictions
+
+                    self._open_predictions.update(
+                        restore_open_predictions(
+                            open_rows,
+                            float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
+                        )
+                    )
                 div_hist = data.pop('sensor_divergence_history', None)
                 if div_hist:
                     self._sensor_divergence_history = deque(
@@ -500,6 +510,16 @@ class UNITARESMonitor:
             # Persist last_update so cross-restart gaps integrate against the real
             # prior check-in time, not the lazy-init wall-clock.
             state_data['last_update_iso'] = self.last_update.isoformat()
+            # Open check-in forecasts, matching the live writer
+            # (agent_monitor_state._attach_monitor_transients).
+            if self._open_predictions:
+                from src.monitor_prediction import serialize_open_predictions
+
+                open_rows = serialize_open_predictions(
+                    self._open_predictions, float(self._prediction_ttl_seconds)
+                )
+                if open_rows:
+                    state_data['open_predictions'] = open_rows
             # Atomic write: write to temp file, then rename to prevent corruption
             tmp_fd, tmp_path = tempfile.mkstemp(dir=state_file.parent, suffix='.tmp')
             try:
@@ -1595,9 +1615,12 @@ class UNITARESMonitor:
 
         # Issue #1995: measure the absolute-floor geometry after the behavioral
         # verdict and primary policy decision have already been computed.  This
-        # observation is telemetry-only, zero-inclusive, and fail-open: neither
-        # a breach nor an instrumentation failure may alter risk, verdict, or
-        # enforcement.  Import lazily so an optional-instrument refactor cannot
+        # observation is telemetry-only, zero-inclusive, and fail-open: building
+        # it, and any instrumentation failure, alters no risk, verdict, or
+        # enforcement.  (A breach reaches the verdict elsewhere, in the
+        # assessment above: always through its risk component, and, with the
+        # default-off UNITARES_FLOOR_BREACH_CAUTION_APPLY floor, directly; the
+        # row labels a verdict that floor raised.)  Import lazily so an optional-instrument refactor cannot
         # prevent the governance monitor itself from loading.
         measurement_scope = "simulation" if self._simulation_active else "live"
         try:
@@ -1625,6 +1648,12 @@ class UNITARESMonitor:
                 "eligible_for_production_counter": False,
                 "unavailable_reason": "evaluation_failed",
             }
+            # The APPLY floor runs in the assessment, before this row, so a
+            # failed observation must still say when it raised the verdict.
+            _floor = getattr(behavioral_assessment, "floor_breach_caution", None)
+            if isinstance(_floor, dict) and _floor.get("applied"):
+                absolute_floor_observation["measurement_role"] = "verdict_floor"
+                absolute_floor_observation["policy_effect"] = "behavioral_verdict_raised"
         self._last_absolute_floor_observation = absolute_floor_observation
 
         # Log decision via audit logger (for accountability and transparency).
@@ -1728,9 +1757,10 @@ class UNITARESMonitor:
                     exc_info=True,
                 )
 
-        # Epistemic-authority guard: a non-agent-authored row cannot turn the
-        # non-discriminative Phi cold-start fallback into a hard pause before
-        # agent-authored or behaviorally authoritative evidence exists.  This is
+        # Epistemic-authority guard: the non-discriminative Phi cold-start
+        # fallback cannot turn into a hard pause before behaviorally
+        # authoritative evidence exists (agent-authored rows included unless
+        # COLD_START_GUARD_INCLUDE_AUTHORED is off).  This is
         # stateless and separate from the two-confirmation shadow above.  The raw
         # pause has already been recorded in audit/history; downstream runtime
         # enforcement receives the guarded proceed/guide decision.
@@ -1738,6 +1768,7 @@ class UNITARESMonitor:
             decision,
             epistemic_class=agent_state.get("epistemic_class"),
             enabled=GovConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED,
+            include_authored=GovConfig.COLD_START_GUARD_INCLUDE_AUTHORED,
         )
         cold_start_epistemic_gate = decision.get("cold_start_epistemic_gate")
         if (

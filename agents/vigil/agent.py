@@ -43,7 +43,12 @@ from agents.common.config import GOV_MCP_URL
 from unitares_sdk.agent import CycleResult, GovernanceAgent
 from unitares_sdk.client import GovernanceClient
 from unitares_sdk.utils import notify
-from agents.common.findings import post_finding, compute_fingerprint
+from agents.common.findings import (
+    REACHED_GOVERNANCE,
+    compute_fingerprint,
+    post_finding,
+    post_finding_result,
+)
 from agents.vigil.checks.registry import load_plugins
 from agents.vigil.checks.runner import run_health_checks
 from agents.watcher.floor_state import load_floor, recompute_floor
@@ -432,6 +437,152 @@ def eligible_for_archive(top_stale: list, threshold_days: int) -> list:
     ]
 
 
+# A stale-opens set that has not changed is re-reported at most this often.
+# Measured 2026-09-24: the sweep listed the same 2 entries in 167 of 167
+# cycles — 48 identical lines a day in the check-in and the log.
+STALE_OPENS_REPEAT_SECONDS = 24 * 3600
+
+# The archive-candidate digest goes to the operator at most once a week.
+ARCHIVE_DIGEST_INTERVAL_SECONDS = 7 * 24 * 3600
+
+# The one command an operator runs to review, then approve, the candidates.
+ARCHIVE_REVIEW_COMMAND = "python3 agents/vigil/agent.py --archive-candidates"
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def stale_opens_report(
+    stale_opens: List[Dict[str, Any]],
+    prev_state: Dict[str, Any],
+    now: datetime,
+) -> Tuple[List[str], Dict[str, Any]]:
+    """Cycle lines for the stale-opens sweep, and the state to carry forward.
+
+    Lines are emitted when the set of stale entries changes, or when the same
+    set was last reported more than STALE_OPENS_REPEAT_SECONDS ago. An
+    unchanged set inside that window yields no lines; the count still lands
+    in cycle state as ``hygiene_stale_opens``.
+    """
+    ids = sorted(str(item.get("id", "?")) for item in stale_opens)
+    prev_ids = prev_state.get("hygiene_stale_open_ids")
+    prev_reported = _parse_iso(prev_state.get("hygiene_stale_opens_reported_at"))
+    unchanged = prev_ids == ids
+    recent = (
+        prev_reported is not None
+        and (now - prev_reported).total_seconds() < STALE_OPENS_REPEAT_SECONDS
+    )
+    if not stale_opens or (unchanged and recent):
+        return [], {
+            "hygiene_stale_open_ids": ids,
+            "hygiene_stale_opens_reported_at": (
+                prev_state.get("hygiene_stale_opens_reported_at") if stale_opens else None
+            ),
+        }
+
+    oldest = stale_opens[0]
+    lines = [
+        f"hygiene: {len(stale_opens)} stale opens (oldest "
+        f"{str(oldest.get('id', '?'))[:12]}, "
+        f"age={oldest.get('last_activity_days', 0)}d)"
+    ]
+    for item in stale_opens[:5]:  # top 5 inline; full count in cycle state
+        summary_short = (item.get("summary") or "")[:60]
+        age_days = item.get("last_activity_days", 0)
+        lines.append(
+            f"stale_open: {str(item.get('id', '?'))[:12]} \"{summary_short}\" age={age_days}d"
+        )
+    return lines, {
+        "hygiene_stale_open_ids": ids,
+        "hygiene_stale_opens_reported_at": now.isoformat(),
+    }
+
+
+def archive_digest_due(prev_state: Dict[str, Any], now: datetime) -> bool:
+    """True when no archive-candidate digest has reached governance this week."""
+    sent = _parse_iso(prev_state.get("archive_digest_sent_at"))
+    return sent is None or (now - sent).total_seconds() >= ARCHIVE_DIGEST_INTERVAL_SECONDS
+
+
+def post_archive_digest(
+    candidates: int, eligible: int, threshold_days: int, now: datetime,
+) -> str:
+    """Tell the operator the candidate queue exists and how to clear it.
+
+    Routed as a low-severity ``vigil_finding`` (the bridge's resident channel),
+    not a KG note: 91 Vigil KG notes in 30 days drew 0 detail reads. Proposes,
+    never archives. Returns the post_finding_result outcome.
+    """
+    year, week, _ = now.isocalendar()
+    message = (
+        f"KG: {candidates} archive candidate(s) waiting for review "
+        f"({eligible} past the {threshold_days}d auto-archive threshold). "
+        f"Review: {ARCHIVE_REVIEW_COMMAND} · approve the listed set: add --apply"
+    )
+    return post_finding_result(
+        event_type="vigil_finding",
+        severity="low",
+        message=message,
+        agent_id="vigil",
+        agent_name="Vigil",
+        fingerprint=compute_fingerprint(
+            ["vigil", "kg_archive_candidates", f"{year}-W{week:02d}"]
+        ),
+        extra={
+            "finding_type": "kg_archive_candidates",
+            "candidates": candidates,
+            "eligible": eligible,
+        },
+    )
+
+
+async def archive_kg_entry(client: GovernanceClient, eid: str) -> Tuple[bool, str]:
+    """Archive one KG entry; high-severity entries fall back to ``closed``.
+
+    Shared by auto-archive and the operator review path so both use the same
+    server call and the same fallback. Returns (ok, error). Never raises.
+    """
+    try:
+        raw = await asyncio.wait_for(
+            client.call_tool("knowledge", {
+                "action": "update",
+                "discovery_id": eid,
+                "status": "archived",
+            }),
+            timeout=5.0,
+        )
+        # Defense: server should always return a dict, but call_tool
+        # could return None or a primitive on a malformed response.
+        # Don't attempt the high-sev fallback in that case.
+        if not isinstance(raw, dict):
+            return False, "non-dict response"
+        if raw.get("success"):
+            return True, ""
+        if (raw.get("error_code") == "PERMISSION_DENIED"
+                or "high-severity" in (raw.get("error") or "").lower()):
+            raw2 = await asyncio.wait_for(
+                client.call_tool("knowledge", {
+                    "action": "update",
+                    "discovery_id": eid,
+                    "status": "closed",
+                }),
+                timeout=5.0,
+            )
+            if isinstance(raw2, dict) and raw2.get("success"):
+                return True, ""
+            return False, "high-sev close failed"
+        return False, (raw.get("error") or "unknown")[:80]
+    except Exception as e:
+        return False, type(e).__name__
+
+
 class VigilAgent(GovernanceAgent):
     def __init__(
         self,
@@ -715,43 +866,9 @@ class VigilAgent(GovernanceAgent):
             eid = entry.get("id")
             if not eid:
                 continue
-            archived_ok = False
-            try:
-                raw = await asyncio.wait_for(
-                    client.call_tool("knowledge", {
-                        "action": "update",
-                        "discovery_id": eid,
-                        "status": "archived",
-                    }),
-                    timeout=5.0,
-                )
-                # Defense: server should always return a dict, but call_tool
-                # could return None or a primitive on a malformed response.
-                # Don't attempt the high-sev fallback in that case.
-                if not isinstance(raw, dict):
-                    summary["errors"].append(f"{eid[:24]}: non-dict response")
-                    continue
-                if raw.get("success"):
-                    archived_ok = True
-                elif (raw.get("error_code") == "PERMISSION_DENIED"
-                      or "high-severity" in (raw.get("error") or "").lower()):
-                    raw2 = await asyncio.wait_for(
-                        client.call_tool("knowledge", {
-                            "action": "update",
-                            "discovery_id": eid,
-                            "status": "closed",
-                        }),
-                        timeout=5.0,
-                    )
-                    if isinstance(raw2, dict) and raw2.get("success"):
-                        archived_ok = True
-                    else:
-                        summary["errors"].append(f"{eid[:24]}: high-sev close failed")
-                else:
-                    err = raw.get("error") or "unknown"
-                    summary["errors"].append(f"{eid[:24]}: {err[:80]}")
-            except Exception as e:
-                summary["errors"].append(f"{eid[:24]}: {type(e).__name__}")
+            archived_ok, err = await archive_kg_entry(client, eid)
+            if not archived_ok:
+                summary["errors"].append(f"{eid[:24]}: {err}")
 
             if archived_ok:
                 summary["archived"] += 1
@@ -989,19 +1106,29 @@ class VigilAgent(GovernanceAgent):
 
         # --- 4.5. KG hygiene v1: stale-opens propose-only sweep (optional) ---
         stale_opens = await self._run_stale_opens_sweep(client)
-        if stale_opens:
-            oldest = stale_opens[0]
-            findings.append(
-                f"hygiene: {len(stale_opens)} stale opens (oldest "
-                f"{oldest.get('id', '?')[:12]}, "
-                f"age={oldest.get('last_activity_days', 0)}d)"
+        cycle_now = datetime.now(timezone.utc)
+        stale_lines, stale_state = stale_opens_report(stale_opens, prev_state, cycle_now)
+        findings.extend(stale_lines)
+
+        # --- 4.5b. Weekly archive-candidate digest to the operator ---
+        archive_digest_sent_at = prev_state.get("archive_digest_sent_at")
+        candidates = groundskeeper_summary.get("archive_candidates", 0)
+        if (
+            groundskeeper_summary.get("audit_run")
+            and candidates > 0
+            and archive_digest_due(prev_state, cycle_now)
+        ):
+            outcome = post_archive_digest(
+                candidates,
+                groundskeeper_summary.get("archive_eligible", 0),
+                int(os.getenv("VIGIL_AUTO_ARCHIVE_AGE_DAYS", "90")),
+                cycle_now,
             )
-            for item in stale_opens[:5]:  # top 5 inline; full count in cycle state
-                summary_short = (item.get("summary") or "")[:60]
-                age_days = item.get("last_activity_days", 0)
-                findings.append(
-                    f"stale_open: {item.get('id', '?')[:12]} \"{summary_short}\" age={age_days}d"
-                )
+            if outcome in REACHED_GOVERNANCE:
+                archive_digest_sent_at = cycle_now.isoformat()
+                findings.append(f"hygiene: archive-candidate digest sent ({candidates})")
+            else:
+                log(f"archive-candidate digest not delivered ({outcome}); retry next cycle")
 
         # --- 4.5a. KG hygiene v2: act on aged candidate_for_archive (optional) ---
         # Bridges the audit→cleanup gap: cleanup_knowledge only walks the
@@ -1126,6 +1253,8 @@ class VigilAgent(GovernanceAgent):
             "groundskeeper_archived": gk_archived,
             "groundskeeper_eligible": gk_eligible,
             "hygiene_stale_opens": len(stale_opens),
+            **stale_state,
+            "archive_digest_sent_at": archive_digest_sent_at,
             "eval_ndcg10": eval_result.get("metrics", {}).get("nDCG@10"),
             "eval_baseline": eval_result.get("baseline"),
             "eval_regression": eval_result.get("regression", False),
@@ -1208,6 +1337,72 @@ class VigilAgent(GovernanceAgent):
             )
             log(f"{verdict or '?'} | {eisv} | {cycle_result.summary}{uptime}")
 
+    async def run_archive_review(
+        self, apply: bool = False, ids: Optional[List[str]] = None,
+    ) -> int:
+        """Operator path for the weekly digest: list, then optionally archive.
+
+        Lists every ``candidate_for_archive`` entry. With ``apply``, archives
+        the listed entries whose activity_score is 0 — the same safety the
+        auto-archiver applies — or exactly ``ids`` when given. No age gate:
+        the operator reviewing the list is the gate the 90-day wait stands in
+        for. Uses Vigil's resident identity (no new mint) and the same archive
+        call as auto-archive. Returns a process exit code.
+        """
+        async with GovernanceClient(
+            mcp_url=self.mcp_url,
+            timeout=self.timeout,
+            connect_timeout=self.connect_timeout,
+            connect_retries=self.connect_retries,
+        ) as client:
+            await self._ensure_identity(client)
+            result = await client.audit_knowledge(scope="open", top_n=1000)
+            audit_data = getattr(result, "audit", None) if getattr(result, "success", False) else None
+            if not isinstance(audit_data, dict):
+                print("audit_knowledge failed; nothing listed", file=sys.stderr)
+                return 1
+            candidates = [
+                e for e in (audit_data.get("top_stale", []) or [])
+                if isinstance(e, dict) and e.get("bucket") == "candidate_for_archive"
+            ]
+            for e in candidates:
+                print(
+                    f"{str(e.get('id', '?'))[:32]:32}  "
+                    f"age={e.get('last_activity_days', 0):>4}d  "
+                    f"activity={e.get('activity_score', 0)}  "
+                    f"{(e.get('summary') or '')[:80]}"
+                )
+            print(f"{len(candidates)} archive candidate(s)")
+            if not apply:
+                print(f"approve the listed set: {ARCHIVE_REVIEW_COMMAND} --apply")
+                return 0
+
+            if ids:
+                wanted = set(ids)
+                targets = [e for e in candidates if e.get("id") in wanted]
+                missing = wanted - {e.get("id") for e in targets}
+                for eid in sorted(missing):
+                    print(f"skip {eid}: not a current archive candidate")
+            else:
+                targets = [e for e in candidates if e.get("activity_score", 0) == 0]
+                skipped = len(candidates) - len(targets)
+                if skipped:
+                    print(f"skip {skipped} with activity > 0 (name them with --ids to archive)")
+
+            archived = 0
+            for e in targets:
+                eid = e.get("id")
+                if not eid:
+                    continue
+                ok, err = await archive_kg_entry(client, eid)
+                if ok:
+                    archived += 1
+                    log(f"OPERATOR_ARCHIVE: {eid} (age={e.get('last_activity_days')}d)")
+                else:
+                    print(f"failed {eid}: {err}")
+            print(f"archived {archived}/{len(targets)}")
+            return 0 if archived == len(targets) else 1
+
     async def run_daemon(self):
         """Run continuously with interval sleeps."""
         log(f"Heartbeat daemon starting (interval={self.heartbeat_interval}s)")
@@ -1230,6 +1425,18 @@ async def main():
     parser.add_argument("--url", default=GOV_MCP_URL, help="MCP URL")
     parser.add_argument("--label", default="Vigil", help="Agent label")
     parser.add_argument("--interval", type=int, default=1800, help="Daemon interval (seconds)")
+    parser.add_argument(
+        "--archive-candidates", action="store_true",
+        help="List KG archive candidates (operator review; no check-in)",
+    )
+    parser.add_argument(
+        "--apply", action="store_true",
+        help="With --archive-candidates: archive the listed set (activity 0) or --ids",
+    )
+    parser.add_argument(
+        "--ids", default="",
+        help="With --archive-candidates --apply: comma-separated ids to archive",
+    )
     args = parser.parse_args()
 
     # with_hygiene activates two stale-open behaviors (gated under one flag):
@@ -1259,6 +1466,9 @@ async def main():
         force_new=args.force_new,
     )
 
+    if args.archive_candidates:
+        ids = [i.strip() for i in args.ids.split(",") if i.strip()] or None
+        sys.exit(await agent.run_archive_review(apply=args.apply, ids=ids))
     if args.daemon:
         await agent.run_daemon()
     else:

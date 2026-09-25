@@ -57,7 +57,18 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
   #   * "td:/test/" — reserved namespace (PR #1102+)
   #   * "td:/force-release-contract-test-" — legacy pre-#1102 naming whose
   #     events still linger in lease_plane_events (governance DB forbids DELETE)
-  @suppressed_test_surface_prefixes ["td:/test/", "td:/force-release-contract-test-"]
+  #   * "dialectic:/test_elixir_" / "resident:/test_elixir_" — the lease-plane
+  #     suite's namespace (LeaseTestHelpers.unique_surface_id). It runs against
+  #     the governance DB by default; its force-release tests paged as three
+  #     HIGH alarms on 2026-08-26. NOT a blanket `:/test_*` rule — this suite's
+  #     own poller integration tests use `dialectic:/test_sentinel_*` and
+  #     expect alarms.
+  @suppressed_test_surface_prefixes [
+    "td:/test/",
+    "td:/force-release-contract-test-",
+    "dialectic:/test_elixir_",
+    "resident:/test_elixir_"
+  ]
 
   @type alarm :: %{
           kind: String.t(),
@@ -210,6 +221,74 @@ defmodule UnitaresSentinel.ForcedReleasePoller.Logic do
       end
 
     seconds <> frac <> "+00:00"
+  end
+
+  # ---- conflict re-alert throttle ----------------------------------------
+
+  @doc """
+  Gate `conflict_batch` alarms through a per-surface re-alert backoff; every
+  other alarm class passes through untouched.
+
+  A surface that stays contended used to page once per 30-second cycle, each
+  with its own fingerprint (the fingerprint carries `last_ts`), so nothing
+  downstream could collapse them: 111 of 280 `held-by-other` alarms in the 30
+  days to 2026-09-24 were one surface. Now a surface pages on its first
+  conflict, then after 1h, 2h, 4h ... capped at 24h while it stays contended,
+  and afresh once it has been quiet for a full interval. An emitted alarm
+  carries `suppressed_cycles_since_last`. Fingerprints are unchanged, so
+  cross-runtime parity with `agents/sentinel/forced_release_alarm.py` holds
+  for every alarm that is emitted.
+  """
+  @spec throttle_conflicts([alarm()], UnitaresSentinel.ReAlert.t(), integer(), keyword()) ::
+          {[alarm()], UnitaresSentinel.ReAlert.t()}
+  def throttle_conflicts(alarms, realert, now_ms, opts \\ []) when is_list(alarms) do
+    realert = UnitaresSentinel.ReAlert.prune(realert, now_ms)
+
+    {kept, realert} =
+      Enum.reduce(alarms, {[], realert}, fn
+        %{kind: "conflict_batch", extra: %{surface_id: surface_id}} = alarm, {kept, state} ->
+          case UnitaresSentinel.ReAlert.decide(
+                 state,
+                 {:conflict, surface_id},
+                 UnitaresSentinel.ReAlert.rank(alarm.severity),
+                 now_ms,
+                 opts
+               ) do
+            {:emit, %{suppressed_since_last: suppressed}, state} ->
+              alarm =
+                if suppressed > 0 do
+                  %{
+                    alarm
+                    | summary: alarm.summary <> " (+#{suppressed} contended cycles since last alarm)",
+                      extra: Map.put(alarm.extra, :suppressed_cycles_since_last, suppressed)
+                  }
+                else
+                  alarm
+                end
+
+              {[alarm | kept], state}
+
+            {:suppress, state} ->
+              {kept, state}
+          end
+
+        alarm, {kept, state} ->
+          {[alarm | kept], state}
+      end)
+
+    {Enum.reverse(kept), realert}
+  end
+
+  @doc """
+  Order alarms for delivery and for queue eviction: highest severity first,
+  and within a severity `first` ahead of `then` (each keeping its own order).
+  Callers pass this tick's alarms as `first` and the carried backlog as
+  `then`, so a fresh high alarm is never queued behind, or evicted by, older
+  lower-severity ones.
+  """
+  @spec order_for_delivery([alarm()], [alarm()]) :: [alarm()]
+  def order_for_delivery(first, then) do
+    Enum.sort_by(first ++ then, &(-UnitaresSentinel.ReAlert.rank(&1.severity)))
   end
 
   # ---- combined --------------------------------------------------------

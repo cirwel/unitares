@@ -111,7 +111,8 @@ the test run one.
   This check replaces the legacy commit status; old heads may still show
   that historical status until the next push. GitHub branch protections are
   separate and are not changed by this workflow.
-- Findings: fix and push (the new diff is reviewed), or post rebuttals with
+- Findings: fix and push (the new diff is reviewed, up to the
+  [round cap](#round-cap)), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
@@ -212,6 +213,68 @@ start on the initial draft of #2352 during the pilot; the command-owned request
 is therefore necessary for this workflow. See the PR for subsequent push and
 fallback validation.
 
+#### Round cap
+
+A PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
+round is one completed native Codex run, counted by the distinct commits
+Codex names. Codex can post a result three ways: a submitted review, a clean
+comment, or a completed activity row. All three count. These don't count: a
+reply inside an existing thread, the receipt that records a native result, a
+disposition, a fix verification, and a local fallback record. A local record
+names no commit, no start time and no per-finding severity, and counting it
+opened a new gap each time it was tried on #2401. After any base change the
+cap no longer applies: the gate stops trusting native evidence then, because
+a native run does not say which base it reviewed. The `review` check shows
+the count ("review round 2 of 3").
+
+Why: every run spends the same subscription quota that authoring does. In the
+first ~14 hours of native review (2026-09-23/24) there were 137 Codex runs
+across 27 PRs. Four PRs used 64 of them: #2380 (20), #2387 (18), #2378 (16),
+#2376 (10). Twelve PRs finished in two runs or fewer. The long runs did not
+converge because each fix added new text or code for Codex to flag. Those later
+findings were usually valid but minor, and the quota they cost was the scarce
+resource.
+
+The rule is for fix loops only:
+
+- A **P0/P1** in the last round always gets another full run after its fix.
+- A **clean** last round is not a fix loop. A push after it is new work, and
+  new work gets a full review.
+- Past the cap, with only P2s open, `review.sh` does not request Codex and
+  does not start the local fallback, which spends the same quota. The
+  fallback runs only when native review is unavailable, and its own rounds are
+  bounded by the review budget, not by this cap. Answer the
+  remaining findings in one batch:
+  - **Don't push:** dispose them on the reviewed diff with
+    `review.sh dispose` (fixed later in #N, or rebutted). This costs no model
+    call.
+  - **Push fixes:** if `git config review.verifier` is set, `review.sh` asks
+    that model whether each finding is addressed by the fix commits. It posts
+    a diff-bound record with the reviewer `fix-verify:<model>`. Findings it
+    judges unaddressed stay open as `FINDINGS(n)` for fixing or disposing.
+    It checks the fixes only, not the new lines for new problems, and the
+    record says so. A round is answered once it is disposed
+    or its fixes are verified, and it gets only **one** answer: any push after
+    that may be new work and gets a full review.
+    With no verifier configured, a push past the cap is
+    UNREVIEWED. The author says so and disposes, or deliberately spends a
+    round.
+- `review.sh --reviewer codex` (or `claude`) deliberately spends a round past
+  the cap. Use it when the fixes changed enough that they need a real review.
+
+The verifier is opt-in, like `review.native`. `ollama:<model>` runs on the
+local Ollama server and costs nothing. `hf:<model>` uses the Hugging Face
+router, which is metered, so it is never the default. On 139 real
+finding/fix pairs from this repo, `gemma4:latest` caught 59 of 66 non-fixes
+and passed 56 of 73 real fixes. So about 1 in 9 unaddressed P2s past the cap
+is accepted as fixed. The record lists every finding it marked addressed, so
+that can be spot-checked. The evaluation is in the PR that added the cap. On
+this operator's machine, run once:
+
+```bash
+git config review.verifier ollama:gemma4:latest
+```
+
 #### Requesting review without local tooling
 
 `review.sh` needs the `gh` CLI and a local Codex or Claude CLI, so it cannot
@@ -234,6 +297,9 @@ operator's), the environment-independent path is a PR comment:
    keep the PR in draft, and hand the disposition to someone who can run
    `review.sh dispose`, naming the thread. Do not assemble the disposition
    record by hand either.
+   The [round cap](#round-cap) applies here too. After three rounds with only
+   P2s open, do not post `@codex review` again: hand the remaining findings
+   off for disposition the same way. A P1 fix still gets its request.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -316,6 +382,9 @@ guards keep concurrent sessions from clobbering each other:
   `docs/dev/CANONICAL_SOURCES.md` so `check_doc_health.py` blocks the stale
   wording from reappearing. Corrections that land in one doc and drift in the
   others were the entire defect class of the 2026-07-02 coherence audit.
+- **Changelog entries**: add a `docs/changelog.d/` fragment, never edit
+  `docs/CHANGELOG.md` directly in an ordinary PR; the format is in
+  [`docs/changelog.d/README.md`](../changelog.d/README.md).
 - **Branch hygiene**: stale and superseded branches are swept per
   `docs/operations/branch-hygiene-runbook.md`. Branches with unique local work
   (`git cherry master <branch>` showing `+`) are held for review, never auto-
@@ -452,6 +521,7 @@ this entirely).
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
+| Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

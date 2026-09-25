@@ -39,6 +39,9 @@ logger = get_logger(__name__)
 # --- identity_session (leaf) ---
 from .session import (
     FOREIGN_DESTINATION_SOURCES,
+    FOREIGN_STABLE_SESSION_ID,
+    UNDECLARED_DESTINATION_PROVENANCE,
+    bind_destination_refusal,
     derive_session_key,
     derive_session_key_with_source,
     _extract_base_fingerprint,
@@ -1427,12 +1430,35 @@ async def _perform_session_bind(
     session_key: str,
     display_agent_id: str = None,
     source: str = "auto_bind",
+    *,
+    key_source: Optional[str] = None,
 ) -> dict:
     """Bind a session key to an agent UUID (Redis + PostgreSQL + sticky transport).
 
-    Shared helper used by both identity() auto-bind and bind_session().
+    Shared helper used by identity()/onboard() for the agent's own stable
+    session id and by bind_session() for a transport key.
     All steps are best-effort — failures are logged but don't prevent binding.
+
+    ``key_source`` is the ladder source the destination resolved through
+    (``derive_session_key_with_source``). It is not needed for the agent's own
+    stable id, which is owned by construction. Any other key is checked with
+    ``bind_destination_refusal`` HERE, not only in the callers (#2147): a
+    destination that belongs to someone else, or whose provenance the caller
+    did not declare, is refused before anything is written. The refusal is
+    the same shape as a successful bind, with ``bound`` False, a named
+    ``bind_refused`` reason and no key echoed.
     """
+    refusal = bind_destination_refusal(agent_uuid, session_key, key_source)
+    if refusal:
+        logger.warning(
+            "[%s] refused bind (%s): destination key resolved via %s, "
+            "which is not this caller's own session key",
+            source,
+            refusal,
+            key_source or "undeclared source",
+        )
+        return {"bound": False, "session_key": None, "bind_refused": refusal}
+
     bound_info = {"bound": False, "session_key": session_key[:20] + "..." if session_key else None}
 
     # 1. Redis cache
@@ -1631,7 +1657,24 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
             mcp_key_source,
         )
     elif mcp_session_key:
-        await _perform_session_bind(target_uuid, mcp_session_key, display_agent_id=target_agent_id, source="bind_session")
+        # The helper applies the same predicate itself (#2147), and the two
+        # differ. The guard above is stricter on the agent's own stable id
+        # when it resolved via a foreign source (the helper owns it by
+        # construction). The helper is stricter on an undeclared source (not
+        # reachable here: the ladder always names one) and on another agent's
+        # stable `agent-...` id under any declared source, which IS reachable:
+        # an X-Session-ID header carrying it passes the guard above and is
+        # refused only here. Whichever refuses must surface as a refusal
+        # rather than fall through to `bound: True`.
+        bound_info = await _perform_session_bind(
+            target_uuid,
+            mcp_session_key,
+            display_agent_id=target_agent_id,
+            source="bind_session",
+            key_source=mcp_key_source,
+        )
+        if bound_info.get("bind_refused"):
+            rebind_refused = bound_info["bind_refused"]
 
     # Update request context so subsequent calls in this request use the correct agent
     try:
@@ -1656,6 +1699,14 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         ),
         "message": (
             f"Resolved agent '{target_label or target_agent_id}', but declined to "
+            f"bind this transport: the destination key's provenance was not "
+            f"declared, so it cannot be shown to be yours. Your identity is unchanged."
+            if rebind_refused == UNDECLARED_DESTINATION_PROVENANCE
+            else f"Resolved agent '{target_label or target_agent_id}', but declined to "
+            f"bind this transport: the destination key is another agent's stable "
+            f"session id, so it cannot be yours. Your identity is unchanged."
+            if rebind_refused == FOREIGN_STABLE_SESSION_ID
+            else f"Resolved agent '{target_label or target_agent_id}', but declined to "
             f"bind this transport: the destination key resolved via "
             f"'{rebind_refused}', which is keyed on the User-Agent alone and can "
             f"belong to another caller. Your identity is unchanged."
@@ -2872,8 +2923,13 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                         "[ONBOARD] %s minted WITHOUT resident tags (%s) — %s",
                         f"{agent_uuid[:8]}...", registration["status"], name,
                     )
-        except Exception:
-            pass  # Never let a response annotation fail a mint.
+        except Exception as e:
+            # Never let a response annotation fail a mint -- but this block
+            # exists to make an off-roster mint visible, so don't fail silently.
+            logger.warning(
+                "[ONBOARD] resident_registration check failed for %s (%s): %s",
+                f"{agent_uuid[:8]}...", name, e,
+            )
 
     # A collision rename is otherwise invisible to the caller: display_name
     # now carries the applied label, but nothing said the requested one was
@@ -3037,8 +3093,10 @@ async def handle_get_trajectory_status(arguments: Dict[str, Any]) -> Sequence[Te
                     prefetched_tags=getattr(_meta, "tags", None) if _meta else None,
                     prefetched_label=getattr(_meta, "label", None) if _meta else None,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"[TRAJECTORY] trust_tier enrichment failed for {agent_uuid[:8]}...: {e}"
+            )
 
         return success_response(result, agent_id=agent_uuid, arguments=arguments)
 
@@ -3063,7 +3121,7 @@ async def _create_spawned_edge_bg(
         await db.graph_query(q, p)
         logger.info(f"[SPAWNED] Created edge {parent_id[:8]}... -> {child_id[:8]}...")
     except Exception as e:
-        logger.debug(f"SPAWNED edge creation failed (non-fatal): {e}")
+        logger.warning(f"SPAWNED edge creation failed (non-fatal): {e}")
 
 
 async def _stamp_default_tags_on_onboard(
@@ -3112,7 +3170,7 @@ async def _seed_genesis_from_parent_bg(child_id: str, parent_id: str):
                 f"{parent_id[:8]}...: {result.get('reason')}"
             )
     except Exception as e:
-        logger.debug(f"seed_genesis_from_parent scheduling failed (non-fatal): {e}")
+        logger.warning(f"seed_genesis_from_parent scheduling failed (non-fatal): {e}")
 
 
 async def _r2_pre_check_and_declare(
@@ -3213,8 +3271,15 @@ async def _r2_pre_check_and_declare(
                     or _prec.get("uuid")
                     or parent_id
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            # Fail open: the liveness check below falls back to the raw
+            # parent_id. Debug, not warning: get_identity returns an
+            # IdentityRecord (no .get), so this raises on every explicit
+            # handoff today; the fallback is the same value either way.
+            logger.debug(
+                f"[R2] parent uuid lookup failed for {parent_id[:8]}..., "
+                f"using raw parent_id: {e}"
+            )
         try:
             live_bindings = await get_live_bindings(parent_uuid)
         except Exception as e:

@@ -11,6 +11,7 @@ run the checker the way CI does, as a subprocess against a throwaway layout.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -112,34 +113,396 @@ def test_an_absent_source_is_reported_not_guessed(layout: Layout):
     assert "1 cited source(s) absent from this checkout" in result.stdout
 
 
-def test_stamp_records_today_and_the_current_digest_and_touches_nothing_else(layout: Layout):
+def _attestations(layout: "Layout") -> list:
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    return sorted(adir.glob("*.json")) if adir.is_dir() else []
+
+
+def test_stamp_writes_a_new_attestation_and_never_touches_skill_md(layout: Layout):
     layout.source("x = 2\n")
     layout.skill(last_verified=_day(10), digest=_digest("x = 1\n"))
-    before = layout.skill_file.read_text()
+    before = layout.skill_file.read_bytes()
 
     result = layout.run("--stamp", "demo")
-    assert result.returncode == 0, result.stdout + result.stderr
-    after = layout.skill_file.read_text()
+    assert result.returncode == 0, result.stdout
+    assert layout.skill_file.read_bytes() == before
 
-    assert f'last_verified: "{_day(0)}"' in after
-    assert f'  unitares/src/thing.py: "{_digest("x = 2\n")}"' in after
-    # Only the date line and the digest block moved.
-    untouched = [l for l in before.splitlines()
-                 if not l.startswith("last_verified:") and "unitares/src/thing.py: " not in l]
-    assert [l for l in after.splitlines()
-            if not l.startswith("last_verified:") and "unitares/src/thing.py: " not in l] == untouched
-    assert "# a comment inside the list survives too" in after
-    assert after.index("source_files:") < after.index("source_digests:") < after.index("\n---\n# Demo")
-
+    [path] = _attestations(layout)
+    record = json.loads(path.read_text())
+    assert record["schema"] == "unitares.skill_attestation.v1"
+    assert record["skill"] == "demo"
+    assert record["verified_date"] == _day(0)
+    assert record["source_digests"] == {"unitares/src/thing.py": _digest("x = 2\n")}
     assert layout.run().returncode == 0
 
 
-def test_stamp_adds_the_digest_block_when_none_existed(layout: Layout):
+def test_two_stamps_write_two_distinct_files(layout: Layout):
+    # Distinct names are what keep concurrent pull requests from conflicting.
     layout.source("x = 1\n")
-    layout.skill(last_verified=_day(10), digest=None)
-    assert layout.run("--stamp", "demo").returncode == 0
-    assert 'source_digests:\n  unitares/src/thing.py: "' in layout.skill_file.read_text()
+    layout.skill(last_verified=_day(1), digest=None)
+    layout.run("--stamp", "demo")
+    layout.run("--stamp", "demo")
+    paths = _attestations(layout)
+    assert len(paths) == 2 and paths[0].name != paths[1].name
+
+
+def test_same_second_stamps_sort_in_the_order_they_were_made(layout: Layout):
+    # Names lead with a microsecond UTC timestamp, so the lexically last file
+    # is the newest even for stamps inside one second; the random suffix must
+    # never decide which record wins.
+    import re
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    for content in ("x = 1\n", "x = 2\n", "x = 3\n"):
+        layout.source(content)
+        layout.run("--stamp", "demo")
+    paths = _attestations(layout)
+    assert all(re.fullmatch(r"\d{8}T\d{12}Z-[0-9a-f]{8}\.json", p.name) for p in paths)
+    newest = json.loads(paths[-1].read_text())
+    assert newest["source_digests"] == {"unitares/src/thing.py": _digest("x = 3\n")}
     assert layout.run().returncode == 0
+
+
+def test_a_new_stamp_records_changed_content(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    assert layout.run().returncode == 1          # no record of this content
+    layout.run("--stamp", "demo")
+    assert layout.run().returncode == 0          # now there is one
+
+
+_CURRENT = object()
+
+
+def _attest(layout: "Layout", stem: str, verified_date: str, digests: dict,
+            skill_digest=_CURRENT) -> None:
+    """Write an attestation by hand, as a merged branch would have left it.
+
+    By default it certifies the skill text currently on disk; pass a digest
+    for other text, or None for a record older than `skill_digest`."""
+    if skill_digest is _CURRENT:
+        skill_digest = hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    adir.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema": "unitares.skill_attestation.v1", "skill": "demo",
+        "verified_at": f"{verified_date}T00:00:00Z", "verified_date": verified_date,
+        "verifier": "test", "source_digests": digests,
+    }
+    if skill_digest is not None:
+        record["skill_digest"] = skill_digest
+    (adir / f"{stem}.json").write_text(json.dumps(record))
+
+
+def test_a_newer_attestation_with_an_old_digest_does_not_mask_a_matching_one(layout: Layout):
+    # The 2026-09-24 unitares-governance case. Master verified the skill against
+    # the changed source (x = 2). A branch cut before that change stamped the
+    # skill later, recording the OLD digest (x = 1) for a source it never
+    # touched, and merged after. Its attestation sorts newest; the older one
+    # still records exactly the current content, so the skill is fresh.
+    layout.source("x = 2\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    src = "unitares/src/thing.py"
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 2\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")})
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert "FRESH" in result.stdout
+    # The age still comes from the newest verified date on record.
+    assert "verified 1 days ago" in result.stdout
+
+
+def test_an_older_attestation_for_different_skill_text_does_not_vouch(layout: Layout):
+    # Skill v1 was stamped against source X, v2 against Y, and the source then
+    # reverted to X. v2 was never reviewed against X, so X is not fresh for it.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    v1 = hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")},
+            skill_digest=v1)
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 2\n")})
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    assert "no attestation records its current content" in result.stdout
+
+
+def test_an_older_attestation_without_a_skill_digest_vouches_only_as_newest(layout: Layout):
+    # Records written before `skill_digest` existed cannot say which skill text
+    # they certified, so they keep the old newest-only behaviour.
+    src = "unitares/src/thing.py"
+    layout.source("x = 2\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 2\n")},
+            skill_digest=None)
+    assert layout.run().returncode == 0                  # newest: still the record
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")},
+            skill_digest=None)
+    assert layout.run().returncode == 1                  # older and unscoped: no vouching
+
+
+def test_a_newest_attestation_for_other_skill_text_does_not_vouch(layout: Layout):
+    # Concurrent branches: one stamped v1 (its file sorts newest), the other
+    # edited the skill to v2 and stamped that. v2 is the text on disk, so only
+    # the v2 record vouches; v1's source digest does not.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    v1 = hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 2\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")},
+            skill_digest=v1)
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    layout.source("x = 2\n")
+    assert layout.run().returncode == 0
+
+
+def test_an_uncertified_skill_edit_falls_back_to_the_newest_record(layout: Layout):
+    # Editing SKILL.md without re-stamping keeps the pre-existing behaviour:
+    # the newest attestation's digests still vouch.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(1), {src: _digest("x = 1\n")})
+    layout.skill_file.write_text(layout.skill_file.read_text() + "unstamped edit\n")
+    assert layout.run().returncode == 0
+
+
+def test_a_newer_stamp_of_other_skill_text_does_not_reset_aging(layout: Layout):
+    # The current text was last certified 45 days ago. A stale branch then
+    # stamped DIFFERENT skill text yesterday. Nobody re-verified the text on
+    # disk, so it is still 45 days old and AGING.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(60), digest=None, freshness_days=14)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(45), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 1\n")},
+            skill_digest="0123456789abcdef")
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    assert "AGING" in result.stdout
+    assert "verified 45 days ago" in result.stdout
+
+
+def test_stamp_records_the_skill_text_it_certified(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    assert layout.run("--stamp", "demo").returncode == 0
+    [path] = _attestations(layout)
+    record = json.loads(path.read_text())
+    assert record["skill_digest"] == hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
+
+
+def test_a_source_whose_digest_is_in_no_attestation_is_stale(layout: Layout):
+    layout.source("x = 3\n")
+    layout.skill(last_verified=_day(20), digest=_digest("x = 0\n"))
+    src = "unitares/src/thing.py"
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(2), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1), {src: _digest("x = 2\n")})
+    result = layout.run()
+    assert result.returncode == 1
+    assert "STALE" in result.stdout
+    assert f"{src} changed since {_day(1)}: no attestation records its current content" in result.stdout
+
+
+def test_the_legacy_frontmatter_digest_still_counts(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(3), digest=_digest("x = 1\n"))
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(1),
+            {"unitares/src/thing.py": _digest("x = 9\n")})
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+
+
+def test_aging_uses_the_newest_date_even_if_its_file_sorts_first(layout: Layout):
+    # File-name order and date order normally agree; the date must not depend on it.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(60), digest=None, freshness_days=14)
+    src = "unitares/src/thing.py"
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(1), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(50), {src: _digest("x = 1\n")})
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert "verified 1 days ago" in result.stdout
+
+
+def test_a_stamp_carries_an_absent_sources_most_recent_digest(layout: Layout):
+    # A source this checkout cannot see keeps the digest recorded where it was
+    # visible, taken from the newest attestation that records it.
+    layout.skill(last_verified=_day(1), digest=None, source="elsewhere/src/bot.py")
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {"elsewhere/src/bot.py": "old"})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {"elsewhere/src/bot.py": "new"})
+    assert layout.run("--stamp", "demo").returncode == 0
+    newest = json.loads(_attestations(layout)[-1].read_text())
+    assert newest["source_digests"] == {"elsewhere/src/bot.py": "new"}
+
+
+def test_a_stamp_does_not_carry_a_digest_certified_for_other_skill_text(layout: Layout):
+    # The skill text was edited since the only record that saw the absent
+    # source. Carrying that digest would have the new stamp certify the edited
+    # prose against content nobody reviewed it against, so it stays unrecorded.
+    layout.skill(last_verified=_day(1), digest=None, source="elsewhere/src/bot.py")
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {"elsewhere/src/bot.py": "old"},
+            skill_digest="0123456789abcdef")
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {"elsewhere/src/bot.py": "legacy"},
+            skill_digest=None)
+    result = layout.run("--stamp", "demo")
+    assert result.returncode == 0, result.stdout
+    assert "1 absent source(s) left unrecorded" in result.stdout
+    newest = json.loads(_attestations(layout)[-1].read_text())
+    assert newest["source_digests"] == {}
+
+
+def test_a_recent_attestation_keeps_an_old_frontmatter_date_fresh(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(45), digest=None, freshness_days=14)
+    assert layout.run().returncode == 1          # stale: no digest, and aging
+    layout.run("--stamp", "demo")
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert "verified 0 days ago" in result.stdout
+
+
+def test_migrate_moves_frontmatter_digests_into_an_attestation(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(3), digest=_digest("x = 1\n"))
+    assert layout.run("--migrate").returncode == 0
+    text = layout.skill_file.read_text()
+    assert "source_digests" not in text
+    assert "must leave exactly as it found it." in text      # rest untouched
+    [path] = _attestations(layout)
+    record = json.loads(path.read_text())
+    assert record["verified_date"] == _day(3)
+    assert record["source_digests"] == {"unitares/src/thing.py": _digest("x = 1\n")}
+    # The digest is of the migrated (stripped) text, the text now on disk.
+    assert record["skill_digest"] == hashlib.sha256(layout.skill_file.read_bytes()).hexdigest()[:16]
+    assert layout.run().returncode == 0
+
+
+def test_prune_keeps_only_the_newest(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    for _ in range(3):
+        layout.run("--stamp", "demo")
+    newest = _attestations(layout)[-1]
+    assert layout.run("--prune", "1").returncode == 0
+    assert _attestations(layout) == [newest]
+
+
+def test_prune_keeps_the_newest_record_for_the_current_skill_text(layout: Layout):
+    # A newer concurrent stamp for DIFFERENT skill text sorts first. Pruning by
+    # recency alone would delete the only record for the text on disk, and the
+    # skill would fall back to the mismatched record and read STALE.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 0\n")},
+            skill_digest="0123456789abcdef")
+    _attest(layout, "20260103T000000000000Z-cccccccc", _day(1), {src: _digest("x = 9\n")},
+            skill_digest="fedcba9876543210")
+    assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0
+    assert "kept 1 older record(s) that still vouch for the current text" in result.stdout
+    names = [p.name for p in _attestations(layout)]
+    assert names == ["20260101T000000000000Z-aaaaaaaa.json", "20260103T000000000000Z-cccccccc.json"]
+    assert layout.run().returncode == 0
+
+
+def test_prune_keeps_every_current_text_record_with_a_unique_digest(layout: Layout):
+    # Records for the current text vouch as a union: the source currently
+    # matches only an OLDER one, and another carries the only digest of a
+    # source not visible here. Both stay; a fully covered duplicate and a
+    # record for other skill text go.
+    src, ext = "unitares/src/thing.py", "elsewhere/src/bot.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20251230T000000000000Z-88888888", _day(5), {src: _digest("x = 1\n")})
+    _attest(layout, "20251231T000000000000Z-99999999", _day(4), {ext: "e1"})
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 2\n")})
+    _attest(layout, "20260103T000000000000Z-cccccccc", _day(1), {src: _digest("x = 0\n")},
+            skill_digest="0123456789abcdef")
+    _attest(layout, "20251201T000000000000Z-77777777", _day(9), {src: _digest("x = 7\n")},
+            skill_digest="fedcba9876543210")
+    assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0
+    assert "pruned 2 attestation(s)" in result.stdout
+    names = [p.name for p in _attestations(layout)]
+    assert names == ["20251231T000000000000Z-99999999.json",
+                     "20260101T000000000000Z-aaaaaaaa.json",
+                     "20260102T000000000000Z-bbbbbbbb.json",
+                     "20260103T000000000000Z-cccccccc.json"]
+    assert layout.run().returncode == 0
+
+
+def test_a_prune_never_leaves_the_mirror_sync_refusing(layout: Layout):
+    # Whatever --prune deletes, the direction guard must let rsync --delete
+    # delete from the mirror too; otherwise sync-plugin-skills.sh exits 4 on
+    # canonical's own intentional pruning, forever.
+    import shutil
+    sys.path.insert(0, str(REPO_ROOT / "scripts" / "dev"))
+    from skills_direction_guard import regressions
+
+    src, ext = "unitares/src/thing.py", "elsewhere/src/bot.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    _attest(layout, "20251231T000000000000Z-99999999", _day(4), {ext: "e1", src: _digest("x = 5\n")})
+    _attest(layout, "20260101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20260102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 1\n")})
+    _attest(layout, "20260103T000000000000Z-cccccccc", _day(1), {src: _digest("x = 0\n")},
+            skill_digest="0123456789abcdef")
+    mirror = layout.projects / "mirror"
+    shutil.copytree(layout.repo / "skills", mirror)
+    assert layout.run("--prune", "1").returncode == 0
+    assert regressions(layout.repo / "skills", mirror) == []
+
+
+def test_migrate_keeps_the_frontmatter_when_the_attestation_cannot_be_written(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(3), digest=_digest("x = 1\n"))
+    before = layout.skill_file.read_bytes()
+    blocker = layout.repo / "skills" / ".attestations"
+    blocker.write_text("not a directory\n")      # mkdir of .attestations/demo fails
+    result = layout.run("--migrate")
+    assert result.returncode != 0
+    assert layout.skill_file.read_bytes() == before
+
+
+def test_this_repo_sources_resolve_in_a_checkout_not_named_unitares(tmp_path: Path):
+    # A worktree is rarely named "unitares"; before 2026-09-24 every cited
+    # unitares/ path was "absent" there and the check passed vacuously.
+    projects = tmp_path
+    repo = projects / "unitares-some-worktree"
+    (repo / "src").mkdir(parents=True)
+    (repo / "skills" / "demo").mkdir(parents=True)
+    (repo / "src" / "thing.py").write_text("x = 2\n")
+    (repo / "skills" / "demo" / "SKILL.md").write_text(textwrap.dedent(f'''\
+        ---
+        name: demo
+        last_verified: "{_day(1)}"
+        freshness_days: 14
+        source_files:
+          - unitares/src/thing.py
+        source_digests:
+          unitares/src/thing.py: "{_digest("x = 1\n")}"
+        ---
+        # Demo
+        '''))
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), str(repo), str(projects)],
+        capture_output=True, text=True,
+        env={**os.environ, "SKILL_FRESHNESS_FLOOR_DAYS": "30"},
+    )
+    assert result.returncode == 1
+    assert "STALE" in result.stdout and "absent" not in result.stdout
 
 
 def test_age_only_override_skips_the_source_check(layout: Layout):

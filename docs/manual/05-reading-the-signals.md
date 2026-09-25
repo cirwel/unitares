@@ -45,10 +45,10 @@ The assessment emits an internal `safe` / `caution` / `high-risk` label, which b
 |---|---|---|---|
 | `proceed` | safe | Continue | — |
 | `guide` | slightly off | Read guidance, adjust | — |
-| `pause` | needs attention | Stop, reflect | self-recovery or dialectic ([§5.5](#55-recovery-self-recovery--dialectic)) |
+| `pause` | hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.5](#55-recovery-self-recovery--dialectic)) |
 | `reject` | significant concern | Human input or dialectic | dialectic |
 
-Total risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — no sigmoid/phi black box, so you can trace exactly why a verdict fired ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
+Total risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — no sigmoid/phi black box, so you can trace exactly why a verdict fired ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor by default, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. (An operator can enable a verdict floor for baselined agents with `UNITARES_FLOOR_BREACH_CAUTION_APPLY`; rows whose behavioral verdict it raised are labelled `policy_effect: behavioral_verdict_raised`. The label says only that the floor raised the behavioral verdict; the audit row's decision reason and final verdict show whether the decision changed.) Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
 
 **Margin** (`comfortable` / `tight` / `critical`) rides along with the verdict, telling you how close the agent is to a basin boundary even while the verdict is still `proceed`.
 
@@ -70,7 +70,7 @@ provenance and keep high-stakes outcome channels outside the agent's authority.
 
 When an agent is paused, recovery is a structured escalation:
 
-1. **Self-recovery** — `self_recovery(action="check")` reports which path the current state allows. `self_recovery(action="quick")` resumes without reflection when risk is low and no void is active; when risk is moderate, `self_recovery(action="review", reflection=...)` resumes after the agent states what went wrong and what it will change. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
+1. **Self-recovery** — `self_recovery(action="check")` reports which path the current state allows. A paused agent cannot write the check-in that would lower its risk, so self-recovery succeeds only when the reading that paused it is already under the gate below; most pauses end through the dialectic, an operator, or re-evaluation at expiry. `self_recovery(action="quick")` resumes without reflection when risk is low and no void is active; when risk is moderate, `self_recovery(action="review", reflection=...)` resumes after the agent states what went wrong and what it will change. Legacy `C(V)` remains visible as ODE-control diagnostic context, but it does not authorize or deny recovery.
 2. **LLM-assisted dialectic** — a configured reviewer model supplies an
    antithesis for single-agent reflection; the default reference path supports a
    local model.

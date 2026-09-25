@@ -11,6 +11,12 @@
 # Refuses to run if the plugin working tree is dirty inside skills/ — those
 # changes belong on plugin first or to be folded into unitares canonical.
 #
+# It also WRITES plugin/skills/SKILLS_MANIFEST.sha256, the canonical
+# fingerprint the plugin's CI parity gate checks the mirror against. unitares
+# does not commit that file (it is derived data, and committing it made every
+# pair of PRs touching any two skills conflict on its aggregate line); it is
+# computed here, from canonical, by scripts/dev/skills_manifest.py.
+#
 # Usage:
 #   ./scripts/dev/sync-plugin-skills.sh                         # default plugin path
 #   UNITARES_PLUGIN_REPO=/path/to/plugin ./scripts/dev/sync-plugin-skills.sh
@@ -49,8 +55,18 @@ if [[ ! -d "$SRC" ]]; then
     exit 2
 fi
 
-# Diff first — same operation either way.
-DIFF_OUT=$(diff -rq "$SRC" "$DST" 2>&1 || true)
+MANIFEST_NAME="SKILLS_MANIFEST.sha256"
+MANIFEST_TOOL="${UNITARES_ROOT}/scripts/dev/skills_manifest.py"
+
+# Diff first — same operation either way. The manifest is compared separately:
+# it exists only on the mirror side, and what matters is that it matches the
+# fingerprint computed from canonical now.
+DIFF_OUT=$(diff -rq -x "$MANIFEST_NAME" "$SRC" "$DST" 2>&1 || true)
+if ! python3 "$MANIFEST_TOOL" --skills-dir "$SRC" --verify "$DST/$MANIFEST_NAME" >/dev/null 2>&1; then
+    MANIFEST_DRIFT="$DST/$MANIFEST_NAME is missing or does not match canonical's fingerprint"
+    DIFF_OUT="${DIFF_OUT:+$DIFF_OUT
+}$MANIFEST_DRIFT"
+fi
 
 if [[ -z "$DIFF_OUT" ]]; then
     echo "[sync-plugin-skills] in sync — nothing to do"
@@ -120,7 +136,7 @@ if [[ "$GUARD_STATUS" == 4 ]]; then
     echo "[sync-plugin-skills] Syncing would revert a verification that already happened." >&2
     echo "[sync-plugin-skills] Forward-port into canonical first, then re-run:" >&2
     echo "[sync-plugin-skills]   cp $DST/<skill>/SKILL.md $SRC/<skill>/SKILL.md" >&2
-    echo "[sync-plugin-skills]   python3 scripts/dev/skills_manifest.py" >&2
+    echo "[sync-plugin-skills]   cp $DST/.attestations/<skill>/<file>.json $SRC/.attestations/<skill>/   # for an attestation" >&2
     exit 4
 fi
 
@@ -129,15 +145,16 @@ echo "[sync-plugin-skills] mirroring $SRC → $DST"
 # preserve only file content, not perms/owners (cross-repo is a portability concern).
 #
 # --checksum is load-bearing, not belt-and-braces. rsync's default quick check
-# is size + mtime, and SKILLS_MANIFEST.sha256 is fixed-size (same seven
-# hash lines, same aggregate line length) so its size never changes when its
-# contents do. When both checkouts are created close together — e.g. two
+# is size + mtime. When both checkouts are created close together — e.g. two
 # `git worktree add` calls in the same session — git stamps identical mtimes,
-# rsync concludes "unchanged", and the stale manifest survives while the
-# SKILL.md files update around it. That lands the mirror in exactly the state
-# the plugin #80 parity gate exists to catch, and it is timing-dependent, so
-# it reproduces intermittently. Observed 2026-07-28 mirroring #1394.
-rsync -a --checksum --delete "$SRC/" "$DST/"
+# so a same-size edit is concluded "unchanged" and survives stale. Observed
+# 2026-07-28 mirroring #1394, on the then-committed fixed-size manifest.
+#
+# The manifest is excluded from the copy (anchored to the top level, so a
+# stray local regeneration in canonical is never mirrored and the mirror's
+# copy is not deleted by --delete) and written fresh from canonical below.
+rsync -a --checksum --delete --exclude="/$MANIFEST_NAME" "$SRC/" "$DST/"
+python3 "$MANIFEST_TOOL" --skills-dir "$SRC" --output "$DST/$MANIFEST_NAME"
 
 echo "[sync-plugin-skills] done. Plugin status:"
 git -C "$PLUGIN_REPO" status --short -- skills/ | sed 's/^/  /'
