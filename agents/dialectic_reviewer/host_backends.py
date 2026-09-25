@@ -434,6 +434,16 @@ def agy_env() -> dict[str, str]:
 # One argv element: Linux caps it at 128 KiB. A dialectic prompt is far smaller.
 _ANTIGRAVITY_PROMPT_BYTES = 120_000
 
+# agy is an agent, not a completion endpoint: handed the review prompt alone it
+# reaches for a tool, --mode plan denies it, and the turn ends SUCCESS with an
+# empty response and denied_actions=[RunCommand] -- every live review fell back
+# to the local model this way (agy 1.2.11, 2026-09-25). Saying up front that the
+# prompt is self-contained and the answer is text makes it reply in the turn.
+_ANTIGRAVITY_TEXT_ONLY = (
+    "\n\nDo not run commands, read files, or use any tools. Everything you need "
+    "is above. Answer directly with the JSON object as your final text reply."
+)
+
 
 def resolve_antigravity_cli() -> Optional[str]:
     """Operator override, then PATH, then the per-user/Homebrew locations a
@@ -475,6 +485,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
     cli_path = resolve_antigravity_cli()
     if cli_path is None:
         return fail("Antigravity CLI (agy) not found or not executable")
+    prompt += _ANTIGRAVITY_TEXT_ONLY
     if len(prompt.encode("utf-8")) > _ANTIGRAVITY_PROMPT_BYTES:
         return fail("Antigravity prompt exceeds the argv size limit")
     try:
@@ -533,7 +544,17 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
     response = data.get("response") if isinstance(data.get("response"), str) else ""
     verdict_text = _extract_verdict(response)
     if verdict_text is None:
-        return fail("Antigravity CLI returned no parseable dialectic verdict",
-                    tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)
+        # An empty reply after a denied tool call is a different failure from a
+        # reply without JSON; name the denied actions so the fallback warning
+        # says which one happened.
+        raw_denied = data.get("denied_actions")
+        denied = [str(d.get("display_name") or d.get("action") or "?") if isinstance(d, dict)
+                  else str(d)
+                  for d in (raw_denied if isinstance(raw_denied, list) else [])]
+        error = "Antigravity CLI returned no parseable dialectic verdict"
+        if not response.strip() and denied:
+            error = ("Antigravity CLI returned an empty reply after denied tool use: "
+                     + ", ".join(denied))
+        return fail(error, tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)
     return HostReviewResult(text=verdict_text, host_id=host_id, backend="antigravity",
                             tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)
