@@ -115,7 +115,7 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # parameter is added, removed, retyped or renamed; skills' input_schema_sha256
 # and the surface digest move.
 # 1.17.0 (2026-09-25): the progressive tools/list shrinks from 44,199 to
-# 40,506 bytes, the cost every session pays before its first call.
+# 40,455 bytes, the cost every session pays before its first call.
 # search_shared_memory stops advertising six fields that only other knowledge
 # actions read (offset, epoch_scope, scope, evidence_ids, verification_basis,
 # decision_standard); search never read them, so a caller that sent one sees no
@@ -125,8 +125,7 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 'check_working_state'), and describe_tool's full view of either still
 # appends the contract. Identity briefs, several alias parameter texts and
 # six leaked model docstrings (inputSchema.description) are shortened or
-# corrected. Numbered after 1.16.0 (#2435), which merges first; merges
-# after #2437, whose start_session shape the alias description states. Nothing
+# corrected. Numbered after 1.16.0 (#2435). Nothing
 # callable is removed or renamed; many input digests and the surface digest
 # move.
 INTERFACE_CONTRACT_VERSION = "1.17.0"
