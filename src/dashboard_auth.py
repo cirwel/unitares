@@ -27,8 +27,16 @@ from src.logging_utils import get_logger
 logger = get_logger(__name__)
 
 def _dashboard_webauthn_config() -> tuple[str, str]:
-    """Read hosted WebAuthn overrides, deriving an HTTPS origin from the RP id."""
-    rp_id = os.getenv("UNITARES_DASHBOARD_RP_ID", "").strip() or "gov.cirwel.org"
+    """Read the passkey relying party; unset means passkey sign-in is off.
+
+    A passkey is bound to one domain and a browser refuses it anywhere else,
+    so no default RP id works for every deployment: the old fallback to one
+    operator's domain left every other install with passkey setup that could
+    never succeed. The origin defaults to https:// plus the RP id.
+    """
+    rp_id = os.getenv("UNITARES_DASHBOARD_RP_ID", "").strip()
+    if not rp_id:
+        return "", ""
     expected_origin = (
         os.getenv("UNITARES_DASHBOARD_ORIGIN", "").strip() or f"https://{rp_id}"
     )
@@ -37,6 +45,23 @@ def _dashboard_webauthn_config() -> tuple[str, str]:
 
 DASHBOARD_RP_ID, DASHBOARD_EXPECTED_ORIGIN = _dashboard_webauthn_config()
 DASHBOARD_RP_NAME = "UNITARES Governance"
+
+
+def _passkeys_unconfigured() -> JSONResponse | None:
+    """Refuse every passkey ceremony, naming the fix, when no RP id is set."""
+    if DASHBOARD_RP_ID:
+        return None
+    return JSONResponse(
+        {
+            "error": "passkey sign-in is not configured",
+            "fix": (
+                "set UNITARES_DASHBOARD_RP_ID to the domain the dashboard is "
+                "served from, and UNITARES_DASHBOARD_ORIGIN if its origin is "
+                "not https:// plus that domain"
+            ),
+        },
+        status_code=503,
+    )
 
 SESSION_COOKIE = "__Host-unitares_session"
 PREAUTH_COOKIE = "__Host-unitares_preauth"
@@ -404,6 +429,8 @@ def _auth_page(name: str) -> Response:
 
 async def http_auth_signin(request):
     """GET /auth/signin — public, but inert until a credential is enrolled."""
+    if unconfigured := _passkeys_unconfigured():
+        return unconfigured
     enrollment_start = request.query_params.get("enroll") == "1"
     step_up = request.query_params.get("stepup") == "1"
     if dashboard_session_authenticated(request) and not step_up and not enrollment_start:
@@ -415,6 +442,8 @@ async def http_auth_signin(request):
 
 async def http_auth_enroll(request):
     """GET enrollment UI; POST mints a 10-minute single-use bootstrap code."""
+    if unconfigured := _passkeys_unconfigured():
+        return unconfigured
     if request.method == "POST":
         if not _operator_token_authorized(request):
             return JSONResponse({"error": "operator credential required"}, status_code=403)
@@ -449,6 +478,8 @@ async def http_auth_enroll(request):
 
 async def http_webauthn_options(request):
     """Create usernameless assertion options without credential enumeration."""
+    if unconfigured := _passkeys_unconfigured():
+        return unconfigured
     if not _rate_limit_authentication_options(request):
         return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
     if await _active_credential_count() == 0:
@@ -475,6 +506,8 @@ async def http_webauthn_options(request):
 
 async def http_webauthn_verify(request):
     """Consume an assertion challenge, verify it, and create an opaque session."""
+    if unconfigured := _passkeys_unconfigured():
+        return unconfigured
     challenge = await _consume_challenge(request, "authenticate")
     if challenge is None:
         return JSONResponse({"error": "challenge missing, expired, or already used"}, status_code=400)
@@ -552,6 +585,8 @@ async def http_webauthn_verify(request):
 
 
 async def http_webauthn_register_options(request):
+    if unconfigured := _passkeys_unconfigured():
+        return unconfigured
     allowed, _ = await _registration_authorized(request)
     if not allowed:
         return JSONResponse({"error": "fresh operator credential or enrollment code required"}, status_code=403)
@@ -595,6 +630,8 @@ async def http_webauthn_register_options(request):
 
 
 async def http_webauthn_register_verify(request):
+    if unconfigured := _passkeys_unconfigured():
+        return unconfigured
     allowed, enroll_code = await _registration_authorized(request)
     if not allowed:
         return JSONResponse({"error": "fresh operator credential or enrollment code required"}, status_code=403)

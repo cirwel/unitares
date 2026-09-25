@@ -89,11 +89,44 @@ def _live_session(**overrides):
     return session
 
 
-def test_default_rp_and_origin_are_exact_host_pair():
-    assert dashboard_auth._dashboard_webauthn_config() == (
-        "gov.cirwel.org",
-        "https://gov.cirwel.org",
+def test_unset_rp_means_passkeys_off_not_an_operator_domain():
+    # A passkey is bound to one domain, so no default works for every
+    # deployment; the old fallback named one operator's domain.
+    assert dashboard_auth._dashboard_webauthn_config() == ("", "")
+
+
+def test_origin_alone_does_not_turn_passkeys_on(monkeypatch):
+    monkeypatch.setenv("UNITARES_DASHBOARD_ORIGIN", "https://governance.example.com")
+    assert dashboard_auth._dashboard_webauthn_config() == ("", "")
+
+
+_CEREMONIES = [
+    ("http_auth_signin", "GET"),
+    ("http_auth_enroll", "GET"),
+    ("http_auth_enroll", "POST"),
+    ("http_webauthn_options", "POST"),
+    ("http_webauthn_verify", "POST"),
+    ("http_webauthn_register_options", "POST"),
+    ("http_webauthn_register_verify", "POST"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handler, method", _CEREMONIES)
+async def test_every_ceremony_refuses_and_names_the_fix_without_rp(monkeypatch, handler, method):
+    monkeypatch.setattr(dashboard_auth, "DASHBOARD_RP_ID", "")
+    monkeypatch.setattr(dashboard_auth, "DASHBOARD_EXPECTED_ORIGIN", "")
+    # Nothing past the gate may run: no storage, no credential lookups.
+    monkeypatch.setattr(dashboard_auth, "get_db", lambda: pytest.fail("reached storage"))
+    monkeypatch.setattr(
+        dashboard_auth, "_active_credential_count",
+        AsyncMock(side_effect=AssertionError("reached credential lookup")),
     )
+    response = await getattr(dashboard_auth, handler)(_Request(method=method))
+    assert response.status_code == 503
+    body = _body(response)
+    assert body["error"] == "passkey sign-in is not configured"
+    assert "UNITARES_DASHBOARD_RP_ID" in body["fix"]
 
 
 def test_webauthn_config_tracks_hosted_deployment(monkeypatch):

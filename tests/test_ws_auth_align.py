@@ -98,7 +98,27 @@ def test_no_token_configured_fails_closed_for_untrusted_peer():
     assert _check_ws_auth(_WS(ip="8.8.8.8"), http_api_token=None) is False
 
 
-def test_cookie_session_accepts_exact_origin():
+@pytest.fixture
+def _configured_rp_origin(monkeypatch):
+    """A deployment that configured passkeys. Nothing is implied any more:
+    with no UNITARES_DASHBOARD_RP_ID the expected origin is empty."""
+    monkeypatch.setattr(
+        "src.http_routes.access.DASHBOARD_EXPECTED_ORIGIN", "https://gov.cirwel.org"
+    )
+
+
+def test_unconfigured_rp_refuses_every_cookie_session(monkeypatch):
+    monkeypatch.setattr("src.http_routes.access.DASHBOARD_EXPECTED_ORIGIN", "")
+    for origin in ("https://gov.cirwel.org", "", None):
+        ws = _WS(
+            ip="8.8.8.8",
+            dashboard_session={"operator_label": "operator"},
+            origin=origin,
+        )
+        assert _check_ws_auth(ws, http_api_token=None) is False
+
+
+def test_cookie_session_accepts_exact_origin(_configured_rp_origin):
     ws = _WS(
         ip="8.8.8.8",
         dashboard_session={"operator_label": "operator"},
@@ -117,7 +137,7 @@ def test_cookie_session_rejects_missing_or_foreign_origin(origin):
     assert _check_ws_auth(ws, http_api_token=None) is False
 
 
-def test_strict_posture_accepts_a_session_from_the_exact_rp_origin(monkeypatch):
+def test_strict_posture_accepts_a_session_from_the_exact_rp_origin(monkeypatch, _configured_rp_origin):
     """Reversed by operator decision, 2026-08-28 — see the REST twin.
 
     The Origin pin the local branch applies is kept here rather than dropped:
