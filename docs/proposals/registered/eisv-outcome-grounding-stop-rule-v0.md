@@ -698,7 +698,7 @@ delegated the choice; an agent selected and drafted this reading under that
 delegation, following an adversarial design review of the alternatives. It
 is ratified on merge, which makes it the operator's decision. Merging remains
 the operator's act, so the decision is reversible until merge. The trace is
-this block, PR #2440 that added it, and PR #CORRECTION_PR that narrowed it
+this block, PR #2440 that added it, and PR #2455 that narrowed it
 (correction note below). The federation decision record in open PR #2452
 does not cover this decision, and no separate decision-packet item exists
 for it.
