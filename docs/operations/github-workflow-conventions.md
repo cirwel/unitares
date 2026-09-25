@@ -275,7 +275,27 @@ this operator's machine, run once:
 git config review.verifier ollama:gemma4:latest
 ```
 
+#### Review provider availability
+
+`scripts/dev/review_providers.json` is the one repo-wide switch for reviewers
+that are down. A provider listed under `disabled` is skipped by
+`review.sh`'s default choice, by its local fallback, and (for Codex) by native
+review, in every checkout, so an outage no longer costs each session a failed
+attempt per hour of cooldown. Agents without local tooling read the same file
+before posting `@codex review`. An explicit `review.sh --reviewer <name>`
+still tries a disabled provider. Re-enable it by deleting its entry.
+
+Operator, 2026-09-25: Codex is unavailable indefinitely (the OpenAI account
+was suspended). Until that entry is removed, review with a fresh-context
+Claude subagent or council, or another model such as Gemini, and record it
+honestly ([Recording a review without gh](#recording-a-review-without-gh)
+when `gh` is missing).
+
 #### Requesting review without local tooling
+
+**Check [provider availability](#review-provider-availability) first:** while
+Codex is disabled there, skip this section and use
+[Recording a review without gh](#recording-a-review-without-gh).
 
 `review.sh` needs the `gh` CLI and a local Codex or Claude CLI, so it cannot
 run in cloud sessions, sandboxed runtimes, or any environment without them.
@@ -291,12 +311,11 @@ operator's), the environment-independent path is a PR comment:
 3. **Fixing** a finding also works without tooling. Push the fix, then post
    `@codex review` again: native review here triggers on PR open, not on
    every push, and the new diff needs its own result. **Rebutting** a finding
-   does not work without tooling. The gate keeps a native finding open until
-   a diff-bound disposition record exists, and only `review.sh dispose` writes
-   one; a thread reply is not read. So reply on the thread with the rebuttal,
-   keep the PR in draft, and hand the disposition to someone who can run
-   `review.sh dispose`, naming the thread. Do not assemble the disposition
-   record by hand either.
+   needs a diff-bound disposition record; a thread reply is not read. Without
+   `gh`, reply on the thread with the rebuttal, then render the record with
+   `review.sh dispose <file> --emit` as described in
+   [Recording a review without gh](#recording-a-review-without-gh) and post it
+   verbatim. Do not assemble the disposition record by hand.
    The [round cap](#round-cap) applies here too. After three rounds with only
    P2s open, do not post `@codex review` again: hand the remaining findings
    off for disposition the same way. A P1 fix still gets its request.
@@ -308,10 +327,56 @@ operator's), the environment-independent path is a PR comment:
 
 Do not hand-build a `unitares-review v1` record in place of this. The gate
 trusts records from the owner's account, which every agent posts through, so
-a record assembled by the authoring session from its own subagents' reviews
-reads as independent when it is not (#2356 posted one and retracted it).
-`review.sh` remains the path when native review is not enabled, and the
-fallback when Codex is unavailable.
+a hand-assembled record is indistinguishable from a real one (#2356 posted one
+and retracted it). `review.sh` remains the path when native review is not
+enabled, and the fallback when Codex is unavailable. Without `gh` either, use
+the next section.
+
+#### Recording a review without gh
+
+Operator decision, 2026-09-24: an agent without `gh` (a cloud session with
+only a GitHub connector) may complete its own review gate with a **subagent
+or council review**, as long as the record says which it was. Before this, a
+Codex usage limit left such sessions with no way to finish a PR (#2423).
+
+1. Run the review in a **fresh context** that did not write the diff: a
+   subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
+   a council/dialectic reviewer. It must end with the `VERDICT:` line.
+   Advisory `consult` output is still not a review.
+2. Push first. Then render the record with the tool, never by hand:
+
+   ```bash
+   ./scripts/dev/review.sh record review.txt --independent --emit \
+       --reviewer-name subagent:<model>-fresh-context   # or council:<who>
+   ```
+
+   `--emit` needs no `gh`: it computes the diff key locally, refuses a HEAD
+   that the remote branch of the same name does not hold, and prints the
+   exact comment body. It keys against `origin/master`; for a PR based on
+   another branch, add `--base origin/<base>` or CI will never match it.
+3. Post the printed body **verbatim** as a top-level PR comment through the
+   connector. The `review` check reads it like any other record, and its
+   description names the reviewer, so a same-session subagent review is
+   visible as one.
+4. Findings: fix, push, and review the new diff the same way. To rebut
+   instead, render the disposition without `gh`:
+
+   ```bash
+   ./scripts/dev/review.sh dispose dispositions.txt --emit \
+       --findings <n> --reviewer <reviewer from the open record> --cites <its URL>
+   ```
+
+   The file needs one numbered entry per finding (`1. fixed in <sha>` or
+   `1. rebutted: <why>`). Offline the tool cannot read the open record, so you
+   name it. CI checks the diff key, the count, and a native-review
+   (`#pullrequestreview-…`) URL; a wrong one leaves the findings open. It does
+   **not** verify `--reviewer` or any other `--cites`: it answers the latest
+   open record with that count and displays the reviewer you passed. Copy both
+   from the open record exactly, or the record misattributes.
+
+A same-model subagent is the weakest reviewer this gate accepts: it shares the
+author's model and blind spots. Prefer native Codex or another model when one
+is available, and name the reviewer honestly in `--reviewer-name`.
 
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
