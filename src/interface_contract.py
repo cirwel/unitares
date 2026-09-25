@@ -114,7 +114,21 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # (it said "the full bundle", which the handler no longer returns). No
 # parameter is added, removed, retyped or renamed; skills' input_schema_sha256
 # and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.16.0"
+# 1.17.0 (2026-09-25): the progressive tools/list shrinks from 44,199 to
+# 40,455 bytes, the cost every session pays before its first call.
+# search_shared_memory stops advertising six fields that only other knowledge
+# actions read (offset, epoch_scope, scope, evidence_ids, verification_basis,
+# decision_standard); search never read them, so a caller that sent one sees no
+# change in behavior, and knowledge keeps all six. The EISV field contract
+# rides once on the advertised surface, on check_working_state; sync_state and
+# record_result carry a pointer to describe_tool(tool_name=
+# 'check_working_state'), and describe_tool's full view of either still
+# appends the contract. Identity briefs, several alias parameter texts and
+# six leaked model docstrings (inputSchema.description) are shortened or
+# corrected. Numbered after 1.16.0 (#2435). Nothing
+# callable is removed or renamed; many input digests and the surface digest
+# move.
+INTERFACE_CONTRACT_VERSION = "1.17.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
