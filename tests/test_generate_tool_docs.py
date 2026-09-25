@@ -286,6 +286,32 @@ def test_every_tool_timeout_is_the_registry_value(markdown, first_party):
             assert line.startswith(gen.seconds(td.timeout)), f"{name}: {line}"
 
 
+def _timeouts_bullet(markdown):
+    match = re.search(r"^- \*\*Timeouts\*\*.*?(?=^- )", _intro(markdown), re.M | re.S)
+    assert match, "no Timeouts bullet in the intro"
+    return match.group(0)
+
+
+def test_a_tool_with_no_limit_is_explained_where_its_line_points(reference, markdown):
+    """A tool line that says "see Timeouts above" must find itself there, with
+    what does limit the call it forwards."""
+    no_limit = sorted(t.name for t in _entries(reference).values() if t.timeout is None)
+    assert "use_tool" in no_limit
+    bullet = _timeouts_bullet(markdown)
+    assert "direct call to that tool" in bullet
+    for name in no_limit:
+        assert f"`{name}`" in bullet
+        assert "Timeouts above" in _field(_block(markdown, name), "Timeout")
+
+    import copy
+
+    two = copy.deepcopy(reference)
+    also = next(t for t in _entries(two).values() if t.timeout is not None)
+    also.timeout = None
+    bullet = _timeouts_bullet(gen.render(two))
+    assert f"`{also.name}`" in bullet and "set no limit of their own" in bullet
+
+
 def test_a_timeout_built_from_a_constant_is_not_the_default(markdown):
     from src.mcp_handlers.support.consultation import CONSULT_TIMEOUT_S
 
@@ -491,10 +517,21 @@ def test_an_import_error_after_loading_is_a_crash_not_cannot_look(monkeypatch):
         gen.build()
 
 
-@pytest.mark.parametrize("failures", [["src.mcp_handlers.probe: ImportError: boom"]])
+@pytest.mark.parametrize(
+    "failures",
+    [
+        ["src.mcp_handlers.probe: ImportError: boom"],
+        # A module's message can span lines, and its last line can look like
+        # an exception; the doctor reads only the last line.
+        ["src.mcp_handlers.probe: RuntimeError: boom\nValueError: while handling it:"],
+    ],
+    ids=["one-line", "multi-line"],
+)
 def test_a_handler_that_did_not_import_is_refused_not_published(
     isolated_out, monkeypatch, capsys, failures
 ):
+    import unitares_doctor
+
     real = gen.edge_index._load_registries
 
     def with_failure():
@@ -509,6 +546,9 @@ def test_a_handler_that_did_not_import_is_refused_not_published(
     err = capsys.readouterr().err
     assert "refusing to generate" in err and "boom" in err
     assert "stale" not in err
+    last = [line for line in err.splitlines() if line.strip()][-1]
+    assert last.startswith("refusing to generate"), last
+    assert not unitares_doctor._generator_crashed(err)
 
 
 # --- the committed file carries shipped defaults ---------------------------------
@@ -589,8 +629,11 @@ def test_the_doctor_reports_a_refusal_as_unknown_with_its_own_remedy(tmp_path):
     shim.parent.mkdir(parents=True)
     shim.write_text(
         "import sys\n"
+        "print('src.mcp_handlers.probe: RuntimeError: boom', file=sys.stderr)\n"
+        "print('ValueError: while handling it:', file=sys.stderr)\n"
         "print('refusing to generate docs/dev/TOOL_REFERENCE.md: 1 handler "
-        "module(s) failed to import', file=sys.stderr)\n"
+        "module(s) failed to import, so tools may be missing (listed above)', "
+        "file=sys.stderr)\n"
         "sys.exit(3)\n"
     )
     result = unitares_doctor.check_tool_reference_fresh(tmp_path)

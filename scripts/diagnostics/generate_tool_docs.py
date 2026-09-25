@@ -85,7 +85,16 @@ class RegistryDidNotImport(Exception):
 
 
 class RegistryUnfit(Exception):
-    """The registry was read, but what it holds is not fit to publish."""
+    """The registry was read, but what it holds is not fit to publish.
+
+    ``detail`` carries text that may span lines, such as a handler module's
+    exception message; it is printed before the one-line verdict, never in it.
+    """
+
+    def __init__(self, summary: str, detail: str = "") -> None:
+        super().__init__(summary)
+        self.summary = summary
+        self.detail = detail
 
 
 @dataclass
@@ -248,7 +257,8 @@ def collect() -> Reference:
     if failures:
         raise RegistryUnfit(
             f"{len(failures)} handler module(s) failed to import, so tools may "
-            "be missing: " + "; ".join(failures)
+            "be missing (listed above)",
+            detail="\n".join(failures),
         )
     if not definitions:
         raise RegistryUnfit("no first-party tool is registered")
@@ -439,7 +449,10 @@ def _identity_line(tool: ToolEntry) -> str:
 
 def _timeout_line(tool: ToolEntry) -> str:
     if tool.timeout is None:
-        return "none of its own; the forwarded call is limited as its target is (see Timeouts above)"
+        return (
+            "none of its own; the call it forwards has the limit a direct call "
+            "to that tool has (see Timeouts above)"
+        )
     text = seconds(tool.timeout)
     if tool.routed and any(a.timeout != tool.timeout for a in tool.actions):
         text += " for the router; some actions stop sooner (table below)"
@@ -510,7 +523,7 @@ description `describe_tool` serves. Regenerate with `make docs`.
   [`identity.md`](../ontology/identity.md).
 - **Timeouts** are the limits each tool's `@mcp_tool` wrapper enforces, at the
   shipped defaults. On a running server these variables change some of them:
-  {variables}.{rest}
+  {variables}.{rest}{forwarding}
 - **Action timeouts are ceilings.** A router action ends by the smaller of the
   router's limit and the one its delegate declares, and sooner when the
   delegate hands the call to a handler with a shorter limit.{hand_routed}
@@ -544,6 +557,17 @@ def render(reference: Reference) -> str:
             "\n  through direct handlers that skip that wrapper, so there they run"
             "\n  with no server-side limit."
         )
+    no_limit = sorted(t.name for t in tools if t.timeout is None)
+    forwarding = ""
+    if no_limit:
+        one = len(no_limit) == 1
+        forwarding = (
+            f"\n  {_codes(no_limit)} {'sets' if one else 'set'} no limit of "
+            f"{'its' if one else 'their'} own: the call "
+            f"{'it forwards' if one else 'each forwards'}"
+            "\n  goes back through the same transport as a call to its target,"
+            "\n  with the limit a direct call to that tool has."
+        )
     hand_routed = sorted(t.name for t in tools if t.actions and not t.routed)
     hand_routed_text = ""
     if hand_routed:
@@ -560,6 +584,7 @@ def render(reference: Reference) -> str:
             counts=counts,
             variables=", ".join(f"`{v}`" for v in edge_index.PINNED_TIMEOUT_VARIABLES),
             rest=rest,
+            forwarding=forwarding,
             hand_routed=hand_routed_text,
         ),
         "",
@@ -652,7 +677,13 @@ def build() -> tuple[int, str | None]:
             "the tree, not a missing dependency; no reference could be built"
         ), None
     except RegistryUnfit as exc:
-        print(f"refusing to generate {_shown(OUT)}: {exc}", file=sys.stderr)
+        # The doctor reads the LAST stderr line alone, and a module's exception
+        # message can span lines, so the detail goes first and the verdict is
+        # flattened onto one final line.
+        if exc.detail:
+            print(exc.detail, file=sys.stderr)
+        verdict = " ".join(exc.summary.split())
+        print(f"refusing to generate {_shown(OUT)}: {verdict}", file=sys.stderr)
         return EXIT_REFUSED, None
 
 

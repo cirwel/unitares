@@ -27,6 +27,9 @@ The default progressive `tools/list` starts with 13 of them; `list_tools`,
   REST `/v1/tools/call` answers `get_governance_metrics`, `health_check`
   through direct handlers that skip that wrapper, so there they run
   with no server-side limit.
+  `use_tool` sets no limit of its own: the call it forwards
+  goes back through the same transport as a call to its target,
+  with the limit a direct call to that tool has.
 - **Action timeouts are ceilings.** A router action ends by the smaller of the
   router's limit and the one its delegate declares, and sooner when the
   delegate hands the call to a handler with a shorter limit.
@@ -602,7 +605,7 @@ EXAMPLES:
 - **Timeout:** 15s
 - **Related:** `request_review`, `check_working_state`
 
-Diagnoses and lifts a governance pause on your own agent: action='check', the default, changes no stored state, and both resuming actions verify you own the agent. Neither resume path runs while a void is active; quick also caps risk at 0.40, review at 0.65 plus a 20+ character reflection that is recorded in the shared knowledge graph whether or not it resumes. An attempt that reaches the safety checks stamps a fresh recovery_attempt_at even when they refuse it, so a retry is not a no-op; a missing reflection is rejected before that stamp. To resume an agent you do not own use operator_resume_agent.
+Lifts a pause or other hold on your own agent. action='check', the default, changes no stored state, and both resuming actions verify you own the agent. Neither resume path runs while a void is active; quick also caps risk at 0.40, review at 0.65 plus a written reflection (20+ characters) on what happened, which is recorded in the shared knowledge graph under your agent whether or not it resumes. An attempt that reaches the safety checks stamps a fresh recovery_attempt_at even when they refuse it, so a retry is not a no-op; a missing reflection is rejected before that stamp. To resume an agent you do not own use operator_resume_agent.
 
 ~~~text
 ACTIONS:
@@ -1580,7 +1583,7 @@ RETURNS:
 
 - **Tier** essential · **operation** write · **stability** beta
 - **Identity:** `pre_onboard`
-- **Timeout:** none of its own; the forwarded call is limited as its target is (see Timeouts above)
+- **Timeout:** none of its own; the call it forwards has the limit a direct call to that tool has (see Timeouts above)
 - **Depends on:** `list_tools`, `describe_tool`
 - **Related:** `list_tools`, `describe_tool`
 
