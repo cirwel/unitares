@@ -946,6 +946,7 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         if actionable:
             result["margin"] = margin
             result["nearest_edge"] = decision.get("nearest_edge")
+            result.update(_margin_scope_fields(decision))
 
     if saved_trust_tier:
         # #428: wrap with glossary so agent sees tier scale + meaning inline.
@@ -1020,6 +1021,7 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
     margin = decision.get("margin")
     if margin:
         result["margin"] = margin
+        result.update(_margin_scope_fields(decision))
     nearest_edge = decision.get("nearest_edge")
     if nearest_edge:
         result["nearest_edge"] = nearest_edge

@@ -70,3 +70,28 @@ def test_fully_assessed_margin_adds_nothing(mode):
     decision = formatted["decision"] if isinstance(formatted.get("decision"), dict) else formatted
     assert "unmeasurable_edges" not in decision
     assert "margin_scope" not in decision
+
+
+def test_minimal_mode_carries_the_scope_beside_its_margin():
+    formatted = format_response(deepcopy(_source()), {"response_mode": "minimal"})
+    assert formatted["margin"] == "comfortable"
+    assert formatted["unmeasurable_edges"] == ["coherence"]
+    assert formatted["margin_scope"] == "measured_edges_only"
+
+
+def test_mirror_mode_carries_the_scope_on_an_actionable_margin():
+    # Mirror shows a margin only when it is actionable; tight is the other
+    # level where an edge can be unassessed.
+    formatted = format_response(
+        deepcopy(_source(margin="tight", nearest_edge="risk")),
+        {"response_mode": "mirror"},
+    )
+    assert formatted["margin"] == "tight"
+    assert formatted["unmeasurable_edges"] == ["coherence"]
+    assert formatted["margin_scope"] == "measured_edges_only"
+
+
+def test_mirror_mode_still_hides_a_comfortable_margin():
+    formatted = format_response(deepcopy(_source()), {"response_mode": "mirror"})
+    assert "margin" not in formatted
+    assert "unmeasurable_edges" not in formatted
