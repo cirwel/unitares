@@ -54,6 +54,8 @@ append-only ledger (``~/.unitares/dialectic-acks.jsonl``, overridable with
 
 Pass ``--seen-at`` with the time you read the listing: a session that changed
 after that is refused, so a batch ack never hides an objection you have not seen.
+A ``--seen-at`` later than the database's current time is refused too, since it
+would let every change through.
 
 Session ids may be given as unambiguous prefixes. A prefix matching more than
 one session is refused, never guessed, and a batch with any bad id writes
@@ -553,6 +555,17 @@ def ack_main(argv: Sequence[str]) -> int:
         return 2
 
     resolved, errors = resolve_ids(prefixes, matches, backlog)
+    # A --seen-at later than the database's clock would pass every session,
+    # including one changed after the operator actually read the listing. The
+    # listing is read before this query runs, so an honest --seen-at is never
+    # later than the query's now(). No skew allowance: any allowance is a
+    # window in which an unseen change gets through, and a refusal here only
+    # costs a re-run with an earlier time.
+    db_now = max((t for t in (_as_utc(r.get("now")) for r in backlog_rows.values())
+                  if t is not None), default=None)
+    if seen_at is not None and db_now is not None and seen_at > db_now:
+        errors.append(f"--seen-at {seen_at.isoformat()} is later than the database's "
+                      f"current time {db_now.isoformat()}; pass the time you read the listing")
     if seen_at is not None:
         for sid in resolved:
             row = backlog_rows.get(sid, {})

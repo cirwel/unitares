@@ -550,6 +550,7 @@ class TestLedgerRobustness:
 
 class TestSeenAt:
     SID = "4444bbbb55556666"
+    DB_NOW = dt.datetime(2026, 9, 25, 12, 0, tzinfo=dt.timezone.utc)
 
     def test_a_session_changed_after_seen_at_is_refused(self, ledger, monkeypatch, capsys):
         _mock_db(monkeypatch, [self.SID],
@@ -564,6 +565,24 @@ class TestSeenAt:
         _mock_db(monkeypatch, [self.SID], [_row(session_id=self.SID)])
         rc = report.main(["ack", self.SID, "--disposition", "stale", "--reason", "x",
                           "--by", "op", "--seen-at", "2026-09-24T12:00:00+00:00"])
+        assert rc == 0 and ledger.exists()
+
+    def test_a_seen_at_later_than_the_database_clock_is_refused(self, ledger, monkeypatch,
+                                                                 capsys):
+        """A future --seen-at would pass every change, the guard's whole purpose."""
+        _mock_db(monkeypatch, [self.SID],
+                 [_row(session_id=self.SID, updated_at=dt.datetime(2026, 9, 25, 10, 0),
+                       now=self.DB_NOW)])
+        rc = report.main(["ack", self.SID, "--disposition", "stale", "--reason", "x",
+                          "--by", "op", "--seen-at", "2099-01-01T00:00:00+00:00"])
+        assert rc == 1
+        assert "later than the database's current time" in capsys.readouterr().err
+        assert not ledger.exists()
+
+    def test_a_seen_at_equal_to_the_database_clock_is_accepted(self, ledger, monkeypatch):
+        _mock_db(monkeypatch, [self.SID], [_row(session_id=self.SID, now=self.DB_NOW)])
+        rc = report.main(["ack", self.SID, "--disposition", "stale", "--reason", "x",
+                          "--by", "op", "--seen-at", "2026-09-25T06:00:00-06:00"])
         assert rc == 0 and ledger.exists()
 
     def test_a_bad_seen_at_is_refused(self, ledger, monkeypatch):
