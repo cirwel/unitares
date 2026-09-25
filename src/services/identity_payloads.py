@@ -717,9 +717,12 @@ def build_identity_response_context(
     those deliberately, so ``has_rejected_value`` keeps the full record
     regardless of this flag.
 
-    The ontology itself is untouched: ``agent_id_is``, which the plugin's
-    identity-contract auditor requires, and the registry/public_handle/label
-    blocks it cross-checks the flat fields against, are all still emitted.
+    This builder always emits the full ontology: ``agent_id_is``, which the
+    plugin's identity-contract auditor requires, and the
+    registry/public_handle/label blocks it cross-checks the flat fields
+    against. ``build_identity_signature_payload`` then compacts a routine
+    (caller-proven strong, continuous) signature to the role declarations and
+    marks it ``detail: "compact"``.
     """
     source_key = _normalize_source(session_resolution_source)
     identity_assurance = _identity_assurance_from_source(source_key, proof_origin)

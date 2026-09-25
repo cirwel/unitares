@@ -519,7 +519,7 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
     ):
         # A review nudge asks the agent to act.
         return False
-    if state.get("nearest_edge") or state.get("unmeasurable_edges"):
+    if state.get("nearest_edge"):
         return False
     summary = envelope.get("action_summary")
     summary = summary if isinstance(summary, dict) else {}
@@ -532,15 +532,17 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
 
 
 def _drop_routine_proceed_duplicates(envelope: Dict[str, Any]) -> None:
-    """Say each fact of a clean proceed once, and say that it was trimmed.
+    """Drop what restates a clean proceed, and say that it was trimmed.
 
     action_summary keeps action, reason and risk_score: it is the documented
     first read (docs/manual/04-integrating-agents.md), and the integration
     samples read action_summary.action. state_summary keeps what the Python SDK
     reads (agents/sdk/.../_checkin_fields.py: action, sub_action, coherence,
-    risk_score). What goes are the restatements: the approve sub_action and
-    safe verdict in action_summary, an unspecified verdict_confidence, the
-    "healthy" status pair and a comfortable margin. _is_routine_proceed
+    risk_score) and the margin with its scope and unassessed edges: today the
+    coherence edge is unassessed for every agent, so "comfortable" is only
+    honest beside what it did not measure. What goes are the restatements: the
+    approve sub_action and safe verdict in action_summary, an unspecified
+    verdict_confidence, and the "healthy" status pair. _is_routine_proceed
     admits only positive evidence of each, so the marker below distinguishes
     "trimmed because routine" from "missing because of a bug".
     """
@@ -555,8 +557,6 @@ def _drop_routine_proceed_duplicates(envelope: Dict[str, Any]) -> None:
     if isinstance(state, dict):
         state.pop("status", None)
         state.pop("health_status", None)
-        state.pop("margin", None)
-        state.pop("margin_scope", None)
     envelope["response_shape"] = "routine"
 
 
@@ -1165,7 +1165,12 @@ def _is_routine_mint(payload: Dict[str, Any]) -> bool:
         thread_context.get("predecessor") or thread_context.get("is_fork")
     ):
         return False
-    return not _onboard_assurance_is_abnormal(payload.get("identity_assurance"))
+    assurance = payload.get("identity_assurance")
+    if not isinstance(assurance, dict):
+        # Positive evidence: a mint whose assurance block is missing is shown
+        # whole, not trimmed into a response with no assurance at all.
+        return False
+    return not _onboard_assurance_is_abnormal(assurance)
 
 
 def _raw_governance_policy(

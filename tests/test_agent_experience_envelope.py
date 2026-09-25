@@ -106,6 +106,11 @@ async def test_experience_alias_gets_envelope():
         "client_session_id": "s-1",
         "is_new": True,
         "identity_resolution_outcome": "minted_force_new",
+        "identity_assurance": {
+            "tier": "weak",
+            "caller_proven": False,
+            "baseline": "fresh_identity",
+        },
     })
     out = await apply_experience_envelope(
         "onboard", {}, _ctx("start_session"), raw

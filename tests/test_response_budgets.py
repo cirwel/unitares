@@ -321,7 +321,8 @@ def test_routine_proceed_says_each_fact_once():
     assert state["risk_score"] == 0.27
     assert "status" not in state
     assert "health_status" not in state
-    assert "margin" not in state
+    # The margin stays: it is short, and honest only beside its scope.
+    assert state["margin"] == "comfortable"
     assert env["prediction_id"] == "64c5d92a-fe16-46a5-93f0-4e7c2848aa06"
     # The id is lifted beside next_action, which names it instead of repeating it.
     assert "prediction_id" in env["next_action"]
@@ -348,22 +349,21 @@ def test_unhealthy_status_is_not_trimmed():
     assert env["action_summary"]["action"] == "proceed"
 
 
-def test_comfortable_margin_with_an_unassessed_edge_is_kept():
-    # Built at the envelope directly: the compact formatter currently passes
-    # only margin/nearest_edge through (response_formatter._format_compact),
-    # so this pins the envelope's own rule for when the edges do arrive.
+def test_unassessed_edges_stay_visible_on_a_routine_proceed():
+    # The coherence edge is unassessed for every agent today, so this is the
+    # normal live decision shape once the edges reach the envelope. It is
+    # routine, and the margin keeps its scope and unassessed edges beside it:
+    # "comfortable" alone would read as "no limit is near".
     payload = format_response(deepcopy(_sync_source()), {"response_mode": "auto"})
     payload["decision"]["unmeasurable_edges"] = ["coherence"]
     payload["decision"]["margin_scope"] = "measured_edges_only"
     env = build_experience_envelope(
         "sync_state", "process_agent_update", payload, {"response_mode": "auto"}
     )
+    assert env["response_shape"] == "routine"
     assert env["state_summary"]["margin"] == "comfortable"
     assert env["state_summary"]["margin_scope"] == "measured_edges_only"
     assert env["state_summary"]["unmeasurable_edges"] == ["coherence"]
-    # An unassessed edge makes the proceed non-routine as a whole.
-    assert "response_shape" not in env
-    assert env["action_summary"]["sub_action"] == "approve"
 
 
 def test_near_edge_proceed_is_not_trimmed():
@@ -489,3 +489,11 @@ def test_empty_extras_do_not_make_a_mint_unusual():
     payload.update({"deprecations": [], "label_renamed": None})
     env = build_experience_envelope("start_session", "onboard", payload, {})
     assert env["response_shape"] == "routine"
+
+
+def test_a_mint_without_an_assurance_block_keeps_the_whole_record():
+    payload = _onboard_payload()
+    payload.pop("identity_assurance")
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+    assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
