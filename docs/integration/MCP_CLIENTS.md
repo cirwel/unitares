@@ -140,7 +140,11 @@ tool runs:
      auto-approved, so while dynamic registration is open any caller can
      register a client and mint a token. Set
      `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false` to admit only
-     pre-registered clients. One static client can serve several
+     pre-registered clients. Set it (like every `UNITARES_OAUTH_*` variable)
+     in the LaunchAgent plist or process environment: it is read at import,
+     before `~/.env.mcp` loads, and a value that arrives only from
+     `~/.env.mcp` leaves registration open (startup logs an error; the
+     OAuth startup line states whether registration is open). One static client can serve several
      connectors: list each connector's redirect URI in
      `UNITARES_OAUTH_STATIC_REDIRECT_URIS` (comma-separated) and paste the
      same ID and secret into each (claude.ai: the custom connector's

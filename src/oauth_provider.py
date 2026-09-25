@@ -28,6 +28,7 @@ from mcp.server.auth.provider import (
     AuthorizationParams,
     OAuthAuthorizationServerProvider,
     OAuthToken,
+    TokenError,
 )
 from mcp.shared.auth import OAuthClientInformationFull
 from starlette.responses import JSONResponse
@@ -380,7 +381,13 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         refresh_token: RefreshTokenEntry,
         scopes: list[str],
     ) -> OAuthToken:
-        self._refresh_tokens.pop(refresh_token.token, None)
+        # Claim before any await: load_refresh_token awaits the store, so two
+        # requests with the same token can both pass it. Only the one that
+        # pops the entry proceeds; the other gets invalid_grant.
+        if self._refresh_tokens.pop(refresh_token.token, None) is None:
+            raise TokenError(
+                error="invalid_grant", error_description="refresh token already used"
+            )
         if self._store is not None:
             # Refresh tokens are single-use; a restart must not resurrect one.
             await self._store.delete(f"rt:{_digest(refresh_token.token)}")

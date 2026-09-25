@@ -189,7 +189,9 @@ if _oauth_issuer_url:
         print(
             "[FastMCP] OAuth gate applies to "
             + ("the public listener (UNITARES_OAUTH_PUBLIC_PORT) only, if it binds" if _oauth_public_port else "every request")
-            + ("; static client configured" if _oauth_static_client_id else ""),
+            + ("; static client configured" if _oauth_static_client_id else "")
+            + ("; dynamic registration OPEN" if _auth_settings.client_registration_options.enabled
+               else "; dynamic registration closed"),
             file=sys.stderr, flush=True,
         )
     except Exception as e:
@@ -375,6 +377,20 @@ async def main():
     if _refusal:
         print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)
         raise SystemExit(1)
+    # Registration was decided at import; ~/.env.mcp has loaded since. A
+    # "false" that arrived only now did not close it, which fails open, so
+    # say so loudly rather than leave the operator believing it is closed.
+    if (
+        _auth_settings is not None
+        and _auth_settings.client_registration_options.enabled
+        and not oauth_dynamic_registration_enabled()
+    ):
+        print(
+            "[FastMCP] ERROR: UNITARES_OAUTH_DYNAMIC_REGISTRATION=false was set after "
+            "startup read it (e.g. in ~/.env.mcp); dynamic registration is still OPEN. "
+            "Set it in the LaunchAgent plist or process environment and restart.",
+            file=sys.stderr, flush=True,
+        )
 
     from src.services.mcp_server_bootstrap import (
         ServerStartupError,

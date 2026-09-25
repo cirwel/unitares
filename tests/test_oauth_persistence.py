@@ -479,3 +479,32 @@ async def test_an_expired_persisted_refresh_token_is_refused():
 
     after = GovernanceOAuthProvider(store=store, refresh_token_ttl=604800)
     assert await after.load_refresh_token(client, tokens.refresh_token) is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_refreshes_with_one_token_mint_one_pair():
+    """load_refresh_token awaits the store, so both requests can pass it;
+    only one may exchange."""
+    import asyncio
+
+    from mcp.server.auth.provider import TokenError
+
+    store = _DictStore()
+    provider = GovernanceOAuthProvider(store=store)
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+
+    first = await provider.load_refresh_token(client, tokens.refresh_token)
+    second = await provider.load_refresh_token(client, tokens.refresh_token)
+    assert first is not None and second is not None
+
+    results = await asyncio.gather(
+        provider.exchange_refresh_token(client, first, []),
+        provider.exchange_refresh_token(client, second, []),
+        return_exceptions=True,
+    )
+    ok = [r for r in results if not isinstance(r, Exception)]
+    refused = [r for r in results if isinstance(r, TokenError)]
+    assert len(ok) == 1 and len(refused) == 1
+    assert refused[0].error == "invalid_grant"
