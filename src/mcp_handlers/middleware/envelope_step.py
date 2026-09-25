@@ -147,7 +147,15 @@ _ONBOARD_RAW_MODES = frozenset({"full", "verbose", "standard"})
 # plugin's post-identity hook and identity_sidecar read agent_id/display_name
 # from the top level or from raw_governance, so lifting them is what lets the
 # default response drop raw_governance.
-_ONBOARD_LIFT_KEYS = ("agent_id", "display_name", "is_new", "identity_resolution_outcome")
+# session_resolution_source, when a payload carries it, is what the plugin's
+# post-identity hook caches and its identity-contract audit checks.
+_ONBOARD_LIFT_KEYS = (
+    "agent_id",
+    "display_name",
+    "is_new",
+    "identity_resolution_outcome",
+    "session_resolution_source",
+)
 # The resolution outcomes of a mint that went as asked. A resume miss, a
 # reactivated archive or any resumed binding is not routine: the envelope then
 # carries the whole onboard record, because those facts exist only in the
@@ -155,6 +163,8 @@ _ONBOARD_LIFT_KEYS = ("agent_id", "display_name", "is_new", "identity_resolution
 _ROUTINE_MINT_OUTCOMES = frozenset({"minted_force_new", "minted_fresh"})
 # Compact identity_assurance for a mint that went as asked. The operator guide
 # tells agents to confirm the binding from tier and session_source here.
+# The minimal onboard payload carries its source only here (it has no
+# top-level session_resolution_source), so session_source stays.
 _ONBOARD_ASSURANCE_KEYS = ("tier", "session_source", "caller_proven")
 
 _ACTION_ALIASES = {
