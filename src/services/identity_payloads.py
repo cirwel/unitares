@@ -285,13 +285,62 @@ def build_identity_signature_payload(
         # _neutral_denial_signature (response_base.py) reads the top-level
         # one, so that is the copy that stays.
         identity_context.pop("identity_assurance", None)
-        payload["identity_context"] = identity_context
-        payload["identity_assurance"] = _identity_assurance_from_source(
+        identity_assurance = _identity_assurance_from_source(
             _normalize_source(session_resolution_source),
             proof_origin,
         )
+        if _signature_is_routine(identity_assurance, identity_context):
+            # The normal case: a caller-proven strong binding with nothing
+            # rejected. The nested registry/public_handle/label/harness blocks
+            # only restate the flat fields above, on every response the caller
+            # makes, so they are left out. The role declarations stay, and the
+            # plugin's identity-contract auditor requires `schema` and
+            # `agent_id_is`. continuity_claim stays too: it is computed per
+            # call and is the tell for a discontinuity. Anything abnormal keeps
+            # the full record.
+            identity_context = {
+                key: identity_context[key]
+                for key in (
+                    "schema",
+                    "identity_is",
+                    "label_is",
+                    "agent_id_is",
+                    "continuity_claim",
+                )
+                if key in identity_context
+            }
+            identity_context["detail"] = "compact"
+            identity_assurance = {
+                key: identity_assurance[key]
+                for key in ("tier", "caller_proven", "session_source")
+                if key in identity_assurance
+            }
+        payload["identity_context"] = identity_context
+        payload["identity_assurance"] = identity_assurance
 
     return payload
+
+
+def _signature_is_routine(
+    identity_assurance: Mapping[str, Any],
+    identity_context: Mapping[str, Any],
+) -> bool:
+    """True when a signature has nothing to explain.
+
+    A caller-proven strong binding is the expected state. A weak, medium or
+    server-inferred binding is not, and a rejected runtime-provenance value
+    (#1872) is diagnostic, so either keeps the full record.
+    """
+    if identity_assurance.get("tier") != "strong":
+        return False
+    if identity_assurance.get("caller_proven") is not True:
+        return False
+    harness = identity_context.get("harness_context")
+    provenance = harness.get("runtime_provenance") if isinstance(harness, Mapping) else None
+    if not isinstance(provenance, Mapping):
+        return True
+    # provenance_detail=False inlines the full record only for a rejected value.
+    return provenance.get("detail") == "omitted" or provenance.get("available") is False
 
 
 def build_onboard_response_data(
