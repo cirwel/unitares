@@ -125,7 +125,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 'check_working_state'), and describe_tool's full view of either still
 # appends the contract. Identity briefs, several alias parameter texts and
 # six leaked model docstrings (inputSchema.description) are shortened or
-# corrected. Numbered after 1.16.0 (#2435), which merges first. Nothing
+# corrected. Numbered after 1.16.0 (#2435), which merges first; merges
+# after #2437, whose start_session shape the alias description states. Nothing
 # callable is removed or renamed; many input digests and the surface digest
 # move.
 INTERFACE_CONTRACT_VERSION = "1.17.0"
