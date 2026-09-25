@@ -287,6 +287,7 @@ COMPACT_CONTEXT_KEYS = (
     "identity_is",
     "label_is",
     "agent_id_is",
+    "harness_is",
     "continuity_claim",
     "detail",
 )
@@ -878,6 +879,7 @@ def test_routine_signature_is_compact():
     assert payload["identity_assurance"] == {
         "tier": "strong",
         "caller_proven": True,
+        "proof_origin": "caller_asserted",
         "session_source": "explicit_client_session_id",
     }
     assert len(json.dumps(payload)) < 600
@@ -918,6 +920,13 @@ def test_abnormal_signature_keeps_the_full_record(overrides):
     for key in CONTRACT_KEYS:
         assert key in context
     assert "reason" in payload["identity_assurance"]
+
+
+def test_uuid_direct_resume_is_not_routine():
+    """A UUID is copyable, so a strong UUID-direct resume keeps the full record."""
+    payload = _sig(session_resolution_source="agent_uuid_direct")
+    assert payload["identity_context"]["continuity_claim"] == "resumed_by_uuid_direct"
+    assert "detail" not in payload["identity_context"]
 
 
 @pytest.mark.parametrize(

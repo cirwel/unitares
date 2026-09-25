@@ -1,9 +1,14 @@
 """Byte budgets for the default lifecycle responses.
 
-The payloads below are the live shapes a default ``start_session`` and a
-routine ``sync_state`` proceed returned on 2026-09-25, trimmed of nothing.
-A budget is a ceiling on the normal case only: guide, pause, provisional and
-weak-binding responses keep their full explanations and are asserted to.
+The onboard payload below is the live shape a default ``start_session``
+returned on 2026-09-25. The sync source is a hand-built minimal proceed in the
+live shape, so a field a real handler adds later does not reach this budget;
+the live check after deploy is the complement. A budget is a ceiling on the
+normal case only: guide, pause, provisional, weak-binding and non-plain-mint
+responses keep their full explanations and are asserted to. Budgets count
+UTF-8 bytes, not tokens; the base64 continuity_token costs more tokens per
+byte than prose. Restoring a field an abnormal case needs is a reason to raise
+a budget, stated in the PR, not a regression.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ if str(SDK_SRC) not in sys.path:
 from unitares_sdk._checkin_fields import resolve_checkin_fields  # noqa: E402
 
 START_SESSION_BUDGET = 1_200
-ROUTINE_SYNC_BUDGET = 950
+ROUTINE_SYNC_BUDGET = 900
 
 _TOKEN = (
     "v1.eyJhaWQiOiI1NGQ2Mjg0Ni03MGJjLTQxZTAtYWZjZi0wODdkOTRiNWQ3NDciLCJjaCI6"
@@ -150,19 +155,29 @@ def test_default_start_session_fits_budget_and_keeps_what_adapters_read():
     env = build_experience_envelope("start_session", "onboard", payload, {})
 
     assert _wire(env) <= START_SESSION_BUDGET, _wire(env)
+    assert env["response_shape"] == "routine"
     assert "raw_governance" not in env
+    assert env["raw_governance_available"] is True
     assert "_response_size" not in env
     # Fields the plugin post-identity hook and identity_sidecar read.
     assert env["agent_uuid"] == payload["uuid"]
     assert env["client_session_id"] == payload["client_session_id"]
     assert env["agent_id"] == payload["agent_id"]
     assert env["display_name"] == payload["display_name"]
+    assert env["label_is"] == "social_or_cosmetic"
     assert env["is_new"] is True
-    assert env["continuity_token"] == _TOKEN
-    # A fresh mint's weak binding is the expected baseline, not a signal.
-    assert "identity_assurance" not in env
-    # No predecessor, no fork: nothing in thread_context to act on.
-    assert "thread_context" not in env
+    # "fresh because asked" vs "fresh because a resume missed".
+    assert env["identity_resolution_outcome"] == "minted_force_new"
+    # The operator guide tells agents to confirm the binding from these.
+    assert env["identity_assurance"] == {
+        "tier": "weak",
+        "session_source": "ip_ua_fingerprint",
+        "caller_proven": False,
+    }
+    # The token rides with its caveat, not bare at the top level.
+    assert "continuity_token" not in env
+    assert env["rebind"]["continuity_token"] == _TOKEN
+    assert "resume=true" in env["rebind"]["use_only_for"]
     assert env["state_summary"]["lineage_state"] == "no_lineage_declared"
 
 
@@ -172,20 +187,11 @@ def test_start_session_full_mode_keeps_the_canonical_record():
         "start_session", "onboard", payload, {"response_mode": "full"}
     )
     assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
     # The top-level fields a client reads survive the mode switch.
-    for key in ("agent_id", "display_name", "is_new", "continuity_token"):
+    for key in ("agent_id", "display_name", "is_new", "identity_resolution_outcome"):
         assert env[key] == payload[key]
-
-
-def test_start_session_caller_proven_medium_binding_keeps_assurance():
-    payload = _onboard_payload(
-        tier="medium",
-        caller_proven=True,
-        proof_origin="caller_asserted",
-        baseline=None,
-    )
-    env = build_experience_envelope("start_session", "onboard", payload, {})
-    assert env["identity_assurance"]["tier"] == "medium"
+    assert env["rebind"]["continuity_token"] == _TOKEN
 
 
 @pytest.mark.parametrize("mode", ["standard", "verbose"])
@@ -203,45 +209,90 @@ def test_start_session_legacy_verbose_flag_keeps_the_canonical_record():
     assert env["raw_governance"] is payload
 
 
-def test_start_session_abnormal_weak_binding_keeps_the_full_explanation():
-    # A weak binding that is NOT the fresh-mint baseline (e.g. a resume that
-    # fell back to a transport fingerprint) is something the agent must fix.
-    payload = _onboard_payload(baseline=None, baseline_note=None)
-    payload["is_new"] = False
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"identity_resolution_outcome": "minted_after_resume_miss"},
+        {"identity_resolution_outcome": None},
+        {"is_new": False, "identity_resolution_outcome": "resumed"},
+        {"auto_resumed": True},
+        {"previous_status": "archived"},
+        {"trajectory": {"genesis": "g", "trust_tier": "t"}},
+        {"provisional_lineage": True},
+    ],
+    ids=[
+        "resume_miss",
+        "outcome_missing",
+        "resumed",
+        "auto_resumed",
+        "reactivated_archive",
+        "trajectory",
+        "provisional_lineage",
+    ],
+)
+def test_a_mint_that_did_not_go_as_asked_keeps_the_whole_record(change):
+    """These facts exist only in the mint's response; identity() re-reads the
+    binding, not how it was made. So anything but a plain fresh mint keeps the
+    canonical record, and a missing outcome counts as not plain."""
+    payload = _onboard_payload()
+    for key, value in change.items():
+        if value is None:
+            payload.pop(key, None)
+        else:
+            payload[key] = value
     env = build_experience_envelope("start_session", "onboard", payload, {})
 
-    assert env["identity_assurance"] is payload["identity_assurance"]
-    assert "how_to_strengthen" in env["identity_assurance"]
+    assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
 
 
-def test_start_session_caller_proven_binding_omits_assurance():
-    payload = _onboard_payload(
-        tier="strong", caller_proven=True, baseline=None, proof_origin="caller_asserted"
-    )
-    env = build_experience_envelope("start_session", "onboard", payload, {})
-    assert "identity_assurance" not in env
-
-
-def test_start_session_with_predecessor_keeps_thread_context():
+def test_start_session_with_predecessor_keeps_the_whole_record():
     payload = _onboard_payload()
     payload["thread_context"]["predecessor"] = {"uuid": "u-prior"}
     env = build_experience_envelope("start_session", "onboard", payload, {})
 
-    assert env["thread_context"]["predecessor"] == {"uuid": "u-prior"}
+    assert env["raw_governance"] is payload
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
 
 
-def test_start_session_provisional_lineage_is_lifted_when_true():
-    payload = _onboard_payload()
-    payload["provisional_lineage"] = True
+def test_start_session_abnormal_weak_binding_keeps_the_full_explanation():
+    # A weak binding that is NOT the fresh-mint baseline (e.g. a resume that
+    # fell back to a transport fingerprint) is something the agent must fix.
+    payload = _onboard_payload(baseline=None, baseline_note=None)
     env = build_experience_envelope("start_session", "onboard", payload, {})
-    assert env["provisional_lineage"] is True
+
+    assert env["identity_assurance"] is payload["identity_assurance"]
+    assert "how_to_strengthen" in env["identity_assurance"]
+    assert env["raw_governance"] is payload
 
 
-def test_start_session_hint_does_not_invite_a_re_mint():
+def test_start_session_caller_proven_medium_binding_keeps_assurance():
+    payload = _onboard_payload(
+        tier="medium",
+        caller_proven=True,
+        proof_origin="caller_asserted",
+        baseline=None,
+    )
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+    assert env["identity_assurance"] is payload["identity_assurance"]
+
+
+def test_start_session_caller_proven_strong_binding_is_compact():
+    payload = _onboard_payload(
+        tier="strong", caller_proven=True, baseline=None, proof_origin="caller_asserted",
+        session_source="explicit_client_session_id",
+    )
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+    assert env["identity_assurance"] == {
+        "tier": "strong",
+        "session_source": "explicit_client_session_id",
+        "caller_proven": True,
+    }
+
+
+def test_routine_start_session_has_no_hint_inviting_a_re_mint():
     env = build_experience_envelope("start_session", "onboard", _onboard_payload(), {})
-    assert env["raw_governance_available"] is True
-    assert "Do not re-mint" in env["raw_governance_hint"]
+    assert "raw_governance_hint" not in env
 
 
 # --- sync_state routine proceed --------------------------------------------
@@ -255,9 +306,14 @@ def test_routine_proceed_fits_budget():
 def test_routine_proceed_says_each_fact_once():
     env = _sync_envelope(_sync_source())
 
+    # action_summary is the documented first read; the integration samples
+    # read action_summary.action.
     assert env["action_summary"] == {
+        "action": "proceed",
         "reason": "Low risk (27.0%) - healthy operating range",
+        "risk_score": 0.27,
     }
+    assert env["response_shape"] == "routine"
     state = env["state_summary"]
     assert state["action"] == "proceed"
     assert state["sub_action"] == "approve"
@@ -266,7 +322,8 @@ def test_routine_proceed_says_each_fact_once():
     assert "health_status" not in state
     assert "margin" not in state
     assert env["prediction_id"] == "64c5d92a-fe16-46a5-93f0-4e7c2848aa06"
-    assert "prediction_id='64c5d92a" in env["next_action"]
+    # The id is lifted beside next_action, which names it instead of repeating it.
+    assert "prediction_id" in env["next_action"]
 
 
 def test_sdk_still_resolves_a_trimmed_routine_proceed():
@@ -357,3 +414,26 @@ def test_tight_margin_keeps_the_full_shape():
     env = _sync_envelope(_sync_source(margin="tight", nearest_edge="risk_pause"))
     assert env["action_summary"]["action"] == "proceed"
     assert env["state_summary"]["margin"] == "tight"
+
+
+@pytest.mark.parametrize(
+    "drop",
+    [("status", "health_status"), ("verdict",), ("margin",)],
+    ids=["health_missing", "verdict_missing", "margin_missing"],
+)
+def test_a_proceed_missing_its_evidence_is_not_trimmed(drop):
+    """A producer regression that drops a field must not look routine.
+
+    Before this change a routine proceed always said "healthy"; trimming it
+    made absence the normal shape, so the rule admits positive evidence only
+    and marks what it trims.
+    """
+    source = _sync_source()
+    for key in drop:
+        source.pop(key, None)
+        source["metrics"].pop(key, None)
+        source["decision"].pop(key, None)
+    env = _sync_envelope(source)
+
+    assert "response_shape" not in env
+    assert env["action_summary"]["action"] == "proceed"

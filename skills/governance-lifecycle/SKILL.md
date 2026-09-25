@@ -133,17 +133,20 @@ call `sync_state(..., response_mode="full")` to retain it under
 
 ### What You Get Back
 
-The friendly tools return a normalized envelope. Read the action from
-`state_summary.action`; `action_summary` carries the named `reason`, and on a
-guide, pause or provisional verdict also the action, verdict and evidence
-maturity. A clean proceed states each fact once, so its `action_summary` may
-hold only the reason. Then read `next_action`,
+The friendly tools return a normalized envelope. Read `action_summary` when
+present for the action, verdict, and evidence maturity, then `next_action`,
 `state_summary`, `risk_summary`, `memory_suggestions`, and `recovery_hint` when
 present. `check_working_state()` and `search_shared_memory()` omit the repeated
 canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
 `response_mode="full"`, respectively, when you need it under `raw_governance`.
 `check_working_state(verbosity="standard")` is the middle tier: EISV, verdict,
-risk_score, basin and mode with their meanings, without the diagnostics.
+risk_score, basin and mode with their meanings, without the diagnostics. A
+response marked `response_shape: "routine"` was trimmed because nothing in it
+needed explaining: a clean `sync_state` proceed keeps `action_summary.action`,
+`reason` and `risk_score` but drops the repeated approve/safe/healthy/comfortable
+values, and a plain fresh `start_session` omits the onboard record. Anything
+unusual (a guide, a pause, a resume miss, a reactivated identity, a declared
+lineage) keeps the full shape.
 
 One response is deliberately **not** that envelope. When a call is refused for
 identity, you get the typed refusal contract instead: `status`
