@@ -508,9 +508,6 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "cleared, unless spawn_reason marks a dispatched child or a "
             "compaction continuation. Use identity to inspect or rename an "
             "existing binding. onboard is the canonical twin; this name adds a "
-            "existing binding. onboard is the canonical twin; this name adds a "
-            "digest envelope. Read the uuid from agent_uuid; response_mode='full' "
-            "keeps the raw payload under raw_governance."
             "digest envelope. Read the uuid from agent_uuid; response_mode='full' "
             "keeps the raw payload under raw_governance."
         ),
