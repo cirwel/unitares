@@ -48,9 +48,11 @@ must be re-opened before anyone cites it elsewhere.
      their handoff contribution, because the protocol's forced discontinuity
      still requires carrying state a predecessor discovered. That is a choice
      for the operator at enrollment (§3).
-3. **Only two of the brief's four proposed assessable claims hold today without
-   narrowing:** identical retries return one canonical outcome, and conflicting
-   reuse of a key is rejected. "No governed mutation without a current permit"
+3. **Only two of the brief's four proposed assessable claims hold today, and
+   both only within a stated scope:** identical retries return one canonical
+   outcome within the binding retention window, and conflicting reuse of a key
+   is rejected on two surfaces (outcome binding and orchestrator spawns), not
+   platform-wide. "No governed mutation without a current permit"
    holds only when `UNITARES_GOVERNED_EFFECT_BINDING` is on, or the per-type
    flag for that effect type is, and only for effects routed through the
    governed-effect plane. Complete provenance reconstruction is unmeasured,
@@ -189,7 +191,10 @@ The brief suggests four candidate claims. Here is where each one stands:
 | Every multi-agent artifact has reconstructible identity and provenance | Attributed writes, lineage, review records, export history | **Unmeasured, not disproven.** The server has no single reconstruction tool by design: clients assemble records across retention and authorization boundaries. `PRODUCT_DEFINITION.md` records complete reconstruction as unmeasured. As worded, the claim is underspecified; it has to name a retention window and a record set before it can be assessed. |
 
 **Recommendation.** Make the first assurance case the outcome-binding claim. It
-combines the first two rows and is scoped to the retention window. The brief's
+takes the outcome-binding half of the first two rows (identical retries, and
+`PREDICTION_REUSE_CONFLICT` on conflicting reuse) and is scoped to the
+retention window. Orchestrator spawn idempotency is a separate mechanism and
+stays out of this case. The brief's
 instinct is right here, and the mechanism already has adversarial tests and a
 named known limit. That limit is #2247: when a commit is ambiguous, the outcome
 can persist while calibration is delivered zero times. #2247 belongs in the case
@@ -256,8 +261,10 @@ an effect happens, not the model's stated intent.
 The brief's five-state ladder is `refused → attempted → blocked → completed →
 recovered`. Most of it already has a home:
 
-- The coordination-ablation receipt records "attempted and completed effect
-  types, authority verdicts".
+- The registered coordination-ablation protocol *specifies* a receipt with
+  "attempted and completed effect types, authority verdicts". It is a field
+  table in a draft protocol with no cohort enrolled, and nothing in the code
+  implements it yet.
 - The governed-effect plane's veto produces `governance_blocked`.
 - Compensation is the plane's promotion requirement
   (`docs/proposals/active/governed-effect-plane-v0.md` §5b), and it is already
@@ -266,17 +273,22 @@ recovered`. Most of it already has a home:
   `tombstoned`. A dirty surface is recorded as `quarantined` instead (migration
   052, `elixir/lease_plane/lib/unitares_lease_plane/effect_repo.ex`).
 
-One state has no recorded field today: **refused**, meaning the model declined
-before attempting. **Recovered** maps to `rollback_state = 'tombstoned'`. The
-gap there is only that the ablation receipt does not yet list rollback state
-among its effect fields. Before proposing a new schema, map the ladder onto
-these existing fields and name only those two gaps: no refused state, and
-rollback state missing from the receipt.
+Two states are recorded in running code today: **blocked**
+(`governance_blocked`) and **recovered** (`rollback_state = 'tombstoned'`).
+**Refused**, meaning the model declined before attempting, has no field
+anywhere. **Attempted** and **completed** exist only in the ablation receipt's
+specification, which is not implemented, and that specification does not list
+rollback state. Before proposing a new schema, map the ladder onto the
+recorded fields and the specified receipt, and name the gaps: no refused
+state, an unimplemented receipt for attempted and completed effects, and
+rollback state missing from the receipt's specification.
 
 The software-analogue experiment is not authorized by anything here. It would
 need its own registration, because it involves destructive operations even in a
-sandbox. A caution for anyone designing it: RoboHarm's refusals clustered
-entirely on the one explicitly violent wording. A software analogue built from
+sandbox. A caution for anyone designing it: per secondary coverage (the
+primary source was not opened), all of Fable 5.1's refusals came on the
+baby-doll task, the one that asks for direct violence against a human-like
+target, and none on the other four hazards. A software analogue built from
 "superficially benign" instructions measures the permit, not the model, which is
 the intended target. Say so in its claim.
 
