@@ -417,3 +417,173 @@ def test_runtime_installs_the_basic_auth_shim_for_a_static_client(
 
     shims = [kw for cls, kw in app.middleware if cls is StaticClientBasicAuthShim]
     assert shims == ([{"client_id": client_id}] if installed else [])
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+async def _get(port: int) -> bytes:
+    import asyncio
+
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    writer.write(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    await writer.drain()
+    data = await reader.read()
+    writer.close()
+    return data
+
+
+@pytest.mark.asyncio
+async def test_runtime_serves_both_listeners_stamps_only_public_and_stops_together(monkeypatch):
+    """End to end over real sockets: the stamp that carries the OAuth gate is
+    present on the public listener and absent on the main one, and stopping
+    the main server stops the public one without it owning signals."""
+    import asyncio
+
+    import uvicorn
+
+    from src.services.mcp_transport_service import (
+        PUBLIC_LISTENER_SCOPE_KEY,
+        McpTransportRuntime,
+        _follower_server_class,
+        mark_public_listener,
+    )
+
+    monkeypatch.delenv("UNITARES_UDS_SOCKET", raising=False)
+    seen: list[bool] = []
+
+    async def app(scope, receive, send):
+        seen.append(bool(scope.get(PUBLIC_LISTENER_SCOPE_KEY)))
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    class _SessionManager:
+        def run(self):
+            import contextlib
+
+            @contextlib.asynccontextmanager
+            async def _cm():
+                yield
+
+            return _cm()
+
+    main_port = _free_port()
+    main = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=main_port, lifespan="off", log_level="warning")
+    )
+    sock = bind_public_socket(0, main_port=main_port)
+    public = _follower_server_class()(
+        main,
+        uvicorn.Config(mark_public_listener(app), lifespan="off", log_level="warning"),
+    )
+    runtime = McpTransportRuntime(
+        app=app, session_manager=_SessionManager(), server=main,
+        public_server=public, public_socket=sock,
+    )
+    task = asyncio.create_task(runtime.serve())
+    try:
+        for _ in range(200):
+            if main.started and public.started:
+                break
+            await asyncio.sleep(0.02)
+        assert main.started and public.started
+
+        assert b"200" in (await _get(main_port)).split(b"\r\n", 1)[0]
+        assert b"200" in (await _get(sock.getsockname()[1])).split(b"\r\n", 1)[0]
+        assert seen == [False, True]
+
+        main.should_exit = True
+        await asyncio.wait_for(task, timeout=10)
+        assert public.should_exit is True
+    finally:
+        if not task.done():
+            main.should_exit = True
+            await asyncio.wait_for(task, timeout=10)
+
+
+def test_follower_never_installs_signal_handlers():
+    import signal
+
+    import uvicorn
+
+    from src.services.mcp_transport_service import _follower_server_class
+
+    before = signal.getsignal(signal.SIGTERM)
+    follower = _follower_server_class()(
+        uvicorn.Server(uvicorn.Config(lambda *a: None)),
+        uvicorn.Config(lambda *a: None),
+    )
+    with follower.capture_signals():
+        assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_a_port_held_on_all_interfaces_counts_as_in_use():
+    """SO_REUSEADDR lets macOS bind 127.0.0.1:P over another 0.0.0.0:P."""
+    import socket
+
+    other = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    other.bind(("0.0.0.0", 0))
+    other.listen(1)
+    try:
+        port = other.getsockname()[1]
+        assert bind_public_socket(port, main_port=8767) is None
+    finally:
+        other.close()
+
+
+@pytest.mark.asyncio
+async def test_build_transport_runtime_stamps_the_public_listener(monkeypatch):
+    """The one line that carries the OAuth gate: if the builder handed the
+    public server the bare app, the tunnel would serve /mcp ungated."""
+    from src.services.mcp_transport_service import PUBLIC_LISTENER_SCOPE_KEY
+
+    seen = {}
+
+    class _App:
+        def add_middleware(self, *_a, **_k):
+            pass
+
+        async def __call__(self, scope, receive, send):
+            seen.update(scope)
+
+    app = _App()
+    monkeypatch.setattr(
+        "src.background_tasks.start_all_background_tasks", lambda **_kwargs: None
+    )
+    monkeypatch.setattr("src.mcp_compat.lowlevel_server", lambda _mcp: object())
+    monkeypatch.setattr(
+        "src.mcp_listen_config.build_streamable_session_manager",
+        lambda _server: object(),
+    )
+    for name in ("_log_transport_security", "_configure_middleware", "_register_application_routes"):
+        monkeypatch.setattr(
+            f"src.services.mcp_transport_service.{name}", lambda *_a, **_k: None
+        )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._create_base_application",
+        lambda _mcp: app,
+    )
+    runtime = build_transport_runtime(
+        object(),
+        auth_config=McpAuthConfig(oauth_public_listener_only=True),
+        host="127.0.0.1",
+        port=8767,
+        reload=False,
+        server_ready_fn=lambda: True,
+        set_server_ready=lambda: None,
+        server_start_time=0.0,
+        server_version="test",
+        server_build_sha="test",
+        public_socket=bind_public_socket(0, main_port=8767),
+    )
+    try:
+        await runtime.public_server.config.app({"type": "http", "headers": []}, None, None)
+        assert seen.get(PUBLIC_LISTENER_SCOPE_KEY) is True
+        assert runtime.server.config.app is app
+    finally:
+        runtime.public_socket.close()

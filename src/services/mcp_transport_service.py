@@ -580,12 +580,14 @@ def build_transport_runtime(
         proxy_headers=True,
         ws="websockets-sansio",
     )
+    main_server = uvicorn.Server(config)
     public_server = None
     if public_socket is not None:
         # Loopback only: the tunnel connector runs on this host. Same proxy
         # header trust as the main listener, so REST/dashboard gates keep
         # seeing the caller's forwarded address, not the connector's.
-        public_server = uvicorn.Server(
+        public_server = _follower_server_class()(
+            main_server,
             uvicorn.Config(
                 mark_public_listener(app),
                 # Informational: serve() is handed the pre-bound socket.
@@ -599,7 +601,7 @@ def build_transport_runtime(
                 forwarded_allow_ips="127.0.0.1",
                 proxy_headers=True,
                 ws="websockets-sansio",
-            )
+            ),
         )
         logger.info(
             "Public OAuth listener on 127.0.0.1:%d; /mcp OAuth applies there only",
@@ -608,7 +610,7 @@ def build_transport_runtime(
     return McpTransportRuntime(
         app=app,
         session_manager=session_manager,
-        server=uvicorn.Server(config),
+        server=main_server,
         public_server=public_server,
         public_socket=public_socket,
     )
@@ -633,6 +635,25 @@ def bind_public_socket(public_port: int, *, main_port: int) -> Any:
             main_port,
         )
         return None
+    # SO_REUSEADDR (kept so a restart is not refused by TIME_WAIT) lets BSD and
+    # macOS bind 127.0.0.1:P over another process's 0.0.0.0:P listener, which
+    # would silently steal that service's loopback traffic. Anything that
+    # already answers on the port is therefore treated as "in use".
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        in_use = probe.connect_ex(("127.0.0.1", public_port)) == 0
+    except OSError:
+        in_use = False
+    finally:
+        probe.close()
+    if in_use:
+        logger.error(
+            "Public OAuth listener NOT started: something already listens on "
+            "127.0.0.1:%d",
+            public_port,
+        )
+        return None
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -648,6 +669,40 @@ def bind_public_socket(public_port: int, *, main_port: int) -> Any:
         )
         return None
     return sock
+
+
+def _follower_server_class() -> type:
+    """A uvicorn Server that exits with a leader and never touches signals.
+
+    uvicorn's ``serve()`` installs its own SIGINT/SIGTERM handlers and chains
+    to whatever it replaced, so a second server started after the main one
+    would own the signal and drain first while the main listener kept taking
+    work. The follower leaves signals to the main server and stops when it
+    does, so both drain together.
+    """
+    import contextlib
+
+    import uvicorn
+
+    class FollowerServer(uvicorn.Server):
+        def __init__(self, leader: Any, config: Any) -> None:
+            self._leader = leader
+            self._own_exit = False
+            super().__init__(config)
+
+        @property
+        def should_exit(self) -> bool:  # type: ignore[override]
+            return self._own_exit or bool(self._leader.should_exit)
+
+        @should_exit.setter
+        def should_exit(self, value: bool) -> None:
+            self._own_exit = value
+
+        @contextlib.contextmanager
+        def capture_signals(self):  # type: ignore[override]
+            yield
+
+    return FollowerServer
 
 
 async def _serve_public_listener(server: Any, sock: Any) -> None:
