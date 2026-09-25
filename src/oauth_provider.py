@@ -815,6 +815,10 @@ class _LineBudget:
 
 
 _LOG_BUDGET = _LineBudget()
+#: A separate budget for lines naming the static client, so a flood of other
+#: callers cannot crowd out the connector's own failures. (A caller that
+#: spoofs the static client id can still spend this one; it is public.)
+_STATIC_LOG_BUDGET = _LineBudget()
 
 
 class OAuthAttemptLogger:
@@ -831,8 +835,9 @@ class OAuthAttemptLogger:
     rate-limited (``_LineBudget``); drops are counted in the next line.
     """
 
-    def __init__(self, app):
+    def __init__(self, app, *, static_client_id: str | None = None):
         self.app = app
+        self._static_client_id = static_client_id
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or scope.get("path") not in _OAUTH_LOG_PATHS:
@@ -893,7 +898,12 @@ class OAuthAttemptLogger:
             await self.app(scope, receive, logging_send)
         finally:
             # No return in this finally: it would swallow the app's exception.
-            suppressed = _LOG_BUDGET.take()
+            budget = (
+                _STATIC_LOG_BUDGET
+                if self._static_client_id and facts.get("client") == self._static_client_id
+                else _LOG_BUDGET
+            )
+            suppressed = budget.take()
             if suppressed:
                 logger.info("[OAUTH] %d attempt line(s) suppressed by the rate limit", suppressed)
             if suppressed is not None:

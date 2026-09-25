@@ -67,7 +67,7 @@ class McpAuthConfig:
     static_client_id: str | None = None
     #: Server-held PKCE verifier for the static client (see
     #: ``StaticClientBasicAuthShim``); None disables the PKCE/scope compat.
-    static_pkce_verifier: str | None = None
+    static_pkce_verifier: str | None = dataclasses.field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -569,7 +569,7 @@ def build_transport_runtime(
 
         # Added after the shim, so outside it: it logs what the client
         # actually sent, not the compat rewrite.
-        app.add_middleware(OAuthAttemptLogger)
+        app.add_middleware(OAuthAttemptLogger, static_client_id=auth_config.static_client_id)
     start_all_background_tasks(set_ready=set_server_ready)
     _register_application_routes(
         app,

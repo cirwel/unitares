@@ -35,6 +35,7 @@ CID, SECRET = "google", "s3cret"
 @pytest.fixture(autouse=True)
 def _fresh_log_budget(monkeypatch):
     monkeypatch.setattr(_op, "_LOG_BUDGET", _op._LineBudget())
+    monkeypatch.setattr(_op, "_STATIC_LOG_BUDGET", _op._LineBudget())
 REDIRECT = "https://oauth-redirect.googleusercontent.com/r/example"
 
 
@@ -52,7 +53,7 @@ def _app(*, compat=True, dcr=False):
         client_id=CID,
         pkce_verifier=static_pkce_verifier(SECRET) if compat else None,
     )
-    app.add_middleware(OAuthAttemptLogger)
+    app.add_middleware(OAuthAttemptLogger, static_client_id=CID)
     return TestClient(app)
 
 
@@ -442,7 +443,7 @@ def test_an_oversized_body_gets_the_sdks_answer_not_the_loggers(grant):
 
 
 def test_log_lines_are_rate_limited_and_drops_counted(monkeypatch, caplog):
-    monkeypatch.setattr(_op, "_LOG_BUDGET", _op._LineBudget(per_window=3, window=3600))
+    monkeypatch.setattr(_op, "_STATIC_LOG_BUDGET", _op._LineBudget(per_window=3, window=3600))
     client = _app(compat=False)
     with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
         for _ in range(6):
@@ -494,7 +495,7 @@ def test_another_clients_oversized_body_gets_the_sdks_answer_with_compat_on():
 
 def test_dropped_lines_are_counted_in_the_next_window(monkeypatch, caplog):
     budget = _op._LineBudget(per_window=2, window=3600)
-    monkeypatch.setattr(_op, "_LOG_BUDGET", budget)
+    monkeypatch.setattr(_op, "_STATIC_LOG_BUDGET", budget)
     client = _app(compat=False)
     params = {"response_type": "code", "client_id": CID, "redirect_uri": REDIRECT}
     with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
@@ -519,3 +520,74 @@ def test_an_unparsed_body_is_logged_as_unparsed_not_as_defaults(caplog, path, ex
     assert "unparsed" in line
     for default in ('pkce="no"', 'client="-"', 'auth="none"', 'grant="-"', 'verifier="no"'):
         assert default not in line, line
+
+
+def test_a_successful_flow_logs_no_code_or_token(caplog):
+    client = _app()
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        q = _authorize(client)
+        code = q["code"][0]
+        tokens = _token(client, code).json()
+        refreshed = client.post("/token", data={
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
+            "client_id": CID, "client_secret": SECRET,
+        }).json()
+    ours = "\n".join(r.getMessage() for r in caplog.records if r.name == "src.oauth_provider")
+    assert ours.count("[OAUTH]") >= 3
+    for secret in (code, tokens["access_token"], tokens["refresh_token"],
+                   refreshed["access_token"], refreshed["refresh_token"], SECRET,
+                   static_pkce_verifier(SECRET)):
+        assert secret not in ours
+
+
+def test_other_clients_code_exchange_never_gets_the_server_verifier():
+    """A DCR client that used PKCE and omits its verifier must be refused,
+    not rescued by the static client's server-held verifier."""
+    client = _app(dcr=True)
+    reg = client.post("/register", json={"redirect_uris": ["https://x.example/cb"]}).json()
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(static_pkce_verifier(SECRET).encode()).digest()
+    ).decode().rstrip("=")
+    resp = client.get("/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"],
+        "redirect_uri": "https://x.example/cb", "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }, follow_redirects=False)
+    code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+    resp = client.post("/token", data={
+        "grant_type": "authorization_code", "code": code, "redirect_uri": "https://x.example/cb",
+        "client_id": reg["client_id"], "client_secret": reg["client_secret"],
+    })
+    assert resp.status_code == 400
+
+
+def test_static_client_links_via_post_authorize_without_pkce():
+    client = _app()
+    resp = client.post("/authorize", data={
+        "response_type": "code", "client_id": CID, "redirect_uri": REDIRECT,
+        "state": "s", "scope": "openid",
+    }, follow_redirects=False)
+    q = parse_qs(urlparse(resp.headers["location"]).query)
+    assert "code" in q, q
+    tok = _token(client, q["code"][0])
+    assert tok.status_code == 200 and tok.json()["scope"] == "mcp:tools"
+
+
+def test_a_flood_from_others_does_not_crowd_out_the_static_clients_lines(monkeypatch, caplog):
+    monkeypatch.setattr(_op, "_LOG_BUDGET", _op._LineBudget(per_window=2, window=3600))
+    client = _app(compat=False)
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        for i in range(10):
+            client.get("/authorize", params={"response_type": "code", "client_id": f"anon-{i}",
+                                             "redirect_uri": REDIRECT}, follow_redirects=False)
+        client.get("/authorize", params={"response_type": "code", "client_id": CID,
+                                         "redirect_uri": REDIRECT}, follow_redirects=False)
+    ours = [r.getMessage() for r in caplog.records if r.name == "src.oauth_provider"]
+    assert any(f'client="{CID}"' in m for m in ours), ours
+
+
+def test_the_config_repr_never_shows_the_verifier():
+    from src.services.mcp_transport_service import McpAuthConfig
+
+    v = static_pkce_verifier(SECRET)
+    assert v not in repr(McpAuthConfig(static_client_id=CID, static_pkce_verifier=v))
