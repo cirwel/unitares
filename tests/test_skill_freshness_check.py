@@ -468,6 +468,22 @@ def test_a_later_stamp_records_only_the_change_it_re_checked(layout: Layout):
     assert layout.run().returncode == 1
 
 
+def test_a_stamp_of_rewritten_text_records_no_transition(layout: Layout):
+    # Master changed the source AND rewrote the skill to match: its re-check
+    # found v1's wording wrong. Restoring v1 (a doc-only revert, or a merge
+    # taking one side of SKILL.md whole) must not ride that stamp to FRESH.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.source("x = 2\n")
+    layout.skill_file.write_text(v1_text + "rewritten for x = 2\n")
+    layout.run("--stamp", "demo")
+    assert "superseded_digests" not in _newest_record(layout)
+    layout.skill_file.write_text(v1_text)
+    assert layout.run().returncode == 1
+
+
 def test_a_transition_recorded_before_the_current_text_was_verified_does_not_carry(layout: Layout):
     # v1 was re-checked across 1 -> 2, the source reverted, a branch edited
     # the skill (v2) and stamped it at 1, then re-landed 2 without stamping.

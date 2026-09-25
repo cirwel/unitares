@@ -33,7 +33,9 @@ against the changed sources, writes ONE NEW FILE per skill:
 `skill_digest` (added 2026-09-24, optional for readers) names the skill text
 the record certified. `superseded_digests` (added 2026-09-25, optional) lists,
 per source whose content changed since the skill was last verified, the
-digest it was last verified at and any it had since been carried to: the stamp records that its verifier
+digest it was last verified at and any it had since been carried to, and only
+when the stamped text was already certified (the verifier re-checked it and
+left it alone; a text edited in the re-check records none): the stamp records that its verifier
 re-checked the skill across that change. See Recorded transitions below.
 
 It never edits SKILL.md. Until 2026-09-24 a stamp rewrote the `last_verified`
@@ -511,7 +513,13 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
             rc = 1
             continue
         skill_digest = skill_text_digest(skill_file)
-        vouching = vouching_attestations(load_attestations(skills_dir, name), skill_digest)
+        records = load_attestations(skills_dir, name)
+        vouching = vouching_attestations(records, skill_digest)
+        # A transition says the claims held across the change. Only a text
+        # already certified, which the verifier left alone, can say that: an
+        # uncertified text was edited in this re-check, which found the old
+        # wording wrong, so carrying the old wording across would invert it.
+        text_unchanged = bool(certified_attestations(records, skill_digest))
         edges = recorded_transitions(
             [data for _, data in transition_records(skills_dir, name, skill_digest)])
         digests: dict[str, str] = {}
@@ -525,7 +533,7 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
                 # from all of it, this stamp is the re-check across the change.
                 prior = carried_forward(
                     last_verified_at(vouching, meta, src), edges.get(src, {}))
-                if prior and digests[src] not in prior:
+                if text_unchanged and prior and digests[src] not in prior:
                     superseded[src] = sorted(prior)
             elif (carried := carried_digest(skills_dir, name, src, skill_digest)) is not None:
                 # Not verifiable from here; keep the record made where it was,
