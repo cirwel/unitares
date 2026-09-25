@@ -895,6 +895,10 @@ def _compact_related_discoveries(
     details). The ack keeps only what a writer needs to decide whether to open
     or supersede one: its id and a short summary preview. Returns the compact
     rows and, when rows were dropped, the snapshot's full length.
+
+    The store handler already stops its similarity scan at five rows, so the
+    total is not reachable today; the cap here keeps the ack bounded if that
+    handler limit is ever raised.
     """
     related = payload.get("related_discoveries")
     if not isinstance(related, list) or not related:
