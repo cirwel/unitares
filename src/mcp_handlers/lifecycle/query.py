@@ -876,9 +876,11 @@ async def _list_agents_lite(
                 "Page with lite=false plus limit and offset, or narrow recent_days."
             )
         else:
+            # lite=true must ride along: a bare `limit` makes the schema
+            # switch the call to full mode (coerce_list_options).
             result["more"] = (
-                f"Showing {limit} of {len(agents)} recent. Raise limit (up to "
-                f"{_LIST_PAGE_CAP}) or set recent_days to see more."
+                f"Showing {limit} of {len(agents)} recent. Pass lite=true with "
+                f"limit up to {_LIST_PAGE_CAP}, or set recent_days, to see more."
             )
     if recent_days:
         result["filter"] = f"Active in last {recent_days} days. Use recent_days=0 for all."

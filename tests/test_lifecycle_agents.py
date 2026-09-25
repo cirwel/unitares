@@ -2771,7 +2771,11 @@ class TestListAgentsDefaultsSurviveTheSchema:
             data = _parse(await handle_list_agents(args))
         assert len(data["agents"]) == data["shown"] == 20
         assert data["matching"] == 30
-        assert "more" in data
+        # Following the hint must keep the call in lite mode: a bare `limit`
+        # would flip it to full (coerce_list_options).
+        assert "lite=true" in data["more"]
+        followed = _schema_args(lite=True, limit=100)
+        assert followed["lite"] is True
 
     @pytest.mark.asyncio
     async def test_lite_default_recency_applies_through_the_schema(self, server):
