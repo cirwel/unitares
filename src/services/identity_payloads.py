@@ -291,9 +291,10 @@ def build_identity_signature_payload(
         )
         if _signature_is_routine(identity_assurance, identity_context):
             # The normal case: a caller-proven strong binding with nothing
-            # rejected. The nested registry/public_handle/label/harness blocks
-            # only restate the flat fields above, on every response the caller
-            # makes, so they are left out. The role declarations stay, and the
+            # rejected and no discontinuity. The registry/public_handle/label
+            # blocks restate the flat fields above, and harness_context restates
+            # the harness and model the caller itself declared, on every
+            # response the caller makes, so they are left out. The role declarations stay, and the
             # plugin's identity-contract auditor requires `schema` and
             # `agent_id_is`. continuity_claim stays too: it is computed per
             # call and is the tell for a discontinuity. Anything abnormal keeps
@@ -321,6 +322,18 @@ def build_identity_signature_payload(
     return payload
 
 
+# Continuity claims a caller-proven strong binding produces in normal use.
+# Anything else is a discontinuity worth the full record.
+_ROUTINE_CONTINUITY_CLAIMS = frozenset({
+    "resumed_by_explicit_session",
+    "resumed_by_continuity_token",
+    "resumed_by_uuid_direct",
+    "resumed_by_uuid_direct_fastpath",
+    "fresh_uuid_minted_by_force_new",
+    "fresh_uuid_minted",
+})
+
+
 def _signature_is_routine(
     identity_assurance: Mapping[str, Any],
     identity_context: Mapping[str, Any],
@@ -329,8 +342,12 @@ def _signature_is_routine(
 
     A caller-proven strong binding is the expected state. A weak, medium or
     server-inferred binding is not, and a rejected runtime-provenance value
-    (#1872) is diagnostic, so either keeps the full record.
+    (#1872) is diagnostic, so either keeps the full record. So does a
+    continuity_claim that reports a discontinuity (a mint after a resume miss,
+    a reactivated archive, a heuristic or unknown-source resolution).
     """
+    if identity_context.get("continuity_claim") not in _ROUTINE_CONTINUITY_CLAIMS:
+        return False
     if identity_assurance.get("tier") != "strong":
         return False
     if identity_assurance.get("caller_proven") is not True:
