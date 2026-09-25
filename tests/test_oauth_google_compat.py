@@ -321,3 +321,91 @@ def test_userinfo_and_resource_queries_stay_out_of_the_log(caplog):
     assert "[OAUTH] authorize" in ours
     assert "hunter2" not in ours and "RESOURCESECRET" not in ours
     assert 'redirect_host="evil.example"' in ours
+
+
+def _dcr_client(client):
+    return client.post("/register", json={"redirect_uris": ["https://x.example/cb"]}).json()
+
+
+def test_other_clients_get_no_compat_on_form_body_paths():
+    """POST /authorize and /token rewrites are the static client's alone."""
+    client = _app(dcr=True)
+    reg = _dcr_client(client)
+    resp = client.post("/authorize", data={
+        "response_type": "code", "client_id": reg["client_id"],
+        "redirect_uri": "https://x.example/cb", "state": "s",
+    }, follow_redirects=False)
+    q = parse_qs(urlparse(resp.headers["location"]).query)
+    assert q.get("error") == ["invalid_request"], q
+
+
+def test_other_clients_refresh_scope_is_not_narrowed():
+    client = _app(dcr=True)
+    reg = _dcr_client(client)
+    verifier = "d" * 64
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    resp = client.get("/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"],
+        "redirect_uri": "https://x.example/cb", "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }, follow_redirects=False)
+    code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+    tokens = client.post("/token", data={
+        "grant_type": "authorization_code", "code": code, "redirect_uri": "https://x.example/cb",
+        "code_verifier": verifier, "client_id": reg["client_id"], "client_secret": reg["client_secret"],
+    }).json()
+    resp = client.post("/token", data={
+        "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"], "scope": "openid",
+        "client_id": reg["client_id"], "client_secret": reg["client_secret"],
+    })
+    assert resp.status_code == 400 and resp.json()["error"] == "invalid_scope"
+
+
+def test_logged_fields_are_capped(caplog):
+    client = _app(compat=False)
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        client.get("/authorize", params={
+            "response_type": "code", "client_id": CID, "redirect_uri": REDIRECT,
+            "scope": "s" * 5000,
+        }, follow_redirects=False)
+    line = next(r.getMessage() for r in caplog.records
+                if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
+    assert "s" * 200 not in line and len(line) < 1500
+
+
+def test_a_blank_code_verifier_counts_as_absent():
+    client = _app()
+    q = _authorize(client)
+    assert _token(client, q["code"][0], code_verifier="").status_code == 200
+
+
+def test_a_failure_describing_the_request_never_changes_the_response(monkeypatch, caplog):
+    import src.oauth_provider as op
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("describe failed")
+
+    monkeypatch.setattr(op, "_attempt_facts", _boom)
+    client = _app()
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        q = _authorize(client)
+    assert "code" in q, q
+    assert any("unavailable (RuntimeError)" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_disconnect_mid_body_is_handled_quietly():
+    called = []
+
+    async def inner(scope, receive, send):
+        called.append(True)
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        raise AssertionError("nothing should be sent to a gone client")
+
+    scope = {"type": "http", "method": "POST", "path": "/token", "headers": [], "query_string": b""}
+    await OAuthAttemptLogger(inner)(scope, receive, send)
+    assert called == []
