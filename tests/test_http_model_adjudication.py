@@ -229,10 +229,83 @@ class TestQueueSuppression:
         assert fps == ["fp-open", "fp-abstained"]
         assert body["model_adjudicated_suppressed"] == 2
 
+    def test_postable_only_filters_long_fingerprints_before_the_limit(self, client):
+        """25+ legacy rows ahead of a valid one must not starve it."""
+        events = [_event("L" * 300 + str(i)) for i in range(30)] + [_event("fp-valid")]
+        with patch("src.audit_db.query_audit_events_async", AsyncMock(return_value=events)), \
+             patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
+                   AsyncMock(return_value=set())), \
+             patch("src.http_routes.sentinel._abstained_sentinel_fingerprints",
+                   AsyncMock(return_value=set())), \
+             patch("src.http_routes.sentinel._model_adjudicated_fingerprints",
+                   AsyncMock(return_value={})), \
+             patch("src.http_routes.sentinel._adjudication_progress",
+                   AsyncMock(return_value=dict(PROGRESS))):
+            body = client.get("/v1/sentinel/adjudication-queue?limit=1&postable_only=1").json()
+            plain = client.get("/v1/sentinel/adjudication-queue?limit=1").json()
+        assert [q["fingerprint"] for q in body["queue"]] == ["fp-valid"]
+        assert body["unpostable_suppressed"] == 30
+        # Without the flag the operator view is unchanged: nothing hidden.
+        assert plain["unpostable_suppressed"] == 0 and plain["pending_total"] == 31
+
     def test_the_adjudicator_can_skip_what_it_already_declined(self, client):
         body = self._get(client, self.VERDICTS, "&exclude_model_abstained=1")
         assert [q["fingerprint"] for q in body["queue"]] == ["fp-open"]
         assert body["model_adjudicated_suppressed"] == 3
+
+
+class TestLegacyFingerprintIdentity:
+    """A row persisted before the ingest bound keeps its raw over-long
+    fingerprint; the same finding recurring afterwards is stored as the digest.
+    They are one finding: a verdict under either form must cover both, and the
+    queue must list it once."""
+
+    RAW = "legacy-" + "x" * 300
+    DIGEST = sentinel_routes._bounded_fingerprint(RAW)[0]
+
+    def _get(self, client, *, adjudicated=(), abstained=(), model_verdicts=None, query=""):
+        # Newest first, as the queue reads them: the post-upgrade recurrence,
+        # then the legacy row.
+        events = [_event(self.DIGEST), _event(self.RAW)]
+        with patch("src.audit_db.query_audit_events_async", AsyncMock(return_value=events)), \
+             patch("src.http_routes.sentinel._adjudicated_sentinel_fingerprints",
+                   AsyncMock(return_value=set(adjudicated))), \
+             patch("src.http_routes.sentinel._abstained_sentinel_fingerprints",
+                   AsyncMock(return_value=set(abstained))), \
+             patch("src.http_routes.sentinel._model_adjudicated_fingerprints",
+                   AsyncMock(return_value=dict(model_verdicts or {}))), \
+             patch("src.http_routes.sentinel._adjudication_progress",
+                   AsyncMock(return_value=dict(PROGRESS))):
+            return client.get("/v1/sentinel/adjudication-queue?limit=10" + query).json()
+
+    def test_digest_is_the_stored_form(self):
+        assert self.DIGEST.startswith("sha256:") and self.DIGEST != self.RAW
+
+    def test_queue_lists_the_finding_once(self, client):
+        body = self._get(client)
+        assert [q["fingerprint"] for q in body["queue"]] == [self.DIGEST]
+        assert body["pending_total"] == 1
+
+    def test_operator_verdict_on_the_legacy_form_covers_the_recurrence(self, client):
+        body = self._get(client, adjudicated={self.RAW})
+        assert body["queue"] == [] and body["pending_total"] == 0
+
+    def test_operator_abstention_on_the_legacy_form_covers_the_recurrence(self, client):
+        body = self._get(client, abstained={self.RAW})
+        assert body["queue"] == [] and body["abstained_suppressed"] == 1
+
+    def test_model_cooldown_on_the_digest_covers_the_legacy_row(self, client):
+        body = self._get(client, model_verdicts={self.DIGEST: "confirmed"})
+        assert body["queue"] == [] and body["model_adjudicated_suppressed"] == 1
+
+    def test_model_cannot_judge_a_recurrence_the_operator_already_judged(self, client):
+        adjudicated, producer, recorder = _patches(already={self.RAW})
+        appended = AsyncMock(return_value=True)
+        with adjudicated, producer, recorder, \
+                patch("src.db.get_db", return_value=_db(appended)):
+            r = _post(client, fingerprint=self.DIGEST)
+        assert r.status_code == 409
+        appended.assert_not_awaited()
 
 
 def test_dashboard_pane_surfaces_hidden_items():

@@ -221,3 +221,53 @@ def test_non_forced_release_findings_are_untouched(client):
     assert r.status_code == 200
     assert "evidence" not in r.json()["event"]
     fetch.assert_not_called()
+
+
+# --- fingerprint bound ------------------------------------------------------
+# Ingest used to accept any length while /v1/sentinel/model-adjudicate refused
+# over 256, so a long fingerprint was stored, queued, judged, then refused.
+# Over-long ones are normalized (never rejected: producers post best-effort
+# and a 400 would lose the finding silently).
+
+def _finding(fp, **extra):
+    return {"type": "sentinel_alarm_finding", "severity": "high", "message": "m",
+            "agent_id": "sentinel", "agent_name": "Sentinel", "fingerprint": fp, **extra}
+
+
+def test_over_long_fingerprint_is_normalized_not_rejected(client):
+    import hashlib
+
+    from src.http_routes.sentinel import _FINGERPRINT_MAX_CHARS
+    long_fp = "lease:" + "x" * 400
+    r = client.post("/api/findings", json=_finding(long_fp))
+    assert r.status_code == 200 and r.json()["success"] is True
+    event = r.json()["event"]
+    assert event["fingerprint"] == "sha256:" + hashlib.sha256(long_fp.encode()).hexdigest()
+    assert len(event["fingerprint"]) <= _FINGERPRINT_MAX_CHARS
+    assert event["fingerprint_original"] == long_fp
+
+
+def test_normalization_is_deterministic_so_dedup_still_works(client):
+    long_fp = "y" * 1000
+    first = client.post("/api/findings", json=_finding(long_fp)).json()
+    second = client.post("/api/findings", json=_finding(long_fp)).json()
+    assert first["deduped"] is False and second["deduped"] is True
+
+
+def test_fingerprint_at_the_bound_is_untouched(client):
+    fp = "z" * 256
+    event = client.post("/api/findings", json=_finding(fp)).json()["event"]
+    assert event["fingerprint"] == fp
+    assert "fingerprint_original" not in event
+
+
+def test_client_cannot_supply_fingerprint_original(client):
+    event = client.post("/api/findings",
+                        json=_finding("short", fingerprint_original="forged")).json()["event"]
+    assert "fingerprint_original" not in event
+
+
+def test_kept_original_is_itself_capped(client):
+    from src.http_routes.sentinel import _FINGERPRINT_ORIGINAL_MAX_CHARS
+    event = client.post("/api/findings", json=_finding("q" * 100_000)).json()["event"]
+    assert len(event["fingerprint_original"]) == _FINGERPRINT_ORIGINAL_MAX_CHARS

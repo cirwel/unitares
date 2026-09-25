@@ -191,7 +191,7 @@ BASINS: Dict[str, Dict[str, Any]] = {
         },
     },
     "critical": {
-        "meaning": "Circuit breaker imminent. Pause and reassess.",
+        "meaning": "Risk in the critical band. Reassess; the policy decision, not this label, says whether the agent is stopped.",
         "thresholds": {
             "type": "operator_alert",
             "rule": "Used by higher-level diagnostics when risk/coherence guards are near breaker thresholds.",
@@ -408,10 +408,52 @@ def _wrap(value: Any, table: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
 _BEHAVIORAL_VERDICTS = frozenset({"safe", "caution", "high-risk"})
 
 
+# Decision actions that actually stop the agent. A behavioral verdict's
+# next_action may only tell the agent to pause when the decision is one of these.
+_STOP_ACTIONS = frozenset({"pause", "reject"})
+
+_NON_STOP_HIGH_RISK_NEXT_ACTION = (
+    "The decision was {action}, so this check-in does not block. A reading this "
+    "high can still pause a later check-in; keep scope tight and sync_state "
+    "after your next substantial step."
+)
+
+# The agent was resumed after a pause and has not checked in since: no
+# check-in decided anything, so the text must not claim a decision.
+_RESUMED_HIGH_RISK_NEXT_ACTION = (
+    "The agent was resumed and nothing blocks it now. This reading predates "
+    "the resume and can still pause a later check-in; keep scope tight and "
+    "sync_state after your next substantial step."
+)
+
+# Active, checked in before, but no decision is held in this server process:
+# a recovery/resume clears the history, and a record may carry none. Claim
+# only what the status establishes.
+_NOT_PAUSED_HIGH_RISK_NEXT_ACTION = (
+    "The agent is not paused and nothing blocks it now. No decision since "
+    "this reading is recorded, and a reading this high can still pause a "
+    "later check-in; keep scope tight and sync_state after your next "
+    "substantial step."
+)
+
+# Says what was decided, not that a hold is in force: a post-ODE dialectic
+# escalation (updates/phases.py) decides pause after the circuit breaker has
+# already run, so that pause is not actuated.
+_STOP_UNDER_STEADY_VERDICT_NEXT_ACTION = (
+    "The decision was {action}, which overrides this verdict. "
+    "self_recovery(action='check') shows whether a hold is in force and what "
+    "lifting it needs."
+)
+
+# Verdicts whose glossary next_action tells the agent to carry on.
+_CARRY_ON_VERDICTS = frozenset({"proceed", "continue", "safe", "caution", "guide"})
+
+
 def explain_verdict(
     verdict: Optional[str],
     *,
     evidence_source: Optional[str] = None,
+    decision_action: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Wrap a verdict value with meaning + next_action.
 
@@ -424,8 +466,35 @@ def explain_verdict(
     the verdict still stands — it is just graded so the wording does not outrun
     the evidence. Omitted / ``"behavioral"`` → byte-identical to the ungraded
     output, so existing callers are unaffected.
+
+    ``decision_action`` is the policy decision the verdict rode on. The
+    behavioral verdict and the decision are separate: a ``high-risk`` verdict
+    can land with a ``proceed`` decision (the cold-start guard, gap
+    suppression), and a ``safe`` verdict can land with a ``pause`` decision
+    (void, coherence and CIRS stops). When the decision is known, the
+    directive follows the decision in both directions: a verdict the decision
+    overrode never tells an agent to pause, and never tells a paused agent to
+    continue. The action is also recorded as ``decision_action`` so a reader
+    holding only the wrapped verdict (the envelope, on a metrics read) can
+    tell the two apart. Omitted → byte-identical output.
     """
     wrapped = _wrap(verdict, VERDICTS)
+    if decision_action is not None:
+        action = str(decision_action).lower()
+        wrapped["decision_action"] = action
+        value = wrapped.get("value")
+        if action == "resumed" and value == "high-risk":
+            wrapped["next_action"] = _RESUMED_HIGH_RISK_NEXT_ACTION
+        elif action == "not_paused" and value == "high-risk":
+            wrapped["next_action"] = _NOT_PAUSED_HIGH_RISK_NEXT_ACTION
+        elif action not in _STOP_ACTIONS and value == "high-risk":
+            wrapped["next_action"] = _NON_STOP_HIGH_RISK_NEXT_ACTION.format(
+                action=action
+            )
+        elif action in _STOP_ACTIONS and value in _CARRY_ON_VERDICTS:
+            wrapped["next_action"] = _STOP_UNDER_STEADY_VERDICT_NEXT_ACTION.format(
+                action=action
+            )
     if (
         evidence_source == "ode_fallback"
         and isinstance(wrapped.get("value"), str)

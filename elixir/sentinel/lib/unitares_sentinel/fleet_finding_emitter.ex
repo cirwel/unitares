@@ -419,6 +419,31 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
     end
   end
 
+  # Finding types that are logged and reported in the cycle check-in but not
+  # POSTed to /api/findings. Operator decision, 2026-09-24 resident review: in
+  # the 30 days before, 263 entropy_outlier and 203 correlated_events rows
+  # landed, all `medium`. `medium` sits outside the Sentinel adjudication queue,
+  # so no path put these in front of anyone for a verdict — that zero is a
+  # "never surfaced" zero, not evidence the signal lacks value. The analysis
+  # therefore stays: it still runs every cycle, is logged, and shapes the
+  # check-in text and complexity, so Sentinel's own state estimate does not
+  # move. Only the findings-channel output is withheld, and
+  # `log_only_finding_types: []` (or a narrower list) restores it.
+  @default_log_only_finding_types ["entropy_outlier", "correlated_events"]
+
+  @doc false
+  def log_only_finding_types(opts \\ []) do
+    Keyword.get(
+      opts,
+      :log_only_finding_types,
+      Application.get_env(
+        :unitares_sentinel,
+        :log_only_finding_types,
+        @default_log_only_finding_types
+      )
+    )
+  end
+
   defp emit_fleet_findings(findings, self_agent_id, opts) do
     findings_opts =
       opts
@@ -426,9 +451,16 @@ defmodule UnitaresSentinel.FleetFindingEmitter do
       |> Keyword.put_new(:agent_id, self_agent_id)
       |> Keyword.put_new(:agent_name, agent_name(opts))
 
+    log_only = log_only_finding_types(opts)
+
     Enum.count(findings, fn finding ->
       log_finding(finding)
-      Findings.post_finding(finding, findings_opts)
+
+      if Map.get(finding, :type) in log_only do
+        false
+      else
+        Findings.post_finding(finding, findings_opts)
+      end
     end)
   end
 

@@ -94,6 +94,105 @@ defmodule UnitaresSentinel.ForcedReleasePollerFindingsTest do
     GenServer.stop(pid)
   end
 
+  test "GenServer resends an alarm whose POST failed, although the cursor moved past it", ctx do
+    parent = self()
+    prior = ~U[2030-02-01 00:00:00.000000Z]
+    event_ts = DateTime.add(prior, 1, :second)
+    surface_id = ctx.surface_prefix <> "/undelivered"
+
+    File.write!(
+      ctx.state_file,
+      ~s({"forced_release_alarm":{"last_event_ts":"#{DateTime.to_iso8601(prior)}"}})
+    )
+
+    {event_id, _} = H.insert_forced_event(surface_id, event_ts)
+    attempts = :counters.new(1, [])
+
+    http_post = fn _url, body, _headers, _timeout_ms ->
+      if body["event_id"] == event_id do
+        :counters.add(attempts, 1, 1)
+        n = :counters.get(attempts, 1)
+        send(parent, {:attempt, n})
+        if n == 1, do: {:error, :econnrefused}, else: {:ok, 200, ~s({"success":true})}
+      else
+        {:ok, 200, ~s({"success":true})}
+      end
+    end
+
+    {:ok, pid} =
+      ForcedReleasePoller.start_link(
+        name: :"test_findings_resend_#{System.unique_integer([:positive])}",
+        db: UnitaresSentinel.DB,
+        interval_ms: 60_000,
+        initial_delay_ms: 60_000,
+        jitter_ms: 0,
+        emit_findings: true,
+        findings_opts: [http_post: http_post]
+      )
+
+    send(pid, :tick)
+    assert_receive {:attempt, 1}, 2_000
+    # Let the first tick finish and persist its cursor past the event.
+    Process.sleep(100)
+    send(pid, :tick)
+    assert_receive {:attempt, 2}, 2_000
+
+    GenServer.stop(pid)
+  end
+
+  test "GenServer attempts at most 5 POSTs per tick when the endpoint stalls", ctx do
+    parent = self()
+    prior = ~U[2030-03-01 00:00:00.000000Z]
+
+    File.write!(
+      ctx.state_file,
+      ~s({"forced_release_alarm":{"last_event_ts":"#{DateTime.to_iso8601(prior)}"}})
+    )
+
+    ids =
+      for i <- 1..7 do
+        {id, _} = H.insert_forced_event(ctx.surface_prefix <> "/stall_#{i}", DateTime.add(prior, i, :second))
+        id
+      end
+
+    http_post = fn _url, body, _headers, _timeout_ms ->
+      if body["event_id"] in ids, do: send(parent, {:attempt, body["event_id"]})
+      {:error, :timeout}
+    end
+
+    {:ok, pid} =
+      ForcedReleasePoller.start_link(
+        name: :"test_findings_bounded_#{System.unique_integer([:positive])}",
+        db: UnitaresSentinel.DB,
+        interval_ms: 60_000,
+        initial_delay_ms: 60_000,
+        jitter_ms: 0,
+        emit_findings: true,
+        findings_opts: [http_post: http_post]
+      )
+
+    send(pid, :tick)
+    Process.sleep(300)
+    attempts = collect_attempts([])
+    assert length(attempts) == 5
+
+    # The other two stay queued and go out on the next tick.
+    send(pid, :tick)
+    Process.sleep(300)
+    second = collect_attempts([])
+    assert Enum.sort(ids -- attempts) -- second == []
+
+    GenServer.stop(pid)
+  end
+
+  defp collect_attempts(acc) do
+    receive do
+      {:attempt, id} -> collect_attempts([id | acc])
+    after
+      0 -> acc
+    end
+  end
+
   test "GenServer first boot bounds nil cursor by lookback window", ctx do
     parent = self()
     now = DateTime.utc_now()

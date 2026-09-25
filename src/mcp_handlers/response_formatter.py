@@ -622,6 +622,7 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         result["verdict"] = explain_verdict(
             metrics.get("verdict"),
             evidence_source=metrics.get("primary_eisv_source"),
+            decision_action=decision.get("action"),
         )
     state_glossary = {}
     if interpreted.get("mode") is not None:
@@ -683,7 +684,11 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
     # as bare strings; only the agent-facing payload key is wrapped.
     from src.governance_glossary import explain_verdict
     verdict_raw = _agent_facing_verdict_raw(response_data, decision, metrics)
-    verdict = explain_verdict(verdict_raw, evidence_source=metrics.get("primary_eisv_source"))
+    verdict = explain_verdict(
+        verdict_raw,
+        evidence_source=metrics.get("primary_eisv_source"),
+        decision_action=decision.get("action"),
+    )
 
     # Collect mirror signals from enrichment-produced data
     mirror_signals = list(response_data.get("_mirror_signals", []))
@@ -989,6 +994,7 @@ def _format_minimal(response_data: dict, using_default_mode: bool, saved_trust_t
         result["verdict"] = explain_verdict(
             metrics.get("verdict"),
             evidence_source=metrics.get("primary_eisv_source"),
+            decision_action=decision.get("action"),
         )
 
     margin = decision.get("margin")
@@ -1044,7 +1050,9 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "risk_score_latest": latest_risk,
         "phi": metrics.get("phi"),
         "verdict": explain_verdict(
-            metrics.get("verdict"), evidence_source=metrics.get("primary_eisv_source")
+            metrics.get("verdict"),
+            evidence_source=metrics.get("primary_eisv_source"),
+            decision_action=decision.get("action"),
         ),
         "lambda1": metrics.get("lambda1"),
         "health_status": metrics.get("health_status"),
