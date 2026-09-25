@@ -172,6 +172,20 @@ def test_start_session_full_mode_keeps_the_canonical_record():
         "start_session", "onboard", payload, {"response_mode": "full"}
     )
     assert env["raw_governance"] is payload
+    # The top-level fields a client reads survive the mode switch.
+    for key in ("agent_id", "display_name", "is_new", "continuity_token"):
+        assert env[key] == payload[key]
+
+
+def test_start_session_caller_proven_medium_binding_keeps_assurance():
+    payload = _onboard_payload(
+        tier="medium",
+        caller_proven=True,
+        proof_origin="caller_asserted",
+        baseline=None,
+    )
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+    assert env["identity_assurance"]["tier"] == "medium"
 
 
 @pytest.mark.parametrize("mode", ["standard", "verbose"])
@@ -271,6 +285,9 @@ def test_unhealthy_status_is_not_trimmed():
     source["status"] = "moderate"
     env = _sync_envelope(source)
     assert env["state_summary"].get("status") == "moderate"
+    # A proceed in an unhealthy state is not routine: action_summary keeps
+    # its action too, not just state_summary its status.
+    assert env["action_summary"]["action"] == "proceed"
 
 
 def test_comfortable_margin_with_an_unassessed_edge_is_kept():
@@ -286,6 +303,19 @@ def test_comfortable_margin_with_an_unassessed_edge_is_kept():
     assert env["state_summary"]["margin"] == "comfortable"
     assert env["state_summary"]["margin_scope"] == "measured_edges_only"
     assert env["state_summary"]["unmeasurable_edges"] == ["coherence"]
+    # An unassessed edge makes the proceed non-routine as a whole.
+    assert env["action_summary"]["action"] == "proceed"
+    assert env["action_summary"]["risk_score"] == 0.27
+
+
+def test_near_edge_proceed_is_not_trimmed():
+    payload = format_response(deepcopy(_sync_source()), {"response_mode": "auto"})
+    payload["decision"]["nearest_edge"] = "risk"
+    env = build_experience_envelope(
+        "sync_state", "process_agent_update", payload, {"response_mode": "auto"}
+    )
+    assert env["state_summary"]["nearest_edge"] == "risk"
+    assert env["action_summary"]["action"] == "proceed"
 
 
 def test_guide_keeps_the_full_action_summary():
