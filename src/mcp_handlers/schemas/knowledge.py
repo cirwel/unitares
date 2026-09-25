@@ -400,6 +400,7 @@ class KnowledgeParams(AgentIdentityMixin):
         ),
         "list": (
                 "limit", "offset", "including_cold", "status", "response_mode",
+                "epoch_scope",
         ),
         "update": (
                 "discovery_id", "status", "severity", "superseded_by",
