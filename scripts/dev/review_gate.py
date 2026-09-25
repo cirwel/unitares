@@ -1216,6 +1216,8 @@ def cmd_record(args) -> int:
 
 
 def cmd_dispose(args) -> int:
+    if getattr(args, "emit", False):
+        return _dispose_emit(args)
     pr, repo, key, _ = _resolve(args)
     prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(), pr_comments(repo, pr))
     if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
@@ -1227,6 +1229,36 @@ def cmd_dispose(args) -> int:
     rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer)
     post_record(pr, rec, f"dispositions for FINDINGS({prior.findings}) — {prior.url}", text)
     print(f"[review] {rec.status()[1]}")
+    return 0
+
+
+def _dispose_emit(args) -> int:
+    """`dispose --emit`: the disposition body, without gh.
+
+    Offline there is no way to read the open FINDINGS record, so the caller
+    names it: its finding count, its reviewer and its URL, all as shown on the
+    PR. The body is only a claim until CI pairs it with that open record on the
+    same diff key; a wrong count or key leaves the findings open (fails closed).
+    """
+    missing = [f for f in ("findings", "reviewer", "cites") if getattr(args, f, None) in (None, "")]
+    if missing:
+        raise SystemExit("review_gate: dispose --emit needs --findings N, --reviewer NAME and "
+                         "--cites URL of the open FINDINGS record (missing: " + ", ".join(missing) + ")")
+    if args.findings < 1:
+        raise SystemExit("review_gate: --findings must be at least 1")
+    if not REVIEWER_NAME_RE.fullmatch(args.reviewer):
+        raise SystemExit("review_gate: --reviewer must match [A-Za-z0-9_.:@/+-]+ "
+                         "(the open record's reviewer, as its marker shows it)")
+    if re.search(r"\s", args.cites):
+        raise SystemExit("review_gate: --cites must be a single URL")
+    text = Path(args.file).read_text()
+    if not dispositions_complete(text, args.findings):
+        raise SystemExit(f"review_gate: dispositions need a numbered entry for each of the "
+                         f"{args.findings} finding(s) — `1. <fixed in …|rebutted: why>` …")
+    rec = Record(_resolve_offline(args), "FINDINGS", args.findings, True, args.reviewer)
+    sys.stdout.write(render_body(rec, f"dispositions for FINDINGS({args.findings}) — {args.cites}", text))
+    print(f"[review] emitted, not posted: post the body above verbatim as a PR comment "
+          f"({rec.status()[1]})", file=sys.stderr)
     return 0
 
 
@@ -1440,6 +1472,14 @@ def main(argv: list[str] | None = None) -> int:
 
     d = sub.add_parser("dispose", help="post dispositions for a FINDINGS record")
     d.add_argument("file")
+    d.add_argument("--base", default=argparse.SUPPRESS,
+                   help="base ref for --emit's key (default origin/master); must be the PR's base")
+    d.add_argument("--emit", action="store_true",
+                   help="print the disposition body instead of posting it (no gh needed); "
+                        "needs --findings, --reviewer and --cites from the open record")
+    d.add_argument("--findings", type=int, help="with --emit: the open record's finding count")
+    d.add_argument("--reviewer", help="with --emit: the open record's reviewer")
+    d.add_argument("--cites", help="with --emit: the open record's URL (comment or native review)")
 
     sub.add_parser("key", help="print the diff key for HEAD")
 

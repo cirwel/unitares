@@ -122,9 +122,9 @@ The authoritative port registry is [`operations/DEFINITIVE_PORTS.md`](operations
 
 ## Recovery: Circuit Breaker + Dialectic
 
-When an agent is paused, recovery follows a structured protocol:
+A pause refuses check-ins and new shared-memory entries (not queued); dialectic moves still work. A paused agent's risk is frozen at the reading that paused it, because it cannot write the check-in that would lower it, so most pauses end through a dialectic review, an operator (`operator_resume_agent`), or re-evaluation at auto-expiry (`src/mcp_handlers/support/pause_ttl.py`). The paths:
 
-1. **Self-recovery** — `self_recovery(action="quick")` if risk ≤ 0.40 and no void is active; `self_recovery(action="review")` with a reflection up to risk 0.65. Legacy `C(V)` is diagnostic context only
+1. **Self-recovery** — `self_recovery(action="check")` reports eligibility. `quick` if risk ≤ 0.40 and no void is active; `review` with a reflection up to risk 0.65. It lifts a pause only when the reading that paused the agent is already under those gates. Legacy `C(V)` is diagnostic context only
 2. **Dialectic review** (`request_review`; thesis -> antithesis -> synthesis). The reviewer is one of:
    - **Orchestrated reviewer** — a separate process with its own identity (`agents/dialectic_reviewer/`; local, Codex, Claude or external backends). When `UNITARES_DIALECTIC_ORCHESTRATED_REVIEW` is on (default off in code) it is the first choice; see [`proposals/active/orchestrated-dialectic-reviewer-v0.md`](proposals/active/orchestrated-dialectic-reviewer-v0.md)
    - **In-process synthetic reviewer** — the default, and the fallback when orchestration is on. Its verdict is binding (it approves only a RESUME synthesis whose antithesis does not dispute), but it runs in the caller's process under a synthetic reviewer id, so it is not an independent reviewer

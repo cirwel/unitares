@@ -291,12 +291,11 @@ operator's), the environment-independent path is a PR comment:
 3. **Fixing** a finding also works without tooling. Push the fix, then post
    `@codex review` again: native review here triggers on PR open, not on
    every push, and the new diff needs its own result. **Rebutting** a finding
-   does not work without tooling. The gate keeps a native finding open until
-   a diff-bound disposition record exists, and only `review.sh dispose` writes
-   one; a thread reply is not read. So reply on the thread with the rebuttal,
-   keep the PR in draft, and hand the disposition to someone who can run
-   `review.sh dispose`, naming the thread. Do not assemble the disposition
-   record by hand either.
+   needs a diff-bound disposition record; a thread reply is not read. Without
+   `gh`, reply on the thread with the rebuttal, then render the record with
+   `review.sh dispose <file> --emit` as described in
+   [Recording a review without gh](#recording-a-review-without-gh) and post it
+   verbatim. Do not assemble the disposition record by hand.
    The [round cap](#round-cap) applies here too. After three rounds with only
    P2s open, do not post `@codex review` again: hand the remaining findings
    off for disposition the same way. A P1 fix still gets its request.
@@ -339,8 +338,18 @@ Codex usage limit left such sessions with no way to finish a PR (#2423).
    connector. The `review` check reads it like any other record, and its
    description names the reviewer, so a same-session subagent review is
    visible as one.
-4. Findings: fix, push, and review the new diff the same way. Rebuttals still
-   need `review.sh dispose`, which reads the prior record through `gh`.
+4. Findings: fix, push, and review the new diff the same way. To rebut
+   instead, render the disposition without `gh`:
+
+   ```bash
+   ./scripts/dev/review.sh dispose dispositions.txt --emit \
+       --findings <n> --reviewer <reviewer from the open record> --cites <its URL>
+   ```
+
+   The file needs one numbered entry per finding (`1. fixed in <sha>` or
+   `1. rebutted: <why>`). Offline the tool cannot read the open record, so you
+   name it; CI pairs the disposition with that record on the same diff key,
+   and a wrong count or key leaves the findings open.
 
 A same-model subagent is the weakest reviewer this gate accepts: it shares the
 author's model and blind spots. Prefer native Codex or another model when one

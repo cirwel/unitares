@@ -1360,3 +1360,32 @@ def test_local_fallback_records_are_not_rounds():
     comments = [_comment(rg.Record(f"k{i}", "FINDINGS", 1, False, r), text="1. [P2] bug")
                 for i, r in enumerate(["codex", "claude", "codex"])]
     assert rg.codex_rounds(comments, [], []).count == 0
+
+
+def test_dispose_emit_answers_the_open_record_ci_reads(repo, tmp_path, capsys):
+    _pushed(repo, tmp_path)
+    key = rg.diff_key("origin/master", "HEAD")
+    open_rec = _comment(rg.Record(key, "FINDINGS", 2, False, "subagent:x"), url="open")
+    open_rec["created_at"] = "2026-09-25T01:00:00Z"
+    (tmp_path / "d.txt").write_text("1. fixed in abc123\n2. rebutted: measured, see thread\n")
+    assert rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "2",
+                    "--reviewer", "subagent:x", "--cites", "open"]) == 0
+    body = capsys.readouterr().out
+    disposition = {"author_association": "OWNER", "html_url": "d", "body": body,
+                   "created_at": "2026-09-25T02:00:00Z"}
+    got = rg.latest_matching([open_rec, disposition], key)
+    assert got.disposed and got.status()[0] == "success"
+
+
+def test_dispose_emit_refuses_incomplete_dispositions(repo, tmp_path):
+    _pushed(repo, tmp_path)
+    (tmp_path / "d.txt").write_text("1. fixed in abc123\n")
+    with pytest.raises(SystemExit, match="numbered entry"):
+        rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "2",
+                 "--reviewer", "x", "--cites", "u"])
+
+
+def test_dispose_emit_needs_the_open_record_named(tmp_path):
+    (tmp_path / "d.txt").write_text("1. fixed\n")
+    with pytest.raises(SystemExit, match="missing: reviewer, cites"):
+        rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "1"])

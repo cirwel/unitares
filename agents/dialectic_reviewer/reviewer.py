@@ -3,8 +3,10 @@ reviewer process.
 
 The agent-orchestrator spawns this as a supervised, lease-bound child when a
 dialectic session needs a reviewer. Unlike the in-process synthetic path
-(`handle_llm_assisted_dialectic`, which hardcodes ``agrees=True`` and borrows the
-paused agent's api_key), this process:
+(`handle_llm_assisted_dialectic`, which runs in the caller's process under the
+synthetic id ``llm-synthetic-reviewer`` and signs with the paused agent's
+api_key; it originally hardcoded ``agrees=True`` and now binds its verdict via
+``_synthetic_review_approves``), this process:
 
   * onboards as its OWN governance identity (strict-identity compliant),
   * runs an operator-selected heterogeneous model (local Ollama by default,
