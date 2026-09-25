@@ -76,6 +76,9 @@ SILENT_BODIES = [
     # it, and then the failure is swallowed (review round 3, finding 1).
     "try:\n    raise RuntimeError('wrapped') from exc\nexcept Exception:\n    pass",
     "try:\n    if bad:\n        raise\nexcept ValueError:\n    pass",
+    # contextlib.suppress swallows a raise the same way (independent review).
+    "with contextlib.suppress(Exception):\n    raise RuntimeError('x')",
+    "with suppress(ValueError):\n    raise",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
     "parser.error('bad input')",
@@ -161,6 +164,10 @@ def test_nested_try_body_and_finally_count_for_the_handler(tmp_path, body):
         "try:\n    cleanup()\nexcept OSError:\n    pass\nelse:\n    raise",
         # A non-None return is not caught by the nested handler.
         "try:\n    return {'error': str(exc)}\nexcept Exception:\n    pass",
+        # A log call under suppress() still runs; only a raise is swallowed.
+        "with contextlib.suppress(Exception):\n    logger.error('x')",
+        # A with block that is not suppress() lets a raise escape.
+        "with lock:\n    raise",
     ],
 )
 def test_escaping_reaction_in_nested_try_counts(tmp_path, body):
@@ -573,3 +580,32 @@ def test_scan_file_keeps_p006_without_a_cited_line(tmp_path, monkeypatch):
     _stub_model(monkeypatch, tmp_path, reply)
     found = scan_file(str(path), region="3-4", persist=False)
     assert [(f.pattern, f.line) for f in found] == [("P006", 3)]
+
+
+def test_noqa_on_an_earlier_try_does_not_cover_a_later_one():
+    """A body line of one try must not reach back to the noqa-acknowledged
+    except of an earlier try (independent review, P2). The walk-back stops at
+    the later try's own header."""
+    from agents.watcher.agent import _p006_governing_except
+
+    lines = {
+        1: "def f():",
+        2: "    try:",
+        3: "        a()",
+        4: "    except Exception:  # noqa: BLE001",
+        5: "        logger.warning('x')",
+        6: "    try:",
+        7: "        b()",
+        8: "    except Exception:",
+        9: "        pass",
+    }
+    assert _p006_governing_except(7, lines) is None
+    assert _p006_governing_except(9, lines) == 8
+    assert _p006_governing_except(5, lines) == 4
+    # A body line nested deeper inside a handler still reaches its clause.
+    nested = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: "        if retry:",
+        3: "            again()",
+    }
+    assert _p006_governing_except(3, nested) == 1

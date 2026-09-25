@@ -1725,6 +1725,18 @@ def _p006_is_loud_log_call(node: Any) -> bool:
     return False
 
 
+def _p006_callee_name(func: Any) -> str:
+    """Last name of a call's target: ``suppress`` for ``suppress(...)`` and
+    ``contextlib.suppress(...)`` alike."""
+    import ast
+
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ""
+
+
 def _p006_handler_reacts(handler: Any) -> bool:
     """True when ``handler``'s body, nested blocks included, has positive
     evidence of reacting: a ``raise``, a logging call at info level or above,
@@ -1743,7 +1755,8 @@ def _p006_handler_reacts(handler: Any) -> bool:
     rule is conservative on purpose: it does not work out whether the
     handler's type matches the raised one, or whether the handler re-raises
     (its body is skipped, as above), so such a finding is kept. A log call or
-    a non-None ``return`` in that body still counts; neither is caught.
+    a non-None ``return`` in that body still counts; neither is caught. The
+    body of a ``with ...suppress(...)`` block is treated the same way.
     """
     import ast
 
@@ -1764,6 +1777,14 @@ def _p006_handler_reacts(handler: Any) -> bool:
             stack.extend(
                 (child, raise_caught) for child in [*node.orelse, *node.finalbody]
             )
+            continue
+        if isinstance(node, (ast.With, ast.AsyncWith)) and any(
+            isinstance(item.context_expr, ast.Call)
+            and _p006_callee_name(item.context_expr.func) == "suppress"
+            for item in node.items
+        ):
+            stack.extend((item, raise_caught) for item in node.items)
+            stack.extend((child, True) for child in node.body)
             continue
         if isinstance(node, ast.Raise):
             if not raise_caught:
@@ -2836,6 +2857,11 @@ def _indent_of(line: str) -> int:
     return len(line) - len(line.lstrip())
 
 
+# A header that opens a try block or one of its non-handler branches: a line
+# under it is not in a handler's body.
+_P006_TRY_OR_BRANCH = re.compile(r"^\s*(try|else|finally)\s*:")
+
+
 def _p006_governing_except(
     flagged_line: int,
     snippet_lines_by_num: dict[int, str],
@@ -2844,22 +2870,32 @@ def _p006_governing_except(
     """Line number of the `except` clause the flagged line belongs to.
 
     The model cites either the clause itself or a line in its body (usually
-    the `logger.debug(...)` call). Walk back to the nearest clause indented
-    less than the flagged line, stopping at a def header. None when no clause
-    is visible, in which case the finding is left alone.
+    the `logger.debug(...)` call). Walk back out through the enclosing blocks
+    (each line indented less than the block walked so far): the first such
+    line that is an except clause governs the flagged line. Reaching a `try:`,
+    `else:` or `finally:` header, or a def, first means the line is not in a
+    handler's body, for instance in the body of a later try whose own handler
+    comes after it. None when no clause is visible, in which case the finding
+    is left alone.
     """
     src = snippet_lines_by_num.get(flagged_line, "")
     if _P006_EXCEPT_CLAUSE.match(src):
         return flagged_line
-    flagged_indent = _indent_of(src)
+    block_indent = _indent_of(src)
     for line_no in range(flagged_line - 1, flagged_line - lookback - 1, -1):
         line = snippet_lines_by_num.get(line_no, "")
         if not line.strip():
             continue
         if _P003_OTHER_DEF.match(line):
             return None
-        if _P006_EXCEPT_CLAUSE.match(line) and _indent_of(line) < flagged_indent:
+        indent = _indent_of(line)
+        if indent >= block_indent:
+            continue
+        if _P006_EXCEPT_CLAUSE.match(line):
             return line_no
+        if _P006_TRY_OR_BRANCH.match(line):
+            return None
+        block_indent = indent
     return None
 
 
