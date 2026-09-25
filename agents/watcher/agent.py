@@ -1777,8 +1777,9 @@ def _p006_handler_reacts(handler: Any) -> bool:
     run when the handler does. So are the handlers of a ``try`` nested inside
     this handler: they react to a different exception (say, one from cleanup
     code), and when that code succeeds the caught exception is still
-    swallowed. The nested try's ``else`` and ``finally`` run outside its
-    handlers and are searched like the rest of this handler.
+    swallowed. The nested try's ``finally`` runs on every path and is
+    searched like the rest of this handler. Its ``else`` is not searched: it
+    is skipped exactly when the nested body raised into a handler.
 
     The body of a nested try that has any handler is a caught body: whatever
     raises there may be caught and swallowed, so evidence in it counts only
@@ -1807,11 +1808,13 @@ def _p006_handler_reacts(handler: Any) -> bool:
             continue
         if isinstance(node, try_types):
             if node.handlers:
+                # The else is skipped when the body raised into a handler,
+                # so evidence there does not count either.
                 if _p006_caught_first_reacts(node.body[0]):
                     return True
             else:
                 stack.extend(node.body)
-            stack.extend([*node.orelse, *node.finalbody])
+            stack.extend(node.finalbody)
             continue
         if isinstance(node, (ast.With, ast.AsyncWith)) and any(
             isinstance(item.context_expr, ast.Call)
@@ -1838,7 +1841,9 @@ def _p006_handler_reacts(handler: Any) -> bool:
 def _p006_caught_first_reacts(stmt: Any) -> bool:
     """True when ``stmt``, the first statement of a caught body, reacts
     without anything that can raise first: ``return <inert non-None value>``
-    or a loud log call whose arguments are all inert."""
+    or a loud log call on a plain name (``logger.warning``, not
+    ``self.logger.warning`` or ``getLogger(n).warning``, whose receiver can
+    raise) with all arguments inert."""
     import ast
 
     if isinstance(stmt, ast.Return):
@@ -1850,7 +1855,7 @@ def _p006_caught_first_reacts(stmt: Any) -> bool:
         )
     if isinstance(stmt, ast.Expr) and _p006_is_loud_log_call(stmt.value):
         call = stmt.value
-        return all(_p006_value_is_inert(arg) for arg in call.args) and all(
+        return isinstance(call.func.value, ast.Name) and all(_p006_value_is_inert(arg) for arg in call.args) and all(
             _p006_value_is_inert(kw.value) for kw in call.keywords
         )
     return False

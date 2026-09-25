@@ -96,6 +96,12 @@ SILENT_BODIES = [
     "try:\n    cleanup()\n    logger.warning('x')\nexcept Exception:\n    pass",
     "try:\n    logger.warning('x %s', compute())\nexcept Exception:\n    pass",
     "with contextlib.suppress(Exception):\n    cleanup()\n    return False",
+    # A nested else is skipped when the body raised into its handler, and a
+    # log receiver that is not a plain name can raise (round 4).
+    "try:\n    cleanup()\nexcept OSError:\n    pass\nelse:\n    raise",
+    "try:\n    cleanup()\nexcept Exception:\n    pass\nelse:\n    return False",
+    "try:\n    self.logger.warning('x')\nexcept AttributeError:\n    pass",
+    "try:\n    logging.getLogger(name).warning('x')\nexcept Exception:\n    pass",
     "with contextlib.suppress(Exception):\n    return compute()",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
@@ -178,8 +184,6 @@ def test_nested_try_body_and_finally_count_for_the_handler(tmp_path, body):
     [
         # try/finally has no handler to catch the raise.
         "try:\n    raise RuntimeError('wrapped') from exc\nfinally:\n    cleanup()",
-        # The nested else runs outside the nested handlers.
-        "try:\n    cleanup()\nexcept OSError:\n    pass\nelse:\n    raise",
         # A non-None return whose value calls nothing cannot raise into the
         # nested handler.
         "try:\n    return {'error': 'failed', 'exc': exc}\nexcept Exception:\n    pass",
@@ -804,5 +808,11 @@ def test_try_else_still_stops_the_walk():
         7: "            give_up()",
     }
     assert _p006_governing_except(7, lines) is None
-    # An else whose owner is not visible is taken to be a try's.
-    assert _p006_governing_except(2, {1: "    else:", 2: "        work()"}) is None
+    # An else whose owner is not visible is taken to be a try's, so the walk
+    # stops there instead of reaching the acknowledged clause above it.
+    hidden_owner = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: "        else:",
+        3: "            work()",
+    }
+    assert _p006_governing_except(3, hidden_owner) is None
