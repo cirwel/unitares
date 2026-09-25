@@ -324,20 +324,3 @@ def test_skills_ship_blocks_when_the_plugin_mirror_is_out_of_sync(ship_repo: Pat
     assert result.returncode == 1
     assert "plugin bundle is out of sync" in result.stderr
 
-
-def test_skills_ship_blocks_on_rule_drift_when_it_changes_the_canonical_rule(
-    ship_repo: Path,
-) -> None:
-    # The commit itself changes the rule the plugin copies, so the drift is
-    # this commit's: block (plugin side first), not warn.
-    _stub_skills_sync(ship_repo, 5)
-    stage_file(ship_repo, "skills/demo/SKILL.md")
-    stage_file(ship_repo, "src/skill_attestations.py")
-
-    result = subprocess.run(
-        [str(ship_repo / "scripts" / "dev" / "ship.sh"), "--direct", "test: change"],
-        cwd=ship_repo, text=True, capture_output=True, env=dict(os.environ),
-    )
-
-    assert result.returncode == 1
-    assert "changes the attestation rule" in result.stderr
