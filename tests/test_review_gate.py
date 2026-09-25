@@ -1544,6 +1544,8 @@ def test_antigravity_prompt_limit_is_in_bytes_and_refuses_an_oversized_diff(repo
 
 
 def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "secret-bearer")
     seen = {}
 
     class Proc:
@@ -1553,6 +1555,7 @@ def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path)
 
     def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
         seen["cmd"], seen["cwd"], seen["listing"] = cmd, cwd, sorted(Path(cwd).iterdir())
+        seen["env"] = kw.get("env")
         stdout.write('{"conversation_id":"c","status":"SUCCESS","response":"fine\\nVERDICT: CLEAN\\n"}\n')
         stderr.write("Warning: invalid unsandboxed permission rules found\n")
         return Proc()
@@ -1560,6 +1563,9 @@ def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path)
     monkeypatch.setattr(rg.subprocess, "Popen", popen)
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert seen["cmd"][:3] == ["agy", "-p", "PROMPT"]
+    # Review of da5835a (P2): no caller secrets reach a prompt-steerable agent.
+    assert seen["env"] is not None and "GITHUB_TOKEN" not in seen["env"]
+    assert "UNITARES_MCP_BEARER_TOKEN" not in seen["env"]
     assert {"--sandbox", "plan", "json"} <= set(seen["cmd"])
     assert seen["cwd"] != str(tmp_path) and seen["cwd"] != os.getcwd() and seen["listing"] == []
     assert not Path(seen["cwd"]).exists()  # the workspace is removed afterwards

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import tempfile
 import time
 from pathlib import Path
@@ -412,6 +413,24 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
 # --------------------------------------------------------------------------- #
 
 ANTIGRAVITY_HOST_ID = "antigravity:host-adapter"
+# agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
+# untrusted text (a PR diff, a paused agent's thesis), and an injected "print
+# your environment" must find no UNITARES_*/GitHub token to echo. Kept: what a
+# CLI needs to find its home, locale, proxy and agy's OWN optional Google
+# credentials. Its subscription login lives in the system keyring, not env.
+AGY_ENV_ALLOWLIST = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
+    "LANG", "LC_ALL", "LC_CTYPE",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
+)
+
+
+def agy_env() -> dict[str, str]:
+    return {k: os.environ[k] for k in AGY_ENV_ALLOWLIST if k in os.environ}
+
 # One argv element: Linux caps it at 128 KiB. A dialectic prompt is far smaller.
 _ANTIGRAVITY_PROMPT_BYTES = 120_000
 
@@ -431,6 +450,18 @@ def resolve_antigravity_cli() -> Optional[str]:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
     return None
+
+
+async def _reap_group(proc: Any) -> None:
+    """Kill agy's whole process group and wait briefly; never raises."""
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        await asyncio.wait_for(proc.communicate(), timeout=5)
+    except Exception:  # noqa: BLE001 - best-effort reap after a kill
+        pass
 
 
 async def call_antigravity_backend(prompt: str) -> HostReviewResult:
@@ -463,25 +494,24 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
                 cli_path, "-p", prompt, "--mode", "plan", "--sandbox",
                 "--output-format", "json",
                 cwd=workspace,
+                env=agy_env(),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                # Own process group: a timeout must reach agy's sandbox children,
+                # or one holding stdout keeps communicate() waiting forever.
+                start_new_session=True,
             )
         except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
             return fail(f"Antigravity CLI spawn failed: {type(exc).__name__}")
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+            await _reap_group(proc)
             return fail(f"Antigravity CLI exceeded {timeout_s:g}s timeout",
                         latency_ms=int((time.monotonic() - started) * 1000))
         except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
-            try:
-                proc.kill()
-                await proc.communicate()
-            except Exception:
-                pass
+            await _reap_group(proc)
             return fail(f"Antigravity CLI communication failed: {type(exc).__name__}")
 
     latency_ms = int((time.monotonic() - started) * 1000)

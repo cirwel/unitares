@@ -559,6 +559,25 @@ OPTIONAL_CLI = {"antigravity": "agy"}
 # and macOS caps all of argv+env at 1 MiB. Bytes, not characters.
 ANTIGRAVITY_PROMPT_LIMIT = 120_000
 
+# agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
+# untrusted text (a PR diff, a paused agent's thesis), and an injected "print
+# your environment" must find no UNITARES_*/GitHub token to echo. Kept: what a
+# CLI needs to find its home, locale, proxy and agy's OWN optional Google
+# credentials. Its subscription login lives in the system keyring, not env.
+AGY_ENV_ALLOWLIST = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
+    "LANG", "LC_ALL", "LC_CTYPE",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
+)
+
+
+def agy_env() -> dict[str, str]:
+    return {k: os.environ[k] for k in AGY_ENV_ALLOWLIST if k in os.environ}
+
+
 ANTIGRAVITY_PROMPT = """\
 You are reviewing a pull request to a repository you cannot see: your working
 directory is deliberately empty, so do not try to read or list files. The full
@@ -896,6 +915,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
                 proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out,
                                         stderr=fh if isolated else subprocess.STDOUT,
                                         cwd=workspace.name if workspace else None,
+                                        env=agy_env() if isolated else None,
                                         start_new_session=True)
             except OSError as exc:  # reviewer CLI missing or not executable
                 return str(exc), f"could not start {reviewer}: {exc.__class__.__name__}"

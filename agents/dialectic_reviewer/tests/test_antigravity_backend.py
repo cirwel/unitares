@@ -23,7 +23,7 @@ class _Proc:
 def _spawn(monkeypatch, stdout: bytes, returncode: int = 0, seen: dict | None = None):
     async def fake_exec(*argv, cwd=None, **kw):
         if seen is not None:
-            seen["argv"], seen["cwd"] = argv, cwd
+            seen["argv"], seen["cwd"], seen["kw"] = argv, cwd, kw
             seen["listing"] = sorted(Path(cwd).iterdir())
         return _Proc(stdout, returncode)
 
@@ -83,3 +83,43 @@ def test_override_path_must_be_executable(monkeypatch, tmp_path):
     assert hb.resolve_antigravity_cli() is None
     fake.chmod(0o755)
     assert hb.resolve_antigravity_cli() == str(fake)
+
+
+def test_agy_gets_an_allowlisted_environment_not_the_callers(monkeypatch):
+    # Review of da5835a (P2): an injected "print your environment" in a
+    # paused agent's thesis must find no governance or GitHub token.
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "secret-bearer")
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    monkeypatch.setenv("HOME", "/Users/op")
+    seen = {}
+    out = {"status": "SUCCESS", "response": json.dumps(VERDICT)}
+    _spawn(monkeypatch, json.dumps(out).encode(), seen=seen)
+    asyncio.run(hb.call_antigravity_backend("P"))
+    env = seen["kw"]["env"]
+    assert env["HOME"] == "/Users/op"
+    assert "UNITARES_MCP_BEARER_TOKEN" not in env and "GITHUB_TOKEN" not in env
+    assert seen["kw"]["start_new_session"] is True
+
+
+def test_a_timeout_kills_the_process_group_and_never_raises(monkeypatch):
+    class Hung(_Proc):
+        pid = 4242
+        async def communicate(self):
+            await asyncio.sleep(3600)
+
+    async def fake_exec(*argv, **kw):
+        return Hung(b"")
+
+    killed = []
+    monkeypatch.setattr(hb, "resolve_antigravity_cli", lambda: "/bin/agy")
+    monkeypatch.setattr(hb.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(hb.os, "killpg", lambda pid, sig: killed.append(pid))
+    monkeypatch.setenv("UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S", "0.01")
+    orig_wait_for = asyncio.wait_for
+
+    async def short_wait_for(aw, timeout):
+        return await orig_wait_for(aw, min(timeout, 0.05))
+
+    monkeypatch.setattr(hb.asyncio, "wait_for", short_wait_for)
+    result = asyncio.run(hb.call_antigravity_backend("P"))
+    assert "timeout" in result.error and killed == [4242]
