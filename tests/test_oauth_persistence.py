@@ -567,3 +567,26 @@ async def test_a_used_refresh_token_stays_refused_when_the_store_delete_fails(ca
         await provider.exchange_refresh_token(client, entry, [])
     assert any("could NOT be deleted" in r.getMessage() for r in caplog.records)
     assert await provider.load_refresh_token(client, tokens.refresh_token) is None
+
+
+class _CountingStore(_DictStore):
+    def __init__(self):
+        super().__init__()
+        self.gets = 0
+
+    async def get(self, key):
+        self.gets += 1
+        return await super().get(key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["0123abcd" * 8, "some-rest-api-token", "Bearer-ish"])
+async def test_non_oauth_bearers_never_touch_the_store(token):
+    """Static allowlist and REST tokens reach load_access_token on every
+    request; a store lookup for them can only miss, and costs Redis round
+    trips (seconds if it hangs)."""
+    store = _CountingStore()
+    provider = GovernanceOAuthProvider(store=store)
+    assert await provider.load_access_token(token) is None
+    assert await provider.load_refresh_token(_dcr_client(), token) is None
+    assert store.gets == 0

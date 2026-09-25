@@ -354,7 +354,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         if _digest(refresh_token) in self._consumed_refresh:
             return None
         entry = self._refresh_tokens.get(refresh_token)
-        if entry is None and self._store is not None:
+        if entry is None and self._store is not None and refresh_token.startswith("rt_"):
             raw = await self._store.get(f"rt:{_digest(refresh_token)}")
             if raw:
                 try:
@@ -444,7 +444,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         entry = self._access_tokens.get(token)
-        if entry is None and self._store is not None:
+        # Every bearer on every request reaches this (the SDK's auth middleware
+        # and the /mcp gate), including static allowlist and REST tokens that
+        # were never stored; only a token this provider minted can be there.
+        if entry is None and self._store is not None and token.startswith("at_"):
             raw = await self._store.get(f"at:{_digest(token)}")
             if raw:
                 try:

@@ -151,9 +151,9 @@ tool runs:
      advanced settings). Connectors sharing a static client share its
      `oauth:<client_id>` session attribution, and if you enable token
      revocation (it is not mounted by default), revoking one connector's
-     token stops every connector on that client from refreshing, across
-     restarts; their current access tokens still work until they expire
-     (up to an hour). Give each connector its own client via DCR
+     **access** token stops every connector on that client from refreshing,
+     across restarts (their current access tokens still work until they
+     expire, up to an hour); revoking a **refresh** token ends only that one. Give each connector its own client via DCR
      if either matters. Alternatively, open registration briefly to add a
      DCR connector and close it again: a registration that received a token
      is kept in Redis, so it stays connected. `POST /register` alone writes
