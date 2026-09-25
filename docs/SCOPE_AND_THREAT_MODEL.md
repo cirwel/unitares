@@ -181,13 +181,16 @@ signature, and a party holding that key could also forge one.
 `Resolution.compute_signature` states this in its own docstring, and retention
 of the symmetric stack is a recorded decision rather than an oversight (see
 [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). It is designed for one
-operator attesting inside their own trust boundary. As of 2026-09-25 the
-maintainer deployment has not issued a party signature since 2026-06-24 (UTC),
-the date of the most recent resolved dialectic record carrying one, and
-`describe_attestation` reports a record without them as `unsigned` rather than
-as attested. A second principal is exactly the party who cannot be given the
-key, so a resolution record is not today independently verifiable by an
-operator who does not already trust its issuer.
+operator attesting inside their own trust boundary. As of 2026-09-25 no
+resolution record in the maintainer deployment carries a signature keyed on a
+party's `api_key` under the current scheme: the four 2026 records that carry a
+signature used a uuid-derived fallback key, forgeable from public data and
+removed in #2155, and the most recent records carrying two signatures are
+legacy v1 rows from 2025-12-13 (UTC), which cannot be verified.
+`describe_attestation` reports a record with no signatures as `unsigned`
+rather than as attested. A second principal is exactly the party who cannot be
+given the key, so a resolution record is not today independently verifiable by
+an operator who does not already trust its issuer.
 
 A deployment-countersigned receipt over the stored resolution record
 (`drr.v1`, [`src/dialectic_receipt.py`](../src/dialectic_receipt.py)) is

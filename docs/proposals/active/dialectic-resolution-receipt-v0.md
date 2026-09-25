@@ -27,11 +27,17 @@ trust its issuer. It also says the decision upstream of any exchange work is
 three constructions: issuer non-repudiation, a transparency log, and a witness
 that signs a receipt third parties verify.
 
-The party scheme has also gone unexercised: as of 2026-09-25 the maintainer
-deployment has not issued a party signature since 2026-06-24 (UTC), the date of
-the most recent resolved record carrying one. A receipt minted today would
-therefore countersign a record with no party attestation in it, and its
-`both_signatures_present` claim would be false.
+The party scheme has also gone unexercised: as of 2026-09-25 no resolution
+record in the maintainer deployment carries a signature keyed on a party's
+`api_key` under the current scheme. The four 2026 records that carry a
+signature used a uuid-derived fallback key, forgeable from public data and
+removed in #2155; the most recent records carrying two signatures are legacy
+v1 rows from 2025-12-13 (UTC), which cannot be verified. With the fallback gone,
+and no agent created since January 2026 holding an `api_key`, a receipt minted
+for a new agent's resolution would countersign a record with no party
+attestation in it and would carry `both_signatures_present: false`. An older
+agent with a key still on file would produce a single-signer attestation
+(`signature_a` only), which would carry the same value.
 
 ## What is built
 
