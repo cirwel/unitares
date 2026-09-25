@@ -520,6 +520,7 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
         # uncertified text was edited in this re-check, which found the old
         # wording wrong, so carrying the old wording across would invert it.
         text_unchanged = bool(certified_attestations(records, skill_digest))
+        _, accepted = effective_record(skills_dir, name, meta, skill_digest)
         edges = recorded_transitions(
             [data for _, data in transition_records(skills_dir, name, skill_digest)])
         digests: dict[str, str] = {}
@@ -529,11 +530,14 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
             full_path = resolve_source(root, projects_root, src)
             if full_path.exists():
                 digests[src] = content_digest(full_path)
-                # What the check accepted until now. If the content moved on
-                # from all of it, this stamp is the re-check across the change.
-                prior = carried_forward(
-                    last_verified_at(vouching, meta, src), edges.get(src, {}))
-                if text_unchanged and prior and digests[src] not in prior:
+                # A change only if the content moved on from everything the
+                # check accepts for this text (a return to content an older
+                # certification recorded is not one). It records the change
+                # from where the text was last verified, not all its history.
+                src_edges = edges.get(src, {})
+                prior = carried_forward(last_verified_at(vouching, meta, src), src_edges)
+                accepts = carried_forward(accepted.get(src, set()), src_edges) | prior
+                if text_unchanged and prior and digests[src] not in accepts:
                     superseded[src] = sorted(prior)
             elif (carried := carried_digest(skills_dir, name, src, skill_digest)) is not None:
                 # Not verifiable from here; keep the record made where it was,

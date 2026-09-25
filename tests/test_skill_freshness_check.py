@@ -484,6 +484,30 @@ def test_a_stamp_of_rewritten_text_records_no_transition(layout: Layout):
     assert layout.run().returncode == 1
 
 
+def test_a_re_stamp_at_content_already_accepted_records_no_transition(layout: Layout):
+    # v1 is certified at 1 and at 2; the source reverts to 1, which v1 still
+    # accepts, and v1 is re-stamped for AGING. That checked no change, so it
+    # must not write a 2 -> 1 edge carrying v2 (certified at 2 only) onto 1.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 2\n")})
+    layout.skill_file.write_text(v1_text)
+    layout.source("x = 1\n")
+    assert layout.run().returncode == 0
+    before = set(_attestations(layout))
+    layout.run("--stamp", "demo")
+    [stamp] = set(_attestations(layout)) - before
+    assert "superseded_digests" not in json.loads(stamp.read_text())
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    assert layout.run().returncode == 1
+
+
 def test_a_transition_recorded_before_the_current_text_was_verified_does_not_carry(layout: Layout):
     # v1 was re-checked across 1 -> 2, the source reverted, a branch edited
     # the skill (v2) and stamped it at 1, then re-landed 2 without stamping.
