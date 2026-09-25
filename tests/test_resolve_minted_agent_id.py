@@ -33,13 +33,6 @@ def test_alias_envelope_falls_back_to_raw_governance_uuid():
     assert resolve_minted_agent_id("start_session", None, result) == MINTED
 
 
-def test_default_alias_envelope_falls_back_to_top_level_agent_uuid():
-    """start_session's default ack omits raw_governance and lifts the minted
-    uuid as agent_uuid; attribution must still find it."""
-    result = [_Text({"success": True, "tool": "start_session", "agent_uuid": MINTED})]
-    assert resolve_minted_agent_id("start_session", None, result) == MINTED
-
-
 def test_agent_signature_uuid_is_last_resort():
     result = [_Text({"success": True, "agent_signature": {"uuid": MINTED}})]
     assert resolve_minted_agent_id("onboard", None, result) == MINTED

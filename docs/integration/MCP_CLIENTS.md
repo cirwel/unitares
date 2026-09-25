@@ -323,24 +323,17 @@ Two kinds of process do not follow this default. A short dispatched subagent usu
 
 Use raw `onboard(...)` instead when targeting older servers or when a raw
 implementation response shape is required. Primary workflow responses lift
-`agent_uuid`, `client_session_id`, and `next_action`; `start_session` also lifts
-`agent_id`, `display_name`, and `continuity_token` when one is issued. Read
-aliases and the write aliases except `request_review` default to a compact
-envelope whose `raw_governance_hint` names the full-payload route:
+`agent_uuid`, `client_session_id`, and `next_action`. Read aliases and the
+write aliases `store_finding`, `update_finding` and `record_result` default to
+a compact envelope whose `raw_governance_hint` names the full-payload route:
 `response_mode="full"` on `sync_state`, `search_shared_memory` and
-`record_result`, `verbosity="full"` on `check_working_state`, a
+`record_result`, `verbosity="full"` on `check_working_state`, and a
 `knowledge(action="details", discovery_id=...)` read for `store_finding` and
 `update_finding` (`response_mode` does not apply to them; the canonical
-`knowledge` tool returns their payload directly), and an
-`identity(client_session_id=...)` read for `start_session`. Repeating a write to
-see its payload writes again, and a second `start_session(force_new=true)` mints
-a second identity; pass `response_mode="full"` on the first `start_session` call
-if the full onboard payload is needed. `start_session` also lifts
-`resident_registration`, `label_renamed` and `bootstrap` when onboard reports
-them. `store_finding`, `update_finding` and `record_result` take `agent_uuid`
-from the response's signature and add `written_as` (the writer's `agent_id`,
-`display_name` and assurance tier), so a caller can see which identity a write
-was recorded under.
+`knowledge` tool returns their payload directly). Repeating a write to see its
+payload writes again. These three writes take `agent_uuid` from the response's
+signature and add `written_as` (the writer's `agent_id`, `display_name` and
+assurance tier), so a caller can see which identity a write was recorded under.
 
 For a same-owner rebind to an existing UUID, call `identity(agent_uuid=..., continuity_token=..., resume=true)` with the matching short-lived token. Do not teach clients to use bare `identity(agent_uuid=..., resume=true)`: UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 

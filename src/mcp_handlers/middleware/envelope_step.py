@@ -29,12 +29,12 @@ Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
 are omitted. Default read aliases, bounded ``sync_state`` modes and the write
-aliases ``start_session``, ``store_finding``, ``update_finding`` and
-``record_result`` omit the repeated canonical payload and advertise an
-explicit full-response escape hatch; the write aliases first lift the ids and
-warnings a caller needs next. ``request_review`` retains it, and
-``response_mode="full"`` restores it explicitly, except on the finding writes,
-whose route back is a ``knowledge(action="details")`` read.
+aliases ``store_finding``, ``update_finding`` and ``record_result`` omit the
+repeated canonical payload and advertise an explicit full-response escape
+hatch; the write aliases first lift the ids and warnings a caller needs next.
+Other state-changing aliases retain it, and ``response_mode="full"`` restores
+it explicitly, except on the finding writes, whose route back is a
+``knowledge(action="details")`` read.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -169,8 +169,9 @@ _COMPACT_READ_ALIASES = frozenset({
 # request_review is deliberately absent: its ack carries the review itself
 # (resolution conditions, reviewer dispatch, thesis-failure flags), which the
 # envelope does not project, and it declares no response_mode on /mcp/.
+# start_session is absent too: its ack shape is decided separately, with the
+# rest of the identity/onboarding surface.
 _COMPACT_WRITE_ALIASES = frozenset({
-    "start_session",
     "store_finding",
     "update_finding",
     "record_result",
@@ -1018,21 +1019,14 @@ def _write_ack_raw_policy(
 
     Default: omit it. The envelope already lifts the ids a caller needs next,
     so the canonical copy was most of a typical ack and mostly repeated the
-    agent signature, the stored record and the full identity ontology.
+    agent signature and the stored record.
 
     Two things keep the payload inline. An explicit full request does, on
-    start_session and record_result (``response_mode='full'``;
-    outcome_event's ``include_semantics`` is the same request under an older
-    name and survives ``/mcp/`` validation). And a payload whose record id the
-    envelope cannot lift does too, because then the canonical copy is the only
-    place the caller could find out what was written.
-
-    onboard's ``verbose`` is not a full request here. It never selects the
-    full payload: validation fills OnboardParams' ``response_mode='minimal'``
-    default, and the handler lets an explicit response_mode win over verbose,
-    so a verbose onboard still builds the minimal payload, whose fields the ack
-    already lifts. (``/mcp/`` also drops verbose on start_session, whose
-    argument model does not declare it.)
+    record_result (``response_mode='full'``; outcome_event's
+    ``include_semantics`` is the same request under an older name and survives
+    ``/mcp/`` validation). And a payload whose record id the envelope cannot
+    lift does too, because then the canonical copy is the only place the
+    caller could find out what was written.
 
     store_finding and update_finding have no full request here. This step sees
     the arguments after canonical validation, and KnowledgeParams fills
@@ -1040,40 +1034,22 @@ def _write_ack_raw_policy(
     same default in normalize_compact_search_details), so a caller's explicit
     'full' and an omitted parameter arrive identical. Their full routes are a
     knowledge(action='details') read, or the canonical knowledge tool, which
-    returns the payload directly. onboard validates to 'minimal' and
-    outcome_event to None, so on those two an arriving 'full' was the caller's.
+    returns the payload directly. outcome_event validates response_mode to
+    None, so on record_result an arriving 'full' was the caller's.
 
     The hint never tells a caller to repeat the write to see the payload: a
-    second store mints a second finding, and a second start_session(force_new)
-    mints a second identity. For the finding writes it names a details read.
-    For start_session it names an identity read and does not name
-    start_session at all, not even with response_mode='full': an agent that
-    re-sends its original force_new arguments plus that flag mints a second
-    identity. record_result has no read by outcome id, so its hint names the
-    full-mode parameter for a later outcome and warns that repeating this one
-    records a second outcome.
+    second store mints a second finding. For the finding writes it names a
+    details read. record_result has no read by outcome id, so its hint names
+    the full-mode parameter for a later outcome and warns that repeating this
+    one records a second outcome.
     """
-    full_mode = str(arguments.get("response_mode") or "").strip().lower() == "full"
-    wants_full = False  # the finding writes: see above
-    if friendly_name == "start_session":
-        wants_full = full_mode
-    elif friendly_name == "record_result":
+    if friendly_name == "record_result":
+        full_mode = (
+            str(arguments.get("response_mode") or "").strip().lower() == "full"
+        )
         wants_full = full_mode or _as_bool(
             arguments.get("include_semantics"), default=False
         )
-
-    if friendly_name == "start_session":
-        uuid = payload.get("uuid") or payload.get("agent_uuid")
-        session_id = payload.get("client_session_id")
-        identifiable = bool(uuid and session_id)
-        target = session_id if session_id else "..."
-        hint = (
-            "The full onboard payload is not repeated here. To inspect this "
-            f"binding, read it with identity(client_session_id='{target}'). "
-            "Do not call start_session again to see it: a second "
-            "start_session(force_new=true) mints a second identity."
-        )
-    elif friendly_name == "record_result":
         identifiable = payload.get("outcome_id") is not None
         hint = (
             "Do not repeat this outcome to read it: without a prediction_id, a "
@@ -1081,21 +1057,22 @@ def _write_ack_raw_policy(
             "(including the full EISV snapshot semantics) inline on a later "
             "outcome, pass response_mode='full' with it."
         )
-    else:
-        discovery = payload.get("discovery")
-        discovery = discovery if isinstance(discovery, dict) else {}
-        discovery_id = (
-            payload.get("discovery_id")
-            or discovery.get("id")
-            or arguments.get("discovery_id")
-        )
-        identifiable = discovery_id is not None
-        target = discovery_id if discovery_id is not None else "..."
-        hint = (
-            "Read the full record with knowledge(action='details', "
-            f"discovery_id='{target}'); do not repeat the write to see it."
-        )
-    return wants_full or not identifiable, hint
+        return wants_full or not identifiable, hint
+
+    # store_finding / update_finding: no full request (see above).
+    discovery = payload.get("discovery")
+    discovery = discovery if isinstance(discovery, dict) else {}
+    discovery_id = (
+        payload.get("discovery_id")
+        or discovery.get("id")
+        or arguments.get("discovery_id")
+    )
+    target = discovery_id if discovery_id is not None else "..."
+    hint = (
+        "Read the full record with knowledge(action='details', "
+        f"discovery_id='{target}'); do not repeat the write to see it."
+    )
+    return discovery_id is None, hint
 
 
 def _raw_governance_policy(
@@ -1108,7 +1085,7 @@ def _raw_governance_policy(
     Canonical tools are unchanged. Read aliases, bounded ``sync_state`` modes
     and the write aliases in ``_COMPACT_WRITE_ALIASES`` default to their
     bounded experience envelope and retain an explicit full-response escape
-    hatch. ``request_review`` still repeats its payload.
+    hatch. Other state-changing aliases still repeat their payload.
     """
     if friendly_name == "sync_state":
         arguments = arguments or {}
@@ -1529,76 +1506,13 @@ def build_experience_envelope(
             "sync_state(response_text='...', complexity=0.5, "
             "client_session_id=...) as you work."
         )
-        # The identity fields clients persist from this response. They used to
-        # be reachable only under raw_governance, which a default ack now
-        # omits: the plugin's post-identity hook and identity sidecar cache
-        # agent_id / display_name, the canaries read display_name, and the
-        # coordination demo reads continuity_token. Lift them rather than
-        # break those readers. session_resolution_source and
-        # continuity_token_supported are not lifted: only the full-mode
-        # payload carries them, and a full-mode ack keeps raw_governance.
-        envelope.update(_lift(
-            payload,
-            "agent_id",
-            "display_name",
-            "continuity_token",
-        ))
-        # Onboard's mint-time failure signals. The handler adds each one
-        # because the failure is otherwise invisible to the caller: an
-        # off-roster resident name minted without resident tags (archived by
-        # the orphan sweep days later), a label collision that applied a
-        # different display_name, a bootstrap check-in that was not written.
-        # They were only under raw_governance, so lift them before it goes.
-        registration = payload.get("resident_registration")
-        if isinstance(registration, dict):
-            # The status names the outcome; the remedy prose rides along when
-            # the outcome may not be what the caller asked for. A registered
-            # resident and a residentless install (the default, and the
-            # correct outcome there) need only the status, so a routine named
-            # mint does not carry ~400 B of prose on every ack.
-            compact_registration = _lift(
-                registration, "status", "requested_name", "on_roster"
-            )
-            if registration.get("status") not in ("registered", "no_roster_configured"):
-                compact_registration.update(_lift(registration, "detail"))
-            if compact_registration:
-                envelope["resident_registration"] = compact_registration
-        renamed = payload.get("label_renamed")
-        if isinstance(renamed, dict) and renamed:
-            envelope["label_renamed"] = dict(renamed)
-        bootstrap = payload.get("bootstrap")
-        if isinstance(bootstrap, dict):
-            compact_bootstrap = _lift(
-                bootstrap,
-                "written",
-                "state_id",
-                "reason",
-                "detail",
-                "payload_digest_match",
-            )
-            if compact_bootstrap:
-                envelope["bootstrap"] = compact_bootstrap
         state_summary = _lift(
             payload,
             "lineage_state",
             "session_key",
             "onboard_origin",
             "onboard_origin_basis",
-            "is_new",
-            "identity_resolution_outcome",
-            "provisional_lineage",
-            "auto_resumed",
-            "previous_status",
         )
-        assurance = payload.get("identity_assurance")
-        if isinstance(assurance, dict):
-            # Tier and proof, not the coaching prose: the prose is what the
-            # full payload is for, the tier is what a caller acts on.
-            compact_assurance = _lift(
-                assurance, "tier", "score", "caller_proven", "proof_origin", "baseline"
-            )
-            if compact_assurance:
-                state_summary["identity_assurance"] = compact_assurance
         predecessor = (
             payload.get("thread_context", {}).get("predecessor", {})
             if isinstance(payload.get("thread_context"), dict)

@@ -55,25 +55,19 @@ its own identity, declare the dispatcher as parent with
 | Request review | `request_review(...)` | `dialectic(action="request")` |
 
 The primary tools return a compact agent-facing envelope. Read aliases,
-bounded `sync_state` modes, and the write acknowledgements of `start_session`,
-`store_finding`, `update_finding` and `record_result` omit the repeated raw
-payload by default; `request_review` retains it. `raw_governance_hint` names
-the route back to the full payload. That is `response_mode="full"` on
-`sync_state`, `search_shared_memory` and `record_result`, and
-`verbosity="full"` on `check_working_state`. For
-`store_finding` and `update_finding`, where `response_mode` does not apply, it
-is a `knowledge(action="details", discovery_id=...)` read; the canonical
-`knowledge` tool also returns their payload directly. For
-`start_session` it is an `identity(client_session_id=...)` read, because a
-second `start_session(force_new=true)` mints a second identity; pass
-`response_mode="full"` on the first call when the full onboard payload is
-needed. A write acknowledgement keeps the ids a caller needs next at the
-top level (`agent_uuid`, `discovery_id`, and `state_summary.outcome_id`; on
-`start_session` also `client_session_id` and `continuity_token` when issued).
-The finding and outcome writes add `written_as`, the writer's `agent_id`,
-`display_name` and assurance tier, so a caller can see which identity a write
-was recorded under. `start_session` also keeps onboard's mint-time warnings
-(`resident_registration`, `label_renamed`, `bootstrap`). Interface contract
+bounded `sync_state` modes, and the write acknowledgements of `store_finding`,
+`update_finding` and `record_result` omit the repeated raw payload by default;
+other state-changing tools retain it. `raw_governance_hint` names the route
+back to the full payload. That is `response_mode="full"` on `sync_state`,
+`search_shared_memory` and `record_result`, and `verbosity="full"` on
+`check_working_state`. For `store_finding` and `update_finding`, where
+`response_mode` does not apply, it is a
+`knowledge(action="details", discovery_id=...)` read; the canonical
+`knowledge` tool also returns their payload directly. These three write
+acknowledgements keep the ids a caller needs next (`agent_uuid`,
+`discovery_id`, and `state_summary.outcome_id`) and add `written_as`, the
+writer's `agent_id`, `display_name` and assurance tier, so a caller can see
+which identity a write was recorded under. Interface contract
 1.13.0 and later negotiates one complete catalog while initially advertising a
 small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
 `list_tools(lite=true)` reports every capability name and the contract version;

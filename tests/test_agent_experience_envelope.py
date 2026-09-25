@@ -108,10 +108,7 @@ async def test_experience_alias_gets_envelope():
     assert data["tool"] == "start_session"
     assert data["agent_uuid"] == "u-1"
     assert data["client_session_id"] == "s-1"
-    # A write ack omits the repeated canonical payload by default; the ids a
-    # caller needs next are lifted above.
-    assert "raw_governance" not in data
-    assert data["raw_governance_available"] is True
+    assert data["raw_governance"]["agent_uuid"] == "u-1"
     assert "next_action" in data
 
 

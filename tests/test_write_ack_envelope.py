@@ -1,10 +1,12 @@
 """Write acknowledgements omit the repeated canonical payload by default.
 
-#2332 bounded the read aliases and routine sync_state. The write aliases still
-repeated their canonical payload under raw_governance, which was most of each
-ack. These pin the new default, the ids and warnings lifted in its place, the
-explicit full-response escape hatch, and the readers that used to reach into
-raw_governance for fields that now ride at the top level.
+#2332 bounded the read aliases and routine sync_state. The finding and outcome
+write aliases (store_finding, update_finding, record_result) still repeated
+their canonical payload under raw_governance, which was most of each ack. These
+pin the new default, the ids and warnings lifted in its place, and the explicit
+full-response escape hatch. start_session is out of scope here (its ack shape is
+decided with the identity/onboarding surface), so one test pins that this change
+leaves it as it was.
 
 Kept apart from test_agent_experience_envelope.py so concurrent envelope work
 appending to that file does not collide with this one.
@@ -46,10 +48,7 @@ def _onboard_payload() -> dict:
     wrapped the way handle_onboard_v2 wraps it (success_response with
     lite_response, which adds server_time and no agent_signature).
 
-    Built rather than hand-written so the lift tests exercise the shape the
-    server actually sends by default: minimal mode carries no
-    session_resolution_source or continuity_token_supported, and a lift of a
-    field the default never carries would pass against a hand-written dict.
+    Used only to pin that start_session's ack is untouched by this change.
     """
     from src.mcp_handlers.response_base import success_response
     from src.services.identity_payloads import build_onboard_response_data
@@ -81,30 +80,6 @@ def _onboard_payload() -> dict:
         data, agent_id=_UUID, arguments={"lite_response": True}
     )
     return json.loads(wrapped[0].text)
-
-
-def _onboard_payload_with_mint_signals() -> dict:
-    """The default ack of a named fresh mint that hit onboard's failure paths.
-
-    Each block is the exact shape its producer returns: resident_registration
-    from onboard_classifier.resident_registration (off-roster name),
-    label_renamed as handle_onboard_v2 writes it on a collision, bootstrap as
-    bootstrap_checkin.write_bootstrap returns it when the write fails.
-    """
-    from src.grounding.onboard_classifier import resident_registration
-
-    payload = _onboard_payload()
-    payload["resident_registration"] = resident_registration(
-        "vigil_probe", ["ephemeral"], roster=["vigil"]
-    )
-    payload["label_renamed"] = {
-        "requested": "canary_dialectic_probe",
-        "applied": "canary_dialectic_probe_2",
-        "reason": "label_taken_by_active_agent",
-        "detail": "'canary_dialectic_probe' is already held by another active agent.",
-    }
-    payload["bootstrap"] = {"written": False, "reason": "error", "detail": "TimeoutError"}
-    return payload
 
 
 def _store_payload() -> dict:
@@ -159,7 +134,6 @@ def _outcome_payload() -> dict:
 
 
 _WRITE_CASES = [
-    ("start_session", "onboard", _onboard_payload, {}),
     ("store_finding", "knowledge", _store_payload, {"summary": "write ack bug"}),
     ("update_finding", "knowledge", _update_payload, {"discovery_id": "d-existing"}),
     ("record_result", "outcome_event", _outcome_payload, {}),
@@ -176,7 +150,7 @@ _FINDING_WRITES = ("store_finding", "update_finding")
 def _full_form_bytes(friendly, canonical, make, args) -> int:
     """Bytes of the response that carries the whole payload.
 
-    start_session and record_result: the alias with response_mode='full'.
+    record_result: the alias with response_mode='full'.
     The finding writes have no full request at the alias (see
     test_finding_write_response_mode_is_not_a_full_request), so their full
     form is the ack as it was before the omission: the same envelope with
@@ -205,8 +179,7 @@ def test_write_ack_omits_raw_governance_by_default(friendly, canonical, make, ar
     assert env["tool"] == friendly
     assert env["next_action"]
     # The hint names a read or an explicit full request, never "re-call" the
-    # write: a repeated store mints a second finding, a repeated
-    # start_session(force_new) mints a second identity.
+    # write: a repeated store mints a second finding.
     hint = env["raw_governance_hint"]
     assert "Re-call" not in hint
     # The ack no longer carries the canonical payload's bulk.
@@ -214,10 +187,10 @@ def test_write_ack_omits_raw_governance_by_default(friendly, canonical, make, ar
     assert "agent_signature" not in json.dumps(env)
 
 
-@pytest.mark.parametrize("friendly,canonical,make,args", _WRITE_CASES[:2])
+@pytest.mark.parametrize("friendly,canonical,make,args", _WRITE_CASES[:1])
 def test_write_ack_is_under_half_its_full_form(friendly, canonical, make, args):
-    """start_session and store_finding carry the bulk (identity ontology,
-    signature, related findings); the default ack sheds most of it."""
+    """store_finding carries the bulk (signature, related findings); the
+    default ack sheds most of it."""
     env = build_experience_envelope(friendly, canonical, make(), args)
     assert _wire_bytes(env) * 2 < _full_form_bytes(friendly, canonical, make, args)
 
@@ -260,120 +233,6 @@ def test_include_semantics_restores_raw_governance():
         "record_result", "outcome_event", _outcome_payload(), {"include_semantics": True}
     )
     assert "raw_governance" in env
-
-
-@pytest.mark.asyncio
-async def test_verbose_is_not_a_full_request_on_start_session():
-    """verbose never selected the full onboard payload: validation fills
-    OnboardParams' response_mode='minimal' default, and the handler lets an
-    explicit response_mode win over verbose. Keeping raw_governance for it
-    would repeat the minimal payload the ack already lifts."""
-    from src.mcp_handlers.identity.handlers import _derive_onboard_response_mode
-    from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
-
-    ctx = DispatchContext()
-    name, arguments, ctx = await resolve_alias(
-        "start_session", {"force_new": True, "verbose": True}, ctx
-    )
-    name, arguments, ctx = await validate_params(name, arguments, ctx)
-    assert _derive_onboard_response_mode(arguments) == (True, "minimal")
-
-    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), arguments)
-    assert "raw_governance" not in env
-
-
-def test_start_session_ack_keeps_identity_fields_top_level():
-    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), {})
-
-    assert env["agent_uuid"] == _UUID
-    assert env["client_session_id"] == _SID
-    assert env["continuity_token"] == _TOKEN
-    assert env["agent_id"] == "Claude_Opus_20260925"
-    assert env["display_name"] == "canary_dialectic_probe"
-    # Only the full-mode payload carries these, and a full-mode ack keeps
-    # raw_governance; the default ack neither has nor invents them.
-    assert "continuity_token_supported" not in env
-    assert "session_resolution_source" not in env
-    summary = env["state_summary"]
-    assert summary["is_new"] is True
-    assert summary["identity_resolution_outcome"] == "minted_force_new"
-    assert summary["lineage_state"] == "no_lineage_declared"
-    # Tier and proof stay visible; the coaching prose is what full mode is for.
-    assert summary["identity_assurance"] == {
-        "tier": "weak",
-        "score": 0.35,
-        "caller_proven": False,
-        "proof_origin": "server_inferred",
-        "baseline": "fresh_identity",
-    }
-    assert "how_to_strengthen" not in json.dumps(env)
-
-
-def test_start_session_hint_names_a_read_and_never_start_session():
-    """Re-sending the original force_new arguments with response_mode='full'
-    would mint a second identity, so the hint must not name start_session as
-    the route to the payload. It names an identity read of this session."""
-    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), {})
-    hint = env["raw_governance_hint"]
-    assert f"identity(client_session_id='{_SID}')" in hint
-    assert "start_session(response_mode" not in hint
-    assert "start_session(" in hint and "second identity" in hint
-    # The only start_session call the hint names is the one it warns against.
-    assert hint.count("start_session(") == 1
-    assert "start_session(force_new=true) mints a second identity" in hint
-
-
-def test_start_session_ack_surfaces_mint_failure_signals():
-    """resident_registration, label_renamed and bootstrap exist because each
-    failure is otherwise invisible to the caller. The default ack omits
-    raw_governance, so they must ride at the top level."""
-    env = build_experience_envelope(
-        "start_session", "onboard", _onboard_payload_with_mint_signals(), {}
-    )
-    assert "raw_governance" not in env
-    registration = env["resident_registration"]
-    assert registration["status"] == "not_on_roster"
-    assert registration["on_roster"] is False
-    assert registration["requested_name"] == "vigil_probe"
-    assert "NOT in this deployment's UNITARES_RESIDENTS roster" in registration["detail"]
-    assert env["label_renamed"]["requested"] == "canary_dialectic_probe"
-    assert env["label_renamed"]["applied"] == "canary_dialectic_probe_2"
-    assert env["label_renamed"]["reason"] == "label_taken_by_active_agent"
-    assert env["bootstrap"] == {"written": False, "reason": "error", "detail": "TimeoutError"}
-
-
-@pytest.mark.parametrize("tags,roster,status,has_detail", [
-    (["persistent", "autonomous"], ["vigil_probe"], "registered", False),
-    (["ephemeral"], [], "no_roster_configured", False),
-    (["ephemeral"], ["vigil"], "not_on_roster", True),
-    (None, ["vigil"], "caller_supplied_tags", True),
-])
-def test_resident_registration_detail_rides_only_when_it_may_be_a_failure(
-    tags, roster, status, has_detail
-):
-    from src.grounding.onboard_classifier import resident_registration
-
-    payload = _onboard_payload()
-    payload["resident_registration"] = resident_registration(
-        "vigil_probe", tags, roster=roster
-    )
-    env = build_experience_envelope("start_session", "onboard", payload, {})
-    registration = env["resident_registration"]
-    assert registration["status"] == status
-    assert ("detail" in registration) is has_detail
-
-
-def test_start_session_ack_without_mint_signals_adds_none():
-    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), {})
-    for key in ("resident_registration", "label_renamed", "bootstrap"):
-        assert key not in env
-
-
-def test_start_session_ack_without_a_token_does_not_invent_one():
-    payload = _onboard_payload()
-    payload.pop("continuity_token")
-    env = build_experience_envelope("start_session", "onboard", payload, {})
-    assert "continuity_token" not in env
 
 
 def test_knowledge_write_acks_keep_ids_and_write_warnings():
@@ -420,7 +279,6 @@ def test_record_result_ack_keeps_outcome_id_and_disclosures():
         # lift, so the canonical payload is the only record of what happened.
         ("store_finding", "knowledge", {"success": True, "stored": [1, 2]}, {}),
         ("record_result", "outcome_event", {"success": True, "outcome_type": "x"}, {}),
-        ("start_session", "onboard", {"success": True, "uuid": _UUID}, {}),
     ],
 )
 def test_write_ack_without_a_liftable_id_keeps_raw_governance(
@@ -447,7 +305,6 @@ def test_request_review_ack_still_carries_raw_governance():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invoked,canonical", [
-    ("start_session", "onboard"),
     ("store_finding", "knowledge"),
     ("update_finding", "knowledge"),
     ("record_result", "outcome_event"),
@@ -480,46 +337,7 @@ async def test_write_error_passes_through_untouched():
     assert out is raw
 
 
-# -- readers that used to reach into raw_governance -------------------------
-
-def _load_script(name: str, relative: str):
-    import importlib.util
-    import sys
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parents[1] / relative
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_dialectic_canary_onboard_check_reads_the_default_ack():
-    canary = _load_script("dialectic_canary", "scripts/ops/dialectic_canary.py")
-    payload = _onboard_payload()
-    payload["display_name"] = canary.LABEL_PREFIX + "probe"
-    env = build_experience_envelope("start_session", "onboard", payload, {})
-    ok, detail = canary.evaluate_onboard(env)
-    assert ok, detail
-
-
-def test_coordination_demo_finds_the_token_in_the_default_ack():
-    demo = _load_script("coordination_demo", "scripts/demo/coordination_demo.py")
-    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), {})
-    assert demo._deep_first(env, ("agent_uuid", "uuid")) == _UUID
-    assert demo._deep_first(env, ("continuity_token",)) == _TOKEN
-
-
-def test_audit_attribution_resolves_the_minted_uuid_from_the_default_ack():
-    from src.services.tool_usage_recorder import resolve_minted_agent_id
-
-    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), {})
-    assert resolve_minted_agent_id("start_session", None, _result(env)) == _UUID
-
-
 _MCP_WRITE_ARGS = [
-    ("start_session", {}, True),
     ("store_finding", {"summary": "write ack bug"}, False),
     ("update_finding", {"discovery_id": "d-existing"}, False),
     ("record_result", {"outcome_type": "task_completed"}, True),
@@ -555,18 +373,7 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
     hint = build_experience_envelope(friendly, canonical, make(), args)[
         "raw_governance_hint"
     ]
-    if friendly == "start_session":
-        # Declared, but the hint deliberately does not name it (a repeated
-        # start_session mints a second identity). It names an identity read,
-        # whose /mcp/ model must deliver client_session_id.
-        identity_tool = mcp_server.mcp._tool_manager.get_tool("identity")
-        read = identity_tool.fn_metadata.arg_model.model_validate(
-            {"client_session_id": _SID}
-        ).model_dump_one_level()
-        assert read.get("client_session_id") == _SID
-        assert f"identity(client_session_id='{_SID}')" in hint
-        assert "response_mode" not in hint
-    elif declares_full:
+    if declares_full:
         # Named for a later outcome, after the warning not to repeat this one.
         assert "response_mode='full'" in hint
         assert hint.startswith("Do not repeat this outcome")
@@ -576,8 +383,6 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
 
 
 @pytest.mark.parametrize("friendly,args,older_flag,delivered", [
-    # onboard's verbose is not listed: it is not a full request on any
-    # transport (test_verbose_is_not_a_full_request_on_start_session).
     ("record_result", {"outcome_type": "task_completed"}, "include_semantics", True),
 ])
 def test_older_full_spellings_as_the_mcp_transport_delivers_them(
@@ -602,7 +407,6 @@ def test_older_full_spellings_as_the_mcp_transport_delivers_them(
 # -- through the real dispatch steps ----------------------------------------
 
 _PIPELINE_CASES = [
-    ("start_session", {"force_new": True}, _onboard_payload),
     ("store_finding", {"summary": "write ack bug", "discovery_type": "bug_found"}, _store_payload),
     ("update_finding", {"discovery_id": "d-existing", "status": "resolved"}, _update_payload),
     ("record_result", {"outcome_type": "task_completed"}, _outcome_payload),
@@ -648,9 +452,7 @@ def _real_signature() -> dict:
     )
 
 
-@pytest.mark.parametrize("friendly,canonical,make,args", [
-    case for case in _WRITE_CASES if case[0] != "start_session"
-])
+@pytest.mark.parametrize("friendly,canonical,make,args", _WRITE_CASES)
 def test_write_ack_says_which_identity_it_was_recorded_under(
     friendly, canonical, make, args
 ):
@@ -690,3 +492,36 @@ def test_write_ack_keeps_the_auto_correction_notice():
     assert payload["_param_coercions"]["applied"] == coercions
     env = build_experience_envelope("record_result", "outcome_event", payload, {})
     assert env["_param_coercions"] == payload["_param_coercions"]
+
+
+# -- start_session is out of scope ------------------------------------------
+
+@pytest.mark.asyncio
+async def test_start_session_ack_is_untouched_by_the_write_ack_change(monkeypatch):
+    """This change reshapes only the finding and outcome write acks. Through
+    the real alias and validation steps, start_session's ack is the same with
+    or without the write-ack policy, and today that ack still carries the
+    canonical payload under raw_governance by default. (Its shape belongs to
+    the identity/onboarding surface; if that surface changes the default, the
+    last assertion follows it, and the equality above still has to hold.)"""
+    from src.mcp_handlers.middleware import envelope_step
+    from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
+
+    assert "start_session" not in envelope_step._COMPACT_WRITE_ALIASES
+
+    ctx = DispatchContext()
+    name, arguments, ctx = await resolve_alias("start_session", {"force_new": True}, ctx)
+    name, arguments, ctx = await validate_params(name, arguments, ctx)
+    payload = _onboard_payload()
+
+    async def _ack() -> dict:
+        return _parse(await apply_experience_envelope(
+            name, dict(arguments), ctx, _result(payload)
+        ))
+
+    with_policy = await _ack()
+    monkeypatch.setattr(envelope_step, "_COMPACT_WRITE_ALIASES", frozenset())
+    without_policy = await _ack()
+    assert with_policy == without_policy
+    assert with_policy["tool"] == "start_session"
+    assert with_policy["raw_governance"] == payload
