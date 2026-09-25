@@ -4080,7 +4080,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         )
         await pg_update_phase(session_id, session.phase.value)
 
-        # 3. Submit synthesis with agrees=True through protocol
+        # 3. Submit synthesis through protocol (agrees is bound below)
         # merged_conditions is now a list[str]; tolerate the legacy string shape.
         synth_conditions = synthesis.get("merged_conditions") or []
         if isinstance(synth_conditions, str):

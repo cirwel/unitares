@@ -113,7 +113,7 @@ def cleanup_stale_processes():
                     if pid != CURRENT_PID:
                         create_time = proc.info.get('create_time', 0)
                         age_seconds = time.time() - create_time
-                        heartbeat_file = Path(project_root) / "data" / "processes" / f"heartbeat_{pid}.txt"
+                        heartbeat_file = process_mgr.pid_dir / f"heartbeat_{pid}.txt"
                         has_recent_heartbeat = False
                         if heartbeat_file.exists():
                             try:

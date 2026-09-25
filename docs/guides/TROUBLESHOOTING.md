@@ -90,8 +90,11 @@ tail -f data/logs/mcp_server_error.log
    # Claude Code
    cat ~/.claude.json | python3 -m json.tool
 
-   # Cursor
-   cat ~/.cursor/mcp.json | python3 -m json.tool
+   # Codex
+   cat ~/.codex/config.toml
+
+   # Other clients: check the client's MCP config for an entry pointing at
+   # http://localhost:8767/mcp/ (shapes in docs/integration/MCP_CLIENTS.md)
    ```
 
 2. **Check server is accessible:**
@@ -99,7 +102,7 @@ tail -f data/logs/mcp_server_error.log
    curl http://localhost:8767/health
    ```
 
-3. **Restart your client** (Cursor: Cmd+Q then reopen, Claude Desktop: quit and reopen)
+3. **Restart your client** (fully quit and reopen; for CLI clients, start a new session)
 
 4. **Check client logs** for connection errors
 

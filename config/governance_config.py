@@ -511,6 +511,20 @@ class GovernanceConfig:
             'GOVERNANCE_NON_AUTHORED_COLD_START_GUARD', 'true'
         ).lower() == 'true'
     )
+    # Extends the guard above to an agent's own report. The Phi cold-start
+    # prior owns the verdict until behavioral confidence reaches 0.3; from
+    # 2026-08-30 to 2026-09-24 it produced every pause verdict (0 of ~19,300
+    # auto_attest rows at confidence >= 0.3 produced one). See the
+    # proprioception contract's 2026-09-24 amendment. A risk-only verdict from
+    # that prior now guides whether or not the agent wrote the check-in;
+    # structural and runtime-safety stops are untouched. Rollback:
+    # GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED=false restores the
+    # agent-report exclusion.
+    COLD_START_GUARD_INCLUDE_AUTHORED = (
+        os.environ.get(
+            'GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED', 'true'
+        ).lower() == 'true'
+    )
 
     # =================================================================
     # Error Handling Constants

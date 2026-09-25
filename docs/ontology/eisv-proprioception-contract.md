@@ -418,6 +418,46 @@ The separate two-confirmation actuator remains dormant under dialectic decision
 observation, and does not weaken independently grounded safety evidence. Rollback
 sets `GOVERNANCE_NON_AUTHORED_COLD_START_GUARD=false` and restarts the service.
 
+**Amendment 2026-09-24 — agent-authored reports.** With
+`GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED=true` (default), rule 1's
+"non-agent-authored" condition is lifted: an agent's own report whose verdict is
+owned by the same Phi cold-start fallback is downgraded under exactly the same
+risk-only, provenance, maturity and no-independent-override conditions, and is
+recorded with its own enforcement basis (`authored_phi_cold_start_deferred`).
+Every other boundary in rule 3 stands. Evidence (dated window measurements on
+the live database, 2026-09-24):
+
+- From 2026-08-30 13:24 (when `auto_attest` first carries behavioral confidence)
+  to 2026-09-24, 0 of ~19,300 `auto_attest` rows at behavioral confidence >= 0.3
+  produced a pause verdict; every pause verdict in that window came from the
+  cold-start prior.
+- The 249 pause verdicts from 2026-08-24 to 2026-09-24 all carried a reported
+  complexity of 0.80–0.94, against a text-derived complexity of 0.14–0.31
+  (median 0.16). 241 of them came from automatic check-ins
+  (`substrate_interpretation`), not agents' own reports. 123 identities
+  received the identical risk 0.7859. The inputs are a reported complexity and
+  a complexity derived from a short template; see #2418.
+- The one pause delivered in the thirty days to 2026-09-24 was an agent's first
+  authored report, at behavioral confidence 0.2, whose behavioral assessment
+  read `safe`.
+- In the same thirty days the confirmation shadow requested by
+  `8539c516649a08af` saw 7 authored cold-start candidates: 6 ineligible
+  (`history_gap`) and 1 `shadow_confirmed` (the delivered pause, where a
+  preceding hook row counted as confirmation 1). It would have deferred none.
+  This amendment is not that counter and does not promote it.
+
+What this does not establish: that cold-start pauses were false positives, or
+that removing them avoids or allows harm. What it changes: a risk-only verdict
+from the prior, with complete provenance, no longer actuates a hard stop by
+itself. The prior can still pause through the fail-closed paths (missing or
+contradictory provenance) and through a risk-derived low basin (`basin_pause`),
+which is not a risk route. Structural and runtime-safety stops (void,
+coherence floor, CIRS resonance, loop detection) and independent verification
+still pause. Rule 4's recovery exception is not extended to authored rows; an
+authored pause delivered before this change cannot use it (none was in force
+on 2026-09-24). Rollback sets `GOVERNANCE_COLD_START_GUARD_INCLUDE_AUTHORED=false`
+and restarts the service.
+
 ## Decision record — V-reintroduction deferred (2026-08-07)
 
 The grounded-coherence re-derivation proposal

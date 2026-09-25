@@ -95,14 +95,18 @@ class AuditEntry:
     session_id: Optional[str] = None
 
 
+# Module-level so the test suite can redirect it (tests/conftest.py); the
+# env var does the same for subprocess-spawned servers.
+DEFAULT_LOG_FILE = Path(os.environ.get("UNITARES_AUDIT_LOG") or Path(__file__).parent.parent / "data" / "audit_log.jsonl")
+
+
 class AuditLogger:
     """Manages audit logging for governance system"""
     _event_loop = None  # Set by server at startup for executor-thread writes
 
     def __init__(self, log_file: Optional[Path] = None):
         if log_file is None:
-            project_root = Path(__file__).parent.parent
-            log_file = project_root / "data" / "audit_log.jsonl"
+            log_file = DEFAULT_LOG_FILE
 
         self.log_file = log_file
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
