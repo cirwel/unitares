@@ -213,7 +213,10 @@ see its payload writes again, and a second `start_session(force_new=true)` mints
 a second identity; pass `response_mode="full"` on the first `start_session` call
 if the full onboard payload is needed. `start_session` also lifts
 `resident_registration`, `label_renamed` and `bootstrap` when onboard reports
-them.
+them. `store_finding`, `update_finding` and `record_result` take `agent_uuid`
+from the response's signature and add `written_as` (the writer's `agent_id`,
+`display_name` and assurance tier), so a caller can see which identity a write
+was recorded under.
 
 For a same-owner rebind to an existing UUID, call `identity(agent_uuid=..., continuity_token=..., resume=true)` with the matching short-lived token. Do not teach clients to use bare `identity(agent_uuid=..., resume=true)`: UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 

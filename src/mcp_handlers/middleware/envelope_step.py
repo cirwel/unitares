@@ -1023,12 +1023,16 @@ def _write_ack_raw_policy(
     Two things keep the payload inline. An explicit full request does, on
     start_session and record_result (``response_mode='full'``;
     outcome_event's ``include_semantics`` is the same request under an older
-    name and survives ``/mcp/`` validation). onboard's ``verbose`` is honoured
-    here too, but only REST and stdio deliver it: the ``/mcp/`` argument model
-    for start_session does not declare it, so FastMCP drops it before the
-    envelope sees it. And a payload whose record id the envelope cannot lift
-    does too, because then the canonical copy is the only place the caller
-    could find out what was written.
+    name and survives ``/mcp/`` validation). And a payload whose record id the
+    envelope cannot lift does too, because then the canonical copy is the only
+    place the caller could find out what was written.
+
+    onboard's ``verbose`` is not a full request here. It never selects the
+    full payload: validation fills OnboardParams' ``response_mode='minimal'``
+    default, and the handler lets an explicit response_mode win over verbose,
+    so a verbose onboard still builds the minimal payload, whose fields the ack
+    already lifts. (``/mcp/`` also drops verbose on start_session, whose
+    argument model does not declare it.)
 
     store_finding and update_finding have no full request here. This step sees
     the arguments after canonical validation, and KnowledgeParams fills
@@ -1052,7 +1056,7 @@ def _write_ack_raw_policy(
     full_mode = str(arguments.get("response_mode") or "").strip().lower() == "full"
     wants_full = False  # the finding writes: see above
     if friendly_name == "start_session":
-        wants_full = full_mode or _as_bool(arguments.get("verbose"), default=False)
+        wants_full = full_mode
     elif friendly_name == "record_result":
         wants_full = full_mode or _as_bool(
             arguments.get("include_semantics"), default=False
@@ -2028,6 +2032,29 @@ def build_experience_envelope(
         warnings = source_payload.get("identity_warnings")
         if isinstance(warnings, list) and warnings:
             envelope["identity_warnings"] = list(warnings)
+        # Who the write was recorded under. The finding and outcome payloads
+        # carry no top-level uuid: their attribution is success_response's
+        # agent_signature, which rode only under raw_governance. A caller that
+        # bound weakly (no client_session_id, a transport-fingerprint pin) has
+        # to be able to see which identity it wrote as, and how well that
+        # binding was proven, without asking for the full payload.
+        if "agent_uuid" not in envelope:
+            signature = source_payload.get("agent_signature")
+            if isinstance(signature, dict) and signature.get("uuid"):
+                envelope["agent_uuid"] = signature["uuid"]
+                written_as = _lift(signature, "agent_id", "display_name")
+                assurance = signature.get("identity_assurance")
+                if isinstance(assurance, dict):
+                    written_as.update(_lift(
+                        assurance, "tier", "caller_proven", "proof_origin"
+                    ))
+                if written_as:
+                    envelope["written_as"] = written_as
+        # success_response's notice that the caller's arguments were
+        # auto-corrected: on a write, the corrected value is what was stored.
+        coercions = source_payload.get("_param_coercions")
+        if isinstance(coercions, dict) and coercions:
+            envelope["_param_coercions"] = coercions
 
     if include_raw:
         envelope["raw_governance"] = payload

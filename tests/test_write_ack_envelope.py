@@ -253,19 +253,33 @@ def test_finding_write_response_mode_is_not_a_full_request(
     assert "knowledge(action='details'" in env["raw_governance_hint"]
 
 
-def test_write_ack_older_full_spellings_restore_raw_governance():
-    """onboard's verbose and outcome_event's include_semantics already meant
-    'give me everything'; they keep meaning it where they reach the envelope
-    (verbose on start_session reaches it over REST and stdio only; see
-    test_older_full_spellings_as_the_mcp_transport_delivers_them)."""
-    env = build_experience_envelope(
-        "start_session", "onboard", _onboard_payload(), {"verbose": True}
-    )
-    assert "raw_governance" in env
+def test_include_semantics_restores_raw_governance():
+    """outcome_event's include_semantics already meant 'give me everything';
+    it keeps meaning it at the friendly surface, and it survives /mcp/."""
     env = build_experience_envelope(
         "record_result", "outcome_event", _outcome_payload(), {"include_semantics": True}
     )
     assert "raw_governance" in env
+
+
+@pytest.mark.asyncio
+async def test_verbose_is_not_a_full_request_on_start_session():
+    """verbose never selected the full onboard payload: validation fills
+    OnboardParams' response_mode='minimal' default, and the handler lets an
+    explicit response_mode win over verbose. Keeping raw_governance for it
+    would repeat the minimal payload the ack already lifts."""
+    from src.mcp_handlers.identity.handlers import _derive_onboard_response_mode
+    from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
+
+    ctx = DispatchContext()
+    name, arguments, ctx = await resolve_alias(
+        "start_session", {"force_new": True, "verbose": True}, ctx
+    )
+    name, arguments, ctx = await validate_params(name, arguments, ctx)
+    assert _derive_onboard_response_mode(arguments) == (True, "minimal")
+
+    env = build_experience_envelope("start_session", "onboard", _onboard_payload(), arguments)
+    assert "raw_governance" not in env
 
 
 def test_start_session_ack_keeps_identity_fields_top_level():
@@ -562,9 +576,8 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
 
 
 @pytest.mark.parametrize("friendly,args,older_flag,delivered", [
-    # onboard's schema declares verbose, but start_session's /mcp/ argument
-    # model does not, so FastMCP drops it there; only REST and stdio carry it.
-    ("start_session", {}, "verbose", False),
+    # onboard's verbose is not listed: it is not a full request on any
+    # transport (test_verbose_is_not_a_full_request_on_start_session).
     ("record_result", {"outcome_type": "task_completed"}, "include_semantics", True),
 ])
 def test_older_full_spellings_as_the_mcp_transport_delivers_them(
@@ -619,3 +632,61 @@ async def test_write_ack_omits_raw_governance_after_real_validation(friendly, ar
     assert data["tool"] == friendly
     assert "raw_governance" not in data, arguments
     assert data["raw_governance_available"] is True
+
+
+def _real_signature() -> dict:
+    """agent_signature as success_response attaches it to a write."""
+    from src.services.identity_payloads import build_identity_signature_payload
+
+    return build_identity_signature_payload(
+        agent_uuid=_UUID,
+        agent_id="Claude_Opus_20260925",
+        display_name="probe",
+        label_source="claimed",
+        session_resolution_source="ip_ua_fingerprint",
+        proof_origin="server_inferred",
+    )
+
+
+@pytest.mark.parametrize("friendly,canonical,make,args", [
+    case for case in _WRITE_CASES if case[0] != "start_session"
+])
+def test_write_ack_says_which_identity_it_was_recorded_under(
+    friendly, canonical, make, args
+):
+    """The finding and outcome payloads carry attribution only in
+    agent_signature. A weakly bound caller must still see who it wrote as."""
+    payload = make()
+    payload["agent_signature"] = _real_signature()
+    env = build_experience_envelope(friendly, canonical, payload, args)
+    assert "raw_governance" not in env
+    assert env["agent_uuid"] == _UUID
+    assert env["written_as"] == {
+        "agent_id": "Claude_Opus_20260925",
+        "display_name": "probe",
+        "tier": "weak",
+        "caller_proven": False,
+        "proof_origin": "server_inferred",
+    }
+    assert "identity_context" not in json.dumps(env)
+
+
+def test_write_ack_without_a_proven_signature_invents_no_writer():
+    payload = _update_payload()
+    payload["agent_signature"] = {"uuid": None}
+    env = build_experience_envelope("update_finding", "knowledge", payload, {})
+    assert "agent_uuid" not in env
+    assert "written_as" not in env
+
+
+def test_write_ack_keeps_the_auto_correction_notice():
+    from src.mcp_handlers.response_base import success_response
+
+    coercions = {"confidence": {"from": "0.5", "to": 0.5}}
+    wrapped = success_response(
+        _outcome_payload(), agent_id=None, arguments={"_param_coercions": coercions}
+    )
+    payload = json.loads(wrapped[0].text)
+    assert payload["_param_coercions"]["applied"] == coercions
+    env = build_experience_envelope("record_result", "outcome_event", payload, {})
+    assert env["_param_coercions"] == payload["_param_coercions"]

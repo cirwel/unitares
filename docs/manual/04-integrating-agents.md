@@ -68,10 +68,12 @@ is a `knowledge(action="details", discovery_id=...)` read; the canonical
 second `start_session(force_new=true)` mints a second identity; pass
 `response_mode="full"` on the first call when the full onboard payload is
 needed. A write acknowledgement keeps the ids a caller needs next at the
-top level (`agent_uuid`, `client_session_id`, `continuity_token` when issued,
-`discovery_id`, and `state_summary.outcome_id`), and `start_session` also keeps
-onboard's mint-time warnings (`resident_registration`, `label_renamed`,
-`bootstrap`). Interface contract
+top level (`agent_uuid`, `discovery_id`, and `state_summary.outcome_id`; on
+`start_session` also `client_session_id` and `continuity_token` when issued).
+The finding and outcome writes add `written_as`, the writer's `agent_id`,
+`display_name` and assurance tier, so a caller can see which identity a write
+was recorded under. `start_session` also keeps onboard's mint-time warnings
+(`resident_registration`, `label_renamed`, `bootstrap`). Interface contract
 1.13.0 and later negotiates one complete catalog while initially advertising a
 small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
 `list_tools(lite=true)` reports every capability name and the contract version;
