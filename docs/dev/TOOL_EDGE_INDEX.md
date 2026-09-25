@@ -65,14 +65,14 @@ note for why the raw rendering is not.
 
 | Public name | Canonical | Wire params | Describe-only | Wire schema hash |
 |---|---|---:|---|---|
-| `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:25dc5f02a64764777cd071e63c1598143b44c3ddfbcad68ee5d1e44e413ff3ee` |
-| `record_result` | `outcome_event` | 14 | — | `sha256:16db80fdb6373ac45fb5578d6696deb9161ef433fab350c005b5586bab144f1d` |
-| `request_review` | `dialectic` | 9 | — | `sha256:ef0ec0a2ec8c3a11f7f4747bda14003f470a5e420e91e175d4ac0e3735ba5dbb` |
-| `search_shared_memory` | `knowledge` | 27 | — | `sha256:912a5fbb8c5ba493591393ed20b79c9f6b31407387c3723ef094d450bddcbda8` |
-| `start_session` | `onboard` | 17 | — | `sha256:54a9f14fabc4e5d2d7c6593bdb21a5390f7fc2112615afb4501d7492dcfbb117` |
-| `store_finding` | `knowledge` | 13 | — | `sha256:dcc00e81d99845be515b018554a872c05269be23161e8afe23e06efce8386cfa` |
-| `sync_state` | `process_agent_update` | 23 | — | `sha256:376d01d3dddddadb31105f11b4c01f720acb73fce00fe1556e096a0868b3fffb` |
-| `update_finding` | `knowledge` | 13 | — | `sha256:a29af94c8c82916db3800f2f5e8a878ad83e0ab5366f0426f18ea629643b6e75` |
+| `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:d8940514d86a40128d11c761cbb7bee47b2fef59115e74a51d03ba68f1e833e4` |
+| `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
+| `request_review` | `dialectic` | 9 | — | `sha256:8e51f6a859b59a6a3b5fd795f74279c9f3ba3be023a2439a87307700419ca9c2` |
+| `search_shared_memory` | `knowledge` | 21 | — | `sha256:6176bfbfaba48d9f404cd7989c9f008be2fe87986c83b2b6ff58746a5d3bdb33` |
+| `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
+| `store_finding` | `knowledge` | 13 | — | `sha256:938f0ad1a527818f675654a2635387068501a288cf31f8e5e8bfeca53713bb4e` |
+| `sync_state` | `process_agent_update` | 23 | — | `sha256:d5c7581ba2664c1e8870fe6784f6dd7fbb48339e6dad928807a1fc1af6d9b198` |
+| `update_finding` | `knowledge` | 13 | — | `sha256:86d3ae8277f33fc0393ab12c09fd46d3d2e0b57f38fc8a713b19ed74534c8908` |
 
 ## Deterministic findings
 

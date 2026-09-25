@@ -371,7 +371,7 @@ class CleanupKnowledgeGraphParams(AgentIdentityMixin):
 
 
 class KnowledgeParams(AgentIdentityMixin):
-    """Parameters for knowledge"""
+    """Knowledge graph parameters."""
     # Which of these flat parameters each action uses. The wire schema stays
     # flat (the MCP wrapper builds its argument model from top-level
     # properties), so this is the only machine-readable statement of the

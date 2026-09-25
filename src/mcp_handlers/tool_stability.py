@@ -27,9 +27,12 @@ from src.tool_meta import ToolStability
 
 # Every advertised description is paid for on every tools/list. The full EISV
 # field contract (#1434) is carried once on the advertised surface, by
-# check_working_state, whose default envelope returns E/I/S/V; the other
-# workflow aliases point at it. The canonical tools keep the full contract.
-EISV_POINTER = "EISV fields (E, I, S, V) are defined on check_working_state."
+# check_working_state, whose envelope returns E/I/S/V; the other workflow
+# aliases point at it. The pointer is a call, not a cross-reference: a client
+# that defers tool loading and selects only sync_state never loads
+# check_working_state's description, but can call describe_tool. The
+# canonical tools keep the full contract.
+EISV_POINTER = "EISV field definitions: describe_tool(tool_name='check_working_state')."
 
 
 def expand_description_pointers(text: Optional[str]) -> Optional[str]:
@@ -504,8 +507,8 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "naming a still-live parent is rejected as coincidental and the claim "
             "cleared, unless spawn_reason marks a dispatched child or a "
             "compaction continuation. Use identity to inspect or rename an "
-            "existing binding. onboard is the canonical twin and returns the "
-            "raw payload; this name returns a digest envelope."
+            "existing binding. onboard is the canonical twin; this name adds a "
+            "digest envelope and keeps the raw payload under raw_governance."
         ),
         experience=True),
     "sync_state": ToolAlias(
@@ -519,9 +522,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "which refuses and points at start_session. simulate_update previews "
             "a proposed check-in without advancing state, though it still "
             "appends an audit event; check_working_state reads the current "
-            "verdict without writing. process_agent_update is the canonical twin "
-            "and returns the raw payload; this name returns a digest envelope "
-            "(response_mode='full' adds the raw payload). "
+            "verdict without writing. process_agent_update is the canonical twin; "
+            "this name returns a digest envelope, and a routine check-in omits "
+            "the raw payload (response_mode='full' adds it under raw_governance). "
             f"{EISV_POINTER}"
         ),
         param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
@@ -612,8 +615,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "and refuses under strict identity from an ephemeral session. "
             "Provenance cannot be self-attested here: verification_source is "
             "forced and provenance keys in detail are stripped. Use store_finding "
-            "for durable knowledge. outcome_event is the canonical twin and "
-            "returns the raw payload; this name returns a digest envelope. "
+            "for durable knowledge. outcome_event is the canonical twin; this "
+            "name adds a digest envelope and keeps the raw payload under "
+            "raw_governance. "
             f"{EISV_POINTER}"
         ),
         experience=True),
