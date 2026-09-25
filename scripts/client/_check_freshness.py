@@ -73,7 +73,9 @@ the branch's text had only its own record, made against the old content, so
 the skill read STALE until the branch re-stamped. Replaying the 19 failing
 CI runs from 2026-09-24 20:40 to 09-25 08:05 UTC (6 branches), 29 of 65 STALE
 sources had content some stamp had already recorded for another version of
-the skill text; the other 36 were content no stamp had recorded.
+the skill text: an upper bound on this class, since those records predate
+transitions and whether a merge is relieved also depends on stamp order; the
+other 36 were content no stamp had recorded.
 Carrying forward accepts that someone re-checked the skill's claims across
 that change. It gives up one pairing: the branch's own edits to the text
 against master's change to the source. Nobody reviewed that pairing, and the
@@ -84,7 +86,12 @@ existence. A stamp from a branch cut before the change records the OLD
 content and no transition, and a source reverting to content some other text
 was verified against has no transition from what the current text was
 verified at, so neither case is accepted; nor is a transition recorded before the current
-text was verified, which says nothing about it. Content no stamp has recorded, such
+text was verified, which says nothing about it. That cut is by stamp time,
+the only order the records carry: if the branch re-stamps its text AFTER
+master's re-check and only then merges master, the records look exactly like
+a re-check followed by an unstamped re-land, and the skill reads STALE until
+re-stamped, as before. Relief comes when master's re-check is the later
+stamp, the usual order for a branch stamped once and merged later. Content no stamp has recorded, such
 as a branch's own unstamped change or both sides editing one file, is STALE
 as before.
 
@@ -96,8 +103,7 @@ fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
 when skill content moves. Old attestations can be removed with `--prune`,
 which keeps the newest N per skill plus every record that still vouches for
 the current SKILL.md text with a source digest no other kept record carries,
-and every record whose transition carries a cited source's current digest
-forward; deleting a file never conflicts with another PR adding one.
+and every record whose transition leads to a cited source's current content; deleting a file never conflicts with another PR adding one.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
 into an attestation dated with that skill's `last_verified`.
@@ -568,39 +574,41 @@ def _pairs(record: dict) -> set[tuple[str, str]]:
 
 
 def _transition_records(root: str, projects_root: str, skills_dir: Path, name: str) -> set[Path]:
-    """Attestation files whose recorded transition is on a path carrying a
-    cited source's current digest forward from what the current text was
-    verified at. For a source absent from this checkout the current digest is
-    unknown, so every eligible record with a transition for it is kept."""
-    skill_md = skills_dir / name / "SKILL.md"
-    meta = parse_frontmatter(skill_md.read_text())
+    """Attestation files whose recorded transition leads to a cited source's
+    current content, whichever skill text is on disk here.
+
+    Not only the text in this checkout: an open branch holding another version
+    of the skill needs the carrier as much, and a prune on master would
+    otherwise delete it as soon as master re-stamped its own text directly.
+    For a source absent from this checkout the current digest is unknown, so
+    every record with a transition for it is kept."""
+    meta = parse_frontmatter((skills_dir / name / "SKILL.md").read_text())
     if not meta:
         return set()
-    skill_digest = skill_text_digest(skill_md)
-    _, accepted = effective_record(skills_dir, name, meta, skill_digest)
-    eligible = transition_records(skills_dir, name, skill_digest)
-    edges = recorded_transitions([data for _, data in eligible])
+    adir = skills_dir / ATTESTATIONS_DIR / name
+    carriers: list[tuple[Path, dict[str, tuple[str, list[str]]]]] = []
+    for path in sorted(adir.glob("*.json")):
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+            if transitions := _transitions_of(data):
+                carriers.append((path, transitions))
+    edges: dict[str, dict[str, set[str]]] = {}
+    for _, transitions in carriers:
+        for src, (new, olds) in transitions.items():
+            for old in olds:
+                edges.setdefault(src, {}).setdefault(old, set()).add(new)
     needed: set[Path] = set()
     for src in load_source_files(skills_dir / name, meta["source_files"]):
         full_path = resolve_source(root, projects_root, src)
-        recorded = accepted.get(src, set())
-        if not recorded:
-            continue
-        src_edges = edges.get(src, {})
-        reach = carried_forward(recorded, src_edges)
         current = content_digest(full_path) if full_path.exists() else None
-        if current is not None and (current in recorded or current not in reach):
-            continue
-        for path, data in eligible:
-            transition = _transitions_of(data).get(src)
-            if transition is None:
+        for path, transitions in carriers:
+            if src not in transitions:
                 continue
-            new, olds = transition
-            if not any(o in reach for o in olds):
-                continue
-            # On a path: its source end is reachable, and the current digest
-            # is reachable from its destination (unknown when absent: keep).
-            if current is None or current in carried_forward({new}, src_edges):
+            new = transitions[src][0]
+            if current is None or current in carried_forward({new}, edges.get(src, {})):
                 needed.add(path)
     return needed
 
@@ -619,14 +627,14 @@ def prune_attestations(root: str, projects_root: str, keep: int) -> int:
     the mirror sync's direction guard (scripts/dev/skills_direction_guard.py)
     lets `rsync --delete` remove, so a prune never leaves the sync refusing,
     and a source whose digest is not visible here keeps its voucher too.
-    A record whose recorded transition lies on the path that carries a cited
-    source's current digest forward is kept as well, whatever text it
-    certified: deleting it would turn that source STALE.
+    A record whose recorded transition leads to a cited source's current
+    content is kept as well, whatever text it certified: a branch holding
+    another version of the skill may depend on it (see _transition_records).
     """
     skills_dir = Path(root) / "skills"
     base = skills_dir / ATTESTATIONS_DIR
     keep = max(keep, 1)
-    removed = retained = 0
+    removed = retained = carrying = 0
     if base.is_dir():
         for adir in sorted(p for p in base.iterdir() if p.is_dir()):
             skill_md = skills_dir / adir.name / "SKILL.md"
@@ -653,13 +661,20 @@ def prune_attestations(root: str, projects_root: str, keep: int) -> int:
                     if _pairs(data) - covered:
                         kept.add(path)
                         covered |= _pairs(data)
-                kept |= _transition_records(root, projects_root, skills_dir, adir.name)
+                carriers = _transition_records(root, projects_root, skills_dir, adir.name) - kept
+                carrying += len(carriers)
+            else:
+                carriers = set()
+            retained += max(0, len(kept) - min(keep, len(paths)))
+            kept |= carriers
             for path in paths:
                 if path not in kept:
                     path.unlink()
                     removed += 1
-            retained += max(0, len(kept) - min(keep, len(paths)))
     note = f"; kept {retained} older record(s) that still vouch for the current text" if retained else ""
+    if carrying:
+        note += (f"; kept {carrying} record(s) whose re-check carries a source to its current "
+                 "content, for any version of the text")
     print(f"  pruned {removed} attestation(s), kept the newest {keep} per skill{note}")
     return 0
 

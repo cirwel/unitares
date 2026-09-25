@@ -382,9 +382,47 @@ def test_prune_keeps_the_record_that_carries_a_source_forward(layout: Layout):
     _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {src: _digest("x = 2\n")},
             skill_digest="0123456789abcdef")         # newest, other text, no transition
     assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0
+    assert carrier in _attestations(layout)
+    # v2's own record vouches; the carrier certified v1 and is counted apart.
+    assert "kept 1 older record(s) that still vouch for the current text" in result.stdout
+    assert "kept 1 record(s) whose re-check carries a source to its current content" in result.stdout
+    assert layout.run().returncode == 0
+
+
+def test_a_prune_on_master_keeps_the_carrier_an_open_branch_needs(layout: Layout):
+    # Master re-checks v1 across 1 -> 2, then re-stamps v1 with no source
+    # change (the answer to AGING). Its own text no longer needs the carrier,
+    # but a branch holding v2, certified at 1 before the re-check, still does.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    carrier = _attestations(layout)[-1]
+    layout.run("--stamp", "demo")
     assert layout.run("--prune", "1").returncode == 0
     assert carrier in _attestations(layout)
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")    # the branch
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
     assert layout.run().returncode == 0
+
+
+def test_a_branch_stamped_after_masters_re_check_still_re_stamps(layout: Layout):
+    # The limit of ordering by stamp time: v2 stamped at 1 AFTER master's
+    # 1 -> 2 re-check is, in the records, the same as a revert followed by an
+    # unstamped re-land, so it fails closed and the branch re-stamps.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20991231T000000000000Z-bbbbbbbb", _day(0), {src: _digest("x = 1\n")})
+    assert layout.run().returncode == 1
 
 
 def test_a_transition_recorded_before_the_current_text_was_verified_does_not_carry(layout: Layout):
