@@ -147,15 +147,26 @@ tool runs:
      advanced settings). Connectors sharing a static client share its
      `oauth:<client_id>` session attribution, and if you enable token
      revocation (it is not mounted by default), revoking one connector's
-     token signs out every connector on that client for the refresh-token
-     lifetime, across restarts. Give each connector its own client via DCR
+     token stops every connector on that client from refreshing, across
+     restarts; their current access tokens still work until they expire
+     (up to an hour). Give each connector its own client via DCR
      if either matters. Alternatively, open registration briefly to add a
      DCR connector and close it again: a registration that received a token
      is kept in Redis, so it stays connected. `POST /register` alone writes
      nothing to Redis, but while registration is open and sign-in is
      auto-approved, anyone can still register, sign in and obtain a token,
      which writes a client and its tokens to Redis; only closing
-     registration bounds that.
+     registration bounds that. Closing it bounds **new** registrations
+     only: a DCR client that already holds a token stays admitted (each
+     refresh renews it). To evict every client and token, delete the
+     OAuth keys and restart:
+
+     ```bash
+     redis-cli --scan --pattern 'unitares:oauth:*' | xargs -r redis-cli del
+     ```
+
+     This is targeted (never flush Redis, which holds the live session
+     store); pre-registered connectors simply sign in again.
 
    OAuth gates `/mcp` on **every** request by default, which locks out
    local clients that do not speak OAuth. To keep them working, give the
@@ -266,7 +277,8 @@ Three things make a lockout harder than it needs to be:
 OAuth state now survives a restart (`src/oauth_provider.py`, `RedisOAuthStore`),
 so a restart is no longer a way to clear it. To sign every OAuth client out,
 delete the `unitares:oauth:*` keys (targeted — never flush Redis, which holds
-the live session store) and restart; or revoke per client.
+the live session store; command above) and restart. There is no per-client
+sign-out by default: the revocation endpoint is not mounted.
 
 If provider construction fails, `/mcp` **closes rather than opening**. The route
 answers `503 auth_unavailable`, because serving it unauthenticated would answer a
