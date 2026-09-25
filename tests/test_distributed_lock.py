@@ -201,6 +201,18 @@ class TestForceRelease:
                 os.close(fd)
 
     @pytest.mark.asyncio
+    async def test_file_open_error_is_not_reported_as_contention(self, lock_no_redis):
+        """A failed open() is an I/O error, not a live holder: it must surface
+        as itself, not after the timeout as LockTimeoutError."""
+        from src.state_locking import LockTimeoutError
+
+        with patch("src.cache.distributed_lock.os.open", side_effect=PermissionError("denied")):
+            with pytest.raises(PermissionError, match="denied") as excinfo:
+                async with lock_no_redis.acquire("perm", timeout=5.0):
+                    pass
+        assert not isinstance(excinfo.value, LockTimeoutError)
+
+    @pytest.mark.asyncio
     async def test_file_lock_timeout_is_lock_timeout_error(self, lock_no_redis):
         from src.state_locking import LockTimeoutError
 

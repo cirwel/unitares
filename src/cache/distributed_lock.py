@@ -202,14 +202,16 @@ class DistributedLock:
 
         try:
             while True:
+                # Open outside the contention handler, re-creating the dir in
+                # case it went: a failed open is an I/O error, not a holder.
+                self._ensure_lock_dir()
+                fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                 try:
-                    # Open lock file and try a non-blocking lock. Only these
-                    # two calls count as contention; the locked body below
-                    # runs outside this handler, so an OSError it raises
+                    # Only flock() counts as contention; the locked body below
+                    # runs outside this handler too, so an OSError it raises
                     # reaches the caller instead of re-acquiring the lock.
-                    fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except IOError:
+                except OSError:
                     # Lock is held, close our fd and retry
                     if fd is not None:
                         try:
