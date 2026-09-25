@@ -208,8 +208,8 @@ A `raise` or log inside a nested `try`'s own handler does not count: it
 reacts to a different exception, and when the nested code succeeds the
 caught one is still swallowed. Nor does a `raise` in the body of a nested
 `try` that has a handler, which may catch it, or a `return` there whose value
-calls something (`return compute()`), since the call may raise into that
-handler.
+does more than name a variable or build a literal (`return compute()`,
+`return cache[key]`), since evaluating it may raise into that handler.
 
 Everything else is P006: `pass`, `...`, an empty block, `continue`, `break`,
 a bare `return` or `return None`, assigning `None` or another fallback to

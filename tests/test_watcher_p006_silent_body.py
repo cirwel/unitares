@@ -84,6 +84,12 @@ SILENT_BODIES = [
     "try:\n    return compute()\nexcept Exception:\n    pass",
     "try:\n    return {'error': str(exc)}\nexcept Exception:\n    pass",
     "try:\n    return await fetch()\nexcept Exception:\n    pass",
+    # Not only calls raise (#2442 review, P2).
+    "try:\n    return cache[key]\nexcept KeyError:\n    pass",
+    "try:\n    return self.result\nexcept AttributeError:\n    pass",
+    "try:\n    return total / count\nexcept Exception:\n    pass",
+    "try:\n    return f'{exc}'\nexcept Exception:\n    pass",
+    "try:\n    return {**extra}\nexcept Exception:\n    pass",
     "with contextlib.suppress(Exception):\n    return compute()",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
@@ -347,6 +353,60 @@ def test_nested_try_above_the_cited_line_is_not_added(tmp_path):
     path = _write(tmp_path, source)
     assert p006_actually_fires(str(path), 7) is False
     assert p006_actually_fires(str(path), 2) is True
+
+
+def test_cite_in_an_earlier_nested_handler_adds_no_later_tries(tmp_path):
+    # #2442 review, P3: a line in a nested try's handler is not above a later
+    # swallow. Master dropped this (both handlers on the path react).
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            a()\n"
+        "        except OSError:\n"
+        "            logger.warning('x')\n"
+        "        try:\n"
+        "            b()\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "    except Exception:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 5) is False
+    assert p006_actually_fires(str(path), 6) is False
+    # A cite above both nested tries still reaches the silent one.
+    assert p006_actually_fires(str(path), 2) is True
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        # A try inside a nested def does not run as part of the block.
+        "        def later():\n"
+        "            try:\n"
+        "                x()\n"
+        "            except Exception:\n"
+        "                pass\n",
+        # The author acknowledged this clause.
+        "        try:\n"
+        "            x()\n"
+        "        except Exception:  # noqa: BLE001\n"
+        "            pass\n",
+    ],
+)
+def test_nested_step_skips_scopes_and_acknowledged_clauses(tmp_path, later):
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        y = 1\n"
+        + later
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 2) is False
+    assert p006_actually_fires(str(path), 3) is False
 
 
 @pytest.mark.parametrize(

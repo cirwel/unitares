@@ -1738,6 +1738,26 @@ def _p006_callee_name(func: Any) -> str:
     return ""
 
 
+def _p006_value_is_inert(value: Any) -> bool:
+    """True when evaluating ``value`` is taken not to raise: a literal, a
+    name, or a tuple, list or dict built only from those, with literal dict
+    keys. A call, await, subscript, attribute access, operator, f-string,
+    set, comprehension or ``*``/``**`` unpacking can raise, so any of them
+    makes it not inert. (A name lookup could raise NameError; that is
+    accepted.)"""
+    import ast
+
+    for node in ast.walk(value):
+        if isinstance(node, ast.Dict):
+            if not all(isinstance(k, ast.Constant) for k in node.keys):
+                return False
+        elif not isinstance(
+            node, (ast.Constant, ast.Name, ast.Tuple, ast.List, ast.expr_context)
+        ):
+            return False
+    return True
+
+
 def _p006_handler_reacts(handler: Any) -> bool:
     """True when ``handler``'s body, nested blocks included, has positive
     evidence of reacting: a ``raise``, a logging call at info level or above,
@@ -1757,11 +1777,12 @@ def _p006_handler_reacts(handler: Any) -> bool:
     handler's type matches the raised one, or whether the handler re-raises
     (its body is skipped, as above), so such a finding is kept. A log call in
     that body still counts: it runs before anything there can be caught. A
-    non-None ``return`` there counts only when its value contains no call
-    (``return False`` or ``return {"error": msg}``, not ``return compute()``
-    or ``return str(exc)``), because a call in the value can raise into that
-    handler and the failure is swallowed. The body of a
-    ``with ...suppress(...)`` block is treated the same way.
+    non-None ``return`` there counts only when its value is inert (see
+    ``_p006_value_is_inert``: ``return False`` or ``return {"error": msg}``,
+    not ``return compute()``, ``return str(exc)`` or ``return cache[key]``),
+    because evaluating anything else can raise into that handler and the
+    failure is swallowed. The body of a ``with ...suppress(...)`` block is
+    treated the same way.
     """
     import ast
 
@@ -1801,15 +1822,9 @@ def _p006_handler_reacts(handler: Any) -> bool:
                 node.value is None
                 or (isinstance(node.value, ast.Constant) and node.value.value is None)
             )
-            # In a caught body, a call in the value can raise into a handler
+            # In a caught body, evaluating the value can raise into a handler
             # that swallows it.
-            and not (
-                raise_caught
-                and any(
-                    isinstance(sub, (ast.Call, ast.Await))
-                    for sub in ast.walk(node.value)
-                )
-            )
+            and (not raise_caught or _p006_value_is_inert(node.value))
         ):
             return True
         if _p006_is_loud_log_call(node):
@@ -1859,7 +1874,11 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     When the line sits in a ``try`` block, the path also takes the handlers of
     every try nested in the innermost such block that starts below the line,
     at any depth: the model may cite the outer ``try:`` line or an early body
-    line when the silent handler belongs to a try further down. This only
+    line when the silent handler belongs to a try further down. Tries inside
+    a nested def, lambda or class are not taken, nor handlers whose clause
+    carries ``# noqa: BLE001`` or a bare ``# noqa``; and nothing is taken
+    when the line sits in a nested try's handler, ``else`` or ``finally``,
+    which is not above a later swallow but in a branch of its own. This only
     adds to a path that already has a handler, so it can keep a finding but
     never drop one: one silent nested handler keeps it, and a line with no
     handler of its own is kept as below.
@@ -1919,10 +1938,41 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
         ):
             innermost = node
     if innermost is not None:
-        for stmt in innermost.body:
-            for node in ast.walk(stmt):
-                if isinstance(node, try_types) and node.lineno > line:
-                    on_path.extend(node.handlers)
+        # Tries in the block, not crossing into a nested def, lambda or
+        # class: code there does not run as part of the block.
+        scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+        nested: list[Any] = []
+        stack: list[Any] = list(innermost.body)
+        while stack:
+            node = stack.pop()
+            if isinstance(node, scope_nodes):
+                continue
+            if isinstance(node, try_types):
+                nested.append(node)
+            stack.extend(ast.iter_child_nodes(node))
+
+        def _in_branch(t: Any) -> bool:
+            # A line in a nested try's handler, else or finally (header
+            # included) is not above a swallow; it belongs to that branch.
+            if any(_within(h, h.lineno) for h in t.handlers):
+                return True
+            for block in (t.orelse, t.finalbody):
+                if block and _within(block[-1], block[0].lineno - 1):
+                    return True
+            return False
+
+        if not any(_in_branch(t) for t in nested):
+            source_lines = source.splitlines()
+            for t in nested:
+                if t.lineno <= line:
+                    continue
+                # A nested clause the author acknowledged with `# noqa:
+                # BLE001` (or a bare `# noqa`) does not keep the finding.
+                on_path.extend(
+                    h
+                    for h in t.handlers
+                    if not _P006_ACKNOWLEDGED.search(source_lines[h.lineno - 1])
+                )
 
     return not all(_p006_handler_reacts(h) for h in on_path)
 
