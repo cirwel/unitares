@@ -6,7 +6,10 @@ import asyncio
 import json
 import os
 import re
+import shutil
+import tempfile
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -395,3 +398,112 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
         finish_reason=finish_reason,
         backend="external",
     )
+
+
+# --------------------------------------------------------------------------- #
+# Antigravity CLI (agy) reviewer host: the operator's Google subscription.
+#
+# agy loads a working directory's .agents/ hooks, rules and project permission
+# rules, so it never runs in a repository: its cwd is an EMPTY temporary
+# directory, refused if any parent holds .git/.agents. The dialectic prompt is
+# self-contained, so nothing is lost. --mode plan and --sandbox are defence in
+# depth. Verified against agy 1.2.11: `agy -p … --mode plan --sandbox
+# --output-format json` prints {"status":"SUCCESS","response":…,"usage":{…}}.
+# --------------------------------------------------------------------------- #
+
+ANTIGRAVITY_HOST_ID = "antigravity:host-adapter"
+# One argv element: Linux caps it at 128 KiB. A dialectic prompt is far smaller.
+_ANTIGRAVITY_PROMPT_BYTES = 120_000
+
+
+def resolve_antigravity_cli() -> Optional[str]:
+    """Operator override, then PATH, then the per-user/Homebrew locations a
+    sparse launchd PATH misses (the agy installer writes ~/.local/bin)."""
+    override = os.getenv("UNITARES_ANTIGRAVITY_CLI", "").strip()
+    if override:
+        path = os.path.abspath(os.path.expanduser(override))
+        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+    found = shutil.which("agy")
+    if found:
+        return os.path.abspath(found)
+    for candidate in (Path.home() / ".local" / "bin" / "agy",
+                      Path("/opt/homebrew/bin/agy"), Path("/usr/local/bin/agy")):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+async def call_antigravity_backend(prompt: str) -> HostReviewResult:
+    """Run agy headless from an empty workspace; never raises."""
+    host_id = ANTIGRAVITY_HOST_ID
+
+    def fail(error: str, **kw: Any) -> HostReviewResult:
+        return HostReviewResult(text=None, host_id=host_id, backend="antigravity",
+                                error=error, **kw)
+
+    cli_path = resolve_antigravity_cli()
+    if cli_path is None:
+        return fail("Antigravity CLI (agy) not found or not executable")
+    if len(prompt.encode("utf-8")) > _ANTIGRAVITY_PROMPT_BYTES:
+        return fail("Antigravity prompt exceeds the argv size limit")
+    try:
+        timeout_s = float(os.getenv("UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S", "420"))
+    except (TypeError, ValueError):
+        timeout_s = 420.0
+    timeout_s = max(1.0, timeout_s)
+
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="dialectic-agy-") as workspace:
+        if any((d / m).exists() for d in Path(workspace).resolve().parents
+               for m in (".git", ".agents")):
+            return fail("Antigravity workspace is not isolated (a parent holds .git/.agents)")
+        try:
+            # exec, not a shell: the prompt is one argv element, never parsed.
+            proc = await asyncio.create_subprocess_exec(
+                cli_path, "-p", prompt, "--mode", "plan", "--sandbox",
+                "--output-format", "json",
+                cwd=workspace,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
+            return fail(f"Antigravity CLI spawn failed: {type(exc).__name__}")
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return fail(f"Antigravity CLI exceeded {timeout_s:g}s timeout",
+                        latency_ms=int((time.monotonic() - started) * 1000))
+        except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
+            try:
+                proc.kill()
+                await proc.communicate()
+            except Exception:
+                pass
+            return fail(f"Antigravity CLI communication failed: {type(exc).__name__}")
+
+    latency_ms = int((time.monotonic() - started) * 1000)
+    if proc.returncode != 0:
+        return fail(f"Antigravity CLI exited {proc.returncode}", latency_ms=latency_ms)
+    raw = stdout.decode(errors="replace").strip()
+    try:
+        data = json.loads(raw.splitlines()[-1]) if raw else {}
+    except (ValueError, IndexError):
+        data = {}
+    if not isinstance(data, dict) or data.get("status") != "SUCCESS":
+        return fail("Antigravity CLI reported no successful result", latency_ms=latency_ms)
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    try:
+        tokens = int(usage.get("total_tokens") or 0)
+    except (TypeError, ValueError):
+        tokens = 0
+    warnings = ["Antigravity CLI does not report an exact model identifier"]
+    response = data.get("response") if isinstance(data.get("response"), str) else ""
+    verdict_text = _extract_verdict(response)
+    if verdict_text is None:
+        return fail("Antigravity CLI returned no parseable dialectic verdict",
+                    tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)
+    return HostReviewResult(text=verdict_text, host_id=host_id, backend="antigravity",
+                            tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)

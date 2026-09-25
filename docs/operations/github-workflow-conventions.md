@@ -298,9 +298,15 @@ Gemini CLI (#2423, reverted). So `agy` runs in an **empty temporary
 workspace** with `--mode plan --sandbox`, and `review.sh` inlines the diff plus
 the full post-change text of every changed file into the prompt. It reads
 those files itself and never executes them. The trade-off is that the
-reviewer cannot browse the rest of the repository. A diff too large to inline
-(about 400 KB) is refused rather than reviewed in part, and the next reviewer
-runs instead. Setup on a machine:
+reviewer cannot browse the rest of the repository. The whole prompt,
+including the instructions and the inlined files, is capped at about 120 KB,
+counted in bytes, because it is passed as one command-line argument. Files that
+do not fit are marked as omitted. A diff that does not fit on its own is
+refused rather than reviewed in part, and the next reviewer runs instead.
+Content is read only from committed git objects: symlinks, submodules and paths
+outside the repository never reach the prompt. The dialectic reviewer has the
+same backend: set `UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the
+orchestrator's environment. Setup on a machine:
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
