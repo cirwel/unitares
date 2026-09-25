@@ -1,6 +1,6 @@
 # Roadmap
 
-**Last reviewed:** 2026-09-17
+**Last reviewed:** 2026-09-25
 
 This roadmap states priorities, not delivery dates. Deployed behavior is defined
 by releases and canonical documentation, not by this file.
@@ -66,17 +66,17 @@ by releases and canonical documentation, not by this file.
 
 ## Later — only after independent evidence
 
-- Multi-operator and mutually distrustful-governor experiments.
-- **Multi-principal trust: not scheduled** (decided 2026-09-25). It is a
-  separate claim: whether identity, attestation, and enforcement survive a
+- **Multi-principal trust, including multi-operator and mutually
+  distrustful-governor experiments: not scheduled** (decided 2026-09-25). It
+  is a separate claim: whether identity, attestation, and enforcement survive a
   principal who does not share this authority. The validation cohort under
   "Now" does not establish it, and it does not gate the cohort. As of
-  2026-09-25 no second
-  principal and no external verifier exist, and a second host run by the same
-  operator is not a second principal. **Wake condition:** a real outside party,
-  a person or organisation with its own administrative root, asks to verify a
-  record from this deployment. The evidence path is outreach, not engineering.
-  See the [decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+  2026-09-25 no second principal and no external verifier exist, and a second
+  host run by the same operator is not a second principal. **Wake condition:**
+  a real outside party, a person or organisation with its own administrative
+  root, asks to verify a record from this deployment. The evidence path would
+  be outreach, not engineering; outreach is not scheduled either. See the
+  [decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
   and [`docs/SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md).
 - Broader policy enforcement or efficacy claims.
 - Stabilization commitments for a 1.0 server/API surface.

@@ -8,6 +8,18 @@ are not scheduled. D5's implementation is a separate follow-up PR, tracked in
 best for the future of the federation", given after an adversarial design review
 of these decisions recommended the option recorded here. Merging remains the
 operator's act, so the decision is reversible until merge.
+**What that basis is and is not.** The direction is a delegation with one
+criterion, in the form of the
+[outcome-fixture precedent](../archive/outcome-fixture-conflation-decision-packet-v0.md):
+the operator delegated these selections to the working agent, and under that
+criterion the working agent selected the options below. The adversarial design
+review was the authoring agent's own review, not an independent one, and it is
+not recorded in the repository beyond this record. Nothing here claims the
+operator weighed each option; the operator's ratification is the merge.
+**Scope of "federation".** The word is used in
+[`PRODUCT_DEFINITION.md`](../../PRODUCT_DEFINITION.md)'s sense: many runtimes
+sharing one operator-controlled server and authority domain. D3a concerns trust
+beyond that domain, which the product definition does not claim.
 **Labels:** D3a, D3b, D4 and D5 follow the design review's numbering. They are
 local to this record and unrelated to D1–D7 in
 [`open-decisions-packet-v0.md`](open-decisions-packet-v0.md).
@@ -43,7 +55,15 @@ applies to the whole track, not only to receipts.
 with its own administrative root, asks to verify a record from this deployment.
 
 **Evidence path.** Outreach, not engineering. The next step that could produce
-evidence is finding that party, not building for one.
+evidence is finding that party, not building for one. **Outreach is not
+scheduled by this record either.** It is the operator's act, and this record
+does not assign or plan it; nothing is in motion on this track.
+
+**Where the wake would be noticed.** A request to verify a record would arrive
+as an issue or discussion on the public repository, where the operator reads
+it. **Backstop:** if no such request has arrived, this decision is re-read on
+or after 2027-03-25; the date is a backstop for review, not a schedule for
+work.
 
 **What this answers.** The open question in the identity plan's S20 entry
 ([`plan.md`](../../ontology/plan.md), "is there a concrete external verifier
@@ -86,6 +106,10 @@ the argument rather than from scratch.
   granularity, for example that the record was written by the dialectic path
   and not by a co-tenant, requires a signer under a separate account that
   governed agents cannot drive.
+- **The key is shared with the AIC.** The `drr.v1` receipt signs with
+  `UNITARES_AIC_SIGNING_KEY`, the same key the dormant Agent Identity Credential
+  prototype would sign identity attestations with. A custody choice for receipts
+  therefore binds the AIC as well.
 - **One standard for both keys.** The lease plane's attestation key
   (`UNITARES_LEASE_ATTESTATION_SIGNING_KEY`, an Ed25519 seed supplied through
   deployment configuration) is live and already has deployment-granularity
@@ -99,7 +123,10 @@ caveat. S19 concerns agent-to-server proof, where a claim about one process is
 exactly what same-account custody cannot support. The preferred option above
 instead narrows the claim to what same-account custody can support. That is a
 preference for whoever wakes D3b, not an amendment: the packet's wake criteria
-stand until that decision is taken.
+stand until that decision is taken. In particular, citing this record does not
+satisfy the registry's "non-exportable custody" criterion: whether a
+same-account non-exportable store counts there is for the D3b decision itself
+to settle.
 
 ## D5: retire party-HMAC minting, keep history readable
 
@@ -124,11 +151,15 @@ was used.
    this row, and the attributed row already says that. It cannot be party-level
    evidence even in principle.
 2. **Restoring it would revive a retired credential.** API keys were deprecated
-   as an authentication mechanism. `src/mcp_handlers/tool_stability.py` records
-   the `get_agent_api_key` alias with the migration note "API keys deprecated -
-   UUID is now auth", dated on or before 2026-01-13, which is the repository
-   history's floor. Issuing keys again to feed the HMAC would bring back a
-   credential the identity model has already removed.
+   as an authentication mechanism: UUID session binding is authentication on
+   the handler path. `src/mcp_handlers/tool_stability.py` records the
+   `get_agent_api_key` alias with the migration note "API keys deprecated -
+   UUID is now auth", dated on or before 2026-01-13, the floor that file gives
+   for the repository's history. Issuing keys again to feed the HMAC would bring
+   back a credential the identity model has deprecated. Deprecated is not
+   removed: some legacy paths still generate a key when metadata is created,
+   and one still verifies ownership with it. So the implementation must stop
+   minting in `finalize_resolution` itself, not rely on keys being absent.
 
 The 2026-09-08 measurement in the `describe_attestation` docstring (no agent
 minted with an API key since 2026-01-29) is telemetry, not a reason for this
@@ -147,13 +178,13 @@ provided a new row reads as `unsigned` and no field is added or removed.
 
 ## D4: pointer
 
-On the peer-review synthesis path, a paused agent with no key on file had
-`signature_a` keyed on the `api_key` the synthesis caller supplied. That is
-usually the reviewer's key, so the record showed a party-A signature party A
-never produced. The fix is
-[#2450](https://github.com/cirwel/unitares/pull/2450). It stands on its own until D5 lands,
-since records minted in between should not carry a signature in a slot whose
-party did not produce it.
+On `master` as of 2026-09-25, on the peer-review synthesis path, a paused agent
+with no key on file gets `signature_a` keyed on the `api_key` the synthesis
+submitter supplied. When the submitter is not party A, the record shows a
+party-A signature party A never produced. The fix is
+[#2450](https://github.com/cirwel/unitares/pull/2450), an open draft. It stands
+on its own until D5 lands, since records minted in between should not carry a
+signature in a slot whose party did not produce it.
 
 ## What this record does not change
 
