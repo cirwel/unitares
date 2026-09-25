@@ -29,6 +29,7 @@ from src.outcome_corroboration import (
     GRADE_WEIGHTS,
     TOOL_OBSERVED,
     ceiling_for_verification_source,
+    corroboration_upgrade_hint,
     enrich_detail_with_corroboration,
 )
 logger = get_logger(__name__)
@@ -724,6 +725,11 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
         "evidence_weight": detail.get("evidence_weight"),
         "claim_risk": detail.get("claim_risk"),
         "corroboration_reasons": detail.get("corroboration_reasons"),
+        # Response-only, never persisted: advice for this caller, not a fact
+        # about the outcome. None once the row reached what its path can earn.
+        "corroboration_hint": corroboration_upgrade_hint(
+            detail.get("corroboration_grade"), ceiling=corroboration_ceiling
+        ),
         "claimed_fields": detail.get("claimed_fields"),
         "verified_fields": detail.get("verified_fields"),
         "unverified_fields": detail.get("unverified_fields"),
