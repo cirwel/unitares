@@ -637,7 +637,7 @@ class TestFormatMirror:
         # #428: verdict is now wrapped with meaning + next_action at the
         # response surface. The raw value lives at .value.
         assert result["verdict"]["value"] == "pause"
-        assert "Needs attention" in result["verdict"]["meaning"]
+        assert "refused, not queued" in result["verdict"]["meaning"]
         assert "next_action" in result["verdict"]
 
     def test_pause_verdict_never_reads_steady_state(self):
