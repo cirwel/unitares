@@ -131,6 +131,7 @@ from src.mcp_listen_config import (
     build_transport_security_settings,
     default_listen_host,
     main_listener_ungated,
+    oauth_gate_required,
     oauth_public_port,
 )
 
@@ -233,6 +234,10 @@ if _oauth_issuer_url:
 # OAuth. Refusing to start takes all of them down for a fault in one. That blast
 # radius is why this is opt-in rather than the default, and why a route-scoped
 # refusal (503 on /mcp alone) is the better long-term shape.
+# Read once, with the import-time refusal, so the check in main() sees the
+# same environment: ~/.env.mcp loads between the two and must not widen the
+# flag's reach.
+_OAUTH_GATE_REQUIRED = oauth_gate_required()
 _auth_refusal = auth_gate_refusal(
     provider_present=_oauth_provider is not None,
     issuer_set=bool(_oauth_issuer_url),
@@ -342,11 +347,17 @@ async def main():
     # a tunnel still pointed at the main port, or any local caller, reaches it.
     # So with OAuth confined to a public listener, only a bearer allowlist
     # satisfies the flag, whatever the host.
-    _refusal = auth_gate_refusal(
-        provider_present=_oauth_provider is not None,
-        issuer_set=bool(_oauth_issuer_url),
-        main_listener_ungated=bool(_oauth_issuer_url and _oauth_public_port),
-        main_host=args.host,
+    # Judges only the public-port case; every other REQUIRED case was judged
+    # at import. Gated on the import-time reading of the flag.
+    _refusal = (
+        auth_gate_refusal(
+            provider_present=_oauth_provider is not None,
+            issuer_set=True,
+            main_listener_ungated=True,
+            main_host=args.host,
+        )
+        if _OAUTH_GATE_REQUIRED and _oauth_issuer_url and _oauth_public_port
+        else None
     )
     if _refusal:
         print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)

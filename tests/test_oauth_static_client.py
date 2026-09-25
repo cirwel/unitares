@@ -498,6 +498,7 @@ async def test_required_refusal_runs_before_bootstrap(monkeypatch):
         lambda: SimpleNamespace(host="0.0.0.0", port=8767, force=False, reload=False),
     )
     monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
+    monkeypatch.setattr(mcp_server, "_OAUTH_GATE_REQUIRED", True)
     monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
 
     with pytest.raises(SystemExit):
@@ -526,6 +527,7 @@ async def test_required_refuses_a_public_port_even_on_a_loopback_main(monkeypatc
         lambda: SimpleNamespace(host="127.0.0.1", port=8767, force=False, reload=False),
     )
     monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
+    monkeypatch.setattr(mcp_server, "_OAUTH_GATE_REQUIRED", True)
     monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
     with pytest.raises(SystemExit):
         await mcp_server.main()
@@ -553,6 +555,38 @@ async def test_required_accepts_a_public_port_with_a_bearer_allowlist(monkeypatc
         lambda: SimpleNamespace(host="127.0.0.1", port=8767, force=False, reload=False),
     )
     monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
+    monkeypatch.setattr(mcp_server, "_OAUTH_GATE_REQUIRED", True)
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "tok")
+    with pytest.raises(_Reached):
+        await mcp_server.main()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_port", [8772, None])
+async def test_required_loaded_only_from_env_mcp_is_not_rejudged_in_main(monkeypatch, public_port):
+    """~/.env.mcp loads between import and main(); a flag that only appears
+    there must not start refusing (the import-time reading governs)."""
+    from types import SimpleNamespace
+
+    from src import mcp_server
+
+    class _Reached(Exception):
+        pass
+
+    async def _bootstrap(**_kwargs):
+        raise _Reached
+
+    monkeypatch.setattr("src.services.mcp_server_bootstrap.bootstrap_server", _bootstrap)
+    monkeypatch.setattr(mcp_server, "_OAUTH_GATE_REQUIRED", False)
+    monkeypatch.setattr(mcp_server, "_oauth_provider", None)
+    monkeypatch.setattr(mcp_server, "_oauth_issuer_url", None)
+    monkeypatch.setattr(mcp_server, "_oauth_public_port", public_port)
+    monkeypatch.setattr(
+        mcp_server,
+        "parse_args",
+        lambda: SimpleNamespace(host="127.0.0.1", port=8767, force=False, reload=False),
+    )
+    monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")  # as if from ~/.env.mcp
+    monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
     with pytest.raises(_Reached):
         await mcp_server.main()
