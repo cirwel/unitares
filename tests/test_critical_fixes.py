@@ -81,6 +81,18 @@ def test_process_manager():
     print("\n💓 Testing Process Manager...")
     
     process_mgr = ProcessManager()
+
+    # cleanup_zombies() terminates every mcp_server_std.py on the host whose
+    # heartbeat is missing from pid_dir. The suite redirects pid_dir to a tmp
+    # dir no real server writes to, so give the reaper an empty process table.
+    import src.process_cleanup as process_cleanup
+    from contextlib import nullcontext
+    from unittest.mock import patch
+    empty_process_table = (
+        patch.object(process_cleanup.psutil, "process_iter", return_value=iter(()))
+        if process_cleanup.PSUTIL_AVAILABLE
+        else nullcontext()
+    )
     
     # Test heartbeat
     try:
@@ -95,7 +107,8 @@ def test_process_manager():
             return False
         
         # Test cleanup (should not error even if no zombies)
-        cleaned = process_mgr.cleanup_zombies()
+        with empty_process_table:
+            cleaned = process_mgr.cleanup_zombies()
         print(f"  ✅ Cleanup ran (cleaned {len(cleaned)} processes)")
         
         # Test getting active processes

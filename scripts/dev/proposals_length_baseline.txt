@@ -1,0 +1,9 @@
+# Active proposals over the 800-line cap, with the line count each may not exceed.
+# Checked by scripts/dev/check_proposals_length.py. Lower an entry when its file
+# shrinks (run the script with --lower); never raise one or add a new file here.
+# Format: <max lines> <repo-relative path>
+923 docs/proposals/active/beam-footprint-roadmap-v0.md
+863 docs/proposals/active/beam-verbs-as-contract-capabilities-v0.md
+1301 docs/proposals/active/beam-wave-3-handler-dispatch.md
+2490 docs/proposals/active/open-decisions-packet-v0.md
+1614 docs/proposals/active/surface-lease-plane-v0.md

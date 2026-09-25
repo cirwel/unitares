@@ -183,11 +183,11 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
         # in-memory status, and the agent's next check-in flows through
         # the categorizer which re-pauses if state is genuinely
         # degraded. See src/mcp_handlers/support/pause_ttl.py.
-        from .pause_ttl import maybe_auto_expire_pause_sync
+        from .pause_ttl import maybe_auto_expire_pause_sync, paused_refusal_recovery
         if maybe_auto_expire_pause_sync(agent_uuid, meta):
             return None  # status now active; let caller proceed
         return error_response(
-            "Agent is paused - circuit breaker active",
+            "Agent is paused - check-ins and new shared-memory entries are refused",
             error_code="AGENT_PAUSED",
             error_category="state_error",
             details={
@@ -195,11 +195,7 @@ def check_agent_can_operate(agent_uuid: str) -> Optional[TextContent]:
                 "paused_at": meta.paused_at,
                 "status": "paused",
             },
-            recovery={
-                "action": "Use self_recovery(action='quick') or self_recovery(action='review', reflection='...') to request recovery",
-                "note": "Circuit breaker triggered due to governance threshold violation",
-                "alternative": "Wait for auto-dialectic recovery to complete",
-            }
+            recovery=paused_refusal_recovery(meta, agent_uuid),
         )
     elif meta.status == "archived":
         return error_response(

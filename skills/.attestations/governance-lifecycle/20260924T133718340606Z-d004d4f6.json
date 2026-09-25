@@ -1,0 +1,26 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-09-24T13:37:18Z",
+  "verified_date": "2026-09-24",
+  "verifier": "Kenny Wang",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "751f88836f20d57c",
+    "unitares/src/mcp_handlers/admin/handlers.py": "47a6f753b0ed1132",
+    "unitares/src/mcp_handlers/core.py": "aaa2703c328b80ae",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "2b6f70a94a7361f5",
+    "unitares/src/mcp_handlers/identity/handlers.py": "ce2c320c8073f510",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "0ffd2f7bc93fba79",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "8997fbde709169e0",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "58ce583bce828bf5",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "f50ccc2629ef7832",
+    "unitares/src/mcp_handlers/tool_stability.py": "9049a8db3938541a",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "0aec78c062f4af99",
+    "unitares/src/mcp_handlers/updates/phases.py": "d23cdd47b016698d",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "da871dd2ab09758c"
+  }
+}

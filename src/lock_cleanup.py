@@ -147,7 +147,8 @@ def cleanup_stale_state_locks(project_root: Path = None, max_age_seconds: float 
     Clean up stale state lock files (convenience wrapper).
     
     Args:
-        project_root: Project root directory (defaults to detecting from file location)
+        project_root: Project root directory. When omitted, sweep the directory
+            StateLockManager writes to (honours UNITARES_LOCK_DIR).
         max_age_seconds: Maximum age before considering stale
         dry_run: If True, only report what would be cleaned
     
@@ -155,10 +156,10 @@ def cleanup_stale_state_locks(project_root: Path = None, max_age_seconds: float 
         Dict with cleanup statistics
     """
     if project_root is None:
-        # Detect project root from this file's location
-        project_root = Path(__file__).parent.parent
-    
-    lock_dir = project_root / "data" / "locks"
+        from src.state_locking import DEFAULT_LOCK_DIR
+        lock_dir = DEFAULT_LOCK_DIR
+    else:
+        lock_dir = project_root / "data" / "locks"
     return cleanup_stale_locks(lock_dir, max_age_seconds, dry_run)
 
 
@@ -176,8 +177,8 @@ if __name__ == "__main__":
     if args.lock_dir:
         lock_dir = Path(args.lock_dir)
     else:
-        project_root = Path(__file__).parent.parent
-        lock_dir = project_root / "data" / "locks"
+        from src.state_locking import DEFAULT_LOCK_DIR
+        lock_dir = DEFAULT_LOCK_DIR
     
     print(f"🔍 Checking lock files in: {lock_dir}")
     print(f"   Max age: {args.max_age}s ({args.max_age/60:.1f} minutes)")

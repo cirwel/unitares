@@ -230,6 +230,23 @@ async def _record_outcome_event_inline(arguments: Dict[str, Any]) -> Dict[str, A
     outcome_type = arguments["outcome_type"]
     agent_id = arguments["agent_id"]
 
+    # An outcome can be an agent's first request after a restart. Its open
+    # forecasts, and the behavioral state this outcome snapshots, live in the
+    # monitor snapshot, which is read only when the monitor loads. Load it
+    # before anything below reads the monitor, and only when a prediction_id
+    # is supplied, so the prediction can bind with the agent's own state.
+    _loaded_monitors = getattr(mcp_server, "monitors", None)
+    if (
+        arguments.get("prediction_id")
+        and isinstance(_loaded_monitors, dict)
+        and agent_id not in _loaded_monitors
+        and hasattr(mcp_server, "get_or_create_monitor")
+    ):
+        try:
+            mcp_server.get_or_create_monitor(agent_id)
+        except Exception as e:  # noqa: BLE001 - fall through to the existing paths
+            logger.debug(f"outcome_event: monitor load for prediction lookup failed: {e}")
+
     # Infer is_bad if not provided
     is_bad = arguments.get("is_bad")
     if is_bad is None:
