@@ -157,7 +157,7 @@ def test_default_start_session_fits_budget_and_keeps_what_adapters_read():
     assert _wire(env) <= START_SESSION_BUDGET, _wire(env)
     assert env["response_shape"] == "routine"
     assert "raw_governance" not in env
-    assert env["raw_governance_available"] is True
+    assert "raw_governance_available" not in env  # not fetchable after the mint
     assert "_response_size" not in env
     # Fields the plugin post-identity hook and identity_sidecar read.
     assert env["agent_uuid"] == payload["uuid"]
@@ -173,6 +173,7 @@ def test_default_start_session_fits_budget_and_keeps_what_adapters_read():
         "tier": "weak",
         "session_source": "ip_ua_fingerprint",
         "caller_proven": False,
+        "baseline": "fresh_identity",
     }
     # The token rides with its caveat, not bare at the top level.
     assert "continuity_token" not in env

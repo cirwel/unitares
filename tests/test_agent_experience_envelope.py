@@ -117,7 +117,7 @@ async def test_experience_alias_gets_envelope():
     # A mint that went as asked does not repeat the canonical record beneath
     # the lifts, and says so.
     assert "raw_governance" not in data
-    assert data["raw_governance_available"] is True
+    assert "raw_governance_available" not in data  # not fetchable after the mint
     assert data["response_shape"] == "routine"
     assert "next_action" in data
 
