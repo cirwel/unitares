@@ -132,16 +132,28 @@ would need: process-bound identity, evidence provenance, a
 [versioned telemetry envelope](ontology/eisv-telemetry-envelope-v1.md), and
 policy decisions with named reasons.
 
-**The blocker is named, not unknown.** Resolution attestations are HMAC keyed on
-each agent's api_key. That is symmetric: a verifier needs the signing key, and
-holding it would also let them forge a signature. Sound for its deployed purpose
-of one operator attesting inside their own trust boundary, and explicitly not
-non-repudiation. Asymmetric or DPoP-style keys were considered and shelved on
-2026-04-19, so until that is revisited a record from this system cannot be
-verified by an operator who does not already trust its issuer, which is the whole
-problem a federation exchange has to solve. Whether the remaining records suffice
-to exchange cross-operator attestations without centralizing raw telemetry is
-open on the **multi-principal trust** track in the [roadmap](ROADMAP.md).
+**The blocker is named, not unknown.** The party-level attestation scheme for
+dialectic resolutions, as written in the code, is HMAC keyed on each agent's
+api_key. That is symmetric: a verifier needs the signing key, and holding it
+would also let them forge a signature. At most it suits one operator attesting
+inside their own trust boundary, and it is explicitly not non-repudiation. As
+of 2026-09-25 the maintainer deployment has not issued a party signature since
+2026-06-24 (UTC), the date of the most recent resolved dialectic record carrying
+one. What was considered and shelved on 2026-04-19 was party-held asymmetric
+(DPoP-style) keys, which party-level non-repudiation would need; that remains
+shelved (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). Server-side
+signing was not part of that decision. Server-side Ed25519 signing exists: as of
+2026-09-25 the maintainer deployment's lease attestations use it, and a
+deployment-countersigned dialectic resolution receipt (`drr.v1`) is wired but
+dormant and has issued no receipts. A receipt would attest the deployment's
+stored record, not either party's intent; its
+[decision packet](proposals/active/dialectic-resolution-receipt-v0.md) names
+what has to exist before enabling it would be honest. So a record from this
+system cannot today be verified by an operator who does not already trust its
+issuer, which is the whole problem a federation exchange has to solve. Whether
+the remaining records suffice to exchange cross-operator attestations without
+centralizing raw telemetry is open on the **multi-principal trust** track in the
+[roadmap](ROADMAP.md).
 
 ## Identity binding and the lease plane
 

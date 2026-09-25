@@ -16,16 +16,22 @@ administrative root, cross-principal interaction via verifiable attestation).
 
 ## The gap
 
-A dialectic resolution carries two attestations, one per party, each an
-HMAC-SHA256 over the canonical payload keyed on that party's `api_key`. Inside
-one operator's trust boundary that is sound, and it is unchanged here. It is
-symmetric: whoever can verify can also forge, so the key can never be handed to
-a second principal. The threat model states the consequence: a resolution record
-is not independently verifiable by an operator who does not already trust its
-issuer. It also says the decision upstream of any exchange work is *which
-verification semantics a multi-principal deployment requires*, and names three
-constructions: issuer non-repudiation, a transparency log, and a witness that
-signs a receipt third parties verify.
+The code's scheme gives a dialectic resolution two attestations, one per party,
+each an HMAC-SHA256 over the canonical payload keyed on that party's `api_key`.
+It is designed for one operator's trust boundary, and it is unchanged here. It
+is symmetric: whoever can verify can also forge, so the key can never be handed
+to a second principal. The threat model states the consequence: a resolution
+record is not independently verifiable by an operator who does not already
+trust its issuer. It also says the decision upstream of any exchange work is
+*which verification semantics a multi-principal deployment requires*, and names
+three constructions: issuer non-repudiation, a transparency log, and a witness
+that signs a receipt third parties verify.
+
+The party scheme has also gone unexercised: as of 2026-09-25 the maintainer
+deployment has not issued a party signature since 2026-06-24 (UTC), the date of
+the most recent resolved record carrying one. A receipt minted today would
+therefore countersign a record with no party attestation in it, and its
+`both_signatures_present` claim would be false.
 
 ## What is built
 
@@ -104,7 +110,8 @@ resolution's standing.
    flag keeps that failure from arriving by accident: a key configured for
    identity attestations alone does not turn receipts on.
 
-   The wake criteria, stated once so the registry and this packet agree:
+   The custody-and-key wake criteria, stated once so the registry and this
+   packet agree (the registry adds reason 4's second principal as a fifth):
    non-exportable custody for the key; an independent channel for a peer to
    pin the public key; retained and published key history; and a revocation
    or transparency policy that bounds back-dating. Nothing short of all four
@@ -133,8 +140,11 @@ resolution's standing.
    costs about four hundred lines and no new configuration surface.
 
 The dormant-capability registry carries the matching `KEEP-DORMANT` entry with
-the wake condition: non-exportable custody for the attestation key and a second
-principal to pin it.
+the same five preconditions: the four wake criteria under reason 1
+(non-exportable custody for the key, an independent pinning channel, retained
+and published key history, and a revocation or transparency policy that bounds
+back-dating) plus reason 4, a second principal that exists and has a reason to
+check a record.
 
 ## Canonical form
 

@@ -174,16 +174,20 @@ peer's thresholds; an operator who cannot answer that is asking to be trusted
 rather than verified, which is the one thing a mutually-distrustful exchange
 cannot supply. Tracked in [#1671](https://github.com/cirwel/unitares/issues/1671).
 
-**The attestation half of the same boundary.** Resolution attestations are HMAC
-keyed on each agent's `api_key`. That is a symmetric construction: a verifier
-needs the signing key to recompute a signature, and a party holding that key
-could also forge one. `Resolution.compute_signature` states this in its own
-docstring, and retention of the symmetric stack is a recorded decision rather
-than an oversight (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). It
-is sound for what it deploys against, which is one operator attesting inside
-their own trust boundary. A second principal is exactly the party who cannot be
-given the key, so a resolution record is not today independently verifiable by
-an operator who does not already trust its issuer.
+**The attestation half of the same boundary.** The party-level resolution
+attestation scheme in the code is HMAC keyed on each agent's `api_key`. That is
+a symmetric construction: a verifier needs the signing key to recompute a
+signature, and a party holding that key could also forge one.
+`Resolution.compute_signature` states this in its own docstring, and retention
+of the symmetric stack is a recorded decision rather than an oversight (see
+[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). It is designed for one
+operator attesting inside their own trust boundary. As of 2026-09-25 the
+maintainer deployment has not issued a party signature since 2026-06-24 (UTC),
+the date of the most recent resolved dialectic record carrying one, and
+`describe_attestation` reports a record without them as `unsigned` rather than
+as attested. A second principal is exactly the party who cannot be given the
+key, so a resolution record is not today independently verifiable by an
+operator who does not already trust its issuer.
 
 A deployment-countersigned receipt over the stored resolution record
 (`drr.v1`, [`src/dialectic_receipt.py`](../src/dialectic_receipt.py)) is
