@@ -513,6 +513,29 @@ def test_a_class_body_runs_in_the_block(tmp_path):
         assert p006_actually_fires(str(path), cite) is True, cite
 
 
+def test_a_class_body_inside_a_handler_runs_in_the_handler(tmp_path):
+    # #2447 review, P3: a try in a class body in a handler runs as part of
+    # that handler, so like any block there it takes no nested handlers.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        class K:\n"
+        "            try:\n"
+        "                y = 1\n"
+        "                try:\n"
+        "                    b()\n"
+        "                except OSError:\n"
+        "                    pass\n"
+        "            except ValueError:\n"
+        "                raise\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 7) is False
+
+
 def test_a_later_try_in_the_same_else_is_below_the_cite(tmp_path):
     # #2442 round 8, P3 2: a nested else is a region of its own, but a try
     # further down that same else still runs after the cited line.

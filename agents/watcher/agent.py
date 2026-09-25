@@ -1917,11 +1917,13 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     or an early body line when the silent handler belongs to a try further
     down. Tries inside a nested def or lambda are not taken (a class body
     runs where it is defined, so its tries are), nor handlers whose clause
-    carries ``# noqa: BLE001`` or a bare ``# noqa``. When the line sits in a
-    nested def, or in a nested try's handler, ``else`` or ``finally``, only
-    tries later in that same region are taken: the region is not above a
-    swallow outside it. Nothing is taken from a block that itself lies inside
-    a handler, where nested handlers are never on the path. This only
+    carries ``# noqa: BLE001`` or a bare ``# noqa``. A nested def, or a
+    nested try's handler, ``else`` or ``finally``, is a region of its own: a
+    line in it is not above a swallow outside it, so only tries later in that
+    same region are taken. In a def that means tries in a try block inside
+    the def that holds the line; a def body is not itself a block. Nothing is
+    taken from a block that itself runs inside a handler (a class body there
+    included), where nested handlers are never on the path. This only
     adds to a path that already has a handler, so it can keep a finding but
     never drop one: one silent nested handler keeps it, and a line with no
     handler of its own is kept as below.
@@ -1977,8 +1979,7 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
 
     def _runs_in_handler(target: Any) -> bool:
         # True when `target` runs as part of some handler's body: reached
-        # from it without crossing a def, lambda or class.
-        crossing = (*deferred, ast.ClassDef)
+        # from it without crossing a def or lambda.
         for node in ast.walk(tree):
             if not isinstance(node, try_types):
                 continue
@@ -1988,7 +1989,7 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
                     child = stack.pop()
                     if child is target:
                         return True
-                    if not isinstance(child, crossing):
+                    if not isinstance(child, deferred):
                         stack.extend(ast.iter_child_nodes(child))
         return False
 
