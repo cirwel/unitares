@@ -525,19 +525,24 @@ class TestVouchedProvenanceIsNotAWarrantForItsPayload:
 #
 # An external agent told "task_completed completion claim has no corroborating
 # detail" guessed test_exit_code / artifact_hash / external_verifier_id, none of
-# which the grader reads (2026-09-24). The hint names the keys that do count, so
-# these tests pin the hint to the grader: every key it advertises must move the
-# grade it says it moves.
+# which the grader reads (2026-09-24). The hint names the reference keys that do
+# count, pinned here to the grader. It deliberately does NOT name the shapes that
+# reach tool_observed: that grade is the calibration admission weight, and a
+# caller can reach it by description alone (SERVER_SET_TOOL_TRIGGERS), which is
+# an open operator decision the hint must not pre-empt.
 
 from src.outcome_corroboration import (  # noqa: E402
     CLAIM_ONLY,
+    GRADE_WEIGHTS,
     SELF_REPORT_WITH_REFS,
     SUBSTRATE_OBSERVED,
     TOOL_OBSERVED,
+    _CLAIM_FIELD_FAMILIES,
     _REF_EXAMPLE_KEYS,
-    _TOOL_OBSERVATION_KINDS,
-    _TOOL_OBSERVATION_PAYLOAD_KEYS,
     corroboration_upgrade_hint,
+)
+from src.mcp_handlers.observability.outcome_events import (  # noqa: E402
+    _MIN_TACTICAL_EVIDENCE_WEIGHT,
 )
 
 
@@ -548,8 +553,6 @@ def _public_grade(detail):
 
 
 def test_hint_covers_every_reference_family_the_grader_reads():
-    from src.outcome_corroboration import _CLAIM_FIELD_FAMILIES
-
     assert set(_REF_EXAMPLE_KEYS) == set(_CLAIM_FIELD_FAMILIES)
     for family, key in _REF_EXAMPLE_KEYS.items():
         assert key in _CLAIM_FIELD_FAMILIES[family]
@@ -560,37 +563,23 @@ def test_every_advertised_reference_key_reaches_self_report_with_refs(key):
     assert _public_grade({key: "x"}) == SELF_REPORT_WITH_REFS
 
 
-@pytest.mark.parametrize("kind", _TOOL_OBSERVATION_KINDS)
-def test_every_advertised_kind_with_exit_code_reaches_tool_observed(kind):
-    assert _public_grade({"kind": kind, "exit_code": 0}) == TOOL_OBSERVED
+def test_what_the_hint_advertises_stays_below_the_calibration_floor():
+    """The whole point of stopping at references."""
+    assert GRADE_WEIGHTS[SELF_REPORT_WITH_REFS] < _MIN_TACTICAL_EVIDENCE_WEIGHT
 
 
-@pytest.mark.parametrize("key", _TOOL_OBSERVATION_PAYLOAD_KEYS)
-def test_every_advertised_payload_key_reaches_tool_observed(key):
-    assert _public_grade({key: ["ran"]}) == TOOL_OBSERVED
-
-
-def test_tool_with_return_code_reaches_tool_observed():
-    assert _public_grade({"tool": "pytest", "exit_code": 0}) == TOOL_OBSERVED
-    assert _public_grade({"tool": "pytest", "returncode": 0}) == TOOL_OBSERVED
-
-
-def test_claim_only_hint_names_references_structure_and_the_cap():
+def test_claim_only_hint_names_references_and_the_cap_but_no_tool_recipe():
     hint = corroboration_upgrade_hint(CLAIM_ONLY, ceiling=TOOL_OBSERVED)
     for key in _REF_EXAMPLE_KEYS.values():
         assert key in hint
-    assert "exit_code" in hint
     assert f"capped at {TOOL_OBSERVED}" in hint
+    for recipe_word in ("exit_code", "returncode", "captured_output", "tool_results", "kind"):
+        assert recipe_word not in hint
 
 
-def test_self_report_hint_skips_the_reference_step_it_already_took():
-    hint = corroboration_upgrade_hint(SELF_REPORT_WITH_REFS, ceiling=TOOL_OBSERVED)
-    assert "References" not in hint
-    assert "exit_code" in hint
-
-
-def test_no_hint_once_the_cap_is_reached():
-    assert corroboration_upgrade_hint(TOOL_OBSERVED, ceiling=TOOL_OBSERVED) is None
+@pytest.mark.parametrize("grade", [SELF_REPORT_WITH_REFS, TOOL_OBSERVED])
+def test_no_hint_above_claim_only(grade):
+    assert corroboration_upgrade_hint(grade, ceiling=TOOL_OBSERVED) is None
 
 
 @pytest.mark.parametrize("ceiling", [SUBSTRATE_OBSERVED, NO_CEILING, None, "bogus"])

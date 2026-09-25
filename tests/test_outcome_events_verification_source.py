@@ -379,17 +379,17 @@ async def test_public_record_result_returns_the_hint_but_never_persists_it():
     payload, persisted = await _inline_record({"summary": "Finished the work."})
 
     hint = payload["corroboration_hint"]
-    assert hint and "exit_code" in hint and "capped at tool_observed" in hint
+    assert hint and "pr_url" in hint and "capped at tool_observed" in hint
     assert "corroboration_hint" not in persisted
     env = build_experience_envelope("record_result", "outcome_event", payload)
     assert env["state_summary"]["corroboration_hint"] == hint
 
 
 @pytest.mark.asyncio
-async def test_public_record_result_has_no_hint_once_at_the_cap():
-    payload, _ = await _inline_record({"kind": "test", "exit_code": 0})
+async def test_public_record_result_has_no_hint_once_references_are_present():
+    payload, _ = await _inline_record({"pr_url": "https://example.invalid/pr/1"})
 
-    assert payload["corroboration_grade"] == "tool_observed"
+    assert payload["corroboration_grade"] == "self_report_with_refs"
     assert payload["corroboration_hint"] is None
 
 
