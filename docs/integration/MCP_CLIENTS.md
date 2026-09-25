@@ -160,7 +160,7 @@ tool runs:
    or no service") refuses to serve with a public port and no bearer
    allowlist whatever the host, since a loopback main listener is still
    reachable by local processes and by a tunnel left on the main port. The
-   refusal is judged from `--host` and the environment before bootstrap, so
+   refusal is judged from the environment at import, before bootstrap, so
    it never stops a running predecessor. The public entry point belongs on the public port. The
    listener is identified by the socket that accepted the connection, which
    nothing in a request can forge, unlike `Host`, the peer address or

@@ -340,9 +340,10 @@ async def main():
 
     # Judged before bootstrap: bootstrap's lease acquisition SIGTERMs any
     # running predecessor, so a refusal after it would turn a config mistake
-    # in this process into an outage. Only --host and the environment are
-    # needed; a public listener that later fails to bind falls back to gating
-    # every request, which is stricter than what is judged here.
+    # in this process into an outage. Only the import-time environment is
+    # needed (--host appears only in the message); a public listener that
+    # later fails to bind falls back to gating every request, which is
+    # stricter than what is judged here.
     # "A gate on /mcp or no service" covers the main listener on loopback too:
     # a tunnel still pointed at the main port, or any local caller, reaches it.
     # So with OAuth confined to a public listener, only a bearer allowlist

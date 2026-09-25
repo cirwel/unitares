@@ -464,8 +464,9 @@ def test_required_refuses_an_ungated_main_listener(monkeypatch):
     ],
 )
 def test_main_listener_exposure_predicate(monkeypatch, up, host, tokens, expected):
-    """Feeds both the UNITARES_OAUTH_REQUIRED refusal and the startup warning
-    in main(), judged against the parsed --host."""
+    """Feeds the startup warning in main(), judged against the parsed --host.
+    (The UNITARES_OAUTH_REQUIRED refusal does not use it: with a public port
+    it refuses whatever the host.)"""
     from src.mcp_listen_config import main_listener_ungated
 
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", tokens)
@@ -562,10 +563,11 @@ async def test_required_accepts_a_public_port_with_a_bearer_allowlist(monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("public_port", [8772, None])
-async def test_required_loaded_only_from_env_mcp_is_not_rejudged_in_main(monkeypatch, public_port):
+async def test_required_loaded_only_from_env_mcp_is_not_rejudged_in_main(monkeypatch):
     """~/.env.mcp loads between import and main(); a flag that only appears
-    there must not start refusing (the import-time reading governs)."""
+    there must not start refusing (the import-time reading governs). Issuer,
+    provider and public port are all set, so only _OAUTH_GATE_REQUIRED
+    decides: a live re-read of the flag would refuse here."""
     from types import SimpleNamespace
 
     from src import mcp_server
@@ -578,9 +580,9 @@ async def test_required_loaded_only_from_env_mcp_is_not_rejudged_in_main(monkeyp
 
     monkeypatch.setattr("src.services.mcp_server_bootstrap.bootstrap_server", _bootstrap)
     monkeypatch.setattr(mcp_server, "_OAUTH_GATE_REQUIRED", False)
-    monkeypatch.setattr(mcp_server, "_oauth_provider", None)
-    monkeypatch.setattr(mcp_server, "_oauth_issuer_url", None)
-    monkeypatch.setattr(mcp_server, "_oauth_public_port", public_port)
+    monkeypatch.setattr(mcp_server, "_oauth_provider", object())
+    monkeypatch.setattr(mcp_server, "_oauth_issuer_url", "https://gov.example.org")
+    monkeypatch.setattr(mcp_server, "_oauth_public_port", 8772)
     monkeypatch.setattr(
         mcp_server,
         "parse_args",
