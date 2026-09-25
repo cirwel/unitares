@@ -874,7 +874,11 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         # LITE-FIRST: Simpler schemas by default for local models
         lite = arguments.get("lite", True)
 
-        from ..tool_stability import get_tool_stability, resolve_tool_alias
+        from ..tool_stability import (
+            expand_description_pointers,
+            get_tool_stability,
+            resolve_tool_alias,
+        )
         tool_name, alias_info = resolve_tool_alias(requested_tool_name)
         from ..decorators import is_tool_hidden
 
@@ -971,7 +975,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
             # and cannot put a second description on an advertised one.
             description = (
                 tool_catalog.TOOL_DESCRIPTION_OVERRIDES.get(requested_tool_name)
-                or alias_info.migration_note
+                or expand_description_pointers(alias_info.migration_note)
                 or description
             )
 

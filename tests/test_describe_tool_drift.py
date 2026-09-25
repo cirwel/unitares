@@ -232,12 +232,23 @@ async def test_workflow_alias_descriptions_carry_eisv_contract(tool_name):
 
 
 def test_registered_workflow_alias_notes_carry_eisv_contract():
-    from src.mcp_handlers.tool_stability import resolve_tool_alias
+    """The advertised surface carries the EISV contract once (#1434).
 
-    for tool_name in ("sync_state", "check_working_state", "record_result"):
+    Every alias description is paid for on every tools/list, so the full
+    contract rides on check_working_state, whose envelope returns E/I/S/V, and
+    the other two aliases point at it. A schema-only client still reads the
+    contract in the same listing, and describe_tool expands the pointer (see
+    test_workflow_alias_descriptions_carry_eisv_contract).
+    """
+    from src.mcp_handlers.tool_stability import EISV_POINTER, resolve_tool_alias
+
+    _, alias = resolve_tool_alias("check_working_state")
+    assert alias is not None
+    _assert_eisv_contract(alias.migration_note or "")
+    for tool_name in ("sync_state", "record_result"):
         _, alias = resolve_tool_alias(tool_name)
         assert alias is not None
-        _assert_eisv_contract(alias.migration_note or "")
+        assert EISV_POINTER in (alias.migration_note or "")
 
 
 @pytest.mark.asyncio

@@ -127,3 +127,22 @@ def test_hypothetical_null_cut_preserves_multi_type_unions():
         {"type": "string"}, {"type": "number"}, {"type": "null"},
     ]}}}
     assert cost._without_null_unions(schema) == schema
+
+
+# A ratchet, not a target. Every session pays for the progressive tools/list
+# before its first call, so this ceiling only moves down: lower it when a cut
+# lands, and raise it only with the reason stated in the PR that raises it.
+# Measured 2026-09-25 at 39,859 B after the tool-surface trim (from 43,836);
+# ~3% headroom so an ordinary parameter addition does not trip it.
+PROGRESSIVE_SURFACE_CEILING_BYTES = 41_000
+
+
+def test_progressive_surface_stays_under_its_ratchet():
+    measured = cost.measure_profile("progressive")
+
+    assert measured.available
+    assert measured.total_bytes <= PROGRESSIVE_SURFACE_CEILING_BYTES, (
+        f"progressive tools/list is {measured.total_bytes:,} B, over the "
+        f"{PROGRESSIVE_SURFACE_CEILING_BYTES:,} B ratchet. Trim the growth, or "
+        "raise the ceiling and say why in the PR."
+    )
