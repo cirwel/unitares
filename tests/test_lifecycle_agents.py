@@ -2884,3 +2884,35 @@ class TestListAgentsDefaultsSurviveTheSchema:
             ))  # summary_only returns the summary object itself
         assert summary["total"] == 130
         assert sum(summary["by_health"].values()) == 130
+
+
+@pytest.mark.asyncio
+async def test_full_mode_by_health_counts_the_same_population_as_total():
+    """by_health used to be counted over the returned page; with a default page
+    of 100 it would sum to 100 beside a total of thousands."""
+    server = make_mock_server()
+    server.agent_metadata = {
+        f"a{i}": make_agent_meta(status="active", label=f"Agent{i}", total_updates=5, notes="")
+        for i in range(130)
+    }
+    health_status = MagicMock()
+    health_status.value = "healthy"
+    server.health_checker = MagicMock()
+    server.health_checker.get_health_status.return_value = (health_status, {})
+    mock_monitor = MagicMock()
+    mock_monitor.state = SimpleNamespace(
+        E=0.7, I=0.3, S=0.5, V=0.0, coherence=0.8,
+        lambda1=0.1, void_active=False, coherence_history=[]
+    )
+    mock_monitor.get_metrics.return_value = {
+        "risk_score": 0.3, "current_risk": 0.3, "phi": 0.5, "verdict": "safe", "mean_risk": 0.3,
+    }
+    server.get_or_create_monitor.return_value = mock_monitor
+    with patch_lifecycle_server(server):
+        from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+        for grouped in (True, False):
+            summary = _parse(await handle_list_agents(
+                {"lite": False, "grouped": grouped, "include_metrics": True}
+            ))["summary"]
+            assert summary["returned"] == 100
+            assert sum(summary["by_health"].values()) == summary["total"] == 130

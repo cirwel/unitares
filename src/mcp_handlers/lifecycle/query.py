@@ -873,7 +873,9 @@ async def _list_agents_lite(
         if limit >= _LIST_PAGE_CAP:
             result["more"] = (
                 f"Showing {limit} of {len(agents)}; a lite page stops at {_LIST_PAGE_CAP}. "
-                "Page with lite=false plus limit and offset, or narrow recent_days."
+                "Narrow recent_days or min_updates, or page with lite=false plus "
+                f"limit, offset and recent_days={recent_days} (full mode applies no "
+                "recency window unless given one, and does not hide ghost agents)."
             )
         else:
             # lite=true must ride along: a bare `limit` makes the schema
@@ -916,8 +918,8 @@ async def _list_agents_full(
     # before grouping, so returned is true. This narrows grouped no-limit
     # calls; an explicit limit is honoured as before.
     limit = arguments.get("limit")
-    # summary_only returns no rows, and its by_health is built from the page,
-    # so paging it would describe 100 agents beside totals for all of them.
+    # summary_only returns no rows, so a default page would only make its
+    # returned/limit fields describe a page that is never sent.
     if limit is None and not summary_only:
         limit = _LIST_PAGE_CAP
     filters = AgentListFilters(
@@ -1149,6 +1151,15 @@ async def _list_agents_full(
     # how many LOGICAL workers these process-instances represent. Additive —
     # `total`/`participated` are unchanged. See _principal_rollup.
     principal_counts = _principal_rollup(agents_list)
+    # Health split over the same pre-pagination population as total and
+    # by_status. It used to be counted over the returned page, which only
+    # agreed with the other counts while a call without a limit was never
+    # paged; with a default page it would sum to 100 beside a total of
+    # thousands.
+    health_counts = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0, "error": 0}
+    for agent in agents_list:
+        health = agent.get("health_status", "unknown")
+        health_counts[health] = health_counts.get(health, 0) + 1
 
     # Apply pagination (optimization)
     if limit is not None:
@@ -1191,13 +1202,7 @@ async def _list_agents_full(
 
         # Add health breakdown if include_metrics
         if include_metrics:
-            response_data["summary"]["by_health"] = {
-                "healthy": sum(1 for a in agents_list if a.get("health_status") == "healthy"),
-                "moderate": sum(1 for a in agents_list if a.get("health_status") == "moderate"),
-                "critical": sum(1 for a in agents_list if a.get("health_status") == "critical"),
-                "unknown": sum(1 for a in agents_list if a.get("health_status") == "unknown"),
-                "error": sum(1 for a in agents_list if a.get("health_status") == "error")
-            }
+            response_data["summary"]["by_health"] = dict(health_counts)
     else:
         response_data = {
             "success": True,
@@ -1220,11 +1225,7 @@ async def _list_agents_full(
         }
 
         if include_metrics:
-            health_statuses = {"healthy": 0, "moderate": 0, "critical": 0, "unknown": 0, "error": 0}
-            for agent in agents_list:
-                status = agent.get("health_status", "unknown")
-                health_statuses[status] = health_statuses.get(status, 0) + 1
-            response_data["summary"]["by_health"] = health_statuses
+            response_data["summary"]["by_health"] = dict(health_counts)
 
     if summary_only:
         return success_response(response_data["summary"])

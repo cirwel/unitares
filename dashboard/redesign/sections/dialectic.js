@@ -131,7 +131,13 @@
         const body = d.querySelector(".dlc-topic-body");
         const r = await DATA.dialecticSession(d.dataset.sid);
         const topic = r.data && r.data.topic;
-        body.innerHTML = topic ? esc(topic) : `<span class="fresh">unavailable</span>`;
+        if (topic) {
+          body.innerHTML = esc(topic);
+        } else {
+          // Let the next expand retry instead of pinning a transient failure.
+          delete d.dataset.loaded;
+          body.innerHTML = `<span class="fresh">unavailable — collapse and expand to retry</span>`;
+        }
       });
     });
   }

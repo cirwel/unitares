@@ -30,7 +30,7 @@ const LIST = {
   ],
 };
 
-function makeDom() {
+function makeDom({ failGets = 0 } = {}) {
   const dom = new JSDOM(`<div id="dlc-mount"></div>`, {
     runScripts: "outside-only",
     url: "https://governance.test/",
@@ -40,6 +40,10 @@ function makeDom() {
     if (path !== "/v1/tools/call") return { ok: false, status: 404 };
     const req = JSON.parse(opts.body);
     calls.push(req);
+    if (req.arguments.action === "get" && failGets > 0) {
+      failGets -= 1;
+      return { ok: false, status: 503 };
+    }
     const result = req.arguments.action === "get"
       ? { success: true, topic: FULL, transcript: [] }
       : LIST;
@@ -70,6 +74,25 @@ describe("dialectic list topic preview", () => {
     await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setTimeout(r, 0));
     expect(calls.some((c) => c.arguments.action === "get" && c.arguments.session_id === "long-one")).toBe(true);
+    expect(d.querySelector(".dlc-topic-body").textContent).toBe(FULL);
+  });
+
+  it("retries the full topic after a failed fetch", async () => {
+    const { dom } = makeDom({ failGets: 1 });
+    await dom.window.Dialectic.load();
+    const d = dom.window.document.querySelector(".dlc-topic");
+    // jsdom fires "toggle" itself when `open` changes, as a browser does, so
+    // no manual dispatch here: one expand is exactly one handler run.
+    const settle = async () => {
+      for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+    };
+    d.open = true;
+    await settle();
+    expect(d.querySelector(".dlc-topic-body").textContent).toContain("unavailable");
+    d.open = false;
+    await settle();
+    d.open = true;
+    await settle();
     expect(d.querySelector(".dlc-topic-body").textContent).toBe(FULL);
   });
 });
