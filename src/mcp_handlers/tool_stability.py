@@ -487,8 +487,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "compaction continuation. Use identity to inspect or rename an "
             "existing binding. onboard is this same call under its canonical "
             "name and returns the raw payload; this name adds the digest "
-            "envelope (next_action, state_summary) and keeps the raw payload "
-            "under raw_governance."
+            "envelope (next_action, state_summary). Read the uuid from "
+            "agent_uuid; response_mode='full' keeps the raw payload under "
+            "raw_governance."
         ),
         experience=True),
     "sync_state": ToolAlias(

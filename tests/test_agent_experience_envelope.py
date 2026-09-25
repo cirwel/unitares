@@ -100,7 +100,18 @@ async def test_legacy_alias_passes_through():
 
 @pytest.mark.asyncio
 async def test_experience_alias_gets_envelope():
-    raw = _result({"success": True, "agent_uuid": "u-1", "client_session_id": "s-1"})
+    raw = _result({
+        "success": True,
+        "agent_uuid": "u-1",
+        "client_session_id": "s-1",
+        "is_new": True,
+        "identity_resolution_outcome": "minted_force_new",
+        "identity_assurance": {
+            "tier": "weak",
+            "caller_proven": False,
+            "baseline": "fresh_identity",
+        },
+    })
     out = await apply_experience_envelope(
         "onboard", {}, _ctx("start_session"), raw
     )
@@ -108,8 +119,25 @@ async def test_experience_alias_gets_envelope():
     assert data["tool"] == "start_session"
     assert data["agent_uuid"] == "u-1"
     assert data["client_session_id"] == "s-1"
-    assert data["raw_governance"]["agent_uuid"] == "u-1"
+    # A mint that went as asked does not repeat the canonical record beneath
+    # the lifts, and says so.
+    assert "raw_governance" not in data
+    assert "raw_governance_available" not in data  # not fetchable after the mint
+    assert data["response_shape"] == "routine"
     assert "next_action" in data
+
+    # A mint the payload cannot show went as asked keeps the record.
+    unproven = _parse(await apply_experience_envelope(
+        "onboard", {}, _ctx("start_session"),
+        _result({"success": True, "agent_uuid": "u-1", "client_session_id": "s-1"}),
+    ))
+    assert unproven["raw_governance"]["agent_uuid"] == "u-1"
+    assert unproven["response_shape"] == "full"
+
+    full = _parse(await apply_experience_envelope(
+        "onboard", {"response_mode": "full"}, _ctx("start_session"), raw
+    ))
+    assert full["raw_governance"]["agent_uuid"] == "u-1"
 
 
 @pytest.mark.asyncio
@@ -285,7 +313,14 @@ def test_onboard_envelope_does_not_turn_sibling_predecessor_into_parent():
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
     assert "co-location does not establish lineage" in env["next_action"]
     assert "Do not use its uuid as parent_agent_id" in env["next_action"]
+    # A thread with a predecessor is the case the caller must read, so the
+    # whole onboard record comes with it.
     assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
+    full = build_experience_envelope(
+        "start_session", "onboard", payload, {"response_mode": "full"}
+    )
+    assert full["raw_governance"] is payload
 
 
 def test_onboard_envelope_does_not_redeclare_recorded_lineage():
@@ -403,7 +438,9 @@ def test_sync_state_envelope_proceed_keeps_continuation_guidance():
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert env["state_summary"]["action"] == "proceed"
     assert env["next_action"].startswith("Keep working")
-    assert "prediction_id='p-2'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "p-2"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_every_recovery_hint_names_a_callable_tool():
@@ -1894,7 +1931,9 @@ def test_sync_state_envelope_next_action_threads_prediction_id():
         "prediction_id": "abc-123",
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
-    assert "prediction_id='abc-123'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "abc-123"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_sync_state_envelope_next_action_generic_without_prediction_id():
@@ -1912,7 +1951,9 @@ def test_sync_state_envelope_prediction_id_composes_with_review_nudge():
         "review_suggested": {"trigger": "low_confidence"},
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
-    assert "prediction_id='abc-123'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "abc-123"
+    assert "pass this prediction_id to record_result" in env["next_action"]
     assert "request_review" in env["next_action"]
 
 
@@ -1935,7 +1976,9 @@ def test_sync_state_envelope_exposes_prediction_id_top_level():
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert env.get("prediction_id") == "abc-123"
     # The prose keeps saying what the id is for; the key is what code reads.
-    assert "prediction_id='abc-123'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "abc-123"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_sync_state_envelope_lifts_prediction_id_from_nested_payload():
@@ -2000,7 +2043,9 @@ def test_envelope_prefers_canonical_prediction_id_over_stale_outer_copy():
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert env["prediction_id"] == "fresh-canonical"
-    assert "prediction_id='fresh-canonical'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "fresh-canonical"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_prediction_id_is_not_lifted_onto_unrelated_tools():
