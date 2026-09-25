@@ -107,7 +107,7 @@ def _is_trusted_network(request) -> bool:
     public OAuth listener is never trusted: that socket exists to carry the
     public tunnel, so its loopback peer says nothing about the caller.
     """
-    if request.scope.get("unitares_public_listener"):
+    if (getattr(request, "scope", None) or {}).get("unitares_public_listener"):
         return False
     client_ip = request.client.host if request.client else None
     if not client_ip:
