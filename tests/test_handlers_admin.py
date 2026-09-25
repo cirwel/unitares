@@ -121,8 +121,13 @@ class TestCleanupStaleLocks:
             assert call_kwargs[1]["max_age_seconds"] == 600.0 or call_kwargs.kwargs.get("max_age_seconds") == 600.0
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("backend", ["advisory", "fcntl"])
-    async def test_cleanup_sweeps_the_writers_dir_and_names_the_backend(self, tmp_path, monkeypatch, backend):
+    @pytest.mark.parametrize(("backend", "reported"), [
+        ("advisory", "advisory"),
+        ("fcntl", "fcntl"),
+        # The dispatcher runs fcntl for any value other than "advisory".
+        ("postgres", "fcntl"),
+    ])
+    async def test_cleanup_sweeps_the_writers_dir_and_names_the_backend(self, tmp_path, monkeypatch, backend, reported):
         """The tool used to pass src/ as the project root and sweep a directory
         nothing writes to, reporting "Cleaned 0" as success. It now sweeps
         StateLockManager's directory, which is safe because only lock files no
@@ -141,9 +146,9 @@ class TestCleanupStaleLocks:
 
         assert data["cleaned"] == 1
         assert not free.exists()
-        assert data["lock_backend"] == backend
+        assert data["lock_backend"] == reported
         assert data["lock_dir"] == str(tmp_path)
-        if backend == "advisory":
+        if reported == "advisory":
             assert "no agent lock files are expected" in data["message"]
         else:
             assert "never by this tool" in data["message"]

@@ -753,7 +753,10 @@ async def handle_cleanup_stale_locks(arguments: Dict[str, Any]) -> Sequence[Text
 
         max_age = arguments.get('max_age_seconds', 300.0)
         dry_run = arguments.get('dry_run', False)
-        backend = os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower()
+        # Report the backend the dispatcher actually uses: acquire_agent_lock_async
+        # treats every value other than "advisory" as fcntl.
+        raw_backend = os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower()
+        backend = "advisory" if raw_backend == "advisory" else "fcntl"
 
         # No project_root: sweep the directory StateLockManager writes to.
         # Safe because removal requires the lock to be free (a held lock is
