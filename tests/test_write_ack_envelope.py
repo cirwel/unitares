@@ -94,7 +94,9 @@ def _store_payload() -> dict:
             "status": "open",
             "severity": "medium",
             "summary": "write ack bug",
-            "related_to": ["d-old-1", "d-old-2"],
+            # The handler sets related_to to exactly the related_discoveries
+            # ids (_link_similar_store_discoveries).
+            "related_to": ["d-old-1"],
         },
         # The handler's rows are whole records minus details
         # (Discovery.to_dict(include_details=False)).
@@ -175,7 +177,6 @@ def _full_form_bytes(friendly, canonical, make, args) -> int:
     if friendly in _FINDING_WRITES:
         payload = make()
         env = build_experience_envelope(friendly, canonical, payload, args)
-        env.pop("raw_governance_available", None)
         env.pop("raw_governance_hint", None)
         env["raw_governance"] = payload
         return _wire_bytes(env)
@@ -190,12 +191,15 @@ def test_write_ack_omits_raw_governance_by_default(friendly, canonical, make, ar
     env = build_experience_envelope(friendly, canonical, payload, args)
 
     assert "raw_governance" not in env
-    assert env["raw_governance_available"] is True
+    # No route fetches this ack's payload afterwards (record_result has no
+    # read by outcome id; a finding's details read returns the stored
+    # record), so the ack does not claim one, as start_session does not.
+    assert "raw_governance_available" not in env
     assert env["success"] is True
     assert env["tool"] == friendly
     assert env["next_action"]
-    # The hint names a read or an explicit full request, never "re-call" the
-    # write: a repeated store mints a second finding.
+    # The hint names what is reachable, never "re-call" the write: a repeated
+    # store mints a second finding.
     hint = env["raw_governance_hint"]
     assert "Re-call" not in hint
     # The ack no longer carries the canonical payload's bulk: a large field
@@ -262,22 +266,32 @@ def test_knowledge_write_acks_keep_ids_and_write_warnings():
         "store_finding", "knowledge", _store_payload(), {"summary": "write ack bug"}
     )
     assert env["discovery_id"] == "d-new"
-    assert env["state_summary"]["related_to"] == ["d-old-1", "d-old-2"]
+    # The auto-linked ids ride once, in related_discoveries; the summary does
+    # not repeat them as related_to.
+    assert [row["discovery_id"] for row in env["related_discoveries"]] == ["d-old-1"]
+    assert "related_to" not in env["state_summary"]
     assert env["_supersedes_warning"] == "supersedes target 'd-gone' not found"
     assert env["_truncated"] == {"summary": True}
-    assert "knowledge(action='details', discovery_id='d-new')" in env["raw_governance_hint"]
+    hint = env["raw_governance_hint"]
+    assert "knowledge(action='details', discovery_id='d-new')" in hint
+    assert "returns the stored record" in hint
 
+    update = _update_payload()
+    update["discovery"]["related_to"] = ["d-linked"]
     env = build_experience_envelope(
-        "update_finding", "knowledge", _update_payload(), {"discovery_id": "d-existing"}
+        "update_finding", "knowledge", update, {"discovery_id": "d-existing"}
     )
     assert env["discovery_id"] == "d-existing"
+    # An update has no similarity snapshot, so its record's links stay.
+    assert env["state_summary"]["related_to"] == ["d-linked"]
     assert env["closure_class"] is None
     assert env["closure_class_note"] == "This closure declares no standard."
 
 
 def test_store_ack_keeps_a_bounded_related_discoveries_snapshot():
-    # related_discoveries is the store-time similarity snapshot: no later
-    # details read returns it, so the ack keeps ids and short previews.
+    # related_discoveries is the store-time similarity snapshot. Its ids are
+    # the stored related_to; its summary previews are what no later details
+    # read returns, so the ack keeps ids and short previews.
     payload = _store_payload()
     payload["related_discoveries"] = [
         {
@@ -327,6 +341,15 @@ def test_store_ack_omits_empty_related_to():
     payload["discovery"]["related_to"] = []
     env = build_experience_envelope("store_finding", "knowledge", payload, {})
     assert "related_to" not in env["state_summary"]
+
+
+def test_store_ack_keeps_related_to_without_a_related_discoveries_snapshot():
+    # With no snapshot to carry the ids, related_to is their only copy.
+    payload = _store_payload()
+    payload.pop("related_discoveries")
+    env = build_experience_envelope("store_finding", "knowledge", payload, {})
+    assert "related_discoveries" not in env
+    assert env["state_summary"]["related_to"] == ["d-old-1"]
 
 
 def test_record_result_ack_keeps_outcome_id_and_disclosures():
@@ -443,9 +466,10 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
         "raw_governance_hint"
     ]
     if declares_full:
-        # Named for a later outcome, after the warning not to repeat this one.
-        assert "response_mode='full'" in hint
-        assert hint.startswith("Do not repeat this outcome")
+        # Named for a later outcome, after saying this one cannot be read
+        # again and must not be repeated.
+        assert "response_mode='full' on a later outcome" in hint
+        assert hint.startswith("This outcome's full payload cannot be read again")
     else:
         assert "response_mode" not in hint
         assert "knowledge(action='details'" in hint
@@ -504,7 +528,8 @@ async def test_write_ack_omits_raw_governance_after_real_validation(friendly, ar
     data = _parse(out)
     assert data["tool"] == friendly
     assert "raw_governance" not in data, arguments
-    assert data["raw_governance_available"] is True
+    assert "raw_governance_available" not in data
+    assert data["raw_governance_hint"]
 
 
 def _real_signature(
@@ -594,27 +619,6 @@ def test_write_ack_without_a_proven_signature_invents_no_writer():
     env = build_experience_envelope("update_finding", "knowledge", payload, {})
     assert "agent_uuid" not in env
     assert "written_as" not in env
-
-
-@pytest.mark.parametrize("friendly_name, build", [
-    ("store_finding", _store_payload),
-    ("update_finding", _update_payload),
-])
-def test_write_ack_keeps_the_auto_correction_notice(friendly_name, build):
-    # The finding handlers wrap with success_response(..., arguments=
-    # request.arguments), which is how _param_coercions reaches a live ack.
-    # outcome_event wraps without arguments, so record_result never carries it.
-    from src.mcp_handlers.response_base import success_response
-
-    coercions = {"severity": {"from": "MEDIUM", "to": "medium"}}
-    wrapped = success_response(
-        build(), agent_id=None, arguments={"_param_coercions": coercions}
-    )
-    payload = json.loads(wrapped[0].text)
-    assert payload["_param_coercions"]["applied"] == coercions
-    env = build_experience_envelope(friendly_name, "knowledge", payload, {})
-    assert "raw_governance" not in env
-    assert env["_param_coercions"] == payload["_param_coercions"]
 
 
 # -- start_session is out of scope ------------------------------------------

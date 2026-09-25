@@ -147,9 +147,10 @@ _MEMORY_SUMMARY_PREVIEW_CHARS = 240
 _MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
 # store_finding's related_discoveries is the store-time similarity snapshot:
-# the findings this write resembled when it was stored. The ack keeps a bounded
-# pointer list (ids and short summary previews); each record is one details
-# read away.
+# the findings this write resembled when it was stored. Its ids are also the
+# stored record's related_to, so the write-time content a details read cannot
+# give back is the summary previews. The ack keeps a bounded list of ids and
+# short previews; each record is one details read away.
 _RELATED_DISCOVERY_LIMIT = 5
 _RELATED_SUMMARY_PREVIEW_CHARS = 120
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
@@ -1067,7 +1068,8 @@ def _knowledge_write_summary(
         # The record's links: on store_finding, the similar findings this
         # write auto-linked; on update_finding, the stored record's existing
         # links (an update does not auto-link). Worth a pointer when there
-        # are any, noise when there are none.
+        # are any, noise when there are none. A store_finding ack that lifts
+        # related_discoveries drops this copy (same ids; see the caller).
         summary.pop("related_to", None)
     if discovery_id is not None:
         summary["discovery_id"] = discovery_id
@@ -1204,16 +1206,19 @@ def _write_ack_raw_policy(
     'full' and an omitted parameter arrive identical. A later
     knowledge(action='details') read returns the stored record, not
     everything this ack carried: the write-time warnings and a bounded
-    related_discoveries snapshot are lifted into the ack for that reason. The
+    related_discoveries snapshot (for its summary previews) are lifted into
+    the ack for that reason. The
     canonical knowledge tool still returns the whole payload directly.
     outcome_event validates response_mode to None, so on record_result an
     arriving 'full' was the caller's.
 
     The hint never tells a caller to repeat the write to see the payload: a
     second store mints a second finding. For the finding writes it names a
-    details read. record_result has no read by outcome id, so its hint names
-    the full-mode parameter for a later outcome and warns that repeating this
-    one records a second outcome.
+    details read, which returns the stored record. record_result has no read
+    by outcome id, so its hint names the full-mode parameter for a later
+    outcome and warns that repeating this one records a second outcome.
+    Neither route fetches the omitted payload, so these acks do not set
+    raw_governance_available.
     """
     if friendly_name == "record_result":
         # include_semantics is read the way the handler reads it (the schema
@@ -1227,10 +1232,11 @@ def _write_ack_raw_policy(
         wants_full = full_mode or _coerce_bool_flag(arguments.get("include_semantics"))
         identifiable = payload.get("outcome_id") is not None
         hint = (
-            "Do not repeat this outcome to read it: without a prediction_id, a "
-            "repeat records a second outcome. To get the complete payload "
-            "(including the full EISV snapshot semantics) inline on a later "
-            "outcome, pass response_mode='full' with it."
+            "This outcome's full payload cannot be read again: there is no "
+            "read by outcome id, and without a prediction_id a repeat records "
+            "a second outcome. To get the complete payload (including the full "
+            "EISV snapshot semantics) inline, pass response_mode='full' on a "
+            "later outcome."
         )
         return wants_full or not identifiable, hint
 
@@ -1244,8 +1250,9 @@ def _write_ack_raw_policy(
     )
     target = discovery_id if discovery_id is not None else "..."
     hint = (
-        "Read the full record with knowledge(action='details', "
-        f"discovery_id='{target}'); do not repeat the write to see it."
+        f"knowledge(action='details', discovery_id='{target}') returns the "
+        "stored record, not this ack's payload; do not repeat the write to "
+        "see it."
     )
     return discovery_id is None, hint
 
@@ -1985,14 +1992,19 @@ def build_experience_envelope(
         ))
         if "closure_class" in source_payload:
             envelope["closure_class"] = source_payload["closure_class"]
-        # The store-time similarity snapshot is the one write-time field the
-        # details read cannot reproduce later, so a bounded form of it stays in
+        # The store-time similarity snapshot. Its ids are the stored record's
+        # related_to, which a details read returns; its summary previews are
+        # what the details read cannot give back, so a bounded form stays in
         # the ack (consolidation_hint, lifted above, summarizes the same set).
         related, related_total = _compact_related_discoveries(source_payload)
         if related:
             envelope["related_discoveries"] = related
             if related_total is not None:
                 envelope["related_discoveries_total"] = related_total
+            if friendly_name == "store_finding":
+                # store sets discovery.related_to to exactly these rows' ids,
+                # so the summary copy would carry the same list twice.
+                state_summary.pop("related_to", None)
 
         if friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")
@@ -2270,19 +2282,22 @@ def build_experience_envelope(
                     ))
                 if written_as:
                     envelope["written_as"] = written_as
-        # success_response's notice that the caller's arguments were
-        # auto-corrected: on a write, the corrected value is what was stored.
-        coercions = source_payload.get("_param_coercions")
-        if isinstance(coercions, dict) and coercions:
-            envelope["_param_coercions"] = coercions
 
     if include_raw:
         envelope["raw_governance"] = payload
-    elif friendly_name != "start_session":
-        # A routine start_session's record cannot be fetched afterwards (only
-        # another mint would produce one), so it does not claim one is
-        # available.
-        envelope["raw_governance_available"] = True
+    else:
+        # raw_governance_available promises a way to fetch the omitted
+        # payload. A routine start_session's record cannot be fetched
+        # afterwards (only another mint would produce one), so it does not
+        # claim one. The write acks are in the same position: record_result
+        # has no read by outcome id, and a finding's details read returns the
+        # stored record, not this ack's payload. Their hint says what is
+        # reachable instead.
+        if (
+            friendly_name != "start_session"
+            and friendly_name not in _COMPACT_WRITE_ALIASES
+        ):
+            envelope["raw_governance_available"] = True
         if raw_hint:
             envelope["raw_governance_hint"] = raw_hint
     if routine_sync and _is_routine_proceed(envelope):

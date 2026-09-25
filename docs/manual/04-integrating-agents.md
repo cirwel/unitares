@@ -61,12 +61,18 @@ as does a plain fresh `start_session` (pass `response_mode="full"` on the mint
 to keep it); other state-changing tools retain it. `raw_governance_hint` names
 where to read more. That is `response_mode="full"` on `sync_state`,
 `search_shared_memory` and `record_result`, and `verbosity="full"` on
-`check_working_state`. For `store_finding` and `update_finding`, where
+`check_working_state`. On `record_result` that option applies to a later
+outcome: there is no read by outcome id, so an ack's own outcome payload cannot
+be fetched again. For `store_finding` and `update_finding`, where
 `response_mode` does not apply, it is a
 `knowledge(action="details", discovery_id=...)` read, which returns the stored
-record; write-time warnings and a bounded `related_discoveries` snapshot stay
-in the ack because that read does not return them. The canonical `knowledge`
-tool returns their whole payload directly. These three write
+record rather than the ack's payload, so these three write acks do not set
+`raw_governance_available`. Write-time warnings and a bounded
+`related_discoveries` snapshot stay in the ack because that read does not
+return the warnings or the snapshot's summary previews; the snapshot's ids are
+the stored record's `related_to`, so a `store_finding` ack that carries the
+snapshot does not repeat them as `state_summary.related_to`. The canonical
+`knowledge` tool returns their whole payload directly. These three write
 acknowledgements keep the ids a caller needs next (`discovery_id`,
 `state_summary.outcome_id`). The finding writes also carry `agent_uuid` and
 `written_as`, the writer's `agent_id`, `display_name` and assurance tier, so a
