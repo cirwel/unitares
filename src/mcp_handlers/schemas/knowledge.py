@@ -371,7 +371,7 @@ class CleanupKnowledgeGraphParams(AgentIdentityMixin):
 
 
 class KnowledgeParams(AgentIdentityMixin):
-    """Parameters for knowledge"""
+    """Knowledge graph parameters."""
     # Which of these flat parameters each action uses. The wire schema stays
     # flat (the MCP wrapper builds its argument model from top-level
     # properties), so this is the only machine-readable statement of the
@@ -387,9 +387,9 @@ class KnowledgeParams(AgentIdentityMixin):
                 "memory_context",
         ),
         "search": (
-                "query", "limit", "offset", "search_mode", "semantic",
+                "query", "limit", "search_mode", "semantic",
                 "include_details", "include_archived", "include_cold",
-                "response_mode", "tags", "status", "scope", "epoch_scope",
+                "response_mode", "tags", "status",
                 "exclude_agent_labels", "min_similarity", "operator",
                 "discovery_type", "severity", "include_provenance",
                 "agent_id_filter", "authority_mode",
@@ -400,6 +400,7 @@ class KnowledgeParams(AgentIdentityMixin):
         ),
         "list": (
                 "limit", "offset", "including_cold", "status", "response_mode",
+                "epoch_scope",
         ),
         "update": (
                 "discovery_id", "status", "severity", "superseded_by",

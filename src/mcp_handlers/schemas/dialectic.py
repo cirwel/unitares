@@ -165,7 +165,7 @@ class LlmAssistedDialecticParams(AgentIdentityMixin):
     reasoning: Optional[str] = Field(default=None, description="Your explanation/reasoning")
 
 class DialecticParams(AgentIdentityMixin):
-    """Parameters for dialectic"""
+    """Review session parameters."""
     # Which of these flat parameters each action uses. The wire schema stays
     # flat (the MCP wrapper builds its argument model from top-level
     # properties), so this is the only machine-readable statement of the
