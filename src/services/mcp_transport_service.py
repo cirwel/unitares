@@ -98,6 +98,8 @@ class McpTransportRuntime:
                 _serve_public_listener(self.public_server, self.public_socket),
                 name="unitares-public-oauth-listener",
             )
+            if hasattr(self.server, "follower_task"):
+                self.server.follower_task = public_task
         try:
             async with self.session_manager.run():
                 logger.info("[STREAMABLE] Session manager started")
@@ -583,7 +585,9 @@ def build_transport_runtime(
         proxy_headers=True,
         ws="websockets-sansio",
     )
-    main_server = uvicorn.Server(config)
+    main_server = (
+        _leader_server_class()(config) if public_socket is not None else uvicorn.Server(config)
+    )
     public_server = None
     if public_socket is not None:
         # Loopback only: the tunnel connector runs on this host. Same proxy
@@ -672,6 +676,36 @@ def bind_public_socket(public_port: int, *, main_port: int) -> Any:
         )
         return None
     return sock
+
+
+def _leader_server_class() -> type:
+    """A uvicorn Server whose shutdown waits for the public listener's drain.
+
+    On SIGTERM uvicorn restores the original handler and re-raises the signal
+    as soon as the leader's own shutdown returns; with no handler installed
+    the process ends there. The public listener drains concurrently (it
+    follows ``should_exit``) but would be cut off whenever the main listener
+    finished first, which is the usual case once the tunnel's traffic moves
+    to the public port. Awaiting the follower inside ``shutdown`` keeps its
+    drain within the captured-signal window.
+    """
+    import uvicorn
+
+    class LeaderServer(uvicorn.Server):
+        follower_task: Any = None
+
+        async def shutdown(self, sockets: Any = None) -> None:
+            await super().shutdown(sockets=sockets)
+            task = self.follower_task
+            if task is None or task.done():
+                return
+            grace = self.config.timeout_graceful_shutdown or 10
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=grace + 5)
+            except (asyncio.TimeoutError, Exception):
+                logger.warning("Public OAuth listener did not finish draining in time")
+
+    return LeaderServer
 
 
 def _follower_server_class() -> type:

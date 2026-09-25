@@ -606,3 +606,87 @@ def test_follower_exit_tracks_the_leader_without_being_told():
     follower.should_exit = True
     assert follower.should_exit is True
     assert leader.should_exit is False
+
+
+_SIGTERM_CHILD = r'''
+import asyncio, sys
+import uvicorn
+from src.services.mcp_transport_service import (
+    McpTransportRuntime, _follower_server_class, _leader_server_class,
+    bind_public_socket, mark_public_listener,
+)
+
+async def app(scope, receive, send):
+    await asyncio.sleep(2)
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"drained"})
+
+class SM:
+    def run(self):
+        import contextlib
+        @contextlib.asynccontextmanager
+        async def cm():
+            yield
+        return cm()
+
+async def main():
+    main_port = int(sys.argv[1])
+    sock = bind_public_socket(0, main_port=main_port)
+    leader = _leader_server_class()(uvicorn.Config(
+        app, host="127.0.0.1", port=main_port, lifespan="off", log_level="warning",
+        timeout_graceful_shutdown=10))
+    follower = _follower_server_class()(leader, uvicorn.Config(
+        mark_public_listener(app), lifespan="off", log_level="warning",
+        timeout_graceful_shutdown=10))
+    print(sock.getsockname()[1], flush=True)
+    await McpTransportRuntime(app=app, session_manager=SM(), server=leader,
+                              public_server=follower, public_socket=sock).serve()
+
+asyncio.run(main())
+'''
+
+
+def test_sigterm_lets_an_in_flight_public_request_finish(tmp_path):
+    """launchd stops the server with SIGTERM. uvicorn re-raises it once the
+    main listener's shutdown returns, so a request still running on the public
+    listener (where the tunnel's traffic lives) must be drained before then."""
+    import os
+    import signal
+    import socket
+    import subprocess
+    import sys
+    import time
+
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = tmp_path / "child.py"
+    script.write_text(_SIGTERM_CHILD)
+    env = {**os.environ, "PYTHONPATH": repo}
+    env.pop("UNITARES_UDS_SOCKET", None)
+    child = subprocess.Popen(
+        [sys.executable, str(script), str(_free_port())],
+        cwd=repo, env=env, stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        public_port = int(child.stdout.readline())
+        deadline = time.time() + 10
+        while True:
+            try:
+                client = socket.create_connection(("127.0.0.1", public_port), timeout=1)
+                break
+            except OSError:
+                assert time.time() < deadline, "public listener never came up"
+                time.sleep(0.05)
+        client.settimeout(15)
+        client.sendall(b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        time.sleep(0.5)  # request is now in flight (the app sleeps 2s)
+        child.send_signal(signal.SIGTERM)
+        data = b""
+        while chunk := client.recv(4096):
+            data += chunk
+        client.close()
+        assert data.startswith(b"HTTP/1.1 200"), data
+        assert b"drained" in data
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=15)
