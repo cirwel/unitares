@@ -2445,9 +2445,9 @@ def test_listing_places_only_findings_that_could_be_copies(
 
 
 def test_git_lookups_are_capped_per_render(watcher_module, tmp_path, monkeypatch):
-    """Grouping and footer labels share one git budget per render, so a
-    backlog spread over many directories cannot put an unbounded number of
-    git subprocesses on the per-prompt path (independent review, P2)."""
+    """Grouping has a fixed git budget per render, so a backlog spread over
+    many directories cannot put an unbounded number of git subprocesses on
+    the per-prompt path (independent review, P2)."""
     trees = _repo_with_worktrees(tmp_path)
     findings = []
     for i in range(30):
@@ -2568,41 +2568,6 @@ def test_surface_pending_marks_every_copy_of_a_shown_entry(watcher_module, tmp_p
     }
 
 
-def test_other_worktree_tally_counts_by_worktree_not_parent_dir(
-    watcher_module, tmp_path, capsys
-):
-    trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
-    removed = tmp_path / "wt" / "removed-wt" / "tests" / "test_gone.py"
-    gone = _copy("eeee000000000005", tmp_path, rel="wt/removed-wt/tests/test_gone.py")
-    gone["line_content"] = "except Exception: pass"
-    assert not removed.parent.exists()
-    _seed_findings(
-        watcher_module,
-        [
-            _copy("aaaa000000000001", trees["main"]),
-            _copy("bbbb000000000002", trees["feat-a"], rel="tests/test_mod.py"),
-            _copy("cccc000000000003", trees["feat-a"], rel="pkg/mod.py"),
-            _copy("dddd000000000004", trees["feat-b"], rel="tests/test_mod.py"),
-            gone,
-        ],
-    )
-
-    assert watcher_module.print_unresolved(scope_root=trees["main"]) == 0
-
-    out = capsys.readouterr().out
-    assert (
-        "Plus 4 finding(s) in other worktrees "
-        "(feat-a=2, feat-b=1, removed-wt=1)"
-    ) in out
-    assert "tests=" not in out and "pkg=" not in out
-
-
-def test_worktree_label_for_deleted_dir_inside_a_live_worktree(watcher_module, tmp_path):
-    trees = _repo_with_worktrees(tmp_path, "feat-a")
-    deleted = trees["feat-a"] / "newdir" / "sub" / "x.py"
-    assert watcher_module._worktree_label(str(deleted), {}) == "feat-a"
-
-
 def _checkout_with_codex_worktrees(root: Path) -> dict[str, Path]:
     """The live layout: a main checkout ``projects/unitares``, two Codex
     worktrees ``.codex/worktrees/<id>/unitares`` and ``projects/wt/<name>``.
@@ -2627,52 +2592,11 @@ def _checkout_with_codex_worktrees(root: Path) -> dict[str, Path]:
     return {key: tree.resolve() for key, tree in trees.items()}
 
 
-def test_worktree_label_tells_codex_worktrees_and_main_apart(watcher_module, tmp_path):
-    trees = _checkout_with_codex_worktrees(tmp_path)
-    label = watcher_module._worktree_label
-    assert label(str(trees["main"] / "pkg" / "mod.py"), {}) == "main"
-    assert label(str(trees["codex-4922"] / "pkg" / "mod.py"), {}) == "codex:4922"
-    assert label(str(trees["codex-9429"] / "pkg" / "mod.py"), {}) == "codex:9429"
-    assert label(str(trees["feat"] / "pkg" / "mod.py"), {}) == "unitares-feat"
-    # A deleted directory inside the main checkout still counts as main.
-    assert label(str(trees["main"] / "gone" / "x.py"), {}) == "main"
-
-
-def test_worktree_label_for_a_removed_codex_worktree(watcher_module, tmp_path):
-    gone = tmp_path / ".codex" / "worktrees" / "7777" / "unitares" / "pkg" / "mod.py"
-    (tmp_path / ".codex" / "worktrees").mkdir(parents=True)
-    assert watcher_module._worktree_label(str(gone), {}) == "codex:7777"
-
-
-def test_other_worktree_footer_separates_codex_worktrees_and_main(
-    watcher_module, tmp_path, capsys
-):
-    trees = _checkout_with_codex_worktrees(tmp_path)
-    _seed_findings(
-        watcher_module,
-        [
-            _copy("aaaa000000000001", trees["main"]),
-            _copy("bbbb000000000002", trees["codex-4922"]),
-            _copy("cccc000000000003", trees["codex-4922"], line=5),
-            _copy("dddd000000000004", trees["codex-9429"]),
-        ],
-    )
-
-    assert watcher_module.print_unresolved(scope_root=trees["feat"]) == 0
-
-    out = capsys.readouterr().out
-    assert (
-        "Plus 4 finding(s) in other worktrees "
-        "(codex:4922=2, codex:9429=1, main=1)"
-    ) in out
-    assert "unitares=" not in out
-
-
 def test_federated_surface_skips_out_of_scope_labels(
     watcher_module, tmp_path, monkeypatch, capsys
 ):
-    """The federated chime discards the out-of-scope counts, so it must not
-    pay for their labels: no git subprocess runs."""
+    """The federated chime with only out-of-scope findings starts no git
+    subprocess."""
     trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
     _seed_findings(
         watcher_module,
@@ -2699,23 +2623,6 @@ def test_federated_surface_skips_out_of_scope_labels(
     )
     assert calls == []
     assert "other worktrees" not in capsys.readouterr().out
-
-
-def test_partition_without_counts_computes_no_labels(watcher_module, tmp_path, monkeypatch):
-    trees = _repo_with_worktrees(tmp_path, "feat-a")
-    findings = [_copy("aaaa000000000001", trees["feat-a"])]
-    calls: list = []
-
-    def _record(*args, **kwargs):
-        calls.append(args)
-        raise OSError("subprocess blocked by test")
-
-    monkeypatch.setattr(subprocess, "run", _record)
-    in_scope, counts = watcher_module._partition_findings_by_scope(
-        findings, trees["main"], count_out_of_scope=False
-    )
-    assert in_scope == [] and counts == {}
-    assert calls == []
 
 
 # --- surface_pending (UserPromptSubmit hook, chime mode) -------------------
@@ -4948,10 +4855,6 @@ def _stub_urlopen(monkeypatch, watcher_module, payload, captured=None):
     monkeypatch.setattr(watcher_module.urllib.request, "urlopen", _fake)
 
 
-
-
-
-
 def test_openai_compat_url_still_supported(watcher_module, monkeypatch):
     """Back-compat: a WATCHER_OLLAMA_URL pointing at /v1/chat/completions keeps
     working (it just cannot raise num_ctx — which is why it is not default)."""
@@ -5094,7 +4997,6 @@ def test_self_test_covers_a_realistic_prompt_size(watcher_module):
         "planted bug moved out of the file head — under front-truncation a bug "
         "in the tail is still visible, so the case would no longer discriminate"
     )
-
 
 
 def test_scan_call_requests_the_scan_window(watcher_module, monkeypatch):
@@ -5568,18 +5470,6 @@ def test_busy_region_warns_but_does_not_count_as_a_failure(
     assert any("1 of 2 regions were skipped (model busy)" in m for m in logged)
 
 
-def test_worktree_label_for_removed_worktree_nested_in_a_checkout(
-    watcher_module, tmp_path
-):
-    # Worktrees kept under an ignored directory of the main checkout
-    # (`.claude/worktrees/<name>`) must not be counted under the checkout.
-    trees = _repo_with_worktrees(tmp_path)
-    (trees["main"] / ".gitignore").write_text(".claude/worktrees/\n")
-    (trees["main"] / ".claude" / "worktrees").mkdir(parents=True)
-    gone = trees["main"] / ".claude" / "worktrees" / "gone-x" / "tests" / "t.py"
-    assert watcher_module._worktree_label(str(gone), {}) == "gone-x"
-
-
 def test_group_shows_each_copy_hint_that_differs(watcher_module, tmp_path):
     # Every row in a displayed group is marked surfaced, so each row's own
     # hint has to be on screen when it differs from the entry's.
@@ -5624,34 +5514,12 @@ def test_group_never_mixes_severities(watcher_module, tmp_path):
     assert [f["fingerprint"] for f in shown] == ["aaaa000000000001"]
 
 
-def test_spent_git_budget_never_labels_a_removed_worktree_as_its_checkout(
-    watcher_module, tmp_path
-):
-    """Past the git budget, "cannot tell whether git ignores it" must not read
-    as "not ignored": a removed `.claude/worktrees/<name>` would then be
-    counted under the enclosing checkout (independent review, P2)."""
-    from agents.watcher.findings import _GIT_LOOKUP_LIMIT
-
-    trees = _repo_with_worktrees(tmp_path)
-    (trees["main"] / ".gitignore").write_text(".claude/worktrees/\n")
-    (trees["main"] / ".claude" / "worktrees").mkdir(parents=True)
-    cache: dict = {}
-    labels = [
-        watcher_module._worktree_label(
-            str(trees["main"] / ".claude" / "worktrees" / f"wt{i}" / "m.py"), cache
-        )
-        for i in range(_GIT_LOOKUP_LIMIT + 3)
-    ]
-    assert "main" not in labels
-    assert set(labels) <= {f"wt{i}" for i in range(_GIT_LOOKUP_LIMIT + 3)} | {"unplaced"}
-
-
 def test_print_unresolved_groups_despite_a_wide_out_of_scope_backlog(
     watcher_module, tmp_path, monkeypatch, capsys
 ):
-    """Footer labels and in-scope grouping have separate git budgets, so out-of-
-    scope findings across many directories cannot turn grouping off on the
-    SessionStart path (independent review, P2)."""
+    """Out-of-scope findings across many directories must not turn in-scope
+    grouping off on the SessionStart path: the footer labels them without
+    git, so grouping keeps its whole budget (independent review, P2)."""
     from agents.watcher.findings import _GIT_LOOKUP_LIMIT
 
     trees = _repo_with_worktrees(tmp_path / "repo", "feat-a")
@@ -5676,6 +5544,3 @@ def test_print_unresolved_groups_despite_a_wide_out_of_scope_backlog(
     assert watcher_module.print_unresolved(scope_root=trees["main"]) == 0
     out = capsys.readouterr().out
     assert "(2 locations, same line text" in out
-    # Past the label budget, rows go to one bucket, not a mix of schemes.
-    footer = next(l for l in out.splitlines() if "other worktrees" in l)
-    assert "d9=" not in footer and "d8=" not in footer

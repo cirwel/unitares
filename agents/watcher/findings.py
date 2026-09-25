@@ -852,37 +852,18 @@ def _apply_floor_to_finding(
 # ---------------------------------------------------------------------------
 
 # Per-render cache of git lookups: ``{directory: (git common dir, worktree
-# toplevel) or None}`` plus ``{"ignored:<path>": bool}`` from ``_git_ignores``.
+# toplevel) or None}``.
 GitCache = dict[str, Any]
 
 # Each cache entry is one git subprocess, so the cache size is the number
 # spawned for this render. The listing runs on every prompt, so the total is
-# capped: past it, placement and labels fall back to the ungrouped row and the
-# path heuristic instead of spawning more.
+# capped: past it, placement fails and the finding is shown ungrouped instead
+# of spawning more.
 _GIT_LOOKUP_LIMIT = 8
 
 
 def _git_budget_spent(cache: GitCache) -> bool:
     return len(cache) >= _GIT_LOOKUP_LIMIT
-
-
-# Footer label for a finding the budget left unplaced: one honest bucket,
-# rather than a guessed worktree or a label from a different naming scheme.
-_UNPLACED_LABEL = "unplaced"
-
-
-def _git_skipped(directory: Path, cache: GitCache) -> bool:
-    """True when placing ``directory`` would need a git lookup the spent
-    budget no longer allows (an existing directory not already looked up)."""
-    try:
-        resolved = directory.resolve()
-    except OSError:
-        return False
-    return (
-        _git_budget_spent(cache)
-        and str(resolved) not in cache
-        and resolved.is_dir()
-    )
 
 
 def _git_worktree_of_dir(directory: Path, cache: GitCache) -> tuple[str, str] | None:
@@ -1299,29 +1280,21 @@ def _resolve_session_scope_root(cwd: Path | None = None) -> Path | None:
 def _partition_findings_by_scope(
     findings: list[dict[str, Any]],
     scope_root: Path | None,
-    git_cache: GitCache | None = None,
-    *,
-    count_out_of_scope: bool = True,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Split findings into ``(in_scope, out_of_scope_groups)``.
 
     A finding is in-scope when its ``file`` lives under ``scope_root``.
-    Out-of-scope findings are aggregated by the worktree they live in (see
-    ``_worktree_label``) so the footer can summarize *where* the backlog is
+    Out-of-scope findings are aggregated by their nearest ``.worktrees``
+    sibling label so the footer can summarize *where* the backlog is
     without listing every path.
 
     If ``scope_root`` is None, all findings are treated as in-scope —
     matches the legacy "surface everything" behavior so callers without
     a worktree (CI, ad-hoc CLI) keep the existing experience.
-
-    Labelling can start git subprocesses. A caller that discards the counts
-    passes ``count_out_of_scope=False``; the second value is then ``{}`` and
-    no label is computed.
     """
     if scope_root is None:
         return list(findings), {}
 
-    cache: GitCache = {} if git_cache is None else git_cache
     in_scope: list[dict[str, Any]] = []
     out_groups: dict[str, int] = {}
     resolved_scope = scope_root.resolve()
@@ -1339,113 +1312,10 @@ def _partition_findings_by_scope(
                 else:
                     in_scope.append(f)
                     continue
-        if not count_out_of_scope:
-            continue
         label_path = str(resolved_file) if resolved_file is not None else file_path
-        label = _worktree_label(label_path, cache)
+        label = _label_for_other_worktree(label_path)
         out_groups[label] = out_groups.get(label, 0) + 1
     return in_scope, out_groups
-
-
-def _codex_worktree_label(path: Path) -> str | None:
-    """``codex:<id>`` for a path under ``.codex/worktrees/<id>/``, else None.
-
-    Every Codex worktree's toplevel is ``~/.codex/worktrees/<id>/<repo>``, so
-    the directory name alone (``unitares``) cannot tell them apart."""
-    parts = path.parts
-    for i in range(len(parts) - 2):
-        if parts[i] == ".codex" and parts[i + 1] == "worktrees":
-            return f"codex:{parts[i + 2]}"
-    return None
-
-
-def _label_for_worktree_root(toplevel: str, common_dir: str) -> str:
-    """Footer label for a worktree git placed.
-
-    ``main`` for the main checkout (its ``.git`` is the common dir),
-    ``codex:<id>`` for a Codex worktree, otherwise the worktree's own
-    directory name (``~/projects/wt/<name>`` gives ``<name>``)."""
-    root = Path(toplevel)
-    if Path(common_dir) == root / ".git":
-        return "main"
-    return _codex_worktree_label(root) or root.name or "(root)"
-
-
-def _worktree_label(file_path: str, cache: GitCache) -> str:
-    """Name the worktree an out-of-scope finding lives in.
-
-    When git can place the file, ``_label_for_worktree_root`` names the
-    worktree: ``main`` for the main checkout, ``codex:<id>`` for a Codex
-    worktree, else the worktree's directory name. Directory names alone are
-    not enough: every Codex worktree and the main checkout share the name
-    ``unitares``. For a path whose directory is gone, the nearest surviving
-    ancestor decides: if it is inside a worktree, that worktree's label;
-    otherwise the removed worktree, named ``codex:<id>`` under
-    ``.codex/worktrees/`` or else by the first missing directory. Anything
-    else (legacy relative paths, files outside git) falls back to
-    ``_label_for_other_worktree``. Before this, a file under
-    ``<worktree>/tests/`` was counted as ``tests``, so one worktree's backlog
-    was split across its subdirectory names.
-    """
-    location = _git_location(file_path, cache)
-    if location is not None:
-        return _label_for_worktree_root(location[1], location[0])
-    path = Path(file_path) if file_path else None
-    if path is not None and path.is_absolute() and _git_skipped(path.parent, cache):
-        return _UNPLACED_LABEL
-    if path is not None and path.is_absolute() and ".worktrees" not in path.parts:
-        missing = path.parent
-        while not missing.parent.is_dir() and missing.parent != missing:
-            missing = missing.parent
-        if not missing.is_dir() and missing.parent != missing:
-            if _git_skipped(missing.parent, cache):
-                return _UNPLACED_LABEL
-            info = _git_worktree_of_dir(missing.parent, cache)
-            ignored = _git_ignores(missing, cache) if info is not None else True
-            if ignored is None:
-                return _UNPLACED_LABEL
-            if info is not None and not ignored:
-                return _label_for_worktree_root(info[1], info[0])
-            # Outside git, or an ignored directory inside a checkout (a
-            # worktree kept under `.claude/worktrees/`): the missing
-            # directory is the removed worktree, not the enclosing checkout.
-            return _codex_worktree_label(path) or missing.name
-    return _label_for_other_worktree(file_path)
-
-
-def _git_ignores(path: Path, cache: GitCache) -> bool | None:
-    """True when git ignores ``path`` in the checkout around its parent.
-
-    Nested worktree directories (``.claude/worktrees/<name>``) are ignored
-    by the enclosing checkout; a deleted source directory normally is not.
-    Errors count as not ignored.
-    """
-    key = f"ignored:{path}"
-    if key in cache:
-        return bool(cache[key])
-    if _git_budget_spent(cache):
-        return None
-    try:
-        result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(path.parent),
-                "check-ignore",
-                "-q",
-                "--no-index",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-            check=False,
-        )
-        ignored = result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        ignored = False
-    cache[key] = ignored
-    return ignored
 
 
 def _label_for_other_worktree(file_path: str) -> str:
@@ -1467,6 +1337,7 @@ def _label_for_other_worktree(file_path: str) -> str:
     # Fall back to the deepest dir name above the file
     parent = Path(file_path).parent
     return parent.name or "(root)"
+
 
 
 def print_unresolved(scope_root: Path | None = None) -> int:
@@ -1495,9 +1366,7 @@ def print_unresolved(scope_root: Path | None = None) -> int:
             # removed. Mark only the display copy so SessionStart remains
             # strictly read-only; the next lifecycle sweep persists path_gone.
             findings.append({**finding, "path_gone": True})
-    # Labels and grouping each get their own budget, so a wide out-of-scope
-    # backlog cannot spend the lookups the in-scope grouping needs.
-    in_scope, out_groups = _partition_findings_by_scope(findings, scope_root, {})
+    in_scope, out_groups = _partition_findings_by_scope(findings, scope_root)
     git_cache: GitCache = {}
 
     block, _shown = _format_findings_block(
