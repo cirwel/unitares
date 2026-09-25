@@ -131,6 +131,7 @@ from src.mcp_listen_config import (
     build_transport_security_settings,
     default_listen_host,
     LOOPBACK_HOSTS,
+    mcp_bearer_tokens,
     oauth_public_port,
 )
 
@@ -176,7 +177,7 @@ if _oauth_issuer_url:
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
         print(
             "[FastMCP] OAuth gate applies to "
-            + (f"the public listener 127.0.0.1:{_oauth_public_port} only" if _oauth_public_port else "every request")
+            + (f"the public listener 127.0.0.1:{_oauth_public_port} only, if it binds" if _oauth_public_port else "every request")
             + ("; static client configured" if _oauth_static_client_id else ""),
             file=sys.stderr, flush=True,
         )
@@ -236,9 +237,6 @@ _auth_refusal = auth_gate_refusal(
     provider_present=_oauth_provider is not None,
     issuer_set=bool(_oauth_issuer_url),
     setup_error_name=type(_oauth_setup_error).__name__ if _oauth_setup_error else None,
-    main_listener_ungated=(
-        _oauth_public_port is not None and default_listen_host() not in LOOPBACK_HOSTS
-    ),
 )
 if _auth_refusal:
     raise RuntimeError(_auth_refusal)
@@ -390,7 +388,22 @@ async def main():
             # Without a provider there is nothing for the listener to gate.
             public_port=_oauth_public_port if _oauth_issuer_url else None,
         )
-        if _oauth_issuer_url and _oauth_public_port and args.host not in LOOPBACK_HOSTS:
+        # Judged here, not at import: --host is only known now, and only the
+        # built runtime knows whether the public listener actually bound.
+        _main_ungated = (
+            runtime.public_server is not None
+            and args.host not in LOOPBACK_HOSTS
+            and not mcp_bearer_tokens()
+        )
+        _refusal = auth_gate_refusal(
+            provider_present=_oauth_provider is not None,
+            issuer_set=bool(_oauth_issuer_url),
+            main_listener_ungated=_main_ungated,
+        )
+        if _refusal:
+            print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)
+            raise SystemExit(1)
+        if _main_ungated:
             print(
                 f"[FastMCP] WARNING: the main listener on {args.host}:{args.port} is NOT "
                 "OAuth-gated (UNITARES_OAUTH_PUBLIC_PORT confines OAuth to the public "

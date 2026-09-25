@@ -113,13 +113,60 @@ def test_transport_runtime_adds_a_loopback_public_listener(monkeypatch):
         server_start_time=0.0,
         server_version="test",
         server_build_sha="test",
-        public_port=8772,
+        public_port=0,  # ephemeral: never collide with a running deployment
     )
 
-    cfg = runtime.public_server.config
-    assert (cfg.host, cfg.port) == ("127.0.0.1", 8772)
-    assert cfg.proxy_headers is True
-    assert cfg.forwarded_allow_ips == runtime.server.config.forwarded_allow_ips
+    try:
+        cfg = runtime.public_server.config
+        assert cfg.host == "127.0.0.1"
+        assert cfg.port == runtime.public_socket.getsockname()[1] != 0
+        assert cfg.proxy_headers is True
+        assert cfg.forwarded_allow_ips == runtime.server.config.forwarded_allow_ips
+    finally:
+        runtime.public_socket.close()
+
+
+def test_an_unbound_public_listener_falls_back_to_gating_every_request(monkeypatch):
+    """UNITARES_OAUTH_PUBLIC_PORT equal to the main port must not leave the
+    only entry point ungated."""
+    seen = {}
+    monkeypatch.setattr(
+        "src.background_tasks.start_all_background_tasks", lambda **_kwargs: None
+    )
+    monkeypatch.setattr("src.mcp_compat.lowlevel_server", lambda _mcp: object())
+    monkeypatch.setattr(
+        "src.mcp_listen_config.build_streamable_session_manager",
+        lambda _server: object(),
+    )
+    for name in ("_log_transport_security", "_configure_middleware"):
+        monkeypatch.setattr(
+            f"src.services.mcp_transport_service.{name}", lambda *_a, **_k: None
+        )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._register_application_routes",
+        lambda *_a, auth_config, **_k: seen.setdefault("auth", auth_config),
+    )
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._create_base_application",
+        lambda _mcp: object(),
+    )
+
+    runtime = build_transport_runtime(
+        object(),
+        auth_config=McpAuthConfig(oauth_public_listener_only=True),
+        host="127.0.0.1",
+        port=8767,
+        reload=False,
+        server_ready_fn=lambda: True,
+        set_server_ready=lambda: None,
+        server_start_time=0.0,
+        server_version="test",
+        server_build_sha="test",
+        public_port=8767,
+    )
+
+    assert runtime.public_server is None
+    assert seen["auth"].oauth_public_listener_only is False
 
 
 def test_capture_transport_context_sets_and_resets_all_compatibility_contexts():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import os
 from dataclasses import dataclass
@@ -539,6 +540,17 @@ def build_transport_runtime(
         server_ready_fn=server_ready_fn,
         server_version=server_version,
     )
+    public_socket = (
+        _bind_public_socket(public_port, main_port=port) if public_port is not None else None
+    )
+    if auth_config.oauth_public_listener_only and public_socket is None:
+        # No public listener means nothing carries the confined gate, so fall
+        # back to gating every request rather than none of them.
+        logger.error(
+            "No public OAuth listener is serving; OAuth now gates every /mcp "
+            "request on the main listener"
+        )
+        auth_config = dataclasses.replace(auth_config, oauth_public_listener_only=False)
     if auth_config.oauth_provider is not None and auth_config.static_client_id:
         from src.oauth_provider import StaticClientBasicAuthShim
 
@@ -572,9 +584,6 @@ def build_transport_runtime(
         ws="websockets-sansio",
     )
     public_server = None
-    public_socket = None
-    if public_port is not None:
-        public_socket = _bind_public_socket(public_port, main_port=port)
     if public_socket is not None:
         # Loopback only: the tunnel connector runs on this host. Same proxy
         # header trust as the main listener, so REST/dashboard gates keep
@@ -584,7 +593,7 @@ def build_transport_runtime(
                 mark_public_listener(app),
                 # Informational: serve() is handed the pre-bound socket.
                 host="127.0.0.1",
-                port=public_port,
+                port=public_socket.getsockname()[1],
                 log_level="info",
                 lifespan="off",
                 limit_concurrency=100,
@@ -595,7 +604,10 @@ def build_transport_runtime(
                 ws="websockets-sansio",
             )
         )
-        logger.info("Public OAuth listener configured on 127.0.0.1:%d", public_port)
+        logger.info(
+            "Public OAuth listener on 127.0.0.1:%d; /mcp OAuth applies there only",
+            public_socket.getsockname()[1],
+        )
     return McpTransportRuntime(
         app=app,
         session_manager=session_manager,
@@ -610,15 +622,15 @@ def _bind_public_socket(public_port: int, *, main_port: int) -> Any:
 
     Bound here rather than by uvicorn: uvicorn's startup calls ``sys.exit`` on
     a bind error, which escapes an asyncio task and would take the main
-    listener down with it. A public port that cannot be bound leaves the
-    public entry point closed and the main listener serving.
+    listener down with it. When this returns None the caller gates every
+    request on the main listener instead, so a bad port fails closed.
     """
     import socket
 
     if public_port == main_port:
         logger.error(
             "Public OAuth listener NOT started: UNITARES_OAUTH_PUBLIC_PORT equals "
-            "the main port %d; the public entry point is closed",
+            "the main port %d",
             main_port,
         )
         return None
@@ -631,8 +643,7 @@ def _bind_public_socket(public_port: int, *, main_port: int) -> Any:
     except OSError as exc:
         sock.close()
         logger.error(
-            "Public OAuth listener NOT started on 127.0.0.1:%d (%s); the public "
-            "entry point is closed, the main listener is unaffected",
+            "Public OAuth listener NOT started on 127.0.0.1:%d (%s)",
             public_port,
             exc,
         )

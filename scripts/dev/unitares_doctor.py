@@ -1208,7 +1208,12 @@ def _doctor_visible_bearer_token() -> str | None:
 
 
 def _public_listener_port() -> "int | None":
-    """UNITARES_OAUTH_PUBLIC_PORT as the server reads it, or None."""
+    """UNITARES_OAUTH_PUBLIC_PORT as the server reads it, or None.
+
+    The server opens that listener only when an OAuth issuer is configured.
+    """
+    if not os.environ.get("UNITARES_OAUTH_ISSUER_URL", "").strip():
+        return None
     raw = os.environ.get("UNITARES_OAUTH_PUBLIC_PORT", "").strip()
     try:
         port = int(raw)

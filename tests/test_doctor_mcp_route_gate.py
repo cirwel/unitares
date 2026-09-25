@@ -373,3 +373,11 @@ def test_an_invalid_public_port_probes_the_main_listener(doctor, monkeypatch):
     monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "nope")
     _result, _conn, ctor = _run(doctor, status=401)
     assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
+
+
+def test_a_public_port_without_an_issuer_probes_the_main_listener(doctor, monkeypatch):
+    """No issuer, no public listener: the server never opens it."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
+    _result, _conn, ctor = _run(doctor, status=400)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
