@@ -151,7 +151,7 @@ New tool: `skills(name?: string, since_version?: string)` → returns:
 Three flag-style options on the request:
 - `name=<skill-name>` returns single skill
 - `since_version=<date>` returns only skills updated since (cheap re-poll)
-- absent: returns full bundle (default — typical session-start case)
+- absent: returns an index, every skill's metadata without `content` (`content_omitted: true`). Until 2026-09-25 it returned the full bundle, 100 KB for seven skills; the adapter always fetched by `name`, so that default served no caller.
 
 ### 4.2. Canonical content location
 

@@ -2802,6 +2802,40 @@ class TestListAgentsDefaultsSurviveTheSchema:
         assert data["matching"] == 150
 
     @pytest.mark.asyncio
+    async def test_the_caller_survives_the_default_page(self, server):
+        """A fresh caller (few updates) sorts last; with the limit now live it
+        would be cut. "Always include the requesting agent" must hold."""
+        recent = datetime.now(timezone.utc).isoformat()
+        self_uuid = "11111111-2222-3333-4444-555555555555"
+        server.agent_metadata = {
+            f"agent-{i}": make_agent_meta(label=f"Agent{i}", total_updates=50 + i, last_update=recent)
+            for i in range(30)
+        }
+        server.agent_metadata[self_uuid] = make_agent_meta(
+            label="Self", total_updates=0, last_update=recent
+        )
+        with patch_lifecycle_server(server), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value=self_uuid):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            data = _parse(await handle_list_agents(_schema_args()))
+        assert len(data["agents"]) == data["shown"] == 20
+        assert data["agents"][0]["id"] == self_uuid
+        assert data["agents"][0]["you"] is True
+
+    @pytest.mark.asyncio
+    async def test_capped_lite_hint_points_to_paging_not_a_smaller_limit(self, server):
+        recent = datetime.now(timezone.utc).isoformat()
+        server.agent_metadata = {
+            f"agent-{i}": make_agent_meta(label=f"Agent{i}", total_updates=1, last_update=recent)
+            for i in range(150)
+        }
+        with patch_lifecycle_server(server):
+            from src.mcp_handlers.lifecycle.handlers import handle_list_agents
+            data = _parse(await handle_list_agents({"lite": True, "limit": 500}))
+        assert "lite=false" in data["more"] and "offset" in data["more"]
+        assert "limit=50" not in data["more"]
+
+    @pytest.mark.asyncio
     async def test_full_mode_without_limit_returns_what_it_counts(self, server):
         server.agent_metadata = {
             f"a{i}": make_agent_meta(status="active", label=f"Agent{i}", total_updates=5, notes="")
@@ -2823,9 +2857,17 @@ class TestListAgentsDefaultsSurviveTheSchema:
         server.get_or_create_monitor.return_value = mock_monitor
         with patch_lifecycle_server(server):
             from src.mcp_handlers.lifecycle.handlers import handle_list_agents
-            data = _parse(await handle_list_agents(
+            flat = _parse(await handle_list_agents(
                 {"lite": False, "grouped": False, "include_metrics": False}
             ))
-        assert data["summary"]["total"] == 130
-        assert data["summary"]["returned"] == len(data["agents"]) == 100
-        assert all(isinstance(a, dict) for a in data["agents"])
+            grouped = _parse(await handle_list_agents(
+                {"lite": False, "grouped": True, "include_metrics": False}
+            ))
+        assert flat["summary"]["total"] == 130
+        assert flat["summary"]["returned"] == len(flat["agents"]) == 100
+        assert all(isinstance(a, dict) for a in flat["agents"])
+        # Grouped: one page of 100 in total across groups (not 100 per group),
+        # and every group list is intact rows, no in-band truncation marker.
+        rows = [a for group in grouped["agents"].values() for a in group]
+        assert grouped["summary"]["returned"] == len(rows) == 100
+        assert all(isinstance(a, dict) for a in rows)

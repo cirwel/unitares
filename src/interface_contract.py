@@ -95,7 +95,13 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.14.0 (2026-09-24): agent gains action="release_presence", which releases
 # the caller's own presence lease at a clean exit. Nothing is removed or
 # renamed; agent's input_schema_sha256 and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.14.0"
+# 1.16.0 (2026-09-25): the skills `name` parameter description now says a
+# call with neither name nor since_version returns an index without content
+# (it said "the full bundle", which the handler no longer returns). No
+# parameter is added, removed, retyped or renamed; skills' input_schema_sha256
+# and the surface digest move. 1.15.0 is taken by the concurrent verbosity
+# change (#2430), which is meant to merge first.
+INTERFACE_CONTRACT_VERSION = "1.16.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

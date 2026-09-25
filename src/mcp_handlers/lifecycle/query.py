@@ -848,6 +848,12 @@ async def _list_agents_lite(
         if caller_uuid and a["id"] == caller_uuid and "you" not in a:
             a["you"] = True
         a.pop("last_update", None)
+    # "Always include the requesting agent" has to survive the page slice
+    # below. A fresh caller sorts last (few updates) or was appended last, so
+    # once the limit applies it would be cut; lead with it instead.
+    own = next((i for i, a in enumerate(agents) if a.get("you")), None)
+    if own:
+        agents.insert(0, agents.pop(own))
 
     result = {
         "agents": agents[: max(0, limit)],
@@ -864,7 +870,16 @@ async def _list_agents_lite(
 
     # Add helpful hints.
     if len(agents) > limit:
-        result["more"] = f"Showing {limit} of {len(agents)} recent. Use limit=50 or recent_days=30 to see more."
+        if limit >= _LIST_PAGE_CAP:
+            result["more"] = (
+                f"Showing {limit} of {len(agents)}; a lite page stops at {_LIST_PAGE_CAP}. "
+                "Page with lite=false plus limit and offset, or narrow recent_days."
+            )
+        else:
+            result["more"] = (
+                f"Showing {limit} of {len(agents)} recent. Raise limit (up to "
+                f"{_LIST_PAGE_CAP}) or set recent_days to see more."
+            )
     if recent_days:
         result["filter"] = f"Active in last {recent_days} days. Use recent_days=0 for all."
 
@@ -891,10 +906,13 @@ async def _list_agents_full(
 
     # Pagination support (optimization)
     offset = arguments.get("offset", 0)
-    # None used to mean "no limit", but the response serializer cut every list
-    # past _LIST_PAGE_CAP anyway while summary.returned counted the uncut page.
-    # Default to the page that actually arrives, so returned is true; an
-    # explicit limit is honoured as before.
+    # None used to mean "no limit", but the response serializer cut each list
+    # past _LIST_PAGE_CAP while summary.returned counted the uncut page. With
+    # grouped=False that was the whole page; with grouped=True (the default)
+    # each status group was cut separately, so up to 100 rows per group went
+    # out. Default to one honest page of _LIST_PAGE_CAP rows in total, taken
+    # before grouping, so returned is true. This narrows grouped no-limit
+    # calls; an explicit limit is honoured as before.
     limit = arguments.get("limit")
     if limit is None:
         limit = _LIST_PAGE_CAP
