@@ -28,13 +28,20 @@ Envelope shape (friendly fields first, raw payload available on demand):
 Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
-are omitted. Default read aliases and bounded ``sync_state`` modes omit the
+are omitted. Default read aliases, bounded ``sync_state`` modes and the write
+aliases ``store_finding``, ``update_finding`` and ``record_result`` omit the
 repeated canonical payload and advertise an explicit full-response escape
-hatch. A plain fresh ``start_session`` omits it too, without a hint, because
-the only way to act on one would be another mint. Other state-changing
-aliases retain it, and ``response_mode="full"`` restores it explicitly. A routine ``sync_state``
-proceed also says each fact once (``_drop_routine_proceed_duplicates``);
-guide, pause and provisional responses keep their full shape.
+hatch; the write aliases first lift the ids and warnings a caller needs next.
+A plain fresh ``start_session`` omits it too, without a hint, because the only
+way to act on one would be another mint. Other state-changing aliases retain
+it. The documented full mode restores it explicitly (``verbosity="full"`` on
+``check_working_state``, ``response_mode="full"`` elsewhere), except on the
+finding writes, whose route to the stored record is a
+``knowledge(action="details")`` read. That read returns the record as stored, not the ack: write-time warnings
+and the store-time similarity snapshot are lifted into the ack itself because
+no later read returns them. A routine ``sync_state`` proceed also says each
+fact once (``_drop_routine_proceed_duplicates``); guide, pause and provisional
+responses keep their full shape.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -139,6 +146,13 @@ _MEMORY_SUMMARY_PREVIEW_CHARS = 240
 # would silently name nobody (or the wrong writer).
 _MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
+# store_finding's related_discoveries is the store-time similarity snapshot:
+# the findings this write resembled when it was stored. Its ids are also the
+# stored record's related_to, so the write-time content a details read cannot
+# give back is the summary previews. The ack keeps a bounded list of ids and
+# short previews; each record is one details read away.
+_RELATED_DISCOVERY_LIMIT = 5
+_RELATED_SUMMARY_PREVIEW_CHARS = 120
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
 # Default start_session. continuity_token alone is ~330 B of it.
@@ -189,6 +203,20 @@ _ACTION_ALIASES = {
 _COMPACT_READ_ALIASES = frozenset({
     "check_working_state",
     "search_shared_memory",
+})
+
+# Write aliases whose acknowledgement omits the repeated canonical payload by
+# default. Each one lifts the identifiers a caller needs next (and the warnings
+# a writer must see) before the omission, so the ack stays self-sufficient.
+# request_review is deliberately absent: its ack carries the review itself
+# (resolution conditions, reviewer dispatch, thesis-failure flags), which the
+# envelope does not project, and it declares no response_mode on /mcp/.
+# start_session is absent too: its ack shape is decided separately, with the
+# rest of the identity/onboarding surface.
+_COMPACT_WRITE_ALIASES = frozenset({
+    "store_finding",
+    "update_finding",
+    "record_result",
 })
 
 
@@ -845,6 +873,62 @@ _UNKNOWN_WRITER = "unknown"
 _DIGEST_ATTRIBUTION_KEYS = ("by", "by_truncated", "agent_id")
 
 
+def _summary_preview(summary: str, limit: int) -> tuple[str, bool]:
+    """Collapse whitespace and bound a summary at a word boundary.
+
+    Returns the preview and whether it was cut, so a bounded preview can say
+    so rather than posing as the complete summary.
+    """
+    compact = " ".join(summary.split())
+    if len(compact) <= limit:
+        return compact, False
+    cutoff = compact.rfind(" ", 0, limit - 1)
+    if cutoff < limit // 2:
+        cutoff = limit - 1
+    return compact[:cutoff].rstrip() + "…", True
+
+
+def _compact_related_discoveries(
+    payload: Dict[str, Any],
+) -> tuple[Optional[List[Dict[str, Any]]], Optional[int]]:
+    """Bound store_finding's store-time similarity snapshot for the ack.
+
+    The canonical ``related_discoveries`` rows are whole records (minus
+    details). The ack keeps only what a writer needs to decide whether to open
+    or supersede one: its id and a short summary preview. Returns the compact
+    rows and, when rows were dropped, the snapshot's full length.
+
+    The store handler already stops its similarity scan at five rows, so the
+    total is not reachable today; the cap here keeps the ack bounded if that
+    handler limit is ever raised.
+    """
+    related = payload.get("related_discoveries")
+    if not isinstance(related, list) or not related:
+        return None, None
+    rows: List[Dict[str, Any]] = []
+    for item in related[:_RELATED_DISCOVERY_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        row: Dict[str, Any] = {}
+        discovery_id = item.get("id") or item.get("discovery_id")
+        if discovery_id is not None:
+            row["discovery_id"] = discovery_id
+        summary = item.get("summary")
+        if isinstance(summary, str):
+            preview, truncated = _summary_preview(
+                summary, _RELATED_SUMMARY_PREVIEW_CHARS
+            )
+            row["summary"] = preview
+            if truncated:
+                row["preview_truncated"] = True
+        if row:
+            rows.append(row)
+    if not rows:
+        return None, None
+    total = len(related) if len(related) > _RELATED_DISCOVERY_LIMIT else None
+    return rows, total
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -908,15 +992,12 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
 
             summary = item.get("summary")
             if isinstance(summary, str):
-                compact = " ".join(summary.split())
-                if len(compact) > _MEMORY_SUMMARY_PREVIEW_CHARS:
-                    cutoff = compact.rfind(" ", 0, _MEMORY_SUMMARY_PREVIEW_CHARS - 1)
-                    if cutoff < _MEMORY_SUMMARY_PREVIEW_CHARS // 2:
-                        cutoff = _MEMORY_SUMMARY_PREVIEW_CHARS - 1
-                    suggestion["summary"] = compact[:cutoff].rstrip() + "…"
+                preview, truncated = _summary_preview(
+                    summary, _MEMORY_SUMMARY_PREVIEW_CHARS
+                )
+                suggestion["summary"] = preview
+                if truncated:
                     suggestion["preview_truncated"] = True
-                else:
-                    suggestion["summary"] = compact
 
             tags = item.get("tags")
             if isinstance(tags, list):
@@ -981,7 +1062,15 @@ def _knowledge_write_summary(
         "summary",
         "updated_at",
         "resolved_at",
+        "related_to",
     )
+    if not summary.get("related_to"):
+        # The record's links: on store_finding, the similar findings this
+        # write auto-linked; on update_finding, the stored record's existing
+        # links (an update does not auto-link). Worth a pointer when there
+        # are any, noise when there are none. A store_finding ack that lifts
+        # related_discoveries drops this copy (same ids; see the caller).
+        summary.pop("related_to", None)
     if discovery_id is not None:
         summary["discovery_id"] = discovery_id
     message = payload.get("message")
@@ -1092,6 +1181,82 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return bool(value)
 
 
+def _write_ack_raw_policy(
+    friendly_name: str,
+    arguments: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> tuple[bool, Optional[str]]:
+    """Decide whether a write acknowledgement repeats its canonical payload.
+
+    Default: omit it. The envelope already lifts the ids a caller needs next,
+    so the canonical copy was most of a typical ack and mostly repeated the
+    agent signature and the stored record.
+
+    Two things keep the payload inline. An explicit full request does, on
+    record_result (``response_mode='full'``; outcome_event's
+    ``include_semantics`` is the same request under an older name and survives
+    ``/mcp/`` validation). And a payload whose record id the envelope cannot
+    lift does too, because then the canonical copy is the only place the
+    caller could find out what was written.
+
+    store_finding and update_finding have no full request here. This step sees
+    the arguments after canonical validation, and KnowledgeParams fills
+    ``response_mode='full'`` by default (the search alias works around the
+    same default in normalize_compact_search_details), so a caller's explicit
+    'full' and an omitted parameter arrive identical. A later
+    knowledge(action='details') read returns the stored record, not
+    everything this ack carried: the write-time warnings and a bounded
+    related_discoveries snapshot (for its summary previews) are lifted into
+    the ack for that reason. The
+    canonical knowledge tool still returns the whole payload directly.
+    outcome_event validates response_mode to None, so on record_result an
+    arriving 'full' was the caller's.
+
+    The hint never tells a caller to repeat the write to see the payload: a
+    second store mints a second finding. For the finding writes it names a
+    details read, which returns the stored record. record_result has no read
+    by outcome id, so its hint names the full-mode parameter for a later
+    outcome and warns that repeating this one records a second outcome.
+    Neither route fetches the omitted payload, so these acks do not set
+    raw_governance_available.
+    """
+    if friendly_name == "record_result":
+        # include_semantics is read the way the handler reads it (the schema
+        # lets a string through validation), so the ack keeps the payload
+        # exactly when the handler built the full snapshot for it.
+        from ..observability.outcome_events import _coerce_bool_flag
+
+        full_mode = (
+            str(arguments.get("response_mode") or "").strip().lower() == "full"
+        )
+        wants_full = full_mode or _coerce_bool_flag(arguments.get("include_semantics"))
+        identifiable = payload.get("outcome_id") is not None
+        hint = (
+            "This outcome's full payload cannot be read again: there is no "
+            "read by outcome id, and without a prediction_id a repeat records "
+            "a second outcome. To get the complete payload (including the full "
+            "EISV snapshot semantics) inline, pass response_mode='full' on a "
+            "later outcome."
+        )
+        return wants_full or not identifiable, hint
+
+    # store_finding / update_finding: no full request (see above).
+    discovery = payload.get("discovery")
+    discovery = discovery if isinstance(discovery, dict) else {}
+    discovery_id = (
+        payload.get("discovery_id")
+        or discovery.get("id")
+        or arguments.get("discovery_id")
+    )
+    target = discovery_id if discovery_id is not None else "..."
+    hint = (
+        f"knowledge(action='details', discovery_id='{target}') returns the "
+        "stored record, not this ack's payload; do not repeat the write to "
+        "see it."
+    )
+    return discovery_id is None, hint
+
+
 def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
     """Whether a mint's identity_assurance block says something to act on.
 
@@ -1178,10 +1343,12 @@ def _raw_governance_policy(
     arguments: Optional[Dict[str, Any]],
     payload: Optional[Dict[str, Any]] = None,
 ) -> tuple[bool, Optional[str]]:
-    """Choose whether a friendly read alias should repeat its canonical payload.
+    """Choose whether a friendly alias should repeat its canonical payload.
 
-    Canonical tools are unchanged. Read aliases default to their bounded
-    experience envelope and retain an explicit full-response escape hatch.
+    Canonical tools are unchanged. Read aliases, bounded ``sync_state`` modes
+    and the write aliases in ``_COMPACT_WRITE_ALIASES`` default to their
+    bounded experience envelope and retain an explicit full-response escape
+    hatch. Other state-changing aliases still repeat their payload.
     """
     if friendly_name == "sync_state":
         arguments = arguments or {}
@@ -1204,6 +1371,9 @@ def _raw_governance_policy(
         return include_raw, (
             "Pass response_mode='full' on the next sync_state for diagnostics."
         )
+
+    if friendly_name in _COMPACT_WRITE_ALIASES:
+        return _write_ack_raw_policy(friendly_name, arguments or {}, payload or {})
 
     if friendly_name == "start_session":
         # A mint that went as asked is fully described by the lifted fields,
@@ -1802,6 +1972,39 @@ def build_experience_envelope(
             envelope["message"] = message
         if discovery_id is not None:
             envelope["discovery_id"] = discovery_id
+        # Write-time warnings and outcomes the handler reports beside the
+        # record. With raw_governance omitted by default these would otherwise
+        # vanish: a failed supersession, truncated content, an anonymous
+        # writer, or a closure that declares no standard.
+        envelope.update(_lift(
+            source_payload,
+            "agent_mode",
+            "_identity_hint",
+            "superseded",
+            "_supersedes_warning",
+            "superseded_by",
+            "supersession_warning",
+            "_name_hint",
+            "_truncated",
+            "_tip",
+            "consolidation_hint",
+            "closure_class_note",
+        ))
+        if "closure_class" in source_payload:
+            envelope["closure_class"] = source_payload["closure_class"]
+        # The store-time similarity snapshot. Its ids are the stored record's
+        # related_to, which a details read returns; its summary previews are
+        # what the details read cannot give back, so a bounded form stays in
+        # the ack (consolidation_hint, lifted above, summarizes the same set).
+        related, related_total = _compact_related_discoveries(source_payload)
+        if related:
+            envelope["related_discoveries"] = related
+            if related_total is not None:
+                envelope["related_discoveries_total"] = related_total
+            if friendly_name == "store_finding":
+                # store sets discovery.related_to to exactly these rows' ids,
+                # so the summary copy would carry the same list twice.
+                state_summary.pop("related_to", None)
 
         if friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")
@@ -1922,6 +2125,14 @@ def build_experience_envelope(
             "calibration_excluded",
         )
         state_summary.update(binding)
+        # A replayed prediction_id and claims the grader could not verify
+        # change what the recorded outcome means; the default ack no longer
+        # repeats the canonical payload, so they ride here.
+        for key, value in _lift(
+            source_payload, "is_bad", "idempotent_replay", "unverified_fields"
+        ).items():
+            if value != []:
+                state_summary[key] = value
         next_action = "Outcome recorded - continue, or sync_state to fold it into your working state."
         if binding.get("calibration_excluded"):
             next_action = (
@@ -2046,13 +2257,47 @@ def build_experience_envelope(
     if hint:
         envelope["recovery_hint"] = hint
 
+    if friendly_name in _COMPACT_WRITE_ALIASES and not include_raw:
+        # A handler-side identity warning (e.g. record_result's
+        # ephemeral_writer) must not vanish with the omitted payload. The
+        # identity-warning step runs after this one and appends to this list.
+        warnings = source_payload.get("identity_warnings")
+        if isinstance(warnings, list) and warnings:
+            envelope["identity_warnings"] = list(warnings)
+        # Who the write was recorded under. The finding and outcome payloads
+        # carry no top-level uuid: their attribution is success_response's
+        # agent_signature, which rode only under raw_governance. A caller that
+        # bound weakly (no client_session_id, a transport-fingerprint pin) has
+        # to be able to see which identity it wrote as, and how well that
+        # binding was proven, without asking for the full payload.
+        if "agent_uuid" not in envelope:
+            signature = source_payload.get("agent_signature")
+            if isinstance(signature, dict) and signature.get("uuid"):
+                envelope["agent_uuid"] = signature["uuid"]
+                written_as = _lift(signature, "agent_id", "display_name")
+                assurance = signature.get("identity_assurance")
+                if isinstance(assurance, dict):
+                    written_as.update(_lift(
+                        assurance, "tier", "caller_proven", "proof_origin"
+                    ))
+                if written_as:
+                    envelope["written_as"] = written_as
+
     if include_raw:
         envelope["raw_governance"] = payload
-    elif friendly_name != "start_session":
-        # A routine start_session's record cannot be fetched afterwards (only
-        # another mint would produce one), so it does not claim one is
-        # available.
-        envelope["raw_governance_available"] = True
+    else:
+        # raw_governance_available promises a way to fetch the omitted
+        # payload. A routine start_session's record cannot be fetched
+        # afterwards (only another mint would produce one), so it does not
+        # claim one. The write acks are in the same position: record_result
+        # has no read by outcome id, and a finding's details read returns the
+        # stored record, not this ack's payload. Their hint says what is
+        # reachable instead.
+        if (
+            friendly_name != "start_session"
+            and friendly_name not in _COMPACT_WRITE_ALIASES
+        ):
+            envelope["raw_governance_available"] = True
         if raw_hint:
             envelope["raw_governance_hint"] = raw_hint
     if routine_sync and _is_routine_proceed(envelope):
