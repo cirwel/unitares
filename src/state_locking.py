@@ -52,6 +52,18 @@ def is_process_alive(pid: int) -> bool:
 DEFAULT_LOCK_DIR = Path(os.environ.get("UNITARES_LOCK_DIR") or Path(__file__).parent.parent / "data" / "locks")
 
 
+def lock_backend() -> str:
+    """Select the agent-lock backend: Postgres advisory locks or fcntl file locks.
+
+    ``UNITARES_AGENT_LOCK_BACKEND=advisory`` (the default) uses a session-scoped
+    Postgres advisory lock; any other value uses fcntl lock files under
+    DEFAULT_LOCK_DIR. Returns "advisory" or "fcntl"; the dispatcher and the
+    admin report both read it here so they cannot disagree.
+    """
+    raw = os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower()
+    return "advisory" if raw == "advisory" else "fcntl"
+
+
 def holds_current_inode(fd: int, lock_file: Path) -> bool:
     """True if ``fd`` is the file currently at ``lock_file``'s path.
 
@@ -329,8 +341,7 @@ class StateLockManager:
             timeout: Timeout per retry attempt in seconds
             max_retries: Maximum number of retry attempts with cleanup
         """
-        backend = os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower()
-        if backend == "advisory":
+        if lock_backend() == "advisory":
             async with self._acquire_agent_lock_async_advisory(
                 agent_id, timeout=timeout, max_retries=max_retries
             ):

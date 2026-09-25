@@ -746,17 +746,13 @@ async def handle_reset_monitor(arguments: Dict[str, Any]) -> Sequence[TextConten
 async def handle_cleanup_stale_locks(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Remove agent lock files that no process holds; report the held ones."""
     try:
-        import os
-
         from src.lock_cleanup import cleanup_stale_state_locks
-        from src.state_locking import DEFAULT_LOCK_DIR
+        from src.state_locking import DEFAULT_LOCK_DIR, lock_backend
 
         max_age = arguments.get('max_age_seconds', 300.0)
         dry_run = arguments.get('dry_run', False)
-        # Report the backend the dispatcher actually uses: acquire_agent_lock_async
-        # treats every value other than "advisory" as fcntl.
-        raw_backend = os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower()
-        backend = "advisory" if raw_backend == "advisory" else "fcntl"
+        # The same selection the dispatcher uses (state_locking.lock_backend).
+        backend = lock_backend()
 
         # No project_root: sweep the directory StateLockManager writes to.
         # Safe because removal requires the lock to be free (a held lock is
