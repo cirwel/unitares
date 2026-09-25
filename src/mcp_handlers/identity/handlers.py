@@ -2923,8 +2923,13 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                         "[ONBOARD] %s minted WITHOUT resident tags (%s) — %s",
                         f"{agent_uuid[:8]}...", registration["status"], name,
                     )
-        except Exception:
-            pass  # Never let a response annotation fail a mint.
+        except Exception as e:
+            # Never let a response annotation fail a mint -- but this block
+            # exists to make an off-roster mint visible, so don't fail silently.
+            logger.warning(
+                "[ONBOARD] resident_registration check failed for %s (%s): %s",
+                f"{agent_uuid[:8]}...", name, e,
+            )
 
     # A collision rename is otherwise invisible to the caller: display_name
     # now carries the applied label, but nothing said the requested one was
@@ -3088,8 +3093,10 @@ async def handle_get_trajectory_status(arguments: Dict[str, Any]) -> Sequence[Te
                     prefetched_tags=getattr(_meta, "tags", None) if _meta else None,
                     prefetched_label=getattr(_meta, "label", None) if _meta else None,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                f"[TRAJECTORY] trust_tier enrichment failed for {agent_uuid[:8]}...: {e}"
+            )
 
         return success_response(result, agent_id=agent_uuid, arguments=arguments)
 
@@ -3114,7 +3121,7 @@ async def _create_spawned_edge_bg(
         await db.graph_query(q, p)
         logger.info(f"[SPAWNED] Created edge {parent_id[:8]}... -> {child_id[:8]}...")
     except Exception as e:
-        logger.debug(f"SPAWNED edge creation failed (non-fatal): {e}")
+        logger.warning(f"SPAWNED edge creation failed (non-fatal): {e}")
 
 
 async def _stamp_default_tags_on_onboard(
@@ -3163,7 +3170,7 @@ async def _seed_genesis_from_parent_bg(child_id: str, parent_id: str):
                 f"{parent_id[:8]}...: {result.get('reason')}"
             )
     except Exception as e:
-        logger.debug(f"seed_genesis_from_parent scheduling failed (non-fatal): {e}")
+        logger.warning(f"seed_genesis_from_parent scheduling failed (non-fatal): {e}")
 
 
 async def _r2_pre_check_and_declare(
@@ -3264,8 +3271,15 @@ async def _r2_pre_check_and_declare(
                     or _prec.get("uuid")
                     or parent_id
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            # Fail open: the liveness check below falls back to the raw
+            # parent_id. Debug, not warning: get_identity returns an
+            # IdentityRecord (no .get), so this raises on every explicit
+            # handoff today; the fallback is the same value either way.
+            logger.debug(
+                f"[R2] parent uuid lookup failed for {parent_id[:8]}..., "
+                f"using raw parent_id: {e}"
+            )
         try:
             live_bindings = await get_live_bindings(parent_uuid)
         except Exception as e:

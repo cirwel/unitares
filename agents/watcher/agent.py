@@ -1659,6 +1659,227 @@ def p008_actually_fires(file_path: str, line: int) -> bool:
     return False
 
 
+# P006 positive evidence. A handler counts as reacting to the failure only
+# when its body shows a `raise`, a `return` with a non-None value, or a logging
+# call at one of these levels. Anything else (debug-only logging, `return
+# None`, `x = None`, collecting the error) keeps the finding.
+_P006_LOUD_LOG_METHODS = frozenset(
+    {"info", "warning", "warn", "error", "exception", "critical", "fatal"}
+)
+_P006_LOUD_LOG_LEVELS = frozenset(
+    {"INFO", "WARNING", "WARN", "ERROR", "CRITICAL", "FATAL"}
+)
+
+
+_P006_LOGGER_NAMES = frozenset(
+    {"logger", "log", "_logger", "_log", "LOGGER", "LOG", "logging"}
+)
+
+
+def _p006_receiver_is_logger(expr: Any) -> bool:
+    """True when the object a method is called on is named like a logger.
+
+    The last name in the receiver must be one of ``_P006_LOGGER_NAMES``
+    (``logger``, ``self.log``, ``self._logger``, ``LOG``, ``logging`` ...) or
+    end in ``logger`` (``app_logger``, ``structlog.get_logger()``,
+    ``logging.getLogger(__name__)``). A name that merely contains "log", such
+    as ``dialog``, ``catalog``, ``blog``, ``login`` or ``backlog``, does not
+    count. This also keeps ``task.exception()`` (the asyncio API, which only
+    returns the stored exception) or ``parser.error(...)`` from counting as
+    logging.
+    """
+    import ast
+
+    while isinstance(expr, ast.Call):
+        expr = expr.func
+    if isinstance(expr, ast.Attribute):
+        name = expr.attr
+    elif isinstance(expr, ast.Name):
+        name = expr.id
+    else:
+        return False
+    return name in _P006_LOGGER_NAMES or name.lower().endswith("logger")
+
+
+def _p006_is_loud_log_call(node: Any) -> bool:
+    """``<logger>.info/warning/error/exception/critical(...)`` or
+    ``<logger>.log(LEVEL, ...)`` with LEVEL at INFO or above, where the
+    receiver is named like a logger (see ``_p006_receiver_is_logger``)."""
+    import ast
+
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+        return False
+    if not _p006_receiver_is_logger(node.func.value):
+        return False
+    method = node.func.attr
+    if method in _P006_LOUD_LOG_METHODS:
+        return True
+    if method == "log" and node.args:
+        level = node.args[0]
+        if isinstance(level, ast.Attribute):
+            return level.attr in _P006_LOUD_LOG_LEVELS
+        if isinstance(level, ast.Name):
+            return level.id in _P006_LOUD_LOG_LEVELS
+        if isinstance(level, ast.Constant) and isinstance(level.value, int):
+            return level.value >= 20  # logging.INFO
+    return False
+
+
+def _p006_callee_name(func: Any) -> str:
+    """Last name of a call's target: ``suppress`` for ``suppress(...)`` and
+    ``contextlib.suppress(...)`` alike."""
+    import ast
+
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ""
+
+
+def _p006_handler_reacts(handler: Any) -> bool:
+    """True when ``handler``'s body, nested blocks included, has positive
+    evidence of reacting: a ``raise``, a logging call at info level or above,
+    or a ``return`` whose value is not ``None``. Any non-None return counts,
+    a fallback such as ``return []`` included: the rule does not try to tell
+    an error value from a default.
+
+    Nested function, lambda and class bodies are skipped: code there does not
+    run when the handler does. So are the handlers of a ``try`` nested inside
+    this handler: they react to a different exception (say, one from cleanup
+    code), and when that code succeeds the caught exception is still
+    swallowed. The nested try's body, ``else`` and ``finally`` do run on this
+    handler's path and are searched, with one exception: a ``raise`` in the
+    body of a nested try that has any handler does not count, because that
+    handler may catch it and the failure is then swallowed after all. The
+    rule is conservative on purpose: it does not work out whether the
+    handler's type matches the raised one, or whether the handler re-raises
+    (its body is skipped, as above), so such a finding is kept. A log call or
+    a non-None ``return`` in that body still counts; neither is caught. The
+    body of a ``with ...suppress(...)`` block is treated the same way.
+    """
+    import ast
+
+    scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+    try_types = tuple(
+        t for t in (ast.Try, getattr(ast, "TryStar", None)) if t is not None
+    )
+    # (node, raise_caught): raise_caught is True inside the body of a nested
+    # try that has handlers, where a `raise` does not escape to the caller.
+    stack = [(node, False) for node in handler.body]
+    while stack:
+        node, raise_caught = stack.pop()
+        if isinstance(node, scope_nodes):
+            continue
+        if isinstance(node, try_types):
+            body_caught = raise_caught or bool(node.handlers)
+            stack.extend((child, body_caught) for child in node.body)
+            stack.extend(
+                (child, raise_caught) for child in [*node.orelse, *node.finalbody]
+            )
+            continue
+        if isinstance(node, (ast.With, ast.AsyncWith)) and any(
+            isinstance(item.context_expr, ast.Call)
+            and _p006_callee_name(item.context_expr.func) == "suppress"
+            for item in node.items
+        ):
+            stack.extend((item, raise_caught) for item in node.items)
+            stack.extend((child, True) for child in node.body)
+            continue
+        if isinstance(node, ast.Raise):
+            if not raise_caught:
+                return True
+            continue
+        if isinstance(node, ast.Return) and not (
+            node.value is None
+            or (isinstance(node.value, ast.Constant) and node.value.value is None)
+        ):
+            return True
+        if _p006_is_loud_log_call(node):
+            return True
+        stack.extend((child, raise_caught) for child in ast.iter_child_nodes(node))
+    return False
+
+
+def _p006_ast_checkable(file_path: str) -> bool:
+    """True when ``p006_actually_fires`` can judge the file: a ``.py`` file
+    that reads and parses. For such files the AST filter is the single
+    authority on re-raising; the line-based ``_p006_body_reraises`` is only
+    the fallback for files it cannot check."""
+    import ast
+
+    if not file_path.endswith(".py"):
+        return False
+    try:
+        ast.parse(Path(file_path).read_text(), filename=file_path)
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return False
+    return True
+
+
+def p006_actually_fires(file_path: str, line: int) -> bool:
+    """AST post-filter for P006 (silent exception swallow).
+
+    A positive-evidence rule, and a chosen standard rather than a measured
+    threshold: the finding is dropped only when every handler on the path from
+    the flagged line outward shows positive evidence of reacting (see
+    ``_p006_handler_reacts``). In every other case it is kept. It came from a
+    manual triage of the unresolved queue on 2026-09-24: P006 was 50 of 93
+    unresolved rows (rows, not distinct sites; the queue held the same code
+    once per worktree and per line shift), and about 40 flagged handlers that
+    already log at warning or above, re-raise, or return an error. Those are
+    triage calls, not recorded verdicts: the lifetime record still has 0
+    confirmed P006 findings (see the #2396 comment above
+    ``_P006_EXCEPT_CLAUSE``).
+
+    The handlers on the path are, for every ``try`` whose span holds the line:
+    the handler the line sits in, or all of the try's handlers when the line
+    sits in the ``try`` block itself (the ``try:`` line included). A line in an
+    ``else``/``finally`` block adds none of that try's handlers. So a flag in
+    an inner try body under ``except KeyError: logger.warning(...)`` is still
+    kept when an outer ``except Exception: pass`` would catch anything else.
+
+    Kept (returns True) whenever the check cannot show a reaction: no handler
+    on the path (a line inside no try, or only in try/finally), an unreadable,
+    non-Python or unparseable file.
+
+    Returns True  → possible real swallow; keep it
+    Returns False → every governing handler reacts; suppress it
+    """
+    import ast
+
+    if not file_path.endswith(".py"):
+        return True
+    try:
+        source = Path(file_path).read_text()
+        tree = ast.parse(source, filename=file_path)
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return True
+
+    def _within(node: Any, start: int) -> bool:
+        end = getattr(node, "end_lineno", None) or getattr(node, "lineno", 0)
+        return start <= line <= end
+
+    try_types = tuple(
+        t for t in (ast.Try, getattr(ast, "TryStar", None)) if t is not None
+    )
+    on_path: list[Any] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, try_types) or not node.handlers:
+            continue
+        if not _within(node, node.lineno):
+            continue
+        body_end = getattr(node.body[-1], "end_lineno", None) or node.body[-1].lineno
+        if node.lineno <= line <= body_end:
+            on_path.extend(node.handlers)
+            continue
+        on_path.extend(h for h in node.handlers if _within(h, h.lineno))
+
+    if not on_path:
+        return True
+    return not all(_p006_handler_reacts(h) for h in on_path)
+
+
 def parse_findings(
     text: str, file_path: str, model_used: str, region_start: int
 ) -> list[tuple[Finding, str]]:
@@ -1799,6 +2020,26 @@ def parse_findings(
             log(
                 f"suppressing P008 false-positive at {file_path}:{line} "
                 f"(no shell=True / os.system at that line)",
+                "debug",
+            )
+            continue
+
+        # P006 post-filter: drop only when every handler that governs the
+        # line re-raises, logs at info or above, or returns a non-None value.
+        # Only a line the model actually cited can be checked; the
+        # region_start fallback for a missing line is not one, so such a
+        # finding is kept unjudged (the verifier's line-based re-raise check
+        # does not run for a .py file that parses either).
+        if pattern == "P006" and line_in_snippet <= 0:
+            log(
+                f"P006 at {file_path} has no cited line; kept without the "
+                f"handler check",
+                "debug",
+            )
+        elif pattern == "P006" and not p006_actually_fires(file_path, line):
+            log(
+                f"suppressing P006 false-positive at {file_path}:{line} "
+                f"(every governing handler re-raises, logs, or returns a value)",
                 "debug",
             )
             continue
@@ -2602,7 +2843,7 @@ def _is_inside_get_or_create_monitor(
 
 # P006: the `except` clause that governs a flagged line, and the two ways its
 # author can show the swallow is deliberate or absent. patterns.md defines
-# P006 as a swallow "without re-raising", and ruff's BLE001 is the broad-except
+# P006 as a handler with no sign of reacting, and ruff's BLE001 is the broad-except
 # rule, so `# noqa: BLE001` (or a bare `# noqa`) on the clause is the author
 # recording that decision. False-positive sweep 2026-09-24: of 39 lifetime P006
 # findings none was confirmed, and three flagged clauses already carried
@@ -2616,6 +2857,11 @@ def _indent_of(line: str) -> int:
     return len(line) - len(line.lstrip())
 
 
+# A header that opens a try block or one of its non-handler branches: a line
+# under it is not in a handler's body.
+_P006_TRY_OR_BRANCH = re.compile(r"^\s*(try|else|finally)\s*:")
+
+
 def _p006_governing_except(
     flagged_line: int,
     snippet_lines_by_num: dict[int, str],
@@ -2624,22 +2870,32 @@ def _p006_governing_except(
     """Line number of the `except` clause the flagged line belongs to.
 
     The model cites either the clause itself or a line in its body (usually
-    the `logger.debug(...)` call). Walk back to the nearest clause indented
-    less than the flagged line, stopping at a def header. None when no clause
-    is visible, in which case the finding is left alone.
+    the `logger.debug(...)` call). Walk back out through the enclosing blocks
+    (each line indented less than the block walked so far): the first such
+    line that is an except clause governs the flagged line. Reaching a `try:`,
+    `else:` or `finally:` header, or a def, first means the line is not in a
+    handler's body, for instance in the body of a later try whose own handler
+    comes after it. None when no clause is visible, in which case the finding
+    is left alone.
     """
     src = snippet_lines_by_num.get(flagged_line, "")
     if _P006_EXCEPT_CLAUSE.match(src):
         return flagged_line
-    flagged_indent = _indent_of(src)
+    block_indent = _indent_of(src)
     for line_no in range(flagged_line - 1, flagged_line - lookback - 1, -1):
         line = snippet_lines_by_num.get(line_no, "")
         if not line.strip():
             continue
         if _P003_OTHER_DEF.match(line):
             return None
-        if _P006_EXCEPT_CLAUSE.match(line) and _indent_of(line) < flagged_indent:
+        indent = _indent_of(line)
+        if indent >= block_indent:
+            continue
+        if _P006_EXCEPT_CLAUSE.match(line):
             return line_no
+        if _P006_TRY_OR_BRANCH.match(line):
+            return None
+        block_indent = indent
     return None
 
 
@@ -2736,9 +2992,17 @@ def _is_p016_inside_inner_assertion_helper(
 
 
 def _verify_finding_against_source(
-    finding: Finding, raw_evidence: str, snippet_lines_by_num: dict[int, str]
+    finding: Finding,
+    raw_evidence: str,
+    snippet_lines_by_num: dict[int, str],
+    indented_lines_by_num: dict[int, str] | None = None,
 ) -> bool:
     """Drop a finding if it can't be substantiated against actual code.
+
+    ``indented_lines_by_num`` is the same snippet with each line's original
+    indentation kept. The P006 clause and body checks read indentation, and
+    ``scan_file``'s ``snippet_lines_by_num`` strips it; callers that already
+    pass indented lines (tests) can omit it.
 
     Returns True if the finding survives verification.
     """
@@ -2947,11 +3211,21 @@ def _verify_finding_against_source(
         return False
     # P006 specifically: the governing `except` clause is acknowledged with
     # `# noqa: BLE001` / bare `# noqa`, or its body re-raises. Either way the
-    # "silent swallow" the rule describes is not there.
+    # "silent swallow" the rule describes is not there. The re-raise check is
+    # line-based and blind to nested handlers and nested defs, so it only runs
+    # when the AST filter in parse_findings (p006_actually_fires) cannot check
+    # the file. For a .py file that parses it never runs: the AST filter judged
+    # the finding if the model cited a line, and a finding with no cited line
+    # (placed at region_start) is judged by neither re-raise check and kept.
     if finding.pattern == "P006":
-        except_line = _p006_governing_except(finding.line, snippet_lines_by_num)
+        p006_lines = (
+            indented_lines_by_num
+            if indented_lines_by_num is not None
+            else snippet_lines_by_num
+        )
+        except_line = _p006_governing_except(finding.line, p006_lines)
         if except_line is not None:
-            clause = snippet_lines_by_num.get(except_line, "")
+            clause = p006_lines.get(except_line, "")
             if _P006_ACKNOWLEDGED.search(clause):
                 log(
                     f"drop P006 {finding.file}:{finding.line} — except clause at line "
@@ -2959,7 +3233,9 @@ def _verify_finding_against_source(
                     "warning",
                 )
                 return False
-            if _p006_body_reraises(except_line, snippet_lines_by_num):
+            if not _p006_ast_checkable(finding.file) and _p006_body_reraises(
+                except_line, p006_lines
+            ):
                 log(
                     f"drop P006 {finding.file}:{finding.line} — except body at line "
                     f"{except_line} re-raises (not a swallow)",
@@ -3049,6 +3325,9 @@ def scan_file(
     # Build a line_number → raw line content lookup so verification can compare
     # findings against the actual source.
     snippet_lines_by_num: dict[int, str] = {}
+    # The same lines with their indentation kept, for the P006 checks that
+    # need it. read_file_region writes each line as f"{i:4d}: {line}".
+    indented_lines_by_num: dict[int, str] = {}
     for raw in code_snippet.splitlines():
         head, _, rest = raw.partition(":")
         try:
@@ -3056,6 +3335,7 @@ def scan_file(
         except ValueError:
             continue
         snippet_lines_by_num[n] = rest.lstrip()
+        indented_lines_by_num[n] = rest[1:] if rest.startswith(" ") else rest
 
     patterns_md = load_patterns()
     prompt = build_prompt(patterns_md, file_path, code_snippet)
@@ -3091,7 +3371,9 @@ def scan_file(
     _clear_model_failures()
     findings: list[Finding] = []
     for f, raw_evidence in parsed:
-        if not _verify_finding_against_source(f, raw_evidence, snippet_lines_by_num):
+        if not _verify_finding_against_source(
+            f, raw_evidence, snippet_lines_by_num, indented_lines_by_num
+        ):
             continue
         # Stamp a content hash onto the finding so its fingerprint encodes
         # WHAT the code looked like, not just where it lived. Fixes the

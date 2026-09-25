@@ -600,18 +600,22 @@ def _recovery_hint(
         )
     if decided_to_continue and _is_cold_start(payload):
         # A cold-start reading is the prior, not a measurement of the agent.
-        # This decision did not block, but the non-authored cold-start guard
-        # does not cover the agent's own reports: until behavioral confidence
-        # reaches 0.3, an authored sync_state is scored on the same prior and
-        # can pause at a high reading. That is the one sequence that still
-        # pauses at cold start, so say it rather than "keep working".
+        # This decision did not block. Whether the agent's own next report can
+        # pause on the same prior depends on the guard's configuration; say so
+        # only when it is true.
         hint = (
             "Cold start: this risk is the prior, not a measurement of your "
             "behavior, and "
             + ("nothing blocks you now." if action in {"resumed", "not_paused"}
                else "this decision does not block.")
         )
-        if _cold_start_pause_deferred(payload, risk):
+        # Only true while the cold-start guard leaves an agent's own report
+        # out (COLD_START_GUARD_INCLUDE_AUTHORED off, or the guard disabled).
+        authored_can_pause = not (
+            GovernanceConfig.NON_AUTHORED_COLD_START_GUARD_ENABLED
+            and GovernanceConfig.COLD_START_GUARD_INCLUDE_AUTHORED
+        )
+        if authored_can_pause and _cold_start_pause_deferred(payload, risk):
             hint += (
                 " Until your third check-in your own sync_state is scored on the "
                 "same prior and can pause on this reading."
@@ -933,6 +937,21 @@ def _friendly_hint_text(value: str) -> str:
     return result
 
 
+# Keys whose values are the caller's own words (a finding's summary, a review's
+# reasoning), echoed back. Translating tool names inside them rewrote user text:
+# a summary saying "auto-onboard" came back as "auto-start_session".
+_CALLER_TEXT_KEYS = frozenset({
+    "summary",
+    "details",
+    "content",
+    "reasoning",
+    "root_cause",
+    "response_text",
+    "issue_description",
+    "title",
+})
+
+
 def _friendly_action_hint(value: Any) -> Any:
     """Recursively translate tool names in an agent-facing action hint."""
     if isinstance(value, str):
@@ -945,7 +964,7 @@ def _friendly_action_hint(value: Any) -> Any:
         return value
 
     friendly = {
-        key: _friendly_action_hint(item)
+        key: item if key in _CALLER_TEXT_KEYS else _friendly_action_hint(item)
         for key, item in value.items()
     }
     tool = value.get("tool")

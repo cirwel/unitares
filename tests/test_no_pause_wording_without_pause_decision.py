@@ -97,8 +97,9 @@ def test_a_stop_decision_under_a_steady_verdict_never_says_continue():
         wrapped = explain_verdict(verdict, decision_action="pause")
         assert "continue" not in wrapped["next_action"].lower(), verdict
         assert "self_recovery(action='check')" in wrapped["next_action"], verdict
-        # A post-ODE escalation decides pause without actuating it, so the
-        # text must not claim a hold is in force.
+        # A decided stop is not necessarily an actuated one (the circuit
+        # breaker actuates separately), so the text must not claim a hold is
+        # in force.
         assert "writes hold" not in wrapped["next_action"], verdict
 
 
@@ -126,22 +127,37 @@ def test_guided_cold_start_never_tells_the_agent_to_pause():
         assert "self_recovery" not in env.get("recovery_hint", ""), mode
 
 
-def test_guided_cold_start_hint_warns_the_next_authored_check_in_can_pause():
-    """The guard covers only non-authored check-ins. The agent's own next
-    sync_state is scored on the same prior and can pause - the one sequence
-    that still paused at cold start (2026-09-21) - so the hint must say so
-    rather than "keep working"."""
-    env = _envelope(_guided_cold_start_check_in(), "auto")
-    hint = env["recovery_hint"]
+def test_guided_cold_start_hint_names_no_pause_when_the_guard_covers_authored(monkeypatch):
+    """With the cold-start guard extended to an agent's own report (the
+    default), the prior cannot pause the next authored check-in either, so the
+    hint must not say it can."""
+    # Patch the class the envelope module holds: another test reloads the
+    # config module, which leaves a different GovernanceConfig object there.
+    monkeypatch.setattr(ES.GovernanceConfig, "NON_AUTHORED_COLD_START_GUARD_ENABLED", True)
+    monkeypatch.setattr(ES.GovernanceConfig, "COLD_START_GUARD_INCLUDE_AUTHORED", True)
+    hint = _envelope(_guided_cold_start_check_in(), "auto")["recovery_hint"]
     assert hint.startswith("Cold start")
     assert "this decision does not block" in hint
+    assert "can pause" not in hint
+
+
+def test_guided_cold_start_hint_warns_when_authored_reports_are_not_covered(monkeypatch):
+    """Rolled back (include_authored off), the agent's own next sync_state is
+    scored on the same prior and can pause - the sequence that paused an agent
+    on 2026-09-21 - so the hint says so rather than "keep working"."""
+    monkeypatch.setattr(ES.GovernanceConfig, "NON_AUTHORED_COLD_START_GUARD_ENABLED", True)
+    monkeypatch.setattr(ES.GovernanceConfig, "COLD_START_GUARD_INCLUDE_AUTHORED", False)
+    hint = _envelope(_guided_cold_start_check_in(), "auto")["recovery_hint"]
     assert "your own sync_state is scored on the same prior and can pause" in hint
 
 
-def test_cold_start_warning_follows_the_verdict_not_the_risk_band():
+def test_cold_start_warning_follows_the_verdict_not_the_risk_band(monkeypatch):
     """Task-type adjustment (exploration/introspection subtract 0.08) can put
     risk_score below 0.7 while the verdict stays high-risk; the guard still
-    deferred a pause, so the warning must still appear."""
+    deferred a pause, so the warning must still appear where authored
+    reports are not covered."""
+    monkeypatch.setattr(ES.GovernanceConfig, "NON_AUTHORED_COLD_START_GUARD_ENABLED", True)
+    monkeypatch.setattr(ES.GovernanceConfig, "COLD_START_GUARD_INCLUDE_AUTHORED", False)
     source = _guided_cold_start_check_in()
     source["metrics"]["risk_score"] = 0.64
     hint = _envelope(source, "auto")["recovery_hint"]
@@ -308,10 +324,9 @@ def test_mirror_shape_escalated_after_policy_evaluation_reports_the_pause():
     policy_evaluation was built leaves the policy record stale, and mirror mode
     drops the decision, so the verdict's decision_action must outrank it.
 
-    The only such rewriter today is the post-ODE dialectic escalation, whose
-    pause is not actuated; #2415 caps that escalation at guide, after which
-    this pause shape no longer occurs. The test pins the field priority, not
-    the escalation."""
+    The only such rewriter is the post-ODE dialectic escalation, which this
+    branch caps at guide, so a pause of this shape no longer arises from it.
+    The test pins the field priority, not the escalation."""
     source = _guided_cold_start_check_in()
     source["decision"] = {"action": "pause", "sub_action": "dialectic_condition"}
     # policy_evaluation still says proceed: it predates the escalation.
@@ -450,8 +465,12 @@ def test_instructions_paragraph_stays_inside_the_client_cutoff():
 
 def test_post_ode_escalation_rewraps_the_nested_behavioral_verdict():
     """build_result wraps behavioral.assessment.verdict with the decision as it
-    stood; a post-ODE dialectic escalation then replaces the decision. The
-    nested wrap must follow the escalated one."""
+    stood; anything that replaces the decision afterwards must re-wrap it.
+
+    Pins the helper, not the escalation: on this branch the post-ODE dialectic
+    escalation is capped at guide, so it only ever passes a proceed decision
+    (which re-wraps to the same text). The pause input exercises the
+    re-wrap for any later rewriter that can stop the agent."""
     result = {
         "behavioral": {"assessment": {
             "verdict": explain_verdict("high-risk", decision_action="proceed"),
@@ -471,7 +490,9 @@ def test_rewrap_tolerates_a_result_without_a_behavioral_block():
 
 def test_simulate_update_escalation_rewraps_the_nested_verdict():
     """simulate_update applies the same post-ODE escalation (mcp_handlers/core.py)
-    and must re-wrap the nested behavioral verdict the same way."""
+    and must re-wrap the nested behavioral verdict the same way. A wiring
+    check only: with the escalation capped at guide the re-wrap does not
+    change the text, so no behavioral assertion could distinguish it."""
     import inspect
 
     from src.mcp_handlers import core
