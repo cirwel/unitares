@@ -28,8 +28,9 @@ by releases and canonical documentation, not by this file.
   A fitted or outcome-learned estimator (fitted blend weights, a learned
   readout) is efficacy work, not instrument-frame work: it is gated like other
   efficacy work and waits on the 2026-12-01 outcome read. That fitting it to
-  the same label channel would not by itself reopen a closed outcome question
-  was decided 2026-09-25 under the operator's recorded delegation, and is
+  the same label channel would not by itself reopen the outcome question if
+  the 2026-12-01 read FAILs was decided 2026-09-25 under the operator's
+  recorded delegation, and is
   ratified on merge, as a pre-read clarification in the registered stop rule
   (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`,
   "Pre-read clarification — drafted 2026-09-25"); the contract's "Fitted and

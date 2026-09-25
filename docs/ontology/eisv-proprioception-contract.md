@@ -1489,9 +1489,13 @@ clarification of that rule's reopening clause; merge ratifies it. In short:
 if the read FAILs, an estimator fitted or learned on the same trusted
 task/test label channel does not, by itself, constitute the "materially
 different label channel or measurement process" the clause requires; a fitted
-readout whose inputs come from a genuinely new measurement process or label
-channel remains a candidate new premise. The rule's operator-judgement clause
-on a corrected instrument and producer contract is unchanged, and no
+readout with inputs from a genuinely new measurement process, or scored
+against a genuinely different label channel (a new exogenous trusted-tier
+source), remains a candidate new premise. Re-scoring under a wider anchor
+scope widens the label definition and is not a new channel. The rule's
+operator-judgement clause on a corrected instrument and producer contract is
+unchanged in what it reserves for a real change to what is measured; the
+block states only that a pure refit is not such a change, and no
 condition, threshold, pinned candidate or manifest entry of the read moves.
 Where this summary and the registered block differ, the registered block
 governs. None of this anticipates the read. The outcome question is
