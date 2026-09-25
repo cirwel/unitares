@@ -10,6 +10,7 @@ Features:
 - Async support for non-blocking lock acquisition in async contexts
 """
 
+import asyncio
 import fcntl
 import os
 import time
@@ -25,6 +26,16 @@ from typing import Optional
 # scripts/dev/lease_plane_deprecate.py — two-arg and one-arg advisory locks never
 # collide even on equal key values. Value is a positive int4 ('AGNT').
 _AGENT_LOCK_NAMESPACE = 0x41474E54
+
+
+class LockTimeoutError(TimeoutError):
+    """The agent lock could not be acquired in time.
+
+    Distinct from a TimeoutError raised by the work done while holding the
+    lock (a slow query, a Redis wait): callers catch this to report lock
+    contention without mislabelling a timeout from inside the locked body.
+    Subclasses TimeoutError so existing ``except TimeoutError`` still works.
+    """
 
 
 def is_process_alive(pid: int) -> bool:
@@ -287,7 +298,7 @@ class StateLockManager:
         if last_error:
             raise last_error
         else:
-            raise TimeoutError(
+            raise LockTimeoutError(
                 f"Lock timeout for agent '{agent_id}' after {max_retries} attempts. "
                 f"Another live process holds this agent's lock; it is released when that process finishes or exits. Wait and retry."
             )
@@ -364,10 +375,10 @@ class StateLockManager:
                 await asyncio.sleep(poll_interval)
 
             if not acquired:
-                # Same exception type the call site already handles (TimeoutError).
-                # A timeout means a live holder on any backend, so the caller
-                # never sweeps lock files in response (see update_workflow_service).
-                raise TimeoutError(
+                # A lock timeout means a live holder on any backend, so the
+                # caller never sweeps lock files in response (see
+                # update_workflow_service, which catches only LockTimeoutError).
+                raise LockTimeoutError(
                     f"Lock timeout for agent '{agent_id}' after {total_budget:.1f}s (advisory backend). "
                     f"Another process may be updating this agent."
                 )
@@ -409,7 +420,6 @@ class StateLockManager:
         # Run in executor to avoid blocking event loop (file I/O operations)
         if self.auto_cleanup_stale:
             try:
-                import asyncio
                 loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, self._check_and_clean_stale_lock, lock_file)
             except Exception:
@@ -497,7 +507,6 @@ class StateLockManager:
                 if attempt < max_retries - 1:  # Don't clean on last attempt
                     if self.auto_cleanup_stale:
                         try:
-                            import asyncio
                             loop = asyncio.get_running_loop()
                             cleaned = await loop.run_in_executor(None, self._check_and_clean_stale_lock, lock_file)
                             if cleaned:
@@ -541,7 +550,7 @@ class StateLockManager:
         if last_error:
             raise last_error
         else:
-            raise TimeoutError(
+            raise LockTimeoutError(
                 f"Lock timeout for agent '{agent_id}' after {max_retries} attempts. "
                 f"Another live process holds this agent's lock; it is released when that process finishes or exits. Wait and retry."
             )

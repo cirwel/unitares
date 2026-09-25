@@ -33,6 +33,7 @@ from mcp.types import TextContent
 # Helpers
 # ============================================================================
 
+from src.state_locking import LockTimeoutError
 from tests.helpers import parse_result
 
 
@@ -516,7 +517,7 @@ class TestProcessAgentUpdate:
         # Make lock acquisition raise TimeoutError
         @asynccontextmanager
         async def _timeout_lock(*args, **kwargs):
-            raise TimeoutError("Lock acquisition timed out")
+            raise LockTimeoutError("Lock acquisition timed out")
             yield  # pragma: no cover
 
         mock_server.lock_manager.acquire_agent_lock_async = MagicMock(side_effect=_timeout_lock)
@@ -2372,7 +2373,7 @@ class TestProcessAgentUpdateExtended:
 
         @asynccontextmanager
         async def _timeout_lock(*args, **kwargs):
-            raise TimeoutError("Lock timeout")
+            raise LockTimeoutError("Lock timeout")
             yield  # pragma: no cover
 
         mock_server.lock_manager.acquire_agent_lock_async = MagicMock(side_effect=_timeout_lock)

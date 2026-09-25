@@ -12,6 +12,7 @@ from src.services.update_response_service import (
     build_process_update_response_data,
     serialize_process_update_response,
 )
+from src.state_locking import LockTimeoutError
 
 logger = get_logger(__name__)
 
@@ -76,9 +77,12 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
 
                 # Capture monitor ref while lock guarantees consistent state
                 ctx.monitor = ctx.mcp_server.monitors.get(ctx.agent_id)
-        except TimeoutError:
+        except LockTimeoutError:
+            # Only a lock-acquisition timeout. A TimeoutError from the locked
+            # body (a slow query, a Redis wait) is not contention and must not
+            # be reported as one, so it propagates.
             _tick("lock_timeout")
-            # No cleanup here. A timeout means a live holder: the acquire loop
+            # No cleanup here. A lock timeout means a live holder: the acquire loop
             # already removed any lock file no process held, and a held lock
             # (file or advisory) is released only when its holder finishes or
             # exits. Removing it would admit a second writer.

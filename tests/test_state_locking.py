@@ -674,8 +674,10 @@ class TestAcquireAgentLockAsyncAdvisory:
         conn = _FakeConn([False])  # never acquires
         monkeypatch.setattr("src.db.get_db", lambda: _FakeDB(conn))
 
+        from src.state_locking import LockTimeoutError
+
         mgr = StateLockManager(lock_dir=tmp_path)
-        with pytest.raises(TimeoutError):
+        with pytest.raises(LockTimeoutError):
             async with mgr.acquire_agent_lock_async("adv_to", timeout=0.1, max_retries=1):
                 pass
 
@@ -814,6 +816,40 @@ class TestOrphanedInodeRace:
                 assert state["fired"]
                 self._assert_current_file_is_locked(lock_file)
 
+
+
+class TestLockTimeoutErrorType:
+    """Acquisition timeouts raise LockTimeoutError so callers can tell them
+    from a TimeoutError raised by the work done under the lock."""
+
+    def test_sync_acquire_timeout_is_lock_timeout_error(self, tmp_path):
+        from src.state_locking import LockTimeoutError
+
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        fd = os.open(str(tmp_path / "busy.lock"), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(LockTimeoutError):
+                with mgr.acquire_agent_lock("busy", timeout=0.2, max_retries=1):
+                    pass
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_acquire_timeout_is_lock_timeout_error(self, tmp_path):
+        from src.state_locking import LockTimeoutError
+
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        fd = os.open(str(tmp_path / "busy.lock"), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(LockTimeoutError):
+                async with mgr._acquire_agent_lock_async_fcntl("busy", timeout=0.2, max_retries=1):
+                    pass
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 class TestBodyExceptionsAreNotContention:
