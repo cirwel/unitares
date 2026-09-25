@@ -42,11 +42,11 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-09-08
+**Last Updated:** 2026-09-25
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases and bounded `sync_state` modes omit the repeated canonical payload and explain how to request it explicitly; other state-changing aliases preserve it under `raw_governance`. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases and bounded `sync_state` modes omit the repeated canonical payload and explain how to request it explicitly (`verbosity="full"` on `check_working_state`, `response_mode="full"` elsewhere); a plain fresh `start_session` omits it too (`response_shape: "routine"`, pass `response_mode="full"` on the mint to keep it); other state-changing aliases preserve it under `raw_governance`. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
@@ -140,7 +140,14 @@ present. `check_working_state()` and `search_shared_memory()` omit the repeated
 canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
 `response_mode="full"`, respectively, when you need it under `raw_governance`.
 `check_working_state(verbosity="standard")` is the middle tier: EISV, verdict,
-risk_score, basin and mode with their meanings, without the diagnostics.
+risk_score, basin and mode with their meanings, without the diagnostics. A
+response marked `response_shape: "routine"` was trimmed because nothing in it
+needed explaining: a clean `sync_state` proceed keeps `action_summary.action`,
+`reason` and `risk_score` and the margin with its scope, but drops the repeated
+approve/safe/healthy values, and a plain fresh `start_session` omits the onboard
+record. Anything
+unusual (a guide, a pause, a resume miss, a reactivated identity, a declared
+lineage) keeps the full shape.
 
 One response is deliberately **not** that envelope. When a call is refused for
 identity, you get the typed refusal contract instead: `status`

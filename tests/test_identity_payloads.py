@@ -280,6 +280,17 @@ def test_identity_response_context_keeps_full_provenance_when_only_harness_known
 # reads survived.
 
 CONTRACT_KEYS = ("schema", "agent_id_is", "registry", "public_handle", "label")
+# What the compact (routine) signature keeps: the auditor needs schema and
+# agent_id_is, and continuity_claim is per-call signal.
+COMPACT_CONTEXT_KEYS = (
+    "schema",
+    "identity_is",
+    "label_is",
+    "agent_id_is",
+    "harness_is",
+    "continuity_claim",
+    "detail",
+)
 
 
 def _sig(**overrides):
@@ -296,9 +307,19 @@ def _sig(**overrides):
     return build_identity_signature_payload(**kwargs)
 
 
+def _full_sig(**overrides):
+    """A signature that is not routine, so it keeps the full record.
+
+    A server-inferred binding is weak proof, which is exactly the case the
+    full ontology exists to explain.
+    """
+    overrides.setdefault("proof_origin", "server_inferred")
+    return _sig(**overrides)
+
+
 def test_signature_keeps_every_field_the_contract_auditor_reads():
     """The plugin auditor treats a missing agent_id_is as a hard violation."""
-    context = _sig()["identity_context"]
+    context = _full_sig()["identity_context"]
 
     for key in CONTRACT_KEYS:
         assert key in context, f"{key} is read by the plugin identity-contract auditor"
@@ -325,7 +346,7 @@ def test_signature_keeps_the_per_call_continuity_claim():
 
 def test_signature_stubs_the_provenance_record_but_keeps_the_flat_fields():
     """Only the field-by-field record goes; harness/model context stays."""
-    harness = _sig()["identity_context"]["harness_context"]
+    harness = _full_sig()["identity_context"]["harness_context"]
 
     assert harness["harness_type"] == "codex"
     for key in ("harness_version", "model", "model_provider"):
@@ -345,7 +366,7 @@ def test_omitted_provenance_is_not_reported_as_unavailable():
     available=False for the second would make the response fail toward a wrong
     label instead of toward "unknown".
     """
-    omitted = _sig()["identity_context"]["harness_context"]["runtime_provenance"]
+    omitted = _full_sig()["identity_context"]["harness_context"]["runtime_provenance"]
     assert "available" not in omitted
 
     nothing_reported = build_identity_response_context(
@@ -429,7 +450,14 @@ def test_signature_assurance_matches_the_full_context_computation():
             client_hint="codex",
             proof_origin=origin,
         )
-        assert payload["identity_assurance"] == context["identity_assurance"]
+        full = context["identity_assurance"]
+        if expected_tier == "strong":
+            # The routine signature keeps a subset; every kept value must
+            # still be the full computation's value.
+            for key, value in payload["identity_assurance"].items():
+                assert full[key] == value
+        else:
+            assert payload["identity_assurance"] == full
         assert payload["identity_assurance"]["tier"] == expected_tier
 
 
@@ -466,7 +494,7 @@ def test_identity_signature_payload_uses_s22_contract():
         display_name="codex-dispatch",
         label_source="claimed",
         session_resolution_source="explicit_client_session_id",
-        proof_origin="caller_asserted",
+        proof_origin="server_inferred",
     )
 
     assert payload["uuid"] == "uuid-sig"
@@ -478,7 +506,10 @@ def test_identity_signature_payload_uses_s22_contract():
     assert payload["identity_context"]["registry"]["uuid"] == "uuid-sig"
     assert payload["identity_context"]["public_handle"]["agent_id"] == "Codex_20260622"
     assert payload["identity_context"]["label"]["display_name"] == "codex-dispatch"
-    assert payload["identity_assurance"]["tier"] == "strong"
+    # A server-inferred binding is never strong (#679), which is why it keeps
+    # the full record; the routine strong form is pinned by
+    # test_routine_signature_is_compact.
+    assert payload["identity_assurance"]["tier"] == "weak"
 
 
 # ── #679: server-injected fingerprint must not be laundered into strong ──
@@ -826,3 +857,96 @@ def test_onboard_welcome_names_predecessor_only_for_lineage_fork(
     )
     assert expected in payload["welcome"]
     assert absent not in payload["welcome"]
+
+
+def test_routine_signature_is_compact():
+    """A caller-proven strong binding has nothing to explain.
+
+    The nested registry/public_handle/label/harness blocks restate the flat
+    fields beside them on every response, so the routine form drops them and
+    keeps the role declarations the plugin auditor reads.
+    """
+    payload = _sig()
+
+    assert payload["uuid"] == "uuid-sig"
+    assert payload["agent_id"] == "Codex_20260622"
+    assert payload["display_name"] == "codex-dispatch"
+    context = payload["identity_context"]
+    assert set(context) == set(COMPACT_CONTEXT_KEYS)
+    assert context["schema"] == "s22.identity_response.v1"
+    assert context["agent_id_is"] == "public_structured_handle"
+    assert context["detail"] == "compact"
+    assert payload["identity_assurance"] == {
+        "tier": "strong",
+        "caller_proven": True,
+        "proof_origin": "caller_asserted",
+        "session_source": "explicit_client_session_id",
+    }
+    assert len(json.dumps(payload)) < 600
+
+
+def test_routine_signature_passes_the_plugin_auditor_rules():
+    """Mirror of the gov-plugin audit_identity_contract agent_signature rules.
+
+    A bound signature must carry an identity_context with the s22 schema and
+    agent_id_is == public_structured_handle; cross-checks against the nested
+    blocks only fire when those blocks are present.
+    """
+    payload = _sig()
+    context = payload["identity_context"]
+    assert payload["uuid"] and payload["agent_id"]
+    assert isinstance(context, dict)
+    assert context["schema"] == "s22.identity_response.v1"
+    assert context["agent_id_is"] == "public_structured_handle"
+    assert payload["agent_id"] == payload["structured_agent_id"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"proof_origin": "server_inferred"},
+        {"proof_origin": None},
+        {"session_resolution_source": "ip_ua_fingerprint", "proof_origin": None},
+        {"model_type": "x" * 5000},
+    ],
+    ids=["server_inferred", "unknown_origin", "weak_source", "rejected_model_value"],
+)
+def test_abnormal_signature_keeps_the_full_record(overrides):
+    """Weak, unproven or rejected-value signatures keep the explanation."""
+    payload = _sig(**overrides)
+    context = payload["identity_context"]
+
+    assert "detail" not in context
+    for key in CONTRACT_KEYS:
+        assert key in context
+    assert "reason" in payload["identity_assurance"]
+
+
+def test_uuid_direct_resume_is_not_routine():
+    """A UUID is copyable, so a strong UUID-direct resume keeps the full record."""
+    payload = _sig(session_resolution_source="agent_uuid_direct")
+    assert payload["identity_context"]["continuity_claim"] == "resumed_by_uuid_direct"
+    assert "detail" not in payload["identity_context"]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["minted_after_resume_miss"],
+)
+def test_discontinuity_keeps_the_full_record_even_when_strong(outcome):
+    """A caller-proven strong binding that reports a discontinuity is not routine.
+
+    Builder-level: the production signature caller (agent_auth) passes no
+    identity_resolution_outcome, so on the wire a resume miss or reactivation
+    surfaces in the start_session envelope (which keeps the whole onboard
+    record for any mint that was not plain), not in agent_signature.
+    """
+    payload = _sig(identity_resolution_outcome=outcome)
+    context = payload["identity_context"]
+
+    assert payload["identity_assurance"]["tier"] == "strong"
+    assert context["continuity_claim"] == "fresh_uuid_minted_after_resume_miss"
+    assert "detail" not in context
+    for key in CONTRACT_KEYS:
+        assert key in context
+
