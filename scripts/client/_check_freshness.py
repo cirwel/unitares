@@ -30,7 +30,10 @@ against the changed sources, writes ONE NEW FILE per skill:
      "source_digests": {source: digest}, "skill_digest": digest of SKILL.md}
 
 `skill_digest` (added 2026-09-24, optional for readers) names the skill text
-the record certified.
+the record certified. `superseded_digests` (added 2026-09-25, optional) lists,
+per source whose content changed since the skill was last verified, the
+digests it had been verified at: the stamp records that its verifier
+re-checked the skill across that change. See Recorded transitions below.
 
 It never edits SKILL.md. Until 2026-09-24 a stamp rewrote the `last_verified`
 line and a `source_digests` block inside SKILL.md, and the skills manifest
@@ -58,6 +61,31 @@ v2: if v1 was stamped against source X, v2 against Y, and the source reverts
 to X, v2 was never reviewed against X; nor does a v1 stamp from a concurrent
 branch vouch for v2 because its file happens to sort newest.
 
+Recorded transitions
+--------------------
+A digest certified for the current text also carries forward along the
+transitions later stamps recorded, even when those stamps certified another
+version of the skill text. This is the base-merge case: a branch edits and
+stamps a skill; master then changes a source the skill cites and re-stamps its
+own version of the text; merging master brings in the new source content, and
+the branch's text had only its own record, made against the old content, so
+the skill read STALE until the branch re-stamped. Replaying the 19 failing
+CI runs from 2026-09-24 20:40 to 09-25 08:05 UTC (6 branches), 29 of 65 STALE
+sources had content some stamp had already recorded for another version of
+the skill text; the other 36 were content no stamp had recorded.
+Carrying forward accepts that someone re-checked the skill's claims across
+that change. It gives up one pairing: the branch's own edits to the text
+against master's change to the source. Nobody reviewed that pairing, and the
+checker cannot see whether the two touch the same claim; AGING bounds how
+long it can go unreviewed.
+Only a recorded transition carries a digest forward, never a record's mere
+existence. A stamp from a branch cut before the change records the OLD
+content and no transition, and a source reverting to content some other text
+was verified against has no transition from what the current text was
+verified at, so neither case is accepted. Content no stamp has recorded, such
+as a branch's own unstamped change or both sides editing one file, is STALE
+as before.
+
 The effective verified date, which drives AGING, comes from the same records
 that vouch for source digests: the latest `verified_date` among them, or the
 frontmatter `last_verified` if later. A newer stamp of different skill text
@@ -65,8 +93,9 @@ does not reset AGING for the text on disk. `.attestations/` is excluded from the
 fingerprint (scripts/dev/skills_manifest.py), so the fingerprint moves only
 when skill content moves. Old attestations can be removed with `--prune`,
 which keeps the newest N per skill plus every record that still vouches for
-the current SKILL.md text with a source digest no other kept record carries; deleting a file never conflicts with another PR
-adding one.
+the current SKILL.md text with a source digest no other kept record carries,
+and every record whose transition carries a cited source's current digest
+forward; deleting a file never conflicts with another PR adding one.
 
 `--migrate` moves any `source_digests` block still in a SKILL.md frontmatter
 into an attestation dated with that skill's `last_verified`.
@@ -235,6 +264,35 @@ def effective_record(skills_dir: Path, name: str, meta: dict,
     return date, accepted
 
 
+def recorded_transitions(records: list[dict]) -> dict[str, dict[str, set[str]]]:
+    """source -> digest it had been verified at -> digests a later stamp
+    re-checked the skill against (each record's `superseded_digests`)."""
+    edges: dict[str, dict[str, set[str]]] = {}
+    for record in records:
+        superseded = record.get("superseded_digests")
+        if not isinstance(superseded, dict):
+            continue
+        for src, olds in superseded.items():
+            new = record["source_digests"].get(src)
+            if new is None or not isinstance(olds, list):
+                continue
+            for old in olds:
+                edges.setdefault(str(src), {}).setdefault(str(old), set()).add(str(new))
+    return edges
+
+
+def carried_forward(accepted: set[str], edges: dict[str, set[str]]) -> set[str]:
+    """``accepted`` plus every digest reachable from it through recorded transitions."""
+    reached = set(accepted)
+    frontier = list(accepted)
+    while frontier:
+        for new in edges.get(frontier.pop(), ()):
+            if new not in reached:
+                reached.add(new)
+                frontier.append(new)
+    return reached
+
+
 def carried_digest(skills_dir: Path, name: str, src: str, skill_digest: str) -> str | None:
     """The digest to carry into a new stamp for a source this checkout cannot
     see, so the stamp keeps the record made where the source was visible.
@@ -269,6 +327,7 @@ def check_skills(root: str, projects_root: str) -> int:
 
         verified_date, accepted = effective_record(
             skills_dir, skill_name, meta, skill_text_digest(skill_file))
+        edges = recorded_transitions(load_attestations(skills_dir, skill_name))
 
         # Anchor to UTC so a CI runner (UTC) and a local machine (e.g. Mountain
         # Time) agree about day boundaries.
@@ -276,7 +335,8 @@ def check_skills(root: str, projects_root: str) -> int:
         verified_start = datetime.strptime(verified_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         age_days = (datetime.now(timezone.utc) - verified_start).days
 
-        drift: tuple[str, str] | None = None
+        drifts: list[tuple[str, str]] = []
+        carried: list[str] = []
         absent = 0
         if not AGE_ONLY:
             for src in load_source_files(skill_dir, meta["source_files"]):
@@ -286,25 +346,32 @@ def check_skills(root: str, projects_root: str) -> int:
                     continue
                 recorded = accepted.get(src)
                 if not recorded:
-                    drift = (src, "has no recorded digest")
-                    break
-                if content_digest(full_path) not in recorded:
-                    drift = (src, f"changed since {verified_date}: no attestation "
-                                  "records its current content")
-                    break
+                    drifts.append((src, "has no recorded digest"))
+                    continue
+                current = content_digest(full_path)
+                if current in recorded:
+                    continue
+                if current in carried_forward(recorded, edges.get(src, {})):
+                    carried.append(src)
+                    continue
+                drifts.append((src, f"changed since {verified_date}: no attestation "
+                                    "records its current content"))
 
-        if drift:
-            src, reason = drift
-            print(f"  [{RED}STALE{NC}] {skill_name}: {src} {reason}")
-            print(f"          re-check the claims that cite it, then: {STAMP_HINT} {skill_name}")
+        if drifts:
+            for src, reason in drifts:
+                print(f"  [{RED}STALE{NC}] {skill_name}: {src} {reason}")
+            print(f"          re-check the claims that cite them, then: {STAMP_HINT} {skill_name}")
             has_stale = True
         elif age_days > max_days:
             print(f"  [{YELLOW}AGING{NC}] {skill_name}: verified {age_days} days ago (threshold: {max_days})")
             has_stale = True
         else:
             note = ""
+            if carried:
+                note += (f"; re-verified since for another version of this text: "
+                         f"{', '.join(carried)}")
             if absent:
-                note = f"; {absent} cited source(s) absent from this checkout, not covered"
+                note += f"; {absent} cited source(s) absent from this checkout, not covered"
             print(f"  [{GREEN}FRESH{NC}] {skill_name}: verified {age_days} days ago{note}")
 
     if has_stale:
@@ -331,7 +398,8 @@ def _verifier(root: str) -> str:
 
 def write_attestation(skills_dir: Path, name: str, digests: dict[str, str],
                       verified_at: datetime, verifier: str,
-                      skill_digest: str | None = None) -> Path:
+                      skill_digest: str | None = None,
+                      superseded: dict[str, list[str]] | None = None) -> Path:
     adir = skills_dir / ATTESTATIONS_DIR / name
     adir.mkdir(parents=True, exist_ok=True)
     # Microseconds keep file-name order chronological for stamps inside the
@@ -351,6 +419,9 @@ def write_attestation(skills_dir: Path, name: str, digests: dict[str, str],
         # The SKILL.md content this record certified. An older record keeps
         # vouching for its source digests only while the skill text is unchanged.
         record["skill_digest"] = skill_digest
+    if superseded:
+        # The change this verifier re-checked the skill across, per source.
+        record["superseded_digests"] = dict(sorted(superseded.items()))
     path.write_text(json.dumps(record, indent=2) + "\n")
     return path
 
@@ -373,19 +444,28 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
             rc = 1
             continue
         skill_digest = skill_text_digest(skill_file)
+        _, accepted = effective_record(skills_dir, name, meta, skill_digest)
+        edges = recorded_transitions(load_attestations(skills_dir, name))
         digests: dict[str, str] = {}
+        superseded: dict[str, list[str]] = {}
         absent: list[str] = []
         for src in load_source_files(skill_dir, meta["source_files"]):
             full_path = resolve_source(root, projects_root, src)
             if full_path.exists():
                 digests[src] = content_digest(full_path)
+                # What the check accepted until now. If the content moved on
+                # from all of it, this stamp is the re-check across the change.
+                prior = carried_forward(accepted.get(src, set()), edges.get(src, {}))
+                if prior and digests[src] not in prior:
+                    superseded[src] = sorted(prior)
             elif (carried := carried_digest(skills_dir, name, src, skill_digest)) is not None:
                 # Not verifiable from here; keep the record made where it was,
                 # but only one made for this exact skill text.
                 digests[src] = carried
             else:
                 absent.append(src)
-        path = write_attestation(skills_dir, name, digests, now, verifier, skill_digest)
+        path = write_attestation(skills_dir, name, digests, now, verifier, skill_digest,
+                                 superseded)
         note = f", {len(absent)} absent source(s) left unrecorded" if absent else ""
         print(f"  stamped {name}: {path.relative_to(Path(root))}, {len(digests)} digest(s){note}")
     return rc
@@ -444,7 +524,49 @@ def _pairs(record: dict) -> set[tuple[str, str]]:
     return {(str(k), str(v)) for k, v in record.get("source_digests", {}).items()}
 
 
-def prune_attestations(root: str, keep: int) -> int:
+def _transition_records(root: str, projects_root: str, skills_dir: Path, name: str,
+                        paths: list[Path]) -> set[Path]:
+    """Attestation files whose recorded transition is on a path carrying a
+    cited source's current digest forward from what the current text was
+    verified at."""
+    skill_md = skills_dir / name / "SKILL.md"
+    meta = parse_frontmatter(skill_md.read_text())
+    if not meta:
+        return set()
+    _, accepted = effective_record(skills_dir, name, meta, skill_text_digest(skill_md))
+    by_path: list[tuple[Path, dict]] = []
+    for path in paths:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+            by_path.append((path, data))
+    edges = recorded_transitions([data for _, data in by_path])
+    needed: set[Path] = set()
+    for src in load_source_files(skills_dir / name, meta["source_files"]):
+        full_path = resolve_source(root, projects_root, src)
+        recorded = accepted.get(src, set())
+        if not full_path.exists() or not recorded:
+            continue
+        current = content_digest(full_path)
+        src_edges = edges.get(src, {})
+        reach = carried_forward(recorded, src_edges)
+        if current in recorded or current not in reach:
+            continue
+        for path, data in by_path:
+            new = data["source_digests"].get(src)
+            olds = (data.get("superseded_digests") or {}).get(src)
+            if new is None or not isinstance(olds, list):
+                continue
+            # On a path: its source end is reachable, and the current
+            # digest is reachable from its destination.
+            if any(str(o) in reach for o in olds) and current in carried_forward({str(new)}, src_edges):
+                needed.add(path)
+    return needed
+
+
+def prune_attestations(root: str, projects_root: str, keep: int) -> int:
     """Delete all but the newest `keep` attestations per skill, never one
     that still vouches for the current skill text.
 
@@ -458,6 +580,9 @@ def prune_attestations(root: str, keep: int) -> int:
     the mirror sync's direction guard (scripts/dev/skills_direction_guard.py)
     lets `rsync --delete` remove, so a prune never leaves the sync refusing,
     and a source whose digest is not visible here keeps its voucher too.
+    A record whose recorded transition lies on the path that carries a cited
+    source's current digest forward is kept as well, whatever text it
+    certified: deleting it would turn that source STALE.
     """
     skills_dir = Path(root) / "skills"
     base = skills_dir / ATTESTATIONS_DIR
@@ -489,6 +614,7 @@ def prune_attestations(root: str, keep: int) -> int:
                     if _pairs(data) - covered:
                         kept.add(path)
                         covered |= _pairs(data)
+                kept |= _transition_records(root, projects_root, skills_dir, adir.name, paths)
             for path in paths:
                 if path not in kept:
                     path.unlink()
@@ -518,7 +644,7 @@ def main(argv: list[str]) -> int:
     if args.migrate:
         return migrate_skills(args.root)
     if args.prune is not None:
-        return prune_attestations(args.root, args.prune)
+        return prune_attestations(args.root, args.projects_root, args.prune)
     return check_skills(args.root, args.projects_root)
 
 
