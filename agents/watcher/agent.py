@@ -1790,7 +1790,9 @@ def _p006_handler_reacts(handler: Any) -> bool:
     msg}`` counts; ``return compute()``, ``return cache[key]``, a ``raise``
     (the nested handler may catch it), and anything after a first statement
     that could raise (``cleanup(); return False``) do not. The body of a
-    ``with ...suppress(...)`` block is treated the same way. The rule is
+    ``with ...suppress(...)`` block is treated the same way, and counts only
+    when ``suppress()`` is the last context manager: one entered after it
+    can raise into it before the body runs. The rule is
     conservative on purpose: it does not work out whether a nested handler's
     type matches what was raised, or whether that handler re-raises (its body
     is skipped, as above), so such a finding is kept.
@@ -1821,7 +1823,15 @@ def _p006_handler_reacts(handler: Any) -> bool:
             and _p006_callee_name(item.context_expr.func) == "suppress"
             for item in node.items
         ):
-            if _p006_caught_first_reacts(node.body[0]):
+            # Context managers entered after suppress() can raise into it
+            # before the body runs, so the body counts only when suppress()
+            # is the last item.
+            last = node.items[-1].context_expr
+            if (
+                isinstance(last, ast.Call)
+                and _p006_callee_name(last.func) == "suppress"
+                and _p006_caught_first_reacts(node.body[0])
+            ):
                 return True
             stack.extend(node.items)
             continue
@@ -1856,7 +1866,9 @@ def _p006_caught_first_reacts(stmt: Any) -> bool:
     if isinstance(stmt, ast.Expr) and _p006_is_loud_log_call(stmt.value):
         call = stmt.value
         return isinstance(call.func.value, ast.Name) and all(_p006_value_is_inert(arg) for arg in call.args) and all(
-            _p006_value_is_inert(kw.value) for kw in call.keywords
+            # kw.arg is None for `**mapping`, which can raise.
+            kw.arg is not None and _p006_value_is_inert(kw.value)
+            for kw in call.keywords
         )
     return False
 
@@ -1905,7 +1917,7 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     line when the silent handler belongs to a try further down. Tries inside
     a nested def, lambda or class are not taken, nor handlers whose clause
     carries ``# noqa: BLE001`` or a bare ``# noqa``. Nothing is taken when the
-    line sits in a nested def, lambda or class, or in a nested try's handler,
+    line sits in a nested def or class, or in a nested try's handler,
     ``else`` or ``finally``, which is not above a later swallow but in a
     region of its own; nor when the block itself lies inside a handler, where
     nested handlers are never on the path. This only
@@ -1998,7 +2010,9 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
         barriers: list[tuple[int, int]] = []
         for stmt in innermost.body:
             for node in ast.walk(stmt):
-                if isinstance(node, scope_nodes):
+                # A lambda shares its line with code that runs in the block,
+                # so only statement scopes are barriers.
+                if isinstance(node, scope_nodes) and not isinstance(node, ast.Lambda):
                     barriers.append((node.lineno, node.end_lineno or node.lineno))
                 if not isinstance(node, try_types):
                     continue

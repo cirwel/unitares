@@ -102,6 +102,10 @@ SILENT_BODIES = [
     "try:\n    cleanup()\nexcept Exception:\n    pass\nelse:\n    return False",
     "try:\n    self.logger.warning('x')\nexcept AttributeError:\n    pass",
     "try:\n    logging.getLogger(name).warning('x')\nexcept Exception:\n    pass",
+    # **mapping can raise; a context manager entered after suppress() can
+    # raise into it before the body runs (round 6).
+    "try:\n    logger.warning('x', **extra)\nexcept Exception:\n    pass",
+    "with suppress(Exception), open(p) as fh:\n    return False",
     "with contextlib.suppress(Exception):\n    return compute()",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
@@ -467,6 +471,20 @@ def test_cite_in_a_region_of_its_own_adds_no_later_tries(tmp_path, region, cites
         assert p006_actually_fires(str(path), cite) is False, cite
     # A cite above everything still reaches the later silent try.
     assert p006_actually_fires(str(path), 2) is True
+
+
+def test_a_lambda_on_the_cited_line_is_not_a_barrier(tmp_path):
+    # Round 6: the rest of the line runs in the block, above the later try.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        items.sort(key=lambda v: v)\n"
+        + _LATER_SILENT_TRY
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 3) is True
 
 
 def test_try_finally_inside_a_handler_takes_no_nested_handlers(tmp_path):
