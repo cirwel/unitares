@@ -98,7 +98,9 @@ def remove_lock_file_if_free(lock_file: Path, min_age_seconds: float = 0.0) -> t
     ``min_age_seconds`` only narrows removal (skip files touched recently).
     """
     try:
-        fd = os.open(str(lock_file), os.O_RDWR)  # never create
+        # Read-only is enough: flock needs no write access, and whether the
+        # unlink is allowed depends on the directory, not the file. Never create.
+        fd = os.open(str(lock_file), os.O_RDONLY)
     except FileNotFoundError:
         return False, "lock file doesn't exist"
     except OSError as exc:
@@ -472,6 +474,7 @@ class StateLockManager:
                         fcntl.flock(lock_fd, fcntl.LOCK_UN)
                         os.close(lock_fd)
                         lock_fd = None
+                        await asyncio.sleep(0)  # yield; still bounded by timeout
                         continue
                     # Write PID and timestamp to lock file for debugging
                     lock_info = {

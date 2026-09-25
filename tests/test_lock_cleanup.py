@@ -228,6 +228,27 @@ class TestCleanupStaleLocks:
         assert result["errors"] == 1
         assert result["error_locks"] == [{"lock_file": "stuck.lock", "error": "read-only dir"}]
 
+    def test_removes_a_free_read_only_lock_file(self, tmp_path):
+        """flock needs no write access, and unlink permission comes from the
+        directory, so a free 0444 file is removable like any other."""
+        lock = _write_lock(tmp_path / "ro.lock")
+        os.chmod(lock, 0o444)
+        result = cleanup_stale_locks(tmp_path)
+        assert result["cleaned"] == 1
+        assert not lock.exists()
+
+    def test_an_unreadable_lock_file_is_an_error_not_kept(self, tmp_path):
+        lock = _write_lock(tmp_path / "locked-out.lock")
+        os.chmod(lock, 0o000)
+        try:
+            result = cleanup_stale_locks(tmp_path)
+        finally:
+            os.chmod(lock, 0o644)
+        assert result["kept"] == 0
+        assert result["errors"] == 1
+        assert result["error_locks"][0]["lock_file"] == "locked-out.lock"
+        assert "cannot open" in result["error_locks"][0]["error"]
+
     def test_only_processes_lock_files(self, tmp_path):
         """Non-.lock files should be ignored."""
         (tmp_path / "not_a_lock.txt").write_text("data")

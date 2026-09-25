@@ -85,7 +85,7 @@ def check_lock_staleness(lock_file: Path, max_age_seconds: float = 300.0) -> Tup
         (is_stale, reason) tuple
     """
     try:
-        fd = os.open(str(lock_file), os.O_RDWR)  # never create
+        fd = os.open(str(lock_file), os.O_RDONLY)  # read-only suffices for flock; never create
     except FileNotFoundError:
         return False, "lock file doesn't exist"
     except OSError as exc:
@@ -143,7 +143,14 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
                 if reason.startswith("held"):
                     reason = _held_reason(lock_file)
 
-            if is_stale:
+            if reason.startswith("cannot open"):
+                # Not held, not free: we could not tell. Report it as a failure,
+                # not as a kept lock.
+                errors.append({
+                    "lock_file": str(lock_file.name),
+                    "error": reason
+                })
+            elif is_stale:
                 cleaned.append({
                     "lock_file": str(lock_file.name),
                     "reason": reason
