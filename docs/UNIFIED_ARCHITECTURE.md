@@ -279,8 +279,12 @@ needs no resident agents to run. What the architecture provides for agents that
 live longer than one session is a set of capabilities, not a roster:
 
 - **Persistent identity.** A long-lived agent keeps a stable identity across restarts through the substrate-identity pattern (`agents/sdk/`, `_substrate.py`; see [`ontology/identity.md`](ontology/identity.md)). Ordinary sessions mint fresh identities instead.
-- **Capability tags.** Behaviour is decided by tags such as `persistent`, `embodied` and `ephemeral`, and by an agent's expected check-in cadence. It is never decided by an agent's name. An embodied agent, for example, is judged against physical rather than behavioural sensors.
-- **An optional named roster.** `UNITARES_RESIDENTS` is **empty by default**. An operator who names residents gives each one its own calibration class. That is a statistical partition, never a dispatch rule. See [`operations/resident-roster.md`](operations/resident-roster.md).
+- **Capability tags and declared properties.** Behaviour is decided by tags such as `persistent`, `embodied` and `ephemeral`, by a `cadence.*` tag for the expected check-in interval, and by what an agent sends. An agent that publishes a physical sensor reading is judged against it rather than the behavioural sensor. Label-keyed overlays (check-in intervals, the resident-progress manifest, dashboard silence thresholds) remain as back-compat fallbacks. They are empty by default and are meant to shrink to nothing.
+- **An optional named roster.** `UNITARES_RESIDENTS` is **empty by default**. Naming an agent there does two things:
+  - it gives the agent its own calibration class, which is a statistical partition;
+  - it is the **only** sanctioned way an identity acquires the privileged `persistent` and `autonomous` tags, which an agent cannot grant itself. These tags exempt it from orphan archival and loop detection.
+
+  A long-lived agent left off the roster onboards untagged and can be archived. See [`operations/resident-roster.md`](operations/resident-roster.md#non-obvious-consequence-privileged-tags).
 - **The public contract.** Long-lived agents use the same MCP surface and the [`unitares-sdk`](../agents/sdk/) as any external agent. Nothing in the server depends on a particular one existing.
 
 `agents/` ships **reference** long-lived agents: a janitor, a fleet monitor, a code watcher, a metrics chronicler and a local-model triage scribe. They are examples of the pattern and operational tools for the deployment that runs them. They are outside the shipped server package and are not governance internals; see [`agents/README.md`](../agents/README.md). The orchestrated dialectic reviewer also lives in `agents/`, but it is part of an optional server feature and is described under Recovery above.
