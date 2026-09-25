@@ -530,3 +530,44 @@ def test_all_json_reports_nothing_hidden_by_disposition(ledger, monkeypatch, cap
     assert out["acknowledged_hidden"] == 0
     assert out["acknowledged_by_disposition"] == {}
     assert out["count"] == 1
+
+
+class TestLedgerRobustness:
+    """Review round 3 on #2428."""
+
+    def test_an_undecodable_ledger_hides_nothing(self, ledger, capsys):
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_bytes(b"\xff\xfe junk\n")
+        assert report.load_acks() == {}
+        assert "hiding nothing" in capsys.readouterr().err
+
+    def test_a_torn_last_line_does_not_swallow_the_next_ack(self, ledger):
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text('{"session_id": "aaaa')
+        report.append_acks([json.loads(_ack_line("b" * 16)), json.loads(_ack_line("c" * 16))])
+        assert set(report.load_acks()) == {"b" * 16, "c" * 16}
+
+
+class TestSeenAt:
+    SID = "4444bbbb55556666"
+
+    def test_a_session_changed_after_seen_at_is_refused(self, ledger, monkeypatch, capsys):
+        _mock_db(monkeypatch, [self.SID],
+                 [_row(session_id=self.SID, updated_at=dt.datetime(2026, 9, 25, 10, 0))])
+        rc = report.main(["ack", self.SID, "--disposition", "stale", "--reason", "x",
+                          "--by", "op", "--seen-at", "2026-09-24T12:00:00+00:00"])
+        assert rc == 1
+        assert "changed after --seen-at" in capsys.readouterr().err
+        assert not ledger.exists()
+
+    def test_an_unchanged_session_is_acknowledged(self, ledger, monkeypatch):
+        _mock_db(monkeypatch, [self.SID], [_row(session_id=self.SID)])
+        rc = report.main(["ack", self.SID, "--disposition", "stale", "--reason", "x",
+                          "--by", "op", "--seen-at", "2026-09-24T12:00:00+00:00"])
+        assert rc == 0 and ledger.exists()
+
+    def test_a_bad_seen_at_is_refused(self, ledger, monkeypatch):
+        _mock_db(monkeypatch, [self.SID], [_row(session_id=self.SID)])
+        rc = report.main(["ack", self.SID, "--disposition", "stale", "--reason", "x",
+                          "--by", "op", "--seen-at", "yesterday"])
+        assert rc == 2 and not ledger.exists()

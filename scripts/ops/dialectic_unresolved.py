@@ -52,6 +52,9 @@ append-only ledger (``~/.unitares/dialectic-acks.jsonl``, overridable with
   If either has moved since (a reassign reopened it, a new objection landed),
   the acknowledgement no longer applies and the session is listed again.
 
+Pass ``--seen-at`` with the time you read the listing: a session that changed
+after that is refused, so a batch ack never hides an objection you have not seen.
+
 Session ids may be given as unambiguous prefixes. A prefix matching more than
 one session is refused, never guessed, and a batch with any bad id writes
 nothing.
@@ -236,7 +239,7 @@ def load_acks(path: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
             lines = fh.readlines()
     except FileNotFoundError:
         return acks
-    except OSError as exc:
+    except (OSError, ValueError) as exc:  # ValueError covers UnicodeDecodeError
         print(f"dialectic_unresolved: ack ledger unreadable, hiding nothing: {exc}",
               file=sys.stderr)
         return acks
@@ -270,6 +273,17 @@ def append_acks(rows: Iterable[Dict[str, Any]], path: Optional[str] = None) -> s
     if parent:
         os.makedirs(parent, exist_ok=True)
     payload = "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows)
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            if fh.tell() > 0:
+                fh.seek(-1, os.SEEK_END)
+                if fh.read(1) != b"\n":
+                    # A torn previous write: terminate it so this batch's first
+                    # row is not glued onto the fragment and silently lost.
+                    payload = "\n" + payload
+    except FileNotFoundError:
+        pass
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
         data = payload.encode("utf-8")
@@ -488,8 +502,19 @@ def ack_main(argv: Sequence[str]) -> int:
                     help="Why it no longer needs surfacing, e.g. 'PR #2025 merged'")
     ap.add_argument("--by", dest="acknowledged_by", default=None,
                     help="Who is acknowledging (default: the login name)")
+    ap.add_argument("--seen-at", default=None, metavar="ISO_TIMESTAMP",
+                    help="When you read the listing you are acting on. Any session "
+                         "updated, or given a new objection, after this is refused, "
+                         "so an ack never hides something you have not seen.")
     ap.add_argument("--dsn", default=DEFAULT_DSN)
     args = ap.parse_args(list(argv))
+    seen_at = None
+    if args.seen_at:
+        seen_at = _as_utc(args.seen_at)
+        if seen_at is None:
+            print(f"dialectic_unresolved ack: --seen-at {args.seen_at!r} is not an ISO timestamp",
+                  file=sys.stderr)
+            return 2
 
     reason = " ".join(args.reason.split())
     if not reason:
@@ -520,6 +545,14 @@ def ack_main(argv: Sequence[str]) -> int:
         return 2
 
     resolved, errors = resolve_ids(prefixes, matches, backlog)
+    if seen_at is not None:
+        for sid in resolved:
+            row = backlog_rows.get(sid, {})
+            moved = [k for k in ("updated_at", "standing_since")
+                     if (_as_utc(row.get(k)) or seen_at) > seen_at]
+            if moved:
+                errors.append(f"{sid}: changed after --seen-at ({', '.join(moved)}); "
+                              f"re-read it before acknowledging")
     if errors:
         print("dialectic_unresolved ack: refused, nothing written:", file=sys.stderr)
         for e in errors:
