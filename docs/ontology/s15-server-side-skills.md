@@ -151,7 +151,7 @@ New tool: `skills(name?: string, since_version?: string)` → returns:
 Three flag-style options on the request:
 - `name=<skill-name>` returns single skill
 - `since_version=<date>` returns only skills updated since (cheap re-poll)
-- absent: returns an index, every skill's metadata without `content` (`content_omitted: true`). Until 2026-09-25 it returned the full bundle, 100 KB for seven skills; the adapter always fetched by `name`, so that default served no caller.
+- absent: returns an index, every skill's metadata without `content` (`content_omitted: true`). Until 2026-09-25 it returned the full bundle, 100 KB for seven skills. The plugin adapter (`_fetch_skills.py`) always fetches by `name`, so it is unaffected; other MCP clients could and did call it bare (an evaluation agent received all seven bodies, 93,821 chars, `docs/evaluations/accountability-journey/capture-stage-2168-unitares-arm.md`). A caller that wants every body passes `since_version` with an early date.
 
 ### 4.2. Canonical content location
 

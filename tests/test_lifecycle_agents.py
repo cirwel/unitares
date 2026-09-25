@@ -2875,3 +2875,12 @@ class TestListAgentsDefaultsSurviveTheSchema:
         rows = [a for group in grouped["agents"].values() for a in group]
         assert grouped["summary"]["returned"] == len(rows) == 100
         assert all(isinstance(a, dict) for a in rows)
+
+        # summary_only sends no rows, so the default page must not apply: its
+        # by_health would otherwise describe 100 agents beside totals for 130.
+        with patch_lifecycle_server(server):
+            summary = _parse(await handle_list_agents(
+                {"summary_only": True, "include_metrics": True}
+            ))  # summary_only returns the summary object itself
+        assert summary["total"] == 130
+        assert sum(summary["by_health"].values()) == 130

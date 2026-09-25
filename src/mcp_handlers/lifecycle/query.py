@@ -916,7 +916,9 @@ async def _list_agents_full(
     # before grouping, so returned is true. This narrows grouped no-limit
     # calls; an explicit limit is honoured as before.
     limit = arguments.get("limit")
-    if limit is None:
+    # summary_only returns no rows, and its by_health is built from the page,
+    # so paging it would describe 100 agents beside totals for all of them.
+    if limit is None and not summary_only:
         limit = _LIST_PAGE_CAP
     filters = AgentListFilters(
         status=status_filter,
