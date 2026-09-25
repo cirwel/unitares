@@ -23,6 +23,7 @@ _spec.loader.exec_module(rg)
 read_native_api = rg.read_native
 completed_review_exit = rg.completed_review_exit
 require_open = rg.require_open
+real_disabled_providers = rg.disabled_providers
 
 
 @pytest.fixture(autouse=True)
@@ -31,6 +32,8 @@ def no_cloud_reads(monkeypatch):
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
+    # The tracked provider switch reflects today's outages; unit tests pin it.
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {})
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -1389,3 +1392,31 @@ def test_dispose_emit_needs_the_open_record_named(tmp_path):
     (tmp_path / "d.txt").write_text("1. fixed\n")
     with pytest.raises(SystemExit, match="missing: reviewer, cites"):
         rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "1"])
+
+
+# --------------------------------------------------------------------------
+# Repo-wide provider switch (scripts/dev/review_providers.json).
+
+def test_a_disabled_provider_is_not_the_default_or_native(monkeypatch):
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    assert rg.default_reviewer("claude/fix-x") == "claude"
+    assert rg.default_reviewer("codex/fix-x") == "claude"
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "true")
+    assert rg.native_enabled() is False
+
+
+def test_a_disabled_provider_is_skipped_unless_asked_for(monkeypatch, capsys):
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    ran = []
+    monkeypatch.setattr(rg, "_review_locked", lambda a, pr, key, p: ran.append(p) or 0)
+    assert rg.review_with_fallback(SimpleNamespace(budget=30, reviewer=None), 1, "k", "codex") == 0
+    assert ran == ["claude"] and "disabled repo-wide" in capsys.readouterr().out
+    ran.clear()
+    rg.review_with_fallback(SimpleNamespace(budget=30, reviewer="codex"), 1, "k", "codex")
+    assert ran == ["codex"]
+
+
+def test_the_tracked_provider_file_parses():
+    got = real_disabled_providers()  # the committed file, not the autouse pin
+    assert isinstance(got, dict) and all(isinstance(v, str) for v in got.values())

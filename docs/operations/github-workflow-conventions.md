@@ -275,7 +275,27 @@ this operator's machine, run once:
 git config review.verifier ollama:gemma4:latest
 ```
 
+#### Review provider availability
+
+`scripts/dev/review_providers.json` is the one repo-wide switch for reviewers
+that are down. A provider listed under `disabled` is skipped by
+`review.sh`'s default choice, by its local fallback, and (for Codex) by native
+review, in every checkout, so an outage no longer costs each session a failed
+attempt per hour of cooldown. Agents without local tooling read the same file
+before posting `@codex review`. An explicit `review.sh --reviewer <name>`
+still tries a disabled provider. Re-enable it by deleting its entry.
+
+Operator, 2026-09-25: Codex is unavailable indefinitely (the OpenAI account
+was suspended). Until that entry is removed, review with a fresh-context
+Claude subagent or council, or another model such as Gemini, and record it
+honestly ([Recording a review without gh](#recording-a-review-without-gh)
+when `gh` is missing).
+
 #### Requesting review without local tooling
+
+**Check [provider availability](#review-provider-availability) first:** while
+Codex is disabled there, skip this section and use
+[Recording a review without gh](#recording-a-review-without-gh).
 
 `review.sh` needs the `gh` CLI and a local Codex or Claude CLI, so it cannot
 run in cloud sessions, sandboxed runtimes, or any environment without them.

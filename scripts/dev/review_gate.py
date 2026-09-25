@@ -545,8 +545,30 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     return snapshot
 
 
+PROVIDERS_FILE = Path(__file__).resolve().with_name("review_providers.json")
+
+
+def disabled_providers() -> dict[str, str]:
+    """Providers the repo marks unavailable, name -> reason (tracked file).
+
+    One committed switch every session reads, so an outage stops every
+    checkout from routing to the dead provider, instead of each session
+    failing once per hour of per-machine cooldown. Missing or unreadable
+    file: nothing is disabled.
+    """
+    try:
+        data = json.loads(PROVIDERS_FILE.read_text())
+        return {name: str((info or {}).get("reason", "disabled"))
+                for name, info in (data.get("disabled") or {}).items()}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return {}
+
+
 def native_enabled() -> bool:
     # Operator opt-in: no cloud/model service is required by a default install.
+    # Native review is Codex, so a repo-wide Codex outage switches it off too.
+    if "codex" in disabled_providers():
+        return False
     return git("config", "--bool", "review.native", check=False).strip() == "true"
 
 
@@ -644,7 +666,9 @@ def current_pr() -> dict | None:
 def default_reviewer(branch: str) -> str:
     # Prefer diversity, but independence is a fresh reviewer context, not a
     # provider name. A quota outage must not prohibit the available reviewer.
-    return "claude" if branch.startswith("codex/") else "codex"
+    preferred, other = ("claude", "codex") if branch.startswith("codex/") else ("codex", "claude")
+    disabled = disabled_providers()
+    return other if preferred in disabled and other not in disabled else preferred
 
 
 def provider_state_path(reviewer: str) -> Path:
@@ -1115,7 +1139,12 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     providers = [preferred, "codex" if preferred == "claude" else "claude"]
     deadline = time.monotonic() + args.budget
     available = []
+    disabled = disabled_providers()
     for provider in providers:
+        if provider in disabled and getattr(args, "reviewer", None) != provider:
+            print(f"[review] skipping {provider}: disabled repo-wide "
+                  f"({disabled[provider]}); see {PROVIDERS_FILE.name}")
+            continue
         if (provider in getattr(args, "failed_providers", set())
                 and getattr(args, "reviewer", None) != provider):
             print(f"[review] {provider} exhausted retries for this diff; "
