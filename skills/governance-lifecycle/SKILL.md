@@ -143,8 +143,9 @@ canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
 risk_score, basin and mode with their meanings, without the diagnostics. A
 response marked `response_shape: "routine"` was trimmed because nothing in it
 needed explaining: a clean `sync_state` proceed keeps `action_summary.action`,
-`reason` and `risk_score` but drops the repeated approve/safe/healthy/comfortable
-values, and a plain fresh `start_session` omits the onboard record. Anything
+`reason` and `risk_score` and the margin with its scope, but drops the repeated
+approve/safe/healthy values, and a plain fresh `start_session` omits the onboard
+record. Anything
 unusual (a guide, a pause, a resume miss, a reactivated identity, a declared
 lineage) keeps the full shape.
 
