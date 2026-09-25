@@ -261,7 +261,9 @@ async def handle_skills(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # though the one adapter that reads content (the plugin's _fetch_skills)
     # always asks by name. name= and since_version= keep returning content:
     # both are fetches, and registry_hash is over all skills either way.
-    index_only = name is None and since_version is None
+    # Truthiness, matching _filter_skills: a caller sending "" for an unset
+    # optional string must get the index, not the unfiltered full bundle.
+    index_only = not name and not since_version
     if index_only:
         filtered = [
             {k: v for k, v in skill.items() if k != "content"}

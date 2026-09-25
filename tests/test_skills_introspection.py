@@ -72,6 +72,14 @@ def test_bare_call_is_an_index_and_says_so():
     assert all("content" not in s for s in payload["skills"])
 
 
+@pytest.mark.parametrize("args", [{"name": ""}, {"since_version": ""}, {"name": "", "since_version": ""}])
+def test_empty_string_arguments_get_the_index_not_the_bundle(args):
+    """Some tool callers send "" for optional strings they leave unset."""
+    payload = _call_handler(args)
+    assert payload["content_omitted"] is True
+    assert all("content" not in s for s in payload["skills"])
+
+
 def test_since_version_still_returns_content():
     """since_version is a cache re-fetch, not discovery."""
     payload = _call_handler({"since_version": "2000-01-01"})
