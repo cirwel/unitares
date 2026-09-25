@@ -341,17 +341,21 @@ def test_a_transition_does_not_vouch_for_content_nobody_recorded(layout: Layout)
 
 
 def test_a_revert_is_not_carried_forward(layout: Layout):
-    # v1 was re-checked across x = 1 -> 2, v2 was verified at x = 2, and the
-    # source then reverted to x = 1. The only transition runs 1 -> 2, so
-    # nothing carries v2 back to 1: v2 was never checked against it.
+    # v2 was verified at 2 BEFORE v1 was re-checked across 1 -> 2, so that
+    # re-check is eligible for v2. The source then reverts to 1. A transition
+    # runs one way: nothing carries v2 from 2 back to 1.
     src = "unitares/src/thing.py"
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(20), digest=None)
-    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 2\n")})
+    layout.skill_file.write_text(v1_text)
+    layout.run("--stamp", "demo")                    # v1 at 1
     layout.source("x = 2\n")
-    layout.run("--stamp", "demo")
-    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
-    layout.run("--stamp", "demo")                    # v2 at x = 2
+    layout.run("--stamp", "demo")                    # v1 across 1 -> 2
+    assert _newest_record(layout)["superseded_digests"] == {src: [_digest("x = 1\n")]}
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
     layout.source("x = 1\n")
     result = layout.run()
     assert result.returncode == 1, result.stdout
