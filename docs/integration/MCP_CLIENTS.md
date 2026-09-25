@@ -138,8 +138,9 @@ tool runs:
      link without this) still signs in as the static client: the server
      supplies a PKCE pair it derives from the client secret, and redeeming
      the code still requires that secret. Requested scopes other than
-     `mcp:tools` are narrowed away rather than refused. Requests that carry
-     PKCE are never altered, and no other client gets either allowance.
+     `mcp:tools` are narrowed away rather than refused, on every static-client
+     sign-in. A client's own PKCE is never altered, and no other client gets
+     either allowance.
      Every `/authorize` and `/token` request is logged as one `[OAUTH]` line
      (client, PKCE and scope facts, status, OAuth error; never a secret or
      code), which is where to look when a connector fails to link.

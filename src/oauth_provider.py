@@ -19,6 +19,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -577,8 +578,9 @@ class StaticClientBasicAuthShim:
 
     PKCE guards a public client's code in transit; this client must present
     its secret to redeem a code, which OAuth 2.0 accepts in place of PKCE for
-    confidential clients. A request that does carry PKCE is never altered.
-    Every other client passes through untouched.
+    confidential clients. A request's own PKCE is never altered; scope
+    narrowing applies to every static-client ``/authorize`` request. Every
+    other client passes through untouched.
     """
 
     def __init__(self, app, *, client_id: str, pkce_verifier: str | None = None,
@@ -705,6 +707,24 @@ async def _read_body(receive, limit: int) -> tuple[bytes, str | None]:
 
 
 _OAUTH_LOG_PATHS = ("/authorize", "/token")
+_LOG_FIELD_CAP = 120
+
+
+def _log_safe(value) -> str:
+    """Caller-supplied, so escape control characters (a newline would forge a
+    log line) and cap the length."""
+    text = "-" if value is None else str(value)
+    if len(text) > _LOG_FIELD_CAP:
+        text = text[:_LOG_FIELD_CAP] + "…"
+    return text.encode("unicode_escape").decode("ascii")
+
+
+def _strip_queries(text):
+    """Drop URL query strings from an error description (the SDK echoes an
+    unregistered redirect URI in full)."""
+    if not text:
+        return text
+    return re.sub(r"\?[^\s'\"]*", "?…", str(text))
 
 
 class OAuthAttemptLogger:
@@ -786,9 +806,13 @@ class OAuthAttemptLogger:
             logger.info(
                 "[OAUTH] %s %s -> %s%s",
                 path.strip("/"),
-                " ".join(f"{k}={v}" for k, v in facts.items()),
+                " ".join(f"{k}={_log_safe(v)}" for k, v in facts.items()),
                 outcome["status"],
-                f" error={outcome['error']} ({outcome['error_description']})" if outcome["error"] else "",
+                (
+                    f" error={_log_safe(outcome['error'])}"
+                    f" ({_log_safe(_strip_queries(outcome['error_description']))})"
+                    if outcome["error"] else ""
+                ),
             )
 
 
