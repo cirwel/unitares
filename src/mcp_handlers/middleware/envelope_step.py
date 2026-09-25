@@ -1019,15 +1019,21 @@ def _write_ack_raw_policy(
     agent signature, the stored record and the full identity ontology.
 
     Two things keep the payload inline. An explicit full request does, on the
-    parameter each alias already declares (``response_mode='full'``; onboard's
-    ``verbose`` and outcome_event's ``include_semantics`` are the same request
-    under older names). And a payload whose record id the envelope cannot lift
+    parameter each alias already declares (``response_mode='full'``;
+    outcome_event's ``include_semantics`` is the same request under an older
+    name and survives ``/mcp/`` validation). onboard's ``verbose`` is honoured
+    here too, but only REST and stdio deliver it: the ``/mcp/`` argument model
+    for start_session does not declare it, so FastMCP drops it before the
+    envelope sees it. And a payload whose record id the envelope cannot lift
     does too, because then the canonical copy is the only place the caller
     could find out what was written.
 
     The hint never tells a caller to repeat the write to see the payload: a
     second store mints a second finding, and a second start_session(force_new)
-    mints a second identity. It names a read instead.
+    mints a second identity. It names a read instead. For start_session it does
+    not name start_session at all, not even with response_mode='full': an agent
+    that re-sends its original force_new arguments plus that flag mints a
+    second identity.
     """
     response_mode = str(arguments.get("response_mode") or "").strip().lower()
     wants_full = response_mode == "full"
@@ -1040,12 +1046,14 @@ def _write_ack_raw_policy(
 
     if friendly_name == "start_session":
         uuid = payload.get("uuid") or payload.get("agent_uuid")
-        identifiable = bool(uuid and payload.get("client_session_id"))
+        session_id = payload.get("client_session_id")
+        identifiable = bool(uuid and session_id)
+        target = session_id if session_id else "..."
         hint = (
-            "start_session(response_mode='full') returns the complete onboard "
-            "payload inline. To inspect this binding without minting another "
-            "identity, call identity(client_session_id='...') with the "
-            "client_session_id above."
+            "The full onboard payload is not repeated here. To inspect this "
+            f"binding, read it with identity(client_session_id='{target}'). "
+            "Do not call start_session again to see it: a second "
+            "start_session(force_new=true) mints a second identity."
         )
     elif friendly_name == "record_result":
         identifiable = payload.get("outcome_id") is not None
@@ -1500,18 +1508,52 @@ def build_experience_envelope(
         # The identity fields clients persist from this response. They used to
         # be reachable only under raw_governance, which a default ack now
         # omits: the plugin's post-identity hook and identity sidecar cache
-        # agent_id / display_name / session_resolution_source /
-        # continuity_token_supported, the canaries read display_name, and the
+        # agent_id / display_name, the canaries read display_name, and the
         # coordination demo reads continuity_token. Lift them rather than
-        # break those readers.
+        # break those readers. session_resolution_source and
+        # continuity_token_supported are not lifted: only the full-mode
+        # payload carries them, and a full-mode ack keeps raw_governance.
         envelope.update(_lift(
             payload,
             "agent_id",
             "display_name",
             "continuity_token",
-            "continuity_token_supported",
-            "session_resolution_source",
         ))
+        # Onboard's mint-time failure signals. The handler adds each one
+        # because the failure is otherwise invisible to the caller: an
+        # off-roster resident name minted without resident tags (archived by
+        # the orphan sweep days later), a label collision that applied a
+        # different display_name, a bootstrap check-in that was not written.
+        # They were only under raw_governance, so lift them before it goes.
+        registration = payload.get("resident_registration")
+        if isinstance(registration, dict):
+            # The status names the outcome; the remedy prose rides along when
+            # the outcome may not be what the caller asked for. A registered
+            # resident and a residentless install (the default, and the
+            # correct outcome there) need only the status, so a routine named
+            # mint does not carry ~400 B of prose on every ack.
+            compact_registration = _lift(
+                registration, "status", "requested_name", "on_roster"
+            )
+            if registration.get("status") not in ("registered", "no_roster_configured"):
+                compact_registration.update(_lift(registration, "detail"))
+            if compact_registration:
+                envelope["resident_registration"] = compact_registration
+        renamed = payload.get("label_renamed")
+        if isinstance(renamed, dict) and renamed:
+            envelope["label_renamed"] = dict(renamed)
+        bootstrap = payload.get("bootstrap")
+        if isinstance(bootstrap, dict):
+            compact_bootstrap = _lift(
+                bootstrap,
+                "written",
+                "state_id",
+                "reason",
+                "detail",
+                "payload_digest_match",
+            )
+            if compact_bootstrap:
+                envelope["bootstrap"] = compact_bootstrap
         state_summary = _lift(
             payload,
             "lineage_state",
