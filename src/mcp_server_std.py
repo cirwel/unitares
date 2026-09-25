@@ -682,7 +682,8 @@ async def main():
 
         try:
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, cleanup_stale_state_locks, project_root, 300, False)
+            # project_root=None: sweep the directory StateLockManager writes to.
+            result = await loop.run_in_executor(None, cleanup_stale_state_locks, None, 300, False)
             if result.get('cleaned', 0) > 0:
                 logger.info(f"Cleaned {result['cleaned']} stale lock files")
         except Exception as e:

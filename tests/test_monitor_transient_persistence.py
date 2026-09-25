@@ -141,6 +141,7 @@ class TestLiveWriterPersistsTransients:
         """
         monitor = UNITARESMonitor(agent_id="transients_parity", load_state=False)
         _update(monitor)
+        monitor.register_tactical_prediction(0.6)
 
         ams.save_monitor_state("transients_parity", monitor)
         live = _saved(isolated_data_dir, "transients_parity")
@@ -150,7 +151,7 @@ class TestLiveWriterPersistsTransients:
 
         for key in ("sensor_divergence", "sensor_divergence_history",
                     "created_at_iso", "last_update_iso", "resolved_risk",
-                    "resolved_verdict"):
+                    "resolved_verdict", "open_predictions"):
             assert (key in live) == (key in legacy), f"writers disagree on {key}"
 
     @pytest.mark.asyncio
@@ -163,3 +164,84 @@ class TestLiveWriterPersistsTransients:
 
         assert "sensor_divergence_history" in data
         assert "created_at_iso" in data
+
+
+class TestOpenForecastsSurviveARestart:
+    """A check-in's prediction_id must still bind after a restart.
+
+    Observed 2026-09-24: a forecast minted at ~10:10Z was graded at ~10:20Z and
+    came back missing_prediction, because two deploy restarts in between
+    reloaded the monitor from a snapshot that never carried the registry.
+    """
+
+    def test_open_forecast_survives_a_restart(self, isolated_data_dir):
+        monitor = UNITARESMonitor(agent_id="forecast_restart", load_state=False)
+        _update(monitor)
+        pid = monitor.register_tactical_prediction(0.65, decision_action="proceed")
+
+        ams.save_monitor_state("forecast_restart", monitor)
+        restored = UNITARESMonitor(agent_id="forecast_restart")
+
+        record = restored.lookup_prediction(pid)
+        assert record is not None
+        assert record["confidence"] == pytest.approx(0.65)
+        assert record["decision_action"] == "proceed"
+        assert restored.consume_prediction(pid) is not None
+
+    def test_restored_forecast_keeps_its_age(self, isolated_data_dir):
+        import time
+
+        monitor = UNITARESMonitor(agent_id="forecast_age", load_state=False)
+        _update(monitor)
+        pid = monitor.register_tactical_prediction(0.4)
+        monitor._open_predictions[pid]["created_at_epoch"] = time.time() - 600
+
+        ams.save_monitor_state("forecast_age", monitor)
+        restored = UNITARESMonitor(agent_id="forecast_age")
+
+        age = time.monotonic() - restored._open_predictions[pid]["created_at"]
+        assert 595 <= age <= 610
+
+    def test_consumed_and_expired_forecasts_are_not_restored(self, isolated_data_dir):
+        import time
+
+        monitor = UNITARESMonitor(agent_id="forecast_prune", load_state=False)
+        _update(monitor)
+        consumed = monitor.register_tactical_prediction(0.5)
+        monitor.consume_prediction(consumed)
+        stale = monitor.register_tactical_prediction(0.5)
+        monitor._open_predictions[stale]["created_at"] -= 7200
+        monitor._open_predictions[stale]["created_at_epoch"] -= 7200
+        live = monitor.register_tactical_prediction(0.5)
+
+        ams.save_monitor_state("forecast_prune", monitor)
+        restored = UNITARESMonitor(agent_id="forecast_prune")
+
+        assert set(restored._open_predictions) == {live}
+
+    def test_malformed_rows_are_skipped(self):
+        from src.monitor_prediction import restore_open_predictions
+
+        rows = [{"prediction_id": "ok", "confidence": 0.3, "created_at_epoch": __import__("time").time()},
+                {"prediction_id": "bad", "confidence": "high"},
+                "not-a-row"]
+
+        assert set(restore_open_predictions(rows)) == {"ok"}
+        assert restore_open_predictions(None) == {}
+
+
+    def test_non_finite_or_out_of_range_rows_are_skipped(self):
+        import time
+        from src.monitor_prediction import restore_open_predictions
+
+        now = time.time()
+        rows = [
+            {"prediction_id": "ok", "confidence": 0.5, "created_at_epoch": now},
+            {"prediction_id": "nan-conf", "confidence": float("nan"), "created_at_epoch": now},
+            {"prediction_id": "big-conf", "confidence": 1.5, "created_at_epoch": now},
+            {"prediction_id": "nan-epoch", "confidence": 0.5, "created_at_epoch": float("nan")},
+            {"prediction_id": "inf-epoch", "confidence": 0.5, "created_at_epoch": float("inf")},
+            {"prediction_id": "future", "confidence": 0.5, "created_at_epoch": now + 3600},
+        ]
+
+        assert set(restore_open_predictions(rows)) == {"ok"}

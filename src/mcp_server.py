@@ -376,7 +376,6 @@ async def main():
             host=args.host,
             port=args.port,
             version=SERVER_VERSION,
-            project_root=Path(project_root),
             mcp=mcp,
         )
     except ServerStartupError as exc:

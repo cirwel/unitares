@@ -55,8 +55,8 @@ class DistributedLock:
             lock_timeout: Auto-release timeout for Redis locks (seconds)
         """
         if lock_dir is None:
-            project_root = Path(__file__).parent.parent.parent
-            lock_dir = project_root / "data" / "locks"
+            from src.state_locking import DEFAULT_LOCK_DIR
+            lock_dir = DEFAULT_LOCK_DIR
         self.lock_dir = lock_dir
         self._ensure_lock_dir()
         self.lock_timeout = lock_timeout

@@ -21,13 +21,13 @@ below. Agreement between agent passes does not supply operator authorization.
 
 ## Decision index
 
-A map for navigation only. The status column repeats the status line above; each
-entry's body is canonical for its detail. The "Waits on" column restates what the
-entry asks the operator and its own *Decays* line; it adds no recommendation.
+A map for navigation only. The status column repeats the status line above, except D4's disposition,
+which supersedes that line for D4 only; each entry's body is canonical for its detail. The "Waits on"
+column restates what the entry asks the operator and its own *Decays* line; it adds no recommendation.
 
 | # | Decision | Status (from the status line above) | Waits on | Detail |
 |---|---|---|---|---|
-| 1 | D4: what PASS condition 4's "same family" means | Open; not implemented | Operator pick among options A to E. Decays when the 2026-12-01 read executes. | [Entry 1](#1-d4--what-pass-condition-4s-same-family-means) |
+| 1 | D4: what PASS condition 4's "same family" means | **Disposed** — operator selected option A (winner-name identity), recorded 2026-09-23, effective at merge of #2373; `EISV_PRIOR_STATE_MODELS` and `DISPERSION_FEATURE` pinned in `REGISTERED_READ_MANIFEST`. For D4 only, supersedes "All seven decisions remain open", "Nothing here is implemented" and D4's *Default if silent*; entry 1 is kept as written on its dates. | Nothing. Ruling text: the "Pre-read clarification" block in `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`. | [Entry 1](#1-d4--what-pass-condition-4s-same-family-means) |
 | 2 | D6: an agent-stratified selective null before the read | Open; not implemented | Operator pick among options A to F. The cheap form expires at the 2026-12-01 read. | [Entry 2](#2-d6--an-agent-stratified-selective-null-before-the-read) |
 | 3 | D5: whether PASS condition 2 is redundant | Open; not implemented (the redundancy itself is marked SETTLED as a fact) | Operator call on whether and where to record the fact before 2026-12-01: one prose pick among A to D, with E and F as separate yes/no. | [Entry 3](#3-d5--whether-pass-condition-2-is-redundant) |
 | 4 | D3: is the published container image adopter-facing, and where does that put `dashboard/` | Open; not implemented | Operator answer to Q1 (what makes something adopter-facing), then Q2 (how the boundary is held), among options A to E. No clock. | [Entry 4](#4-d3--is-the-published-container-image-adopter-facing-and-where-does-that-put-dashboard) |
@@ -296,7 +296,7 @@ blocks that exist because two verification passes ran over every entry:
 **Class:** authority (what a pre-registered instrument counts as satisfied).
 **Reversibility:** reversible until 2026-12-01, one-way after.
 **Blast radius:** fleet, and partly external.
-**Decays:** yes — at the moment the read executes.
+**Decays:** yes — at the moment the read executes. **Disposition:** option A, recorded 2026-09-23, effective at merge of #2373 (see [the decision index](#decision-index)); the *Established* bullet "The candidate tuple is not pinned" describes the state before that change.
 
 ### The fork
 

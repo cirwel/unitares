@@ -16,8 +16,8 @@ Pattern:
     >>> explain_verdict("pause")
     {
       "value": "pause",
-      "meaning": "Needs attention.",
-      "next_action": "Stop current work, reflect, ..."
+      "meaning": "A hard stop: check-ins and new shared-memory entries are refused, not queued.",
+      "next_action": "Stop and read the reason and guidance. ..."
     }
 
 The wrapper preserves the original value at "value" so existing consumers
@@ -111,8 +111,13 @@ VERDICTS: Dict[str, Dict[str, str]] = {
         "next_action": "Read the guidance text and adjust approach.",
     },
     "pause": {
-        "meaning": "Needs attention.",
-        "next_action": "Stop current work, reflect, consider dialectic review.",
+        "meaning": "A hard stop: check-ins and new shared-memory entries are refused, not queued.",
+        "next_action": (
+            "Stop and read the reason and guidance. "
+            "self_recovery(action='check') reports self-recovery eligibility; "
+            "a dialectic review opened for the pause is found with "
+            "dialectic(action='get', agent_id=...)."
+        ),
     },
     "reject": {
         "meaning": "Significant concern.",
@@ -431,9 +436,9 @@ _NOT_PAUSED_HIGH_RISK_NEXT_ACTION = (
     "substantial step."
 )
 
-# Says what was decided, not that a hold is in force: a post-ODE dialectic
-# escalation (updates/phases.py) decides pause after the circuit breaker has
-# already run, so that pause is not actuated.
+# Says what was decided, not that a hold is in force: the decision and its
+# actuation (the circuit breaker) are separate steps, and self_recovery's check
+# is the authority on whether a hold exists.
 _STOP_UNDER_STEADY_VERDICT_NEXT_ACTION = (
     "The decision was {action}, which overrides this verdict. "
     "self_recovery(action='check') shows whether a hold is in force and what "

@@ -420,6 +420,46 @@ class TestCheckRecoveryOptions:
             assert data["eligible"] is False
             assert any(b["type"] == "high_risk" for b in data["blockers"])
 
+    async def _check(self, mock_server):
+        from src.mcp_handlers.lifecycle.self_recovery import handle_check_recovery_options
+
+        with patch(
+            "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
+            return_value=("test-agent", None),
+        ), patch(
+            "src.mcp_handlers.lifecycle.self_recovery.mcp_server",
+            mock_server,
+        ):
+            result = await handle_check_recovery_options({"_agent_uuid": "test-uuid"})
+            text = json.loads(result[0].text)
+            return text.get("data", text)
+
+    @pytest.mark.asyncio
+    async def test_paused_high_risk_advice_is_followable(self):
+        """A paused agent's risk is frozen and leave_note is refused while
+        paused, so neither may be offered as its next step."""
+        data = await self._check(self._make_mock_server(risk=0.72, status="paused"))
+        blocker = next(b for b in data["blockers"] if b["type"] == "high_risk")
+        assert "Wait for risk to decrease" not in blocker["resolution"]
+        assert "request_review" in blocker["resolution"]
+        joined = " ".join(data["recommendations"])
+        assert "leave_note(" not in joined
+        assert "request_review" in joined
+
+    @pytest.mark.asyncio
+    async def test_paused_without_risk_authority_is_not_told_to_check_in(self):
+        data = await self._check(
+            self._make_mock_server(status="paused", risk_source="phi_history")
+        )
+        blocker = next(b for b in data["blockers"] if b["type"] == "no_risk_authority")
+        assert "Submit one check-in" not in blocker["resolution"]
+        assert "request_review" in blocker["resolution"]
+
+    @pytest.mark.asyncio
+    async def test_unpaused_blocked_agent_keeps_leave_note_advice(self):
+        data = await self._check(self._make_mock_server(risk=0.72, status="moderate"))
+        assert any("leave_note(" in r for r in data["recommendations"])
+
     @pytest.mark.asyncio
     async def test_low_coherence_does_not_block_eligibility(self):
         from src.mcp_handlers.lifecycle.self_recovery import handle_check_recovery_options
