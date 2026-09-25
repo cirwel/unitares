@@ -30,7 +30,9 @@ if str(SDK_SRC) not in sys.path:
 from unitares_sdk._checkin_fields import resolve_checkin_fields  # noqa: E402
 
 START_SESSION_BUDGET = 1_200
-ROUTINE_SYNC_BUDGET = 900
+# Raised from 900 in #2448: the margin now carries its scope (~75 B), which
+# is the cost of an honest "comfortable" on the normal live decision.
+ROUTINE_SYNC_BUDGET = 960
 
 _TOKEN = (
     "v1.eyJhaWQiOiI1NGQ2Mjg0Ni03MGJjLTQxZTAtYWZjZi0wODdkOTRiNWQ3NDciLCJjaCI6"
@@ -117,6 +119,10 @@ def _sync_source(**decision_overrides) -> dict:
         "reason": "Low risk (27.0%) - healthy operating range",
         "margin": "comfortable",
         "nearest_edge": None,
+        # Live shape: the coherence edge is unassessed for every agent today,
+        # so a real decision carries these and the formatter passes them on.
+        "unmeasurable_edges": ["coherence"],
+        "margin_scope": "measured_edges_only",
     }
     decision.update(decision_overrides)
     return {
