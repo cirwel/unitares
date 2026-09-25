@@ -93,7 +93,11 @@ layer, not this case.
   `audit.outcome_events` outside the application path.
 - **A5.** Two times are known for the deployment: when migration 070 was
   applied (`core.schema_migrations` version 70, `applied_at`), and when the
-  server first ran a revision at or after `6e42ea3`, the post-070 handler.
+  server first ran a revision that contains the #2246 merge `aabc57e7`
+  (2026-09-14 18:35 -0600), which brought migration 070 and its handler into
+  `master`. "Contains" means ancestry (`git merge-base --is-ancestor aabc57e7
+  <deployed-sha>`), not date. For example, `5ff08c42`, merged earlier the same
+  day, is a pre-070 revision.
   Migrations are applied separately from server restarts, so the second time
   is not recorded by the migration. It has to come from deployment or restart
   logs. The claim and its falsifiers cover only rows written at or after the
@@ -143,9 +147,12 @@ cases.
   The pinned test above reproduces it; how often it happens in production is
   not measured. **Knock-on effect:** arm D of the registered coordination
   ablation (`accountable-coordination-ablation-v0`) includes outcome binding, so
-  L1 is a defect specific to arm D in that study. The enrollment record should
-  disclose it as an arm-D-specific limit. It is not a common-mode defect in the
-  protocol's sense, which covers repairs applied to every arm.
+  L1 is a defect specific to arm D in that study. *Recommendation for
+  enrollment, not a settled reading of the protocol:* disclose L1 as a limit
+  specific to arm D. This case reads it as not common-mode, because it is not a
+  repair applied to every arm. Classifying it under the protocol is the
+  operator's call, since success condition 5 depends on whether a common-mode
+  repair occurred.
 - **L2: the claim holds only inside the retention window.** After cleanup, the
   same `prediction_id` can start a new canonical submission. That is intended,
   but it means the claim is not "forever".
@@ -153,8 +160,8 @@ cases.
 - **L4: no production measurement.** There is no count of observed conflicts,
   replays or L1 occurrences. Following *Measurement authority* in `CLAUDE.md`,
   a zero from an unmeasured surface is not evidence that nothing happened.
-- **L5: older, unbound rows.** Before migration 070 (commit `6e42ea3`,
-  2026-09-14), or on a pre-070 server still running after the migration, the
+- **L5: older, unbound rows.** Before migration 070 (reached `master` in
+  merge `aabc57e7`), or on a pre-070 server still running after the migration, the
   handler wrote `detail["prediction_id"]` on a plain insert
   with no uniqueness, so a lost-ack retry or a reused prediction ID could write
   a second row. Migration 070 does not create bindings for existing outcome
