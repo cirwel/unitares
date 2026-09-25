@@ -2100,3 +2100,51 @@ def test_metrics_tier_reported_matches_the_tier_the_handler_builds(arguments):
     )
     assert env["response_options"]["current"] == raw_tier
     assert ("raw_governance" in env) == (raw_tier != "minimal")
+
+
+def _tier_built(data):
+    """Which branch of get_governance_metrics_data produced ``data``."""
+    if "_debug_lite_received" in data:
+        return "full"
+    if str(data.get("_note", "")).startswith("Use verbosity='full'"):
+        return "standard"
+    return "minimal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"lite": None},
+        {"lite": True},
+        {"lite": False},
+        {"lite": "false"},
+        {"lite": "banana"},
+        {"verbosity": "standard"},
+        {"verbosity": "standard", "lite": None},
+        {"verbosity": "full", "lite": True},
+    ],
+)
+async def test_envelope_reports_the_tier_the_real_handler_built(arguments):
+    """Runs the handler itself, so reverting runtime_queries' tier logic fails
+    here even though the envelope and resolver would still agree."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from src.governance_monitor import UNITARESMonitor
+    from src.services.runtime_queries import get_governance_metrics_data
+
+    monitor = UNITARESMonitor("test-tier-parity", load_state=False)
+    server = SimpleNamespace(get_or_create_monitor=lambda aid: monitor, agent_metadata={})
+    with patch(
+        "src.agent_monitor_state.hydrate_from_db_if_fresh",
+        new=AsyncMock(return_value=False),
+    ):
+        data = await get_governance_metrics_data(
+            "test-tier-parity", dict(arguments), server=server
+        )
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    assert env["response_options"]["current"] == _tier_built(data)
