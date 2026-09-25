@@ -143,6 +143,10 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
                 if reason.startswith("held"):
                     reason = _held_reason(lock_file)
 
+            if reason == "lock file doesn't exist":
+                # Removed between the directory listing and the probe (an
+                # acquirer's pre-clean, another sweep): nothing to report.
+                continue
             if reason.startswith("cannot open"):
                 # Not held, not free: we could not tell. Report it as a failure,
                 # not as a kept lock.
@@ -237,6 +241,12 @@ if __name__ == "__main__":
             print(f"   - {item['lock_file']}: {item['reason']}")
         print()
     
+    if result['errors'] > 0:
+        print("Could not check:")
+        for item in result['error_locks']:
+            print(f"   - {item['lock_file']}: {item['error']}")
+        print()
+
     if result['kept'] > 0:
         print("Kept locks (held, or free but recent):")
         for item in result['kept_locks']:

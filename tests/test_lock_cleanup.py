@@ -238,6 +238,8 @@ class TestCleanupStaleLocks:
         assert not lock.exists()
 
     def test_an_unreadable_lock_file_is_an_error_not_kept(self, tmp_path):
+        if os.geteuid() == 0:
+            pytest.skip("root can open a mode-000 file")
         lock = _write_lock(tmp_path / "locked-out.lock")
         os.chmod(lock, 0o000)
         try:
@@ -248,6 +250,13 @@ class TestCleanupStaleLocks:
         assert result["errors"] == 1
         assert result["error_locks"][0]["lock_file"] == "locked-out.lock"
         assert "cannot open" in result["error_locks"][0]["error"]
+
+    def test_a_file_gone_before_the_probe_is_not_counted(self, tmp_path):
+        _write_lock(tmp_path / "gone.lock")
+        with patch("src.lock_cleanup.remove_lock_file_if_free",
+                   return_value=(False, "lock file doesn't exist")):
+            result = cleanup_stale_locks(tmp_path)
+        assert (result["cleaned"], result["kept"], result["errors"]) == (0, 0, 0)
 
     def test_only_processes_lock_files(self, tmp_path):
         """Non-.lock files should be ignored."""
