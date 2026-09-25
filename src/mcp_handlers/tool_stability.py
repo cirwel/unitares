@@ -487,8 +487,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "compaction continuation. Use identity to inspect or rename an "
             "existing binding. onboard is this same call under its canonical "
             "name and returns the raw payload; this name adds the digest "
-            "envelope (next_action, state_summary) and keeps the raw payload "
-            "under raw_governance."
+            "envelope (next_action, state_summary). Read the uuid from "
+            "agent_uuid; response_mode='full' keeps the raw payload under "
+            "raw_governance."
         ),
         experience=True),
     "sync_state": ToolAlias(
@@ -520,9 +521,10 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "inferred returns that agent's real state marked "
             "identity_assurance.caller_proven=false, which may be a co-located "
             "sibling's, so pass the client_session_id start_session returned to "
-            "be sure the reading is yours. lite=false returns the full "
-            "canonical payload under raw_governance, which is where mode and "
-            "basin live. Use sync_state to also "
+            "be sure the reading is yours. verbosity='standard' adds mode and "
+            "basin with their meanings under raw_governance; verbosity='full' "
+            "(alias lite=false) returns the full canonical diagnostics. Use "
+            "sync_state to also "
             "log work and get a proceed or pause decision. get_governance_metrics "
             "is this same read under its canonical name and always returns the "
             "raw payload; this name returns the digest envelope instead. "

@@ -38,6 +38,7 @@ _GATE_ENV = (
     "UNITARES_DOCTOR_PUBLIC_URL",
     "UNITARES_OAUTH_ISSUER_URL",
     "UNITARES_MCP_BEARER_TOKENS",
+    "UNITARES_OAUTH_PUBLIC_PORT",
 )
 
 
@@ -352,3 +353,88 @@ def test_registered_as_an_operator_check(doctor):
     gate = [c for c in checks if c.name == "mcp_route_gate"]
     assert len(gate) == 1
     assert gate[0].mode == "operator"
+
+
+# --- public OAuth listener ----------------------------------------------------
+
+_SERVER = ("abc1234", "2026-09-24T06:59:03")
+_OTHER = ("ffff000", "2026-09-20T00:00:00")
+
+
+def _identities(doctor, monkeypatch, *, main, public, public_port=8772):
+    """Stub /health identity per port: the probe itself is the fake connection."""
+    ids = {doctor.MCP_PORT: main, public_port: public}
+    monkeypatch.setattr(doctor, "_health_identity", lambda port: ids.get(port))
+
+
+def test_probes_the_public_listener_when_it_is_this_server(doctor, monkeypatch):
+    """The tunnel reaches the public port and only it carries the OAuth gate;
+    probing the ungated main port would misreport a healthy setup."""
+    monkeypatch.setenv("UNITARES_OAUTH_ISSUER_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
+    _identities(doctor, monkeypatch, main=_SERVER, public=_SERVER)
+    result, conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", 8772)
+    assert _headers(conn)["Host"] == "gov.example.org"
+    assert result.status != doctor.Status.PASS
+
+
+def test_the_doctor_shell_need_not_carry_the_issuer(doctor, monkeypatch):
+    """The server reads its plist, not this shell."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
+    _identities(doctor, monkeypatch, main=_SERVER, public=_SERVER)
+    _result, _conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", 8772)
+
+
+def test_another_service_on_the_public_port_is_not_graded(doctor, monkeypatch):
+    """The server skips a port something else answers on and gates main; the
+    doctor must not grade that other service's reply as the MCP route's."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
+    _identities(doctor, monkeypatch, main=_SERVER, public=_OTHER)
+    _result, _conn, ctor = _run(doctor, status=200)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
+
+
+def test_a_public_port_with_no_server_probes_the_main_listener(doctor, monkeypatch):
+    """Nothing listening, or a non-HTTP holder: no /health identity."""
+    monkeypatch.setenv("UNITARES_OAUTH_ISSUER_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "8772")
+    _identities(doctor, monkeypatch, main=_SERVER, public=None)
+    _result, _conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
+
+
+def test_an_invalid_public_port_probes_the_main_listener(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_OAUTH_ISSUER_URL", "https://gov.example.org")
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", "nope")
+    _result, _conn, ctor = _run(doctor, status=401)
+    assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
+
+
+def test_health_identity_reads_build_and_start(doctor, monkeypatch):
+    import json as _json
+
+    body = _json.dumps(
+        {"build_sha": "abc1234", "uptime": {"started_at": "2026-09-24T06:59:03"}}
+    ).encode()
+    with patch("http.client.HTTPConnection") as ctor:
+        ctor.return_value = _FakeConn(status=200, body=body)
+        assert doctor._health_identity(8772) == ("abc1234", "2026-09-24T06:59:03")
+    with patch("http.client.HTTPConnection") as ctor:
+        ctor.return_value = _FakeConn(status=200, body=b"<html>not us</html>")
+        assert doctor._health_identity(8772) is None
+    with patch("http.client.HTTPConnection") as ctor:
+        ctor.return_value = _FakeConn(exc=ConnectionRefusedError())
+        assert doctor._health_identity(8772) is None
+
+
+def test_an_unchallenged_main_probe_names_the_by_design_case(doctor, monkeypatch):
+    """A 400 on the main listener is not proof that provider construction
+    failed; the message must also name the confined-OAuth layout."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "https://gov.example.org")
+    result, _conn, _ctor = _run(doctor, status=400)
+    assert result.status == doctor.Status.WARN
+    assert "UNITARES_OAUTH_PUBLIC_PORT" in result.detail
