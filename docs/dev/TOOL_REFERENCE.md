@@ -1559,7 +1559,7 @@ RESPONSE WRAPPER FIELDS:
 - **Timeout:** 10s
 - **Related:** `describe_tool`
 
-Discover the complete governance capability catalog, including names omitted from the initial progressive tools/list advertisement. The default lite=true response is the compact federation handshake: every public capability appears once as a name-only record beside the interface contract. Use lite=false for descriptions, categories, tiers, workflows, relationships, and direct-advertisement status. Category, tier, essential_only, and include_advanced narrow either view; progressive orders the result by recent usage. Use describe_tool for one capability's parameters, then use_tool to invoke a capability absent from the initial listing. verbose is accepted for compatibility but ignored. Callable before an identity is bound.
+Discover the complete governance capability catalog, including names omitted from the initial progressive tools/list advertisement. The default lite=true response is the compact federation handshake: every public capability appears once as a name-only record beside the interface contract. Use lite=false for descriptions, categories, tiers, workflows, relationships, and direct-advertisement status. Use describe_tool for one capability's parameters, then use_tool to invoke a capability absent from the initial listing. Callable before an identity is bound.
 
 ~~~text
 LITE RESPONSE:
@@ -1591,7 +1591,7 @@ RETURNS:
 - **Depends on:** `list_tools`, `describe_tool`
 - **Related:** `list_tools`, `describe_tool`
 
-Invoke one public capability omitted from the initial progressive tools/list advertisement. Find the exact name with list_tools and inspect its arguments with describe_tool, then pass that argument object here. The target's normal identity, validation, authorization, timeout and response middleware all run; this is a discovery gateway, not an authorization bypass. The gateway adds no shorter timeout of its own. It refuses recursive use_tool calls. Set UNITARES_TOOL_ADVERTISEMENT=full when the client should receive every schema up front.
+Invoke one public capability omitted from the initial progressive tools/list advertisement. Find the exact name with list_tools and inspect its arguments with describe_tool, then pass that argument object here. The target's normal identity, validation, authorization, timeout and response middleware all run; this is a discovery gateway, not an authorization bypass. It refuses recursive use_tool calls.
 
 ### `skills`
 

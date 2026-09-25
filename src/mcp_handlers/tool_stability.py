@@ -25,6 +25,28 @@ from src.governance_glossary import EISV_INLINE_SUMMARY
 from src.tool_meta import TOOL_STABILITY as _TOOL_STABILITY  # noqa: F401
 from src.tool_meta import ToolStability
 
+# Every advertised description is paid for on every tools/list. The full EISV
+# field contract (#1434) is carried once on the advertised surface, by
+# check_working_state, whose envelope returns E/I/S/V; the other workflow
+# aliases point at it. The pointer is a call, not a cross-reference: a client
+# that defers tool loading and selects only sync_state never loads
+# check_working_state's description, but can call describe_tool. The
+# canonical tools keep the full contract.
+EISV_POINTER = "EISV field definitions: describe_tool(tool_name='check_working_state')."
+
+
+def expand_description_pointers(text: Optional[str]) -> Optional[str]:
+    """Return the explained form of an advertised description.
+
+    The wire orients and describe_tool explains: an alias description that
+    points at the EISV contract on tools/list gets the full contract back when
+    one tool is described. It is appended as a second paragraph, so the first
+    line still matches the wire.
+    """
+    if not text or EISV_POINTER not in text:
+        return text
+    return f"{text}\n\n{EISV_INLINE_SUMMARY}"
+
 @dataclass
 class ToolAlias:
     """Alias mapping for renamed/consolidated tools"""
@@ -485,10 +507,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "naming a still-live parent is rejected as coincidental and the claim "
             "cleared, unless spawn_reason marks a dispatched child or a "
             "compaction continuation. Use identity to inspect or rename an "
-            "existing binding. onboard is this same call under its canonical "
-            "name and returns the raw payload; this name adds the digest "
-            "envelope (next_action, state_summary) and keeps the raw payload "
-            "under raw_governance."
+            "existing binding. onboard is the canonical twin; this name adds a "
+            "digest envelope. Read the uuid from agent_uuid; response_mode='full' "
+            "keeps the raw payload under raw_governance."
         ),
         experience=True),
     "sync_state": ToolAlias(
@@ -502,11 +523,10 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "which refuses and points at start_session. simulate_update previews "
             "a proposed check-in without advancing state, though it still "
             "appends an audit event; check_working_state reads the current "
-            "verdict without writing. process_agent_update is this same check-in "
-            "under its canonical name and returns the raw payload; this name adds "
-            "the digest envelope (next_action, state_summary, risk_summary) and "
-            "keeps the raw payload under raw_governance. "
-            f"{EISV_INLINE_SUMMARY}"
+            "verdict without writing. process_agent_update is the canonical twin; "
+            "this name returns a digest envelope, and a routine check-in omits "
+            "the raw payload (response_mode='full' adds it under raw_governance). "
+            f"{EISV_POINTER}"
         ),
         param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
         experience=True),
@@ -596,10 +616,11 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "and refuses under strict identity from an ephemeral session. "
             "Provenance cannot be self-attested here: verification_source is "
             "forced and provenance keys in detail are stripped. Use store_finding "
-            "for durable knowledge. outcome_event is this same write under its "
-            "canonical name and returns the raw payload; this name adds the "
-            "digest envelope and keeps the raw payload under raw_governance. "
-            f"{EISV_INLINE_SUMMARY}"
+            "for durable knowledge. outcome_event is the canonical twin; this "
+            "name adds a digest envelope and keeps the raw payload under "
+            "raw_governance only with response_mode='full' or "
+            "include_semantics=true, or when the write returned no outcome_id. "
+            f"{EISV_POINTER}"
         ),
         experience=True),
     "request_review": ToolAlias(

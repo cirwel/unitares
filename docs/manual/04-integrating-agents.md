@@ -54,9 +54,32 @@ its own identity, declare the dispatcher as parent with
 | Record an outcome | `record_result(...)` | `outcome_event` |
 | Request review | `request_review(...)` | `dialectic(action="request")` |
 
-The primary tools return a compact agent-facing envelope. Read aliases and
-bounded `sync_state` modes omit the repeated raw payload by default and expose
-a full-mode escape hatch; other state-changing tools retain it. Interface contract
+The primary tools return a compact agent-facing envelope. Read aliases,
+bounded `sync_state` modes, and the write acknowledgements of `store_finding`,
+`update_finding` and `record_result` omit the repeated raw payload by default,
+as does a plain fresh `start_session` (pass `response_mode="full"` on the mint
+to keep it); other state-changing tools retain it. `raw_governance_hint` names
+where to read more. That is `response_mode="full"` on `sync_state`,
+`search_shared_memory` and `record_result`, and `verbosity="full"` on
+`check_working_state`. On `record_result` that option applies to a later
+outcome: there is no read by outcome id, so an ack's own outcome payload cannot
+be fetched again. For `store_finding` and `update_finding`, where
+`response_mode` does not apply, it is a
+`knowledge(action="details", discovery_id=...)` read, which returns the stored
+record rather than the ack's payload, so these three write acks do not set
+`raw_governance_available`. Write-time warnings and a bounded
+`related_discoveries` snapshot stay in the ack because that read does not
+return the warnings or the snapshot's summary previews; the snapshot's ids are
+the stored record's `related_to`, so a `store_finding` ack that carries the
+snapshot does not repeat them as `state_summary.related_to`. The canonical
+`knowledge` tool returns their whole payload directly. These three write
+acknowledgements keep the ids a caller needs next (`discovery_id`,
+`state_summary.outcome_id`). The finding writes also carry `agent_uuid` and
+`written_as`, the writer's `agent_id`, `display_name` and assurance tier, so a
+caller can see which identity a write was recorded under; `record_result`
+carries them only when its binding was not server-inferred (for example, the
+call passed `client_session_id`), because `outcome_event` signs nothing for a
+server-inferred binding. Interface contract
 1.13.0 and later negotiates one complete catalog while initially advertising a
 small progressive surface. Legacy `GOVERNANCE_TOOL_MODE` values are ignored.
 `list_tools(lite=true)` reports every capability name and the contract version;
