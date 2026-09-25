@@ -648,9 +648,14 @@ class StaticClientBasicAuthShim:
             if (
                 self._verifier
                 and values.get("grant_type") == "authorization_code"
-                and "code_verifier" not in present
+                and not values.get("code_verifier")
             ):
+                fields = [(k, v) for k, v in fields if k != "code_verifier"]
                 fields.append(("code_verifier", self._verifier))
+            if self._verifier and values.get("grant_type") == "refresh_token":
+                # A connector that re-sends its originally requested scope on
+                # refresh would otherwise lose the session an hour after linking.
+                fields = _narrow_scope(fields)
         new_body = urlencode(fields).encode()
 
         headers = [
@@ -664,15 +669,23 @@ class StaticClientBasicAuthShim:
 
     def _authorize_fields(self, fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
         values = dict(fields)
-        out = [(k, v) for k, v in fields if k != "scope"]
-        requested = (values.get("scope") or "").split()
-        kept = [s for s in requested if s == "mcp:tools"]
-        if kept:
-            out.append(("scope", " ".join(kept)))
-        if "code_challenge" not in values:
-            out = [(k, v) for k, v in out if k != "code_challenge_method"]
+        out = _narrow_scope(fields)
+        if not values.get("code_challenge"):
+            # Absent or blank: a blank challenge is no PKCE at all.
+            out = [(k, v) for k, v in out if k not in ("code_challenge", "code_challenge_method")]
             out += [("code_challenge", self._challenge), ("code_challenge_method", "S256")]
         return out
+
+
+def _narrow_scope(fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Keep only ``mcp:tools`` from a requested scope; drop the parameter if
+    nothing remains (the SDK then uses the client's or grant's scope)."""
+    values = dict(fields)
+    out = [(k, v) for k, v in fields if k != "scope"]
+    kept = [s for s in (values.get("scope") or "").split() if s == "mcp:tools"]
+    if kept:
+        out.append(("scope", " ".join(kept)))
+    return out
 
 
 def static_pkce_verifier(client_secret: str) -> str:
@@ -711,12 +724,13 @@ _LOG_FIELD_CAP = 120
 
 
 def _log_safe(value) -> str:
-    """Caller-supplied, so escape control characters (a newline would forge a
-    log line) and cap the length."""
+    """Caller-supplied, so quote it (a space or ``->`` inside would fake
+    another field), escape control characters (a newline would forge a line)
+    and cap the length."""
     text = "-" if value is None else str(value)
     if len(text) > _LOG_FIELD_CAP:
-        text = text[:_LOG_FIELD_CAP] + "…"
-    return text.encode("unicode_escape").decode("ascii")
+        text = text[:_LOG_FIELD_CAP] + "..."
+    return json.dumps(text, ensure_ascii=True)
 
 
 def _strip_queries(text):
@@ -770,7 +784,7 @@ class OAuthAttemptLogger:
         }
         if path == "/authorize":
             facts.update(
-                pkce="yes" if "code_challenge" in values else "no",
+                pkce="yes" if values.get("code_challenge") else "no",
                 scope=values.get("scope") or "-",
                 redirect_host=urlparse(values.get("redirect_uri") or "").netloc or "-",
                 resource=values.get("resource") or "-",
@@ -778,7 +792,7 @@ class OAuthAttemptLogger:
         else:
             facts.update(
                 grant=values.get("grant_type") or "-",
-                verifier="yes" if "code_verifier" in values else "no",
+                verifier="yes" if values.get("code_verifier") else "no",
             )
 
         outcome = {"status": None, "error": None, "error_description": None}

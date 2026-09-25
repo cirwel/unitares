@@ -125,9 +125,9 @@ def test_attempts_are_logged_without_secrets(caplog):
         _authorize(client, scope="openid")
         _token(client, "bogus-code")
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("[OAUTH]")]
-    assert any("authorize" in l and "pkce=no" in l and "scope=openid" in l
-               and "error=invalid_request" in l for l in lines), lines
-    assert any("token" in l and "grant=authorization_code" in l and "auth=post" in l
+    assert any("authorize" in l and 'pkce="no"' in l and 'scope="openid"' in l
+               and 'error="invalid_request"' in l for l in lines), lines
+    assert any("token" in l and 'grant="authorization_code"' in l and 'auth="post"' in l
                and "-> 400" in l for l in lines), lines
     blob = "\n".join(lines)
     assert SECRET not in blob and "bogus-code" not in blob
@@ -143,7 +143,7 @@ def test_logged_basic_auth_names_the_client_not_the_secret(caplog):
                            headers={"Authorization": basic})
     assert resp.status_code == 200, resp.text
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("[OAUTH]")]
-    assert any(f"client={CID}" in l and "auth=basic" in l and "-> 200" in l for l in lines), lines
+    assert any(f'client="{CID}"' in l and 'auth="basic"' in l and "-> 200" in l for l in lines), lines
     assert SECRET not in "\n".join(lines)
 
 
@@ -255,3 +255,39 @@ def test_import_derives_the_verifier_from_the_static_client_env(tmp_path):
     out = subprocess.run([sys.executable, "-c", code], cwd=repo, env=env,
                          capture_output=True, text=True, timeout=120)
     assert out.stdout.strip().splitlines()[-1] == "True", out.stderr[-2000:]
+
+
+def test_refresh_resending_a_foreign_scope_still_works():
+    """Linked once with scope=openid; a connector that re-sends it on refresh
+    must not lose the session an hour later."""
+    client = _app()
+    q = _authorize(client, scope="openid")
+    tokens = _token(client, q["code"][0]).json()
+    resp = client.post("/token", data={
+        "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
+        "scope": "openid", "client_id": CID, "client_secret": SECRET,
+    })
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["scope"] == "mcp:tools"
+
+
+@pytest.mark.parametrize("method", ["", "S256"])
+def test_a_blank_code_challenge_counts_as_no_pkce(method):
+    client = _app()
+    q = _authorize(client, code_challenge="", code_challenge_method=method)
+    assert "code" in q, q
+    assert _token(client, q["code"][0]).status_code == 200
+
+
+def test_a_logged_value_cannot_fake_another_field(caplog):
+    client = _app(compat=False)
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        client.get("/authorize", params={
+            "response_type": "code", "client_id": "bogus auth=basic -> 200",
+            "redirect_uri": REDIRECT, "scope": "x pkce=yes -> 200",
+        }, follow_redirects=False)
+    line = next(r.getMessage() for r in caplog.records
+                if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
+    assert 'client="bogus auth=basic -> 200"' in line
+    assert 'scope="x pkce=yes -> 200"' in line
+    assert 'pkce="no"' in line

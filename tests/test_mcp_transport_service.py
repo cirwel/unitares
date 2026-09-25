@@ -755,3 +755,40 @@ def test_follower_force_exit_tracks_the_leader():
     assert follower.force_exit is False
     leader.force_exit = True
     assert follower.force_exit is True
+
+
+def test_runtime_passes_the_static_pkce_verifier_to_the_shim(monkeypatch):
+    """The last wiring link: McpAuthConfig -> StaticClientBasicAuthShim."""
+    from src.oauth_provider import StaticClientBasicAuthShim
+
+    class _App:
+        def __init__(self):
+            self.middleware = []
+
+        def add_middleware(self, cls, **kwargs):
+            self.middleware.append((cls, kwargs))
+
+    app = _App()
+    monkeypatch.setattr(
+        "src.background_tasks.start_all_background_tasks", lambda **_kwargs: None
+    )
+    monkeypatch.setattr("src.mcp_compat.lowlevel_server", lambda _mcp: object())
+    monkeypatch.setattr(
+        "src.mcp_listen_config.build_streamable_session_manager", lambda _server: object()
+    )
+    for name in ("_log_transport_security", "_configure_middleware", "_register_application_routes"):
+        monkeypatch.setattr(f"src.services.mcp_transport_service.{name}", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "src.services.mcp_transport_service._create_base_application", lambda _mcp: app
+    )
+    build_transport_runtime(
+        object(),
+        auth_config=McpAuthConfig(
+            oauth_provider=object(), static_client_id="static", static_pkce_verifier="v" * 43
+        ),
+        host="127.0.0.1", port=8767, reload=False,
+        server_ready_fn=lambda: True, set_server_ready=lambda: None,
+        server_start_time=0.0, server_version="test", server_build_sha="test",
+    )
+    shims = [kw for cls, kw in app.middleware if cls is StaticClientBasicAuthShim]
+    assert shims == [{"client_id": "static", "pkce_verifier": "v" * 43}]

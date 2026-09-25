@@ -134,12 +134,13 @@ tool runs:
      never written to Redis, so rotating its secret takes effect on the next
      restart); its tokens persist like any other. The token
      endpoint accepts its secret either in the form body or as HTTP Basic.
-     A connector that sends no PKCE (Google's custom MCP connector could not
-     link without this) still signs in as the static client: the server
+     A connector that sends no PKCE (the likely reason Google's custom MCP
+     connector failed to link; unconfirmed, which is what the log below is
+     for) still signs in as the static client: the server
      supplies a PKCE pair it derives from the client secret, and redeeming
      the code still requires that secret. Requested scopes other than
      `mcp:tools` are narrowed away rather than refused, on every static-client
-     sign-in. A client's own PKCE is never altered, and no other client gets
+     sign-in and refresh. A client's own PKCE is never altered, and no other client gets
      either allowance.
      Every `/authorize` and `/token` request is logged as one `[OAUTH]` line
      (client, PKCE and scope facts, status, OAuth error; never a secret or
