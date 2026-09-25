@@ -38,7 +38,7 @@ Call `onboard()` against UNITARES using the strongest honest mode:
 - include `model_type` when the current runtime is clear from context
 - do not invent a display name unless the user asked for one
 
-`start_session(...)` is an equivalent alias (same parameters, same rules). Invoking the alias returns the normalized agent-experience envelope — `next_action`/`state_summary` first, `agent_uuid` and `client_session_id` lifted to the top level, and the canonical payload under `raw_governance`. That payload defaults to `response_mode="minimal"`, which carries `uuid`, `agent_id`, `display_name` and `client_session_id` but omits `session_resolution_source` and `continuity_token_supported`; pass `response_mode="full"` when you need `session_resolution_source` for the cache below.
+`start_session(...)` is the same call under a friendly name (same identity rules). Over `/mcp/` it advertises the mint contract only; adapter plumbing (`process_fingerprint`, `onboard_origin`, `orchestrated`, `thread_id`, `trajectory_signature`, `client_hint`) is sent to canonical `onboard`. Invoking the alias returns the normalized agent-experience envelope — `next_action`/`state_summary` first, `agent_uuid` and `client_session_id` lifted to the top level, and the canonical payload under `raw_governance`. That payload defaults to `response_mode="minimal"`, which carries `uuid`, `agent_id`, `display_name` and `client_session_id` but omits `session_resolution_source` and `continuity_token_supported`; pass `response_mode="full"` when you need `session_resolution_source` for the cache below.
 
 Do not use bare `identity(agent_uuid=<uuid>, resume=true)`. UUID alone is an unsigned claim and is hijack-shaped under strict identity mode.
 

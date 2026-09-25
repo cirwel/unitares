@@ -65,12 +65,12 @@ note for why the raw rendering is not.
 
 | Public name | Canonical | Wire params | Describe-only | Wire schema hash |
 |---|---|---:|---|---|
-| `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:d8940514d86a40128d11c761cbb7bee47b2fef59115e74a51d03ba68f1e833e4` |
-| `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
-| `request_review` | `dialectic` | 9 | — | `sha256:8e51f6a859b59a6a3b5fd795f74279c9f3ba3be023a2439a87307700419ca9c2` |
-| `search_shared_memory` | `knowledge` | 21 | — | `sha256:6176bfbfaba48d9f404cd7989c9f008be2fe87986c83b2b6ff58746a5d3bdb33` |
-| `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
-| `store_finding` | `knowledge` | 13 | — | `sha256:938f0ad1a527818f675654a2635387068501a288cf31f8e5e8bfeca53713bb4e` |
+| `check_working_state` | `get_governance_metrics` | 4 | — | `sha256:531f55a32affc789664f0b5c1267869a4212ad1be2a0ffe74b3b3aa1083778ac` |
+| `record_result` | `outcome_event` | 13 | — | `sha256:87e177583cb2c617005118a9cdb11b4fe21c9e000bfed7f8cab3fe1a24d29781` |
+| `request_review` | `dialectic` | 8 | — | `sha256:529b89e73f1e6d907886230eddb4826783ef9da93b4278982df8b236aeea536d` |
+| `search_shared_memory` | `knowledge` | 20 | — | `sha256:ec02444003d393bd20513d0c6cd8287b6e819f3fda2ebb268a5d288145798942` |
+| `start_session` | `onboard` | 9 | — | `sha256:9dbb6ccd13291e3787f2bbba0c795cb9167ad56463101d663c105d9ba38f0387` |
+| `store_finding` | `knowledge` | 12 | — | `sha256:349cf499c0f0bd530db53a3e9dae85574fb87c83f8e5e408de5624c5fab8352f` |
 | `sync_state` | `process_agent_update` | 23 | — | `sha256:d5c7581ba2664c1e8870fe6784f6dd7fbb48339e6dad928807a1fc1af6d9b198` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:86d3ae8277f33fc0393ab12c09fd46d3d2e0b57f38fc8a713b19ed74534c8908` |
 

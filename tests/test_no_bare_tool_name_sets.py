@@ -97,6 +97,16 @@ EXCEPTIONS: dict[str, str] = {
     "src/tool_schemas.py::_HIDE_IDENTITY_PARAMS_TOOLS": (
         "consulted with the canonical tool whose schema is built; aliases inherit that schema"
     ),
+    "src/tool_schemas.py::_HIDE_CONTINUITY_TOKEN_TOOLS": (
+        "keyed by the exact canonical name whose ADVERTISED schema it narrows; a "
+        "CallSet would fold aliases onto their canonical and hide the field there "
+        "too, which is the one thing it must not do; tests/test_schema_plumbing_trim.py"
+    ),
+    "src/alias_schema.py::ALIAS_ADVERTISED_DROP": (
+        f"{GUARDED_REGISTRY}: keyed by the advertised alias whose schema it narrows, "
+        "so the canonical tool keeps every field; tests/test_schema_plumbing_trim.py "
+        "pins each entry both ways (gone from the alias, still on the canonical)"
+    ),
     "src/http_routes/access.py::_HTTP_PREBIND_SKIP_TOOLS": (
         "REST prebind skip; matched on the invoked name and, with the identity-gate "
         "parity change, on its canonical tool"

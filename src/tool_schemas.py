@@ -213,8 +213,8 @@ def first_line(s: str | None) -> str:
 # ambient binding rather than hand-threaded identifiers. Mirrors the existing
 # `inject_action` strip in mcp_server._register_common_aliases.
 #
-# SCOPE IS DELIBERATELY agent_id + agent_name ONLY. client_session_id and
-# continuity_token are NOT stripped, and that is load-bearing:
+# SCOPE IS DELIBERATELY agent_id + agent_name ONLY. client_session_id is NOT
+# stripped, and that is load-bearing:
 #   - A claude.ai remote-connector client only sends params present in the
 #     advertised inputSchema. These two tools are in
 #     TOOLS_NEEDING_SESSION_INJECTION, so when the client omits client_session_id
@@ -225,8 +225,13 @@ def first_line(s: str | None) -> str:
 #     a single shared-fingerprint identity. Advertising client_session_id lets a
 #     well-behaved agent send its unique agent-{uuid} key instead, keeping
 #     attribution isolated. See tests/test_onboard_pin.py::TestToolSchemaClientSessionId.
-#   - continuity_token has NO injection fallback; stripping it would break
-#     claude.ai cross-instance PATH-0 resume outright.
+#   - continuity_token stays advertised on process_agent_update (sync_state):
+#     the Python SDK's strict-refusal retry attaches it there. Cross-process
+#     resume by token is retired (S1-c, continuity_token_resume_rejected); the
+#     same-live-process rebind is identity(agent_uuid, continuity_token,
+#     resume=true), which keeps it. get_governance_metrics keeps it on the
+#     canonical name; its check_working_state alias does not advertise it
+#     (src/alias_schema.py ALIAS_ADVERTISED_DROP).
 # agent_id (structured handle, auto-resolved) and agent_name (cosmetic; the
 # name-claim resolution path was removed 2026-04-17) carry no such dependency.
 _AUTO_INJECTED_IDENTITY_PARAMS = (
@@ -240,6 +245,37 @@ _HIDE_IDENTITY_PARAMS_TOOLS = {
     "process_agent_update",
     "get_governance_metrics",
 }
+
+
+# Canonical tools advertised in the progressive surface whose schemas stop
+# offering continuity_token. It stays on each Pydantic model, so REST callers
+# (Sentinel's self_recovery, for one) and extra="forbid" ConsultParams still
+# accept it; only the /mcp/ advertisement, whose argument model drops
+# undeclared keys, stops inviting it on ordinary calls. Audit and rationale:
+# src/alias_schema.py ALIAS_ADVERTISED_DROP.
+_HIDE_CONTINUITY_TOKEN_TOOLS = frozenset({
+    "consult",
+    "describe_tool",
+    "list_tools",
+    "use_tool",
+    "self_recovery",
+})
+
+
+def _drop_advertised_params(schema: Any, names: frozenset) -> Any:
+    """Return a copy of an advertised schema without the named properties."""
+    if not isinstance(schema, dict):
+        return schema
+    import copy
+    schema = copy.deepcopy(schema)
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        for name in names:
+            props.pop(name, None)
+    req = schema.get("required")
+    if isinstance(req, list):
+        schema["required"] = [r for r in req if r not in names]
+    return schema
 
 
 def _hide_auto_injected_identity(schema: Any) -> Any:
@@ -299,6 +335,8 @@ def advertised_input_schema(
     """
     if tool_name in _HIDE_IDENTITY_PARAMS_TOOLS:
         schema = _hide_auto_injected_identity(schema)
+    if tool_name in _HIDE_CONTINUITY_TOKEN_TOOLS:
+        schema = _drop_advertised_params(schema, frozenset({"continuity_token"}))
     schema = apply_field_description_mode(schema, field_descriptions, budget=budget)
     schema = apply_property_title_mode(
         schema, resolve_property_title_mode(property_titles)
