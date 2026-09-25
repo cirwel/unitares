@@ -242,8 +242,7 @@ def oauth_public_port() -> Optional[int]:
         port = 0
     if not 0 < port < 65536:
         logger.warning(
-            "UNITARES_OAUTH_PUBLIC_PORT=%r is not a port; OAuth stays on every request",
-            raw,
+            "UNITARES_OAUTH_PUBLIC_PORT is not a valid port; OAuth stays on every request"
         )
         return None
     return port

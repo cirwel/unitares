@@ -655,10 +655,11 @@ def bind_public_socket(public_port: int, *, main_port: int) -> Any:
     finally:
         probe.close()
     if in_use:
+        # The port is not named: CodeQL treats values read from an *AUTH*
+        # variable as secrets; the operator knows what they set.
         logger.error(
             "Public OAuth listener NOT started: something already listens on "
-            "127.0.0.1:%d",
-            public_port,
+            "the UNITARES_OAUTH_PUBLIC_PORT port"
         )
         return None
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -670,9 +671,9 @@ def bind_public_socket(public_port: int, *, main_port: int) -> Any:
     except OSError as exc:
         sock.close()
         logger.error(
-            "Public OAuth listener NOT started on 127.0.0.1:%d (%s)",
-            public_port,
-            exc,
+            "Public OAuth listener NOT started on the UNITARES_OAUTH_PUBLIC_PORT "
+            "port (%s)",
+            type(exc).__name__,
         )
         return None
     return sock

@@ -177,7 +177,7 @@ if _oauth_issuer_url:
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
         print(
             "[FastMCP] OAuth gate applies to "
-            + (f"the public listener 127.0.0.1:{_oauth_public_port} only, if it binds" if _oauth_public_port else "every request")
+            + ("the public listener (UNITARES_OAUTH_PUBLIC_PORT) only, if it binds" if _oauth_public_port else "every request")
             + ("; static client configured" if _oauth_static_client_id else ""),
             file=sys.stderr, flush=True,
         )
@@ -197,7 +197,7 @@ if _oauth_issuer_url:
         print(
             "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
             + (
-                f"and is now CLOSED (503) on the public listener :{_oauth_public_port}; "
+                "and is now CLOSED (503) on the public listener; "
                 "the main listener is still served, unless the public listener "
                 "cannot bind, in which case every /mcp request answers 503"
                 if _oauth_public_port
