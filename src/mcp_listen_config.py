@@ -11,7 +11,6 @@ See CLAUDE.md for environment variables.
 from __future__ import annotations
 
 import hmac
-import ipaddress
 import os
 import logging
 import time
@@ -214,86 +213,29 @@ def mcp_bearer_tokens() -> List[str]:
     return split_csv_env(_MCP_BEARER_TOKENS_ENV)
 
 
-def normalize_host(value: str) -> str:
-    """Lowercase a Host value and drop any port or ``:*`` wildcard."""
-    host = (value or "").strip().lower()
-    if host.startswith("["):
-        end = host.find("]")
-        return host[: end + 1] if end != -1 else host
-    if host.count(":") == 1:
-        return host.split(":", 1)[0]
-    return host
+def oauth_public_port() -> Optional[int]:
+    """Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT).
 
-
-def oauth_enforce_hosts() -> tuple[str, ...]:
-    """Hosts on which the ``/mcp`` OAuth gate applies (UNITARES_OAUTH_ENFORCE_HOSTS).
-
-    Entries are normalized with :func:`normalize_host`, so the ``host:*`` and
-    ``host:port`` forms taught for ``UNITARES_MCP_ALLOWED_HOSTS`` still match.
-    Empty means every host.
+    When set, the server also listens on ``127.0.0.1:<port>`` for the public
+    tunnel, and the ``/mcp`` OAuth gate applies to that listener only; the
+    main port keeps the posture it had. Unset (or invalid, which is warned
+    about) keeps OAuth on every request, the historical posture, so a typo
+    fails closed rather than open.
     """
-    seen: list[str] = []
-    for entry in split_csv_env("UNITARES_OAUTH_ENFORCE_HOSTS"):
-        host = normalize_host(entry)
-        if host and host not in seen:
-            seen.append(host)
-    return tuple(seen)
-
-
-_DEFAULT_OAUTH_EXEMPT_NETWORKS = ("127.0.0.0/8", "::1/128")
-
-
-def oauth_exempt_networks() -> tuple:
-    """Peer networks a host-scoped OAuth gate may exempt (UNITARES_OAUTH_EXEMPT_NETWORKS).
-
-    Loopback only by default. Adding a LAN or tailnet range trusts network
-    position: anything that delivers internet traffic from inside that range
-    without a forwarding header (a layer-4 port forwarder, an SNAT load
-    balancer) is then exempt too. An unparseable entry is skipped with a
-    warning, which narrows the exemption rather than widening it.
-    """
-    raw = split_csv_env("UNITARES_OAUTH_EXEMPT_NETWORKS") or list(_DEFAULT_OAUTH_EXEMPT_NETWORKS)
-    networks = []
-    for entry in raw:
-        try:
-            networks.append(ipaddress.ip_network(entry, strict=False))
-        except ValueError:
-            logger.warning("UNITARES_OAUTH_EXEMPT_NETWORKS: ignoring invalid network %r", entry)
-    return tuple(networks)
-
-
-# A client that connects directly never sends these; a proxy or tunnel does
-# (cloudflared sends all three it knows). Their presence marks a request as
-# relayed, whatever address or socket it arrived on.
-_FORWARDING_HEADERS = (b"x-forwarded-for", b"forwarded", b"cf-connecting-ip")
-
-
-def is_local_peer(scope, networks=None) -> bool:
-    """True when the request was not relayed by a proxy and came over the UDS
-    listener or from an exempt network (see :func:`oauth_exempt_networks`).
-
-    A relayed request is never local: behind Docker port forwarding or a proxy
-    on a private address, the peer is one uvicorn does not trust for
-    ``X-Forwarded-For``, so the address alone would read a public caller as
-    local. For a trusted loopback proxy uvicorn has already rewritten
-    ``scope["client"]`` to the caller's address, which this also rejects.
-    """
-    if any(k.lower() in _FORWARDING_HEADERS for k, _ in scope.get("headers", [])):
-        return False
-    if scope.get("unitares_peer_pid") is not None:
-        return True
-    client = scope.get("client")
-    if not client:
-        return False
+    raw = os.environ.get("UNITARES_OAUTH_PUBLIC_PORT", "").strip()
+    if not raw:
+        return None
     try:
-        addr = ipaddress.ip_address(str(client[0]).strip("[]"))
+        port = int(raw)
     except ValueError:
-        return False
-    if getattr(addr, "ipv4_mapped", None):
-        addr = addr.ipv4_mapped
-    if networks is None:
-        networks = oauth_exempt_networks()
-    return any(addr in net for net in networks)
+        port = 0
+    if not 0 < port < 65536:
+        logger.warning(
+            "UNITARES_OAUTH_PUBLIC_PORT=%r is not a port; OAuth stays on every request",
+            raw,
+        )
+        return None
+    return port
 
 
 def mcp_bearer_required() -> bool:

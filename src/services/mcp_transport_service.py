@@ -32,9 +32,7 @@ from src.mcp_listen_config import (
     check_mcp_bearer,
     check_oauth_bearer,
     cors_extra_origins,
-    is_local_peer,
     mcp_bearer_tokens,
-    normalize_host,
 )
 from src.mcp_transport import Transport503EmissionMiddleware
 
@@ -59,15 +57,11 @@ class McpAuthConfig:
     #: Distinguishes "no gate was configured" from "a configured gate is
     #: missing", which the provider being None cannot express on its own.
     gate_unavailable: bool = False
-    #: Hosts (normalized, see ``oauth_enforce_hosts()``) on which the OAuth
-    #: gate applies. Empty means every host, the historical posture. A request
-    #: skips the gate only when its Host is NOT listed AND its peer is local
-    #: (``is_local_peer``, loopback by default): Host alone is caller-controlled, and peer alone
-    #: cannot tell a tunnelled request from a local one if the proxy forwards
-    #: no client address.
-    oauth_enforce_hosts: tuple[str, ...] = ()
-    #: Peer networks eligible for the exemption; None reads the environment.
-    oauth_exempt_networks: tuple | None = None
+    #: True when a dedicated public listener carries the OAuth gate
+    #: (UNITARES_OAUTH_PUBLIC_PORT). The gate then applies only to requests
+    #: stamped ``scope["unitares_public_listener"]``, which only that
+    #: listener's socket sets; nothing in a request can forge or strip it.
+    oauth_public_listener_only: bool = False
     #: Client ID of the pre-registered OAuth client, if one is configured.
     static_client_id: str | None = None
 
@@ -92,15 +86,27 @@ class McpTransportRuntime:
     app: Any
     session_manager: Any
     server: Any
+    public_server: Any = None
 
     async def serve(self) -> None:
         uds_socket_path, uds_task = await _start_uds_listener(self.app)
+        public_task = None
+        if self.public_server is not None:
+            public_task = asyncio.create_task(
+                self.public_server.serve(), name="unitares-public-oauth-listener"
+            )
         try:
             async with self.session_manager.run():
                 logger.info("[STREAMABLE] Session manager started")
                 await self.server.serve()
             logger.info("[STREAMABLE] Session manager shut down")
         finally:
+            if public_task is not None:
+                self.public_server.should_exit = True
+                try:
+                    await public_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             await _stop_uds_listener(uds_socket_path, uds_task)
 
 
@@ -118,9 +124,22 @@ def _www_authenticate_header(auth_settings: Any) -> str:
         return "Bearer"
 
 
-def request_host(scope: dict[str, Any]) -> str:
-    """Return the request's Host header lowercased with any port removed."""
-    return normalize_host(Headers(scope=scope).get("host") or "")
+#: Scope key the public listener stamps on every request it accepts.
+PUBLIC_LISTENER_SCOPE_KEY = "unitares_public_listener"
+
+
+def mark_public_listener(app: Any) -> AsgiCallable:
+    """Wrap ``app`` so every request through it is stamped as public.
+
+    The stamp is set by the listening socket's server, never by the request,
+    which is what makes it safe to gate on where Host, peer address and
+    forwarding headers are not.
+    """
+
+    async def public_app(scope, receive, send):
+        await app({**scope, PUBLIC_LISTENER_SCOPE_KEY: True}, receive, send)
+
+    return public_app
 
 
 async def authorize_mcp_request(
@@ -129,10 +148,9 @@ async def authorize_mcp_request(
 ) -> AuthDecision:
     """Evaluate the static/OAuth bearer gate against one allowlist snapshot.
 
-    With ``oauth_enforce_hosts`` set, everything below applies only to
-    requests that are not exempt (unlisted Host from a local peer); an exempt
-    request is served as if no gate were configured, including when the gate
-    failed to build.
+    With ``oauth_public_listener_only``, everything below applies only to the
+    public listener; requests on the main listener are served as if no OAuth
+    gate were configured, including when the gate failed to build.
 
     Fails closed at the ROUTE when a configured gate could not be built. An
     operator who set ``UNITARES_OAUTH_ISSUER_URL`` asked for a gate; if
@@ -159,16 +177,20 @@ async def authorize_mcp_request(
     credential rather than being locked out by their own hardening.
     """
     bearer_allow = mcp_bearer_tokens()
-    # Host scoping narrows only the OAuth gate. A bearer allowlist stays global
-    # by design (check_mcp_bearer has no trusted-network branch). The exemption
-    # needs both an unlisted Host and a local peer, so neither a forged Host
-    # from a public address nor a tunnel that rewrites Host opens the route.
     if (
         not bearer_allow
-        and auth_config.oauth_enforce_hosts
-        and request_host(scope) not in auth_config.oauth_enforce_hosts
-        and is_local_peer(scope, auth_config.oauth_exempt_networks)
+        and auth_config.oauth_public_listener_only
+        and not scope.get(PUBLIC_LISTENER_SCOPE_KEY)
     ):
+        # The main listener is not gated by OAuth. A token a local client does
+        # present still attributes the session to its OAuth client.
+        if auth_config.oauth_provider is not None:
+            ok, client_id = await check_oauth_bearer(
+                Headers(scope=scope).get("authorization"),
+                auth_config.oauth_provider,
+            )
+            if ok and client_id:
+                return AuthDecision(allowed=True, oauth_client_id=f"oauth:{client_id}")
         return AuthDecision(allowed=True)
     if not bearer_allow and auth_config.gate_unavailable:
         return AuthDecision(
@@ -494,6 +516,7 @@ def build_transport_runtime(
     server_start_time: float,
     server_version: str,
     server_build_sha: str,
+    public_port: int | None = None,
 ) -> McpTransportRuntime:
     """Assemble the ASGI app, streamable manager, and uvicorn server."""
     import uvicorn
@@ -546,10 +569,32 @@ def build_transport_runtime(
         proxy_headers=True,
         ws="websockets-sansio",
     )
+    public_server = None
+    if public_port is not None:
+        # Loopback only: the tunnel connector runs on this host. Same proxy
+        # header trust as the main listener, so REST/dashboard gates keep
+        # seeing the caller's forwarded address, not the connector's.
+        public_server = uvicorn.Server(
+            uvicorn.Config(
+                mark_public_listener(app),
+                host="127.0.0.1",
+                port=public_port,
+                log_level="info",
+                lifespan="off",
+                limit_concurrency=100,
+                timeout_keep_alive=5,
+                timeout_graceful_shutdown=10,
+                forwarded_allow_ips="127.0.0.1",
+                proxy_headers=True,
+                ws="websockets-sansio",
+            )
+        )
+        logger.info("Public OAuth listener configured on 127.0.0.1:%d", public_port)
     return McpTransportRuntime(
         app=app,
         session_manager=session_manager,
         server=uvicorn.Server(config),
+        public_server=public_server,
     )
 
 

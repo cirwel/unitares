@@ -1,10 +1,14 @@
-"""Pre-registered OAuth client and the host-scoped /mcp gate.
+"""Pre-registered OAuth client and the public-listener /mcp gate.
 
 Some hosted connectors cannot self-register: Google's custom MCP connector asks
 the operator for a client ID and secret. These tests pin the static client (it
 authenticates at the token endpoint whichever standard way the connector sends
-its secret) and the host scoping that keeps local callers off the gate once
-OAuth is switched on for the public hostname.
+its secret) and the dedicated public listener that carries the OAuth gate, so
+local callers on the main port are unaffected when OAuth is switched on.
+
+The listener, not Host / peer address / forwarding headers, decides: every one
+of those is set by the caller or by whatever proxy sits in front, and review of
+the host-scoped version found a proxy configuration that defeated each.
 """
 
 from __future__ import annotations
@@ -26,7 +30,11 @@ from src.oauth_provider import (
     build_static_client,
 )
 from src.services import mcp_transport_service as svc
-from src.services.mcp_transport_service import McpAuthConfig, request_host
+from src.services.mcp_transport_service import (
+    PUBLIC_LISTENER_SCOPE_KEY,
+    McpAuthConfig,
+    mark_public_listener,
+)
 
 CLIENT_ID = "google-connector"
 SECRET = "s3cret:with/odd chars"
@@ -177,42 +185,24 @@ def test_incomplete_static_client_config_raises(kwargs):
 
 
 # --------------------------------------------------------------------------- #
-# Host scoping
+# Public listener gate
 # --------------------------------------------------------------------------- #
 
 
-def _scope(
-    host: str | None,
-    authorization: str | None = None,
-    peer: str | None = "127.0.0.1",
-    peer_pid: int | None = None,
-    extra: tuple[tuple[bytes, bytes], ...] = (),
-):
-    headers = list(extra)
-    if host is not None:
-        headers.append((b"host", host.encode()))
+def _scope(authorization: str | None = None, public: bool = False, host: str = "localhost:8767"):
+    headers = [(b"host", host.encode())]
     if authorization is not None:
         headers.append((b"authorization", authorization.encode()))
-    scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
-    if peer is not None:
-        scope["client"] = (peer, 50000)
-    if peer_pid is not None:
-        scope["unitares_peer_pid"] = peer_pid
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": headers,
+        "client": ("127.0.0.1", 50000),
+    }
+    if public:
+        scope[PUBLIC_LISTENER_SCOPE_KEY] = True
     return scope
-
-
-@pytest.mark.parametrize(
-    "host,expected",
-    [
-        ("gov.example.org", "gov.example.org"),
-        ("GOV.example.org:443", "gov.example.org"),
-        ("127.0.0.1:8767", "127.0.0.1"),
-        ("[::1]:8767", "[::1]"),
-        (None, ""),
-    ],
-)
-def test_request_host_normalizes(host, expected):
-    assert request_host(_scope(host)) == expected
 
 
 class _Provider:
@@ -222,126 +212,138 @@ class _Provider:
         return None
 
 
-_SCOPED = McpAuthConfig(
-    oauth_provider=_Provider(), oauth_enforce_hosts=("gov.example.org",)
-)
+_LISTENER = McpAuthConfig(oauth_provider=_Provider(), oauth_public_listener_only=True)
 
 
 @pytest.mark.asyncio
-async def test_enforced_host_requires_oauth(monkeypatch):
+async def test_public_listener_requires_oauth(monkeypatch):
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(_scope("gov.example.org"), _SCOPED)
+    decision = await svc.authorize_mcp_request(_scope(public=True), _LISTENER)
     assert decision.allowed is False
     assert decision.response.status_code == 401
 
 
 @pytest.mark.asyncio
-async def test_enforced_host_accepts_an_oauth_token(monkeypatch):
+async def test_public_listener_accepts_an_oauth_token(monkeypatch):
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(
-        _scope("gov.example.org", "Bearer good"), _SCOPED
-    )
+    decision = await svc.authorize_mcp_request(_scope("Bearer good", public=True), _LISTENER)
     assert decision.allowed is True
     assert decision.oauth_client_id == "oauth:c"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("host", ["localhost:8767", "127.0.0.1:8767", "192.168.1.151:8767", None])
-async def test_other_hosts_stay_ungated(monkeypatch, host):
+@pytest.mark.parametrize(
+    "extra_header",
+    [(b"x-forwarded-for", b"203.0.113.9"), (b"host", b"gov.example.org"), (b"cf-connecting-ip", b"1.2.3.4")],
+)
+async def test_nothing_in_the_request_makes_the_public_listener_local(monkeypatch, extra_header):
+    """Every header the host-scoped design keyed on is irrelevant now."""
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(_scope(host), _SCOPED)
+    scope = _scope(public=True)
+    scope["headers"].append(extra_header)
+    decision = await svc.authorize_mcp_request(scope, _LISTENER)
+    assert decision.allowed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host", ["localhost:8767", "gov.example.org", "127.0.0.1:8767"])
+async def test_main_listener_is_not_gated(monkeypatch, host):
+    """A default nginx / Host-rewriting tunnel pointed at the main port is the
+    operator's own exposure, exactly as before this change; the public tunnel
+    belongs on the public listener."""
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(_scope(host=host), _LISTENER)
     assert decision.allowed is True
 
 
 @pytest.mark.asyncio
-async def test_unscoped_oauth_still_gates_every_host(monkeypatch):
-    """No enforce list keeps the historical everywhere-gated posture."""
+async def test_main_listener_still_attributes_a_presented_token(monkeypatch):
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(_scope("Bearer good"), _LISTENER)
+    assert decision.allowed is True
+    assert decision.oauth_client_id == "oauth:c"
+
+
+@pytest.mark.asyncio
+async def test_main_listener_ignores_a_bad_token(monkeypatch):
+    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
+    decision = await svc.authorize_mcp_request(_scope("Bearer nope"), _LISTENER)
+    assert decision.allowed is True
+    assert decision.oauth_client_id is None
+
+
+@pytest.mark.asyncio
+async def test_without_a_public_listener_oauth_gates_every_request(monkeypatch):
+    """Unset keeps the historical posture."""
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
     decision = await svc.authorize_mcp_request(
-        _scope("localhost:8767"), McpAuthConfig(oauth_provider=_Provider())
+        _scope(), McpAuthConfig(oauth_provider=_Provider())
     )
     assert decision.allowed is False
 
 
 @pytest.mark.asyncio
-async def test_a_bearer_allowlist_stays_global_under_host_scoping(monkeypatch):
+async def test_a_bearer_allowlist_stays_global(monkeypatch):
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: ["tok"])
-    decision = await svc.authorize_mcp_request(_scope("localhost:8767"), _SCOPED)
+    decision = await svc.authorize_mcp_request(_scope(), _LISTENER)
     assert decision.allowed is False
 
 
 @pytest.mark.asyncio
-async def test_failed_gate_closes_only_the_enforced_host(monkeypatch):
+async def test_failed_gate_closes_only_the_public_listener(monkeypatch):
     monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    cfg = McpAuthConfig(gate_unavailable=True, oauth_enforce_hosts=("gov.example.org",))
-    public = await svc.authorize_mcp_request(_scope("gov.example.org"), cfg)
-    local = await svc.authorize_mcp_request(_scope("localhost:8767"), cfg)
+    cfg = McpAuthConfig(gate_unavailable=True, oauth_public_listener_only=True)
+    public = await svc.authorize_mcp_request(_scope(public=True), cfg)
+    main = await svc.authorize_mcp_request(_scope(), cfg)
     assert public.response.status_code == 503
-    assert local.allowed is True
+    assert main.allowed is True
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("host", ["localhost:8767", "gov.example.org"])
-async def test_a_public_peer_is_gated_whatever_host_it_sends(monkeypatch, host):
-    """A forged Host, or a tunnel that rewrites Host, must not open the route."""
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(_scope(host, peer="203.0.113.9"), _SCOPED)
-    assert decision.allowed is False
+async def test_mark_public_listener_stamps_every_request():
+    seen = {}
+
+    async def inner(scope, receive, send):
+        seen.update(scope)
+
+    await mark_public_listener(inner)({"type": "http", "headers": []}, None, None)
+    assert seen[PUBLIC_LISTENER_SCOPE_KEY] is True
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("peer", ["127.0.0.1", "::1", "::ffff:127.0.0.1"])
-async def test_loopback_peers_are_exempt_by_default(monkeypatch, peer):
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    monkeypatch.delenv("UNITARES_OAUTH_EXEMPT_NETWORKS", raising=False)
-    decision = await svc.authorize_mcp_request(_scope("localhost:8767", peer=peer), _SCOPED)
-    assert decision.allowed is True
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("8772", 8772), ("", None), ("nope", None), ("0", None), ("70000", None)],
+)
+def test_public_port_parsing_fails_closed(monkeypatch, raw, expected):
+    """An invalid value leaves OAuth on every request rather than none."""
+    from src.mcp_listen_config import oauth_public_port
+
+    monkeypatch.setenv("UNITARES_OAUTH_PUBLIC_PORT", raw)
+    assert oauth_public_port() == expected
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("peer", ["10.1.2.3", "192.168.1.151", "100.96.201.46", "172.17.0.1"])
-async def test_private_peers_are_gated_unless_configured(monkeypatch, peer):
-    """A layer-4 forwarder (Docker Desktop, SNAT) delivers internet traffic from
-    a private address with no forwarding header, so private ranges are opt-in."""
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    monkeypatch.delenv("UNITARES_OAUTH_EXEMPT_NETWORKS", raising=False)
-    decision = await svc.authorize_mcp_request(_scope("localhost", peer=peer), _SCOPED)
-    assert decision.allowed is False
+def test_rest_never_trusts_the_public_listener():
+    from starlette.requests import Request
 
+    from src.http_routes.access import _is_trusted_network
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("peer", ["192.168.1.151", "100.96.201.46"])
-async def test_configured_networks_are_exempt(monkeypatch, peer):
-    import ipaddress
+    scope = {"type": "http", "headers": [], "client": ("127.0.0.1", 1)}
+    assert _is_trusted_network(Request(scope)) is True
+    assert _is_trusted_network(Request({**scope, PUBLIC_LISTENER_SCOPE_KEY: True})) is False
 
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    cfg = McpAuthConfig(
-        oauth_provider=_Provider(),
-        oauth_enforce_hosts=("gov.example.org",),
-        oauth_exempt_networks=(
-            ipaddress.ip_network("192.168.0.0/16"),
-            ipaddress.ip_network("100.64.0.0/10"),
-        ),
+def test_an_oversized_basic_token_request_is_refused_before_buffering():
+    """The client_id is public; an anonymous Basic caller must not make the
+    shim buffer an unbounded body ahead of the SDK's own limit."""
+    client = TestClient(_app(_provider()))
+    resp = client.post(
+        "/token",
+        content=b"grant_type=authorization_code&code=" + b"x" * (128 * 1024),
+        headers={
+            "Authorization": _basic(CLIENT_ID, "wrong"),
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
     )
-    decision = await svc.authorize_mcp_request(_scope("localhost", peer=peer), cfg)
-    assert decision.allowed is True
-
-
-def test_exempt_networks_env_skips_invalid_entries(monkeypatch):
-    from src.mcp_listen_config import oauth_exempt_networks
-
-    monkeypatch.setenv("UNITARES_OAUTH_EXEMPT_NETWORKS", "127.0.0.0/8, not-a-net, 100.64.0.0/10")
-    assert [str(n) for n in oauth_exempt_networks()] == ["127.0.0.0/8", "100.64.0.0/10"]
-
-
-@pytest.mark.asyncio
-async def test_a_relayed_request_over_uds_is_gated(monkeypatch):
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(
-        _scope("localhost", peer=None, peer_pid=4242, extra=((b"x-forwarded-for", b"203.0.113.9"),)),
-        _SCOPED,
-    )
-    assert decision.allowed is False
+    assert resp.status_code == 413
 
 
 @pytest.mark.parametrize(
@@ -378,67 +380,3 @@ def test_static_client_env_unset_registers_nothing(monkeypatch):
     ):
         monkeypatch.delenv(key, raising=False)
     assert static_clients_from_env() == []
-
-
-@pytest.mark.asyncio
-async def test_uds_peer_is_exempt_on_other_hosts(monkeypatch):
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(
-        _scope("localhost", peer=None, peer_pid=4242), _SCOPED
-    )
-    assert decision.allowed is True
-
-
-@pytest.mark.asyncio
-async def test_a_peerless_request_is_gated(monkeypatch):
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(_scope("localhost", peer=None), _SCOPED)
-    assert decision.allowed is False
-
-
-@pytest.mark.parametrize(
-    "raw,expected",
-    [
-        ("gov.example.org:*", ("gov.example.org",)),
-        ("GOV.example.org:443, gov.example.org", ("gov.example.org",)),
-        ("[fd7a::1]:8767", ("[fd7a::1]",)),
-        ("", ()),
-    ],
-)
-def test_enforce_hosts_accepts_the_allowed_hosts_forms(monkeypatch, raw, expected):
-    """The host:* form taught for UNITARES_MCP_ALLOWED_HOSTS must not ungate."""
-    from src.mcp_listen_config import oauth_enforce_hosts
-
-    monkeypatch.setenv("UNITARES_OAUTH_ENFORCE_HOSTS", raw)
-    assert oauth_enforce_hosts() == expected
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "header",
-    [b"x-forwarded-for", b"X-Forwarded-For", b"forwarded", b"cf-connecting-ip"],
-)
-async def test_a_relayed_request_from_a_private_peer_is_gated(monkeypatch, header):
-    """Docker port forwarding delivers tunnel traffic from a 172.x bridge address
-    uvicorn does not trust, so the address alone would read it as local."""
-    monkeypatch.setattr(svc, "mcp_bearer_tokens", lambda: [])
-    decision = await svc.authorize_mcp_request(
-        _scope("localhost", peer="172.17.0.1", extra=((header, b"203.0.113.9"),)),
-        _SCOPED,
-    )
-    assert decision.allowed is False
-
-
-def test_an_oversized_basic_token_request_is_refused_before_buffering():
-    """The client_id is public; an anonymous Basic caller must not make the
-    shim buffer an unbounded body ahead of the SDK's own limit."""
-    client = TestClient(_app(_provider()))
-    resp = client.post(
-        "/token",
-        content=b"grant_type=authorization_code&code=" + b"x" * (128 * 1024),
-        headers={
-            "Authorization": _basic(CLIENT_ID, "wrong"),
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
-    assert resp.status_code == 413

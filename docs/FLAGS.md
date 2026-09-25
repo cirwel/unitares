@@ -101,7 +101,7 @@ additions merge cleanly. -->
 | `UNITARES_FIRST_RUN` | `None (no reader fallback)` | Identity resolution: UUID lookup | agents/sdk/src/unitares_sdk/agent.py, agents/watcher/agent.py |
 | `UNITARES_FLOOR_BREACH_CAUTION_APPLY` | `''` | Whether a baselined absolute-floor breach forces at least "caution" (UNITARES_FLOOR_BREACH_CAUTION_APPLY) | src/behavioral_assessment.py |
 | `UNITARES_FLOOR_BREACH_CAUTION_SHADOW` | `''` | Whether to record what the baselined floor-breach verdict floor would do (UNITARES_FLOOR_BREACH_CAUTION_SHADOW) | src/behavioral_assessment.py |
-| `UNITARES_GATEWAY_ALLOWED_HOSTS` | varies: `None (no reader fallback)` (src/mcp_listen_config.py:128); `[] (via split_csv_env)` (src/mcp_listen_config.py:129) | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
+| `UNITARES_GATEWAY_ALLOWED_HOSTS` | varies: `None (no reader fallback)` (src/mcp_listen_config.py:127); `[] (via split_csv_env)` (src/mcp_listen_config.py:128) | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_ALLOW_NULL_ORIGIN` | `False` | TransportSecuritySettings for the reduced gateway surface on :8768 | src/mcp_listen_config.py |
 | `UNITARES_GATEWAY_DNS_REBIND_PROTECTION` | `''` | Whether Host/Origin validation is enforced on the gateway surface | src/mcp_listen_config.py |
@@ -149,9 +149,8 @@ additions merge cleanly. -->
 | `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
-| `UNITARES_OAUTH_ENFORCE_HOSTS` | `[] (via split_csv_env)` | Hosts on which the ``/mcp`` OAuth gate applies (UNITARES_OAUTH_ENFORCE_HOSTS) | src/mcp_listen_config.py |
-| `UNITARES_OAUTH_EXEMPT_NETWORKS` | `[] (via split_csv_env)` | Peer networks a host-scoped OAuth gate may exempt (UNITARES_OAUTH_EXEMPT_NETWORKS) | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_PUBLIC_PORT` | `''` | Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT) | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_REQUIRED` | `False (via env_truthy)` | True when the operator demanded an auth gate on ``/mcp`` or no service | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_RESOURCE_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_SECRET` | `None (no reader fallback)` | — | src/mcp_server.py |

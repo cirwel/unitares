@@ -132,32 +132,32 @@ tool runs:
      An incomplete static-client configuration fails OAuth setup, which
      closes the gated route rather than opening it (see below).
 
-   OAuth gates `/mcp` on **every** host by default, which locks out local
-   clients that do not speak OAuth. To gate only the public hostname, set
-   `UNITARES_OAUTH_ENFORCE_HOSTS="gov.example.org"` (comma-separated; a
-   port or `:*` suffix is ignored). A request then skips OAuth only when
-   **all** hold: its `Host` is not listed; it carries no proxy forwarding
-   header (`X-Forwarded-For`, `Forwarded`, `CF-Connecting-IP`); and it
-   arrived over the UDS listener or from a network in
-   `UNITARES_OAUTH_EXEMPT_NETWORKS` (CIDRs; **loopback only** by default).
+   OAuth gates `/mcp` on **every** request by default, which locks out
+   local clients that do not speak OAuth. To keep them working, give the
+   public tunnel its own listener:
 
-   `Host` is caller-controlled, so the exemption rests on the other two, and
-   both are only as good as your network path:
-   - The forwarding-header check keeps HTTP proxies and tunnels gated —
-     including cloudflared with `httpHostHeader` and Docker port forwarding,
-     where the relayed peer is a private address — because they add
-     `X-Forwarded-For`. A proxy that strips all of them defeats it.
-   - A **layer-4** forwarder (Docker Desktop or rootless port publishing, an
-     SNAT load balancer, kube-proxy) delivers internet traffic from its own
-     address and adds no header. If that address falls in an exempt network,
-     an internet caller that sends `Host: localhost` is served ungated. Keep
-     such a forwarder's address out of `UNITARES_OAUTH_EXEMPT_NETWORKS`, and
-     add a LAN or tailnet range only on a host where nothing forwards public
-     traffic from it.
+   ```bash
+   export UNITARES_OAUTH_PUBLIC_PORT=8772   # loopback only
+   ```
 
+   The server then also listens on `127.0.0.1:8772`, and the OAuth gate
+   applies to that listener alone. Point the tunnel's ingress at
+   `http://127.0.0.1:8772` (an explicit IPv4 address, not `localhost`). The
+   main port keeps the posture it had, so anything you expose through the
+   main port — a reverse proxy, another tunnel — is exposed ungated exactly
+   as before; the public entry point belongs on the public port. The
+   listener is identified by the socket that accepted the connection, which
+   nothing in a request can forge, unlike `Host`, the peer address or
+   forwarding headers. REST routes reached through the public listener never
+   get the trusted-network bypass.
+
+   On the main listener a presented OAuth token is still checked, so a
+   local OAuth client keeps its session attribution; a bad token there is
+   ignored rather than refused. An invalid `UNITARES_OAUTH_PUBLIC_PORT`
+   is warned about and leaves OAuth on every request. If OAuth setup fails,
+   the public listener answers 503 and the main listener is still served.
    An incomplete static-client configuration (any of the three variables
-   without the others) fails OAuth setup. The server warns at startup when
-   the issuer's host is not in the enforce list. A bearer allowlist
+   without the others) fails OAuth setup. A bearer allowlist
    (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.
 
 The Host allowlist applies regardless of the auth choice — set it even when

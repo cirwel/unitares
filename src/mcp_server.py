@@ -130,9 +130,7 @@ from src.mcp_listen_config import (
     auth_gate_refusal,
     build_transport_security_settings,
     default_listen_host,
-    normalize_host,
-    oauth_enforce_hosts,
-    oauth_exempt_networks,
+    oauth_public_port,
 )
 
 # --- OAuth 2.1 configuration (optional, enabled by env var) ---
@@ -142,17 +140,15 @@ _auth_settings = None
 _OAUTH_REQUIRED_SCOPES = ["mcp:tools"]
 
 _oauth_setup_error: Exception | None = None
-# Host-scoped gate: read outside the issuer branch so a provider that fails to
-# build still closes only the hosts the operator asked to gate.
-_oauth_enforce_hosts = oauth_enforce_hosts()
-_oauth_exempt_networks = oauth_exempt_networks()
+# Read outside the issuer branch so a provider that fails to build still closes
+# only the public listener the operator asked to gate.
+_oauth_public_port = oauth_public_port()
 _oauth_static_client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID") or None
 
 if _oauth_issuer_url:
     try:
         from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
         from src.oauth_provider import GovernanceOAuthProvider, static_clients_from_env
-        from urllib.parse import urlparse
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
         _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
@@ -177,18 +173,10 @@ if _oauth_issuer_url:
             ),
         )
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
-        _issuer_host = normalize_host(urlparse(_oauth_issuer_url).netloc)
-        if _oauth_enforce_hosts and _issuer_host not in _oauth_enforce_hosts:
-            print(
-                f"[FastMCP] WARNING: UNITARES_OAUTH_ENFORCE_HOSTS does not include the "
-                f"issuer host {_issuer_host!r}; requests to it from a local peer skip OAuth",
-                file=sys.stderr, flush=True,
-            )
         print(
             "[FastMCP] OAuth gate applies to "
-            + (", ".join(_oauth_enforce_hosts) if _oauth_enforce_hosts else "every host")
-            + ("; static client configured" if _oauth_static_client_id else "")
-            + "; exempt peers: " + ", ".join(str(n) for n in _oauth_exempt_networks),
+            + (f"the public listener 127.0.0.1:{_oauth_public_port} only" if _oauth_public_port else "every request")
+            + ("; static client configured" if _oauth_static_client_id else ""),
             file=sys.stderr, flush=True,
         )
     except Exception as e:
@@ -207,9 +195,9 @@ if _oauth_issuer_url:
         print(
             "[FastMCP] WARNING: OAuth setup FAILED — the MCP route has NO AUTH GATE "
             + (
-                f"and is now CLOSED (503) on {', '.join(_oauth_enforce_hosts)} and to "
-                "non-local peers; local peers on other hosts are still served"
-                if _oauth_enforce_hosts
+                f"and is now CLOSED (503) on the public listener :{_oauth_public_port}; "
+                "the main listener is still served"
+                if _oauth_public_port
                 else "and is now CLOSED (503) rather than served open"
             )
             + f" ({type(e).__name__})",
@@ -384,8 +372,7 @@ async def main():
                 # than serving it open. Scoped to the route: every other
                 # surface on this process keeps its own gate.
                 gate_unavailable=_oauth_setup_error is not None,
-                oauth_enforce_hosts=_oauth_enforce_hosts,
-                oauth_exempt_networks=_oauth_exempt_networks,
+                oauth_public_listener_only=_oauth_public_port is not None,
                 static_client_id=_oauth_static_client_id,
             ),
             host=args.host,
@@ -396,6 +383,8 @@ async def main():
             server_start_time=SERVER_START_TIME,
             server_version=SERVER_VERSION,
             server_build_sha=SERVER_BUILD_SHA,
+            # Without a provider there is nothing for the listener to gate.
+            public_port=_oauth_public_port if _oauth_issuer_url else None,
         )
         await runtime.serve()
     except ImportError:
