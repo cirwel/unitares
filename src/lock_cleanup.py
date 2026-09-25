@@ -228,7 +228,7 @@ if __name__ == "__main__":
         print()
     
     if result['kept'] > 0:
-        print("✅ Active locks:")
+        print("Kept locks (held, or free but recent):")
         for item in result['kept_locks']:
             print(f"   - {item['lock_file']}: {item['reason']}")
 
