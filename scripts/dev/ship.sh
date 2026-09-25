@@ -344,7 +344,18 @@ fi
 # in sync with unitares canonical. Fires only when skills/ is staged AND the
 # plugin checkout is reachable (script no-ops on operators without it).
 if git diff --cached --name-only | grep -q '^skills/'; then
-    if ! "$PROJECT_ROOT/scripts/dev/sync-plugin-skills.sh" --check; then
+    SKILLS_SYNC_STATUS=0
+    "$PROJECT_ROOT/scripts/dev/sync-plugin-skills.sh" --check || SKILLS_SYNC_STATUS=$?
+    if [[ "$SKILLS_SYNC_STATUS" == 5 ]]; then
+        # Mirror in sync; the plugin's freshness checker disagrees with the
+        # canonical attestation rule in this working tree. Re-syncing cannot
+        # fix that (the checker needs a port in the plugin repo), so this
+        # warns rather than blocking. It is a drift signal, not a gate: it
+        # runs only when skills/ is staged and reads the working tree, not
+        # the staged blob, so it cannot say which commit caused the drift.
+        echo "[ship] warning: plugin freshness checker drifted from canonical's attestation rule (see above);" >&2
+        echo "[ship] port it in unitares-governance-plugin separately. Continuing." >&2
+    elif [[ "$SKILLS_SYNC_STATUS" != 0 ]]; then
         echo
         echo "[ship] skills/ staged but plugin bundle is out of sync." >&2
         echo "[ship] run: ./scripts/dev/sync-plugin-skills.sh" >&2
