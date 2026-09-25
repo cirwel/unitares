@@ -221,7 +221,8 @@ completes); (3)+(4) are the justification (need §0).
 (fitted blend weights, a learned readout) is efficacy work gated by the
 registered 2026-12-01 outcome read. That one fitted to the same label channel
 would not by itself constitute a new premise under that read's reopening clause
-was ratified 2026-09-25 as a pre-read clarification in the registered stop rule
+was ratified 2026-09-25, effective at merge, as a pre-read clarification in
+the registered stop rule
 (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`, "Pre-read
 clarification — drafted 2026-09-25"), which is the authority; no condition,
 threshold or pinned candidate of the read moved. Label-free work

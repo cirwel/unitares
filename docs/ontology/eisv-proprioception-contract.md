@@ -1479,10 +1479,10 @@ parked on 2026-09-24. It may be revisited after the 12-01 read reports, and only
 as an arm inside the incremental-value ablation
 (`docs/proposals/eisv-incremental-value-ablation-v1.md`).
 
-**Ratified 2026-09-25: the same label channel is not a new premise.** The
-authority for this is the registered stop rule, not this document: its block
-"Pre-read clarification — drafted 2026-09-25, effective at merge: what the
-reopening clause's 'new premise' excludes"
+**Ratified 2026-09-25, effective at merge: the same label channel is not a
+new premise.** The authority for this is the registered stop rule, not this
+document: its block "Pre-read clarification — drafted 2026-09-25, effective
+at merge: what the reopening clause's 'new premise' excludes"
 (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`), ratified
 2026-09-25 under the operator's recorded delegation as a pre-read
 clarification of that rule's reopening clause, effective at merge. In short:

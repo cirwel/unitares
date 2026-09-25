@@ -582,7 +582,13 @@ FAILs; it says nothing about which branch the read will take.
 
 **Definition.** The *label channel* is the outcome labels the registered read
 scores: the `task` scope under `--anchor-scope trusted` and
-`--fixture-rule registered`, or more labels of the same kind. An estimator
+`--fixture-rule registered`, or more labels of the same kind. The channel is
+fixed by where the labels come from, the `TASK_OUTCOMES` outcome types the
+`task` scope reads, not by flag values: a fitted estimator re-scored on those
+outcome types under another anchor scope or row filter gains no new label
+channel by that alone. Whether a corrected instrument and producer contract
+are a materially different measurement process is the operator-judgement
+clause's question (below), which this block leaves unchanged. An estimator
 *fitted or learned on that channel* is one whose parameters or selection are
 chosen against those labels: fitted blend weights, a learned readout from
 EISV or prior state to an outcome, or any other fitted function of
@@ -604,7 +610,10 @@ operator-judgement clause above ("If condition 3 fails on the registered
 cohort, whether a corrected instrument and producer contract are the
 'materially different measurement process' the reopening clause requires is
 the operator's judgment") is unchanged: a corrected instrument changes what
-is measured, which this block does not address.
+is measured, which this block does not address. A corrected instrument
+whose parameters were tuned against these labels falls under that clause,
+not this block: the correction is judged there, and its tuning neither
+qualifies nor disqualifies it here.
 
 **Why this reading.** (1) The clause's own exclusion is "more of the same
 labels": the evidence a fitted estimator on this channel brings is those
@@ -628,7 +637,10 @@ that any new estimator satisfies.
 
 **Disclosure of what was known when this was written.** Drafted 2026-09-25,
 before the registered read and before any 2026-12-01 data exists. No outcome
-read, dry run, or discrimination analysis was performed to prepare it. It was
+read, dry run, or discrimination analysis was performed to prepare it. The
+facts disclosed in the condition-4 block above were in view when it was
+written, so it is a pre-read choice, not a pre-evidence one. It restricts
+what can reopen the question after a FAIL; it loosens nothing. It was
 written alongside a placement note in
 `docs/ontology/eisv-proprioception-contract.md` ("Fitted and learned
 estimators — which bucket they sit in") that first proposed this reading.
@@ -645,7 +657,10 @@ condition of the read.
 **How it was decided.** Operator direction, 2026-09-25: "proceed best for the
 future of the federation", given after an adversarial design review of these
 decisions recommended the option recorded here. Merging remains the
-operator's act, so the decision is reversible until merge.
+operator's act, so the decision is reversible until merge. This block is
+the decision record; no separate decision-packet item exists for it.
+Leaving the boundary open until a reopening proposal arrived would have
+decided it after the read's outcome was known; deciding it now avoids that.
 
 **Attestation.** Attested by the operator on merge as a clarification of the
 reopening clause, not a weakening of the registered protocol (`CLAUDE.md`,
