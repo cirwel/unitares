@@ -356,18 +356,23 @@ def _has_substrate_evidence(detail: Mapping[str, Any], verification_source: str 
 #: ``scripts/diagnostics/outcome_evidence_provenance_split.py`` reports it.
 SERVER_SET_TOOL_TRIGGERS = frozenset({"phase5_emitter"})
 
-#: The key the hint shows for each reference family, where one reads better
+#: Reference families the hint may advertise. "command" is left out on
+#: purpose: its keys include exit_code and returncode, which beside a `tool`
+#: or a `kind` are TOOL_OBSERVED triggers, so naming that family would hand
+#: callers the calibration-floor recipe the hint exists to withhold.
+_HINT_REF_FAMILIES = ("pr", "commit", "ci", "test")
+#: The key the hint shows for each advertised family, where one reads better
 #: than the family's alphabetical first. Derived from _CLAIM_FIELD_FAMILIES,
-#: never a separate list: a family without a preference (or whose preferred key
-#: was renamed away) falls back to its own first key, and every family appears.
-_PREFERRED_REF_EXAMPLE = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command", "command": "command"}
+#: never a separate list: a preferred key renamed away falls back to the
+#: family's own first key.
+_PREFERRED_REF_EXAMPLE = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command"}
 _REF_EXAMPLE_KEYS = {
     family: (
         _PREFERRED_REF_EXAMPLE[family]
-        if _PREFERRED_REF_EXAMPLE.get(family) in keys
-        else sorted(keys)[0]
+        if _PREFERRED_REF_EXAMPLE.get(family) in _CLAIM_FIELD_FAMILIES[family]
+        else sorted(_CLAIM_FIELD_FAMILIES[family])[0]
     )
-    for family, keys in _CLAIM_FIELD_FAMILIES.items()
+    for family in _HINT_REF_FAMILIES
 }
 
 
@@ -594,10 +599,9 @@ def corroboration_upgrade_hint(grade: str | None, *, ceiling: str | None) -> str
     if grade != CLAIM_ONLY or ceiling != TOOL_OBSERVED:
         return None
     ref_keys = ", ".join(_REF_EXAMPLE_KEYS.values())
-    families = ", ".join(_REF_EXAMPLE_KEYS)
     return (
-        f"References in detail ({ref_keys}; any key of the {families} families "
-        f"counts) raise this to {SELF_REPORT_WITH_REFS}. "
+        f"A reference in detail ({ref_keys}) raises this to "
+        f"{SELF_REPORT_WITH_REFS}. "
         f"Self-attested detail is capped at {TOOL_OBSERVED} whatever it carries; "
         f"higher grades need server_observation or external_signal provenance, "
         f"which a caller cannot set."

@@ -552,10 +552,23 @@ def _public_grade(detail):
     ).grade
 
 
-def test_hint_covers_every_reference_family_the_grader_reads():
-    assert set(_REF_EXAMPLE_KEYS) == set(_CLAIM_FIELD_FAMILIES)
+def test_hint_advertises_every_reference_family_except_command():
+    """command's keys (exit_code, returncode) are tool_observed triggers."""
+    assert set(_REF_EXAMPLE_KEYS) == set(_CLAIM_FIELD_FAMILIES) - {"command"}
     for family, key in _REF_EXAMPLE_KEYS.items():
         assert key in _CLAIM_FIELD_FAMILIES[family]
+
+
+@pytest.mark.parametrize("key", list(_REF_EXAMPLE_KEYS.values()))
+@pytest.mark.parametrize(
+    "context",
+    [{}, {"tool": "pytest"}, {"kind": "build"}, {"kind": "test", "tool": "pytest"}],
+)
+def test_no_advertised_key_combines_into_a_tool_trigger(key, context):
+    """Following the hint on top of a partial tool description must not cross
+    the calibration floor (review of #2430)."""
+    grade = _public_grade({**context, key: "x"})
+    assert GRADE_WEIGHTS[grade] < _MIN_TACTICAL_EVIDENCE_WEIGHT
 
 
 @pytest.mark.parametrize("key", list(_REF_EXAMPLE_KEYS.values()))
