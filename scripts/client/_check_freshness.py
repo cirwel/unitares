@@ -33,9 +33,9 @@ against the changed sources, writes ONE NEW FILE per skill:
 `skill_digest` (added 2026-09-24, optional for readers) names the skill text
 the record certified. `superseded_digests` (added 2026-09-25, optional) lists,
 per source whose content changed since the skill was last verified, the
-digest it was last verified at and any it had since been carried to, and only
-when the stamped text was already certified (the verifier re-checked it and
-left it alone; a text edited in the re-check records none): the stamp records that its verifier
+digest it was last verified at, and only when the newest record certified
+exactly the text being stamped, a best-effort sign that the verifier left the
+wording alone (see Recorded transitions for what it cannot see): the stamp records that its verifier
 re-checked the skill across that change. See Recorded transitions below.
 
 It never edits SKILL.md. Until 2026-09-24 a stamp rewrote the `last_verified`
@@ -97,6 +97,13 @@ re-stamped, as before. Relief comes when master's re-check is the later
 stamp, the usual order for a branch stamped once and merged later. Content no stamp has recorded, such
 as a branch's own unstamped change or both sides editing one file, is STALE
 as before.
+A stamp records a transition only when the newest record certified exactly
+the text being stamped, so a re-check that rewrote the skill records none: the
+wording it replaced did not survive the change. That is a best-effort reading
+of the records, not of the edit: when a merge brought in another version's
+record, a verifier who restores that version's text still records one, and a
+later return of the wording they rejected is carried. That wording against
+that change is the one pairing given up above, bounded by AGING.
 
 The effective verified date, which drives AGING, comes from the same records
 that vouch for source digests: the latest `verified_date` among them, or the
@@ -522,14 +529,13 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
         records = load_attestations(skills_dir, name)
         vouching = vouching_attestations(records, skill_digest)
         # A transition says the claims held across the change. Only a text the
-        # verifier left alone can say that: the newest record here certified
-        # exactly this text, so nothing edited it since the last stamp. Text
-        # edited in this re-check, even back to wording certified earlier,
-        # records none: the re-check found the wording it replaced wrong.
+        # verifier left alone can say that; the best sign the records give is
+        # that the newest one certified exactly this text. Text edited in this
+        # re-check, even back to wording certified earlier, then records none.
+        # A merged-in record of another version defeats the sign (module
+        # docstring, Recorded transitions).
         text_unchanged = bool(records) and records[0].get("skill_digest") == skill_digest
         _, accepted = effective_record(skills_dir, name, meta, skill_digest)
-        edges = recorded_transitions(
-            [data for _, data in transition_records(skills_dir, name, skill_digest)])
         digests: dict[str, str] = {}
         superseded: dict[str, list[str]] = {}
         absent: list[str] = []
@@ -541,9 +547,8 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
                 # check accepts for this text (a return to content an older
                 # certification recorded is not one). It records the change
                 # from where the text was last verified, not all its history.
-                src_edges = edges.get(src, {})
-                prior = carried_forward(last_verified_at(vouching, meta, src), src_edges)
-                accepts = carried_forward(accepted.get(src, set()), src_edges) | prior
+                prior = last_verified_at(vouching, meta, src)
+                accepts = accepted.get(src, set()) | prior
                 if text_unchanged and prior and digests[src] not in accepts:
                     superseded[src] = sorted(prior)
             elif (carried := carried_digest(skills_dir, name, src, skill_digest)) is not None:

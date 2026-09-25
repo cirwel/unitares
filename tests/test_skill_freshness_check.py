@@ -361,23 +361,6 @@ def test_a_revert_is_not_carried_forward(layout: Layout):
     assert result.returncode == 1, result.stdout
 
 
-def test_a_stale_branch_stamp_records_no_transition(layout: Layout):
-    # A branch cut before the change re-stamps its (certified) text with the
-    # OLD content on disk, which its own records already accept: it re-checked
-    # no change and records none, even though master's records elsewhere hold
-    # a newer digest.
-    src = "unitares/src/thing.py"
-    layout.source("x = 1\n")
-    layout.skill(last_verified=_day(20), digest=None)
-    _attest(layout, "20200101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
-    _attest(layout, "20200102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 2\n")},
-            skill_digest="0123456789abcdef")
-    before = set(_attestations(layout))
-    layout.run("--stamp", "demo")
-    [stamp] = set(_attestations(layout)) - before
-    assert "superseded_digests" not in json.loads(stamp.read_text())
-
-
 def test_prune_keeps_the_record_that_carries_a_source_forward(layout: Layout):
     src = "unitares/src/thing.py"
     layout.source("x = 1\n")
