@@ -53,7 +53,7 @@ Cost
 ----
 The CI side reads comments with GITHUB_TOKEN and calls no model. Native Codex is operator opt-in (`git config review.native true`), with a
 bounded wait and local fallback. Otherwise the review runs through a CLI the operator already has (`codex`,
-`claude`, or `gemini` when installed, each on its own subscription login); `record` takes any review text, so a contributor with no model at
+`claude`); `record` takes any review text, so a contributor with no model at
 all can satisfy the gate with a human review. No metered API is on the
 required path (AGENTS.md, execution-cost policy).
 """
@@ -66,7 +66,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import signal
 import subprocess
 import sys
@@ -547,13 +546,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
 
 
 PROVIDERS_FILE = Path(__file__).resolve().with_name("review_providers.json")
-KNOWN_PROVIDERS = {"codex", "claude", "gemini"}
-# Cross-family preference when the author's family is unknown (a human branch).
-PROVIDER_ORDER = ("codex", "gemini", "claude")
-# Only reviewers that need an extra, operator-installed CLI are gated on it;
-# codex and claude keep their existing behaviour (a missing CLI is an
-# UNREVIEWED launch failure with a cooldown, not a silent skip).
-OPTIONAL_CLI = {"gemini": "gemini"}
+KNOWN_PROVIDERS = {"codex", "claude"}
 
 
 def disabled_providers() -> dict[str, str]:
@@ -701,28 +694,12 @@ def current_pr() -> dict | None:
     return json.loads(proc.stdout) if proc.returncode == 0 else None
 
 
-def optional_cli_installed(provider: str) -> bool:
-    return provider not in OPTIONAL_CLI or shutil.which(OPTIONAL_CLI[provider]) is not None
-
-
-def reviewer_candidates(branch: str) -> list[str]:
-    """Usable reviewers for a branch, best first.
-
-    Prefer a model family other than the author's (the branch prefix), but
-    independence is a fresh reviewer context, not a provider name, so the
-    author's own family stays last as a valid fallback. Disabled providers
-    are dropped, and an optional CLI (gemini) only counts when installed.
-    """
-    author = branch.split("/", 1)[0]
-    disabled = disabled_providers()
-    usable = [p for p in PROVIDER_ORDER if p not in disabled and optional_cli_installed(p)]
-    return [p for p in usable if p != author] + [p for p in usable if p == author]
-
-
 def default_reviewer(branch: str) -> str:
-    # A quota outage must not prohibit the available reviewer.
-    candidates = reviewer_candidates(branch)
-    return candidates[0] if candidates else ("claude" if branch.startswith("codex/") else "codex")
+    # Prefer diversity, but independence is a fresh reviewer context, not a
+    # provider name. A quota outage must not prohibit the available reviewer.
+    preferred, other = ("claude", "codex") if branch.startswith("codex/") else ("codex", "claude")
+    disabled = disabled_providers()
+    return other if preferred in disabled and other not in disabled else preferred
 
 
 def provider_state_path(reviewer: str) -> Path:
@@ -749,9 +726,7 @@ def remember_unavailable(reviewer: str, text: str, note: str) -> None:
     message = (text + "\n" + note).lower()
     reasons = {
         "quota": ("weekly limit", "usage limit", "rate limit", "rate_limit", "quota"),
-        # "set an auth method": gemini CLI 0.61 with no login (exit 41).
-        "authentication": ("not logged in", "authentication failed", "unauthorized", "login required",
-                           "set an auth method"),
+        "authentication": ("not logged in", "authentication failed", "unauthorized", "login required"),
         "startup": ("could not start",),
     }
     reason = next((name for name, matches in reasons.items()
@@ -776,11 +751,6 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     if reviewer == "codex":
         cmd = ["codex", "exec", "--sandbox", "read-only", "-C", os.getcwd(),
                "--output-last-message", str(last), prompt]
-    elif reviewer == "gemini":
-        # --approval-mode plan is Gemini CLI's read-only mode; the answer is
-        # stdout, kept apart from stderr so the VERDICT line stays last.
-        cmd = ["gemini", "-p", prompt, "--approval-mode", "plan", "--skip-trust",
-               "--output-format", "text"]
     elif reviewer == "claude":
         cmd = ["claude", "-p", prompt,
                "--allowedTools", "Read", "Grep", "Glob",
@@ -791,14 +761,10 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     log = out_dir / "reviewer.log"
     with open(log, "w") as fh:
         # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
-        out = open(last, "w") if reviewer == "gemini" else fh
         try:
-            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out,
-                                    stderr=fh if reviewer == "gemini" else subprocess.STDOUT,
-                                    start_new_session=True)
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
         except OSError as exc:  # reviewer CLI missing or not executable
-            if out is not fh:
-                out.close()
             return str(exc), f"could not start {reviewer}: {exc.__class__.__name__}"
         try:
             rc = proc.wait(timeout=budget_s)
@@ -806,13 +772,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
             return log.read_text(errors="replace"), f"killed at the {budget_s}s budget"
-        finally:
-            if out is not fh:
-                out.close()
-    text = last.read_text(errors="replace") if last.exists() else ""
-    # An empty answer (gemini writes only stdout there) must surface the log,
-    # where an auth or quota error lands, so it is classified, not lost.
-    text = text if text.strip() else log.read_text(errors="replace")
+    text = last.read_text(errors="replace") if last.exists() else log.read_text(errors="replace")
     return text, ("exit 0" if rc == 0 else f"exit {rc}")
 
 
@@ -996,7 +956,6 @@ class review_lock:
 def cmd_review(args) -> int:
     pr, repo, key, branch = _resolve(args)
     reviewer = args.reviewer or default_reviewer(branch)
-    args.branch = branch  # review_with_fallback picks the next candidate by author family
     head = git("rev-parse", "HEAD").strip()
     deadline = time.monotonic() + args.budget
     joined = False
@@ -1031,7 +990,7 @@ def cmd_review(args) -> int:
                     rounds = pr_rounds(repo, pr, key, head, comments)
                     if rounds.capped():
                         return capped_review(args, repo, pr, key, head, rounds)
-                args.failed_providers = {p for p in KNOWN_PROVIDERS
+                args.failed_providers = {p for p in ("claude", "codex")
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
                     native_start = time.monotonic()
@@ -1208,8 +1167,7 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     Findings stop routing: trying another model must never erase a review we
     dislike. An explicit --reviewer retries that provider despite cooldown.
     """
-    others = [p for p in reviewer_candidates(getattr(args, "branch", "") or "") if p != preferred]
-    providers = [preferred] + others[:1]
+    providers = [preferred, "codex" if preferred == "claude" else "claude"]
     deadline = time.monotonic() + args.budget
     available = []
     disabled = disabled_providers()
@@ -1559,7 +1517,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("review", help="review HEAD's diff and post the record")
-    r.add_argument("--reviewer", choices=sorted(KNOWN_PROVIDERS))
+    r.add_argument("--reviewer", choices=["codex", "claude"])
     r.add_argument("--budget", type=int, default=DEFAULT_BUDGET_S)
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
 
