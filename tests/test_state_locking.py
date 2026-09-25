@@ -683,3 +683,137 @@ class TestAcquireAgentLockAsyncAdvisory:
         assert len([c for c in conn.calls if "pg_try_advisory_lock" in c[0]]) > 1
         # ...and no unlock is issued, because the lock was never held.
         assert not any("pg_advisory_unlock" in c[0] for c in conn.calls)
+
+
+# ============================================================================
+# Orphaned-inode race: a cleaner unlinks the path between an acquirer's
+# open() and its flock(), so the acquirer locks an inode nobody else can see
+# while a newcomer locks a fresh file at the same path.
+# ============================================================================
+
+class TestOrphanedInodeRace:
+
+    def test_holds_current_inode(self, tmp_path):
+        from src.state_locking import holds_current_inode
+
+        lock_file = tmp_path / "a.lock"
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+        try:
+            assert holds_current_inode(fd, lock_file) is True
+            lock_file.unlink()
+            assert holds_current_inode(fd, lock_file) is False
+            lock_file.write_text("")  # a fresh inode at the same path
+            assert holds_current_inode(fd, lock_file) is False
+        finally:
+            os.close(fd)
+
+    def test_remove_lock_file_if_free_never_creates(self, tmp_path):
+        from src.state_locking import remove_lock_file_if_free
+
+        removed, reason = remove_lock_file_if_free(tmp_path / "missing.lock")
+        assert removed is False
+        assert not (tmp_path / "missing.lock").exists()
+
+    def _unlink_after_first_open(self, lock_file):
+        """Patch os.open so the acquirer's first open of lock_file is followed
+        by a cleaner unlinking the path before the acquirer's flock()."""
+        real_open = os.open
+        state = {"fired": False}
+
+        def racing_open(path, flags, *args, **kwargs):
+            fd = real_open(path, flags, *args, **kwargs)
+            if not state["fired"] and str(path) == str(lock_file):
+                state["fired"] = True
+                os.unlink(path)
+            return fd
+
+        return patch("src.state_locking.os.open", side_effect=racing_open), state
+
+    def _assert_current_file_is_locked(self, lock_file):
+        fd = os.open(str(lock_file), os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    def test_sync_acquire_reopens_after_unlink(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        lock_file = tmp_path / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file)
+        with racing:
+            with mgr.acquire_agent_lock("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_acquire_reopens_after_unlink(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        lock_file = tmp_path / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file)
+        with racing:
+            async with mgr._acquire_agent_lock_async_fcntl("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+
+_WRITER = """
+import os, sys, time
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from src.state_locking import StateLockManager
+lock_dir, log, n = Path(sys.argv[2]), sys.argv[3], int(sys.argv[4])
+mgr = StateLockManager(lock_dir=lock_dir)
+out = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
+for _ in range(n):
+    with mgr.acquire_agent_lock("shared", timeout=60.0, max_retries=1):
+        os.write(out, f"S {os.getpid()}\\n".encode())
+        time.sleep(0.002)
+        os.write(out, f"E {os.getpid()}\\n".encode())
+"""
+
+_CLEANER = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from src.state_locking import StateLockManager
+lock_dir, stop = Path(sys.argv[2]), Path(sys.argv[3])
+mgr = StateLockManager(lock_dir=lock_dir)
+while not stop.exists():
+    mgr._check_and_clean_stale_lock(lock_dir / "shared.lock")
+"""
+
+
+def test_writers_stay_mutually_exclusive_under_a_concurrent_cleaner(tmp_path):
+    """Several processes take the same agent lock while another process runs
+    the stale-lock cleaner in a tight loop. Every critical section must close
+    before the next opens. Before the fix the cleaner released its probe lock
+    and then unlinked, and acquirers never checked which inode they held, so
+    two writers could be inside at once."""
+    import subprocess
+
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    log = tmp_path / "sections.log"
+    stop = tmp_path / "stop"
+    root = str(project_root)
+
+    cleaner = subprocess.Popen([sys.executable, "-c", _CLEANER, root, str(lock_dir), str(stop)])
+    try:
+        writers = [
+            subprocess.Popen([sys.executable, "-c", _WRITER, root, str(lock_dir), str(log), "40"])
+            for _ in range(4)
+        ]
+        for w in writers:
+            assert w.wait(timeout=120) == 0
+    finally:
+        stop.write_text("")
+        cleaner.wait(timeout=30)
+
+    events = log.read_text().split("\n")[:-1]
+    assert len(events) == 4 * 40 * 2
+    for i in range(0, len(events), 2):
+        start, end = events[i].split(), events[i + 1].split()
+        assert start[0] == "S" and end[0] == "E" and start[1] == end[1], (
+            f"overlapping critical sections at event {i}: {events[i:i + 4]}"
+        )

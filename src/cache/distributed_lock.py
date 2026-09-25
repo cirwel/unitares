@@ -191,6 +191,8 @@ class DistributedLock:
         """Fallback to file-based locking (fcntl)."""
         import fcntl
 
+        from src.state_locking import holds_current_inode
+
         # Re-create the lock dir if it was removed since construction.
         self._ensure_lock_dir()
         lock_file = self.lock_dir / f"{resource_id}.lock"
@@ -205,6 +207,13 @@ class DistributedLock:
 
                     # Try non-blocking lock
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if not holds_current_inode(fd, lock_file):
+                        # A cleaner unlinked the path after our open(); this
+                        # lock guards nothing. Reopen on the next pass.
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                        os.close(fd)
+                        fd = None
+                        continue
 
                     # Write PID to lock file
                     os.ftruncate(fd, 0)

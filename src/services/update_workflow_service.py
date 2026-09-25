@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import time
-from pathlib import Path
 from typing import Sequence
 
 from mcp.types import TextContent
@@ -80,38 +78,16 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
                 ctx.monitor = ctx.mcp_server.monitors.get(ctx.agent_id)
         except TimeoutError:
             _tick("lock_timeout")
-            cleaned = False
-            # Stale *file* locks only exist on the fcntl backend; under the advisory
-            # backend a timeout means a live PostgreSQL session holds the lock, so the
-            # file-oriented cleanup would no-op and emit a misleading message. Skip it.
-            advisory_backend = (
-                os.environ.get("UNITARES_AGENT_LOCK_BACKEND", "advisory").strip().lower() == "advisory"
-            )
-            if not advisory_backend:
-                try:
-                    from src.lock_cleanup import cleanup_stale_state_locks
-                    project_root = Path(__file__).resolve().parent.parent
-                    cleanup_result = await ctx.loop.run_in_executor(
-                        None, cleanup_stale_state_locks, project_root, 60.0, False
-                    )
-                    if cleanup_result["cleaned"] > 0:
-                        logger.info(f"Auto-recovery: Cleaned {cleanup_result['cleaned']} stale lock(s) after timeout")
-                        cleaned = True
-                except Exception as cleanup_error:
-                    logger.warning(f"Could not perform emergency lock cleanup: {cleanup_error}")
-
-            if advisory_backend:
-                cleanup_msg = "Another live session currently holds the lock. "
-            elif cleaned:
-                cleanup_msg = "The system has automatically cleaned stale locks. "
-            else:
-                cleanup_msg = "Automatic lock cleanup was attempted but did not resolve the issue. "
+            # No cleanup here. A timeout means a live holder: the acquire loop
+            # already removed any lock file no process held, and a held lock
+            # (file or advisory) is released only when its holder finishes or
+            # exits. Removing it would admit a second writer.
             return [error_response(
-                f"Failed to acquire lock for agent '{ctx.agent_id}' after automatic retries and cleanup. "
-                f"This usually means another active process is updating this agent. "
-                f"{cleanup_msg}If this persists, try: "
-                f"1) Wait a few seconds and retry, 2) Check for other Cursor/Claude sessions, "
-                f"3) Use cleanup_stale_locks tool, or 4) Restart Cursor if stuck."
+                f"Failed to acquire lock for agent '{ctx.agent_id}' after automatic retries. "
+                f"Another live session or process holds this agent's lock and is still "
+                f"updating it; the lock is released when that holder finishes or exits. "
+                f"If this persists, try: 1) Wait a few seconds and retry, "
+                f"2) Check for other sessions acting as this agent."
                 ,
                 error_code="LOCK_TIMEOUT",
                 error_category="system_error",

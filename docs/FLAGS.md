@@ -39,7 +39,7 @@ additions merge cleanly. -->
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_ADJUDICATION_ABSTAIN_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
-| `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Execute the extracted process_agent_update workflow for a prepared UpdateContext. | src/services/update_workflow_service.py, src/state_locking.py |
+| `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Remove agent lock files that no process holds; report the held ones. | src/mcp_handlers/admin/handlers.py, src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
 | `UNITARES_API_TOKEN` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |

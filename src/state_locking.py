@@ -5,9 +5,8 @@ Ensures only one process can modify agent state at a time using file-based locki
 Prevents race conditions and state corruption in multi-process MCP environments.
 
 Features:
-- Automatic stale lock cleanup before acquisition attempts
-- Exponential backoff retry with automatic recovery
-- Process health checking to detect stale locks
+- Removal of lock files no process holds (held-ness is the only staleness test)
+- Exponential backoff retry
 - Async support for non-blocking lock acquisition in async contexts
 """
 
@@ -42,6 +41,65 @@ def is_process_alive(pid: int) -> bool:
 DEFAULT_LOCK_DIR = Path(os.environ.get("UNITARES_LOCK_DIR") or Path(__file__).parent.parent / "data" / "locks")
 
 
+def holds_current_inode(fd: int, lock_file: Path) -> bool:
+    """True if ``fd`` is the file currently at ``lock_file``'s path.
+
+    flock locks an inode, not a path. If a cleaner unlinks the path between
+    our open() and our flock(), we end up holding a lock on an orphaned inode
+    while a newcomer creates and locks a fresh file at the same path, so both
+    believe they hold the lock. Acquirers call this after flock() succeeds and
+    reopen on a mismatch.
+    """
+    try:
+        held = os.fstat(fd)
+        current = os.stat(lock_file)
+    except FileNotFoundError:
+        return False
+    return (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
+
+
+def remove_lock_file_if_free(lock_file: Path, min_age_seconds: float = 0.0) -> tuple[bool, str]:
+    """Remove ``lock_file`` only if no process holds it. Returns (removed, reason).
+
+    flock locks are released by the kernel when the holder's descriptors close,
+    including when the holder dies, so "can we take LOCK_EX without blocking"
+    is the whole staleness test. The recorded pid and timestamp are debugging
+    info and never justify removing a held lock: that is how a second writer
+    gets admitted. A lock held by a live but stuck process stays held until
+    that process exits.
+
+    The unlink happens while we still hold the probe lock, on the inode we
+    probed, so no acquirer can own that inode when it disappears; one that
+    opened it earlier fails holds_current_inode() and reopens. A free lock
+    file blocks nobody, so removing one is housekeeping, not recovery.
+    ``min_age_seconds`` only narrows removal (skip files touched recently).
+    """
+    try:
+        fd = os.open(str(lock_file), os.O_RDWR)  # never create
+    except FileNotFoundError:
+        return False, "lock file doesn't exist"
+    except OSError as exc:
+        return False, f"cannot open lock file: {exc}"
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False, "held by a live process"
+        if not holds_current_inode(fd, lock_file):
+            return False, "replaced while probing"
+        age = time.time() - os.fstat(fd).st_mtime
+        if age < min_age_seconds:
+            return False, f"free, but touched {age:.0f}s ago (< {min_age_seconds:.0f}s)"
+        lock_file.unlink(missing_ok=True)
+        return True, "not held by any process"
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(fd)
+
+
 class StateLockManager:
     """Ensures only one process can modify agent state at a time"""
     
@@ -57,7 +115,9 @@ class StateLockManager:
         self.lock_dir = lock_dir
         self._ensure_lock_dir()
         self.auto_cleanup_stale = auto_cleanup_stale
-        self.stale_threshold = stale_threshold  # Seconds before considering lock stale
+        # Retained for API compatibility; no longer decides removal (a lock is
+        # stale only when no process holds it; see remove_lock_file_if_free).
+        self.stale_threshold = stale_threshold
 
     def _ensure_lock_dir(self) -> None:
         """Ensure the lock directory exists.
@@ -74,108 +134,14 @@ class StateLockManager:
         self.lock_dir.mkdir(parents=True, exist_ok=True)
 
     def _check_and_clean_stale_lock(self, lock_file: Path) -> bool:
+        """Remove ``lock_file`` if no process holds it. Returns True if removed.
+
+        Held-ness is the only test; see remove_lock_file_if_free for why the
+        recorded pid and timestamp are not consulted.
         """
-        Check if lock file is stale and clean it if so.
-        Returns True if lock was cleaned, False otherwise.
-        
-        Strategy:
-        1. Try to acquire a non-blocking lock - if we can, the lock is stale
-        2. If we can't acquire it, try to read the lock file to check process status
-        3. Only delete if we're certain the process is dead
-        """
-        if not lock_file.exists():
-            return False
-        
-        # First, try to acquire the lock non-blocking to see if it's actually held
-        # If we can acquire it immediately, the lock is stale
-        test_fd = None
-        try:
-            test_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
-            try:
-                # Try non-blocking exclusive lock
-                fcntl.flock(test_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                # If we got here, the lock was NOT held - it's stale!
-                # Release our test lock and delete the file
-                fcntl.flock(test_fd, fcntl.LOCK_UN)
-                os.close(test_fd)
-                test_fd = None
-                lock_file.unlink(missing_ok=True)
-                return True
-            except IOError:
-                # Lock is held by another process - check if that process is alive
-                pass
-            finally:
-                if test_fd is not None:
-                    try:
-                        fcntl.flock(test_fd, fcntl.LOCK_UN)
-                    except (IOError, OSError):
-                        pass
-                    os.close(test_fd)
-        except (IOError, OSError):
-            # Can't open lock file - might be actively locked or permission issue
-            # Don't delete it
-            return False
-        
-        # Lock is held - check if the holding process is still alive
-        try:
-            # Try to read lock info with a shared lock (non-blocking)
-            read_fd = os.open(str(lock_file), os.O_RDONLY)
-            try:
-                # Try to acquire shared lock non-blocking
-                fcntl.flock(read_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                # Got shared lock - can read the file
-                os.lseek(read_fd, 0, os.SEEK_SET)
-                content = os.read(read_fd, 4096).decode('utf-8', errors='ignore')
-                if content:
-                    try:
-                        lock_data = json.loads(content)
-                        pid = lock_data.get('pid')
-                        timestamp = lock_data.get('timestamp', 0)
-                        
-                        if pid is None:
-                            # No PID means stale/corrupted
-                            fcntl.flock(read_fd, fcntl.LOCK_UN)
-                            os.close(read_fd)
-                            lock_file.unlink(missing_ok=True)
-                            return True
-                        
-                        # Check if process is alive
-                        if not is_process_alive(pid):
-                            # Process is dead, lock is stale
-                            fcntl.flock(read_fd, fcntl.LOCK_UN)
-                            os.close(read_fd)
-                            lock_file.unlink(missing_ok=True)
-                            return True
-                        
-                        # Check if lock timestamp is too old
-                        if timestamp > 0:
-                            lock_age = time.time() - timestamp
-                            if lock_age > self.stale_threshold:
-                                # Lock is old - double-check process is actually dead
-                                if not is_process_alive(pid):
-                                    fcntl.flock(read_fd, fcntl.LOCK_UN)
-                                    os.close(read_fd)
-                                    lock_file.unlink(missing_ok=True)
-                                    return True
-                    except (json.JSONDecodeError, ValueError):
-                        # Corrupted lock file
-                        fcntl.flock(read_fd, fcntl.LOCK_UN)
-                        os.close(read_fd)
-                        lock_file.unlink(missing_ok=True)
-                        return True
-                fcntl.flock(read_fd, fcntl.LOCK_UN)
-            except IOError:
-                # Can't acquire shared lock - lock is actively held
-                pass
-            finally:
-                os.close(read_fd)
-        except (IOError, OSError):
-            # Can't read lock file - might be actively locked
-            # Don't delete it
-            pass
-        
-        return False
-    
+        removed, _reason = remove_lock_file_if_free(lock_file)
+        return removed
+
     @contextmanager
     def acquire_agent_lock(self, agent_id: str, timeout: float = 5.0, max_retries: int = 3):
         """
@@ -215,6 +181,14 @@ class StateLockManager:
                 while time.time() - start_time < timeout:
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        if not holds_current_inode(lock_fd, lock_file):
+                            # A cleaner unlinked the path after our open();
+                            # this lock guards nothing. Reopen and try again.
+                            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                            os.close(lock_fd)
+                            lock_fd = None
+                            lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+                            continue
                         # Write PID and timestamp to lock file for debugging
                         lock_info = {
                             "pid": os.getpid(),
@@ -306,7 +280,7 @@ class StateLockManager:
         else:
             raise TimeoutError(
                 f"Lock timeout for agent '{agent_id}' after {max_retries} attempts. "
-                f"Another process may be updating this agent. Try: wait and retry, or use cleanup_stale_locks tool."
+                f"Another live process holds this agent's lock; it is released when that process finishes or exits. Wait and retry."
             )
     
     @asynccontextmanager
@@ -449,6 +423,14 @@ class StateLockManager:
                 while time.time() - start_time < timeout:
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        if not holds_current_inode(lock_fd, lock_file):
+                            # A cleaner unlinked the path after our open();
+                            # this lock guards nothing. Reopen and try again.
+                            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                            os.close(lock_fd)
+                            lock_fd = None
+                            lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+                            continue
                         # Write PID and timestamp to lock file for debugging
                         lock_info = {
                             "pid": os.getpid(),
@@ -543,6 +525,6 @@ class StateLockManager:
         else:
             raise TimeoutError(
                 f"Lock timeout for agent '{agent_id}' after {max_retries} attempts. "
-                f"Another process may be updating this agent. Try: wait and retry, or use cleanup_stale_locks tool."
+                f"Another live process holds this agent's lock; it is released when that process finishes or exits. Wait and retry."
             )
 
