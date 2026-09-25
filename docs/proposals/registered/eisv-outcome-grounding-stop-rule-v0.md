@@ -1,7 +1,9 @@
 # EISV outcome-grounding: scope correction and a stop rule
 
 Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17;
-power-characterisation correction, 2026-08-23
+power-characterisation correction, 2026-08-23; condition 4 clarification
+and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
+merge
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -301,6 +303,188 @@ automatically.
 Do not adjust these thresholds after seeing the read. The point of writing them
 down now is that they were chosen before the data existed.
 
+### Pre-read clarification — drafted 2026-09-23, effective at merge: what condition 4's "family" means
+
+PASS condition 4 above says the winning candidate must be "the same family as
+at this read's other lead slice". The word "family" appears nowhere else in
+this document, and no code, test, or document partitions the candidates into
+families (#2154). The one other document that reads the term,
+`independent-operator-cohort-preregistration-v0.md`, adopted the condition and
+read "family" as the whole registered candidate set; under that reading the
+compared object is the same candidate set at both leads, so condition 4 could
+not fail on the argmax flip its own rationale names. That document is amended
+alongside this block so its reading agrees with this one. This block defines
+the term before the registered cohort exists.
+It is a clarification of an undefined term, not a change to any threshold,
+cohort, cutoff, date, estimator, or command.
+
+**Definition.** For this read, condition 4 is met if and only if the
+`Best EISV/prior model` cell of the task / 365 d / lead 0 row is
+byte-identical to the `Best EISV/prior model` cell of the task / 365 d /
+lead 30 row in the matrix output of the single registered read, which is
+the first attempt, in receipt order, that printed the matrix (under
+`--read-id eisv-outcome-grounding-2026-12-01` or one of its `-retry-<n>`
+forms; the report names which), and neither cell is `-`. "Family" therefore means the candidate's name as
+`scripts/analysis/eisv_ablation_matrix.py` prints it; two candidates are in
+the same family only when they are the same candidate. Nothing else is
+compared: not the feature a candidate reads, not its delta, not its
+confidence interval, and not the set of candidates that were fitted.
+
+**How it is applied.** The report quotes both cells verbatim and writes one
+of `condition 4: met (<name> at both leads)` or
+`condition 4: unmet (<name at lead 0> / <name at lead 30>)`. A `-` in either
+cell (no candidate/baseline delta was formable on that slice) is `unmet`,
+and the report writes `condition 4: unmet (- / <name>)` or
+`condition 4: unmet (<name> / -)` or `condition 4: unmet (- / -)` as the
+cells read. The comparison uses the registered read's output only; the
+pre-declared sensitivity cohort, any exploratory or reproduction read, and
+the output of any failed attempt play no part. Whether the two names happen
+to share an EISV feature may be reported as context; it does not decide the
+condition.
+
+**Why this reading.** (1) The condition's own rationale names the argmax:
+"an argmax that changes with a nuisance parameter is noise-mining." The
+argmax is a candidate name, so the stability asked for is stability of that
+name. (2) The pull request that registered this document (#1425, merged
+2026-07-31) described the fourth condition as "a stable argmax across
+leads"; this block restores that gloss. It is cited as the registering
+text's contemporaneous wording, not as a pre-data warrant: the same pull
+request body also reported the 2026-07-31 historical read. (3) It is
+decidable from two printed cells with no mapping table, so no analyst
+choice exists at read time, and the definition needs no knowledge of which
+candidates exist or were fitted: it reads the same under any candidate
+tuple. Whether the read may *run* under a changed tuple is a separate
+question, answered by the pin described below. (4) It is the most
+conservative reading available against a false PASS: every coarser
+partition admits winners the rationale would call unstable. It is not
+conservative against a false closure; the disclosure below states that cost.
+
+**Candidate set at the time of this clarification, and the pin.** The
+winner is drawn from `EISV_PRIOR_STATE_MODELS` in
+`scripts/analysis/eisv_skeptic_report.py`, which at `master` `fb966bad`
+names seven candidates:
+`previous_bad_plus_prior_risk`, `prior_risk_binned`, `prior_phi_binned`,
+`prior_s_binned`, `prior_verdict`, `prior_eisv_dispersion_binned`,
+`previous_bad_plus_dispersion`. `global_bad_rate`, `previous_outcome_bad`
+(the baseline) and `reported_confidence_raw` are scored but are not
+candidates and cannot win. Selection among candidates is the lexicographic
+key `(beats_baseline, auc_delta, brier_improvement)` in
+`eisv_ablation_matrix.py`. `max` keeps the first maximal element, and the
+candidates reach it in the order `build_model_scores` constructs them
+(`prior_risk_binned`, `previous_bad_plus_prior_risk`,
+`prior_eisv_dispersion_binned`, `previous_bad_plus_dispersion`,
+`prior_phi_binned`, `prior_s_binned`, `prior_verdict`), not in the order
+of `EISV_PRIOR_STATE_MODELS`, which `score_deltas_vs_baseline` uses only as
+a membership filter. An exact tie on all three keys is therefore resolved
+by construction order.
+
+Alongside this clarification, a separately disclosed code change records
+these seven names, as the tuple is written, and `DISPERSION_FEATURE = "prior_s_disp"`
+on this protocol's entry in `REGISTERED_READ_MANIFEST`
+(`eisv_ablation_matrix.py`), taken from `master` `fb966bad`. From that
+change on, a `--read-protocol registered` read under this protocol's id (the
+registered id and its `-retry-<n>` forms) compares the live
+`eisv_skeptic_report` constants to the recorded values and refuses to read
+if either differs. A difference is therefore adjudicated by the CLI as a
+refusal to read; it is not disclosed and read through. The condition-4
+rule above does not depend on the pin; the read does. What the pin
+freezes, stated exactly: the candidate tuple as written and the dispersion
+feature name. The comparison is exact tuple equality, so a reordering of
+the tuple also refuses; that is a conservative choice of comparison, not a
+claim that the tuple's order selects. What it does not freeze: the
+tie-break order, which is the construction order in `build_model_scores`,
+and what any candidate computes. The tie-break order is recorded above and
+guarded by a CI canary test (`test_build_model_scores_construction_order_is_the_recorded_tie_break`
+in `tests/test_eisv_ablation_matrix.py`). It runs the real
+`build_model_scores` and `score_deltas_vs_baseline` on synthetic rows where
+all seven candidates fit and checks the order they reach the selection in,
+so a reordered construction, a sort, a slice or a reversal of the result
+fails it; and it forces an exact tie through the real `build_matrix_row` to
+check that the selection follows that order rather than, say, the tuple's.
+Its rows are synthetic, so a change that reordered candidates only on other
+data would pass it. The canary is a CI check, not a refusal inside the
+read. The model
+constructors in `build_model_scores`, their binning,
+`min_feature_rows` (30), `MIN_DISPERSION_SNAPSHOTS` (5) and
+`DISPERSION_WINDOW_MINUTES` (90.0) remain governed only by the registered
+command's "run from a checkout of `master`". `score_deltas_vs_baseline`
+binds its `candidate_names` default when the module is imported, so the
+guard compares source constants: it detects a drifted checkout and is not
+a runtime guarantee about what a read computes.
+
+**Execution contract, strengthened.** The pin strengthens the registered
+execution contract rather than disclosing something about it: the command
+says "run from a checkout of `master`", and from the pin on, a `master`
+whose candidate tuple or dispersion feature has moved cannot run this read
+until the checkout is corrected or the manifest and this document are
+amended by pull request. The operator attests this strengthening on merge
+together with the clarification. Recovery path, so that a December refusal
+is not ambiguous between "protocol violation" and "nothing happened yet":
+the refusal is raised inside `validate_read_protocol`, which
+`record_read_receipt` calls as its first statement, before the ledger
+directory is created and before the receipt file is created with `O_EXCL`;
+`main_async` calls `record_read_receipt` before `build_matrix_from_db`. A
+read refused this way writes no receipt, consumes no read id, and touches
+no database. The same `eisv-outcome-grounding-2026-12-01` id is then used
+once the checkout is corrected or the manifest amended; the `-retry-<n>`
+rule above governs failures after a receipt exists and is not triggered.
+The refusal message names both the recorded and the live values; if a
+refusal occurs, the December report discloses it.
+
+**Disclosure of what was known when this was written.** Five lead 0 /
+lead 30 winner pairs are recorded in this repository, none of them the
+registered task / 365 d cohort. The frozen 2026-08-09 descriptive matrix
+(`docs/operations/eisv-ablation-frozen-2026-08-09.md`) has four, in the
+task and strict scopes at 30 d and 90 d: `prior_risk_binned` /
+`previous_bad_plus_dispersion` at 30 d and `prior_risk_binned` /
+`prior_s_binned` at 90 d, in both scopes. The 2026-06-16 record
+(`docs/operations/ablation-initiates-finding-2026-06-16.md`) has one,
+task / 90 d: `previous_bad_plus_prior_risk` / `prior_s_binned`. The winning
+names differ on all five, so this definition would have been unmet on every
+recorded pair. In addition, after the frozen cutoff the ablation watchdog
+completed 42 runs and the dogfood/ablation guard 43, each printing two live
+matrices whose `Best EISV/prior model` column exposed the selected
+candidates; the guard disabled null resampling, which does not suppress
+that column (see "Protocol deviation — disclosed 2026-08-23" above and
+`docs/ontology/falsification-design-system-audit-2026-08-23.md`). Their
+winners were not recorded and are not known to this block. It is written
+with those facts in view: it is a pre-read choice, not a pre-evidence one.
+It was written before any access to the registered cohort; no live outcome
+read was performed to prepare it. A coarser feature-axis partition was
+considered and rejected (decision record:
+`docs/proposals/active/open-decisions-packet-v0.md`, item D4; audit: #2154);
+the adversarial design review of that packet split between the two
+readings, and the operator selected winner-name identity. The feature-axis
+partition would also have been unmet on every recorded pair, so the choice
+between the two readings changed no recorded verdict.
+
+**Named cost.** Condition 4 binds only on the branch where conditions 1–3
+all pass, and on that branch this reading is the condition most likely to
+produce FAIL, which closes the scheduled read track (not EISV; "What
+continues regardless" below governs that). The operator accepts that
+trade: a stable-argmax requirement that may not be met, rather than one
+that cannot fail.
+
+**What this block does not do.** It does not alter conditions 1–3, the 150
+block threshold, the 0.05 level, the 400-resample null, the cohort, the
+fixture rule, the cutoff, the date, the command, or any estimator in
+`eisv_ablation_matrix.py` or `eisv_skeptic_report.py`. It authorises no
+read before 2026-12-01. It does not itself pin anything: recording the
+candidate tuple and `DISPERSION_FEATURE` in
+`REGISTERED_READ_MANIFEST` is a separate, disclosed code change made
+alongside this clarification, and the rule above does not depend on it. It
+does not change `independent-operator-cohort-preregistration-v0.md`'s
+protocol; the sentences in that document that read "family" as the whole
+candidate set are amended alongside this clarification so its reading agrees
+with this one, while its enrollment ledger is empty. It does not resolve the condition 1 →
+condition 2 redundancy at 400 resamples (#2154 §2) or the agent-stratified
+null question (#2154 §3).
+
+**Attestation.** Attested by the operator on merge as a clarification of an
+undefined term, not a weakening of the registered protocol (`CLAUDE.md`,
+"Measurement authority — what a number may decide", exemption for
+pre-registered scientific stop rules).
+
 ### Feasibility diagnostic for condition 3 — disclosure corrected 2026-08-23
 
 This is a post-registration, exploratory support-feasibility note. It uses only
@@ -342,6 +526,46 @@ live data before the registered read. The 2026-12-01 read remains in force
 exactly as registered. If condition 3 is unmet, the interpretation already
 specified above applies: closure for insufficient eligible evidence, not a
 measured null or disproof.
+
+### Smallest relevant effect — declared 2026-09-23, effective at merge
+
+This is a separate declaration from the condition-4 clarification above, made
+in the same change. It fills the slot the 2026-08-23 correction left open; it
+is a choice of standard, stated here before the read applies it.
+
+The power-characterisation correction above
+records that no beta, AUC delta, or equivalent effect size fills the
+"predeclared smallest relevant effect" slot, and that the operator must
+declare one before any further live outcome-discrimination access. The
+declaration, made 2026-09-23 before any access to the registered cohort, is
+that **no smallest relevant effect is set for this read**. How it was made:
+the operator delegated the choice among the reviewed alternatives to the
+working agent on 2026-09-23; the agent selected and drafted this one after
+an adversarial design review of the alternatives; it becomes the operator's
+declaration on merge, which ratifies it. The
+2026-09-02 interim access disclosed above ran a discrimination script after
+the 2026-08-23 correction and before this declaration existed; it returned 0
+eligible outcomes and computed no discrimination result. That
+is a choice, not an omission, and it is recorded here as the declaration
+the correction asks for. Three reasons, each checkable against this
+repository: the record contains no relevance anchor for this estimand (every
+candidate value in it is a detectability figure, a runtime report label, or
+the withdrawn 0.05 bound that this gate bars by name); the only claim a
+power-qualified `REFUTED` could refute is rework prediction, because in the
+dated inventory of 2026-09-02
+(`docs/proposals/archive/outcome-fixture-conflation-decision-packet-v0.md`,
+21-day window) every `is_bad` row is `test_failed` or
+`watcher_finding_dismissed`, and no recorded measurement shows a bad row of a
+violation, harm, or concealment type; and a value
+chosen now so that `REFUTED` becomes reachable would be derived from what the
+read can detect, which the gate forbids. Consequences: the December read
+runs as registered; the operational stop rule decides PASS or FAIL
+unchanged; the database-free power probe still runs as registered and is
+reported descriptively, not at a declared effect; on any non-PASS branch the scientific inference is `INCONCLUSIVE`
+by declaration, exactly as the gate already provides; and `REFUTED` is
+unreachable for this read. The slot is not closed for the future: a later
+read under a new premise carries its own declaration. No numeric effect
+size is substituted for the unfilled slot.
 
 ## What continues regardless
 
