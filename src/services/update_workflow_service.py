@@ -110,8 +110,8 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
                 f"Failed to acquire lock for agent '{ctx.agent_id}' after automatic retries and cleanup. "
                 f"This usually means another active process is updating this agent. "
                 f"{cleanup_msg}If this persists, try: "
-                f"1) Wait a few seconds and retry, 2) Check for other Cursor/Claude sessions, "
-                f"3) Use cleanup_stale_locks tool, or 4) Restart Cursor if stuck."
+                f"1) Wait a few seconds and retry, 2) Check for other sessions updating this agent, "
+                f"3) Use cleanup_stale_locks tool, or 4) Restart your MCP client if stuck."
                 ,
                 error_code="LOCK_TIMEOUT",
                 error_category="system_error",
