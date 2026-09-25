@@ -7,12 +7,15 @@ purpose and links to the precise version at every step.
 
 ## The product in one sentence
 
-**UNITARES is a self-hosted federation kernel for agent identity, claims and
-evidence, review, outcomes, and reconstruction.** Different harnesses retain
-their own execution loops while sharing an attributed record through MCP/HTTP.
+**UNITARES is a self-hosted, single-operator federation kernel for agent
+identity, claims and evidence, review, outcomes, and reconstruction.** Different
+harnesses retain their own execution loops while sharing an attributed record
+through MCP/HTTP.
 
 Here federation means many independent runtimes and harnesses sharing one
-operator-controlled server and authority domain. “Kernel” describes that shared
+operator-controlled server and authority domain; that is what single-operator
+means. Where these documents mean several operators or authority domains, they
+say cross-operator or multi-principal instead. “Kernel” describes that shared
 accountability boundary. It is not a claim that UNITARES owns execution,
 replicates state across independent servers, or has proved better outcomes than
 a structured handoff. Runtimes interoperate with each other over their own

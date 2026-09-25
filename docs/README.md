@@ -1,6 +1,6 @@
 # UNITARES Documentation
 
-This is the documentation tree for the
+This is the documentation tree for the single-operator
 [UNITARES federation kernel](../README.md). Start with the repo README for
 the core idea and quickstart, then choose the path below. Canonical references,
 operator runbooks, research provenance, and optional essays are kept separate so

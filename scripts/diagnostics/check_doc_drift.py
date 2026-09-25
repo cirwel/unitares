@@ -236,7 +236,7 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
         ("reconstruction", ("reconstruction",)),
     ],
     "docs/deployment/glama.md": [
-        ("self-hostable product", ("self-hostable federation kernel",)),
+        ("self-hostable product", ("self-hostable, single-operator federation kernel",)),
         ("provider-hosted deployment", ("private provider-hosted deployment",)),
         ("fresh-process identity", ("fresh processes receive fresh identities",)),
         ("external-processing boundary", ("optional inference and integrations",)),

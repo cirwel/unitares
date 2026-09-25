@@ -9,12 +9,13 @@ operator's production service credentials.
 
 Suggested directory description:
 
-> UNITARES is a self-hostable federation kernel for AI-agent identity, claims and
-> evidence, review, outcomes, and reconstruction. Agents keep their own runtimes
-> while sharing an attributed record through MCP. Fresh processes receive fresh
-> identities; explicit lineage links inherited work. The private bundle supplies
-> durable storage and coordination services. Advisory inference requires a
-> configured provider, and completing peer review requires a reviewer.
+> UNITARES is a self-hostable, single-operator federation kernel for AI-agent
+> identity, claims and evidence, review, outcomes, and reconstruction. Agents
+> keep their own runtimes while sharing an attributed record through MCP. Fresh
+> processes receive fresh identities; explicit lineage links inherited work. The
+> private bundle supplies durable storage and coordination services. Advisory
+> inference requires a configured provider, and completing peer review requires
+> a reviewer.
 
 On Glama this is a private provider-hosted deployment: Glama runs the compute and
 stores the persistent volume, while the operator controls account configuration

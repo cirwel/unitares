@@ -1,8 +1,9 @@
 # Capabilities and deployment
 
-UNITARES is a self-hosted federation kernel: many independent agent runtimes and
-harnesses share one operator-controlled server and authority domain. The core
-workflow is identity, claims and evidence, review, outcomes, and reconstruction.
+UNITARES is a self-hosted, single-operator federation kernel: many independent
+agent runtimes and harnesses share one operator-controlled server and authority
+domain. The core workflow is identity, claims and evidence, review, outcomes,
+and reconstruction.
 This guide organizes existing capabilities; it does not add a schema, change a
 default, or narrow discovery.
 
