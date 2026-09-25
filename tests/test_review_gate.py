@@ -1664,7 +1664,8 @@ def test_resuming_stops_at_the_limit_and_the_tail_is_never_an_answer(monkeypatch
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert len(calls) == rg.AGY_RESUME_LIMIT + 1
     assert rg.parse_verdict(text) != ("CLEAN", 0)
-    assert rg.parse_verdict(text) is None or note != "exit 0"
+    assert note != "exit 0"  # an unrecovered truncation is a failure
+    assert "output limit not recovered after 3 resume(s)" in note
 
 
 def test_other_agy_errors_are_not_resumed(monkeypatch, tmp_path):
@@ -1695,3 +1696,27 @@ def test_a_resumed_agy_review_is_recorded_end_to_end(tmp_path, monkeypatch, caps
     assert rc == 1, capsys.readouterr()
     assert records[0][1].verdict == "FINDINGS" and records[0][1].reviewer == "antigravity"
     assert "resumed 1x" in capsys.readouterr().err
+
+
+def test_a_budget_that_runs_out_mid_resume_is_a_failure(monkeypatch, tmp_path):
+    """Still truncated when the time budget ends: never reported as exit 0."""
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_TRUNCATED])
+    ticks = iter([0.0, 0.0, 100.0, 100.0, 100.0, 100.0])
+    monkeypatch.setattr(rg.time, "monotonic", lambda: next(ticks, 100.0))
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note.startswith("output limit not recovered")
+    assert note != "exit 0"
+
+
+def test_an_unrecovered_truncation_is_recorded_as_failed_not_clean(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff --git a/x b/x\n+x\n")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    monkeypatch.setattr(rg, "antigravity_prompt", lambda *args, **kw: "PROMPT")
+    monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
+    _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMIT + 1))
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "antigravity")
+    assert rc == rg.UNREVIEWED
+    assert records[0][1].verdict == "FAILED"

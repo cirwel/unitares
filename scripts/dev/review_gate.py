@@ -982,6 +982,13 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     finally:
         if workspace:
             workspace.cleanup()
+    if failure is None and isolated:
+        final = last.read_text(errors="replace") if last.exists() else ""
+        if _agy_output_limited(final) is not None:
+            # Still truncated after the last resume, or the budget ran out:
+            # a failure, never "exit 0" (which callers accept as a review).
+            failure = (f"output limit not recovered after {resumed} resume(s)"
+                       + ("" if resumed < AGY_RESUME_LIMIT else f" (limit {AGY_RESUME_LIMIT})"))
     if failure is not None:
         if failure.startswith("could not start"):
             note, _, detail = failure.partition("|")
