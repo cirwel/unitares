@@ -202,29 +202,12 @@ class DistributedLock:
         try:
             while True:
                 try:
-                    # Open lock file
+                    # Open lock file and try a non-blocking lock. Only these
+                    # two calls count as contention; the locked body below
+                    # runs outside this handler, so an OSError it raises
+                    # reaches the caller instead of re-acquiring the lock.
                     fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
-
-                    # Try non-blocking lock
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    if not holds_current_inode(fd, lock_file):
-                        # A cleaner unlinked the path after our open(); this
-                        # lock guards nothing. Reopen on the next pass.
-                        fcntl.flock(fd, fcntl.LOCK_UN)
-                        os.close(fd)
-                        fd = None
-                        continue
-
-                    # Write PID to lock file
-                    os.ftruncate(fd, 0)
-                    os.write(fd, f"{os.getpid()}".encode())
-                    os.fsync(fd)
-
-                    logger.debug(f"File lock acquired: {resource_id}")
-                    self._file_locks[resource_id] = fd
-                    yield
-                    return
-
                 except IOError:
                     # Lock is held, close our fd and retry
                     if fd is not None:
@@ -242,6 +225,25 @@ class DistributedLock:
                         )
 
                     await asyncio.sleep(retry_delay)
+                    continue
+
+                if not holds_current_inode(fd, lock_file):
+                    # A cleaner unlinked the path after our open(); this
+                    # lock guards nothing. Reopen on the next pass.
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+                    fd = None
+                    continue
+
+                # Write PID to lock file
+                os.ftruncate(fd, 0)
+                os.write(fd, f"{os.getpid()}".encode())
+                os.fsync(fd)
+
+                logger.debug(f"File lock acquired: {resource_id}")
+                self._file_locks[resource_id] = fd
+                yield
+                return
 
         finally:
             # Release lock

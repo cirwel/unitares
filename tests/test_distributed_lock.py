@@ -233,6 +233,17 @@ class TestFileFallback:
             assert str(os.getpid()) in content
 
     @pytest.mark.asyncio
+    async def test_body_oserror_is_not_contention(self, lock_no_redis, tmp_path):
+        """An OSError from the locked body must reach the caller once, with the
+        lock released, not be retried as flock contention (which re-acquired
+        the lock and surfaced as RuntimeError from asynccontextmanager)."""
+        with pytest.raises(TimeoutError, match="inner timeout"):
+            async with lock_no_redis.acquire("body-test", timeout=2.0):
+                raise TimeoutError("inner timeout")
+        async with lock_no_redis.acquire("body-test", timeout=0.5):
+            pass  # released: re-acquirable at once
+
+    @pytest.mark.asyncio
     async def test_is_locked_file_fallback(self, lock_no_redis, tmp_path):
         """is_locked returns False for non-held file lock."""
         assert await lock_no_redis.is_locked("no-file-lock") is False
