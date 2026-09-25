@@ -714,7 +714,39 @@ class TestOrphanedInodeRace:
         assert removed is False
         assert not (tmp_path / "missing.lock").exists()
 
-    def _unlink_after_first_open(self, lock_file):
+    def test_cleaner_unlinks_while_its_probe_still_holds_the_lock(self, tmp_path, monkeypatch):
+        """If the cleaner released its probe before unlinking, an acquirer
+        could lock the file in that gap, pass its inode check, and then be
+        left on an orphan when the unlink lands. The four-process test cannot
+        hit that window reliably, so assert the ordering directly: at the
+        moment of unlink the file must still be locked by the probe."""
+        from src.state_locking import remove_lock_file_if_free
+
+        lock_file = tmp_path / "a.lock"
+        lock_file.write_text("{}")
+        real_unlink = Path.unlink
+        seen = []
+
+        def checking_unlink(self, *args, **kwargs):
+            if self == lock_file:
+                fd = os.open(str(self), os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    seen.append("free at unlink")
+                except BlockingIOError:
+                    seen.append("held at unlink")
+                finally:
+                    os.close(fd)
+            return real_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", checking_unlink)
+        removed, _reason = remove_lock_file_if_free(lock_file)
+        assert removed is True
+        assert seen == ["held at unlink"]
+        assert not lock_file.exists()
+
+    def _unlink_after_first_open(self, lock_file, remove_dir=False):
         """Patch os.open so the acquirer's first open of lock_file is followed
         by a cleaner unlinking the path before the acquirer's flock()."""
         real_open = os.open
@@ -725,6 +757,8 @@ class TestOrphanedInodeRace:
             if not state["fired"] and str(path) == str(lock_file):
                 state["fired"] = True
                 os.unlink(path)
+                if remove_dir:
+                    os.rmdir(lock_file.parent)
             return fd
 
         return patch("src.state_locking.os.open", side_effect=racing_open), state
@@ -751,6 +785,30 @@ class TestOrphanedInodeRace:
         mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
         lock_file = tmp_path / "raced.lock"
         racing, state = self._unlink_after_first_open(lock_file)
+        with racing:
+            async with mgr._acquire_agent_lock_async_fcntl("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+    def test_sync_acquire_recovers_when_the_lock_dir_vanishes_mid_race(self, tmp_path):
+        """Reopening after an orphaned-inode miss re-creates the lock dir; a
+        failed reopen used to be swallowed as contention and then crash
+        flock(None) with a TypeError."""
+        lock_dir = tmp_path / "locks"
+        mgr = StateLockManager(lock_dir=lock_dir, auto_cleanup_stale=False)
+        lock_file = lock_dir / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file, remove_dir=True)
+        with racing:
+            with mgr.acquire_agent_lock("raced", timeout=2.0, max_retries=1):
+                assert state["fired"]
+                self._assert_current_file_is_locked(lock_file)
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_acquire_recovers_when_the_lock_dir_vanishes_mid_race(self, tmp_path):
+        lock_dir = tmp_path / "locks"
+        mgr = StateLockManager(lock_dir=lock_dir, auto_cleanup_stale=False)
+        lock_file = lock_dir / "raced.lock"
+        racing, state = self._unlink_after_first_open(lock_file, remove_dir=True)
         with racing:
             async with mgr._acquire_agent_lock_async_fcntl("raced", timeout=2.0, max_retries=1):
                 assert state["fired"]

@@ -179,6 +179,12 @@ class StateLockManager:
 
                 # Try to acquire lock with timeout
                 while time.time() - start_time < timeout:
+                    if lock_fd is None:
+                        # Reopen after an orphaned-inode miss (below). Outside
+                        # the try, so a failed open surfaces instead of being
+                        # read as contention; re-create the dir in case it went.
+                        self._ensure_lock_dir()
+                        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         if not holds_current_inode(lock_fd, lock_file):
@@ -187,7 +193,6 @@ class StateLockManager:
                             fcntl.flock(lock_fd, fcntl.LOCK_UN)
                             os.close(lock_fd)
                             lock_fd = None
-                            lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                             continue
                         # Write PID and timestamp to lock file for debugging
                         lock_info = {
@@ -355,9 +360,9 @@ class StateLockManager:
                 await asyncio.sleep(poll_interval)
 
             if not acquired:
-                # Same exception type the call site already handles (TimeoutError);
-                # the advisory backend has no stale lock files to clean, so the
-                # caller's file-oriented cleanup is skipped (see update_workflow_service).
+                # Same exception type the call site already handles (TimeoutError).
+                # A timeout means a live holder on any backend, so the caller
+                # never sweeps lock files in response (see update_workflow_service).
                 raise TimeoutError(
                     f"Lock timeout for agent '{agent_id}' after {total_budget:.1f}s (advisory backend). "
                     f"Another process may be updating this agent."
@@ -421,6 +426,12 @@ class StateLockManager:
 
                 # Try to acquire lock with timeout
                 while time.time() - start_time < timeout:
+                    if lock_fd is None:
+                        # Reopen after an orphaned-inode miss (below). Outside
+                        # the try, so a failed open surfaces instead of being
+                        # read as contention; re-create the dir in case it went.
+                        self._ensure_lock_dir()
+                        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         if not holds_current_inode(lock_fd, lock_file):
@@ -429,7 +440,6 @@ class StateLockManager:
                             fcntl.flock(lock_fd, fcntl.LOCK_UN)
                             os.close(lock_fd)
                             lock_fd = None
-                            lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                             continue
                         # Write PID and timestamp to lock file for debugging
                         lock_info = {
