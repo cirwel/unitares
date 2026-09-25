@@ -327,7 +327,10 @@ class DistributedLock:
 
         lock_file = self.lock_dir / f"{resource_id}.lock"
         if lock_file.exists():
-            removed, reason = remove_lock_file_if_free(lock_file)
+            try:
+                removed, reason = remove_lock_file_if_free(lock_file)
+            except OSError as e:
+                removed, reason = False, f"could not remove: {e}"
             if removed:
                 released = True
                 logger.warning(f"Force-released file lock: {resource_id}")

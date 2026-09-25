@@ -213,6 +213,13 @@ class TestForceRelease:
         assert not isinstance(excinfo.value, LockTimeoutError)
 
     @pytest.mark.asyncio
+    async def test_force_release_reports_an_os_error_instead_of_raising(self, lock_no_redis, tmp_path):
+        (tmp_path / "ro-resource.lock").touch()
+        with patch("src.state_locking.remove_lock_file_if_free", side_effect=PermissionError("read-only")):
+            released = await lock_no_redis.force_release("ro-resource")
+        assert released is False
+
+    @pytest.mark.asyncio
     async def test_file_lock_timeout_is_lock_timeout_error(self, lock_no_redis):
         from src.state_locking import LockTimeoutError
 

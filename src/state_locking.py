@@ -319,7 +319,10 @@ class StateLockManager:
           section and the lock auto-releases if the connection drops. This path is
           the RFC (A.2) disconfirmer: if it collapses p99 < 2.0s, the tail was the
           file lock, not the substrate.
-        - ``fcntl``: the legacy file-based lock, preserved verbatim as a fallback.
+        - ``fcntl``: the file-based lock, kept as a supported fallback. Only
+          ``flock()`` counts as contention, acquirers re-check after locking
+          that they hold the file at the path, and a timeout raises
+          LockTimeoutError.
 
         Args:
             agent_id: Agent identifier

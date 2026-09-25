@@ -34,17 +34,14 @@ echo ""
 # Never delete lock files by age: a stuck holder's file can be old, and
 # unlinking it lets a newcomer lock a fresh file at the same path, so two
 # writers get in. lock_cleanup removes only files no process holds.
+# No --lock-dir: lock_cleanup resolves the directory the lock writer uses
+# (data/locks, or UNITARES_LOCK_DIR when set) and handles a missing one.
 echo "Checking for stale lock files..."
-LOCK_DIR="$PROJECT_DIR/data/locks"
-if [[ -d "$LOCK_DIR" ]]; then
-    LOCK_ARGS=(--lock-dir "$LOCK_DIR" --max-age 1800)
-    if [[ "$DRY_RUN" == true ]]; then
-        LOCK_ARGS+=(--dry-run)
-    fi
-    (cd "$PROJECT_DIR" && python3 -m src.lock_cleanup "${LOCK_ARGS[@]}")
-else
-    echo "Lock directory not found (OK if not using file locks)."
+LOCK_ARGS=(--max-age 1800)
+if [[ "$DRY_RUN" == true ]]; then
+    LOCK_ARGS+=(--dry-run)
 fi
+(cd "$PROJECT_DIR" && python3 -m src.lock_cleanup "${LOCK_ARGS[@]}")
 echo ""
 
 # 3. Check for orphaned heartbeat files
