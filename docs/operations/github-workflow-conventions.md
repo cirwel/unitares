@@ -285,6 +285,22 @@ attempt per hour of cooldown. Agents without local tooling read the same file
 before posting `@codex review`. An explicit `review.sh --reviewer <name>`
 still tries a disabled provider. Re-enable it by deleting its entry.
 
+`review.sh` can also review with the **Gemini CLI** on a Google subscription
+login, with no API key and no metered call. It is used only when the `gemini`
+command is installed, and it runs in `--approval-mode plan` (read-only). A
+reviewer from a different model family than the branch's author prefix is
+preferred: for a `claude/` branch the order is Codex, Gemini, then Claude,
+minus anything disabled above. To enable it on a machine:
+
+```bash
+npm install -g @google/gemini-cli
+gemini            # once, interactively: sign in with Google
+./scripts/dev/review.sh --reviewer gemini   # or let the default pick it
+```
+
+A signed-out Gemini fails fast ("set an Auth method") and cools down for an
+hour like the other providers.
+
 Operator, 2026-09-25: Codex is unavailable indefinitely (the OpenAI account
 was suspended). Until that entry is removed, review with a fresh-context
 Claude subagent or council, or another model such as Gemini, and record it
