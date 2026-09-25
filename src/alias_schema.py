@@ -52,6 +52,16 @@ ALIAS_SCHEMA_DROP = {
         "topic",
         "use_llm",
         "use_model",
+        # Read only by other actions' handlers (2026-09-25): offset by
+        # details, epoch_scope by list, scope by audit, and the three
+        # promotion receipt fields by promote. The search parser reads none
+        # of them, directly or through request.arguments.
+        "offset",
+        "epoch_scope",
+        "scope",
+        "evidence_ids",
+        "verification_basis",
+        "decision_standard",
     }),
 }
 
@@ -180,6 +190,38 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "Expand results inline only with response_mode='full'; otherwise "
                 "open one with knowledge(action='details')."
             ),
+        },
+        # The router's text for these describes the store action (discovery_type
+        # lists every writable type) or names several actions at once. On the
+        # search alias each is only a filter.
+        "discovery_type": {
+            "description": (
+                "Filter results by discovery type, e.g. bug_found, insight, "
+                "architectural_decision."
+            ),
+            "brief": "Filter by discovery type, e.g. bug_found.",
+        },
+        "tags": {
+            "description": "Exact any-of tag filter, applied in every search mode.",
+            "brief": "Exact any-of tag filter.",
+        },
+        "severity": {
+            "description": "Filter by severity: low, medium, high, critical.",
+        },
+    },
+    # The router's agent_id text describes the read actions ("Filter by
+    # agent"). On the store alias it names the writer, and an unbound call
+    # honors it verbatim for a low/medium write (params_step keeps an explicit
+    # agent_id when no session is bound), so the text steers callers away
+    # from setting it. High/critical severity is refused unless the session is
+    # bound to the writer (_authorize_store_discovery -> verify_agent_ownership).
+    "store_finding": {
+        "agent_id": {
+            "description": (
+                "Leave unset; the bound session is the writer. high/critical "
+                "severity needs a session bound to the writing agent."
+            ),
+            "brief": "Leave unset; the bound session is the writer.",
         },
     },
 }
