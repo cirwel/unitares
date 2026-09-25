@@ -44,11 +44,28 @@ def is_process_alive(pid: int) -> bool:
 
 
 def _recorded_pid(lock_file: Path):
-    """The pid the holder wrote into the lock file, for reporting only."""
+    """The pid the holder wrote into the lock file, for reporting only.
+
+    StateLockManager writes JSON with a "pid" key; the DistributedLock file
+    fallback writes a bare integer. None when neither parses, including a
+    file the holder has just truncated before rewriting.
+    """
     try:
-        return json.loads(lock_file.read_text() or "{}").get("pid")
-    except (json.JSONDecodeError, OSError, ValueError, AttributeError):
+        data = json.loads(lock_file.read_text() or "null")
+    except (json.JSONDecodeError, OSError, ValueError):
         return None
+    if isinstance(data, dict):
+        data = data.get("pid")
+    return data if isinstance(data, int) and not isinstance(data, bool) else None
+
+
+def _held_reason(lock_file: Path) -> str:
+    """Describe a held lock. The recorded pid is reported, never trusted."""
+    pid = _recorded_pid(lock_file)
+    if pid is None:
+        return "held by a live process (holder pid unknown)"
+    alive = "alive" if is_process_alive(pid) else "not running"
+    return f"held by a live process (recorded pid {pid}, {alive})"
 
 
 def check_lock_staleness(lock_file: Path, max_age_seconds: float = 300.0) -> Tuple[bool, str]:
@@ -77,9 +94,7 @@ def check_lock_staleness(lock_file: Path, max_age_seconds: float = 300.0) -> Tup
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            pid = _recorded_pid(lock_file)
-            alive = "alive" if pid and is_process_alive(pid) else "not running"
-            return False, f"held by a live process (recorded pid {pid}, {alive})"
+            return False, _held_reason(lock_file)
         age = time.time() - os.fstat(fd).st_mtime
         if age < max_age_seconds:
             return False, f"free, but touched {age:.0f}s ago (< {max_age_seconds:.0f}s)"
@@ -126,9 +141,7 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
                 # remove_lock_file_if_free for why this must not be split.
                 is_stale, reason = remove_lock_file_if_free(lock_file, max_age_seconds)
                 if reason.startswith("held"):
-                    pid = _recorded_pid(lock_file)
-                    alive = "alive" if pid and is_process_alive(pid) else "not running"
-                    reason = f"held by a live process (recorded pid {pid}, {alive})"
+                    reason = _held_reason(lock_file)
 
             if is_stale:
                 cleaned.append({

@@ -125,6 +125,22 @@ class TestCheckLockStaleness:
         with _held(lock):
             assert check_lock_staleness(lock, max_age_seconds=0)[0] is False
 
+    @pytest.mark.parametrize(("content", "expected"), [
+        (json.dumps({"pid": os.getpid()}), f"recorded pid {os.getpid()}, alive"),
+        (str(os.getpid()), f"recorded pid {os.getpid()}, alive"),  # DistributedLock format
+        ("", "holder pid unknown"),  # truncated before the holder rewrote it
+        ("not json", "holder pid unknown"),
+    ])
+    def test_held_reason_reports_the_pid_it_could_read(self, tmp_path, content, expected):
+        """An unreadable pid is 'unknown', never 'not running': the tool must
+        not suggest a holder is dead when it could not tell."""
+        lock = _write_lock(tmp_path / "held.lock", content=content)
+        with _held(lock):
+            is_stale, reason = check_lock_staleness(lock, max_age_seconds=0)
+        assert is_stale is False
+        assert expected in reason
+        assert "None" not in reason
+
     def test_probe_does_not_remove(self, tmp_path):
         lock = _write_lock(tmp_path / "old.lock")
         check_lock_staleness(lock, max_age_seconds=0)
