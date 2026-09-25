@@ -73,6 +73,11 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
   require Logger
 
+  # Undelivered alarms carried to the next tick (see run_runtime_tick/1).
+  @max_pending_alarms 200
+  # At the 3s findings timeout, 5 stalled POSTs cost 15s of the 30s tick.
+  @max_deliveries_per_tick 5
+
   alias UnitaresSentinel.{
     CycleState,
     Findings,
@@ -547,13 +552,42 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
     {alarms, new_cursor} =
       tick(prior_cursor: effective_prior, db: state.db, persist: false)
 
-    emit_findings(alarms, state)
+    now_ms = System.system_time(:millisecond)
+
+    {fresh, conflict_realert} =
+      Logic.throttle_conflicts(
+        alarms,
+        state
+        |> Map.get(:conflict_realert, UnitaresSentinel.ReAlert.new())
+        |> UnitaresSentinel.ReAlert.prune(now_ms),
+        now_ms
+      )
+
+    # The cursor advances past every row this tick read, delivered or not, so
+    # an alarm whose POST failed would never be rebuilt from the database.
+    # Undelivered alarms are carried in memory (bounded, lost on restart like
+    # the rest of this GenServer's state) and bypass the throttle, which
+    # already admitted them. Delivery order and eviction both go by severity,
+    # this tick's alarms ahead of older ones (eviction by severity, then
+    # queue age: Findings.cap_queue/2), and at most
+    # @max_deliveries_per_tick POSTs are attempted, so a stalled endpoint can
+    # neither eat the tick deadline nor push a fresh high alarm out behind a
+    # backlog. Governance dedups on fingerprint, so resending one that did land
+    # is harmless.
+    pending =
+      fresh
+      |> Logic.order_for_delivery(Map.get(state, :pending_alarms, []))
+      |> emit_findings(state)
+      |> Findings.cap_queue(@max_pending_alarms)
 
     if new_cursor != nil and not same_cursor?(new_cursor, effective_prior) do
       persist_cursor(new_cursor, [])
     end
 
-    %{state | running?: false, cursor: new_cursor}
+    state
+    |> Map.put(:conflict_realert, conflict_realert)
+    |> Map.put(:pending_alarms, pending)
+    |> Map.merge(%{running?: false, cursor: new_cursor})
   end
 
   defp schedule_next_tick(state) do
@@ -606,10 +640,27 @@ defmodule UnitaresSentinel.ForcedReleasePoller do
 
   defp apply_first_boot_lookback(cursor, _state), do: cursor
 
-  defp emit_findings(_alarms, %{emit_findings?: false}), do: :ok
+  # Attempts at most @max_deliveries_per_tick of `ordered` and returns what is
+  # still undelivered. Within a severity, alarms not attempted this tick go
+  # ahead of ones that just failed, so retries rotate through the queue instead
+  # of re-trying the same head forever. Accepted and deduped both count as
+  # delivered.
+  defp emit_findings(_ordered, %{emit_findings?: false}), do: []
 
-  defp emit_findings(alarms, %{findings_opts: findings_opts}) when is_list(alarms) do
-    Enum.each(alarms, &Findings.post_alarm(&1, findings_opts))
+  defp emit_findings(ordered, %{findings_opts: findings_opts}) when is_list(ordered) do
+    {attempt, rest} = Enum.split(ordered, @max_deliveries_per_tick)
+
+    failed =
+      Enum.reject(attempt, fn alarm ->
+        Findings.post_alarm_result(alarm, findings_opts) in [:accepted, :deduped]
+      end)
+
+    # Stamp everything that stays queued, attempted or not, so eviction by age
+    # never mistakes a fresh unattempted alarm for the oldest.
+    Logic.order_for_delivery(
+      Enum.map(rest, &Findings.stamp_queued/1),
+      Enum.map(failed, &Findings.stamp_queued/1)
+    )
   end
 
   defp load_cursor_from_state do

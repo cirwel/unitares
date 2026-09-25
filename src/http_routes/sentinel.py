@@ -5,6 +5,7 @@ Split out of src/http_api.py (see that module for route registration).
 
 from __future__ import annotations
 
+import hashlib
 import math
 import os
 import re
@@ -33,6 +34,41 @@ _FINDING_SEVERITIES = frozenset({"info", "low", "medium", "warning", "high", "cr
 _FINDING_TYPE_SUFFIX = "_finding"
 # Required top-level fields on the posted JSON
 _FINDING_REQUIRED_FIELDS = ("type", "severity", "message", "agent_id", "agent_name", "fingerprint")
+# One bound for every route that takes a fingerprint. Ingest used to accept any
+# length while the model-adjudicate route rejected over this, so a long one was
+# stored, queued, judged, and only then refused. An over-long fingerprint is
+# NORMALIZED at ingest, never rejected: producers post findings best-effort and
+# swallow errors, so a 400 would lose the finding silently — the failure the
+# finding stream exists to catch. The digest is deterministic, so dedup and
+# every later lookup by fingerprint still agree; the original is kept (capped).
+_FINGERPRINT_MAX_CHARS = 256
+_FINGERPRINT_ORIGINAL_MAX_CHARS = 4096
+
+
+def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
+    """``(fingerprint to store, original if it had to be replaced)``."""
+    if len(raw) <= _FINGERPRINT_MAX_CHARS:
+        return raw, None
+    digest = "sha256:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return digest, raw[:_FINGERPRINT_ORIGINAL_MAX_CHARS]
+
+
+def _canonical_fingerprint(fp) -> str:
+    """The key one logical finding is matched on, whichever form its row carries.
+
+    A row persisted before the ingest bound can hold a raw over-long
+    fingerprint, while a recurrence of the same finding is stored as its
+    digest. Exact matching would split them into two findings: the recurrence
+    would bypass a verdict, abstention or cooldown recorded under the raw form,
+    and the queue would list both. Mapping both forms to the digest (it is
+    deterministic from the raw value) keeps them one finding. A fingerprint at
+    or under the bound is its own key, so nothing else changes.
+    """
+    return _bounded_fingerprint(str(fp))[0]
+
+
+def _canonical_fingerprints(fps) -> set:
+    return {_canonical_fingerprint(fp) for fp in fps}
 # Sentinel finding event types as persisted in audit.events (the durable store
 # behind the transient ring buffer). The backlog endpoint reads these.
 # Families eligible for the adjudication queue. Widened ONE family at a time,
@@ -345,6 +381,14 @@ async def http_record_finding(request):
                 status_code=400,
             )
 
+        fingerprint, original = _bounded_fingerprint(str(payload["fingerprint"]))
+        payload["fingerprint"] = fingerprint
+        if original is not None:
+            payload["fingerprint_original"] = original
+        else:
+            # Only this route may set it; never trust a client-supplied one.
+            payload.pop("fingerprint_original", None)
+
         # Evidence at ingest (bridge-dispatch proposal §4, PR #1450): forced-
         # release sentinel findings get their event check attached BEFORE
         # storage, so the durable audit record, the /api/events feed (Discord
@@ -636,6 +680,15 @@ async def _adjudicated_sentinel_fingerprints() -> set:
     return {r["fp"] for r in rows if r["fp"]}
 
 
+async def _already_adjudicated(fingerprint: str) -> bool:
+    """True if an operator outcome exists for this finding under EITHER form of
+    its fingerprint, so a digest-form recurrence cannot collect a second label
+    for a finding already judged under its legacy raw form (or vice versa)."""
+    return _canonical_fingerprint(fingerprint) in _canonical_fingerprints(
+        await _adjudicated_sentinel_fingerprints()
+    )
+
+
 def event_type_is_sentinel_family(producer_ref: Optional[str]) -> bool:
     """True for Sentinel's own producer refs.
 
@@ -897,25 +950,40 @@ async def http_sentinel_adjudication_queue(request):
             order="desc",
             limit=1000,
         )
-        adjudicated = await _adjudicated_sentinel_fingerprints()
+        # Every exclusion and the dedup below match on the canonical key, so a
+        # legacy over-long row and its digest-form recurrence are one finding
+        # (see _canonical_fingerprint).
+        adjudicated = _canonical_fingerprints(await _adjudicated_sentinel_fingerprints())
         # Two different exclusions, deliberately not merged: `adjudicated` is
         # permanent and drives the 409; `abstained` expires and does not.
-        abstained = await _abstained_sentinel_fingerprints()
+        abstained = _canonical_fingerprints(await _abstained_sentinel_fingerprints())
         # A model's confirm/dismiss takes the item off the queue for a
         # cooldown. A model ABSTAIN does not — "the model could not tell" must
         # leave the item for whoever can — unless the caller is the model
         # adjudicator itself, which asks not to be re-shown what it already
         # declined (?exclude_model_abstained=1).
-        model_verdicts = await _model_adjudicated_fingerprints()
+        # No two raw keys can collide here: the model-adjudicate route has
+        # never accepted an over-long fingerprint, so only the stored form of
+        # each finding carries a model verdict.
+        model_verdicts = {
+            _canonical_fingerprint(fp): verdict
+            for fp, verdict in (await _model_adjudicated_fingerprints()).items()
+        }
         exclude_model_abstained = (
             request.query_params.get("exclude_model_abstained", "") in ("1", "true")
         )
+        # ?postable_only=1: skip items whose fingerprint the model-adjudicate
+        # route would refuse (rows persisted before the ingest bound). Done
+        # HERE, before the limit, so a caller that cannot post them is never
+        # handed a window full of them. Counted, like every other exclusion.
+        postable_only = request.query_params.get("postable_only", "") in ("1", "true")
 
         seen: set = set()
         queue = []
         pending_total = 0
         abstained_suppressed = 0
         model_suppressed = 0
+        unpostable_suppressed = 0
         evidence_targets = []
         for e in events:
             details = e.get("details") or {}
@@ -923,22 +991,28 @@ async def http_sentinel_adjudication_queue(request):
             if severity not in _adjudicable_severities(e.get("event_type")):
                 continue
             fp = details.get("fingerprint")
-            if not fp or fp in seen:
+            if not fp:
                 continue
-            seen.add(fp)
-            if fp in adjudicated:
+            key = _canonical_fingerprint(fp)
+            if key in seen:
+                continue
+            seen.add(key)
+            if key in adjudicated:
                 continue
             # Suppressed, not resolved. Counted and reported rather than hidden:
             # an operator must be able to see that declined items exist, or the
             # cooldown becomes a silent backlog.
-            if fp in abstained:
+            if key in abstained:
                 abstained_suppressed += 1
                 continue
-            model_verdict = model_verdicts.get(fp)
+            model_verdict = model_verdicts.get(key)
             if model_verdict in ("confirmed", "dismissed") or (
                 model_verdict == "abstain" and exclude_model_abstained
             ):
                 model_suppressed += 1
+                continue
+            if postable_only and len(fp) > _FINGERPRINT_MAX_CHARS:
+                unpostable_suppressed += 1
                 continue
             pending_total += 1
             if len(queue) < limit:
@@ -978,6 +1052,7 @@ async def http_sentinel_adjudication_queue(request):
             # Same rule as abstention: judged-by-a-model items are counted,
             # never silently dropped.
             "model_adjudicated_suppressed": model_suppressed,
+            "unpostable_suppressed": unpostable_suppressed,
             "model_adjudication_cooldown_hours": _MODEL_ADJUDICATION_COOLDOWN_HOURS,
             "progress": await _adjudication_progress(),
         })
@@ -1031,7 +1106,7 @@ async def http_sentinel_adjudicate(request):
     # durable trace is an audit event that suppresses the item for a cooldown.
     if status == "abstain":
         try:
-            if fingerprint in await _adjudicated_sentinel_fingerprints():
+            if await _already_adjudicated(fingerprint):
                 return JSONResponse(
                     {"success": False, "error": "already adjudicated",
                      "fingerprint": fingerprint},
@@ -1066,7 +1141,7 @@ async def http_sentinel_adjudicate(request):
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     try:
-        if fingerprint in await _adjudicated_sentinel_fingerprints():
+        if await _already_adjudicated(fingerprint):
             return JSONResponse(
                 {"success": False, "error": "already adjudicated", "fingerprint": fingerprint},
                 status_code=409,
@@ -1190,9 +1265,12 @@ async def http_sentinel_model_adjudicate(request):
     fingerprint = str(body.get("fingerprint") or "").strip()
     verdict = str(body.get("verdict") or "").strip().lower()
     reason = (str(body.get("reason") or "").strip().lower() or None)
-    if not fingerprint or len(fingerprint) > 256:
-        return JSONResponse({"success": False, "error": "fingerprint required (<=256 chars)"},
-                            status_code=400)
+    if not fingerprint or len(fingerprint) > _FINGERPRINT_MAX_CHARS:
+        return JSONResponse(
+            {"success": False,
+             "error": f"fingerprint required (<={_FINGERPRINT_MAX_CHARS} chars)"},
+            status_code=400,
+        )
     if verdict not in _MODEL_VERDICTS:
         return JSONResponse(
             {"success": False, "error": f"verdict must be one of {', '.join(_MODEL_VERDICTS)}"},
@@ -1225,7 +1303,7 @@ async def http_sentinel_model_adjudicate(request):
     rationale = str(body.get("rationale") or "")[:_MODEL_RATIONALE_MAX_CHARS]
 
     try:
-        if fingerprint in await _adjudicated_sentinel_fingerprints():
+        if await _already_adjudicated(fingerprint):
             # An operator verdict outranks any model's; never shadow it.
             return JSONResponse(
                 {"success": False, "error": "already adjudicated by an operator",
