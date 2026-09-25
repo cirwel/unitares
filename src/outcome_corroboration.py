@@ -356,17 +356,11 @@ def _has_substrate_evidence(detail: Mapping[str, Any], verification_source: str 
 #: ``scripts/diagnostics/outcome_evidence_provenance_split.py`` reports it.
 SERVER_SET_TOOL_TRIGGERS = frozenset({"phase5_emitter"})
 
-#: The structural shapes ``tool_observation_triggers`` reads. Named constants
-#: because ``corroboration_upgrade_hint`` states them to callers: one source,
-#: so the advice cannot name a shape the grader does not read.
-_TOOL_OBSERVATION_KINDS = ("test", "command", "lint", "build", "file_op", "tool_call")
-_TOOL_OBSERVATION_PAYLOAD_KEYS = ("tool_results", "command_results", "observed_command", "captured_output")
-
 #: The key the hint shows for each reference family, where one reads better
 #: than the family's alphabetical first. Derived from _CLAIM_FIELD_FAMILIES,
 #: never a separate list: a family without a preference (or whose preferred key
 #: was renamed away) falls back to its own first key, and every family appears.
-_PREFERRED_REF_EXAMPLE = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command", "command": "exit_code"}
+_PREFERRED_REF_EXAMPLE = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command", "command": "command"}
 _REF_EXAMPLE_KEYS = {
     family: (
         _PREFERRED_REF_EXAMPLE[family]
@@ -392,11 +386,11 @@ def tool_observation_triggers(detail: Mapping[str, Any]) -> set[str]:
     if any(marker in source for marker in _TRUSTED_TOOL_SOURCES):
         triggers.add("trusted_tool_source")
     kind = str(detail.get("kind") or "").lower()
-    if kind in _TOOL_OBSERVATION_KINDS and "exit_code" in detail:
+    if kind in {"test", "command", "lint", "build", "file_op", "tool_call"} and "exit_code" in detail:
         triggers.add("kind_with_exit_code")
     if detail.get("tool") and ("exit_code" in detail or "returncode" in detail):
         triggers.add("tool_with_return_code")
-    for key in _TOOL_OBSERVATION_PAYLOAD_KEYS:
+    for key in ("tool_results", "command_results", "observed_command", "captured_output"):
         if _nonempty(detail.get(key)):
             triggers.add(f"payload:{key}")
     return triggers
@@ -579,44 +573,35 @@ def assess_outcome_corroboration(
 
 
 def corroboration_upgrade_hint(grade: str | None, *, ceiling: str | None) -> str | None:
-    """Tell a caller what ``detail`` would have to carry to grade higher.
+    """Tell a caller whose claim graded ``claim_only`` what the grader reads.
 
-    The reasons say what was missing; without this, an agent told its claim
-    had "no corroborating detail" guessed at key names the grader does not
-    read (test_exit_code, artifact_hash, external_verifier_id -- an external
-    agent's actual guesses, 2026-09-24). Stating the recognised keys is safe
-    because it is not an escalation path: every self-attested row is capped
-    at ``ceiling`` whatever it carries, and the hint says so, so no one reads
-    the key list as a route to a grade the submitting path cannot reach.
+    The reasons say "no corroborating detail" without saying what would count;
+    an external agent guessed test_exit_code / artifact_hash /
+    external_verifier_id, none of which the grader reads (2026-09-24).
+
+    Deliberately stops at SELF_REPORT_WITH_REFS (0.35). The next grade,
+    TOOL_OBSERVED, is 0.65, which is also the calibration admission weight,
+    and a caller can reach it by DESCRIBING a tool result in the right shape
+    (see SERVER_SET_TOOL_TRIGGERS: recorded, not resolved, and an operator
+    call). Advertising those shapes to every caller would move rows across the
+    calibration floor before that call is made, so the hint names only the
+    reference keys, which stay below it, and the cap.
 
     Only self-attested rows (ceiling TOOL_OBSERVED, the public path's cap) get
     a hint: a vouched in-process emitter is not an agent reading advice, and
-    the cap sentence would be false for it. Returns None otherwise, and once
-    the grade has reached the cap.
+    the cap sentence would be false for it.
     """
-    if grade not in _GRADE_RANK or ceiling != TOOL_OBSERVED:
+    if grade != CLAIM_ONLY or ceiling != TOOL_OBSERVED:
         return None
-    if _GRADE_RANK[grade] >= _GRADE_RANK[TOOL_OBSERVED]:
-        return None
-    parts: list[str] = []
-    if grade == CLAIM_ONLY:
-        ref_keys = ", ".join(_REF_EXAMPLE_KEYS.values())
-        parts.append(
-            f"References in detail ({ref_keys}) raise this to "
-            f"{SELF_REPORT_WITH_REFS}."
-        )
-    parts.append(
-        f"A structured result reaches {TOOL_OBSERVED}: "
-        f"kind (one of {', '.join(_TOOL_OBSERVATION_KINDS)}) with exit_code, "
-        f"tool with exit_code or returncode, or a non-empty "
-        f"{' / '.join(_TOOL_OBSERVATION_PAYLOAD_KEYS)}."
-    )
-    parts.append(
+    ref_keys = ", ".join(_REF_EXAMPLE_KEYS.values())
+    families = ", ".join(_REF_EXAMPLE_KEYS)
+    return (
+        f"References in detail ({ref_keys}; any key of the {families} families "
+        f"counts) raise this to {SELF_REPORT_WITH_REFS}. "
         f"Self-attested detail is capped at {TOOL_OBSERVED} whatever it carries; "
         f"higher grades need server_observation or external_signal provenance, "
         f"which a caller cannot set."
     )
-    return " ".join(parts)
 
 
 def enrich_detail_with_corroboration(
