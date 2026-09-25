@@ -734,3 +734,17 @@ async def test_a_public_listener_crash_after_startup_is_logged(caplog):
     with caplog.at_level(logging.ERROR):
         await _serve_public_listener(_Crashes(), object())
     assert any("Public OAuth listener STOPPED" in r.getMessage() for r in caplog.records)
+
+
+def test_follower_force_exit_tracks_the_leader():
+    """A second Ctrl-C force-quits the leader; the follower must not run out
+    its full graceful drain after it."""
+    import uvicorn
+
+    from src.services.mcp_transport_service import _follower_server_class
+
+    leader = uvicorn.Server(uvicorn.Config(lambda *a: None))
+    follower = _follower_server_class()(leader, uvicorn.Config(lambda *a: None))
+    assert follower.force_exit is False
+    leader.force_exit = True
+    assert follower.force_exit is True

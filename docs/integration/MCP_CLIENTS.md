@@ -162,15 +162,22 @@ tool runs:
      which writes a client and its tokens to Redis; only closing
      registration bounds that. Closing it bounds **new** registrations
      only: a DCR client that already holds a token stays admitted (each
-     refresh renews it). To evict every client and token, delete the
-     OAuth keys and restart:
+     refresh renews it). To evict every client and token, **stop** the
+     server, delete the OAuth keys, then start it. Deleting while it runs
+     does not work: the process still holds the tokens in memory and writes
+     them back on the next refresh or sign-in. With launchd (KeepAlive
+     would respawn it, so unload rather than kill):
 
      ```bash
-     redis-cli --scan --pattern 'unitares:oauth:*' | xargs -r redis-cli del
+     launchctl bootout gui/$(id -u)/com.unitares.governance-mcp
+     R="${REDIS_URL:-redis://localhost:6379/0}"   # the server's REDIS_URL
+     redis-cli -u "$R" --scan --pattern 'unitares:oauth:*' | xargs -r redis-cli -u "$R" del
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
      ```
 
-     This is targeted (never flush Redis, which holds the live session
-     store); pre-registered connectors simply sign in again.
+     Run `bootout` and `bootstrap` as separate commands, not chained on one
+     line. The deletion is targeted (never flush Redis, which holds the live
+     session store); pre-registered connectors simply sign in again.
 
    OAuth gates `/mcp` on **every** request by default, which locks out
    local clients that do not speak OAuth. To keep them working, give the
@@ -280,8 +287,9 @@ Three things make a lockout harder than it needs to be:
 
 OAuth state now survives a restart (`src/oauth_provider.py`, `RedisOAuthStore`),
 so a restart is no longer a way to clear it. To sign every OAuth client out,
-delete the `unitares:oauth:*` keys (targeted — never flush Redis, which holds
-the live session store; command above) and restart. There is no per-client
+stop the server, delete the `unitares:oauth:*` keys, then start it (targeted —
+never flush Redis, which holds the live session store; steps above). Deleting
+while it runs is undone by its next token issuance. There is no per-client
 sign-out by default: the revocation endpoint is not mounted.
 
 If provider construction fails, `/mcp` **closes rather than opening**. The route

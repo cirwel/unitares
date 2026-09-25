@@ -726,6 +726,7 @@ def _follower_server_class() -> type:
         def __init__(self, leader: Any, config: Any) -> None:
             self._leader = leader
             self._own_exit = False
+            self._own_force = False
             super().__init__(config)
 
         @property
@@ -735,6 +736,17 @@ def _follower_server_class() -> type:
         @should_exit.setter
         def should_exit(self, value: bool) -> None:
             self._own_exit = value
+
+        # A second Ctrl-C / SIGTERM sets force_exit on the leader only; mirror
+        # it so the follower abandons its drain too instead of running out
+        # its full graceful timeout.
+        @property
+        def force_exit(self) -> bool:  # type: ignore[override]
+            return self._own_force or bool(getattr(self._leader, "force_exit", False))
+
+        @force_exit.setter
+        def force_exit(self, value: bool) -> None:
+            self._own_force = value
 
         @contextlib.contextmanager
         def capture_signals(self):  # type: ignore[override]
