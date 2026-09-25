@@ -248,6 +248,18 @@ class TestForceRelease:
                     os.close(fd)
 
     @pytest.mark.asyncio
+    async def test_inode_mismatch_retries_are_bounded_by_the_timeout(self, lock_no_redis):
+        """If the path changes on every pass, acquire() must still honour its
+        timeout (and yield to the loop) rather than spin forever."""
+        from src.state_locking import LockTimeoutError
+
+        with patch("src.state_locking.holds_current_inode", return_value=False):
+            with pytest.raises(LockTimeoutError):
+                await asyncio.wait_for(
+                    lock_no_redis.acquire("churn", timeout=0.3).__aenter__(), timeout=5.0
+                )
+
+    @pytest.mark.asyncio
     async def test_file_lock_timeout_is_lock_timeout_error(self, lock_no_redis):
         from src.state_locking import LockTimeoutError
 

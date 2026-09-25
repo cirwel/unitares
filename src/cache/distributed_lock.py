@@ -232,10 +232,16 @@ class DistributedLock:
 
                 if not holds_current_inode(fd, lock_file):
                     # A cleaner unlinked the path after our open(); this
-                    # lock guards nothing. Reopen on the next pass.
+                    # lock guards nothing. Reopen on the next pass, still
+                    # bounded by the timeout and yielding to the loop.
                     fcntl.flock(fd, fcntl.LOCK_UN)
                     os.close(fd)
                     fd = None
+                    if time.monotonic() - start_time >= timeout:
+                        raise LockTimeoutError(
+                            f"File lock timeout for '{resource_id}' after {timeout:.1f}s"
+                        )
+                    await asyncio.sleep(0)
                     continue
 
                 # Write PID to lock file
