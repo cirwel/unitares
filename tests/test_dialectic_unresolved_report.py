@@ -571,3 +571,15 @@ class TestSeenAt:
         rc = report.main(["ack", self.SID, "--disposition", "stale", "--reason", "x",
                           "--by", "op", "--seen-at", "yesterday"])
         assert rc == 2 and not ledger.exists()
+
+
+def test_seen_at_without_an_offset_is_refused(ledger, monkeypatch, capsys):
+    """Review round 5 on #2428: a naive time read as UTC let an unseen
+    objection through for operators east of UTC."""
+    sid = "4444bbbb55556666"
+    _mock_db(monkeypatch, [sid], [_row(session_id=sid)])
+    rc = report.main(["ack", sid, "--disposition", "stale", "--reason", "x",
+                      "--by", "op", "--seen-at", "2026-09-24T10:00"])
+    assert rc == 2
+    assert "WITH an offset" in capsys.readouterr().err
+    assert not ledger.exists()

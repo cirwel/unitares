@@ -504,7 +504,7 @@ def ack_main(argv: Sequence[str]) -> int:
                     help="Why it no longer needs surfacing, e.g. 'PR #2025 merged'")
     ap.add_argument("--by", dest="acknowledged_by", default=None,
                     help="Who is acknowledging (default: the login name)")
-    ap.add_argument("--seen-at", default=None, metavar="ISO_TIMESTAMP",
+    ap.add_argument("--seen-at", default=None, metavar="ISO_TIMESTAMP_WITH_OFFSET",
                     help="When you read the listing you are acting on. Any session "
                          "updated, or given a new objection, after this is refused, "
                          "so an ack never hides something you have not seen.")
@@ -512,11 +512,17 @@ def ack_main(argv: Sequence[str]) -> int:
     args = ap.parse_args(list(argv))
     seen_at = None
     if args.seen_at:
-        seen_at = _as_utc(args.seen_at)
-        if seen_at is None:
-            print(f"dialectic_unresolved ack: --seen-at {args.seen_at!r} is not an ISO timestamp",
-                  file=sys.stderr)
+        try:
+            parsed = dt.datetime.fromisoformat(args.seen_at)
+        except ValueError:
+            parsed = None
+        # Refuse a naive time: guessing UTC (or local) could let an unseen
+        # objection through for an operator east of the guess.
+        if parsed is None or parsed.tzinfo is None:
+            print(f"dialectic_unresolved ack: --seen-at {args.seen_at!r} must be an ISO "
+                  f"timestamp WITH an offset, e.g. 2026-09-24T10:00:00-06:00", file=sys.stderr)
             return 2
+        seen_at = parsed.astimezone(dt.timezone.utc)
 
     reason = " ".join(args.reason.split())
     if not reason:
