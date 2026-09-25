@@ -126,6 +126,11 @@ def _empty_state() -> Dict[str, Any]:
     }
 
 
+# Module-level so the test suite can redirect it (tests/conftest.py); the
+# env var does the same for subprocess-spawned servers.
+DEFAULT_STATE_FILE = Path(os.environ.get("UNITARES_SEQUENTIAL_CALIBRATION_STATE") or Path(__file__).parent.parent / "data" / "sequential_calibration_state.json")
+
+
 class SequentialCalibrationTracker:
     """Track exogenous tactical evidence with a predictable Bernoulli e-process."""
 
@@ -137,7 +142,7 @@ class SequentialCalibrationTracker:
         prior_failure: float = 1.0,
     ):
         if state_file is None:
-            state_file = Path(__file__).parent.parent / "data" / "sequential_calibration_state.json"
+            state_file = DEFAULT_STATE_FILE
         self.state_file = Path(state_file)
         self.prior_success = float(prior_success)
         self.prior_failure = float(prior_failure)

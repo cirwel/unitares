@@ -20,8 +20,10 @@ behavior" (see ~/.claude memory feedback_tests-with-fixes.md).
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
+import subprocess
 import sys
 import threading
 from datetime import datetime, timedelta, timezone
@@ -700,7 +702,7 @@ def _install_scan_stubs(watcher_module, monkeypatch, findings_to_return):
     monkeypatch.setattr(
         watcher_module,
         "_verify_finding_against_source",
-        lambda _f, _ev, _lines: True,
+        lambda _f, _ev, _lines, _indented=None: True,
     )
 
 
@@ -1015,7 +1017,13 @@ def _make_raw_entry(
     detected_at: str = "2026-04-11T00:00:00Z",
     severity: str = "high",
     hint: str = "mutation before persistence",
+    line_content_hash: str | None = None,
 ) -> dict:
+    # Distinct fingerprints get distinct content hashes by default. These
+    # fixtures share one file and line, so a shared hash would make every row
+    # a copy of the same code and the listing would group them into one entry.
+    if line_content_hash is None:
+        line_content_hash = hashlib.sha256(fingerprint.encode()).hexdigest()[:12]
     return {
         "pattern": pattern,
         "file": file,
@@ -1024,7 +1032,7 @@ def _make_raw_entry(
         "severity": severity,
         "detected_at": detected_at,
         "model_used": "gemma4:latest",
-        "line_content_hash": "0123456789ab",
+        "line_content_hash": line_content_hash,
         "fingerprint": fingerprint,
         "status": status,
     }
@@ -2130,6 +2138,491 @@ def test_label_for_other_worktree_falls_back_to_parent(watcher_module):
     # No `.worktrees` segment — fall back to deepest dir name.
     assert watcher_module._label_for_other_worktree("/var/log/app/main.py") == "app"
     assert watcher_module._label_for_other_worktree("") == "(unknown)"
+
+
+# --- Display-time grouping of copies ---------------------------------------
+#
+# The same code flagged in several worktrees, or at a shifted line, is several
+# rows. The listing shows one entry per group, keeps every copy's fingerprint
+# on screen, and never writes: findings.jsonl stays byte-identical.
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=watcher-test",
+            "-c",
+            "user.email=watcher-test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            *args,
+        ],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _repo_with_worktrees(root: Path, *names: str) -> dict[str, Path]:
+    """A git repo at ``root/main`` plus linked worktrees ``root/wt/<name>``,
+    each holding ``pkg/mod.py`` and ``tests/test_mod.py``."""
+    main = root / "main"
+    main.mkdir(parents=True)
+    _git("init", "-q", cwd=main)
+    _git("commit", "-q", "--allow-empty", "--no-verify", "-m", "init", cwd=main)
+    trees = {"main": main}
+    for name in names:
+        _git("worktree", "add", "-q", "-b", name, str(root / "wt" / name), cwd=main)
+        trees[name] = root / "wt" / name
+    for tree in trees.values():
+        for rel in ("pkg/mod.py", "tests/test_mod.py"):
+            (tree / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tree / rel).write_text("try:\n    work()\nexcept Exception:\n    pass\n")
+    return {name: tree.resolve() for name, tree in trees.items()}
+
+
+def _copy(fp: str, tree: Path, *, rel: str = "pkg/mod.py", line: int = 3, **kw) -> dict:
+    kw.setdefault("line_content_hash", "c0ffee000000")
+    kw.setdefault("pattern", "P006")
+    kw.setdefault("severity", "medium")
+    return _make_raw_entry(fp, file=str(tree / rel), line=line, **kw)
+
+
+def test_listing_groups_copies_across_worktrees(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+    findings = [
+        _copy("aaaa000000000001", trees["feat-a"]),
+        _copy("bbbb000000000002", trees["feat-b"], line=5),
+        _copy("cccc000000000003", trees["main"], status="surfaced"),
+        _copy("dddd000000000004", trees["feat-a"], line_content_hash="other0000000"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    entries = [line for line in block.splitlines() if line.startswith("  [")]
+    assert len(entries) == 2
+    grouped = next(line for line in entries if "locations" in line)
+    assert "P006 pkg/mod.py" in grouped
+    assert "(3 locations, same line text, 3 worktree(s))" in grouped
+    # Each copy stays individually addressable for --dismiss / --resolve.
+    for fp, tree, line in (
+        ("aaaa0000", "feat-a", 3),
+        ("bbbb0000", "feat-b", 5),
+        ("cccc0000", "main", 3),
+    ):
+        copy_line = next(l for l in block.splitlines() if f"(#{fp})" in l)
+        assert copy_line.startswith(f"    {tree}: ")
+        assert copy_line.split(": ", 1)[1].startswith(f"{trees[tree]}/pkg/mod.py:{line}")
+    assert "(#cccc0000) (surfaced)" in block
+    assert "(#dddd0000)" in block
+    assert "Total unresolved: 4 (showing 4 as 2 entries" in block
+    assert sorted(f["fingerprint"] for f in shown) == sorted(
+        f["fingerprint"] for f in findings
+    )
+
+
+def test_listing_groups_line_shifted_copies_in_one_worktree(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("aaaa000000000001", trees["main"], line=3),
+        _copy("bbbb000000000002", trees["main"], line=9),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "(2 locations, same line text, 1 worktree(s))" in block
+    assert len(shown) == 2
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"pattern": "P001"},
+        {"line_content_hash": "different000"},
+        {"rel": "tests/test_mod.py"},
+    ],
+)
+def test_listing_keeps_findings_that_differ_apart(watcher_module, tmp_path, change):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"]),
+        _copy("bbbb000000000002", trees["feat-a"], **change),
+    ]
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+    assert sum(1 for line in block.splitlines() if line.startswith("  [")) == 2
+
+
+def test_listing_does_not_group_across_repositories(watcher_module, tmp_path):
+    one = _repo_with_worktrees(tmp_path / "one")
+    two = _repo_with_worktrees(tmp_path / "two")
+    findings = [
+        _copy("aaaa000000000001", one["main"]),
+        _copy("bbbb000000000002", two["main"]),
+    ]
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+@pytest.mark.parametrize("content_hash", ["", None])
+def test_listing_does_not_group_without_a_content_hash(
+    watcher_module, tmp_path, content_hash
+):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"]),
+        _copy("bbbb000000000002", trees["feat-a"]),
+    ]
+    for f in findings:
+        if content_hash is None:
+            f.pop("line_content_hash")
+        else:
+            f["line_content_hash"] = content_hash
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+def test_listing_does_not_group_outside_git(watcher_module, tmp_path):
+    findings = []
+    for fp, name in (("aaaa000000000001", "x"), ("bbbb000000000002", "y")):
+        path = tmp_path / name / "pkg" / "mod.py"
+        path.parent.mkdir(parents=True)
+        path.write_text("pass\n")
+        findings.append(_copy(fp, tmp_path / name))
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+def _fingerprint_lines(block: str) -> list[str]:
+    return [line for line in block.splitlines() if "(#" in line]
+
+
+def test_display_cap_admits_entries_and_fills_rows_with_copies(watcher_module, tmp_path):
+    """Medium entries are admitted by count and the 10-row cap is then filled
+    with further copies in entry order: 12 medium rows in 2 groups show both
+    entries and 10 copies, and the 2 cut copies are summarised, not listed,
+    and not marked shown."""
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy(f"a{i:07d}00000000", trees["main"], line=i + 1, line_content_hash="aaaa00000000")
+        for i in range(6)
+    ] + [
+        _copy(f"b{i:07d}00000000", trees["main"], line=i + 1, line_content_hash="bbbb00000000")
+        for i in range(6)
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert sum(1 for line in block.splitlines() if line.startswith("  [")) == 2
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
+    assert "+2 more location(s) not shown" in block
+    hidden = {f["fingerprint"] for f in findings} - {f["fingerprint"] for f in shown}
+    assert hidden == {"b000000400000000", "b000000500000000"}
+    assert not any(f"(#{fp[:8]})" in block for fp in hidden)
+    assert "Total unresolved: 12 (showing 10 as 2 entries" in block
+
+
+def test_display_cap_never_hides_a_distinct_finding_behind_copies(
+    watcher_module, tmp_path
+):
+    """Copies grouped at their oldest member's place must not push distinct,
+    older findings out: A0 (01-01), D0-D4 (02-xx), then nine copies of A
+    (03-xx). Ungrouped, the 10 oldest rows were A0, all of D and four A
+    copies; grouped, the same rows show as A's entry plus five D entries."""
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("a000000000000000", trees["main"], line=1, detected_at="2026-01-01T00:00:00Z")
+    ] + [
+        _copy(
+            f"d{i:015d}",
+            trees["main"],
+            line=100 + i,
+            line_content_hash=f"d{i:011d}",
+            detected_at=f"2026-02-0{i + 1}T00:00:00Z",
+        )
+        for i in range(5)
+    ] + [
+        _copy(
+            f"a{i + 1:015d}",
+            trees["main"],
+            line=i + 2,
+            detected_at=f"2026-03-0{i + 1}T00:00:00Z",
+        )
+        for i in range(9)
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    shown_fps = {f["fingerprint"] for f in shown}
+    assert {f"d{i:015d}" for i in range(5)} <= shown_fps
+    assert {f"a{i:015d}" for i in range(5)} <= shown_fps
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
+    assert sum(1 for line in block.splitlines() if line.startswith("  [")) == 6
+    assert "+5 more location(s) not shown" in block
+    assert "Total unresolved: 15 (showing 10 as 6 entries" in block
+
+
+def test_critical_copies_still_count_as_rows_against_the_medium_allowance(
+    watcher_module, tmp_path
+):
+    """The medium allowance is 10 minus the critical/high rows, as it was
+    ungrouped: one critical line copied ten times leaves no room for medium,
+    even though it renders as a single entry."""
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy(f"c{i:015d}", trees["main"], line=i + 1, severity="critical",
+              detected_at=f"2026-01-0{i % 9 + 1}T00:00:00Z")
+        for i in range(10)
+    ] + [
+        _copy(f"m{i:015d}", trees["main"], line=100 + i, severity="medium",
+              line_content_hash=f"m{i:011d}", detected_at="2026-02-01T00:00:00Z")
+        for i in range(3)
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert {f["severity"] for f in shown} == {"critical"}
+    assert len(_fingerprint_lines(block)) == 10
+
+
+def test_listing_runs_no_git_for_low_findings(watcher_module, tmp_path, monkeypatch):
+    """Low findings are never displayed, so grouping must not place them in a
+    worktree: a low-only listing starts no git subprocess."""
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"], severity="low"),
+        _copy("bbbb000000000002", trees["feat-a"], severity="low"),
+    ]
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+        raise OSError("subprocess blocked by test")
+
+    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert calls == []
+    assert shown == []
+    assert block is None or "(#" not in block
+
+
+def test_listing_places_only_findings_that_could_be_copies(
+    watcher_module, tmp_path, monkeypatch
+):
+    """The chime renders on every prompt, so a finding that shares its
+    (pattern, hash, severity, file name) with no other finding cannot be a
+    copy and must not cost a git subprocess: 40 distinct findings in 40
+    directories render with no git call."""
+    for i in range(40):
+        (tmp_path / f"dir{i}").mkdir()
+    findings = [
+        _copy(
+            f"d{i:015d}",
+            tmp_path / f"dir{i}",
+            rel=f"mod{i}.py",
+            line_content_hash=f"h{i:011d}",
+        )
+        for i in range(40)
+    ]
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+        raise OSError("subprocess blocked by test")
+
+    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert calls == []
+    assert block is not None
+    assert len(shown) == 10
+
+
+def test_git_lookups_are_capped_per_render(watcher_module, tmp_path, monkeypatch):
+    """Grouping has a fixed git budget per render, so a backlog spread over
+    many directories cannot put an unbounded number of git subprocesses on
+    the per-prompt path (independent review, P2)."""
+    trees = _repo_with_worktrees(tmp_path)
+    findings = []
+    for i in range(30):
+        d = trees["main"] / f"d{i}"
+        d.mkdir()
+        # Two rows per directory with the same line: each could be a copy.
+        for j in range(2):
+            findings.append(
+                _copy(f"{i:08d}{j:08d}", trees["main"], rel=f"d{i}/m.py", line=j + 1)
+            )
+    real_run = subprocess.run
+    git_calls: list = []
+
+    def _counting(*args, **kwargs):
+        cmd = args[0] if args else kwargs.get("args")
+        if cmd and cmd[0] == "git":
+            git_calls.append(cmd)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _counting)
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert len(shown) == 10
+    from agents.watcher.findings import _GIT_LOOKUP_LIMIT
+
+    assert 0 < len(git_calls) <= _GIT_LOOKUP_LIMIT
+
+
+def test_medium_copy_never_rides_on_a_high_entry(watcher_module, tmp_path):
+    """Severity is part of the group key: with ten high rows the medium
+    allowance is zero, so a medium copy of a high line must not be shown, or
+    marked surfaced, under the high entry."""
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy(f"h{i:015d}", trees["main"], line=10 + i, severity="high",
+              line_content_hash=f"h{i:011d}")
+        for i in range(9)
+    ] + [
+        _copy("s000000000000001", trees["main"], severity="high"),
+        _copy("s000000000000002", trees["feat-a"], severity="medium"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "s000000000000002" not in {f["fingerprint"] for f in shown}
+    assert "s0000000" not in "".join(
+        line for line in block.splitlines() if "(#s0000000)" in line and "MEDIUM" in line
+    )
+    assert {f["severity"] for f in shown} == {"high"}
+
+
+def test_display_cap_bounds_one_large_group(watcher_module, tmp_path):
+    # One file with 30 identical lines is one group; it still shows 10 rows.
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [_copy(f"a{i:015d}", trees["main"], line=i + 1) for i in range(30)]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
+    assert "+20 more location(s) not shown" in block
+
+
+def test_display_cap_leaves_no_room_for_grouped_mediums_after_ten_highs(
+    watcher_module, tmp_path
+):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _make_raw_entry(f"hi_{i:013d}", severity="high") for i in range(10)
+    ] + [
+        _copy("aaaa000000000001", trees["main"]),
+        _copy("bbbb000000000002", trees["feat-a"]),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "[MEDIUM]" not in block
+    assert len(shown) == 10
+    assert len(_fingerprint_lines(block)) == 10
+
+
+def test_print_unresolved_groups_copies_without_writing(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    trees = _repo_with_worktrees(tmp_path / "repo", "feat-a")
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    monkeypatch.chdir(outside)  # no session scope: the whole queue is listed
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"]),
+            _copy("bbbb000000000002", trees["feat-a"]),
+        ],
+    )
+    before = watcher_module.FINDINGS_FILE.read_bytes()
+
+    assert watcher_module.print_unresolved() == 0
+
+    out = capsys.readouterr().out
+    assert "P006 pkg/mod.py" in out
+    assert "(2 locations, same line text, 2 worktree(s))" in out
+    assert "(#aaaa0000)" in out and "(#bbbb0000)" in out
+    assert watcher_module.FINDINGS_FILE.read_bytes() == before
+
+
+def test_surface_pending_marks_every_copy_of_a_shown_entry(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"], pattern="P011"),
+            _copy("bbbb000000000002", trees["feat-a"], pattern="P011"),
+        ],
+    )
+    assert watcher_module.surface_pending(check_in=False) == 0
+    statuses = {f["fingerprint"]: f["status"] for f in watcher_module._iter_findings_raw()}
+    assert statuses == {
+        "aaaa000000000001": "surfaced",
+        "bbbb000000000002": "surfaced",
+    }
+
+
+def _checkout_with_codex_worktrees(root: Path) -> dict[str, Path]:
+    """The live layout: a main checkout ``projects/unitares``, two Codex
+    worktrees ``.codex/worktrees/<id>/unitares`` and ``projects/wt/<name>``.
+    The main checkout and both Codex toplevels are all named ``unitares``."""
+    main = root / "projects" / "unitares"
+    main.mkdir(parents=True)
+    _git("init", "-q", cwd=main)
+    _git("commit", "-q", "--allow-empty", "--no-verify", "-m", "init", cwd=main)
+    trees = {
+        "main": main,
+        "codex-4922": root / ".codex" / "worktrees" / "4922" / "unitares",
+        "codex-9429": root / ".codex" / "worktrees" / "9429" / "unitares",
+        "feat": root / "projects" / "wt" / "unitares-feat",
+    }
+    for key, tree in trees.items():
+        if key != "main":
+            tree.parent.mkdir(parents=True, exist_ok=True)
+            _git("worktree", "add", "-q", "-b", key, str(tree), cwd=main)
+    for tree in trees.values():
+        (tree / "pkg").mkdir(parents=True, exist_ok=True)
+        (tree / "pkg" / "mod.py").write_text("pass\n")
+    return {key: tree.resolve() for key, tree in trees.items()}
+
+
+def test_federated_surface_skips_out_of_scope_labels(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    """The federated chime with only out-of-scope findings starts no git
+    subprocess."""
+    trees = _repo_with_worktrees(tmp_path, "feat-a", "feat-b")
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["feat-a"]),
+            _copy("bbbb000000000002", trees["feat-b"], rel="tests/test_mod.py"),
+            _copy("cccc000000000003", tmp_path, rel="wt/removed/pkg/mod.py"),
+        ],
+    )
+    calls: list = []
+
+    def _record(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+        raise OSError("subprocess blocked by test")
+
+    monkeypatch.setattr(subprocess, "run", _record)
+    monkeypatch.setattr(subprocess, "Popen", _record)
+
+    assert (
+        watcher_module.surface_pending(
+            audience="codex:main", scope_root=trees["main"], check_in=False
+        )
+        == 0
+    )
+    assert calls == []
+    assert "other worktrees" not in capsys.readouterr().out
 
 
 # --- surface_pending (UserPromptSubmit hook, chime mode) -------------------
@@ -4362,10 +4855,6 @@ def _stub_urlopen(monkeypatch, watcher_module, payload, captured=None):
     monkeypatch.setattr(watcher_module.urllib.request, "urlopen", _fake)
 
 
-
-
-
-
 def test_openai_compat_url_still_supported(watcher_module, monkeypatch):
     """Back-compat: a WATCHER_OLLAMA_URL pointing at /v1/chat/completions keeps
     working (it just cannot raise num_ctx — which is why it is not default)."""
@@ -4508,7 +4997,6 @@ def test_self_test_covers_a_realistic_prompt_size(watcher_module):
         "planted bug moved out of the file head — under front-truncation a bug "
         "in the tail is still visible, so the case would no longer discriminate"
     )
-
 
 
 def test_scan_call_requests_the_scan_window(watcher_module, monkeypatch):
@@ -4980,3 +5468,79 @@ def test_busy_region_warns_but_does_not_count_as_a_failure(
 
     assert not watcher_module._model_failure_path(detector).exists()
     assert any("1 of 2 regions were skipped (model busy)" in m for m in logged)
+
+
+def test_group_shows_each_copy_hint_that_differs(watcher_module, tmp_path):
+    # Every row in a displayed group is marked surfaced, so each row's own
+    # hint has to be on screen when it differs from the entry's.
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("aaaa000000000001", trees["main"], line=3, hint="swallows DB error"),
+        _copy("bbbb000000000002", trees["main"], line=9, hint="hides timeout"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "— swallows DB error  (2 locations" in block
+    copy_b = next(l for l in block.splitlines() if "(#bbbb0000)" in l)
+    assert "— hides timeout" in copy_b
+    copy_a = next(l for l in block.splitlines() if "(#aaaa0000)" in l)
+    assert "—" not in copy_a
+    assert len(shown) == 2
+
+
+def test_review_findings_are_never_grouped(watcher_module, tmp_path):
+    # R000 hashes the hint, not the source line: equal hashes do not mean
+    # equal code.
+    trees = _repo_with_worktrees(tmp_path)
+    findings = [
+        _copy("aaaa000000000001", trees["main"], line=3, pattern="R000"),
+        _copy("bbbb000000000002", trees["main"], line=9, pattern="R000"),
+    ]
+    block, _shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+
+
+def test_group_never_mixes_severities(watcher_module, tmp_path):
+    trees = _repo_with_worktrees(tmp_path, "feat-a")
+    findings = [
+        _copy("aaaa000000000001", trees["main"], severity="high"),
+        _copy("bbbb000000000002", trees["feat-a"], severity="low"),
+    ]
+    block, shown = watcher_module._format_findings_block(findings, header="x")
+    assert block is not None
+    assert "locations" not in block
+    assert "(#bbbb0000)" not in block  # low is never shown
+    assert [f["fingerprint"] for f in shown] == ["aaaa000000000001"]
+
+
+def test_print_unresolved_groups_despite_a_wide_out_of_scope_backlog(
+    watcher_module, tmp_path, monkeypatch, capsys
+):
+    """Out-of-scope findings across many directories must not turn in-scope
+    grouping off on the SessionStart path: the footer labels them without
+    git, so grouping keeps its whole budget (independent review, P2)."""
+    from agents.watcher.findings import _GIT_LOOKUP_LIMIT
+
+    trees = _repo_with_worktrees(tmp_path / "repo", "feat-a")
+    elsewhere = _repo_with_worktrees(tmp_path / "other")
+    out_of_scope = []
+    for i in range(_GIT_LOOKUP_LIMIT + 2):
+        d = elsewhere["main"] / f"d{i}"
+        d.mkdir()
+        (d / "m.py").write_text("try:\n    work()\nexcept Exception:\n    pass\n")
+        out_of_scope.append(
+            _copy(f"o{i:015d}", elsewhere["main"], rel=f"d{i}/m.py",
+                  line_content_hash=f"o{i:011d}")
+        )
+    _seed_findings(
+        watcher_module,
+        [
+            _copy("aaaa000000000001", trees["main"], line=3),
+            _copy("bbbb000000000002", trees["main"], line=9),
+            *out_of_scope,
+        ],
+    )
+    assert watcher_module.print_unresolved(scope_root=trees["main"]) == 0
+    out = capsys.readouterr().out
+    assert "(2 locations, same line text" in out
