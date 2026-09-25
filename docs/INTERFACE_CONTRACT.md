@@ -172,10 +172,13 @@ The two identifiers serve different jobs:
   the surface digest move; 1.15.0, 2026-09-24: `get_governance_metrics` and
   `check_working_state` declare `verbosity`, which the handler already read;
   undeclared, `/mcp/` dropped it, so the `standard` tier was unreachable there.
-  `verbosity` overrides `lite` when set. Two `lite` inputs now get a different
-  tier: an explicit `lite: null` gets the default (`minimal`, previously `full`),
-  and on REST a string the schema reads as false, such as `"no"` or `"0"`, gets
-  `full` (previously `minimal`), matching MCP. Both input digests and the surface
+  `verbosity` overrides `lite` when set. Existing inputs that behave
+  differently: validated routes (`/mcp/` and REST `check_working_state`) refuse
+  an off-list `verbosity` such as `"Standard"` that they used to ignore; an
+  explicit `lite: null` gets the default (`minimal`, previously `full`); and on
+  REST `get_governance_metrics`, the one unvalidated route, a string the schema
+  reads as false, such as `"no"` or `"0"`, gets `full` (previously `minimal`),
+  as every validated route already did. Both input digests and the surface
   digest move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,

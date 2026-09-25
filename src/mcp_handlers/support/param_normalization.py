@@ -220,9 +220,10 @@ def resolve_metrics_verbosity(arguments: Dict[str, Any] | None) -> str:
     the default (minimal); a string follows the schema's coercion exactly.
     """
     arguments = arguments or {}
-    # Exact match, as the handler always did: no case folding or stripping, so a
-    # REST caller's "Standard" still falls through to lite as before (over /mcp/
-    # the schema's Literal refuses it outright).
+    # Exact match, as the handler always did: no case folding or stripping. Only
+    # the unvalidated route (REST get_governance_metrics) ever hands this an
+    # off-list value, which falls through to lite as before; validated routes
+    # (/mcp/, REST check_working_state) refuse it at the schema's Literal.
     verbosity = arguments.get("verbosity")
     if isinstance(verbosity, str) and verbosity in METRICS_VERBOSITY_TIERS:
         return verbosity

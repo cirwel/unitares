@@ -2092,8 +2092,9 @@ def test_metrics_tier_reported_matches_the_tier_the_handler_builds(arguments):
     try:
         validated = GetGovernanceMetricsParams.model_validate(arguments).model_dump()
     except Exception:
-        # Refused over /mcp/, but REST skips validation and hands these raw
-        # arguments to the handler, so the raw-tier assertions below still apply.
+        # Refused on validated routes, but REST get_governance_metrics skips
+        # validation and hands these raw arguments to the handler, so the
+        # raw-tier assertions below still apply.
         validated = None
     if validated is not None:
         assert resolve_metrics_verbosity(validated) == raw_tier
@@ -2153,9 +2154,23 @@ async def test_envelope_reports_the_tier_the_real_handler_built(arguments):
 
 
 def test_metrics_verbosity_is_matched_exactly_like_the_handler_always_did():
-    """No case folding: a REST caller's "Standard" keeps falling through to lite."""
+    """No case folding. Only unvalidated REST get_governance_metrics can pass
+    "Standard" here, and it keeps falling through to lite; validated routes
+    refuse it (see the next test)."""
     from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
 
     assert resolve_metrics_verbosity({"verbosity": "Standard"}) == "minimal"
     assert resolve_metrics_verbosity({"verbosity": " full", "lite": False}) == "full"
     assert resolve_metrics_verbosity({"verbosity": "Full", "lite": True}) == "minimal"
+
+
+def test_validated_routes_refuse_an_off_list_verbosity():
+    """1.15.0 note: /mcp/ and REST check_working_state validate, so a value they
+    once ignored is now a validation error, as 1.8.0 did for cirs_protocol."""
+    import pydantic
+
+    from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
+
+    for value in ("Standard", "bogus"):
+        with pytest.raises(pydantic.ValidationError):
+            GetGovernanceMetricsParams.model_validate({"verbosity": value})
