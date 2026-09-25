@@ -1912,15 +1912,20 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     kept when an outer ``except Exception: pass`` would catch anything else.
 
     When the line sits in a ``try`` block, the path also takes the handlers of
-    every try nested in the innermost such block that starts below the line,
-    at any depth: the model may cite the outer ``try:`` line or an early body
-    line when the silent handler belongs to a try further down. Tries inside
-    a nested def, lambda or class are not taken, nor handlers whose clause
-    carries ``# noqa: BLE001`` or a bare ``# noqa``. Nothing is taken when the
-    line sits in a nested def or class, or in a nested try's handler,
-    ``else`` or ``finally``, which is not above a later swallow but in a
-    region of its own; nor when the block itself lies inside a handler, where
-    nested handlers are never on the path. This only
+    every try nested in that block (or in any enclosing try block) that starts
+    below the line, at any depth: the model may cite the outer ``try:`` line
+    or an early body line when the silent handler belongs to a try further
+    down. Tries inside a nested def or lambda are not taken (a class body
+    runs where it is defined, so its tries are), nor tries inside any
+    handler, since nested handlers are never on a handler's path (so an
+    enclosing try block cannot reach them either), nor handlers whose clause
+    carries ``# noqa: BLE001`` or a bare ``# noqa``. A nested def, or a
+    nested try's handler, ``else`` or ``finally``, is a region of its own: a
+    line in it is not above a swallow outside it, so only tries later in that
+    same region are taken. In a def that means tries in a try block inside
+    the def that holds the line; a def body is not itself a block. Nothing is
+    taken from a block that itself runs inside a handler (a class body there
+    included), where nested handlers are never on the path. This only
     adds to a path that already has a handler, so it can keep a finding but
     never drop one: one silent nested handler keeps it, and a line with no
     handler of its own is kept as below.
@@ -1969,21 +1974,16 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
     # A cite in a try block may point above the swallow it means: at the
     # `try:` line or an early body line, with the silent handler on a try
     # nested further down that block. Add the handlers of every try nested
-    # in the innermost such block that starts after the cited line.
-    innermost = None
-    for node in ast.walk(tree):
-        if not isinstance(node, try_types):
-            continue
-        body_end = getattr(node.body[-1], "end_lineno", None) or node.body[-1].lineno
-        if node.lineno <= line <= body_end and (
-            innermost is None or node.lineno > innermost.lineno
-        ):
-            innermost = node
-    scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+    # in any such block that starts below the cited line, outside a region
+    # the cite is not in. That is line order, not control flow: a try in an
+    # exclusive branch or after a `return` is still taken, which only keeps.
+    # Only def and lambda bodies are deferred code: a class body runs at
+    # definition time, as part of the block.
+    deferred = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 
     def _runs_in_handler(target: Any) -> bool:
         # True when `target` runs as part of some handler's body: reached
-        # from it without crossing a def, lambda or class.
+        # from it without crossing a def or lambda.
         for node in ast.walk(tree):
             if not isinstance(node, try_types):
                 continue
@@ -1993,61 +1993,73 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
                     child = stack.pop()
                     if child is target:
                         return True
-                    if not isinstance(child, scope_nodes):
+                    if not isinstance(child, deferred):
                         stack.extend(ast.iter_child_nodes(child))
         return False
 
-    # Inside a handler, a nested try's handlers are deliberately not on the
-    # path (see `_p006_handler_reacts`), so the step does not run there.
-    if innermost is not None and _runs_in_handler(innermost):
-        innermost = None
-    if innermost is not None:
-        # Tries in the block, not crossing into a nested def, lambda or
-        # class: code there does not run as part of the block.
-        nested: list[Any] = []
-        stack: list[Any] = list(innermost.body)
+    # Every try block holding the line, the enclosing ones included. Inside
+    # a handler, a nested try's handlers are deliberately not on the path
+    # (see `_p006_handler_reacts`), so a block there takes nothing.
+    blocks = []
+    for node in ast.walk(tree):
+        if not isinstance(node, try_types):
+            continue
+        body_end = getattr(node.body[-1], "end_lineno", None) or node.body[-1].lineno
+        if node.lineno <= line <= body_end and not _runs_in_handler(node):
+            blocks.append(node)
+
+    # Tries in those blocks, not crossing into a nested def or lambda: code
+    # there does not run as part of the block. Nor into any handler: a try
+    # there runs in that handler, and nested handlers are never on a
+    # handler's path. A block's own handlers are outside its body, so this
+    # also keeps an enclosing block from reaching them.
+    nested: dict[int, Any] = {}
+    for block in blocks:
+        stack: list[Any] = list(block.body)
         while stack:
             node = stack.pop()
-            if isinstance(node, scope_nodes):
+            if isinstance(node, deferred):
                 continue
-            if isinstance(node, try_types):
-                nested.append(node)
+            if isinstance(node, ast.ExceptHandler):
+                continue
+            if isinstance(node, try_types) and node.lineno > line:
+                nested[id(node)] = node
             stack.extend(ast.iter_child_nodes(node))
 
-        # A line in a nested def, lambda or class, or in a nested try's
-        # handler, else or finally, is not above a later swallow in the
-        # block: it belongs to a region of its own. A branch's span starts
-        # right after the block before it, so its header counts even when
-        # comments separate it from its first statement.
-        barriers: list[tuple[int, int]] = []
-        for stmt in innermost.body:
-            for node in ast.walk(stmt):
-                # A lambda shares its line with code that runs in the block,
-                # so only statement scopes are barriers.
-                if isinstance(node, scope_nodes) and not isinstance(node, ast.Lambda):
-                    barriers.append((node.lineno, node.end_lineno or node.lineno))
-                if not isinstance(node, try_types):
-                    continue
-                barriers.extend((h.lineno, h.end_lineno or h.lineno) for h in node.handlers)
-                prev_end = (node.handlers or node.body)[-1].end_lineno or 0
-                if node.orelse:
-                    barriers.append((prev_end + 1, node.orelse[-1].end_lineno or 0))
-                    prev_end = node.orelse[-1].end_lineno or 0
-                if node.finalbody:
-                    barriers.append((prev_end + 1, node.finalbody[-1].end_lineno or 0))
+    # A nested def, or a try's handler, else or finally, is a region of its
+    # own: a line in it is not above a swallow outside it. A try later
+    # in the same region is still below the line. A branch's span starts
+    # right after the block before it, so its header counts even when
+    # comments separate it from its first statement. A lambda shares its line
+    # with code that runs in the block, so it is no region.
+    regions: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            regions.append((node.lineno, node.end_lineno or node.lineno))
+        if not isinstance(node, try_types):
+            continue
+        regions.extend((h.lineno, h.end_lineno or h.lineno) for h in node.handlers)
+        prev_end = (node.handlers or node.body)[-1].end_lineno or 0
+        if node.orelse:
+            regions.append((prev_end + 1, node.orelse[-1].end_lineno or 0))
+            prev_end = node.orelse[-1].end_lineno or 0
+        if node.finalbody:
+            regions.append((prev_end + 1, node.finalbody[-1].end_lineno or 0))
+    cite_regions = [(s, e) for s, e in regions if s <= line <= e]
 
-        if not any(start <= line <= end for start, end in barriers):
-            source_lines = source.splitlines()
-            for t in nested:
-                if t.lineno <= line:
-                    continue
-                # A nested clause the author acknowledged with `# noqa:
-                # BLE001` (or a bare `# noqa`) does not keep the finding.
-                on_path.extend(
-                    h
-                    for h in t.handlers
-                    if not _P006_ACKNOWLEDGED.search(source_lines[h.lineno - 1])
-                )
+    # Split as the tokenizer counts lines: str.splitlines also breaks on form
+    # feeds and other separators, which would shift `h.lineno` off its line.
+    source_lines = re.split(r"\r\n|\r|\n", source)
+    for t in nested.values():
+        if not all(s <= t.lineno <= e for s, e in cite_regions):
+            continue
+        # A nested clause the author acknowledged with `# noqa: BLE001` (or
+        # a bare `# noqa`) does not keep the finding.
+        on_path.extend(
+            h
+            for h in t.handlers
+            if not _P006_ACKNOWLEDGED.search(source_lines[h.lineno - 1])
+        )
 
     return not all(_p006_handler_reacts(h) for h in on_path)
 
