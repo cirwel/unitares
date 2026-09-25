@@ -262,9 +262,13 @@ The author cannot substitute their own self-check for independent review.
 `cmd_record` requires an explicit independence attestation; it does not infer
 independence from a provider name or branch prefix. A separate reviewer using
 the same model is valid, though it is the weakest reviewer the gate accepts,
-so name it honestly. Consult advice alone is not a code review. If no reviewer
-completes, the author reports the blocker; CI shows a neutral warning. The
-author keeps the PR draft until review is complete.
+so name it honestly. An independent human or model code review done elsewhere
+is recorded the same way, with
+`./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`
+(plus `--emit` without `gh`), or another machine with the reviewer CLI can run `./scripts/dev/review.sh`.
+Consult advice alone is not a code review. If no reviewer completes, the
+author reports the blocker; CI shows a neutral warning. The author keeps the
+PR draft until review is complete.
 
 The record is keyed on the diff, so it can be produced at any later point
 without re-pushing.
