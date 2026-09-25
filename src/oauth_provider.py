@@ -15,13 +15,14 @@ import asyncio
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import logging
 import os
 import secrets
 import time
 from dataclasses import dataclass, field
-from urllib.parse import parse_qsl, unquote, urlencode
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -556,72 +557,239 @@ def static_clients_from_env() -> list[OAuthClientInformationFull]:
 
 
 class StaticClientBasicAuthShim:
-    """Rewrite HTTP Basic client auth on ``POST /token`` into form fields.
+    """Compatibility rewrites for the static client only, ahead of the SDK.
 
-    The SDK authenticates a client only by its registered method, and its Basic
-    path still requires ``client_id`` in the form body, which RFC 6749 §2.3.1
-    clients commonly omit. For the static client only, move the Basic
-    credentials into the form and drop the header, so either style reaches the
-    ``client_secret_post`` check. Every other request passes through untouched,
-    including DCR clients that registered for Basic.
+    ``POST /token``: HTTP Basic client auth is moved into form fields. The SDK
+    authenticates a client only by its registered method, and its Basic path
+    still requires ``client_id`` in the form body, which RFC 6749 §2.3.1
+    clients commonly omit. Either style then reaches the
+    ``client_secret_post`` check.
+
+    With ``pkce_verifier`` set, two more rewrites let a confidential connector
+    that does not implement PKCE (the SDK requires it on every flow) sign in:
+
+    - ``/authorize`` without ``code_challenge`` gets one derived from the
+      server-held verifier, and requested scopes are narrowed to
+      ``mcp:tools`` (dropped if nothing remains) instead of failing with
+      ``invalid_scope``.
+    - ``POST /token`` for an authorization code without ``code_verifier``
+      gets that verifier.
+
+    PKCE guards a public client's code in transit; this client must present
+    its secret to redeem a code, which OAuth 2.0 accepts in place of PKCE for
+    confidential clients. A request that does carry PKCE is never altered.
+    Every other client passes through untouched.
     """
 
-    def __init__(self, app, *, client_id: str, path: str = "/token"):
+    def __init__(self, app, *, client_id: str, pkce_verifier: str | None = None,
+                 path: str = "/token", authorize_path: str = "/authorize"):
         self.app = app
         self._client_id = client_id
+        self._verifier = pkce_verifier
+        self._challenge = _s256(pkce_verifier) if pkce_verifier else None
         self._path = path
+        self._authorize_path = authorize_path
 
     async def __call__(self, scope, receive, send):
-        if (
-            scope.get("type") != "http"
-            or scope.get("method") != "POST"
-            or scope.get("path") != self._path
-        ):
+        if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        creds = _basic_credentials(scope)
-        if creds is None or creds[0] != self._client_id:
+        path, method = scope.get("path"), scope.get("method")
+        if self._verifier and path == self._authorize_path and method == "GET":
+            fields = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+            if dict(fields).get("client_id") == self._client_id:
+                fields = self._authorize_fields(fields)
+                scope = {**scope, "query_string": urlencode(fields).encode()}
+            await self.app(scope, receive, send)
+            return
+        if method != "POST" or path not in (self._path, self._authorize_path):
+            await self.app(scope, receive, send)
+            return
+        creds = _basic_credentials(scope) if path == self._path else None
+        if path == self._authorize_path and not self._verifier:
+            await self.app(scope, receive, send)
+            return
+        if path == self._path and creds is None and not self._verifier:
+            await self.app(scope, receive, send)
+            return
+        if creds is not None and creds[0] != self._client_id:
             await self.app(scope, receive, send)
             return
 
-        # The client_id is public, so this runs for anonymous callers before the
-        # SDK's own body limit. A token request is a few hundred bytes.
-        body = bytearray()
-        more = True
-        while more:
-            message = await receive()
-            if message["type"] != "http.request":
-                # Client went away before the body finished; nothing to rewrite.
-                await self.app(scope, _replay([message]), send)
-                return
-            body += message.get("body", b"")
-            if len(body) > _MAX_TOKEN_BODY:
+        body, early = await _read_body(receive, _MAX_TOKEN_BODY)
+        if early is not None:
+            if early == "too_large":
                 await JSONResponse(
                     {"error": "invalid_request", "error_description": "request body too large"},
                     status_code=413,
                 )(scope, receive, send)
-                return
-            more = message.get("more_body", False)
+            else:
+                # Client went away before the body finished; nothing to rewrite.
+                await self.app(scope, _replay([{"type": "http.disconnect"}]), send)
+            return
 
-        fields = parse_qsl(bytes(body).decode("utf-8", errors="replace"), keep_blank_values=True)
-        present = {k for k, _ in fields}
-        if "client_id" not in present:
-            fields.append(("client_id", creds[0]))
-        if "client_secret" not in present:
-            fields.append(("client_secret", creds[1]))
+        fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+        values = dict(fields)
+        client = creds[0] if creds is not None else values.get("client_id")
+        if client != self._client_id:
+            await self.app(scope, _replay([_body_message(body)]), send)
+            return
+        present = set(values)
+        if path == self._authorize_path:
+            fields = self._authorize_fields(fields)
+        else:
+            if creds is not None:
+                if "client_id" not in present:
+                    fields.append(("client_id", creds[0]))
+                if "client_secret" not in present:
+                    fields.append(("client_secret", creds[1]))
+            if (
+                self._verifier
+                and values.get("grant_type") == "authorization_code"
+                and "code_verifier" not in present
+            ):
+                fields.append(("code_verifier", self._verifier))
         new_body = urlencode(fields).encode()
 
         headers = [
             (k, v)
             for k, v in scope.get("headers", [])
-            if k.lower() not in (b"authorization", b"content-length")
+            if k.lower() not in (b"content-length",)
+            and not (creds is not None and k.lower() == b"authorization")
         ]
         headers.append((b"content-length", str(len(new_body)).encode()))
-        await self.app(
-            {**scope, "headers": headers},
-            _replay([{"type": "http.request", "body": new_body, "more_body": False}]),
-            send,
-        )
+        await self.app({**scope, "headers": headers}, _replay([_body_message(new_body)]), send)
+
+    def _authorize_fields(self, fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        values = dict(fields)
+        out = [(k, v) for k, v in fields if k != "scope"]
+        requested = (values.get("scope") or "").split()
+        kept = [s for s in requested if s == "mcp:tools"]
+        if kept:
+            out.append(("scope", " ".join(kept)))
+        if "code_challenge" not in values:
+            out = [(k, v) for k, v in out if k != "code_challenge_method"]
+            out += [("code_challenge", self._challenge), ("code_challenge_method", "S256")]
+        return out
+
+
+def static_pkce_verifier(client_secret: str) -> str:
+    """Server-held PKCE verifier for the static client, derived from its
+    secret so it is stable across restarts and never leaves the server."""
+    digest = hmac.new(client_secret.encode(), b"unitares-static-client-pkce", hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def _s256(verifier: str) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+
+
+def _body_message(body: bytes) -> dict:
+    return {"type": "http.request", "body": body, "more_body": False}
+
+
+async def _read_body(receive, limit: int) -> tuple[bytes, str | None]:
+    """Read a request body up to ``limit``. Returns (body, None) or
+    (partial, "too_large" | "disconnect")."""
+    body = bytearray()
+    more = True
+    while more:
+        message = await receive()
+        if message["type"] != "http.request":
+            return bytes(body), "disconnect"
+        body += message.get("body", b"")
+        if len(body) > limit:
+            return bytes(body), "too_large"
+        more = message.get("more_body", False)
+    return bytes(body), None
+
+
+_OAUTH_LOG_PATHS = ("/authorize", "/token")
+
+
+class OAuthAttemptLogger:
+    """Log one line per ``/authorize`` and ``/token`` request: client, PKCE
+    and scope facts, the auth style, the status and any OAuth error.
+
+    Without it a failed connector sign-in leaves no trace (the server keeps no
+    access log). Never logs a secret, a code, a verifier or a token.
+    Sits outermost so it sees what the client actually sent.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("path") not in _OAUTH_LOG_PATHS:
+            await self.app(scope, receive, send)
+            return
+        path, method = scope["path"], scope.get("method")
+        if method == "GET":
+            fields = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+        elif method == "POST":
+            body, early = await _read_body(receive, _MAX_TOKEN_BODY)
+            if early == "too_large":
+                logger.info("[OAUTH] %s -> 413 (body over %d bytes)", path.strip("/"), _MAX_TOKEN_BODY)
+                await JSONResponse(
+                    {"error": "invalid_request", "error_description": "request body too large"},
+                    status_code=413,
+                )(scope, receive, send)
+                return
+            if early == "disconnect":
+                return
+            receive = _replay([_body_message(body)])
+            fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+        else:
+            await self.app(scope, receive, send)
+            return
+        values = dict(fields)
+        basic = _basic_credentials(scope)
+        facts = {
+            "client": values.get("client_id") or (basic[0] if basic else None),
+            "auth": "basic" if basic else ("post" if "client_secret" in values else "none"),
+        }
+        if path == "/authorize":
+            facts.update(
+                pkce="yes" if "code_challenge" in values else "no",
+                scope=values.get("scope") or "-",
+                redirect_host=urlparse(values.get("redirect_uri") or "").netloc or "-",
+                resource=values.get("resource") or "-",
+            )
+        else:
+            facts.update(
+                grant=values.get("grant_type") or "-",
+                verifier="yes" if "code_verifier" in values else "no",
+            )
+
+        outcome = {"status": None, "error": None, "error_description": None}
+
+        async def logging_send(message):
+            if message["type"] == "http.response.start":
+                outcome["status"] = message.get("status")
+                for k, v in message.get("headers", []):
+                    if k.lower() == b"location":
+                        q = dict(parse_qsl(urlparse(v.decode("latin-1")).query))
+                        outcome["error"] = q.get("error")
+                        outcome["error_description"] = q.get("error_description")
+            elif message["type"] == "http.response.body" and outcome["status"] and outcome["status"] >= 400:
+                try:
+                    data = json.loads(message.get("body", b"") or b"{}")
+                    outcome["error"] = outcome["error"] or data.get("error")
+                    outcome["error_description"] = outcome["error_description"] or data.get("error_description")
+                except (ValueError, AttributeError):
+                    pass
+            await send(message)
+
+        try:
+            await self.app(scope, receive, logging_send)
+        finally:
+            logger.info(
+                "[OAUTH] %s %s -> %s%s",
+                path.strip("/"),
+                " ".join(f"{k}={v}" for k, v in facts.items()),
+                outcome["status"],
+                f" error={outcome['error']} ({outcome['error_description']})" if outcome["error"] else "",
+            )
 
 
 _MAX_TOKEN_BODY = 64 * 1024

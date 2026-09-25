@@ -416,7 +416,14 @@ def test_runtime_installs_the_basic_auth_shim_for_a_static_client(
     )
 
     shims = [kw for cls, kw in app.middleware if cls is StaticClientBasicAuthShim]
-    assert shims == ([{"client_id": client_id}] if installed else [])
+    assert shims == ([{"client_id": client_id, "pkce_verifier": None}] if installed else [])
+    from src.oauth_provider import OAuthAttemptLogger
+
+    loggers = [cls for cls, _ in app.middleware if cls is OAuthAttemptLogger]
+    assert len(loggers) == (1 if provider is not None else 0)
+    if loggers:
+        # outermost: added last, so it logs what the client actually sent
+        assert app.middleware[-1][0] is OAuthAttemptLogger
 
 
 def _free_port() -> int:

@@ -65,6 +65,9 @@ class McpAuthConfig:
     oauth_public_listener_only: bool = False
     #: Client ID of the pre-registered OAuth client, if one is configured.
     static_client_id: str | None = None
+    #: Server-held PKCE verifier for the static client (see
+    #: ``StaticClientBasicAuthShim``); None disables the PKCE/scope compat.
+    static_pkce_verifier: str | None = None
 
 
 @dataclass(frozen=True)
@@ -559,7 +562,13 @@ def build_transport_runtime(
         app.add_middleware(
             StaticClientBasicAuthShim,
             client_id=auth_config.static_client_id,
+            pkce_verifier=auth_config.static_pkce_verifier,
         )
+    if auth_config.oauth_provider is not None:
+        from src.oauth_provider import OAuthAttemptLogger
+
+        # Added last, so outermost: it logs what the client actually sent.
+        app.add_middleware(OAuthAttemptLogger)
     start_all_background_tasks(set_ready=set_server_ready)
     _register_application_routes(
         app,
