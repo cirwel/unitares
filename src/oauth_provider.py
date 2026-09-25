@@ -33,7 +33,6 @@ from mcp.server.auth.provider import (
     TokenError,
 )
 from mcp.shared.auth import OAuthClientInformationFull
-from starlette.responses import JSONResponse
 
 
 @dataclass
@@ -618,23 +617,19 @@ class StaticClientBasicAuthShim:
             await self.app(scope, receive, send)
             return
 
-        body, early = await _read_body(receive, _MAX_TOKEN_BODY)
-        if early is not None:
-            if early == "too_large":
-                await JSONResponse(
-                    {"error": "invalid_request", "error_description": "request body too large"},
-                    status_code=413,
-                )(scope, receive, send)
-            else:
-                # Client went away before the body finished; nothing to rewrite.
-                await self.app(scope, _replay([{"type": "http.disconnect"}]), send)
+        # A bounded peek: at most _MAX_TOKEN_BODY is held, whoever the caller
+        # (the client_id is public). An oversize body, a mid-body disconnect or
+        # any other client's request goes on to the SDK as the untouched stream.
+        _seen, body, complete, passthrough = await _peek_body(receive, _MAX_TOKEN_BODY)
+        if not complete:
+            await self.app(scope, passthrough, send)
             return
 
         fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
         values = dict(fields)
         client = creds[0] if creds is not None else values.get("client_id")
         if client != self._client_id:
-            await self.app(scope, _replay([_body_message(body)]), send)
+            await self.app(scope, passthrough, send)
             return
         present = set(values)
         if path == self._authorize_path:
@@ -701,22 +696,6 @@ def _s256(verifier: str) -> str:
 
 def _body_message(body: bytes) -> dict:
     return {"type": "http.request", "body": body, "more_body": False}
-
-
-async def _read_body(receive, limit: int) -> tuple[bytes, str | None]:
-    """Read a request body up to ``limit``. Returns (body, None) or
-    (partial, "too_large" | "disconnect")."""
-    body = bytearray()
-    more = True
-    while more:
-        message = await receive()
-        if message["type"] != "http.request":
-            return bytes(body), "disconnect"
-        body += message.get("body", b"")
-        if len(body) > limit:
-            return bytes(body), "too_large"
-        more = message.get("more_body", False)
-    return bytes(body), None
 
 
 _OAUTH_LOG_PATHS = ("/authorize", "/token")
@@ -906,22 +885,22 @@ class OAuthAttemptLogger:
         try:
             await self.app(scope, receive, logging_send)
         finally:
+            # No return in this finally: it would swallow the app's exception.
             suppressed = _LOG_BUDGET.take()
-            if suppressed is None:
-                return
             if suppressed:
                 logger.info("[OAUTH] %d attempt line(s) suppressed by the rate limit", suppressed)
-            logger.info(
-                "[OAUTH] %s %s -> %s%s",
-                path.strip("/"),
-                " ".join(f"{k}={_log_safe(v)}" for k, v in facts.items()),
-                outcome["status"],
-                (
-                    f" error={_log_safe(outcome['error'])}"
-                    f" ({_log_safe(_strip_queries(outcome['error_description']))})"
-                    if outcome["error"] else ""
-                ),
-            )
+            if suppressed is not None:
+                logger.info(
+                    "[OAUTH] %s %s -> %s%s",
+                    path.strip("/"),
+                    " ".join(f"{k}={_log_safe(v)}" for k, v in facts.items()),
+                    outcome["status"],
+                    (
+                        f" error={_log_safe(outcome['error'])}"
+                        f" ({_log_safe(_strip_queries(outcome['error_description']))})"
+                        if outcome["error"] else ""
+                    ),
+                )
 
 
 _MAX_TOKEN_BODY = 64 * 1024

@@ -459,3 +459,48 @@ def test_line_budget_reports_drops_on_the_next_logged_line():
     assert budget.take() is None and budget.take() is None
     budget._window = 0.0
     assert budget.take() == 2
+
+
+def test_an_app_error_propagates_even_when_the_log_budget_is_spent(monkeypatch):
+    """No return inside the logger's finally: it would swallow the error."""
+    monkeypatch.setattr(_op, "_LOG_BUDGET", _op._LineBudget(per_window=0, window=3600))
+
+    async def boom(scope, receive, send):
+        raise RuntimeError("handler failed")
+
+    app = OAuthAttemptLogger(boom)
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    import asyncio
+
+    with pytest.raises(RuntimeError, match="handler failed"):
+        asyncio.run(app({"type": "http", "method": "GET", "path": "/authorize",
+                         "headers": [], "query_string": b""}, receive, None))
+
+
+def test_another_clients_oversized_body_gets_the_sdks_answer_with_compat_on():
+    plain = TestClient(Starlette(routes=create_auth_routes(
+        GovernanceOAuthProvider(static_clients=[build_static_client(CID, SECRET, [REDIRECT])]),
+        issuer_url=AnyHttpUrl("https://gov.example.org"),
+    )))
+    padded = {"grant_type": "authorization_code", "client_id": "someone-else",
+              "client_secret": "x", "code": "x", "pad": "p" * 100_000}
+    a = _app(compat=True).post("/token", data=padded)
+    b = plain.post("/token", data=padded)
+    assert a.status_code == b.status_code != 413
+
+
+def test_dropped_lines_are_counted_in_the_next_window(monkeypatch, caplog):
+    budget = _op._LineBudget(per_window=2, window=3600)
+    monkeypatch.setattr(_op, "_LOG_BUDGET", budget)
+    client = _app(compat=False)
+    params = {"response_type": "code", "client_id": CID, "redirect_uri": REDIRECT}
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        for _ in range(4):
+            client.get("/authorize", params=params, follow_redirects=False)
+        budget._start = -1e9  # next window
+        client.get("/authorize", params=params, follow_redirects=False)
+    lines = [r.getMessage() for r in caplog.records if r.name == "src.oauth_provider"]
+    assert "[OAUTH] 2 attempt line(s) suppressed by the rate limit" in lines
