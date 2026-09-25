@@ -200,3 +200,36 @@ def normalize_compact_search_details(arguments: Dict[str, Any]) -> Normalization
             "interpretation": "compact_digest_before_serialization",
         }
     }
+
+
+METRICS_VERBOSITY_TIERS = ("minimal", "standard", "full")
+#: The strings GetGovernanceMetricsParams coerces to lite=True; every other
+#: string becomes False. Shared so a resolver fed raw arguments and one fed
+#: validated arguments land on the same tier.
+LITE_TRUE_STRINGS = ("true", "1", "yes")
+
+
+def resolve_metrics_verbosity(arguments: Dict[str, Any] | None) -> str:
+    """The get_governance_metrics tier a call is served, from its arguments.
+
+    One resolver for the handler that builds the payload and the envelope that
+    describes it. They used to decide separately and disagreed on an explicit
+    ``lite: null``: the handler read None as falsy and built ``full`` while the
+    envelope read it as the default and reported ``minimal`` (review of #2430).
+    A valid ``verbosity`` wins; otherwise ``lite`` decides. None or absent means
+    the default (minimal); a string follows the schema's coercion exactly.
+    """
+    arguments = arguments or {}
+    # Exact match, as the handler always did: no case folding or stripping. Only
+    # the unvalidated route (REST get_governance_metrics) ever hands this an
+    # off-list value, which falls through to lite as before; validated routes
+    # (/mcp/, REST check_working_state) refuse it at the schema's Literal.
+    verbosity = arguments.get("verbosity")
+    if isinstance(verbosity, str) and verbosity in METRICS_VERBOSITY_TIERS:
+        return verbosity
+    lite = arguments.get("lite")
+    if lite is None:
+        return "minimal"
+    if isinstance(lite, str):
+        return "minimal" if lite.lower() in LITE_TRUE_STRINGS else "full"
+    return "minimal" if lite else "full"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import os
 from dataclasses import dataclass
@@ -57,6 +58,13 @@ class McpAuthConfig:
     #: Distinguishes "no gate was configured" from "a configured gate is
     #: missing", which the provider being None cannot express on its own.
     gate_unavailable: bool = False
+    #: True when a dedicated public listener carries the OAuth gate
+    #: (UNITARES_OAUTH_PUBLIC_PORT). The gate then applies only to requests
+    #: stamped ``scope["unitares_public_listener"]``, which only that
+    #: listener's socket sets; nothing in a request can forge or strip it.
+    oauth_public_listener_only: bool = False
+    #: Client ID of the pre-registered OAuth client, if one is configured.
+    static_client_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,15 +87,31 @@ class McpTransportRuntime:
     app: Any
     session_manager: Any
     server: Any
+    public_server: Any = None
+    public_socket: Any = None
 
     async def serve(self) -> None:
         uds_socket_path, uds_task = await _start_uds_listener(self.app)
+        public_task = None
+        if self.public_server is not None:
+            public_task = asyncio.create_task(
+                _serve_public_listener(self.public_server, self.public_socket),
+                name="unitares-public-oauth-listener",
+            )
+            if hasattr(self.server, "follower_task"):
+                self.server.follower_task = public_task
         try:
             async with self.session_manager.run():
                 logger.info("[STREAMABLE] Session manager started")
                 await self.server.serve()
             logger.info("[STREAMABLE] Session manager shut down")
         finally:
+            if public_task is not None:
+                self.public_server.should_exit = True
+                try:
+                    await public_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             await _stop_uds_listener(uds_socket_path, uds_task)
 
 
@@ -105,11 +129,33 @@ def _www_authenticate_header(auth_settings: Any) -> str:
         return "Bearer"
 
 
+#: Scope key the public listener stamps on every request it accepts.
+PUBLIC_LISTENER_SCOPE_KEY = "unitares_public_listener"
+
+
+def mark_public_listener(app: Any) -> AsgiCallable:
+    """Wrap ``app`` so every request through it is stamped as public.
+
+    The stamp is set by the listening socket's server, never by the request,
+    which is what makes it safe to gate on where Host, peer address and
+    forwarding headers are not.
+    """
+
+    async def public_app(scope, receive, send):
+        await app({**scope, PUBLIC_LISTENER_SCOPE_KEY: True}, receive, send)
+
+    return public_app
+
+
 async def authorize_mcp_request(
     scope: dict[str, Any],
     auth_config: McpAuthConfig,
 ) -> AuthDecision:
     """Evaluate the static/OAuth bearer gate against one allowlist snapshot.
+
+    With ``oauth_public_listener_only``, everything below applies only to the
+    public listener; requests on the main listener are served as if no OAuth
+    gate were configured, including when the gate failed to build.
 
     Fails closed at the ROUTE when a configured gate could not be built. An
     operator who set ``UNITARES_OAUTH_ISSUER_URL`` asked for a gate; if
@@ -136,6 +182,21 @@ async def authorize_mcp_request(
     credential rather than being locked out by their own hardening.
     """
     bearer_allow = mcp_bearer_tokens()
+    if (
+        not bearer_allow
+        and auth_config.oauth_public_listener_only
+        and not scope.get(PUBLIC_LISTENER_SCOPE_KEY)
+    ):
+        # The main listener is not gated by OAuth. A token a local client does
+        # present still attributes the session to its OAuth client.
+        if auth_config.oauth_provider is not None:
+            ok, client_id = await check_oauth_bearer(
+                Headers(scope=scope).get("authorization"),
+                auth_config.oauth_provider,
+            )
+            if ok and client_id:
+                return AuthDecision(allowed=True, oauth_client_id=f"oauth:{client_id}")
+        return AuthDecision(allowed=True)
     if not bearer_allow and auth_config.gate_unavailable:
         return AuthDecision(
             allowed=False,
@@ -460,6 +521,7 @@ def build_transport_runtime(
     server_start_time: float,
     server_version: str,
     server_build_sha: str,
+    public_socket: Any = None,
 ) -> McpTransportRuntime:
     """Assemble the ASGI app, streamable manager, and uvicorn server."""
     import uvicorn
@@ -480,6 +542,24 @@ def build_transport_runtime(
         server_ready_fn=server_ready_fn,
         server_version=server_version,
     )
+    if auth_config.oauth_public_listener_only and public_socket is None:
+        # No public listener means nothing carries the confined gate, so fall
+        # back to gating every request rather than none of them.
+        logger.error(
+            "No public OAuth listener is serving; %s",
+            "OAuth is unavailable, so every /mcp request on the main listener "
+            "answers 503"
+            if auth_config.gate_unavailable
+            else "OAuth now gates every /mcp request on the main listener",
+        )
+        auth_config = dataclasses.replace(auth_config, oauth_public_listener_only=False)
+    if auth_config.oauth_provider is not None and auth_config.static_client_id:
+        from src.oauth_provider import StaticClientBasicAuthShim
+
+        app.add_middleware(
+            StaticClientBasicAuthShim,
+            client_id=auth_config.static_client_id,
+        )
     start_all_background_tasks(set_ready=set_server_ready)
     _register_application_routes(
         app,
@@ -505,11 +585,192 @@ def build_transport_runtime(
         proxy_headers=True,
         ws="websockets-sansio",
     )
+    main_server = (
+        _leader_server_class()(config) if public_socket is not None else uvicorn.Server(config)
+    )
+    public_server = None
+    if public_socket is not None:
+        # Loopback only: the tunnel connector runs on this host. Same proxy
+        # header trust as the main listener, so REST/dashboard gates keep
+        # seeing the caller's forwarded address, not the connector's.
+        public_server = _follower_server_class()(
+            main_server,
+            uvicorn.Config(
+                mark_public_listener(app),
+                # Informational: serve() is handed the pre-bound socket.
+                host="127.0.0.1",
+                port=public_socket.getsockname()[1],
+                log_level="info",
+                lifespan="off",
+                limit_concurrency=100,
+                timeout_keep_alive=5,
+                timeout_graceful_shutdown=10,
+                forwarded_allow_ips="127.0.0.1",
+                proxy_headers=True,
+                ws="websockets-sansio",
+            ),
+        )
+        logger.info(
+            "Public OAuth listener on 127.0.0.1:%d; /mcp OAuth applies there only",
+            public_socket.getsockname()[1],
+        )
     return McpTransportRuntime(
         app=app,
         session_manager=session_manager,
-        server=uvicorn.Server(config),
+        server=main_server,
+        public_server=public_server,
+        public_socket=public_socket,
     )
+
+
+def bind_public_socket(public_port: int, *, main_port: int) -> Any:
+    """Bind the public listener's loopback socket, or return None.
+
+    Bound by the caller rather than by uvicorn: uvicorn's startup calls
+    ``sys.exit`` on a bind error, which escapes an asyncio task and would take
+    the main listener down with it. ``main()`` binds it after bootstrap (so a
+    predecessor has released the port) and before building the runtime. When
+    this returns None, ``build_transport_runtime`` gates every request on the
+    main listener instead, so a bad port fails closed.
+    """
+    import socket
+
+    if public_port == main_port:
+        logger.error(
+            "Public OAuth listener NOT started: UNITARES_OAUTH_PUBLIC_PORT equals "
+            "the main port %d",
+            main_port,
+        )
+        return None
+    # SO_REUSEADDR (kept so a restart is not refused by TIME_WAIT) lets BSD and
+    # macOS bind 127.0.0.1:P over another process's 0.0.0.0:P listener, which
+    # would silently steal that service's loopback traffic. Anything that
+    # already answers on the port is therefore treated as "in use".
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.5)
+    try:
+        in_use = probe.connect_ex(("127.0.0.1", public_port)) == 0
+    except OSError:
+        in_use = False
+    finally:
+        probe.close()
+    if in_use:
+        # The port is not named: CodeQL treats values read from an *AUTH*
+        # variable as secrets; the operator knows what they set.
+        logger.error(
+            "Public OAuth listener NOT started: something already listens on "
+            "the UNITARES_OAUTH_PUBLIC_PORT port"
+        )
+        return None
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", public_port))
+        sock.listen(2048)
+        sock.setblocking(False)
+    except OSError as exc:
+        sock.close()
+        logger.error(
+            "Public OAuth listener NOT started on the UNITARES_OAUTH_PUBLIC_PORT "
+            "port (%s)",
+            type(exc).__name__,
+        )
+        return None
+    return sock
+
+
+def _leader_server_class() -> type:
+    """A uvicorn Server whose shutdown waits for the public listener's drain.
+
+    On SIGTERM uvicorn restores the original handler and re-raises the signal
+    as soon as the leader's own shutdown returns; with no handler installed
+    the process ends there. The public listener drains concurrently (it
+    follows ``should_exit``) but would be cut off whenever the main listener
+    finished first, which is the usual case once the tunnel's traffic moves
+    to the public port. Awaiting the follower inside ``shutdown`` keeps its
+    drain within the captured-signal window.
+    """
+    import uvicorn
+
+    class LeaderServer(uvicorn.Server):
+        follower_task: Any = None
+
+        async def shutdown(self, sockets: Any = None) -> None:
+            await super().shutdown(sockets=sockets)
+            task = self.follower_task
+            if task is None or task.done():
+                return
+            grace = self.config.timeout_graceful_shutdown or 10
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=grace + 5)
+            except (asyncio.TimeoutError, Exception):
+                logger.warning("Public OAuth listener did not finish draining in time")
+
+    return LeaderServer
+
+
+def _follower_server_class() -> type:
+    """A uvicorn Server that exits with a leader and never touches signals.
+
+    uvicorn's ``serve()`` installs its own SIGINT/SIGTERM handlers and chains
+    to whatever it replaced, so a second server started after the main one
+    would own the signal and drain first while the main listener kept taking
+    work. The follower leaves signals to the main server and stops when it
+    does, so both drain together.
+    """
+    import contextlib
+
+    import uvicorn
+
+    class FollowerServer(uvicorn.Server):
+        def __init__(self, leader: Any, config: Any) -> None:
+            self._leader = leader
+            self._own_exit = False
+            self._own_force = False
+            super().__init__(config)
+
+        @property
+        def should_exit(self) -> bool:  # type: ignore[override]
+            return self._own_exit or bool(self._leader.should_exit)
+
+        @should_exit.setter
+        def should_exit(self, value: bool) -> None:
+            self._own_exit = value
+
+        # A second Ctrl-C / SIGTERM sets force_exit on the leader only; mirror
+        # it so the follower abandons its drain too instead of running out
+        # its full graceful timeout.
+        @property
+        def force_exit(self) -> bool:  # type: ignore[override]
+            return self._own_force or bool(getattr(self._leader, "force_exit", False))
+
+        @force_exit.setter
+        def force_exit(self, value: bool) -> None:
+            self._own_force = value
+
+        @contextlib.contextmanager
+        def capture_signals(self):  # type: ignore[override]
+            yield
+
+    return FollowerServer
+
+
+async def _serve_public_listener(server: Any, sock: Any) -> None:
+    try:
+        await server.serve(sockets=[sock])
+    except SystemExit:
+        # Belt and braces for any other startup exit: never the main listener's.
+        logger.error("Public OAuth listener exited during startup; main listener unaffected")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Nothing awaits this task until shutdown, so without this a crash
+        # would leave the tunnel refused with no trace in the logs.
+        logger.error(
+            "Public OAuth listener STOPPED (%s); the public entry point is down "
+            "until restart, the main listener is unaffected",
+            type(exc).__name__,
+        )
 
 
 async def _start_uds_listener(app: Any) -> tuple[str | None, asyncio.Task[None] | None]:
