@@ -410,6 +410,24 @@ def test_a_prune_on_master_keeps_the_carrier_an_open_branch_needs(layout: Layout
     assert layout.run().returncode == 0
 
 
+def test_prune_drops_a_carrier_older_than_the_aging_window(layout: Layout):
+    # A carrier helps only a text certified before it, and a text certified
+    # that long ago reads AGING anyway, so history this old goes.
+    src = "unitares/src/thing.py"
+    layout.source("x = 2\n")
+    layout.skill(last_verified=_day(60), digest=None)
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    adir.mkdir(parents=True)
+    (adir / "20200101T000000000000Z-aaaaaaaa.json").write_text(json.dumps({
+        "schema": "unitares.skill_attestation.v1", "skill": "demo",
+        "verified_at": f"{_day(45)}T00:00:00Z", "verified_date": _day(45), "verifier": "test",
+        "source_digests": {src: _digest("x = 2\n")}, "skill_digest": "0123456789abcdef",
+        "superseded_digests": {src: [_digest("x = 1\n")]}}))
+    _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {src: _digest("x = 2\n")})
+    assert layout.run("--prune", "1").returncode == 0
+    assert [p.name for p in _attestations(layout)] == ["20991231T000000000000Z-ffffffff.json"]
+
+
 def test_a_branch_stamped_after_masters_re_check_still_re_stamps(layout: Layout):
     # The limit of ordering by stamp time: v2 stamped at 1 AFTER master's
     # 1 -> 2 re-check is, in the records, the same as a revert followed by an
@@ -455,6 +473,8 @@ def test_prune_keeps_the_carrier_of_a_source_absent_where_it_runs(layout: Layout
     carrier = _attestations(layout)[-1]
     layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
     _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {ext: _digest("x = 1\n")})
+    _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {ext: _digest("x = 2\n")},
+            skill_digest="0123456789abcdef")         # newest, other text, no transition
     assert layout.run().returncode == 0
     elsewhere = layout.projects / "empty-projects"
     elsewhere.mkdir()

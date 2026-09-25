@@ -6,8 +6,9 @@ reviewed), `freshness_days`, and the `source_files` its claims depend on.
 Verification records live beside the skills as attestations (below). Two checks:
 
 - STALE: a cited source's current content matches no digest on record for
-  the current skill text (see Attestations below), or a cited source has no
-  recorded digest at all. The
+  the current skill text (see Attestations below) and is not reached from one
+  through a re-check recorded since (see Recorded transitions below), or a
+  cited source has no recorded digest at all. The
   digest is computed from the file in the working tree, so the check needs no
   git history and gives the same answer in a fresh checkout, a shallow clone, a
   worktree, or an rsync copy. File mtime was the previous signal; every
@@ -581,10 +582,18 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
     of the skill needs the carrier as much, and a prune on master would
     otherwise delete it as soon as master re-stamped its own text directly.
     For a source absent from this checkout the current digest is unknown, so
-    every record with a transition for it is kept."""
+    every such record with a transition for it is kept.
+
+    Only records inside the AGING window count. A carrier helps a text only if
+    it was written after that text's certification, and a text certified
+    before the window reads AGING whatever carries it, so an older carrier can
+    never make a skill FRESH; keeping it would stop prune removing any history
+    for a skill whose sources keep changing."""
     meta = parse_frontmatter((skills_dir / name / "SKILL.md").read_text())
     if not meta:
         return set()
+    max_days = max(meta["freshness_days"], FRESHNESS_FLOOR_DAYS)
+    today = datetime.now(timezone.utc).date()
     adir = skills_dir / ATTESTATIONS_DIR / name
     carriers: list[tuple[Path, dict[str, tuple[str, list[str]]]]] = []
     for path in sorted(adir.glob("*.json")):
@@ -592,9 +601,16 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
             data = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
-        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
-            if transitions := _transitions_of(data):
-                carriers.append((path, transitions))
+        if not (isinstance(data, dict) and isinstance(data.get("source_digests"), dict)):
+            continue
+        try:
+            verified = datetime.strptime(str(data.get("verified_date")), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if (today - verified).days > max_days:
+            continue
+        if transitions := _transitions_of(data):
+            carriers.append((path, transitions))
     edges: dict[str, dict[str, set[str]]] = {}
     for _, transitions in carriers:
         for src, (new, olds) in transitions.items():
