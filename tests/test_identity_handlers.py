@@ -1581,6 +1581,39 @@ class TestHandleIdentityAdapter:
         )
 
     @pytest.mark.asyncio
+    async def test_identity_stable_bind_passes_the_ownership_check(self, patch_identity_deps, mock_db, mock_redis):
+        """#2147: the helper now checks ownership itself. identity()'s stable
+        bind hands it a key derived from the agent's own uuid, so it must
+        still bind, through the REAL helper."""
+        from src.mcp_handlers.identity import handlers as identity_handlers
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.get_identity.return_value = None
+        mock_db.get_agent.return_value = None
+
+        real_bind = identity_handlers._perform_session_bind
+        outcomes = []
+
+        async def _observe(*args, **kwargs):
+            outcome = await real_bind(*args, **kwargs)
+            outcomes.append((kwargs.get("source"), outcome))
+            return outcome
+
+        with patch.object(identity_handlers, "ensure_agent_persisted", AsyncMock(return_value=True)), \
+             patch.object(identity_handlers, "_perform_session_bind", _observe):
+            result = await identity_handlers.handle_identity_adapter({
+                "client_session_id": "transport-session",
+                "force_new": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert [source for source, _ in outcomes] == ["identity_stable_session"]
+        assert outcomes[0][1]["bound"] is True
+        assert "bind_refused" not in outcomes[0][1]
+
+    @pytest.mark.asyncio
     async def test_identity_does_not_re_persist_existing_agent(self, patch_identity_deps, mock_db, mock_redis):
         """
         identity() for an already-persisted agent must not redundantly call
@@ -1957,6 +1990,36 @@ class TestHandleOnboardV2:
         assert "session_continuity" not in data
         assert "workflow" not in data
         assert "what_this_does" not in data
+
+    @pytest.mark.asyncio
+    async def test_onboard_stable_bind_passes_the_ownership_check(self, patch_onboard_deps, mock_db, mock_redis):
+        """#2147: the helper now checks ownership itself. onboard()'s stable
+        bind hands it a key derived from the new agent's own uuid, so it must
+        still bind, through the REAL helper. This site awaits the helper bare,
+        so a raise here would have failed the whole onboard."""
+        from src.mcp_handlers.identity import handlers as identity_handlers
+
+        mock_redis.get.return_value = None
+        mock_db.get_session.return_value = None
+        mock_db.find_agent_by_label.return_value = None
+        mock_db.get_identity.return_value = SimpleNamespace(identity_id="new-ident", metadata={})
+
+        real_bind = identity_handlers._perform_session_bind
+        outcomes = []
+
+        async def _observe(*args, **kwargs):
+            outcome = await real_bind(*args, **kwargs)
+            outcomes.append((kwargs.get("source"), outcome))
+            return outcome
+
+        with patch.object(identity_handlers, "_perform_session_bind", _observe):
+            result = await identity_handlers.handle_onboard_v2({"client_session_id": "onboard-new"})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert [source for source, _ in outcomes] == ["onboard_stable_session"]
+        assert outcomes[0][1]["bound"] is True
+        assert "bind_refused" not in outcomes[0][1]
 
     @pytest.mark.asyncio
     async def test_onboard_schedules_presence_lease(

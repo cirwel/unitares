@@ -327,6 +327,41 @@ class TestLogSessionResolveMissObserved:
         assert d["token_agent_uuid_present"] is False
         assert d["client_hint"] == "codex"
         assert d["model_type"] == "gpt-5-codex"
+        assert d["suppressed_since_last"] == 0
+
+    def test_records_throttled_count(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_session_resolve_miss_observed(
+            session_key="agent-storm-key",
+            resolution_source="explicit_client_session_id",
+            reason="pg_session_missing",
+            resume=True,
+            force_new=False,
+            token_agent_uuid_present=False,
+            suppressed_since_last=49,
+        )
+
+        d = _read_jsonl(logger.log_file)[0]["details"]
+        assert d["suppressed_since_last"] == 49
+
+    def test_flush_row_carries_observation_time_but_appends_at_now(self, tmp_path):
+        logger = _make_logger(tmp_path)
+        logger.log_session_resolve_miss_observed(
+            session_key="agent-quiet-key",
+            resolution_source="throttle_flush",
+            reason="pg_session_missing",
+            resume=True,
+            force_new=False,
+            token_agent_uuid_present=False,
+            suppressed_since_last=7,
+            suppressed_last_at="2026-09-20T10:00:00",
+        )
+
+        e = _read_jsonl(logger.log_file)[0]
+        # Append order stays monotonic for backward-scanning readers.
+        assert e["timestamp"] != "2026-09-20T10:00:00"
+        assert e["details"]["suppressed_last_at"] == "2026-09-20T10:00:00"
+        assert e["details"]["resolution_source"] == "throttle_flush"
 
 
 # ===========================================================================

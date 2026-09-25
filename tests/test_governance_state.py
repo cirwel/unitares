@@ -426,7 +426,9 @@ class TestGenerateGuidance:
         state = GovernanceState()
         g = state._generate_guidance("critical", "low", "stalled", "declining", "mixed", {})
         assert g is not None
-        assert "Circuit breaker" in g
+        assert "critical band" in g
+        # The state knows no decision, so it must not tell the agent to stop.
+        assert "pause" not in g.lower()
 
     def test_declining_guidance(self):
         state = GovernanceState()

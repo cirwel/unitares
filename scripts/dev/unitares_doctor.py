@@ -3460,6 +3460,8 @@ FORCED_TRANSFORM_FINGERPRINT_PREFIX = "forced_release:ad_hoc:"
 FORCED_TRANSFORM_TEST_SURFACE_PREFIXES = (
     "td:/test/",
     "td:/force-release-contract-test-",
+    "dialectic:/test_elixir_",
+    "resident:/test_elixir_",
 )
 FORCED_TRANSFORM_DAYS = 30        # lookback for the ABSENCE arm
 FORCED_TRANSFORM_LATENCY_DAYS = 7  # lookback for the LATENCY arm (see docstring)

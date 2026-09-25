@@ -1669,6 +1669,26 @@ async def _r2_post_update_hook(ctx: UpdateContext) -> None:
         )
 
 
+
+def _rewrap_behavioral_verdict(result: dict, decision: dict) -> None:
+    """Re-wrap the nested behavioral verdict after a post-ODE escalation.
+
+    build_result wrapped it with the decision as it stood then; the escalation
+    replaced that decision, so the wrapped next_action would describe the old
+    one (explain_verdict follows the decision it is given).
+    """
+    try:
+        assessment = result.get('behavioral', {}).get('assessment', {})
+        verdict = assessment.get('verdict')
+        if isinstance(verdict, dict) and verdict.get('value') is not None:
+            from src.governance_glossary import explain_verdict
+            assessment['verdict'] = explain_verdict(
+                verdict['value'], decision_action=decision.get('action')
+            )
+    except Exception as e:
+        logger.debug(f"Behavioral verdict re-wrap skipped: {e}")
+
+
 async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
     mcp_server = ctx.mcp_server
     agent_id = ctx.agent_id
@@ -1748,6 +1768,7 @@ async def _post_update_health_and_baselines(ctx: UpdateContext) -> None:
             if escalated_decision is not decision:
                 ctx.result['decision'] = escalated_decision
                 ctx.result['dialectic_escalation'] = True
+                _rewrap_behavioral_verdict(ctx.result, escalated_decision)
             ctx.warnings.extend(condition_warnings)
     except Exception as e:
         logger.debug(f"Dialectic condition enforcement skipped: {e}")

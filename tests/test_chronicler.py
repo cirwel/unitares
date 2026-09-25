@@ -521,6 +521,16 @@ class TestFormatDigest:
         summary, _ = format_digest(report)
         assert summary == "Chronicler daily: 3/3 scrapers ok, 2 moved"
 
+    def test_movement_clause_caps_names_and_skips_flat_and_first(self):
+        from agents.chronicler.agent import movement_clause
+
+        movers = [(f"m{i}", float(i + 1), float(i)) for i in range(7)]
+        report = self._report(movers + [("flat", 3.0, 3.0), ("new", 1.0, None)])
+        assert movement_clause(report) == (
+            ", 7 moved (m0, m1, m2, m3, m4, +2 more)"
+        )
+        assert movement_clause(self._report([("flat", 3.0, 3.0)])) == ""
+
     def test_details_name_the_delta(self):
         from agents.chronicler.agent import format_digest
 
@@ -675,11 +685,13 @@ class TestChroniclerAgent:
         assert result.complexity == 0.4
         assert result.confidence == 0.5
 
-    def test_cycle_stores_a_kg_digest(self, tmp_path: Path):
+    def test_cycle_stores_a_kg_digest(self, tmp_path: Path, monkeypatch):
         """The point of the digest: a run leaves something an operator reads,
         not just a chart point."""
         from agents.chronicler import agent as chronicler
         from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.setenv("CHRONICLER_KG_DIGEST", "1")
 
         fake = FakeHttpClient(
             priors={"tests.unitares.count": [{"ts": "2026-08-13", "value": 655.0}]}
@@ -700,7 +712,7 @@ class TestChroniclerAgent:
         assert args["summary"] == "Chronicler daily: 1/1 scrapers ok, 1 moved"
         assert "tests.unitares.count: 655 -> 663 (+8)" in args["details"]
 
-    def test_digest_is_tagged_ephemeral(self, tmp_path: Path):
+    def test_digest_is_tagged_ephemeral(self, tmp_path: Path, monkeypatch):
         """Without the tag a snapshot has no resolution condition, so every
         later KG sweep re-reads it as unfinished work.
 
@@ -711,6 +723,8 @@ class TestChroniclerAgent:
         """
         from agents.chronicler import agent as chronicler
         from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.setenv("CHRONICLER_KG_DIGEST", "1")
 
         client = AsyncMock()
         fake = FakeHttpClient()
@@ -726,13 +740,15 @@ class TestChroniclerAgent:
         _, args = client.call_tool.call_args.args
         assert "ephemeral" in args["tags"]
 
-    def test_kg_failure_is_reported_on_the_checkin(self, tmp_path: Path):
+    def test_kg_failure_is_reported_on_the_checkin(self, tmp_path: Path, monkeypatch):
         """The whole point of the digest is that an unread channel is not a
         report. A digest that fails forever while the check-in says
         '1/1 scrapers ok' at confidence 0.9 reproduces that failure on the one
         channel anyone watches."""
         from agents.chronicler import agent as chronicler
         from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.setenv("CHRONICLER_KG_DIGEST", "1")
 
         client = AsyncMock()
         client.call_tool.side_effect = RuntimeError("KG unreachable")
@@ -771,7 +787,7 @@ class TestChroniclerAgent:
         assert result.summary == "Chronicler: 1/1 scrapers ok"
         assert result.confidence == 0.9
 
-    def test_kg_failure_does_not_fail_the_run(self, tmp_path: Path):
+    def test_kg_failure_does_not_fail_the_run(self, tmp_path: Path, monkeypatch):
         """The metrics have already landed by then — losing the digest is not
         worth a red run. It must still complete and still report the scrape
         truthfully; reporting the digest failure is
@@ -779,6 +795,8 @@ class TestChroniclerAgent:
         together are the whole contract: swallowed, but not hidden."""
         from agents.chronicler import agent as chronicler
         from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.setenv("CHRONICLER_KG_DIGEST", "1")
 
         client = AsyncMock()
         client.call_tool.side_effect = RuntimeError("KG unreachable")
@@ -795,6 +813,52 @@ class TestChroniclerAgent:
         assert result is not None
         assert result.summary.startswith("Chronicler: 1/1 scrapers ok")
         assert fake.calls, "the metric POST must still have happened"
+
+    def test_digest_is_off_by_default(self, tmp_path: Path, monkeypatch):
+        """Measured 2026-09-24: 20 digests in 30d, 0 detail reads. The digest
+        became a second unread channel, so it is opt-in; an unset env var
+        must write nothing to the KG."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.delenv("CHRONICLER_KG_DIGEST", raising=False)
+        client = AsyncMock()
+        fake = FakeHttpClient()
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"x": lambda _r: 1.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            result = asyncio.run(agent.run_cycle(client=client))
+
+        client.call_tool.assert_not_called()
+        assert result.confidence == 0.9
+
+    def test_checkin_names_what_moved(self, tmp_path: Path, monkeypatch):
+        """With the digest off, the check-in is where a run says what moved —
+        otherwise dropping the digest recreates the invisible-resident
+        problem it was added to fix."""
+        from agents.chronicler import agent as chronicler
+        from agents.chronicler.agent import ChroniclerAgent
+
+        monkeypatch.delenv("CHRONICLER_KG_DIGEST", raising=False)
+        fake = FakeHttpClient(
+            priors={"tests.unitares.count": [{"ts": "2026-08-13", "value": 655.0}]}
+        )
+        agent = ChroniclerAgent(
+            base_url="http://127.0.0.1:8767", token=None, repo_root=tmp_path,
+        )
+        with (
+            patch.object(chronicler, "SCRAPERS", {"tests.unitares.count": lambda _r: 663.0}),
+            patch("agents.chronicler.agent.httpx.Client", return_value=fake),
+        ):
+            result = asyncio.run(agent.run_cycle(client=AsyncMock()))
+
+        assert result.summary == (
+            "Chronicler: 1/1 scrapers ok, 1 moved (tests.unitares.count)"
+        )
 
     def test_digest_can_be_switched_off(self, tmp_path: Path, monkeypatch):
         from agents.chronicler import agent as chronicler

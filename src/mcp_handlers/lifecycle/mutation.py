@@ -453,3 +453,67 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
         "archived": backup_path is not None,
         "backup_path": backup_path
     })
+
+
+@mcp_tool("release_agent_presence", timeout=10.0, register=False)
+async def handle_release_presence(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """Release the caller's own presence lease on a clean exit.
+
+    Scoped to the bound identity only: there is no agent_id to target, so one
+    agent cannot mark another as exited. A host's session-end hook calls this so
+    a successor can declare this agent as its parent right away instead of
+    waiting out the lease TTL. A crash never reaches here, and the TTL remains
+    the backstop.
+    """
+    from ..identity.shared import require_write_permission, get_bound_agent_id
+    allowed, write_error = require_write_permission(arguments=arguments)
+    if not allowed:
+        return [write_error]
+
+    agent_uuid = get_bound_agent_id(arguments=arguments)
+    if not agent_uuid:
+        return [error_response(
+            "release_presence needs a bound session: pass the client_session_id "
+            "from start_session.",
+            error_code="IDENTITY_REQUIRED",
+        )]
+
+    # The releasing session's own id, in both the context and argument forms,
+    # so its late final check-in cannot re-acquire what it just released.
+    from ..context import get_context_client_session_id
+    session_ids = tuple(
+        {str(s) for s in (get_context_client_session_id(), arguments.get("client_session_id")) if s}
+    )
+
+    from ..identity.agent_presence_lease import release_agent_presence
+    result = await release_agent_presence(agent_uuid, session_ids)
+
+    # A process binding also reads as a live parent, for five minutes after its
+    # last onboard, so retire this session's bindings too. Only when this
+    # session was the last holder: never while another session keeps presence.
+    bindings_retired: int | None = 0
+    if result["released"] or result["reason"] in {"no_live_lease", "lease_plane_unavailable"}:
+        from ..identity.agent_presence_lease import mark_bindings_retired
+        from ..identity.process_binding import retire_bindings
+        # Before retiring, so an insert still in flight retires its own row.
+        mark_bindings_retired(agent_uuid)
+        bindings_retired = await retire_bindings(agent_uuid)
+        if bindings_retired is None:
+            bindings_retired = await retire_bindings(agent_uuid)  # one retry
+
+    response = {
+        "action": "release_presence",
+        "agent_id": agent_uuid,
+        "released": result["released"],
+        "reason": result["reason"],
+        "bindings_retired": bindings_retired,
+    }
+    if result.get("retryable"):
+        # A transient failure (lease_lookup_failed, release_unavailable): a
+        # lease may still be live, so no binding was retired; repeat the call.
+        response["retryable"] = True
+    if bindings_retired is None:
+        # A live binding may remain, and it still reads as a running parent
+        # for up to five minutes; say so rather than report a clean exit.
+        response["binding_retirement_failed"] = True
+    return success_response(response)

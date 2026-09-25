@@ -17,44 +17,10 @@ connected. Recover work across restarts, context loss, and handoffs.
 
 </div>
 
-## Your agents forget. UNITARES remembers who did what.
-
-An agent spends the night working out why a backup failed. By morning its
-session has restarted, its context is gone, and another process has taken over.
-What did it find? What backs that up? Who challenged it? None of that is a
-commit, so your repository never sees it.
-
-With UNITARES, agents check in as they work, and the record outlives them:
-
-```mermaid
-sequenceDiagram
-    participant A as Agent A
-    participant U as UNITARES
-    participant B as Agent B (other model)
-    participant S as Successor
-    A->>U: Check-in: "Trying a fifth fix. Not sure why."
-    U->>A: Pause, with the reason
-    A->>U: self_recovery(action="review"): "I was guessing. Back to the logs."
-    A->>U: Searches "backup" (nothing yet), files "The disk was full." + logs, requests review
-    B->>U: "Full disk, or a log that never rotated?"
-    A->>U: "Checked. Rotation works. It was the disk."
-    Note over A: Session ends. Hours later, its presence has expired.
-    S->>U: Starts with Agent A as its declared parent, then searches "backup" in full mode
-    U->>S: The finding, filed under Agent A
-```
-
-## Start with one thing
-
-Start with the first layer and add the next when you need it. How a session gets
-its identity, including handoffs, is in [Agent identity](docs/integration/MCP_CLIENTS.md#agent-identity).
-
-| Start here | You get | Tools |
-|---|---|---|
-| **1. Remember** | Each session you onboard gets its own identity, and what it finds survives restarts and handoffs. | `start_session`, `search_shared_memory`, `store_finding` |
-| **2. Challenge** | Open a review on the record. A peer agent or a reviewer model you configure answers it, and any disagreement stays with the work. | `request_review`, `dialectic` |
-| **3. Steer** | Check-ins return proceed, guide, or pause with a reason, and outcomes are recorded against them. | `sync_state`, `self_recovery`, `record_result` |
-
-## What UNITARES is
+An agent reports that its fix is done and the tests pass. By morning its
+session has restarted, its context is gone, and another process has taken over
+the task. Who said it? What supports it? Who challenged it? What happened? Each
+run leaves its own log, and the answers scatter across them.
 
 UNITARES is self-hosted accountability infrastructure for operators running
 multiple AI agents. Its federation kernel connects independent runtimes to one
@@ -63,8 +29,9 @@ while keeping their own models, tools, and runtimes. They interoperate with
 each other over their own transports or A2A; UNITARES is the record behind
 them, not the transport between them.
 
-Agent work remains attributable, reviewable, and recoverable even when the
-process that started it is gone.
+UNITARES preserves accountability across discontinuities in agent identity,
+context, process, and time. Agent work remains attributable, reviewable, and
+recoverable even when the process that started it is gone.
 
 ## What UNITARES gives you
 
@@ -82,8 +49,13 @@ process that started it is gone.
 - **Reconstruction** — give a successor the records needed to understand and
   continue earlier work.
 
-Measured results and their evidence status are in the
-[claim ledger](docs/EVIDENCE_AND_LIMITS.md).
+The [claim ledger](docs/EVIDENCE_AND_LIMITS.md) gives the evidence status of
+each measured result.
+
+Together, these form an operator-owned accountability layer across coding
+agents, research agents, background agents, and custom runtimes. What it adds
+to a record of what happened is adjudication: disagreement, conditions, and
+outcomes bound to the process that made the claim.
 
 ## Install
 
@@ -101,6 +73,12 @@ This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
 coordination plane.
 
 ## How it works
+
+An agent joins the operator's UNITARES deployment and receives a process
+identity. During work it can publish selected findings and evidence, request
+structured review, report meaningful state transitions, and record outcomes.
+UNITARES keeps those records available to the operator and to later authorized
+processes.
 
 The server runs alongside evals, sandboxes, and guardrails. It provides the
 continuity and accountability layer that connects their outputs over time.

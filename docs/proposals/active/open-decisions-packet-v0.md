@@ -19,6 +19,28 @@ Review recommendations are attributed separately from observations and policy.
 **Recommendations:** non-binding, including the independent review's table
 below. Agreement between agent passes does not supply operator authorization.
 
+## Decision index
+
+A map for navigation only. The status column repeats the status line above; each
+entry's body is canonical for its detail. The "Waits on" column restates what the
+entry asks the operator and its own *Decays* line; it adds no recommendation.
+
+| # | Decision | Status (from the status line above) | Waits on | Detail |
+|---|---|---|---|---|
+| 1 | D4: what PASS condition 4's "same family" means | Open; not implemented | Operator pick among options A to E. Decays when the 2026-12-01 read executes. | [Entry 1](#1-d4--what-pass-condition-4s-same-family-means) |
+| 2 | D6: an agent-stratified selective null before the read | Open; not implemented | Operator pick among options A to F. The cheap form expires at the 2026-12-01 read. | [Entry 2](#2-d6--an-agent-stratified-selective-null-before-the-read) |
+| 3 | D5: whether PASS condition 2 is redundant | Open; not implemented (the redundancy itself is marked SETTLED as a fact) | Operator call on whether and where to record the fact before 2026-12-01: one prose pick among A to D, with E and F as separate yes/no. | [Entry 3](#3-d5--whether-pass-condition-2-is-redundant) |
+| 4 | D3: is the published container image adopter-facing, and where does that put `dashboard/` | Open; not implemented | Operator answer to Q1 (what makes something adopter-facing), then Q2 (how the boundary is held), among options A to E. No clock. | [Entry 4](#4-d3--is-the-published-container-image-adopter-facing-and-where-does-that-put-dashboard) |
+| 5 | D2: what the two-word review phrase names, and what satisfies the gate it guards | Open; not implemented | Operator pick among options A to G. No clock; entry 7's option E removes the next-touch clock behind this entry's second default-if-silent forecast. | [Entry 5](#5-d2--what-the-two-word-review-phrase-names-and-what-satisfies-the-gate-it-guards) |
+| 6 | D1: which dormant doctor schema-drift checks CI should run, and where | Open; not implemented | Operator pick among options A to E, plus the separate blocking-or-advisory call. No clock. | [Entry 6](#6-d1--which-dormant-doctor-schema-drift-checks-ci-should-run-and-where) |
+| 7 | D7: the documents carrying pre-existing repo-scope Rule 5 violations | Open; not implemented | Operator answer to the first question (path severity versus the review register), then a pick among options A to H. No clock. | [Entry 7](#7-d7--the-documents-carrying-pre-existing-repo-scope-rule-5-violations) |
+
+Around the entries: [Codex review recommendations](#codex-review-recommendations--recorded-2026-09-10),
+[Council review](#council-review--recorded-2026-09-12),
+[Why this packet exists](#why-this-packet-exists), [The order, and why](#the-order-and-why),
+[Reading the entries](#reading-the-entries), and after entry 7,
+[Evidence gaps and review observations](#evidence-gaps-and-review-observations).
+
 ---
 
 ## Codex review recommendations — recorded 2026-09-10
