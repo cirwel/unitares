@@ -815,6 +815,48 @@ class TestOrphanedInodeRace:
                 self._assert_current_file_is_locked(lock_file)
 
 
+
+class TestBodyExceptionsAreNotContention:
+    """An OSError raised by the caller's code inside the locked section
+    (TimeoutError, ConnectionError, ...) must reach the caller once, with the
+    lock released, not be read as flock contention and re-acquire the lock."""
+
+    @staticmethod
+    def _counting_open():
+        real_open = os.open
+        opens = []
+
+        def counting(path, flags, *args, **kwargs):
+            if str(path).endswith("body.lock"):
+                opens.append(path)
+            return real_open(path, flags, *args, **kwargs)
+
+        return patch("src.state_locking.os.open", side_effect=counting), opens
+
+    def test_sync_body_oserror_propagates_once(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        counting, opens = self._counting_open()
+        with counting:
+            with pytest.raises(ConnectionResetError, match="peer went away"):
+                with mgr.acquire_agent_lock("body", timeout=2.0, max_retries=1):
+                    raise ConnectionResetError("peer went away")
+        assert len(opens) == 1
+        with mgr.acquire_agent_lock("body", timeout=0.5, max_retries=1):
+            pass  # released: re-acquirable at once
+
+    @pytest.mark.asyncio
+    async def test_async_fcntl_body_timeout_propagates_once(self, tmp_path):
+        mgr = StateLockManager(lock_dir=tmp_path, auto_cleanup_stale=False)
+        counting, opens = self._counting_open()
+        with counting:
+            with pytest.raises(TimeoutError, match="inner timeout"):
+                async with mgr._acquire_agent_lock_async_fcntl("body", timeout=2.0, max_retries=1):
+                    raise TimeoutError("inner timeout")
+        assert len(opens) == 1
+        async with mgr._acquire_agent_lock_async_fcntl("body", timeout=0.5, max_retries=1):
+            pass
+
+
 _WRITER = """
 import os, sys, time
 sys.path.insert(0, sys.argv[1])

@@ -187,42 +187,46 @@ class StateLockManager:
                         lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        if not holds_current_inode(lock_fd, lock_file):
-                            # A cleaner unlinked the path after our open();
-                            # this lock guards nothing. Reopen and try again.
-                            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                            os.close(lock_fd)
-                            lock_fd = None
-                            continue
-                        # Write PID and timestamp to lock file for debugging
-                        lock_info = {
-                            "pid": os.getpid(),
-                            "timestamp": time.time(),
-                            "agent_id": agent_id
-                        }
-                        os.ftruncate(lock_fd, 0)  # Clear file
-                        os.write(lock_fd, json.dumps(lock_info).encode())
-                        os.fsync(lock_fd)  # Ensure written to disk
-                        
-                        # Lock acquired successfully - yield control
-                        try:
-                            yield  # Lock acquired, allow operation
-                        finally:
-                            # Always release lock when exiting context
-                            try:
-                                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                            except (IOError, OSError):
-                                pass
-                            try:
-                                os.close(lock_fd)
-                            except (OSError, ValueError):
-                                # File descriptor already closed or invalid
-                                pass
-                            lock_fd = None  # Mark as closed
-                        return  # Success, exit retry loop
-                    except IOError:
+                    except OSError:
                         # Lock is held by another process, wait and retry
                         time.sleep(0.1)
+                        continue
+                    if not holds_current_inode(lock_fd, lock_file):
+                        # A cleaner unlinked the path after our open();
+                        # this lock guards nothing. Reopen and try again.
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        os.close(lock_fd)
+                        lock_fd = None
+                        continue
+                    # Write PID and timestamp to lock file for debugging
+                    lock_info = {
+                        "pid": os.getpid(),
+                        "timestamp": time.time(),
+                        "agent_id": agent_id
+                    }
+                    os.ftruncate(lock_fd, 0)  # Clear file
+                    os.write(lock_fd, json.dumps(lock_info).encode())
+                    os.fsync(lock_fd)  # Ensure written to disk
+                    
+                    # Lock acquired - yield control. The body runs outside the
+                    # contention handler above, so an OSError it raises (e.g.
+                    # TimeoutError, ConnectionError) reaches the caller instead
+                    # of being read as contention and re-acquiring the lock.
+                    try:
+                        yield  # Lock acquired, allow operation
+                    finally:
+                        # Always release lock when exiting context
+                        try:
+                            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        except (IOError, OSError):
+                            pass
+                        try:
+                            os.close(lock_fd)
+                        except (OSError, ValueError):
+                            # File descriptor already closed or invalid
+                            pass
+                        lock_fd = None  # Mark as closed
+                    return  # Success, exit retry loop
                 
                 # Timeout reached - close file descriptor before retry
                 if lock_fd:
@@ -434,42 +438,46 @@ class StateLockManager:
                         lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                     try:
                         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        if not holds_current_inode(lock_fd, lock_file):
-                            # A cleaner unlinked the path after our open();
-                            # this lock guards nothing. Reopen and try again.
-                            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                            os.close(lock_fd)
-                            lock_fd = None
-                            continue
-                        # Write PID and timestamp to lock file for debugging
-                        lock_info = {
-                            "pid": os.getpid(),
-                            "timestamp": time.time(),
-                            "agent_id": agent_id
-                        }
-                        os.ftruncate(lock_fd, 0)  # Clear file
-                        os.write(lock_fd, json.dumps(lock_info).encode())
-                        os.fsync(lock_fd)  # Ensure written to disk
-                        
-                        # Lock acquired successfully - yield control
-                        try:
-                            yield  # Lock acquired, allow operation
-                        finally:
-                            # Always release lock when exiting context
-                            try:
-                                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                            except (IOError, OSError):
-                                pass
-                            try:
-                                os.close(lock_fd)
-                            except (OSError, ValueError):
-                                # File descriptor already closed or invalid
-                                pass
-                            lock_fd = None  # Mark as closed
-                        return  # Success, exit retry loop
-                    except IOError:
+                    except OSError:
                         # Lock is held by another process, wait and retry (NON-BLOCKING)
                         await asyncio.sleep(0.1)  # Use asyncio.sleep instead of time.sleep
+                        continue
+                    if not holds_current_inode(lock_fd, lock_file):
+                        # A cleaner unlinked the path after our open();
+                        # this lock guards nothing. Reopen and try again.
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        os.close(lock_fd)
+                        lock_fd = None
+                        continue
+                    # Write PID and timestamp to lock file for debugging
+                    lock_info = {
+                        "pid": os.getpid(),
+                        "timestamp": time.time(),
+                        "agent_id": agent_id
+                    }
+                    os.ftruncate(lock_fd, 0)  # Clear file
+                    os.write(lock_fd, json.dumps(lock_info).encode())
+                    os.fsync(lock_fd)  # Ensure written to disk
+                    
+                    # Lock acquired - yield control. The body runs outside the
+                    # contention handler above, so an OSError it raises (e.g.
+                    # TimeoutError, ConnectionError) reaches the caller instead
+                    # of being read as contention and re-acquiring the lock.
+                    try:
+                        yield  # Lock acquired, allow operation
+                    finally:
+                        # Always release lock when exiting context
+                        try:
+                            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        except (IOError, OSError):
+                            pass
+                        try:
+                            os.close(lock_fd)
+                        except (OSError, ValueError):
+                            # File descriptor already closed or invalid
+                            pass
+                        lock_fd = None  # Mark as closed
+                    return  # Success, exit retry loop
                 
                 # Timeout reached - close file descriptor before retry
                 if lock_fd:
