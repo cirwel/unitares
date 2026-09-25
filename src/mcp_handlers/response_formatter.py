@@ -542,6 +542,25 @@ def format_response(
 
     return response_data
 
+
+def _margin_scope_fields(decision: dict) -> dict:
+    """margin_scope and unmeasurable_edges, when an edge went unassessed.
+
+    A bare margin reads as "no limit is near" even when an edge was never
+    measured (the coherence edge is unassessed for every agent today), so the
+    scope rides WITH the margin. Omitted when every edge was assessed, so the
+    common fully-measured case costs nothing.
+    """
+    edges = decision.get("unmeasurable_edges")
+    if not edges:
+        return {}
+    fields = {"unmeasurable_edges": list(edges)}
+    scope = decision.get("margin_scope")
+    if scope:
+        fields["margin_scope"] = scope
+    return fields
+
+
 def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any = None) -> dict:
     """Build a bounded interpreted summary for agents."""
     from src.governance_state import GovernanceState
@@ -601,6 +620,7 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
         "require_human": decision.get("require_human"),
         "margin": decision.get("margin"),
         "nearest_edge": decision.get("nearest_edge"),
+        **_margin_scope_fields(decision),
         "state": interpreted,
         "metrics": {
             "E": E, "I": I, "S": S, "V": V,
@@ -1072,6 +1092,7 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
         "require_human": decision.get("require_human"),
         "margin": decision.get("margin"),
         "nearest_edge": decision.get("nearest_edge"),
+        **_margin_scope_fields(decision),
     }
 
     health_status = response_data.get("health_status") or compact_metrics.get("health_status") or response_data.get("status")
