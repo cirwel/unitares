@@ -369,6 +369,12 @@ def carried_digest(skills_dir: Path, name: str, src: str, skill_digest: str) -> 
     a digest from a record for other text would have the new stamp certify
     this prose against source content nobody reviewed it against. With no such
     record the source is left unrecorded, to be stamped where it is visible.
+
+    It carries the digest the text was certified at, not one a recorded
+    transition carried it to: where the source is not visible the stamp
+    cannot tell which it is now. A text that was FRESH only through a
+    transition and is re-stamped here therefore reads STALE once the source is
+    visible again, and is re-stamped there, the cost before transitions.
     """
     for att in certified_attestations(load_attestations(skills_dir, name), skill_digest):
         digest = att["source_digests"].get(src)
@@ -605,6 +611,15 @@ def _pairs(record: dict) -> set[tuple[str, str]]:
     return {(str(k), str(v)) for k, v in record.get("source_digests", {}).items()}
 
 
+def _carries(path: Path) -> bool:
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    return (isinstance(data, dict) and isinstance(data.get("source_digests"), dict)
+            and bool(_transitions_of(data)))
+
+
 def _transition_records(root: str, projects_root: str, skills_dir: Path, name: str) -> set[Path]:
     """Attestation files whose recorded transition leads to a cited source's
     current content, whichever skill text is on disk here.
@@ -622,12 +637,18 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
     for a skill whose sources keep changing. The window is this checkout's; a
     branch whose own text sets a longer one can lose a carrier it still
     needed, and then reads STALE and re-stamps, the cost before this existed."""
-    meta = parse_frontmatter((skills_dir / name / "SKILL.md").read_text())
+    adir = skills_dir / ATTESTATIONS_DIR / name
+    try:
+        meta = parse_frontmatter((skills_dir / name / "SKILL.md").read_text())
+        sources = load_source_files(skills_dir / name, meta["source_files"]) if meta else []
+    except (OSError, ValueError, yaml.YAMLError):
+        # Unreadable metadata (the check fails on it too): keep every record
+        # that carries anything rather than stop halfway through a prune.
+        return {path for path in adir.glob("*.json") if _carries(path)}
     if not meta:
         return set()
     max_days = max(meta["freshness_days"], FRESHNESS_FLOOR_DAYS)
     today = datetime.now(timezone.utc).date()
-    adir = skills_dir / ATTESTATIONS_DIR / name
     carriers: list[tuple[Path, dict[str, tuple[str, list[str]]]]] = []
     for path in sorted(adir.glob("*.json")):
         try:
@@ -650,7 +671,7 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
             for old in olds:
                 edges.setdefault(src, {}).setdefault(old, set()).add(new)
     needed: set[Path] = set()
-    for src in load_source_files(skills_dir / name, meta["source_files"]):
+    for src in sources:
         full_path = resolve_source(root, projects_root, src)
         current = content_digest(full_path) if full_path.exists() else None
         for path, transitions in carriers:

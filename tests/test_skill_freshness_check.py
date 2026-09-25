@@ -358,15 +358,20 @@ def test_a_revert_is_not_carried_forward(layout: Layout):
 
 
 def test_a_stale_branch_stamp_records_no_transition(layout: Layout):
-    # A branch cut before the change stamps with the OLD content on disk, which
-    # its own records already accept: it re-checked no change and records none.
+    # A branch cut before the change re-stamps its (certified) text with the
+    # OLD content on disk, which its own records already accept: it re-checked
+    # no change and records none, even though master's records elsewhere hold
+    # a newer digest.
     src = "unitares/src/thing.py"
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(20), digest=None)
-    _attest(layout, "20200101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")},
+    _attest(layout, "20200101T000000000000Z-aaaaaaaa", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20200102T000000000000Z-bbbbbbbb", _day(2), {src: _digest("x = 2\n")},
             skill_digest="0123456789abcdef")
+    before = set(_attestations(layout))
     layout.run("--stamp", "demo")
-    assert "superseded_digests" not in _newest_record(layout)
+    [stamp] = set(_attestations(layout)) - before
+    assert "superseded_digests" not in json.loads(stamp.read_text())
 
 
 def test_prune_keeps_the_record_that_carries_a_source_forward(layout: Layout):
@@ -426,6 +431,18 @@ def test_prune_drops_a_carrier_older_than_the_aging_window(layout: Layout):
     _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {src: _digest("x = 2\n")})
     assert layout.run("--prune", "1").returncode == 0
     assert [p.name for p in _attestations(layout)] == ["20991231T000000000000Z-ffffffff.json"]
+
+
+def test_prune_survives_unreadable_frontmatter(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.run("--stamp", "demo")
+    layout.skill_file.write_text(layout.skill_file.read_text().replace(
+        "freshness_days: 14", "freshness_days: abc"))
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0, result.stderr
+    assert len(_attestations(layout)) == 1
 
 
 def test_a_branch_stamped_after_masters_re_check_still_re_stamps(layout: Layout):
