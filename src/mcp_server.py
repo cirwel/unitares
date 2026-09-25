@@ -139,11 +139,17 @@ _auth_settings = None
 _OAUTH_REQUIRED_SCOPES = ["mcp:tools"]
 
 _oauth_setup_error: Exception | None = None
+# Host-scoped gate: read outside the issuer branch so a provider that fails to
+# build still closes only the hosts the operator asked to gate.
+_oauth_enforce_hosts = tuple(
+    h.strip().lower() for h in os.environ.get("UNITARES_OAUTH_ENFORCE_HOSTS", "").split(",") if h.strip()
+)
+_oauth_static_client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID") or None
 
 if _oauth_issuer_url:
     try:
         from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
-        from src.oauth_provider import GovernanceOAuthProvider
+        from src.oauth_provider import GovernanceOAuthProvider, build_static_client
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
         _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
@@ -151,7 +157,22 @@ if _oauth_issuer_url:
             os.environ.get("UNITARES_OAUTH_RESOURCE_URL")
             or f"{_oauth_issuer_url.rstrip('/')}/mcp"
         )
-        _oauth_provider = GovernanceOAuthProvider(secret=_oauth_secret, auto_approve=_auto_approve)
+        _static_clients = []
+        if _oauth_static_client_id:
+            _static_clients.append(build_static_client(
+                client_id=_oauth_static_client_id,
+                client_secret=os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_SECRET", ""),
+                redirect_uris=[
+                    u.strip()
+                    for u in os.environ.get("UNITARES_OAUTH_STATIC_REDIRECT_URIS", "").split(",")
+                    if u.strip()
+                ],
+            ))
+        _oauth_provider = GovernanceOAuthProvider(
+            secret=_oauth_secret,
+            auto_approve=_auto_approve,
+            static_clients=_static_clients,
+        )
         _auth_settings = AuthSettings(
             issuer_url=_oauth_issuer_url,
             resource_server_url=_oauth_resource_url,
@@ -163,6 +184,12 @@ if _oauth_issuer_url:
             ),
         )
         print(f"[FastMCP] OAuth 2.1 enabled (issuer: {_oauth_issuer_url})", file=sys.stderr, flush=True)
+        print(
+            "[FastMCP] OAuth gate applies to "
+            + (", ".join(_oauth_enforce_hosts) if _oauth_enforce_hosts else "every host")
+            + ("; static client configured" if _static_clients else ""),
+            file=sys.stderr, flush=True,
+        )
     except Exception as e:
         # An operator who set the issuer URL asked for an auth gate. Serving
         # /mcp unauthenticated anyway answers a different question than the one
@@ -350,6 +377,8 @@ async def main():
                 # than serving it open. Scoped to the route: every other
                 # surface on this process keeps its own gate.
                 gate_unavailable=_oauth_setup_error is not None,
+                oauth_enforce_hosts=_oauth_enforce_hosts,
+                static_client_id=_oauth_static_client_id,
             ),
             host=args.host,
             port=args.port,

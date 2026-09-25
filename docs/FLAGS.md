@@ -149,10 +149,14 @@ additions merge cleanly. -->
 | `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_ENFORCE_HOSTS` | `''` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_REQUIRED` | `False (via env_truthy)` | True when the operator demanded an auth gate on ``/mcp`` or no service | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_RESOURCE_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_SECRET` | `None (no reader fallback)` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_STATIC_CLIENT_ID` | `None (no reader fallback)` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | — | src/mcp_server.py |
 | `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Base URL of the local Ollama endpoint | src/mcp_handlers/support/inference_registry.py |
 | `UNITARES_OLLAMA_BASE_URL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'http://localhost:11434/v1'` (agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | — | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |

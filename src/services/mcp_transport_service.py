@@ -57,6 +57,14 @@ class McpAuthConfig:
     #: Distinguishes "no gate was configured" from "a configured gate is
     #: missing", which the provider being None cannot express on its own.
     gate_unavailable: bool = False
+    #: Hosts (lowercase, no port) on which the OAuth gate applies. Empty means
+    #: every host, the historical posture. Set to the public tunnel hostname so
+    #: a hosted connector must authenticate while loopback/LAN/tailnet callers
+    #: keep the ungated route they already had. Host, not source IP: behind
+    #: the tunnel every request's IP is the proxy's, but the edge routes by Host.
+    oauth_enforce_hosts: tuple[str, ...] = ()
+    #: Client ID of the pre-registered OAuth client, if one is configured.
+    static_client_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +113,15 @@ def _www_authenticate_header(auth_settings: Any) -> str:
         return "Bearer"
 
 
+def request_host(scope: dict[str, Any]) -> str:
+    """Return the request's Host header lowercased with any port removed."""
+    host = (Headers(scope=scope).get("host") or "").strip().lower()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[: end + 1] if end != -1 else host
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
 async def authorize_mcp_request(
     scope: dict[str, Any],
     auth_config: McpAuthConfig,
@@ -136,6 +153,15 @@ async def authorize_mcp_request(
     credential rather than being locked out by their own hardening.
     """
     bearer_allow = mcp_bearer_tokens()
+    # Host scoping narrows only the OAuth gate. A bearer allowlist stays global
+    # by design (check_mcp_bearer has no trusted-network branch), and so does
+    # the closure below on the hosts the operator did ask to gate.
+    if (
+        not bearer_allow
+        and auth_config.oauth_enforce_hosts
+        and request_host(scope) not in auth_config.oauth_enforce_hosts
+    ):
+        return AuthDecision(allowed=True)
     if not bearer_allow and auth_config.gate_unavailable:
         return AuthDecision(
             allowed=False,
@@ -480,6 +506,13 @@ def build_transport_runtime(
         server_ready_fn=server_ready_fn,
         server_version=server_version,
     )
+    if auth_config.oauth_provider is not None and auth_config.static_client_id:
+        from src.oauth_provider import StaticClientBasicAuthShim
+
+        app.add_middleware(
+            StaticClientBasicAuthShim,
+            client_id=auth_config.static_client_id,
+        )
     start_all_background_tasks(set_ready=set_server_ready)
     _register_application_routes(
         app,

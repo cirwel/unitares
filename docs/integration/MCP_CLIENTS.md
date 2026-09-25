@@ -116,6 +116,30 @@ tool runs:
      if a reverse proxy exposes the MCP resource at a different public URL.
      See `src/oauth_provider.py`.
 
+     A connector that cannot self-register asks for a client ID and secret
+     instead (Google's custom MCP connector does this, and shows a redirect
+     URI to allow). Pre-register one:
+
+     ```bash
+     export UNITARES_OAUTH_STATIC_CLIENT_ID="$(python3 -c 'import secrets; print("unitares_" + secrets.token_hex(12))')"
+     export UNITARES_OAUTH_STATIC_CLIENT_SECRET="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+     export UNITARES_OAUTH_STATIC_REDIRECT_URIS="<redirect URI the connector shows>"
+     ```
+
+     The static client comes from the environment, so it survives restarts;
+     its tokens do not, and the connector reconnects after one. The token
+     endpoint accepts its secret either in the form body or as HTTP Basic.
+     An incomplete static-client configuration fails OAuth setup, which
+     closes the gated route rather than opening it.
+
+   OAuth gates `/mcp` on **every** host by default, which locks out local
+   clients that do not speak OAuth. To gate only the public hostname, set
+   `UNITARES_OAUTH_ENFORCE_HOSTS="gov.example.org"` (comma-separated, no
+   port). Other hosts — loopback, LAN, tailnet — keep the route they had.
+   The decision keys on `Host`, not source IP: behind a tunnel every
+   request's IP is the proxy's, while the edge routes by `Host`. A bearer
+   allowlist (`UNITARES_MCP_BEARER_TOKENS`) stays global regardless.
+
 The Host allowlist applies regardless of the auth choice — set it even when
 using "none" locally is fine, but for a public host you need both the
 allowlist entry *and* an auth gate.
