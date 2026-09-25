@@ -449,3 +449,42 @@ def test_a_proceed_carrying_a_review_nudge_is_not_trimmed():
     )
     assert "request_review" in env["next_action"]
     assert "response_shape" not in env
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"label_renamed": {"from": "taken", "to": "taken_54d62846"}},
+        {"resident_registration": {"status": "not_on_roster"}},
+        {"bootstrap": {"status": "written"}},
+        {"deprecations": ["old_param"]},
+        {"lineage_state": "rejected_cross_role"},
+        {"lineage_state": "rejected_coincidental"},
+        {"some_future_notice": {"note": "x"}},
+    ],
+    ids=[
+        "label_renamed",
+        "resident_registration",
+        "bootstrap",
+        "deprecations",
+        "rejected_cross_role",
+        "rejected_coincidental",
+        "unknown_key",
+    ],
+)
+def test_a_mint_with_anything_extra_to_say_keeps_the_whole_record(extra):
+    """Onboard adds keys after building the record; an allowlist, not a
+    denylist, decides routine, so an unknown notice is shown, not dropped."""
+    payload = _onboard_payload()
+    payload.update(extra)
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
+
+
+def test_empty_extras_do_not_make_a_mint_unusual():
+    payload = _onboard_payload()
+    payload.update({"deprecations": [], "label_renamed": None})
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+    assert env["response_shape"] == "routine"

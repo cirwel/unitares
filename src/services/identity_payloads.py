@@ -276,8 +276,10 @@ def build_identity_signature_payload(
             # This envelope is attached to every response, including plain
             # validation errors, and no response_mode reaches the error path.
             # The provenance record is the bulk of it and restates harness
-            # context the caller itself supplied; the flat fields beside it
-            # survive, and a rejected value keeps the full record.
+            # context the caller itself supplied. In the full record the flat
+            # harness fields beside it survive and a rejected value keeps the
+            # whole record; a routine signature drops harness_context entirely
+            # (below).
             provenance_detail=False,
         )
         # One assurance block per response, not two. It was emitted both
