@@ -511,6 +511,8 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "existing binding. onboard is the canonical twin; this name adds a "
             "digest envelope. Read the uuid from agent_uuid; response_mode='full' "
             "keeps the raw payload under raw_governance."
+            "digest envelope. Read the uuid from agent_uuid; response_mode='full' "
+            "keeps the raw payload under raw_governance."
         ),
         experience=True),
     "sync_state": ToolAlias(

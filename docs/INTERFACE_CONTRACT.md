@@ -183,8 +183,8 @@ The two identifiers serve different jobs:
   call returns an index without content, which is what the handler now
   returns; no parameter changes, and `skills`' input digest and the surface
   digest move;
-  1.17.0, 2026-09-25, numbered after 1.16.0 (#2435), which merges first, and merged after #2437, whose plain-fresh-mint shape the start_session description states: the
-  progressive `tools/list` shrinks from 44,199 to 40,506 bytes.
+  1.17.0, 2026-09-25, numbered after 1.16.0 (#2435): the
+  progressive `tools/list` shrinks from 44,199 to 40,455 bytes.
   `search_shared_memory` stops advertising six fields only other `knowledge`
   actions read (`offset`, `epoch_scope`, `scope`, `evidence_ids`,
   `verification_basis`, `decision_standard`); search never read them, and
