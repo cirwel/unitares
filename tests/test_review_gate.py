@@ -7,6 +7,7 @@ pass a new diff)."""
 from __future__ import annotations
 
 import importlib.util
+import os
 import json
 import re
 import subprocess
@@ -35,6 +36,8 @@ def no_cloud_reads(monkeypatch):
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
     # The tracked provider switch reflects today's outages; unit tests pin it.
     monkeypatch.setattr(rg, "disabled_providers", lambda: {})
+    # Whether the agy CLI is installed must not change unit behaviour.
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: p not in rg.OPTIONAL_CLI)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -1465,3 +1468,95 @@ def test_a_malformed_provider_file_warns(monkeypatch, tmp_path, capsys):
     f.write_text("{not json")
     monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
     assert real_disabled_providers() == {} and "malformed" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Antigravity CLI reviewer: subscription login, EMPTY workspace, inlined prompt.
+# agy 1.2.11 was verified by the operator: `agy -p ... --mode plan --sandbox
+# --output-format json` in an empty dir printed {"status":"SUCCESS","response":"OK\n",...}.
+
+def test_antigravity_is_preferred_cross_family_when_installed(monkeypatch):
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
+    assert rg.reviewer_candidates("claude/x") == ["codex", "antigravity", "claude"]
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    assert rg.default_reviewer("claude/x") == "antigravity"
+    assert rg.reviewer_candidates("antigravity/x") == ["claude", "antigravity"]
+
+
+def test_antigravity_is_skipped_when_agy_is_absent(monkeypatch):
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    assert rg.reviewer_candidates("claude/x") == ["claude"]
+
+
+def test_fallback_after_codex_is_now_antigravity_not_claude(monkeypatch):
+    # The case the candidate list changes: codex enabled, agy installed.
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    ran = []
+    monkeypatch.setattr(rg, "_review_locked", lambda a, pr, key, p: ran.append(p) or rg.UNREVIEWED)
+    rg.review_with_fallback(SimpleNamespace(budget=30, reviewer=None, branch="claude/x"), 1, "k", "codex")
+    assert ran == ["codex", "antigravity"]
+
+
+def test_antigravity_prompt_inlines_the_diff_and_changed_files(tmp_path):
+    (tmp_path / "a.py").write_text("print('after')\n")
+    diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n-print('before')\n+print('after')\n"
+    prompt = rg.antigravity_prompt(diff, "origin/master", "abc123", root=tmp_path)
+    assert diff in prompt and "===== FILE a.py (post-change) =====\nprint('after')" in prompt
+    assert prompt.rstrip().endswith("print('after')") and "cannot see" in prompt
+
+
+def test_antigravity_prompt_omits_files_past_the_limit_and_refuses_an_oversized_diff(tmp_path, monkeypatch):
+    monkeypatch.setattr(rg, "ANTIGRAVITY_PROMPT_LIMIT", 6000)
+    (tmp_path / "big.txt").write_text("x" * 5000)
+    diff = "+++ b/big.txt\n+x\n"
+    prompt = rg.antigravity_prompt(diff, "b", "h", root=tmp_path)
+    assert "big.txt omitted: prompt size limit" in prompt and "x" * 5000 not in prompt
+    assert rg.antigravity_prompt("+" * 7000, "b", "h", root=tmp_path) is None
+
+
+def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path):
+    seen = {}
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        seen["cmd"], seen["cwd"], seen["listing"] = cmd, cwd, sorted(Path(cwd).iterdir())
+        stdout.write('{"conversation_id":"c","status":"SUCCESS","response":"fine\\nVERDICT: CLEAN\\n"}\n')
+        stderr.write("Warning: invalid unsandboxed permission rules found\n")
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert seen["cmd"][:3] == ["agy", "-p", "PROMPT"]
+    assert {"--sandbox", "plan", "json"} <= set(seen["cmd"])
+    assert seen["cwd"] != str(tmp_path) and seen["cwd"] != os.getcwd() and seen["listing"] == []
+    assert not Path(seen["cwd"]).exists()  # the workspace is removed afterwards
+    assert rg.parse_verdict(text) == ("CLEAN", 0) and note == "exit 0"
+
+
+def test_a_failed_antigravity_run_returns_raw_output_and_cools_down(monkeypatch, tmp_path):
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            return 3
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        stderr.write('AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","retryable":true}\n')
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert "RESOURCE_EXHAUSTED" in text and note == "exit 3"
+    rg.remember_unavailable("antigravity", text, note)
+    assert rg.provider_cooldown("antigravity") == "quota"
+
+
+def test_antigravity_json_that_is_not_success_is_not_an_answer():
+    assert rg._antigravity_text('{"status":"ERROR","response":"VERDICT: CLEAN"}') \
+        == '{"status":"ERROR","response":"VERDICT: CLEAN"}'
+    assert rg._antigravity_text("not json") == "not json"
