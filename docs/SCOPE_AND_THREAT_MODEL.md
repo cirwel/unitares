@@ -178,10 +178,13 @@ cannot supply. Tracked in [#1671](https://github.com/cirwel/unitares/issues/1671
 attestation scheme in the code is HMAC keyed on each agent's `api_key`. That is
 a symmetric construction: a verifier needs the signing key to recompute a
 signature, and a party holding that key could also forge one.
-`Resolution.compute_signature` states this in its own docstring, and retention
-of the symmetric stack is a recorded decision rather than an oversight (see
-[`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md)). It is designed for one
-operator attesting inside their own trust boundary. As of 2026-09-25 no
+`Resolution.compute_signature` states this in its own docstring. The recorded
+decision to keep a symmetric stack, with asymmetric DPoP shelved on 2026-04-19,
+covers agent identity (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md));
+it is not a decision to keep the party HMAC. Whether to restore key issuance for
+that scheme or delete it is still open, as the `describe_attestation` docstring
+in `src/dialectic_protocol.py` records. The scheme is designed for one operator
+attesting inside their own trust boundary. As of 2026-09-25 no
 resolution record in the maintainer deployment carries a signature keyed on a
 party's `api_key` under the current scheme: the four 2026 records that carry a
 signature used a uuid-derived fallback key, forgeable from public data and

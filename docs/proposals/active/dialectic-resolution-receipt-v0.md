@@ -32,12 +32,16 @@ record in the maintainer deployment carries a signature keyed on a party's
 `api_key` under the current scheme. The four 2026 records that carry a
 signature used a uuid-derived fallback key, forgeable from public data and
 removed in #2155; the most recent records carrying two signatures are legacy
-v1 rows from 2025-12-13 (UTC), which cannot be verified. With the fallback gone,
-and no agent created since January 2026 holding an `api_key`, a receipt minted
-for a new agent's resolution would countersign a record with no party
-attestation in it and would carry `both_signatures_present: false`. An older
-agent with a key still on file would produce a single-signer attestation
-(`signature_a` only), which would carry the same value.
+v1 rows from 2025-12-13 (UTC), which cannot be verified. What a receipt minted
+today would countersign depends on the path. An LLM-assisted session passes an
+empty reviewer key, so its record carries at most `signature_a`: with the
+fallback gone, and no agent created since January 2026 holding an `api_key`, a
+new agent's record carries no party attestation, while an older agent with a
+key on file gets a single-signer attestation. Either way the receipt would
+carry `both_signatures_present: false`. A peer-reviewed session signs with each
+party's key when one is available, so a peer resolution between two parties
+that both hold keys would still produce a bilateral record, and its receipt
+would carry `both_signatures_present: true`.
 
 ## What is built
 
