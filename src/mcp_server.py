@@ -187,7 +187,7 @@ if _oauth_issuer_url:
         print(
             "[FastMCP] OAuth gate applies to "
             + (", ".join(_oauth_enforce_hosts) if _oauth_enforce_hosts else "every host")
-            + ("; static client configured" if _static_clients else ""),
+            + ("; static client configured" if _oauth_static_client_id else ""),
             file=sys.stderr, flush=True,
         )
     except Exception as e:
