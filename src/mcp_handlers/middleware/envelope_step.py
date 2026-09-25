@@ -28,10 +28,12 @@ Envelope shape (friendly fields first, raw payload available on demand):
 Population is conservative: every field is harvested from values the
 canonical handlers already return — this layer reorders and translates,
 it does not compute new governance signals. Fields with nothing to say
-are omitted. Default read aliases and bounded ``sync_state`` modes omit the
-repeated canonical payload and advertise an explicit full-response escape
-hatch. Other state-changing aliases retain it, and
-``sync_state(response_mode="full")`` restores it explicitly.
+are omitted. Default read aliases, bounded ``sync_state`` modes and a default
+``start_session`` omit the repeated canonical payload and advertise an
+explicit full-response escape hatch. Other state-changing aliases retain it,
+and ``response_mode="full"`` restores it explicitly. A routine ``sync_state``
+proceed also says each fact once (``_drop_routine_proceed_duplicates``);
+guide, pause and provisional responses keep their full shape.
 Error payloads (success=False / "error") pass through unchanged: the raw
 error contract carries its own recovery info.
 
@@ -137,6 +139,14 @@ _MEMORY_BY_LABEL_CHARS = 64
 _MEMORY_TAG_LIMIT = 5
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
+# Default start_session. continuity_token alone is ~330 B of it.
+_START_SESSION_BUDGET_BYTES = 1_200
+_ONBOARD_RAW_MODES = frozenset({"full", "verbose", "standard"})
+# Onboard fields a caller or adapter reads off the friendly envelope. The
+# plugin's post-identity hook and identity_sidecar read agent_id/display_name
+# from the top level or from raw_governance, so lifting them is what lets the
+# default response drop raw_governance.
+_ONBOARD_LIFT_KEYS = ("agent_id", "display_name", "is_new", "continuity_token")
 
 _ACTION_ALIASES = {
     "approve": ("proceed", None),
@@ -453,6 +463,74 @@ def _action_summary(
     if evidence_basis:
         summary["evidence_basis"] = evidence_basis
     return summary or None
+
+
+_ROUTINE_VERDICTS = frozenset({"safe", "proceed", "approve"})
+
+
+def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
+    """A clean proceed: nothing in the envelope asks the agent to act.
+
+    Anything else — a guide, a pause, a provisional or caveated verdict, a
+    near or unassessed edge, a recovery hint — keeps the full shape, because
+    those are the responses where the repeated fields carry meaning.
+    """
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict) or state.get("action") != "proceed":
+        return False
+    if state.get("sub_action") not in (None, "approve"):
+        return False
+    if state.get("verdict_provisional") or envelope.get("verdict_caveat"):
+        return False
+    if envelope.get("recovery_hint"):
+        return False
+    if state.get("margin") not in (None, "comfortable"):
+        return False
+    summary = envelope.get("action_summary")
+    summary = summary if isinstance(summary, dict) else {}
+    if summary.get("headline") or summary.get("verdict_confidence") == "provisional":
+        return False
+    if summary.get("sub_action") not in (None, "approve"):
+        return False
+    verdict = summary.get("verdict")
+    return verdict is None or str(verdict).lower() in _ROUTINE_VERDICTS
+
+
+def _drop_routine_proceed_duplicates(envelope: Dict[str, Any]) -> None:
+    """Say each fact of a clean proceed once.
+
+    A routine proceed carried the action three times (action_summary,
+    state_summary.action, status/health_status "healthy"), the risk three
+    times and the sub_action twice. state_summary is the copy the Python SDK
+    reads (agents/sdk/.../_checkin_fields.py: action, sub_action, coherence,
+    risk_score), and action_summary.reason is the named reason, so those stay
+    and the restatements go. A margin is dropped only when it is comfortable
+    and no edge is near or unassessed: that is the one case where it says
+    nothing the action does not.
+    """
+    summary = envelope.get("action_summary")
+    if isinstance(summary, dict):
+        for key in ("action", "sub_action", "verdict", "risk_score"):
+            summary.pop(key, None)
+        if summary.get("verdict_confidence") == "unspecified":
+            summary.pop("verdict_confidence", None)
+        if not summary:
+            envelope.pop("action_summary", None)
+
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict):
+        return
+    health = [state[key] for key in ("status", "health_status") if key in state]
+    if health and all(value == "healthy" for value in health):
+        state.pop("status", None)
+        state.pop("health_status", None)
+    if (
+        state.get("margin") == "comfortable"
+        and not state.get("nearest_edge")
+        and not state.get("unmeasurable_edges")
+    ):
+        state.pop("margin", None)
+        state.pop("margin_scope", None)
 
 
 def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -987,6 +1065,23 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return bool(value)
 
 
+def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
+    """Whether a mint's identity_assurance block says something to act on.
+
+    A just-minted identity is server-inferred by construction: the minting
+    call cannot carry the client_session_id it is about to receive, so the
+    block reports weak/not caller-proven and then explains that this is the
+    expected baseline. Repeating that on every mint is a lecture, not a
+    signal. Any other weak binding keeps the whole block, reason and
+    how_to_strengthen included.
+    """
+    if not isinstance(assurance, dict):
+        return False
+    if assurance.get("caller_proven") is True:
+        return False
+    return assurance.get("baseline") != "fresh_identity"
+
+
 def _raw_governance_policy(
     friendly_name: str,
     arguments: Optional[Dict[str, Any]],
@@ -1016,6 +1111,24 @@ def _raw_governance_policy(
         return include_raw, (
             "Re-call sync_state(..., response_mode='full') for the complete "
             "canonical diagnostics."
+        )
+
+    if friendly_name == "start_session":
+        # The envelope lifts every field a caller or adapter reads (uuid,
+        # client_session_id, agent_id, display_name, is_new, continuity_token)
+        # and the abnormal-only identity blocks, so repeating the whole onboard
+        # payload beneath them was the same record twice. The canonical record
+        # rides along only when asked for, on the same signals onboard uses to
+        # pick its own verbose shape (_derive_onboard_response_mode).
+        arguments = arguments or {}
+        requested = str(arguments.get("response_mode") or "").strip().lower()
+        include_raw = requested in _ONBOARD_RAW_MODES or (
+            not requested and _as_bool(arguments.get("verbose"), default=False)
+        )
+        return include_raw, (
+            "Pass response_mode='full' to start_session for the complete onboard "
+            "record. Do not re-mint to read it: identity(client_session_id=...) "
+            "re-reads this binding."
         )
 
     if friendly_name not in _COMPACT_READ_ALIASES:
@@ -1419,6 +1532,18 @@ def build_experience_envelope(
             if isinstance(payload.get("thread_context"), dict)
             else {}
         )
+        if not include_raw:
+            envelope.update(_lift(payload, *_ONBOARD_LIFT_KEYS))
+            if payload.get("provisional_lineage") is True:
+                envelope["provisional_lineage"] = True
+            assurance = payload.get("identity_assurance")
+            if _onboard_assurance_is_abnormal(assurance):
+                envelope["identity_assurance"] = assurance
+            thread_context = payload.get("thread_context")
+            if isinstance(thread_context, dict) and (
+                thread_context.get("predecessor") or thread_context.get("is_fork")
+            ):
+                envelope["thread_context"] = thread_context
         if isinstance(predecessor, dict) and predecessor.get("uuid"):
             state_summary["predecessor_uuid"] = predecessor["uuid"]
             fork_kind = payload.get("thread_context", {}).get("episode_fork_kind")
@@ -1817,7 +1942,10 @@ def build_experience_envelope(
         envelope["raw_governance_available"] = True
         if raw_hint:
             envelope["raw_governance_hint"] = raw_hint
+    if routine_sync and _is_routine_proceed(envelope):
+        _drop_routine_proceed_duplicates(envelope)
     bounded_search = friendly_name == "search_shared_memory" and not include_raw
+    bounded_start = friendly_name == "start_session" and not include_raw
     if bounded_search:
         _enforce_search_projection_budget(envelope)
 
@@ -1833,6 +1961,10 @@ def build_experience_envelope(
     elif bounded_search:
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         if measured_bytes > _SEARCH_LEAN_BUDGET_BYTES:
+            _attach_response_size(envelope, friendly_name)
+    elif bounded_start:
+        measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+        if measured_bytes > _START_SESSION_BUDGET_BYTES:
             _attach_response_size(envelope, friendly_name)
     else:
         _attach_response_size(envelope, friendly_name)
