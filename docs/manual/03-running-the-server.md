@@ -30,7 +30,7 @@ Full port map: [`../operations/DEFINITIVE_PORTS.md`](../operations/DEFINITIVE_PO
 
 | Endpoint | Transport | Use case |
 |---|---|---|
-| `/mcp/` | Streamable HTTP | MCP clients (Cursor, Claude Code, Claude Desktop via bridge) |
+| `/mcp/` | Streamable HTTP | MCP clients (Claude Code, Codex, Hermes, any Streamable HTTP client; stdio-only clients via bridge) |
 | `/v1/tools/call` | REST POST | CLI, scripts, non-MCP clients |
 | `/dashboard` | HTTP | The web dashboard |
 | `/health`, `/health/live` | HTTP | Health checks |
@@ -43,7 +43,7 @@ curl -s -X POST http://127.0.0.1:8767/v1/tools/call \
   -d '{"name":"<tool_name>","arguments":{ ... }}'
 ```
 
-Client-specific MCP JSON (Cursor, Claude Code, Claude Desktop) is routed from
+Client-specific MCP configuration (Claude Code, Codex, Claude Desktop, others) is routed from
 [chapter 4](04-integrating-agents.md#45-connect-a-client-or-resident) and lives
 canonically in [`../integration/MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md).
 

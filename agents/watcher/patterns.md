@@ -194,8 +194,40 @@ acquisitions without a paired release in a `finally:` or `async with` context.
 
 ### P006 — Silent exception swallow (severity: medium, violation_class: VOI)
 
-`except Exception: pass` or `except Exception: logger.warning(...)` without
-re-raising. Hides real bugs and makes debugging impossible.
+An exception handler (`except`, `catch`) that shows no sign of reacting to
+the failure. A handler reacts only if its body, nested blocks included,
+contains at least one of:
+
+- a `raise` / `throw`
+- a logging call at info, warning, error, exception or critical level, on a
+  logger (`logger.warning(...)`, not `task.exception()`)
+- a `return` with a value other than `None` / `null` / `undefined`; any such
+  value counts, a fallback like `return []` included
+
+A `raise` or log inside a nested `try`'s own handler does not count: it
+reacts to a different exception, and when the nested code succeeds the
+caught one is still swallowed. Nor does a `raise` in the body of a nested
+`try` that has a handler, which may catch it.
+
+Everything else is P006: `pass`, `...`, an empty block, `continue`, `break`,
+a bare `return` or `return None`, assigning `None` or another fallback to
+a variable,
+collecting the error, or logging only at debug level (`logger.debug(...)`,
+`console.debug(...)`). Hides real bugs and makes debugging impossible.
+
+When handlers are nested, every handler that could catch the exception must
+react. An inner `except KeyError: logger.warning(...)` inside an outer
+`except Exception: pass` is still P006, because the outer handler silently
+swallows every other exception.
+
+After you report, checks that never add a finding drop some P006 findings,
+in any language: the governing `except` clause carries `# noqa: BLE001` or a
+bare `# noqa`, or the cited line is a comment, outside the scanned lines, or
+under a `tests/` directory. For Python files that parse, an AST check also
+drops the finding when you cite a line and every handler governing it shows
+one of the three reactions above; for any other `except` clause only a
+cruder line-based `raise` check runs. The optional side-effect exemption
+below is still your call.
 
 **SAFE — DO NOT FLAG:**
 ```python
@@ -213,7 +245,7 @@ primary logic path does NOT depend on its result — it is intentional.
 Only flag when the swallow is on the main logic path or could mask a
 failure the caller needs to know about.
 
-**Hint template:** `silent swallow — log and re-raise or narrow the except`
+**Hint template:** `silent swallow — log at info or above, re-raise, or return an error value`
 
 <!-- P007 has been demoted to the EXPERIMENTAL section below.
      Detecting it requires reasoning about temporal flow (which pool was

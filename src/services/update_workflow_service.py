@@ -91,7 +91,8 @@ async def run_process_update_workflow(ctx, *, serializer=None) -> Sequence[TextC
                 f"Another live session or process holds this agent's lock and is still "
                 f"updating it; the lock is released when that holder finishes or exits. "
                 f"If this persists, try: 1) Wait a few seconds and retry, "
-                f"2) Check for other sessions acting as this agent."
+                f"2) Check for other sessions acting as this agent, "
+                f"3) Restart your MCP client if it is the one stuck."
                 ,
                 error_code="LOCK_TIMEOUT",
                 error_category="system_error",

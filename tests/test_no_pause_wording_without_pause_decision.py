@@ -127,22 +127,37 @@ def test_guided_cold_start_never_tells_the_agent_to_pause():
         assert "self_recovery" not in env.get("recovery_hint", ""), mode
 
 
-def test_guided_cold_start_hint_warns_the_next_authored_check_in_can_pause():
-    """The guard covers only non-authored check-ins. The agent's own next
-    sync_state is scored on the same prior and can pause - the one sequence
-    that still paused at cold start (2026-09-21) - so the hint must say so
-    rather than "keep working"."""
-    env = _envelope(_guided_cold_start_check_in(), "auto")
-    hint = env["recovery_hint"]
+def test_guided_cold_start_hint_names_no_pause_when_the_guard_covers_authored(monkeypatch):
+    """With the cold-start guard extended to an agent's own report (the
+    default), the prior cannot pause the next authored check-in either, so the
+    hint must not say it can."""
+    # Patch the class the envelope module holds: another test reloads the
+    # config module, which leaves a different GovernanceConfig object there.
+    monkeypatch.setattr(ES.GovernanceConfig, "NON_AUTHORED_COLD_START_GUARD_ENABLED", True)
+    monkeypatch.setattr(ES.GovernanceConfig, "COLD_START_GUARD_INCLUDE_AUTHORED", True)
+    hint = _envelope(_guided_cold_start_check_in(), "auto")["recovery_hint"]
     assert hint.startswith("Cold start")
     assert "this decision does not block" in hint
+    assert "can pause" not in hint
+
+
+def test_guided_cold_start_hint_warns_when_authored_reports_are_not_covered(monkeypatch):
+    """Rolled back (include_authored off), the agent's own next sync_state is
+    scored on the same prior and can pause - the sequence that paused an agent
+    on 2026-09-21 - so the hint says so rather than "keep working"."""
+    monkeypatch.setattr(ES.GovernanceConfig, "NON_AUTHORED_COLD_START_GUARD_ENABLED", True)
+    monkeypatch.setattr(ES.GovernanceConfig, "COLD_START_GUARD_INCLUDE_AUTHORED", False)
+    hint = _envelope(_guided_cold_start_check_in(), "auto")["recovery_hint"]
     assert "your own sync_state is scored on the same prior and can pause" in hint
 
 
-def test_cold_start_warning_follows_the_verdict_not_the_risk_band():
+def test_cold_start_warning_follows_the_verdict_not_the_risk_band(monkeypatch):
     """Task-type adjustment (exploration/introspection subtract 0.08) can put
     risk_score below 0.7 while the verdict stays high-risk; the guard still
-    deferred a pause, so the warning must still appear."""
+    deferred a pause, so the warning must still appear where authored
+    reports are not covered."""
+    monkeypatch.setattr(ES.GovernanceConfig, "NON_AUTHORED_COLD_START_GUARD_ENABLED", True)
+    monkeypatch.setattr(ES.GovernanceConfig, "COLD_START_GUARD_INCLUDE_AUTHORED", False)
     source = _guided_cold_start_check_in()
     source["metrics"]["risk_score"] = 0.64
     hint = _envelope(source, "auto")["recovery_hint"]
