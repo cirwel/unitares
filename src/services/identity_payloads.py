@@ -306,6 +306,7 @@ def build_identity_signature_payload(
                     "identity_is",
                     "label_is",
                     "agent_id_is",
+                    "harness_is",
                     "continuity_claim",
                 )
                 if key in identity_context
@@ -313,7 +314,7 @@ def build_identity_signature_payload(
             identity_context["detail"] = "compact"
             identity_assurance = {
                 key: identity_assurance[key]
-                for key in ("tier", "caller_proven", "session_source")
+                for key in ("tier", "caller_proven", "proof_origin", "session_source")
                 if key in identity_assurance
             }
         payload["identity_context"] = identity_context
@@ -324,11 +325,11 @@ def build_identity_signature_payload(
 
 # Continuity claims a caller-proven strong binding produces in normal use.
 # Anything else is a discontinuity worth the full record.
+# A UUID-direct resume is left out on purpose: a UUID is a copyable string that
+# appears in shared memory and logs, yet that route scores strong.
 _ROUTINE_CONTINUITY_CLAIMS = frozenset({
     "resumed_by_explicit_session",
     "resumed_by_continuity_token",
-    "resumed_by_uuid_direct",
-    "resumed_by_uuid_direct_fastpath",
     "fresh_uuid_minted_by_force_new",
     "fresh_uuid_minted",
 })
