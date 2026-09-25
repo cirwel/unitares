@@ -134,6 +134,34 @@ def attested_date(skills_dir, name, skill_digest):
 """
 
 
+# A faithful port of canonical's rule, as the plugin carries it.
+_PORTED_CHECKER = """\
+import hashlib, json
+from pathlib import Path
+
+def skill_text_digest(skill_md):
+    return hashlib.sha256(Path(skill_md).read_bytes()).hexdigest()[:16]
+
+def attested_date(skills_dir, name, skill_digest):
+    adir = Path(skills_dir) / ".attestations" / name
+    records = []
+    for path in sorted(adir.glob("*.json"), reverse=True) if adir.is_dir() else []:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("source_digests"), dict):
+            records.append(data)
+    certified = [r for r in records if r.get("skill_digest") == skill_digest]
+    date = None
+    for r in certified or records[:1]:
+        v = r.get("verified_date")
+        if isinstance(v, str) and v and (date is None or v > date):
+            date = v
+    return date
+"""
+
+
 def test_a_drifted_plugin_checker_fails_check_but_not_the_sync(trees):
     canon, plugin = trees
     (plugin / "scripts").mkdir()
@@ -145,7 +173,51 @@ def test_a_drifted_plugin_checker_fails_check_but_not_the_sync(trees):
     # The skills mirror is still written: the checker port is separate work.
     assert (plugin / "skills" / "SKILLS_MANIFEST.sha256").read_text() == _expected(canon)
 
+    # Mirror in sync, checker drifted: its own exit code, so ship.sh can tell
+    # it from mirror drift (which a re-sync fixes and this does not).
     check = _sync(canon, plugin, "--check")
-    assert check.returncode == 1
+    assert check.returncode == 5
     assert "in sync" in check.stdout
     assert "disagrees with canonical's attestation rule" in check.stderr
+
+
+def test_apply_mode_checks_the_rule_against_the_mirror_it_wrote(trees):
+    # This checker agrees everywhere except on skill "live" once it has
+    # attestations, which only the sync itself brings over. A parity result
+    # taken before the write would miss it.
+    canon, plugin = trees
+    live = canon / "skills" / "live"
+    live.mkdir()
+    (live / "SKILL.md").write_text('---\nname: live\nlast_verified: "2026-09-24"\n---\n# Live\n')
+    adir = canon / "skills" / ".attestations" / "live"
+    adir.mkdir(parents=True)
+    (adir / "20260924T000000000000Z-00000000.json").write_text(
+        '{"verified_date": "2026-09-24", "source_digests": {}}'
+    )
+    _git(canon, "add", "skills")
+    _git(canon, "commit", "-q", "-m", "live")
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_PORTED_CHECKER + """
+_ported = attested_date
+def attested_date(skills_dir, name, skill_digest):
+    if name == "live" and (Path(skills_dir) / ".attestations" / name).is_dir():
+        return "1999-01-01"
+    return _ported(skills_dir, name, skill_digest)
+""")
+
+    result = _sync(canon, plugin)
+    assert result.returncode == 5, result.stderr + result.stdout
+    assert "synced skill live" in result.stderr
+
+
+def test_a_checker_that_crashes_warns_without_failing(trees):
+    canon, plugin = trees
+    assert _sync(canon, plugin).returncode == 0
+    (plugin / "scripts").mkdir()
+    (plugin / "scripts" / "_check_freshness.py").write_text(_PORTED_CHECKER + """
+def attested_date(skills_dir, name, skill_digest):
+    raise RuntimeError("boom")
+""")
+    check = _sync(canon, plugin, "--check")
+    assert check.returncode == 0, check.stderr
+    assert "could not compare" in check.stderr and "RuntimeError: boom" in check.stderr

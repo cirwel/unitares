@@ -19,8 +19,9 @@ Usage:
     python3 scripts/dev/check_plugin_attestation_rule.py <plugin_repo>
 
 Exits 0 when the rules agree (or the plugin has no freshness checker to
-compare), 1 on disagreement, 2 when the plugin's checker cannot be loaded.
-Findings go to stdout.
+compare), 1 on disagreement, 2 when the comparison could not be made: the
+plugin's checker fails to load, or either side raises while comparing. A crash
+is never reported as drift. Findings go to stdout.
 """
 
 from __future__ import annotations
@@ -38,16 +39,22 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from src.skill_attestations import (  # noqa: E402
-    ATTESTATIONS_DIR,
-    load_attestations,
-    skill_text_digest,
-    vouching_date,
-)
+# A broken canonical import must not surface as exit 1 (drift) through an
+# uncaught ImportError, so it is held and reported by check().
+try:
+    from src.skill_attestations import (  # noqa: E402
+        ATTESTATIONS_DIR,
+        load_attestations,
+        skill_text_digest,
+        vouching_date,
+    )
+    _CANONICAL_IMPORT_ERROR: Exception | None = None
+except Exception as exc:  # noqa: BLE001
+    _CANONICAL_IMPORT_ERROR = exc
 
 EXIT_OK = 0
 EXIT_DRIFT = 1
-EXIT_UNLOADABLE = 2
+EXIT_UNUSABLE = 2
 
 PLUGIN_CHECKER = Path("scripts") / "_check_freshness.py"
 SKILL = "demo"
@@ -105,17 +112,34 @@ def compare(plugin, skills_dir: Path, name: str, digest: str) -> tuple[str | Non
 
 
 def check(plugin_repo: Path) -> tuple[int, list[str]]:
+    if _CANONICAL_IMPORT_ERROR is not None:
+        err = _CANONICAL_IMPORT_ERROR
+        return EXIT_UNUSABLE, [f"cannot load canonical src/skill_attestations.py: {type(err).__name__}: {err}"]
     if not (plugin_repo / PLUGIN_CHECKER).is_file():
         return EXIT_OK, [f"no {PLUGIN_CHECKER} in plugin; nothing to compare"]
     try:
         plugin = _load_plugin_checker(plugin_repo)
     except Exception as exc:  # the plugin's module is foreign code; any failure is "cannot load"
-        return EXIT_UNLOADABLE, [f"cannot load plugin {PLUGIN_CHECKER}: {type(exc).__name__}: {exc}"]
+        return EXIT_UNUSABLE, [f"cannot load plugin {PLUGIN_CHECKER}: {type(exc).__name__}: {exc}"]
     missing = [fn for fn in ("attested_date", "skill_text_digest") if not hasattr(plugin, fn)]
     if missing:
         return EXIT_DRIFT, [f"plugin {PLUGIN_CHECKER} has no {', '.join(missing)}(): "
                             "it predates the port of src/skill_attestations.py THE RULE"]
+    try:
+        findings = _compare(plugin, plugin_repo)
+    except Exception as exc:  # a crash says nothing about whether the rules agree
+        return EXIT_UNUSABLE, [f"comparison raised {type(exc).__name__}: {exc}"]
 
+    if not findings:
+        return EXIT_OK, []
+    shown = findings[:MAX_REPORTED]
+    if len(findings) > MAX_REPORTED:
+        shown.append(f"... and {len(findings) - MAX_REPORTED} more")
+    return EXIT_DRIFT, shown
+
+
+def _compare(plugin, plugin_repo: Path) -> list[str]:
+    """Every disagreement between the plugin and canonical, as report lines."""
     findings: list[str] = []
     with tempfile.TemporaryDirectory() as tmp:
         skills_dir = Path(tmp) / "skills"
@@ -152,21 +176,18 @@ def check(plugin_repo: Path) -> tuple[int, list[str]]:
             want, got = compare(plugin, real_dir, skill_dir.name, digest)
             if want != got:
                 findings.append(f"synced skill {skill_dir.name}: canonical {want!r}, plugin {got!r}")
-
-    if not findings:
-        return EXIT_OK, []
-    shown = findings[:MAX_REPORTED]
-    if len(findings) > MAX_REPORTED:
-        shown.append(f"... and {len(findings) - MAX_REPORTED} more")
-    return EXIT_DRIFT, shown
+    return findings
 
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print(__doc__.strip().splitlines()[0], file=sys.stderr)
         print("usage: check_plugin_attestation_rule.py <plugin_repo>", file=sys.stderr)
-        return EXIT_UNLOADABLE
-    status, lines = check(Path(argv[1]))
+        return EXIT_UNUSABLE
+    try:
+        status, lines = check(Path(argv[1]))
+    except Exception as exc:  # e.g. canonical's own reader failing; still not drift
+        status, lines = EXIT_UNUSABLE, [f"check raised {type(exc).__name__}: {exc}"]
     for line in lines:
         print(line)
     return status

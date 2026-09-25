@@ -116,8 +116,23 @@ def test_a_checker_that_predates_the_port_is_reported(tmp_path):
 
 def test_an_unloadable_checker_is_distinguished_from_drift(tmp_path):
     status, lines = rule_check.check(_plugin(tmp_path, "import no_such_module_xyz\n"))
-    assert status == rule_check.EXIT_UNLOADABLE
+    assert status == rule_check.EXIT_UNUSABLE
     assert "cannot load" in lines[0]
+
+
+def test_a_checker_that_raises_is_not_reported_as_drift(tmp_path):
+    # A port that crashes on some input says nothing about whether the rules
+    # agree; reporting it as drift would send the operator to port the rule.
+    plugin = _plugin(tmp_path, PORTED + textwrap.dedent('''
+        _ported = attested_date
+        def attested_date(skills_dir, name, skill_digest):
+            if (Path(skills_dir) / ".attestations" / name).is_dir():
+                raise RuntimeError("boom")
+            return _ported(skills_dir, name, skill_digest)
+    '''))
+    status, lines = rule_check.check(plugin)
+    assert status == rule_check.EXIT_UNUSABLE, lines
+    assert lines == ["comparison raised RuntimeError: boom"]
 
 
 def test_a_plugin_without_a_checker_has_nothing_to_compare(tmp_path):

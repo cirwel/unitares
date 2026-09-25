@@ -286,3 +286,40 @@ def test_direct_ship_falls_back_to_legacy_watcher_dir_for_commit_trailer(
 
     assert "[ship] appended Watcher-Findings trailer: legacy123" in stdout
     assert "Watcher-Findings: legacy123" in message
+
+
+def _stub_skills_sync(repo: Path, exit_code: int) -> None:
+    stub = repo / "scripts" / "dev" / "sync-plugin-skills.sh"
+    stub.write_text(f"#!/usr/bin/env bash\nexit {exit_code}\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+
+
+def test_skills_ship_warns_but_continues_when_only_the_plugin_rule_drifted(
+    ship_repo: Path,
+) -> None:
+    # sync-plugin-skills.sh --check exit 5: mirror in sync, only the plugin's
+    # freshness checker drifted. A re-sync cannot fix that, so no block.
+    _stub_skills_sync(ship_repo, 5)
+    stage_file(ship_repo, "skills/demo/SKILL.md")
+
+    result = subprocess.run(
+        [str(ship_repo / "scripts" / "dev" / "ship.sh"), "--direct", "test: change"],
+        cwd=ship_repo, text=True, capture_output=True, env=dict(os.environ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "drifted from canonical's attestation rule" in result.stderr
+    assert "test: change" in run(["git", "log", "-1", "--format=%B"], ship_repo).stdout
+
+
+def test_skills_ship_blocks_when_the_plugin_mirror_is_out_of_sync(ship_repo: Path) -> None:
+    _stub_skills_sync(ship_repo, 1)
+    stage_file(ship_repo, "skills/demo/SKILL.md")
+
+    result = subprocess.run(
+        [str(ship_repo / "scripts" / "dev" / "ship.sh"), "--direct", "test: change"],
+        cwd=ship_repo, text=True, capture_output=True, env=dict(os.environ),
+    )
+
+    assert result.returncode == 1
+    assert "plugin bundle is out of sync" in result.stderr

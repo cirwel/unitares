@@ -25,9 +25,12 @@
 # Both modes also compare the plugin's freshness checker with canonical's
 # attestation rule (scripts/dev/check_plugin_attestation_rule.py). The plugin
 # keeps its own copy of that rule because it cannot import unitares, and a
-# copy drifts silently. Disagreement fails --check (exit 1) and, in apply
-# mode, is reported after the mirror is written (exit 5): the skills still
-# sync, but the checker needs a port that this script cannot make.
+# copy drifts silently. Disagreement exits 5 in both modes, a code of its
+# own so a caller (ship.sh) can tell it from mirror drift (exit 1): re-running
+# the sync cannot fix it, the checker needs a port this script cannot make. In
+# apply mode the skills still sync, and the rule is checked against the mirror
+# as written. When the mirror has drifted too, --check exits 1 and still
+# prints the rule result.
 #
 # Environment:
 #   UNITARES_PLUGIN_REPO  — path to unitares-governance-plugin checkout.
@@ -65,17 +68,20 @@ fi
 MANIFEST_NAME="SKILLS_MANIFEST.sha256"
 MANIFEST_TOOL="${UNITARES_ROOT}/scripts/dev/skills_manifest.py"
 
-# Attestation-rule parity. Computed once, reported at every exit below that
-# would otherwise claim success. `set -e` would abort on the check's non-zero
-# exit before the status could be read, so the capture is unguarded.
-set +e
-RULE_OUT=$(python3 "${UNITARES_ROOT}/scripts/dev/check_plugin_attestation_rule.py" "$PLUGIN_REPO" 2>&1)
-RULE_STATUS=$?
-set -e
+# Attestation-rule parity. Its "synced skills" part reads the mirror, so
+# apply mode re-runs it after writing. `set -e` would abort on the check's
+# non-zero exit before the status could be read, so the capture is unguarded.
+check_rule_parity() {
+    set +e
+    RULE_OUT=$(python3 "${UNITARES_ROOT}/scripts/dev/check_plugin_attestation_rule.py" "$PLUGIN_REPO" 2>&1)
+    RULE_STATUS=$?
+    set -e
+}
+check_rule_parity
 
 # Prints the parity result; returns 1 only on a real disagreement. A checker
-# that cannot be loaded is a warning: this is a drift detector, not a guard
-# against data loss, so it does not block the skills sync.
+# that cannot be loaded or raises is a warning: this is a drift detector, not
+# a guard against data loss, so it does not block the skills sync.
 report_rule_parity() {
     case "$RULE_STATUS" in
         0) return 0 ;;
@@ -85,7 +91,7 @@ report_rule_parity() {
             echo "[sync-plugin-skills] port src/skill_attestations.py THE RULE into $PLUGIN_REPO/scripts/_check_freshness.py" >&2
             return 1 ;;
         *)
-            echo "[sync-plugin-skills] warning: could not compare the plugin's attestation rule (exit $RULE_STATUS):" >&2
+            echo "[sync-plugin-skills] warning: could not compare the plugin's attestation rule (exit $RULE_STATUS), not checked:" >&2
             echo "$RULE_OUT" | sed 's/^/  /' >&2
             return 0 ;;
     esac
@@ -104,7 +110,6 @@ fi
 if [[ -z "$DIFF_OUT" ]]; then
     echo "[sync-plugin-skills] in sync — nothing to do"
     if ! report_rule_parity; then
-        [[ "$CHECK_ONLY" == 1 ]] && exit 1
         exit 5
     fi
     exit 0
@@ -198,6 +203,7 @@ echo "[sync-plugin-skills] done. Plugin status:"
 git -C "$PLUGIN_REPO" status --short -- skills/ | sed 's/^/  /'
 echo
 echo "[sync-plugin-skills] next: cd $PLUGIN_REPO && commit + push the mirror update"
+check_rule_parity
 if ! report_rule_parity; then
     exit 5
 fi
