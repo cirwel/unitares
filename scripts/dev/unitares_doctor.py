@@ -1207,6 +1207,55 @@ def _doctor_visible_bearer_token() -> str | None:
     return None
 
 
+def _health_identity(port: int) -> "tuple[str, str] | None":
+    """(build_sha, started_at) from /health on a loopback port, or None.
+
+    Together they name one running server process, which is what lets the
+    doctor tell this server's public listener from another service that
+    happens to hold the same port.
+    """
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        try:
+            conn.request("GET", "/health", headers={"User-Agent": "unitares-doctor"})
+            resp = conn.getresponse()
+            if resp.status != 200:
+                return None
+            data = json.loads(resp.read(65536).decode("utf-8", "replace"))
+        finally:
+            conn.close()
+        sha = data.get("build_sha")
+        started = (data.get("uptime") or {}).get("started_at")
+    except (OSError, http.client.HTTPException, ValueError, AttributeError):
+        return None
+    if not sha or not started:
+        return None
+    return str(sha), str(started)
+
+
+def _public_listener_port() -> "int | None":
+    """The server's public OAuth listener port, if it is actually serving.
+
+    The doctor's shell need not match the server's (the server reads its
+    LaunchAgent plist), so the issuer is not required here. An exported
+    UNITARES_OAUTH_PUBLIC_PORT is probed only when its /health names the same
+    server process as the main listener's. Anything else — nothing listening,
+    a server with no issuer, or another service holding the port (the server
+    then falls back to gating main) — probes the main listener instead.
+    """
+    raw = os.environ.get("UNITARES_OAUTH_PUBLIC_PORT", "").strip()
+    try:
+        port = int(raw)
+    except ValueError:
+        return None
+    if not 0 < port < 65536 or port == MCP_PORT:
+        return None
+    public = _health_identity(port)
+    if public is None or public != _health_identity(MCP_PORT):
+        return None
+    return port
+
+
 def check_mcp_route_gate() -> CheckResult:
     """Which gate, if any, is closed on /mcp/ for a client arriving externally.
 
@@ -1261,9 +1310,13 @@ def check_mcp_route_gate() -> CheckResult:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    url = f"http://127.0.0.1:{MCP_PORT}{MCP_ROUTE_PATH}"
+    # With a public OAuth listener the tunnel reaches that port, not the main
+    # one, and only that port carries the OAuth gate.
+    port = _public_listener_port() or MCP_PORT
+    listener = "public OAuth listener" if port != MCP_PORT else "loopback listener"
+    url = f"http://127.0.0.1:{port}{MCP_ROUTE_PATH}"
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", MCP_PORT, timeout=5)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         try:
             conn.request("GET", MCP_ROUTE_PATH, headers=headers)
             resp = conn.getresponse()
@@ -1287,7 +1340,7 @@ def check_mcp_route_gate() -> CheckResult:
     except (ConnectionError, OSError, http.client.HTTPException, ValueError) as e:
         return CheckResult(
             name, mode, Status.FAIL,
-            f"{url} unreachable on the loopback listener",
+            f"{url} unreachable on the {listener}",
             detail=str(e),
         )
 
@@ -1333,10 +1386,13 @@ def check_mcp_route_gate() -> CheckResult:
         return CheckResult(
             name, mode, Status.WARN,
             f"MCP route answers {status} as {external_host} without challenging an anonymous caller",
-            detail=f"{origin} The Host allowlist is fine, but nothing gated the request: no "
-                   "bearer allowlist is active and no OAuth provider was constructed. If "
-                   "UNITARES_OAUTH_ISSUER_URL is set on the server, provider construction "
-                   "failed at startup — check stderr for the NO AUTH GATE warning.",
+            detail=f"{origin} The Host allowlist is fine, but nothing gated the request on "
+                   f"{listener} :{port}: no bearer allowlist is active and no OAuth gate "
+                   "applied. Either no OAuth provider was constructed (if "
+                   "UNITARES_OAUTH_ISSUER_URL is set on the server, check stderr for the "
+                   "NO AUTH GATE warning), or the server confines OAuth to a public "
+                   "listener (UNITARES_OAUTH_PUBLIC_PORT) and this probed the main one, "
+                   "which is ungated by design; export that port here to probe it.",
         )
     if status == 503 and "auth_unavailable" in body:
         return CheckResult(

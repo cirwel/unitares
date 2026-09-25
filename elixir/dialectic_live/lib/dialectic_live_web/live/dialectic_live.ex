@@ -63,6 +63,10 @@ defmodule DialecticLiveWeb.DialecticLive do
 
   defp awaiting?(s), do: truthy(field(s, "awaiting_facilitation"))
 
+  # The governance list sends a ~280-char topic preview (topic_truncated,
+  # topic_chars); dialectic(action="get") returns the full text.
+  defp topic_truncated?(s), do: truthy(field(s, "topic_truncated"))
+
   defp updated_sort_key(s) do
     case field(s, "updated_at") || field(s, "created_at") do
       v when is_integer(v) -> v
@@ -107,6 +111,9 @@ defmodule DialecticLiveWeb.DialecticLive do
           </div>
           <div :if={field(s, "topic") || field(s, "question")} class="text-sm text-base-content/70 mt-1">
             {field(s, "topic") || field(s, "question")}
+          </div>
+          <div :if={topic_truncated?(s)} class="text-xs text-base-content/50 mt-1">
+            preview of a {field(s, "topic_chars")}-character topic; dialectic(action="get") has the full text
           </div>
         </li>
       </ul>

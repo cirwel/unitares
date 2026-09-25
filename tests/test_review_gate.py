@@ -7,6 +7,7 @@ pass a new diff)."""
 from __future__ import annotations
 
 import importlib.util
+import os
 import json
 import re
 import subprocess
@@ -35,6 +36,8 @@ def no_cloud_reads(monkeypatch):
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
     # The tracked provider switch reflects today's outages; unit tests pin it.
     monkeypatch.setattr(rg, "disabled_providers", lambda: {})
+    # Whether the agy CLI is installed must not change unit behaviour.
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: p not in rg.OPTIONAL_CLI)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -1465,3 +1468,139 @@ def test_a_malformed_provider_file_warns(monkeypatch, tmp_path, capsys):
     f.write_text("{not json")
     monkeypatch.setattr(rg, "PROVIDERS_FILE", f)
     assert real_disabled_providers() == {} and "malformed" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Antigravity CLI reviewer: subscription login, EMPTY workspace, inlined prompt.
+# agy 1.2.11 was verified by the operator: `agy -p ... --mode plan --sandbox
+# --output-format json` in an empty dir printed {"status":"SUCCESS","response":"OK\n",...}.
+
+def test_antigravity_is_preferred_cross_family_when_installed(monkeypatch):
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
+    assert rg.reviewer_candidates("claude/x") == ["codex", "antigravity", "claude"]
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    assert rg.default_reviewer("claude/x") == "antigravity"
+    assert rg.reviewer_candidates("antigravity/x") == ["claude", "antigravity"]
+
+
+def test_antigravity_is_skipped_when_agy_is_absent(monkeypatch):
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
+    assert rg.reviewer_candidates("claude/x") == ["claude"]
+
+
+def test_fallback_after_codex_is_now_antigravity_not_claude(monkeypatch):
+    # The case the candidate list changes: codex enabled, agy installed.
+    monkeypatch.setattr(rg, "optional_cli_installed", lambda p: True)
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    ran = []
+    monkeypatch.setattr(rg, "_review_locked", lambda a, pr, key, p: ran.append(p) or rg.UNREVIEWED)
+    rg.review_with_fallback(SimpleNamespace(budget=30, reviewer=None, branch="claude/x"), 1, "k", "codex")
+    assert ran == ["codex", "antigravity"]
+
+
+def _agy_prompt(repo):
+    diff = rg.diff_text("master", "HEAD")
+    return diff, rg.antigravity_prompt(diff, "master", "h")
+
+
+def test_antigravity_prompt_inlines_committed_changed_files(repo):
+    diff, prompt = _agy_prompt(repo)
+    assert diff in prompt and "===== FILE a.txt (post-change) =====\na changed\n" in prompt
+    assert "cannot see" in prompt and "b.txt" not in prompt.split("===== DIFF =====")[1].split(diff)[1]
+
+
+def test_antigravity_prompt_reads_git_objects_not_the_filesystem(repo, tmp_path):
+    # Review of 965e9bc (P1): paths were taken from '+++ b/' text anywhere in
+    # the diff, joined without normalising, and symlinks were followed, so a
+    # PR could inline files from outside the repository into a third-party
+    # prompt. Now: git's own path list, committed blobs, no symlinks.
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP-SECRET\n")
+    (repo / "forge.txt").write_text(f"++ b/{secret}\n++ b/../../secret.txt\n")
+    (repo / "link").symlink_to(secret)
+    _git(repo, "add", "forge.txt", "link")
+    _git(repo, "commit", "-qm", "attempt")
+    (repo / "a.txt").write_text("uncommitted edit\n")  # working tree must not leak in
+    diff, prompt = _agy_prompt(repo)
+    assert f"+++ b/{secret}" in diff  # the forged header really is in the diff
+    assert "TOP-SECRET" not in prompt and "uncommitted edit" not in prompt
+    assert "===== FILE link" not in prompt and "===== FILE forge.txt (post-change) =====" in prompt
+
+
+def test_antigravity_prompt_limit_is_in_bytes_and_refuses_an_oversized_diff(repo, monkeypatch):
+    # 3000 characters but 6000 bytes: counted in characters it would fit a
+    # 4500-unit budget; counted in bytes (what argv limits) it must not.
+    (repo / "big.txt").write_text("é" * 3000)
+    _git(repo, "add", "big.txt")
+    _git(repo, "commit", "-qm", "big")
+    diff = rg.diff_text("master", "HEAD")
+    skeleton = rg.ANTIGRAVITY_PROMPT.format(base="master", head="h", diff=diff, files="")
+    monkeypatch.setattr(rg, "ANTIGRAVITY_PROMPT_LIMIT", len(skeleton.encode()) + 4500)
+    prompt = rg.antigravity_prompt(diff, "master", "h")
+    assert "big.txt omitted: prompt size limit" in prompt and "é" * 3000 not in prompt.split("===== DIFF =====")[1].split(diff)[1]
+    assert len(prompt.encode()) <= rg.ANTIGRAVITY_PROMPT_LIMIT
+    monkeypatch.setattr(rg, "ANTIGRAVITY_PROMPT_LIMIT", 100)
+    assert rg.antigravity_prompt("+" * 200, "b", "h") is None
+
+
+def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKEN", "secret-bearer")
+    seen = {}
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        seen["cmd"], seen["cwd"], seen["listing"] = cmd, cwd, sorted(Path(cwd).iterdir())
+        seen["env"] = kw.get("env")
+        stdout.write('{"conversation_id":"c","status":"SUCCESS","response":"fine\\nVERDICT: CLEAN\\n"}\n')
+        stderr.write("Warning: invalid unsandboxed permission rules found\n")
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert seen["cmd"][:3] == ["agy", "-p", "PROMPT"]
+    # Review of da5835a (P2): no caller secrets reach a prompt-steerable agent.
+    assert seen["env"] is not None and "GITHUB_TOKEN" not in seen["env"]
+    assert "UNITARES_MCP_BEARER_TOKEN" not in seen["env"]
+    assert {"--sandbox", "plan", "json"} <= set(seen["cmd"])
+    assert seen["cwd"] != str(tmp_path) and seen["cwd"] != os.getcwd() and seen["listing"] == []
+    assert not Path(seen["cwd"]).exists()  # the workspace is removed afterwards
+    assert rg.parse_verdict(text) == ("CLEAN", 0) and note == "exit 0"
+
+
+def test_a_failed_antigravity_run_returns_raw_output_and_cools_down(monkeypatch, tmp_path):
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            return 3
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        stderr.write('AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","retryable":true}\n')
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert "RESOURCE_EXHAUSTED" in text and note == "exit 3"
+    rg.remember_unavailable("antigravity", text, note)  # the new quota keyword
+    assert rg.provider_cooldown("antigravity") == "quota"
+
+
+def test_antigravity_json_that_is_not_success_is_not_an_answer():
+    assert rg._antigravity_text('{"status":"ERROR","response":"VERDICT: CLEAN"}') \
+        == '{"status":"ERROR","response":"VERDICT: CLEAN"}'
+    assert rg._antigravity_text("not json") == "not json"
+
+
+def test_a_workspace_under_a_repo_is_refused(monkeypatch, tmp_path):
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(rg.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(rg.subprocess, "Popen", lambda *a, **k: pytest.fail("launched agy"))
+    out = tmp_path / "out"
+    out.mkdir()
+    text, note = rg.run_reviewer("antigravity", "P", out, 30)
+    assert note == "skipped: workspace not isolated"

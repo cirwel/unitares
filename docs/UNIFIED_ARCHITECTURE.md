@@ -158,7 +158,7 @@ Agents contribute discoveries to a shared store. **PostgreSQL FTS is the canonic
 |    outcome_events            |
 |  knowledge.discoveries       |     relational KG record + FTS.
 |  governance_graph (AGE)      |
-|  metrics.series              |     Chronicler time series
+|  metrics.series              |     metrics time series
 |  lease_plane.*, effects.*,   |     BEAM coordination planes
 |  coordination.*,             |
 |  orchestration.*             |
@@ -272,21 +272,24 @@ anyio isolation (Redis guards, sync blocking I/O, performance caches):
 
 ---
 
-## Resident Agents
+## Long-lived agents (optional)
 
-Several long-lived governance agents run alongside the server. They consume the same public contract as external agents (the [`unitares-sdk`](../agents/sdk/) package), and serve as both reference implementations and operational hygiene.
+UNITARES governs any agent that checks in. It does not come with a fleet, and it
+needs no resident agents to run. What the architecture provides for agents that
+live longer than one session is a set of capabilities, not a roster:
 
-| Resident | Cadence | Role |
-|---|---|---|
-| **Vigil** | scheduled (launchd, ~30 min) | Janitorial — health checks, KG groundskeeping, test triggers |
-| **Vigil hygiene** | weekly | Branch hygiene |
-| **Sentinel** | continuous (`/ws/eisv`) | Fleet monitor — anomaly detection on the live event stream. The live slot is the BEAM Sentinel (`elixir/sentinel`); the Python Sentinel is the reference / rollback slot |
-| **Watcher** | event-driven | Code-watcher — wired into Claude Code's PostToolUse hook, local-LLM pattern match |
-| **Chronicler** | daily | Codebase, fleet and governance metrics → `metrics.series` |
-| **Dialectic reviewer** | on dispatch | Orchestrated external reviewer (see Recovery above) |
-| **Triage scribe** | on demand | Local-model anomaly summarizer |
+- **Persistent identity.** A long-lived agent keeps a stable identity across restarts through the substrate-identity pattern (`agents/sdk/`, `_substrate.py`; see [`ontology/identity.md`](ontology/identity.md)). Ordinary sessions mint fresh identities instead.
+- **Capability tags and declared properties.** Behaviour is decided by tags such as `persistent`, `embodied` and `ephemeral`, by a `cadence.*` tag for the expected check-in interval, and by what an agent sends. An agent that publishes a physical sensor reading is judged against it rather than the behavioural sensor. Two label-keyed overlays, for check-in intervals and dashboard silence thresholds, remain as back-compat fallbacks. They are empty by default and are meant to shrink to nothing. The resident-progress manifest (`UNITARES_RESIDENT_PROGRESS_MANIFEST`) is different: it is the progress probe's own opt-in configuration, keyed by label and empty by default.
+- **An optional named roster.** `UNITARES_RESIDENTS` is **empty by default**. Naming an agent there does two things:
+  - it gives the agent its own calibration class, which is a statistical partition;
+  - it is the **only** sanctioned way an identity acquires the privileged `persistent` and `autonomous` tags, which an agent cannot grant itself. These tags exempt it from orphan archival and loop detection.
 
-Which residents a deployment runs is configuration (`UNITARES_RESIDENTS`, empty by default; see [`operations/resident-roster.md`](operations/resident-roster.md)). `agents/local_resident/` is the shared runner for local-model residents (currently the triage scribe). See [`agents/README.md`](../agents/README.md) for the reference implementations. The residents are reference patterns, **not** load-bearing governance internals — the public contract lives in `agents/sdk/`.
+  A long-lived agent left off the roster onboards untagged and can be archived. See [`operations/resident-roster.md`](operations/resident-roster.md#non-obvious-consequence-privileged-tags).
+- **The public contract.** Long-lived agents use the same MCP surface and the [`unitares-sdk`](../agents/sdk/) as any external agent. Nothing in the server depends on a particular one existing.
+
+`agents/` ships **reference** long-lived agents: a janitor, a fleet monitor, a code watcher, a metrics chronicler and a local-model triage scribe. They are examples of the pattern and operational tools for the deployment that runs them. They are outside the shipped server package and are not governance internals; see [`agents/README.md`](../agents/README.md). The orchestrated dialectic reviewer also lives in `agents/`, but it is part of an optional server feature and is described under Recovery above.
+
+The range of agents this covers runs from an ephemeral CLI session that checks in once to a persistent embodied system. One deployment's example of the latter is a Raspberry Pi agent whose physical sensors map onto EISV ([anima-mcp](https://github.com/cirwel/anima-mcp)). The same dynamics, verdicts and knowledge graph apply to both.
 
 ## Threat model and security posture
 
@@ -298,20 +301,6 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 - Dashboard browser sign-in uses passkey/WebAuthn sessions (`src/dashboard_auth.py`), which MCP auth never consults. HTTP routes also accept the trusted-network bypass or `UNITARES_HTTP_API_TOKEN` in local posture, or an MCP bearer in strict posture (`src/http_routes/access.py`)
 
 Multi-tenant or public-facing deployment will benefit from a harder auth posture than the current defaults. Vulnerability reports: [`SECURITY.md`](../.github/SECURITY.md).
-
-## Case Study: Lumen (Physical Sensor Agent)
-
-One of the registered agents is [Lumen](https://github.com/cirwel/anima-mcp) — a Raspberry Pi 4 sensor-backed agent that checks in to Unitares every ~180 seconds (configurable via `ANIMA_GOVERNANCE_INTERVAL_SECONDS`).
-
-What makes Lumen distinctive as an agent:
-
-- **Physical sensors** (temperature, humidity, pressure, light) feed into labeled Anima dimensions (warmth, clarity, stability, presence), which are mapped to EISV for governance check-ins
-- **Autonomous drawing** driven by a local EISV instance (DrawingEISV) that shares the same math but runs independently — coherence modulates how long Lumen draws and how picky it is about saving
-- **Proprioceptive loop** — the light sensor reads Lumen's own LEDs, making clarity partly self-referential
-
-Lumen demonstrates that Unitares can govern agents with very different architectures — from ephemeral CLI agents that check in once to persistent embodied systems with continuous sensor streams. The same EISV dynamics, the same verdicts, the same knowledge graph.
-
-For Lumen's internal architecture (sensors, neural bands, DrawingEISV, LED pipeline, and creature-facing interface), see [anima-mcp](https://github.com/cirwel/anima-mcp).
 
 ---
 
