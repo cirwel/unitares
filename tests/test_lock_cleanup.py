@@ -169,6 +169,7 @@ class TestCleanupStaleLocks:
         assert result["cleaned"] == 0
         assert result["kept"] == 1
         assert "held" in result["kept_locks"][0]["reason"]
+        assert "recorded pid 999999999" in result["kept_locks"][0]["reason"]
 
     def test_never_removes_a_lock_held_by_state_lock_manager(self, tmp_path):
         """The review repro: sweeping inside acquire_agent_lock with max_age 0

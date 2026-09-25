@@ -31,21 +31,17 @@ fi
 echo ""
 
 # 2. Check for stale lock files
+# Never delete lock files by age: a stuck holder's file can be old, and
+# unlinking it lets a newcomer lock a fresh file at the same path, so two
+# writers get in. lock_cleanup removes only files no process holds.
 echo "Checking for stale lock files..."
 LOCK_DIR="$PROJECT_DIR/data/locks"
 if [[ -d "$LOCK_DIR" ]]; then
-    LOCK_COUNT=$(find "$LOCK_DIR" -name "*.lock" -mmin +30 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$LOCK_COUNT" -gt 0 ]]; then
-        echo "Found $LOCK_COUNT stale lock files (>30 min old):"
-        find "$LOCK_DIR" -name "*.lock" -mmin +30 -ls 2>/dev/null | head -5
-        if [[ "$DRY_RUN" == false ]]; then
-            echo "Removing..."
-            find "$LOCK_DIR" -name "*.lock" -mmin +30 -delete 2>/dev/null
-            echo "Done."
-        fi
-    else
-        echo "No stale lock files found."
+    LOCK_ARGS=(--lock-dir "$LOCK_DIR" --max-age 1800)
+    if [[ "$DRY_RUN" == true ]]; then
+        LOCK_ARGS+=(--dry-run)
     fi
+    (cd "$PROJECT_DIR" && python3 -m src.lock_cleanup "${LOCK_ARGS[@]}")
 else
     echo "Lock directory not found (OK if not using file locks)."
 fi

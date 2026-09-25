@@ -125,6 +125,10 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 300.0, dry_run:
                 # Probe and unlink under one held flock; see
                 # remove_lock_file_if_free for why this must not be split.
                 is_stale, reason = remove_lock_file_if_free(lock_file, max_age_seconds)
+                if reason.startswith("held"):
+                    pid = _recorded_pid(lock_file)
+                    alive = "alive" if pid and is_process_alive(pid) else "not running"
+                    reason = f"held by a live process (recorded pid {pid}, {alive})"
 
             if is_stale:
                 cleaned.append({
