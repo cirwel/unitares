@@ -150,7 +150,11 @@ _oauth_static_client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID") or N
 if _oauth_issuer_url:
     try:
         from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
-        from src.oauth_provider import GovernanceOAuthProvider, static_clients_from_env
+        from src.oauth_provider import (
+            GovernanceOAuthProvider,
+            RedisOAuthStore,
+            static_clients_from_env,
+        )
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
         _auto_approve = os.environ.get("UNITARES_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
@@ -163,6 +167,8 @@ if _oauth_issuer_url:
             secret=_oauth_secret,
             auto_approve=_auto_approve,
             static_clients=_static_clients,
+            # Tokens and DCR clients survive restarts; memory-only if Redis is down.
+            store=RedisOAuthStore(),
         )
         _auth_settings = AuthSettings(
             issuer_url=_oauth_issuer_url,

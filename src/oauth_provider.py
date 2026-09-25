@@ -1,14 +1,22 @@
 """
-In-memory OAuth 2.1 Authorization Server Provider for unitares-governance.
+OAuth 2.1 Authorization Server Provider for unitares-governance.
 
 Implements the MCP SDK's OAuthAuthorizationServerProvider protocol.
-Tokens stored in-memory — reset on server restart (Claude.ai re-authenticates).
+State lives in memory and, when a store is given (Redis in production), is
+written through so issued tokens and DCR registrations survive a restart: a
+connector signed in before a restart stays signed in after it. Authorization
+codes stay in memory only (five-minute lifetime; a restart mid-sign-in just
+means signing in again).
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
+import hashlib
+import json
+import logging
 import os
 import secrets
 import time
@@ -54,12 +62,91 @@ class RefreshTokenEntry:
         return time.time() > self.created_at + ttl
 
 
+logger = logging.getLogger(__name__)
+
+#: DCR registrations expire unless a token is issued to them within this
+#: window, so open registration cannot grow the store without bound.
+CLIENT_STATE_TTL = 30 * 86400
+
+
+class OAuthStateStore:
+    """Key/value store for OAuth state. Every method must fail soft: a store
+    that is down degrades the provider to memory-only, never to an error."""
+
+    async def get(self, key: str) -> str | None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    async def set(self, key: str, value: str, ttl: int) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    async def delete(self, *keys: str) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+
+class RedisOAuthStore(OAuthStateStore):
+    """OAuth state in Redis, the server's session store, with per-key TTLs.
+
+    Keys hold a SHA-256 of each token, never the token itself. Every call is
+    bounded by ``asyncio.wait_for`` (async Redis is not ExecutorPool-wrapped)
+    and any failure reads as a miss.
+    """
+
+    PREFIX = "unitares:oauth:"
+
+    def __init__(self, timeout: float = 1.0):
+        self._timeout = timeout
+
+    async def _redis(self):
+        from src.cache.redis_client import get_redis
+
+        return await asyncio.wait_for(get_redis(), timeout=self._timeout)
+
+    async def get(self, key: str) -> str | None:
+        try:
+            redis = await self._redis()
+            if redis is None:
+                return None
+            return await asyncio.wait_for(redis.get(self.PREFIX + key), timeout=self._timeout)
+        except Exception as exc:
+            logger.warning("OAuth store read failed (%s); using memory only", type(exc).__name__)
+            return None
+
+    async def set(self, key: str, value: str, ttl: int) -> None:
+        if ttl <= 0:
+            return
+        try:
+            redis = await self._redis()
+            if redis is not None:
+                await asyncio.wait_for(
+                    redis.set(self.PREFIX + key, value, ex=int(ttl)), timeout=self._timeout
+                )
+        except Exception as exc:
+            logger.warning("OAuth store write failed (%s); token is memory-only", type(exc).__name__)
+
+    async def delete(self, *keys: str) -> None:
+        if not keys:
+            return
+        try:
+            redis = await self._redis()
+            if redis is not None:
+                await asyncio.wait_for(
+                    redis.delete(*(self.PREFIX + k for k in keys)), timeout=self._timeout
+                )
+        except Exception as exc:
+            logger.warning("OAuth store delete failed (%s)", type(exc).__name__)
+
+
+def _digest(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     """
-    In-memory OAuth 2.1 Authorization Server for unitares-governance.
+    OAuth 2.1 Authorization Server for unitares-governance.
 
     Implements OAuthAuthorizationServerProvider protocol from the MCP SDK.
-    Single-user, personal server — optimized for simplicity.
+    Single-user, personal server — optimized for simplicity. With a ``store``,
+    tokens and DCR clients are written through and loaded back on a miss.
     """
 
     def __init__(
@@ -70,6 +157,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         refresh_token_ttl: int = 604800,
         auth_code_ttl: int = 300,
         static_clients: list[OAuthClientInformationFull] | None = None,
+        store: OAuthStateStore | None = None,
     ):
         self._secret = secret or secrets.token_hex(32)
         self._auto_approve = auto_approve
@@ -86,6 +174,47 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._auth_codes: dict[str, AuthCodeEntry] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshTokenEntry] = {}
+        self._store = store
+        self._static_client_ids = frozenset(self._clients)
+
+    # -- persistence helpers ------------------------------------------------
+
+    async def _persist_client(self, client: OAuthClientInformationFull) -> None:
+        if self._store is not None and client.client_id not in self._static_client_ids:
+            await self._store.set(
+                f"client:{client.client_id}", client.model_dump_json(), CLIENT_STATE_TTL
+            )
+
+    async def _persist_access(self, entry: AccessToken) -> None:
+        if self._store is None:
+            return
+        ttl = (entry.expires_at - int(time.time())) if entry.expires_at else self._access_token_ttl
+        await self._store.set(
+            f"at:{_digest(entry.token)}",
+            entry.model_dump_json(exclude={"token"}),
+            ttl,
+        )
+
+    async def _persist_refresh(self, entry: RefreshTokenEntry) -> None:
+        if self._store is None:
+            return
+        ttl = int(entry.created_at + self._refresh_token_ttl - time.time())
+        await self._store.set(
+            f"rt:{_digest(entry.token)}",
+            json.dumps({
+                "client_id": entry.client_id,
+                "scopes": list(entry.scopes),
+                "created_at": entry.created_at,
+            }),
+            ttl,
+        )
+
+    async def _issued(self, client: OAuthClientInformationFull,
+                      access: AccessToken, refresh: RefreshTokenEntry) -> None:
+        await self._persist_access(access)
+        await self._persist_refresh(refresh)
+        # A client that just got a token is in use; keep its registration.
+        await self._persist_client(client)
 
     def _generate_token(self, prefix: str = "at") -> str:
         """Generate a cryptographically random token."""
@@ -98,7 +227,16 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         return at.client_id if at and hasattr(at, "client_id") else None
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        return self._clients.get(client_id)
+        client = self._clients.get(client_id)
+        if client is None and self._store is not None:
+            raw = await self._store.get(f"client:{client_id}")
+            if raw:
+                try:
+                    client = OAuthClientInformationFull.model_validate_json(raw)
+                except ValueError:
+                    return None
+                self._clients[client_id] = client
+        return client
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if not client_info.client_id:
@@ -108,6 +246,7 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         if not client_info.client_id_issued_at:
             client_info.client_id_issued_at = int(time.time())
         self._clients[client_info.client_id] = client_info
+        await self._persist_client(client_info)
 
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams,
@@ -168,6 +307,11 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             client_id=client.client_id,
             scopes=authorization_code.scopes or ["mcp:tools"],
         )
+        await self._issued(
+            client,
+            self._access_tokens[access_token_str],
+            self._refresh_tokens[refresh_token_str],
+        )
 
         return OAuthToken(
             access_token=access_token_str,
@@ -181,12 +325,28 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self, client: OAuthClientInformationFull, refresh_token: str,
     ) -> RefreshTokenEntry | None:
         entry = self._refresh_tokens.get(refresh_token)
+        if entry is None and self._store is not None:
+            raw = await self._store.get(f"rt:{_digest(refresh_token)}")
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    entry = RefreshTokenEntry(
+                        token=refresh_token,
+                        client_id=str(data["client_id"]),
+                        scopes=list(data.get("scopes") or []),
+                        created_at=float(data["created_at"]),
+                    )
+                except (ValueError, KeyError, TypeError):
+                    return None
+                self._refresh_tokens[refresh_token] = entry
         if entry is None:
             return None
         if entry.client_id != client.client_id:
             return None
-        if entry.is_expired(self._refresh_token_ttl):
-            del self._refresh_tokens[refresh_token]
+        if entry.is_expired(self._refresh_token_ttl) or await self._revoked_after(entry):
+            self._refresh_tokens.pop(refresh_token, None)
+            if self._store is not None:
+                await self._store.delete(f"rt:{_digest(refresh_token)}")
             return None
         return entry
 
@@ -197,6 +357,9 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         scopes: list[str],
     ) -> OAuthToken:
         self._refresh_tokens.pop(refresh_token.token, None)
+        if self._store is not None:
+            # Refresh tokens are single-use; a restart must not resurrect one.
+            await self._store.delete(f"rt:{_digest(refresh_token.token)}")
 
         access_token_str = self._generate_token("at")
         new_refresh_str = self._generate_token("rt")
@@ -215,6 +378,11 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             client_id=client.client_id,
             scopes=effective_scopes,
         )
+        await self._issued(
+            client,
+            self._access_tokens[access_token_str],
+            self._refresh_tokens[new_refresh_str],
+        )
 
         return OAuthToken(
             access_token=access_token_str,
@@ -226,12 +394,32 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
 
     async def load_access_token(self, token: str) -> AccessToken | None:
         entry = self._access_tokens.get(token)
+        if entry is None and self._store is not None:
+            raw = await self._store.get(f"at:{_digest(token)}")
+            if raw:
+                try:
+                    entry = AccessToken.model_validate({**json.loads(raw), "token": token})
+                except (ValueError, TypeError):
+                    return None
+                self._access_tokens[token] = entry
         if entry is None:
             return None
         if entry.expires_at and entry.expires_at < int(time.time()):
-            del self._access_tokens[token]
+            self._access_tokens.pop(token, None)
             return None
         return entry
+
+    async def _revoked_after(self, entry: RefreshTokenEntry) -> bool:
+        """True if the client's refresh tokens were revoked after this one was
+        issued. A marker, because a restarted process cannot enumerate the
+        persisted refresh tokens it has not loaded."""
+        if self._store is None:
+            return False
+        raw = await self._store.get(f"revoked:{entry.client_id}")
+        try:
+            return raw is not None and entry.created_at <= float(raw)
+        except ValueError:
+            return False
 
     async def revoke_token(self, token: AccessToken | RefreshTokenEntry) -> None:
         if isinstance(token, AccessToken):
@@ -240,8 +428,17 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
                          if v.client_id == token.client_id]
             for k in to_remove:
                 del self._refresh_tokens[k]
+            if self._store is not None:
+                await self._store.delete(
+                    f"at:{_digest(token.token)}", *(f"rt:{_digest(k)}" for k in to_remove)
+                )
+                await self._store.set(
+                    f"revoked:{token.client_id}", repr(time.time()), self._refresh_token_ttl
+                )
         elif isinstance(token, RefreshTokenEntry):
             self._refresh_tokens.pop(token.token, None)
+            if self._store is not None:
+                await self._store.delete(f"rt:{_digest(token.token)}")
 
 
 def build_static_client(

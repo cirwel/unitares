@@ -110,8 +110,11 @@ tool runs:
    - **OAuth 2.1.** Set `UNITARES_OAUTH_ISSUER_URL` to the public base URL. The
      server then advertises Dynamic Client Registration, so a DCR-capable
      client (e.g. Claude.ai custom connector) leaves client_id/client_secret
-     blank and self-registers. Note: client registrations are in-memory and
-     reset on restart. The protected MCP resource defaults to
+     blank and self-registers. Client registrations and issued tokens are
+     kept in Redis (keys `unitares:oauth:*`, token keys are SHA-256 digests,
+     TTLs follow token lifetimes), so a restart does not sign connectors out;
+     with Redis unavailable they fall back to memory and reset on restart.
+     The protected MCP resource defaults to
      `<UNITARES_OAUTH_ISSUER_URL>/mcp`; set `UNITARES_OAUTH_RESOURCE_URL` only
      if a reverse proxy exposes the MCP resource at a different public URL.
      See `src/oauth_provider.py`.
@@ -126,8 +129,9 @@ tool runs:
      export UNITARES_OAUTH_STATIC_REDIRECT_URIS="<redirect URI the connector shows>"
      ```
 
-     The static client comes from the environment, so it survives restarts;
-     its tokens do not, and the connector reconnects after one. The token
+     The static client comes from the environment on every start (it is
+     never written to Redis, so rotating its secret takes effect on the next
+     restart); its tokens persist like any other. The token
      endpoint accepts its secret either in the form body or as HTTP Basic.
      An incomplete static-client configuration fails OAuth setup, which
      closes the gated route rather than opening it (see below).
@@ -238,8 +242,10 @@ Three things make a lockout harder than it needs to be:
   network position; for REST specifically, `UNITARES_REST_STRICT=0` restores the
   bypass.
 
-OAuth state cannot strand you across a restart: client registrations and tokens
-are in-memory and reset when the process does (`src/oauth_provider.py`).
+OAuth state now survives a restart (`src/oauth_provider.py`, `RedisOAuthStore`),
+so a restart is no longer a way to clear it. To sign every OAuth client out,
+delete the `unitares:oauth:*` keys (targeted — never flush Redis, which holds
+the live session store) and restart; or revoke per client.
 
 If provider construction fails, `/mcp` **closes rather than opening**. The route
 answers `503 auth_unavailable`, because serving it unauthenticated would answer a
