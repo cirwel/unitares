@@ -26,11 +26,6 @@ by releases and canonical documentation, not by this file.
   calibration — which needs neither external labels nor another operator
   (see `docs/ontology/eisv-proprioception-contract.md`, "Sensory class split").
 
-- **Multi-principal trust** is a separate claim with its own evidence path:
-  whether identity, attestation, and enforcement survive a principal who does
-  not share this authority. The cohort above does not establish it, and it does
-  not gate the cohort. See [`docs/SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md).
-
 - **Two exports, for legibility rather than capability:** an audit-trail export
   in the shape of the IETF Agent Audit Trail draft, and standard trace emission
   under the OpenTelemetry GenAI conventions (still in development upstream).
@@ -72,6 +67,17 @@ by releases and canonical documentation, not by this file.
 ## Later — only after independent evidence
 
 - Multi-operator and mutually distrustful-governor experiments.
+- **Multi-principal trust: not scheduled** (decided 2026-09-25). It is a
+  separate claim: whether identity, attestation, and enforcement survive a
+  principal who does not share this authority. The validation cohort under
+  "Now" does not establish it, and it does not gate the cohort. As of
+  2026-09-25 no second
+  principal and no external verifier exist, and a second host run by the same
+  operator is not a second principal. **Wake condition:** a real outside party,
+  a person or organisation with its own administrative root, asks to verify a
+  record from this deployment. The evidence path is outreach, not engineering.
+  See the [decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+  and [`docs/SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md).
 - Broader policy enforcement or efficacy claims.
 - Stabilization commitments for a 1.0 server/API surface.
 

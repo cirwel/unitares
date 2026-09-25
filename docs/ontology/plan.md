@@ -710,6 +710,8 @@ Codex's argument was that the trust-tier cost of B-relaxed is not theoretical �
 
 **Operator decision pending.** Is the demand server→world attestation (this), agent→server resume proof (S19 B-strict enrollment), or both? And is there a concrete external verifier today that justifies wiring issuance into the hot path?
 
+**Answered 2026-09-25 (second question only):** no concrete external verifier exists, so issuance is not wired and multi-principal work is not scheduled until an outside party asks to verify a record. See [`federation-trust-decisions-2026-09-25.md`](../proposals/active/federation-trust-decisions-2026-09-25.md) (D3a). The first question stays open.
+
 ---
 
 ### S21 — Identity-UX + ID/verbosity simplification arc (session 2026-06-24)
