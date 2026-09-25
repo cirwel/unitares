@@ -749,6 +749,16 @@ async def _serve_public_listener(server: Any, sock: Any) -> None:
     except SystemExit:
         # Belt and braces for any other startup exit: never the main listener's.
         logger.error("Public OAuth listener exited during startup; main listener unaffected")
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        # Nothing awaits this task until shutdown, so without this a crash
+        # would leave the tunnel refused with no trace in the logs.
+        logger.error(
+            "Public OAuth listener STOPPED (%s); the public entry point is down "
+            "until restart, the main listener is unaffected",
+            type(exc).__name__,
+        )
 
 
 async def _start_uds_listener(app: Any) -> tuple[str | None, asyncio.Task[None] | None]:

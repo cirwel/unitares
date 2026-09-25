@@ -136,6 +136,19 @@ tool runs:
      An incomplete static-client configuration fails OAuth setup, which
      closes the gated route rather than opening it (see below).
 
+     **Close registration if the gate should exclude anyone.** Sign-in is
+     auto-approved, so while dynamic registration is open any caller can
+     register a client and mint a token. Set
+     `UNITARES_OAUTH_DYNAMIC_REGISTRATION=false` to admit only
+     pre-registered clients. One static client can serve several
+     connectors: list each connector's redirect URI in
+     `UNITARES_OAUTH_STATIC_REDIRECT_URIS` (comma-separated) and paste the
+     same ID and secret into each (claude.ai: the custom connector's
+     advanced settings). Alternatively, open registration briefly to add a
+     DCR connector and close it again: a registration that received a token
+     is kept in Redis, so it stays connected. Registration alone writes
+     nothing to Redis, so an open `/register` cannot grow the session store.
+
    OAuth gates `/mcp` on **every** request by default, which locks out
    local clients that do not speak OAuth. To keep them working, give the
    public tunnel its own listener:

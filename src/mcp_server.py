@@ -131,6 +131,7 @@ from src.mcp_listen_config import (
     build_transport_security_settings,
     default_listen_host,
     main_listener_ungated,
+    oauth_dynamic_registration_enabled,
     oauth_gate_required,
     oauth_public_port,
 )
@@ -174,8 +175,12 @@ if _oauth_issuer_url:
             issuer_url=_oauth_issuer_url,
             resource_server_url=_oauth_resource_url,
             required_scopes=_OAUTH_REQUIRED_SCOPES,
+            # Open DCR plus auto-approve lets anyone mint a token, so an
+            # operator can close it and admit only pre-registered clients
+            # (or open it briefly to add a connector; registrations that got
+            # a token persist after it closes).
             client_registration_options=ClientRegistrationOptions(
-                enabled=True,
+                enabled=oauth_dynamic_registration_enabled(),
                 valid_scopes=["mcp:tools"],
                 default_scopes=["mcp:tools"],
             ),

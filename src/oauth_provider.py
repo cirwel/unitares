@@ -64,8 +64,9 @@ class RefreshTokenEntry:
 
 logger = logging.getLogger(__name__)
 
-#: DCR registrations expire unless a token is issued to them within this
-#: window, so open registration cannot grow the store without bound.
+#: A DCR registration is written to the store only when a token is issued
+#: to it (so unauthenticated POST /register cannot grow the store), and then
+#: expires unless another token is issued within this window.
 CLIENT_STATE_TTL = 30 * 86400
 
 
@@ -76,10 +77,12 @@ class OAuthStateStore:
     async def get(self, key: str) -> str | None:  # pragma: no cover - interface
         raise NotImplementedError
 
-    async def set(self, key: str, value: str, ttl: int) -> None:  # pragma: no cover
+    async def set(self, key: str, value: str, ttl: int) -> bool:  # pragma: no cover
+        """Write; True if it landed."""
         raise NotImplementedError
 
-    async def delete(self, *keys: str) -> None:  # pragma: no cover
+    async def delete(self, *keys: str) -> bool:  # pragma: no cover
+        """Delete; True if it landed."""
         raise NotImplementedError
 
 
@@ -111,29 +114,35 @@ class RedisOAuthStore(OAuthStateStore):
             logger.warning("OAuth store read failed (%s); using memory only", type(exc).__name__)
             return None
 
-    async def set(self, key: str, value: str, ttl: int) -> None:
+    async def set(self, key: str, value: str, ttl: int) -> bool:
         if ttl <= 0:
-            return
+            return True
         try:
             redis = await self._redis()
-            if redis is not None:
-                await asyncio.wait_for(
-                    redis.set(self.PREFIX + key, value, ex=int(ttl)), timeout=self._timeout
-                )
+            if redis is None:
+                return False
+            await asyncio.wait_for(
+                redis.set(self.PREFIX + key, value, ex=int(ttl)), timeout=self._timeout
+            )
+            return True
         except Exception as exc:
-            logger.warning("OAuth store write failed (%s); token is memory-only", type(exc).__name__)
+            logger.warning("OAuth store write failed (%s); state is memory-only", type(exc).__name__)
+            return False
 
-    async def delete(self, *keys: str) -> None:
+    async def delete(self, *keys: str) -> bool:
         if not keys:
-            return
+            return True
         try:
             redis = await self._redis()
-            if redis is not None:
-                await asyncio.wait_for(
-                    redis.delete(*(self.PREFIX + k for k in keys)), timeout=self._timeout
-                )
+            if redis is None:
+                return False
+            await asyncio.wait_for(
+                redis.delete(*(self.PREFIX + k for k in keys)), timeout=self._timeout
+            )
+            return True
         except Exception as exc:
             logger.warning("OAuth store delete failed (%s)", type(exc).__name__)
+            return False
 
 
 def _digest(token: str) -> str:
@@ -245,8 +254,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             client_info.client_secret = secrets.token_hex(32)
         if not client_info.client_id_issued_at:
             client_info.client_id_issued_at = int(time.time())
+        # Memory only until a token is issued to it (see CLIENT_STATE_TTL).
         self._clients[client_info.client_id] = client_info
-        await self._persist_client(client_info)
 
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams,
@@ -429,16 +438,29 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
             for k in to_remove:
                 del self._refresh_tokens[k]
             if self._store is not None:
-                await self._store.delete(
-                    f"at:{_digest(token.token)}", *(f"rt:{_digest(k)}" for k in to_remove)
-                )
-                await self._store.set(
+                # Marker first: it is what refuses the client's persisted refresh
+                # tokens this process never loaded.
+                marked = await self._store.set(
                     f"revoked:{token.client_id}", repr(time.time()), self._refresh_token_ttl
                 )
+                deleted = await self._store.delete(
+                    f"at:{_digest(token.token)}", *(f"rt:{_digest(k)}" for k in to_remove)
+                )
+                if not (marked and deleted):
+                    logger.error(
+                        "OAuth revocation for a client did NOT reach the store; its "
+                        "persisted tokens stay valid until they expire or the "
+                        "revocation is repeated"
+                    )
         elif isinstance(token, RefreshTokenEntry):
             self._refresh_tokens.pop(token.token, None)
-            if self._store is not None:
-                await self._store.delete(f"rt:{_digest(token.token)}")
+            if self._store is not None and not await self._store.delete(
+                f"rt:{_digest(token.token)}"
+            ):
+                logger.error(
+                    "OAuth refresh-token revocation did NOT reach the store; the "
+                    "token stays valid until it expires or is revoked again"
+                )
 
 
 def build_static_client(

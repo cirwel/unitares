@@ -213,6 +213,18 @@ def mcp_bearer_tokens() -> List[str]:
     return split_csv_env(_MCP_BEARER_TOKENS_ENV)
 
 
+def oauth_dynamic_registration_enabled() -> bool:
+    """Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION).
+
+    On by default, as before. Open DCR with auto-approve lets any caller mint a
+    token, so a deployment that wants the OAuth gate to exclude anyone should
+    turn it off and admit only pre-registered clients, opening it briefly to
+    add a connector if needed. An unparseable value reads as off.
+    """
+    raw = os.environ.get("UNITARES_OAUTH_DYNAMIC_REGISTRATION", "true").strip().lower()
+    return raw in _TRUTHY
+
+
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 

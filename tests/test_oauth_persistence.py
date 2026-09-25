@@ -33,13 +33,15 @@ class _DictStore(OAuthStateStore):
 
     async def set(self, key, value, ttl):
         if ttl <= 0:
-            return
+            return True
         self.data[key] = value
         self.ttls[key] = ttl
+        return True
 
     async def delete(self, *keys):
         for k in keys:
             self.data.pop(k, None)
+        return True
 
 
 def _dcr_client(client_id="dcr-1"):
@@ -303,3 +305,82 @@ async def test_redis_store_is_bounded_when_redis_hangs(monkeypatch):
     started = time.monotonic()
     assert await RedisOAuthStore(timeout=0.05).get("at:abc") is None
     assert time.monotonic() - started < 1
+
+
+@pytest.mark.asyncio
+async def test_registration_alone_writes_nothing_to_the_store():
+    """Unauthenticated POST /register must not grow Redis, the session store."""
+    store = _DictStore()
+    provider = GovernanceOAuthProvider(store=store)
+    for i in range(50):
+        await provider.register_client(_dcr_client(f"spam-{i}"))
+    assert store.data == {}
+
+
+@pytest.mark.asyncio
+async def test_a_client_is_persisted_once_it_gets_a_token():
+    store = _DictStore()
+    provider = GovernanceOAuthProvider(store=store)
+    client = _dcr_client()
+    await provider.register_client(client)
+    await _sign_in(provider, client)
+    assert f"client:{client.client_id}" in store.data
+
+
+class _BrokenStore(_DictStore):
+    async def set(self, key, value, ttl):
+        return False
+
+    async def delete(self, *keys):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_a_revocation_that_misses_the_store_is_logged(caplog):
+    """Swallowing it would silently undo the revocation once the store is back."""
+    import logging
+
+    provider = GovernanceOAuthProvider(store=_BrokenStore())
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+    access = await provider.load_access_token(tokens.access_token)
+    with caplog.at_level(logging.ERROR, logger="src.oauth_provider"):
+        await provider.revoke_token(access)
+    assert any("did NOT reach the store" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [(None, True), ("true", True), ("1", True), ("false", False), ("0", False), ("nope", False)],
+)
+def test_dynamic_registration_switch(monkeypatch, raw, expected):
+    from src.mcp_listen_config import oauth_dynamic_registration_enabled
+
+    if raw is None:
+        monkeypatch.delenv("UNITARES_OAUTH_DYNAMIC_REGISTRATION", raising=False)
+    else:
+        monkeypatch.setenv("UNITARES_OAUTH_DYNAMIC_REGISTRATION", raw)
+    assert oauth_dynamic_registration_enabled() is expected
+
+
+def test_with_registration_closed_there_is_no_register_route():
+    from mcp.server.auth.routes import create_auth_routes
+    from mcp.server.auth.settings import ClientRegistrationOptions
+    from pydantic import AnyHttpUrl
+    from starlette.applications import Starlette
+    from starlette.testclient import TestClient
+
+    provider = GovernanceOAuthProvider(
+        static_clients=[build_static_client("google", "s3cret", ["https://example.org/cb"])]
+    )
+    app = Starlette(routes=create_auth_routes(
+        provider,
+        issuer_url=AnyHttpUrl("https://gov.example.org"),
+        client_registration_options=ClientRegistrationOptions(enabled=False),
+    ))
+    client = TestClient(app)
+    resp = client.post("/register", json={"redirect_uris": ["https://x.example/cb"]})
+    assert resp.status_code in (404, 405)
+    meta = client.get("/.well-known/oauth-authorization-server").json()
+    assert "registration_endpoint" not in meta

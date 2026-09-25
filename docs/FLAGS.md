@@ -153,6 +153,7 @@ additions merge cleanly. -->
 | `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | `'true'` | Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION) | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_PUBLIC_PORT` | `''` | Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT) | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_REQUIRED` | `False (via env_truthy)` | True when the operator demanded an auth gate on ``/mcp`` or no service | src/mcp_listen_config.py |

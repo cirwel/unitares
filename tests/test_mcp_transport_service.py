@@ -717,3 +717,20 @@ def test_sigterm_lets_an_in_flight_public_request_finish(tmp_path):
         if child.poll() is None:
             child.kill()
         child.wait(timeout=15)
+
+
+@pytest.mark.asyncio
+async def test_a_public_listener_crash_after_startup_is_logged(caplog):
+    """Nothing awaits the task until shutdown; a silent crash would leave the
+    tunnel refused with no trace."""
+    import logging
+
+    from src.services.mcp_transport_service import _serve_public_listener
+
+    class _Crashes:
+        async def serve(self, sockets):
+            raise RuntimeError("boom")
+
+    with caplog.at_level(logging.ERROR):
+        await _serve_public_listener(_Crashes(), object())
+    assert any("Public OAuth listener STOPPED" in r.getMessage() for r in caplog.records)
