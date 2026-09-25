@@ -355,8 +355,33 @@ async def main():
     try:
         from src.services.mcp_transport_service import (
             McpAuthConfig,
+            bind_public_socket,
             build_transport_runtime,
         )
+
+        # Bound and judged before the runtime is built: build_transport_runtime
+        # schedules the background sweepers, and a refusal must come before
+        # any of them (and before the main listener) exists. After bootstrap,
+        # so a still-running predecessor has released the port with its lease.
+        _public_socket = (
+            bind_public_socket(_oauth_public_port, main_port=args.port)
+            if _oauth_issuer_url and _oauth_public_port
+            else None
+        )
+        _main_ungated = main_listener_ungated(
+            public_listener_up=_public_socket is not None, host=args.host
+        )
+        _refusal = auth_gate_refusal(
+            provider_present=_oauth_provider is not None,
+            issuer_set=bool(_oauth_issuer_url),
+            main_listener_ungated=_main_ungated,
+            main_host=args.host,
+        )
+        if _refusal:
+            if _public_socket is not None:
+                _public_socket.close()
+            print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)
+            raise SystemExit(1)
 
         def _set_server_ready() -> None:
             global SERVER_READY, SERVER_STARTUP_TIME
@@ -385,22 +410,8 @@ async def main():
             server_start_time=SERVER_START_TIME,
             server_version=SERVER_VERSION,
             server_build_sha=SERVER_BUILD_SHA,
-            # Without a provider there is nothing for the listener to gate.
-            public_port=_oauth_public_port if _oauth_issuer_url else None,
+            public_socket=_public_socket,
         )
-        # Judged here, not at import: --host is only known now, and only the
-        # built runtime knows whether the public listener actually bound.
-        _main_ungated = main_listener_ungated(
-            public_listener_up=runtime.public_server is not None, host=args.host
-        )
-        _refusal = auth_gate_refusal(
-            provider_present=_oauth_provider is not None,
-            issuer_set=bool(_oauth_issuer_url),
-            main_listener_ungated=_main_ungated,
-        )
-        if _refusal:
-            print(f"[FastMCP] {_refusal}", file=sys.stderr, flush=True)
-            raise SystemExit(1)
         if _main_ungated:
             print(
                 f"[FastMCP] WARNING: the main listener on {args.host}:{args.port} is NOT "

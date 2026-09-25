@@ -519,7 +519,7 @@ def build_transport_runtime(
     server_start_time: float,
     server_version: str,
     server_build_sha: str,
-    public_port: int | None = None,
+    public_socket: Any = None,
 ) -> McpTransportRuntime:
     """Assemble the ASGI app, streamable manager, and uvicorn server."""
     import uvicorn
@@ -539,9 +539,6 @@ def build_transport_runtime(
         app,
         server_ready_fn=server_ready_fn,
         server_version=server_version,
-    )
-    public_socket = (
-        _bind_public_socket(public_port, main_port=port) if public_port is not None else None
     )
     if auth_config.oauth_public_listener_only and public_socket is None:
         # No public listener means nothing carries the confined gate, so fall
@@ -617,13 +614,15 @@ def build_transport_runtime(
     )
 
 
-def _bind_public_socket(public_port: int, *, main_port: int) -> Any:
+def bind_public_socket(public_port: int, *, main_port: int) -> Any:
     """Bind the public listener's loopback socket, or return None.
 
-    Bound here rather than by uvicorn: uvicorn's startup calls ``sys.exit`` on
-    a bind error, which escapes an asyncio task and would take the main
-    listener down with it. When this returns None the caller gates every
-    request on the main listener instead, so a bad port fails closed.
+    Bound by the caller rather than by uvicorn: uvicorn's startup calls
+    ``sys.exit`` on a bind error, which escapes an asyncio task and would take
+    the main listener down with it; binding before the runtime is built also
+    lets ``main()`` refuse to serve before any background work starts. When
+    this returns None, ``build_transport_runtime`` gates every request on the
+    main listener instead, so a bad port fails closed.
     """
     import socket
 

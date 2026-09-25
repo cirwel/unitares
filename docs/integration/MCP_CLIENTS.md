@@ -149,8 +149,10 @@ tool runs:
    and tailnet callers when `UNITARES_BIND_ALL_INTERFACES=1` — gets `/mcp`
    without a credential, as with no OAuth configured. The server warns at
    startup when the main listener binds beyond loopback (`--host` included)
-   with no bearer allowlist, and `UNITARES_OAUTH_REQUIRED=1` refuses to start
-   in that state. The public entry point belongs on the public port. The
+   with no bearer allowlist, and `UNITARES_OAUTH_REQUIRED=1` refuses to serve
+   in that state. That refusal comes after the process lease is taken (it
+   needs `--host`) but before the main listener binds or any background task
+   starts; the lease is released on the way out. The public entry point belongs on the public port. The
    listener is identified by the socket that accepted the connection, which
    nothing in a request can forge, unlike `Host`, the peer address or
    forwarding headers. REST routes reached through the public listener never

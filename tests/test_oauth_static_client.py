@@ -392,28 +392,28 @@ def test_an_unbindable_public_port_leaves_the_main_listener_alone():
     busy public port from taking the main listener down with it."""
     import socket
 
-    from src.services.mcp_transport_service import _bind_public_socket
+    from src.services.mcp_transport_service import bind_public_socket
 
     busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     busy.bind(("127.0.0.1", 0))
     busy.listen(1)
     try:
         port = busy.getsockname()[1]
-        assert _bind_public_socket(port, main_port=8767) is None
+        assert bind_public_socket(port, main_port=8767) is None
     finally:
         busy.close()
 
 
 def test_a_public_port_equal_to_the_main_port_is_refused():
-    from src.services.mcp_transport_service import _bind_public_socket
+    from src.services.mcp_transport_service import bind_public_socket
 
-    assert _bind_public_socket(8767, main_port=8767) is None
+    assert bind_public_socket(8767, main_port=8767) is None
 
 
 def test_a_free_public_port_binds_loopback():
-    from src.services.mcp_transport_service import _bind_public_socket
+    from src.services.mcp_transport_service import bind_public_socket
 
-    sock = _bind_public_socket(0, main_port=8767)
+    sock = bind_public_socket(0, main_port=8767)
     try:
         assert sock.getsockname()[0] == "127.0.0.1"
     finally:
@@ -438,9 +438,11 @@ def test_required_refuses_an_ungated_main_listener(monkeypatch):
 
     monkeypatch.setenv("UNITARES_OAUTH_REQUIRED", "1")
     monkeypatch.delenv("UNITARES_MCP_BEARER_TOKENS", raising=False)
-    assert auth_gate_refusal(
-        provider_present=True, issuer_set=True, main_listener_ungated=True
+    message = auth_gate_refusal(
+        provider_present=True, issuer_set=True, main_listener_ungated=True,
+        main_host="100.96.201.46",
     )
+    assert message and "100.96.201.46" in message and "--host" in message
     assert auth_gate_refusal(
         provider_present=True, issuer_set=True, main_listener_ungated=False
     ) is None

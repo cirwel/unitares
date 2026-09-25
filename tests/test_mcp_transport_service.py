@@ -14,6 +14,7 @@ from src.mcp_handlers.context import (
 )
 from src.services.mcp_transport_service import (
     McpAuthConfig,
+    bind_public_socket,
     build_transport_runtime,
     capture_transport_context,
     make_streamable_mcp_asgi,
@@ -113,7 +114,8 @@ def test_transport_runtime_adds_a_loopback_public_listener(monkeypatch):
         server_start_time=0.0,
         server_version="test",
         server_build_sha="test",
-        public_port=0,  # ephemeral: never collide with a running deployment
+        # Ephemeral: never collide with a running deployment.
+        public_socket=bind_public_socket(0, main_port=8767),
     )
 
     try:
@@ -162,7 +164,7 @@ def test_an_unbound_public_listener_falls_back_to_gating_every_request(monkeypat
         server_start_time=0.0,
         server_version="test",
         server_build_sha="test",
-        public_port=8767,
+        public_socket=bind_public_socket(8767, main_port=8767),  # refused: None
     )
 
     assert runtime.public_server is None

@@ -270,6 +270,7 @@ def auth_gate_refusal(
     issuer_set: bool,
     setup_error_name: Optional[str] = None,
     main_listener_ungated: bool = False,
+    main_host: Optional[str] = None,
 ) -> Optional[str]:
     """The startup refusal message, or ``None`` to serve.
 
@@ -295,9 +296,10 @@ def auth_gate_refusal(
         return (
             "UNITARES_OAUTH_REQUIRED is set but the main MCP listener has no auth "
             "gate: UNITARES_OAUTH_PUBLIC_PORT confines OAuth to the public listener "
-            "while the main listener binds beyond loopback "
-            "(UNITARES_BIND_ALL_INTERFACES), and UNITARES_MCP_BEARER_TOKENS is "
-            "empty. Bind the main listener to loopback or set a bearer allowlist."
+            f"while the main listener binds beyond loopback ({main_host or 'non-loopback host'}, "
+            "from --host, UNITARES_MCP_HOST or UNITARES_BIND_ALL_INTERFACES), and "
+            "UNITARES_MCP_BEARER_TOKENS is empty. Bind the main listener to loopback "
+            "or set a bearer allowlist."
         )
     if provider_present:
         return None
