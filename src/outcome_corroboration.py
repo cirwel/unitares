@@ -356,6 +356,25 @@ def _has_substrate_evidence(detail: Mapping[str, Any], verification_source: str 
 #: ``scripts/diagnostics/outcome_evidence_provenance_split.py`` reports it.
 SERVER_SET_TOOL_TRIGGERS = frozenset({"phase5_emitter"})
 
+#: Reference families the hint may advertise. "command" is left out on
+#: purpose: its keys include exit_code and returncode, which beside a `tool`
+#: or a `kind` are TOOL_OBSERVED triggers, so naming that family would hand
+#: callers the calibration-floor recipe the hint exists to withhold.
+_HINT_REF_FAMILIES = ("pr", "commit", "ci", "test")
+#: The key the hint shows for each advertised family, where one reads better
+#: than the family's alphabetical first. Derived from _CLAIM_FIELD_FAMILIES,
+#: never a separate list: a preferred key renamed away falls back to the
+#: family's own first key.
+_PREFERRED_REF_EXAMPLE = {"pr": "pr_url", "commit": "commit_sha", "ci": "ci_run", "test": "test_command"}
+_REF_EXAMPLE_KEYS = {
+    family: (
+        _PREFERRED_REF_EXAMPLE[family]
+        if _PREFERRED_REF_EXAMPLE.get(family) in _CLAIM_FIELD_FAMILIES[family]
+        else sorted(_CLAIM_FIELD_FAMILIES[family])[0]
+    )
+    for family in _HINT_REF_FAMILIES
+}
+
 
 def tool_observation_triggers(detail: Mapping[str, Any]) -> set[str]:
     """Names of the evidence triggers in ``detail`` that reach TOOL_OBSERVED.
@@ -555,6 +574,37 @@ def assess_outcome_corroboration(
         verified_fields=sorted(verified),
         unverified_fields=sorted(unverified),
         reasons=reasons,
+    )
+
+
+def corroboration_upgrade_hint(grade: str | None, *, ceiling: str | None) -> str | None:
+    """Tell a caller whose claim graded ``claim_only`` what the grader reads.
+
+    The reasons say "no corroborating detail" without saying what would count;
+    an external agent guessed test_exit_code / artifact_hash /
+    external_verifier_id, none of which the grader reads (2026-09-24).
+
+    Deliberately stops at SELF_REPORT_WITH_REFS (0.35). The next grade,
+    TOOL_OBSERVED, is 0.65, which is also the calibration admission weight,
+    and a caller can reach it by DESCRIBING a tool result in the right shape
+    (see SERVER_SET_TOOL_TRIGGERS: recorded, not resolved, and an operator
+    call). Advertising those shapes to every caller would move rows across the
+    calibration floor before that call is made, so the hint names only the
+    reference keys, which stay below it, and the cap.
+
+    Only self-attested rows (ceiling TOOL_OBSERVED, the public path's cap) get
+    a hint: a vouched in-process emitter is not an agent reading advice, and
+    the cap sentence would be false for it.
+    """
+    if grade != CLAIM_ONLY or ceiling != TOOL_OBSERVED:
+        return None
+    ref_keys = ", ".join(_REF_EXAMPLE_KEYS.values())
+    return (
+        f"A reference in detail ({ref_keys}) raises this to "
+        f"{SELF_REPORT_WITH_REFS}. "
+        f"Self-attested detail is capped at {TOOL_OBSERVED} whatever it carries; "
+        f"higher grades need server_observation or external_signal provenance, "
+        f"which a caller cannot set."
     )
 
 

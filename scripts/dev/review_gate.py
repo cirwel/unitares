@@ -53,7 +53,7 @@ Cost
 ----
 The CI side reads comments with GITHUB_TOKEN and calls no model. Native Codex is operator opt-in (`git config review.native true`), with a
 bounded wait and local fallback. Otherwise the review runs through a CLI the operator already has (`codex`,
-`claude`); `record` takes any review text, so a contributor with no model at
+`claude`, or `agy` for Antigravity when installed, each on its own subscription login); `record` takes any review text, so a contributor with no model at
 all can satisfy the gate with a human review. No metered API is on the
 required path (AGENTS.md, execution-cost policy).
 """
@@ -66,6 +66,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -546,7 +547,58 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
 
 
 PROVIDERS_FILE = Path(__file__).resolve().with_name("review_providers.json")
-KNOWN_PROVIDERS = {"codex", "claude"}
+KNOWN_PROVIDERS = {"codex", "claude", "antigravity"}
+# Cross-family preference when the author's family is unknown (a human branch).
+PROVIDER_ORDER = ("codex", "antigravity", "claude")
+# Reviewers that need an extra operator-installed CLI count only when it is on
+# PATH; codex and claude keep their behaviour (a missing CLI is an UNREVIEWED
+# launch failure with a cooldown, not a silent skip).
+OPTIONAL_CLI = {"antigravity": "agy"}
+# Antigravity reviews an inlined prompt from an empty workspace, so the whole
+# prompt rides in ONE argv element: Linux caps that at 128 KiB (MAX_ARG_STRLEN)
+# and macOS caps all of argv+env at 1 MiB. Bytes, not characters.
+ANTIGRAVITY_PROMPT_LIMIT = 120_000
+
+# agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
+# untrusted text (a PR diff, a paused agent's thesis), and an injected "print
+# your environment" must find no UNITARES_*/GitHub token to echo. Kept: what a
+# CLI needs to find its home, locale, proxy and agy's OWN optional Google
+# credentials. Its subscription login lives in the system keyring, not env.
+AGY_ENV_ALLOWLIST = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
+    "LANG", "LC_ALL", "LC_CTYPE",
+    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
+    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
+)
+
+
+def agy_env() -> dict[str, str]:
+    return {k: os.environ[k] for k in AGY_ENV_ALLOWLIST if k in os.environ}
+
+
+ANTIGRAVITY_PROMPT = """\
+You are reviewing a pull request to a repository you cannot see: your working
+directory is deliberately empty, so do not try to read or list files. The full
+diff (base {base}, head {head}) and the complete post-change text of every
+changed file are below; judge the change from them alone.
+
+Adversarially look for defects the author may have rationalized: behaviour
+that is wrong, a claim in a doc or comment that the code contradicts, a test
+that cannot fail, an error path that reports success. Cite file:line for every
+finding and say what input or state makes it go wrong. Do not report style
+preferences. If the material below is not enough to judge something, say so
+rather than assuming it is fine.
+
+End with exactly one line and nothing after it:
+VERDICT: CLEAN
+or
+VERDICT: FINDINGS(<number of findings>)
+
+===== DIFF =====
+{diff}
+{files}"""
 
 
 def disabled_providers() -> dict[str, str]:
@@ -694,12 +746,28 @@ def current_pr() -> dict | None:
     return json.loads(proc.stdout) if proc.returncode == 0 else None
 
 
-def default_reviewer(branch: str) -> str:
-    # Prefer diversity, but independence is a fresh reviewer context, not a
-    # provider name. A quota outage must not prohibit the available reviewer.
-    preferred, other = ("claude", "codex") if branch.startswith("codex/") else ("codex", "claude")
+def optional_cli_installed(provider: str) -> bool:
+    return provider not in OPTIONAL_CLI or shutil.which(OPTIONAL_CLI[provider]) is not None
+
+
+def reviewer_candidates(branch: str) -> list[str]:
+    """Usable reviewers for a branch, best first.
+
+    Prefer a model family other than the author's (the branch prefix), but
+    independence is a fresh reviewer context, not a provider name, so the
+    author's own family stays last as a valid fallback. Disabled providers
+    are dropped, and an optional CLI only counts when installed.
+    """
+    author = branch.split("/", 1)[0]
     disabled = disabled_providers()
-    return other if preferred in disabled and other not in disabled else preferred
+    usable = [p for p in PROVIDER_ORDER if p not in disabled and optional_cli_installed(p)]
+    return [p for p in usable if p != author] + [p for p in usable if p == author]
+
+
+def default_reviewer(branch: str) -> str:
+    # A quota outage must not prohibit the available reviewer.
+    candidates = reviewer_candidates(branch)
+    return candidates[0] if candidates else ("claude" if branch.startswith("codex/") else "codex")
 
 
 def provider_state_path(reviewer: str) -> Path:
@@ -725,7 +793,8 @@ def remember_unavailable(reviewer: str, text: str, note: str) -> None:
     """
     message = (text + "\n" + note).lower()
     reasons = {
-        "quota": ("weekly limit", "usage limit", "rate limit", "rate_limit", "quota"),
+        "quota": ("weekly limit", "usage limit", "rate limit", "rate_limit", "quota",
+                  "resource_exhausted"),
         "authentication": ("not logged in", "authentication failed", "unauthorized", "login required"),
         "startup": ("could not start",),
     }
@@ -742,6 +811,71 @@ def remember_unavailable(reviewer: str, text: str, note: str) -> None:
     os.replace(f.name, path)
 
 
+def _changed_blobs(base: str) -> list[tuple[str, str]]:
+    """(path, committed text) for each changed regular file at HEAD.
+
+    Everything comes from git objects, never the working tree: paths from
+    `git diff --name-only` (not from diff text, where an added line can forge
+    a `+++ b/` header), content from `git show HEAD:<path>` (a symlink's
+    target is never followed, uncommitted edits never leak in). Symlinks,
+    submodules and any path that is not clean and relative are skipped, so
+    nothing outside the repository can be read into a prompt that leaves the
+    machine.
+    """
+    out = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames",
+                          "--diff-filter=d", f"{base}...HEAD"],
+                         capture_output=True, check=False).stdout
+    blobs = []
+    for raw in out.split(b"\0"):
+        path = raw.decode("utf-8", "replace")
+        parts = Path(path).parts
+        if not path or Path(path).is_absolute() or ".." in parts:
+            continue
+        ls = subprocess.run(["git", "ls-tree", "-z", "HEAD", "--", path],
+                            capture_output=True, check=False).stdout.decode("utf-8", "replace")
+        if not ls.startswith("100"):  # 100644/100755 only: no 120000 symlink, 160000 submodule
+            continue
+        show = subprocess.run(["git", "show", f"HEAD:{path}"], capture_output=True, check=False)
+        if show.returncode == 0:
+            blobs.append((path, show.stdout.decode("utf-8", "replace")))
+    return blobs
+
+
+def antigravity_prompt(diff: str, base: str, head: str) -> str | None:
+    """A self-contained review prompt: the diff plus each changed file's full
+    committed text. None when even the diff alone would not fit, so the caller
+    fails over instead of reviewing part of the change."""
+    def size(s: str) -> int:
+        return len(s.encode("utf-8"))
+
+    skeleton = ANTIGRAVITY_PROMPT.format(base=base, head=head, diff=diff, files="")
+    budget = ANTIGRAVITY_PROMPT_LIMIT - size(skeleton)
+    if budget < 0:
+        return None
+    files = ""
+    for path, body in _changed_blobs(base):
+        block = f"\n===== FILE {path} (post-change) =====\n{body}"
+        if size(files) + size(block) > budget:
+            note = f"\n===== FILE {path} omitted: prompt size limit =====\n"
+            if size(files) + size(note) <= budget:
+                files += note
+            continue
+        files += block
+    return ANTIGRAVITY_PROMPT.format(base=base, head=head, diff=diff, files=files)
+
+
+def _antigravity_text(stdout: str) -> str:
+    """agy -p --output-format json prints one object; SUCCESS carries the
+    answer in "response". Anything else is returned raw for classification."""
+    try:
+        data = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else {}
+    except (ValueError, IndexError):
+        return stdout
+    if isinstance(data, dict) and data.get("status") == "SUCCESS" and isinstance(data.get("response"), str):
+        return data["response"]
+    return stdout
+
+
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tuple[str, str]:
     """Return (final text, status note). Never raises on reviewer failure."""
     last = (out_dir / "last-message.txt").resolve()
@@ -751,6 +885,11 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     if reviewer == "codex":
         cmd = ["codex", "exec", "--sandbox", "read-only", "-C", os.getcwd(),
                "--output-last-message", str(last), prompt]
+    elif reviewer == "antigravity":
+        # The prompt is already self-contained (antigravity_prompt). An EMPTY workspace, not the checkout: a PR can carry .agents/ hooks,
+        # rules and project permissions that agy would load from its cwd.
+        # --mode plan and --sandbox are defence in depth, not the boundary.
+        cmd = ["agy", "-p", prompt, "--mode", "plan", "--sandbox", "--output-format", "json"]
     elif reviewer == "claude":
         cmd = ["claude", "-p", prompt,
                "--allowedTools", "Read", "Grep", "Glob",
@@ -759,20 +898,43 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
         raise SystemExit(f"review_gate: unknown reviewer {reviewer!r}")
 
     log = out_dir / "reviewer.log"
+    isolated = reviewer == "antigravity"
+    workspace = tempfile.TemporaryDirectory(prefix="review-agy-") if isolated else None
+    if workspace and any((d / m).exists() for d in Path(workspace.name).resolve().parents
+                         for m in (".git", ".agents")):
+        # agy may discover project config by walking up from its cwd.
+        workspace.cleanup()
+        return ("temporary workspace sits under a .git/.agents directory; set TMPDIR "
+                "to a plain directory", "skipped: workspace not isolated")
     with open(log, "w") as fh:
-        # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
+        # antigravity: stdout is the JSON answer, kept apart from stderr.
+        out = open(last, "w") if isolated else fh
         try:
-            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fh,
-                                    stderr=subprocess.STDOUT, start_new_session=True)
-        except OSError as exc:  # reviewer CLI missing or not executable
-            return str(exc), f"could not start {reviewer}: {exc.__class__.__name__}"
-        try:
-            rc = proc.wait(timeout=budget_s)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait()
-            return log.read_text(errors="replace"), f"killed at the {budget_s}s budget"
-    text = last.read_text(errors="replace") if last.exists() else log.read_text(errors="replace")
+            # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
+            try:
+                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out,
+                                        stderr=fh if isolated else subprocess.STDOUT,
+                                        cwd=workspace.name if workspace else None,
+                                        env=agy_env() if isolated else None,
+                                        start_new_session=True)
+            except OSError as exc:  # reviewer CLI missing or not executable
+                return str(exc), f"could not start {reviewer}: {exc.__class__.__name__}"
+            try:
+                rc = proc.wait(timeout=budget_s)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+                return log.read_text(errors="replace"), f"killed at the {budget_s}s budget"
+        finally:
+            if out is not fh:
+                out.close()
+            if workspace:
+                workspace.cleanup()
+    text = last.read_text(errors="replace") if last.exists() else ""
+    if isolated:
+        text = _antigravity_text(text)
+    # An empty answer must surface the log, where auth/quota errors land.
+    text = text if text.strip() else log.read_text(errors="replace")
     return text, ("exit 0" if rc == 0 else f"exit {rc}")
 
 
@@ -956,6 +1118,7 @@ class review_lock:
 def cmd_review(args) -> int:
     pr, repo, key, branch = _resolve(args)
     reviewer = args.reviewer or default_reviewer(branch)
+    args.branch = branch  # review_with_fallback picks the next candidate by author family
     head = git("rev-parse", "HEAD").strip()
     deadline = time.monotonic() + args.budget
     joined = False
@@ -990,7 +1153,7 @@ def cmd_review(args) -> int:
                     rounds = pr_rounds(repo, pr, key, head, comments)
                     if rounds.capped():
                         return capped_review(args, repo, pr, key, head, rounds)
-                args.failed_providers = {p for p in ("claude", "codex")
+                args.failed_providers = {p for p in KNOWN_PROVIDERS
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
                     native_start = time.monotonic()
@@ -1167,7 +1330,8 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
     Findings stop routing: trying another model must never erase a review we
     dislike. An explicit --reviewer retries that provider despite cooldown.
     """
-    providers = [preferred, "codex" if preferred == "claude" else "claude"]
+    others = [p for p in reviewer_candidates(getattr(args, "branch", "") or "") if p != preferred]
+    providers = [preferred] + others[:1]
     deadline = time.monotonic() + args.budget
     available = []
     disabled = disabled_providers()
@@ -1214,7 +1378,15 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     print(f"[review] {reviewer} reviewing PR #{pr} (key {key[:12]}, budget {args.budget}s)…",
           flush=True)
     t0 = time.monotonic()
-    text, note = run_reviewer(reviewer, prompt, out_dir, args.budget)
+    if reviewer == "antigravity":
+        # It runs in an empty workspace, so it gets the material inline.
+        prompt = antigravity_prompt(diff_path.read_text(errors="replace"), args.base,
+                                    git("rev-parse", "--short", "HEAD").strip())
+    if prompt is None:
+        text, note = ("diff too large for the antigravity reviewer's inlined prompt",
+                      "skipped: prompt over the size limit")
+    else:
+        text, note = run_reviewer(reviewer, prompt, out_dir, args.budget)
     minutes = (time.monotonic() - t0) / 60
     parsed = parse_verdict(text) if note == "exit 0" else None
     if parsed is None:
@@ -1517,7 +1689,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     r = sub.add_parser("review", help="review HEAD's diff and post the record")
-    r.add_argument("--reviewer", choices=["codex", "claude"])
+    r.add_argument("--reviewer", choices=sorted(KNOWN_PROVIDERS))
     r.add_argument("--budget", type=int, default=DEFAULT_BUDGET_S)
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
 

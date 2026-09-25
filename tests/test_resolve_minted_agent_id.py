@@ -84,3 +84,32 @@ async def test_http_onboard_audit_row_carries_minted_uuid():
         await execute_http_tool("onboard", {"force_new": True})
 
     assert mock_tracker.log_tool_call.call_args.kwargs["agent_id"] == MINTED
+
+
+def test_a_real_routine_start_session_envelope_is_attributed():
+    """Built by the real envelope builder, not hand-shaped.
+
+    A plain fresh mint omits raw_governance and carries agent_uuid, not uuid;
+    the #1387 fallback must still find the minted identity (2026-09-25 review).
+    """
+    import json
+
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+    payload = {
+        "success": True,
+        "uuid": MINTED,
+        "client_session_id": "agent-s-1",
+        "is_new": True,
+        "identity_resolution_outcome": "minted_force_new",
+        "identity_assurance": {
+            "tier": "weak",
+            "caller_proven": False,
+            "baseline": "fresh_identity",
+        },
+    }
+    envelope = build_experience_envelope("start_session", "onboard", payload, {})
+    assert "raw_governance" not in envelope
+    result = [_Text(envelope)]
+    assert resolve_minted_agent_id("start_session", None, result) == MINTED
+    assert json.loads(result[0].text)["agent_uuid"] == MINTED

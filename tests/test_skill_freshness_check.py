@@ -97,6 +97,33 @@ def test_a_source_whose_content_changed_is_stale_and_named(layout: Layout):
     assert "--stamp demo" in result.stdout
 
 
+def test_stale_names_every_drifting_source_not_only_the_first(layout: Layout):
+    # Until 2026-09-25 the report stopped at the first drift, which on #2430
+    # named a file master changed rather than one the branch did.
+    (layout.repo / "src" / "other.py").write_text("y = 2\n")
+    layout.source("x = 2\n")
+    layout.skill_file.write_text(textwrap.dedent(f'''\
+        ---
+        name: demo
+        last_verified: "{_day(1)}"
+        freshness_days: 14
+        source_files:
+          - unitares/src/thing.py
+          - unitares/src/other.py
+        source_digests:
+          unitares/src/thing.py: "{_digest("x = 1\n")}"
+          unitares/src/other.py: "{_digest("y = 1\n")}"
+        ---
+        # Demo
+        '''))
+    result = layout.run()
+    assert result.returncode == 1
+    assert result.stdout.count("STALE") == 2, result.stdout
+    assert "unitares/src/thing.py changed since" in result.stdout
+    assert "unitares/src/other.py changed since" in result.stdout
+    assert "re-check the claims that cite them" in result.stdout
+
+
 def test_a_cited_source_without_a_digest_is_stale(layout: Layout):
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(1), digest=None)
@@ -287,6 +314,309 @@ def test_a_newer_stamp_of_other_skill_text_does_not_reset_aging(layout: Layout):
     assert result.returncode == 1, result.stdout
     assert "AGING" in result.stdout
     assert "verified 45 days ago" in result.stdout
+
+
+def _newest_record(layout: "Layout") -> dict:
+    return json.loads(_attestations(layout)[-1].read_text())
+
+
+def test_a_stamp_records_the_change_it_re_checked(layout: Layout):
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    assert "superseded_digests" not in _newest_record(layout)     # nothing changed
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    assert _newest_record(layout)["superseded_digests"] == {src: [_digest("x = 1\n")]}
+    layout.run("--stamp", "demo")
+    assert "superseded_digests" not in _newest_record(layout)     # same content again
+
+
+def test_a_base_merge_that_changed_a_source_master_re_verified_stays_fresh(layout: Layout):
+    # The 2026-09-25 #2430 case. A branch edited the skill (v2) and stamped it
+    # against x = 1. Master changed the source to x = 2 and re-stamped its own
+    # text (v1) across that change. After merging master, v2 is on disk with
+    # x = 2: nobody paired the two, but each change was re-checked.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")                    # master: v1 at x = 1
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")                    # master: v1 across x = 1 -> 2
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert f"re-verified since for another version of this text: {src}" in result.stdout
+    assert "verified 3 days ago" in result.stdout    # v2's own date, not master's
+
+
+def test_a_transition_does_not_vouch_for_content_nobody_recorded(layout: Layout):
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
+    layout.source("x = 3\n")                        # the branch's own, unstamped change
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    assert "no attestation records its current content" in result.stdout
+
+
+def test_a_revert_is_not_carried_forward(layout: Layout):
+    # v2 was verified at 2 BEFORE v1 was re-checked across 1 -> 2, so that
+    # re-check is eligible for v2. The source then reverts to 1. A transition
+    # runs one way: nothing carries v2 from 2 back to 1.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    v1_text = layout.skill_file.read_text()
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 2\n")})
+    layout.skill_file.write_text(v1_text)
+    layout.run("--stamp", "demo")                    # v1 at 1
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")                    # v1 across 1 -> 2
+    assert _newest_record(layout)["superseded_digests"] == {src: [_digest("x = 1\n")]}
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    layout.source("x = 1\n")
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+
+
+def test_prune_keeps_the_record_that_carries_a_source_forward(layout: Layout):
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    carrier = _attestations(layout)[-1]
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
+    _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {src: _digest("x = 2\n")},
+            skill_digest="0123456789abcdef")         # newest, other text, no transition
+    assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0
+    assert carrier in _attestations(layout)
+    # v2's own record vouches; the carrier certified v1 and is counted apart.
+    assert "kept 1 older record(s) that still vouch for the current text" in result.stdout
+    assert "kept 1 record(s) whose re-check carries a source to its current content" in result.stdout
+    assert layout.run().returncode == 0
+
+
+def test_a_prune_on_master_keeps_the_carrier_an_open_branch_needs(layout: Layout):
+    # Master re-checks v1 across 1 -> 2, then re-stamps v1 with no source
+    # change (the answer to AGING). Its own text no longer needs the carrier,
+    # but a branch holding v2, certified at 1 before the re-check, still does.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    carrier = _attestations(layout)[-1]
+    layout.run("--stamp", "demo")
+    assert layout.run("--prune", "1").returncode == 0
+    assert carrier in _attestations(layout)
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")    # the branch
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
+    assert layout.run().returncode == 0
+
+
+def test_prune_drops_a_carrier_older_than_the_aging_window(layout: Layout):
+    # A carrier helps only a text certified before it, and a text certified
+    # that long ago reads AGING anyway, so history this old goes.
+    src = "unitares/src/thing.py"
+    layout.source("x = 2\n")
+    layout.skill(last_verified=_day(60), digest=None)
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    adir.mkdir(parents=True)
+    (adir / "20200101T000000000000Z-aaaaaaaa.json").write_text(json.dumps({
+        "schema": "unitares.skill_attestation.v1", "skill": "demo",
+        "verified_at": f"{_day(45)}T00:00:00Z", "verified_date": _day(45), "verifier": "test",
+        "source_digests": {src: _digest("x = 2\n")}, "skill_digest": "0123456789abcdef",
+        "superseded_digests": {src: [_digest("x = 1\n")]}}))
+    _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {src: _digest("x = 2\n")})
+    assert layout.run("--prune", "1").returncode == 0
+    assert [p.name for p in _attestations(layout)] == ["20991231T000000000000Z-ffffffff.json"]
+
+
+def test_prune_survives_unreadable_frontmatter(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.run("--stamp", "demo")
+    layout.skill_file.write_text(layout.skill_file.read_text().replace(
+        "freshness_days: 14", "freshness_days: abc"))
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0, result.stderr
+    assert len(_attestations(layout)) == 1
+
+
+def test_a_branch_stamped_after_masters_re_check_still_re_stamps(layout: Layout):
+    # The limit of ordering by stamp time: v2 stamped at 1 AFTER master's
+    # 1 -> 2 re-check is, in the records, the same as a revert followed by an
+    # unstamped re-land, so it fails closed and the branch re-stamps.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20991231T000000000000Z-bbbbbbbb", _day(0), {src: _digest("x = 1\n")})
+    assert layout.run().returncode == 1
+
+
+def test_a_later_stamp_records_only_the_change_it_re_checked(layout: Layout):
+    # v2 stamped at 1 after master's 1 -> 2 re-check stays STALE on 2. Master
+    # then moves to 3 and re-stamps v1: it moved on from 2, not from 1, so v2
+    # is still not carried past the 1 -> 2 re-check that predates it.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.source("x = 3\n")
+    before = set(_attestations(layout))
+    layout.run("--stamp", "demo")                    # master, before the merge
+    [stamp] = set(_attestations(layout)) - before
+    assert json.loads(stamp.read_text())["superseded_digests"] == {src: [_digest("x = 2\n")]}
+    # The merge brings the branch's v2 and its stamp at 1, made after master's
+    # 1 -> 2 re-check but before master's 2 -> 3 one.
+    stamp.rename(stamp.parent / "20991231T000000000000Z-cccccccc.json")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20991230T000000000000Z-bbbbbbbb", _day(0), {src: _digest("x = 1\n")})
+    assert layout.run().returncode == 1
+
+
+def test_a_stamp_of_rewritten_text_records_no_transition(layout: Layout):
+    # Master changed the source AND rewrote the skill to match: its re-check
+    # found v1's wording wrong. Restoring v1 (a doc-only revert, or a merge
+    # taking one side of SKILL.md whole) must not ride that stamp to FRESH.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.source("x = 2\n")
+    layout.skill_file.write_text(v1_text + "rewritten for x = 2\n")
+    layout.run("--stamp", "demo")
+    assert "superseded_digests" not in _newest_record(layout)
+    layout.skill_file.write_text(v1_text)
+    assert layout.run().returncode == 1
+
+
+def test_a_re_stamp_at_content_already_accepted_records_no_transition(layout: Layout):
+    # v1 is certified at 1 and at 2; the source reverts to 1, which v1 still
+    # accepts, and v1 is re-stamped for AGING. That checked no change, so it
+    # must not write a 2 -> 1 edge carrying v2 (certified at 2 only) onto 1.
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 2\n")})
+    layout.skill_file.write_text(v1_text)
+    layout.source("x = 1\n")
+    assert layout.run().returncode == 0
+    before = set(_attestations(layout))
+    layout.run("--stamp", "demo")
+    [stamp] = set(_attestations(layout)) - before
+    assert "superseded_digests" not in json.loads(stamp.read_text())
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    assert layout.run().returncode == 1
+
+
+def test_a_stamp_after_editing_back_to_older_certified_text_records_no_transition(layout: Layout):
+    # v1 and then v2 were certified at 1. At 2 the verifier finds v2 wrong and
+    # restores v1, which was certified once. That is still an edit in this
+    # re-check, so it records no transition that would carry v2 to 2.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    v1_text = layout.skill_file.read_text()
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.skill_file.write_text(v1_text)
+    layout.run("--stamp", "demo")
+    assert "superseded_digests" not in _newest_record(layout)
+    layout.skill_file.write_text(v1_text + "v2 prose\n")
+    assert layout.run().returncode == 1
+
+
+def test_a_transition_recorded_before_the_current_text_was_verified_does_not_carry(layout: Layout):
+    # v1 was re-checked across 1 -> 2, the source reverted, a branch edited
+    # the skill (v2) and stamped it at 1, then re-landed 2 without stamping.
+    # The only 1 -> 2 re-check predates v2, so it says nothing about v2.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.source("x = 1\n")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    result = layout.run()
+    assert result.returncode == 1, result.stdout
+    assert "STALE" in result.stdout
+
+
+def test_prune_keeps_the_carrier_of_a_source_absent_where_it_runs(layout: Layout):
+    ext = "elsewhere/src/bot.py"
+    bot = layout.projects / "elsewhere" / "src" / "bot.py"
+    bot.parent.mkdir(parents=True)
+    bot.write_text("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None, source=ext)
+    layout.run("--stamp", "demo")
+    bot.write_text("x = 2\n")
+    layout.run("--stamp", "demo")
+    carrier = _attestations(layout)[-1]
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {ext: _digest("x = 1\n")})
+    _attest(layout, "20991231T000000000000Z-ffffffff", _day(1), {ext: _digest("x = 2\n")},
+            skill_digest="0123456789abcdef")         # newest, other text, no transition
+    assert layout.run().returncode == 0
+    elsewhere = layout.projects / "empty-projects"
+    elsewhere.mkdir()
+    pruned = subprocess.run(
+        [sys.executable, str(CHECKER), str(layout.repo), str(elsewhere), "--prune", "1"],
+        capture_output=True, text=True)
+    assert pruned.returncode == 0, pruned.stderr
+    assert carrier in _attestations(layout)
+    assert layout.run().returncode == 0
+
+
+def test_a_malformed_transition_field_is_ignored_by_check_and_prune(layout: Layout):
+    src = "unitares/src/thing.py"
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(20), digest=None)
+    layout.run("--stamp", "demo")
+    layout.source("x = 2\n")
+    layout.run("--stamp", "demo")
+    layout.skill_file.write_text(layout.skill_file.read_text() + "v2 prose\n")
+    _attest(layout, "20200101T000000000000Z-bbbbbbbb", _day(3), {src: _digest("x = 1\n")})
+    adir = layout.repo / "skills" / ".attestations" / "demo"
+    (adir / "20991231T000000000000Z-ffffffff.json").write_text(json.dumps({
+        "schema": "unitares.skill_attestation.v1", "skill": "demo",
+        "verified_at": f"{_day(1)}T00:00:00Z", "verified_date": _day(1), "verifier": "test",
+        "source_digests": {src: _digest("x = 2\n")}, "skill_digest": "0123456789abcdef",
+        "superseded_digests": ["not", "a", "map"]}))
+    assert layout.run().returncode == 0
+    result = layout.run("--prune", "1")
+    assert result.returncode == 0, result.stderr
+    assert layout.run().returncode == 0
 
 
 def test_stamp_records_the_skill_text_it_certified(layout: Layout):

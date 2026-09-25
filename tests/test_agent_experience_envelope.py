@@ -100,7 +100,18 @@ async def test_legacy_alias_passes_through():
 
 @pytest.mark.asyncio
 async def test_experience_alias_gets_envelope():
-    raw = _result({"success": True, "agent_uuid": "u-1", "client_session_id": "s-1"})
+    raw = _result({
+        "success": True,
+        "agent_uuid": "u-1",
+        "client_session_id": "s-1",
+        "is_new": True,
+        "identity_resolution_outcome": "minted_force_new",
+        "identity_assurance": {
+            "tier": "weak",
+            "caller_proven": False,
+            "baseline": "fresh_identity",
+        },
+    })
     out = await apply_experience_envelope(
         "onboard", {}, _ctx("start_session"), raw
     )
@@ -108,8 +119,25 @@ async def test_experience_alias_gets_envelope():
     assert data["tool"] == "start_session"
     assert data["agent_uuid"] == "u-1"
     assert data["client_session_id"] == "s-1"
-    assert data["raw_governance"]["agent_uuid"] == "u-1"
+    # A mint that went as asked does not repeat the canonical record beneath
+    # the lifts, and says so.
+    assert "raw_governance" not in data
+    assert "raw_governance_available" not in data  # not fetchable after the mint
+    assert data["response_shape"] == "routine"
     assert "next_action" in data
+
+    # A mint the payload cannot show went as asked keeps the record.
+    unproven = _parse(await apply_experience_envelope(
+        "onboard", {}, _ctx("start_session"),
+        _result({"success": True, "agent_uuid": "u-1", "client_session_id": "s-1"}),
+    ))
+    assert unproven["raw_governance"]["agent_uuid"] == "u-1"
+    assert unproven["response_shape"] == "full"
+
+    full = _parse(await apply_experience_envelope(
+        "onboard", {"response_mode": "full"}, _ctx("start_session"), raw
+    ))
+    assert full["raw_governance"]["agent_uuid"] == "u-1"
 
 
 @pytest.mark.asyncio
@@ -285,7 +313,14 @@ def test_onboard_envelope_does_not_turn_sibling_predecessor_into_parent():
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
     assert "co-location does not establish lineage" in env["next_action"]
     assert "Do not use its uuid as parent_agent_id" in env["next_action"]
+    # A thread with a predecessor is the case the caller must read, so the
+    # whole onboard record comes with it.
     assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
+    full = build_experience_envelope(
+        "start_session", "onboard", payload, {"response_mode": "full"}
+    )
+    assert full["raw_governance"] is payload
 
 
 def test_onboard_envelope_does_not_redeclare_recorded_lineage():
@@ -403,7 +438,9 @@ def test_sync_state_envelope_proceed_keeps_continuation_guidance():
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert env["state_summary"]["action"] == "proceed"
     assert env["next_action"].startswith("Keep working")
-    assert "prediction_id='p-2'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "p-2"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_every_recovery_hint_names_a_callable_tool():
@@ -1894,7 +1931,9 @@ def test_sync_state_envelope_next_action_threads_prediction_id():
         "prediction_id": "abc-123",
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
-    assert "prediction_id='abc-123'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "abc-123"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_sync_state_envelope_next_action_generic_without_prediction_id():
@@ -1912,7 +1951,9 @@ def test_sync_state_envelope_prediction_id_composes_with_review_nudge():
         "review_suggested": {"trigger": "low_confidence"},
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
-    assert "prediction_id='abc-123'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "abc-123"
+    assert "pass this prediction_id to record_result" in env["next_action"]
     assert "request_review" in env["next_action"]
 
 
@@ -1935,7 +1976,9 @@ def test_sync_state_envelope_exposes_prediction_id_top_level():
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert env.get("prediction_id") == "abc-123"
     # The prose keeps saying what the id is for; the key is what code reads.
-    assert "prediction_id='abc-123'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "abc-123"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_sync_state_envelope_lifts_prediction_id_from_nested_payload():
@@ -2000,7 +2043,9 @@ def test_envelope_prefers_canonical_prediction_id_over_stale_outer_copy():
     }
     env = build_experience_envelope("sync_state", "process_agent_update", payload)
     assert env["prediction_id"] == "fresh-canonical"
-    assert "prediction_id='fresh-canonical'" in env["next_action"]
+    # next_action names the lifted id rather than repeating it.
+    assert env["prediction_id"] == "fresh-canonical"
+    assert "pass this prediction_id to record_result" in env["next_action"]
 
 
 def test_prediction_id_is_not_lifted_onto_unrelated_tools():
@@ -2052,3 +2097,145 @@ def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
         "check_working_state", "get_governance_metrics", {"risk_score": risk}
     )
     assert envelope["risk_summary"] == f"risk {band} ({risk:.2f})"
+
+
+# --- check_working_state verbosity tiers ---------------------------------------
+#
+# The handler has always honoured minimal / standard / full, but only boolean
+# `lite` was advertised, so an agent wanting more than the minimum reached `full`
+# (~15 KB) and was then told to go back to lite=true (external agent, 2026-09-24).
+
+
+@pytest.mark.parametrize(
+    "arguments, current",
+    [
+        ({}, "minimal"),
+        ({"lite": True}, "minimal"),
+        ({"lite": False}, "full"),
+        ({"verbosity": "standard"}, "standard"),
+        ({"verbosity": "full", "lite": True}, "full"),
+        ({"verbosity": "minimal", "lite": False}, "minimal"),
+    ],
+)
+def test_metrics_response_options_report_the_tier_actually_served(arguments, current):
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    options = env["response_options"]
+    assert options["current"] == current
+    assert "verbosity='standard'" in options["interpreted_state"]
+
+
+def test_oversized_full_metrics_point_at_the_standard_tier():
+    payload = {"success": True, "padding": "x" * 6_000}
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, {"lite": False}
+    )
+    assert "verbosity='standard'" in env["_response_size"]["reduce_with"]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"lite": None},
+        {"lite": None, "verbosity": None},
+        {"lite": "false"},
+        {"lite": "on"},
+        {"lite": "banana"},
+        {"verbosity": "bogus", "lite": False},
+        {"verbosity": "standard", "lite": None},
+    ],
+)
+def test_metrics_tier_reported_matches_the_tier_the_handler_builds(arguments):
+    """Review of #2430: lite=null made the handler build full while the
+    envelope reported minimal. Both now resolve through one function; this
+    pins the envelope to the handler on raw AND schema-validated arguments."""
+    from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
+    from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
+
+    raw_tier = resolve_metrics_verbosity(arguments)
+    try:
+        validated = GetGovernanceMetricsParams.model_validate(arguments).model_dump()
+    except Exception:
+        # Refused on validated routes, but REST get_governance_metrics skips
+        # validation and hands these raw arguments to the handler, so the
+        # raw-tier assertions below still apply.
+        validated = None
+    if validated is not None:
+        assert resolve_metrics_verbosity(validated) == raw_tier
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    assert env["response_options"]["current"] == raw_tier
+    assert ("raw_governance" in env) == (raw_tier != "minimal")
+
+
+def _tier_built(data):
+    """Which branch of get_governance_metrics_data produced ``data``."""
+    if "_debug_lite_received" in data:
+        return "full"
+    if str(data.get("_note", "")).startswith("Use verbosity='full'"):
+        return "standard"
+    return "minimal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"lite": None},
+        {"lite": True},
+        {"lite": False},
+        {"lite": "false"},
+        {"lite": "banana"},
+        {"verbosity": "standard"},
+        {"verbosity": "standard", "lite": None},
+        {"verbosity": "full", "lite": True},
+    ],
+)
+async def test_envelope_reports_the_tier_the_real_handler_built(arguments):
+    """Runs the handler itself, so reverting runtime_queries' tier logic fails
+    here even though the envelope and resolver would still agree."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from src.governance_monitor import UNITARESMonitor
+    from src.services.runtime_queries import get_governance_metrics_data
+
+    monitor = UNITARESMonitor("test-tier-parity", load_state=False)
+    server = SimpleNamespace(get_or_create_monitor=lambda aid: monitor, agent_metadata={})
+    with patch(
+        "src.agent_monitor_state.hydrate_from_db_if_fresh",
+        new=AsyncMock(return_value=False),
+    ):
+        data = await get_governance_metrics_data(
+            "test-tier-parity", dict(arguments), server=server
+        )
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+    )
+    assert env["response_options"]["current"] == _tier_built(data)
+
+
+def test_metrics_verbosity_is_matched_exactly_like_the_handler_always_did():
+    """No case folding. Only unvalidated REST get_governance_metrics can pass
+    "Standard" here, and it keeps falling through to lite; validated routes
+    refuse it (see the next test)."""
+    from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
+
+    assert resolve_metrics_verbosity({"verbosity": "Standard"}) == "minimal"
+    assert resolve_metrics_verbosity({"verbosity": " full", "lite": False}) == "full"
+    assert resolve_metrics_verbosity({"verbosity": "Full", "lite": True}) == "minimal"
+
+
+def test_validated_routes_refuse_an_off_list_verbosity():
+    """1.15.0 note: /mcp/ and REST check_working_state validate, so a value they
+    once ignored is now a validation error, as 1.8.0 did for cirs_protocol."""
+    import pydantic
+
+    from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
+
+    for value in ("Standard", "bogus"):
+        with pytest.raises(pydantic.ValidationError):
+            GetGovernanceMetricsParams.model_validate({"verbosity": value})

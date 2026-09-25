@@ -40,9 +40,10 @@ additions merge cleanly. -->
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
 | `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_ADJUDICATION_ABSTAIN_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
-| `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Execute the extracted process_agent_update workflow for a prepared UpdateContext. | src/services/update_workflow_service.py, src/state_locking.py |
+| `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
+| `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Operator override, then PATH, then the per-user/Homebrew locations a sparse launchd PATH misses | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_API_TOKEN` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
@@ -70,12 +71,13 @@ additions merge cleanly. -->
 | `UNITARES_DASHBOARD_OPERATOR_LABEL` | `'operator'` | read by _operator_label() | src/dashboard_auth.py |
 | `UNITARES_DASHBOARD_ORIGIN` | `''` | Read hosted WebAuthn overrides, deriving an HTTPS origin from the RP id. | src/dashboard_auth.py |
 | `UNITARES_DASHBOARD_RP_ID` | `''` | Read hosted WebAuthn overrides, deriving an HTTPS origin from the RP id. | src/dashboard_auth.py |
+| `UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'420'` (agents/dialectic_reviewer/host_backends.py) | Run agy headless from an empty workspace; never raises. | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_BEAM_RESOLUTION` | `'0'` | True iff the operator has flipped UNITARES_DIALECTIC_BEAM_RESOLUTION on. | src/mcp_handlers/dialectic/beam_resolve_client.py |
 | `UNITARES_DIALECTIC_CLAUDE_MODEL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run Claude safely and return exact provider-reported model provenance | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'420'` (agents/dialectic_reviewer/host_backends.py) | Run Claude safely and return exact provider-reported model provenance | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `str(DEFAULT_VERDICT_TIMEOUT_S)` (src/mcp_handlers/dialectic/wait_assessment.py); `'420'` (agents/dialectic_reviewer/reviewer.py) | Seconds a reviewer model call may take before the wait is unusual | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/dialectic/wait_assessment.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_CONTINUATION_POLL_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `DEFAULT_CONTINUATION_POLL_S` (agents/dialectic_reviewer/reviewer.py) | Run bounded objection → response → reconsideration rounds | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
-| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:84); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:168); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:84); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:172); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `None (no reader fallback)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY` | `''` | Default variable holding the external reviewer's API key | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
@@ -153,10 +155,15 @@ additions merge cleanly. -->
 | `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | `'true'` | Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION) | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_ISSUER_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_PUBLIC_PORT` | `''` | Loopback port of the public OAuth listener (UNITARES_OAUTH_PUBLIC_PORT) | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_REQUIRED` | `False (via env_truthy)` | True when the operator demanded an auth gate on ``/mcp`` or no service | src/mcp_listen_config.py |
 | `UNITARES_OAUTH_RESOURCE_URL` | `None (no reader fallback)` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_SECRET` | `None (no reader fallback)` | — | src/mcp_server.py |
+| `UNITARES_OAUTH_STATIC_CLIENT_ID` | varies: `None (no reader fallback)` (src/mcp_server.py); `''` (src/oauth_provider.py) | Build the static client from the environment, or none if unconfigured | src/mcp_server.py, src/oauth_provider.py |
+| `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
+| `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
 | `UNITARES_OLLAMA_BASE` | `'http://localhost:11434'` | Base URL of the local Ollama endpoint | src/mcp_handlers/support/inference_registry.py |
 | `UNITARES_OLLAMA_BASE_URL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'http://localhost:11434/v1'` (agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py) | — | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py, agents/local_resident/runner.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |

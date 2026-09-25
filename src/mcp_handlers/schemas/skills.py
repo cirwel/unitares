@@ -17,7 +17,7 @@ class SkillsParams(BaseModel):
 
     name: Optional[str] = Field(
         default=None,
-        description="Return only the skill matching this exact name (e.g. 'governance-lifecycle'). If absent, return the full bundle.",
+        description="Return only the skill matching this exact name (e.g. 'governance-lifecycle'), with its full content. If absent (and since_version is absent), return an index of every skill without content.",
     )
     since_version: Optional[str] = Field(
         default=None,

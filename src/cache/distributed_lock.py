@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any
 
 from .redis_client import get_redis
 from src.logging_utils import get_logger
+from src.state_locking import LockTimeoutError
 
 logger = get_logger(__name__)
 
@@ -148,7 +149,7 @@ class DistributedLock:
             if elapsed >= timeout:
                 # Get lock holder info for error message
                 holder = await redis.get(key)
-                raise TimeoutError(
+                raise LockTimeoutError(
                     f"Lock timeout for '{resource_id}' after {timeout:.1f}s. "
                     f"Held by: {holder}"
                 )
@@ -191,6 +192,8 @@ class DistributedLock:
         """Fallback to file-based locking (fcntl)."""
         import fcntl
 
+        from src.state_locking import holds_current_inode
+
         # Re-create the lock dir if it was removed since construction.
         self._ensure_lock_dir()
         lock_file = self.lock_dir / f"{resource_id}.lock"
@@ -199,24 +202,16 @@ class DistributedLock:
 
         try:
             while True:
+                # Open outside the contention handler, re-creating the dir in
+                # case it went: a failed open is an I/O error, not a holder.
+                self._ensure_lock_dir()
+                fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
                 try:
-                    # Open lock file
-                    fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
-
-                    # Try non-blocking lock
+                    # Only flock() counts as contention; the locked body below
+                    # runs outside this handler too, so an OSError it raises
+                    # reaches the caller instead of re-acquiring the lock.
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-                    # Write PID to lock file
-                    os.ftruncate(fd, 0)
-                    os.write(fd, f"{os.getpid()}".encode())
-                    os.fsync(fd)
-
-                    logger.debug(f"File lock acquired: {resource_id}")
-                    self._file_locks[resource_id] = fd
-                    yield
-                    return
-
-                except IOError:
+                except OSError:
                     # Lock is held, close our fd and retry
                     if fd is not None:
                         try:
@@ -228,11 +223,36 @@ class DistributedLock:
                     # Check timeout
                     elapsed = time.monotonic() - start_time
                     if elapsed >= timeout:
-                        raise TimeoutError(
+                        raise LockTimeoutError(
                             f"File lock timeout for '{resource_id}' after {timeout:.1f}s"
                         )
 
                     await asyncio.sleep(retry_delay)
+                    continue
+
+                if not holds_current_inode(fd, lock_file):
+                    # A cleaner unlinked the path after our open(); this
+                    # lock guards nothing. Reopen on the next pass, still
+                    # bounded by the timeout and yielding to the loop.
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    os.close(fd)
+                    fd = None
+                    if time.monotonic() - start_time >= timeout:
+                        raise LockTimeoutError(
+                            f"File lock timeout for '{resource_id}' after {timeout:.1f}s"
+                        )
+                    await asyncio.sleep(0)
+                    continue
+
+                # Write PID to lock file
+                os.ftruncate(fd, 0)
+                os.write(fd, f"{os.getpid()}".encode())
+                os.fsync(fd)
+
+                logger.debug(f"File lock acquired: {resource_id}")
+                self._file_locks[resource_id] = fd
+                yield
+                return
 
         finally:
             # Release lock
@@ -288,6 +308,11 @@ class DistributedLock:
 
         Only use for recovering from stuck locks when you're certain
         no process is actively using the resource.
+
+        The Redis lock is deleted outright. A file lock is removed only if no
+        process holds it: deleting a held flock's file does not release the
+        holder, it only lets a second holder lock a fresh file at the same
+        path. A held file lock is released when its holder exits.
         """
         released = False
 
@@ -304,14 +329,23 @@ class DistributedLock:
                 logger.warning(f"Failed to force-release Redis lock: {e}")
 
         # Try file-based
+        from src.state_locking import remove_lock_file_if_free
+
         lock_file = self.lock_dir / f"{resource_id}.lock"
         if lock_file.exists():
             try:
-                lock_file.unlink()
+                removed, reason = remove_lock_file_if_free(lock_file)
+            except OSError as e:
+                removed, reason = False, f"could not remove: {e}"
+            if removed:
                 released = True
                 logger.warning(f"Force-released file lock: {resource_id}")
-            except OSError as e:
-                logger.warning(f"Failed to force-release file lock: {e}")
+            else:
+                logger.warning(
+                    f"Did not remove file lock {resource_id}: {reason}. A held "
+                    f"file lock is released when its holder exits; removing it "
+                    f"would admit a second holder."
+                )
 
         return released
 

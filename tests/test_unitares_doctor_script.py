@@ -846,6 +846,7 @@ def test_freshness_checks_stay_registered(doctor):
     names = {c.name for c in doctor.build_checks(REPO_ROOT, "postgresql://x/y")}
     assert "flags_catalog_fresh" in names
     assert "tool_edge_index_fresh" in names
+    assert "tool_reference_fresh" in names
 
 
 def test_check_class_anchors_fresh_runs_and_classifies(doctor):
