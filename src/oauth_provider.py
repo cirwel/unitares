@@ -191,6 +191,10 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
         self._refresh_tokens: dict[str, RefreshTokenEntry] = {}
         self._store = store
         self._static_client_ids = frozenset(self._clients)
+        # Digests of refresh tokens already exchanged, with their expiry. The
+        # store delete is awaited (and can fail), so without this a request
+        # arriving meanwhile would reload the used token from the store.
+        self._consumed_refresh: dict[str, float] = {}
 
     # -- persistence helpers ------------------------------------------------
 
@@ -347,6 +351,8 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def load_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: str,
     ) -> RefreshTokenEntry | None:
+        if _digest(refresh_token) in self._consumed_refresh:
+            return None
         entry = self._refresh_tokens.get(refresh_token)
         if entry is None and self._store is not None:
             raw = await self._store.get(f"rt:{_digest(refresh_token)}")
@@ -383,14 +389,29 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     ) -> OAuthToken:
         # Claim before any await: load_refresh_token awaits the store, so two
         # requests with the same token can both pass it. Only the one that
-        # pops the entry proceeds; the other gets invalid_grant.
-        if self._refresh_tokens.pop(refresh_token.token, None) is None:
+        # pops the entry proceeds; the other gets invalid_grant. Recording the
+        # digest as consumed (also before any await) stops a later load from
+        # reloading the token from the store while, or if, its delete lags.
+        digest = _digest(refresh_token.token)
+        if (
+            self._refresh_tokens.pop(refresh_token.token, None) is None
+            or digest in self._consumed_refresh
+        ):
             raise TokenError(
                 error="invalid_grant", error_description="refresh token already used"
             )
-        if self._store is not None:
-            # Refresh tokens are single-use; a restart must not resurrect one.
-            await self._store.delete(f"rt:{_digest(refresh_token.token)}")
+        now = time.time()
+        self._consumed_refresh = {
+            d: exp for d, exp in self._consumed_refresh.items() if exp > now
+        }
+        self._consumed_refresh[digest] = refresh_token.created_at + self._refresh_token_ttl
+        if self._store is not None and not await self._store.delete(f"rt:{digest}"):
+            # This process refuses it (consumed set); another process, or this
+            # one after a restart, would not until it expires.
+            logger.error(
+                "A used refresh token could NOT be deleted from the store; it "
+                "stays redeemable after a restart until it expires"
+            )
 
         access_token_str = self._generate_token("at")
         new_refresh_str = self._generate_token("rt")

@@ -508,3 +508,62 @@ async def test_concurrent_refreshes_with_one_token_mint_one_pair():
     refused = [r for r in results if isinstance(r, TokenError)]
     assert len(ok) == 1 and len(refused) == 1
     assert refused[0].error == "invalid_grant"
+
+
+class _SlowDeleteStore(_DictStore):
+    """A store whose delete yields, as Redis does, so the gap between the
+    in-memory claim and the store delete is real."""
+
+    async def delete(self, *keys):
+        import asyncio
+
+        await asyncio.sleep(0.01)
+        return await super().delete(*keys)
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_arriving_during_the_store_delete_is_refused():
+    import asyncio
+
+    from mcp.server.auth.provider import TokenError
+
+    store = _SlowDeleteStore()
+    provider = GovernanceOAuthProvider(store=store)
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+
+    async def refresh(delay):
+        await asyncio.sleep(delay)
+        entry = await provider.load_refresh_token(client, tokens.refresh_token)
+        if entry is None:
+            return "refused"
+        try:
+            await provider.exchange_refresh_token(client, entry, [])
+            return "minted"
+        except TokenError:
+            return "refused"
+
+    results = await asyncio.gather(refresh(0), refresh(0.005))
+    assert sorted(results) == ["minted", "refused"]
+
+
+class _FailingDeleteStore(_DictStore):
+    async def delete(self, *keys):
+        return False
+
+
+@pytest.mark.asyncio
+async def test_a_used_refresh_token_stays_refused_when_the_store_delete_fails(caplog):
+    import logging
+
+    store = _FailingDeleteStore()
+    provider = GovernanceOAuthProvider(store=store)
+    client = _dcr_client()
+    await provider.register_client(client)
+    tokens = await _sign_in(provider, client)
+    entry = await provider.load_refresh_token(client, tokens.refresh_token)
+    with caplog.at_level(logging.ERROR, logger="src.oauth_provider"):
+        await provider.exchange_refresh_token(client, entry, [])
+    assert any("could NOT be deleted" in r.getMessage() for r in caplog.records)
+    assert await provider.load_refresh_token(client, tokens.refresh_token) is None
