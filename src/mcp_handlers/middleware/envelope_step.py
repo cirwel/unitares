@@ -487,6 +487,10 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
         return False
     if state.get("margin") not in (None, "comfortable"):
         return False
+    if state.get("nearest_edge") or state.get("unmeasurable_edges"):
+        return False
+    if any(state.get(key) not in (None, "healthy") for key in ("status", "health_status")):
+        return False
     summary = envelope.get("action_summary")
     summary = summary if isinstance(summary, dict) else {}
     if summary.get("headline") or summary.get("verdict_confidence") == "provisional":
@@ -1078,7 +1082,7 @@ def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
     """
     if not isinstance(assurance, dict):
         return False
-    if assurance.get("caller_proven") is True:
+    if assurance.get("caller_proven") is True and assurance.get("tier") == "strong":
         return False
     return assurance.get("baseline") != "fresh_identity"
 
@@ -1539,8 +1543,10 @@ def build_experience_envelope(
             if isinstance(payload.get("thread_context"), dict)
             else {}
         )
+        # Lifted in every mode, so a client reading the top-level fields does
+        # not lose them when it asks for response_mode='full'.
+        envelope.update(_lift(payload, *_ONBOARD_LIFT_KEYS))
         if not include_raw:
-            envelope.update(_lift(payload, *_ONBOARD_LIFT_KEYS))
             if payload.get("provisional_lineage") is True:
                 envelope["provisional_lineage"] = True
             assurance = payload.get("identity_assurance")

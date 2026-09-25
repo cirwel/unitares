@@ -918,3 +918,24 @@ def test_abnormal_signature_keeps_the_full_record(overrides):
     for key in CONTRACT_KEYS:
         assert key in context
     assert "reason" in payload["identity_assurance"]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["minted_after_resume_miss"],
+)
+def test_discontinuity_keeps_the_full_record_even_when_strong(outcome):
+    """A caller-proven strong binding that reports a discontinuity is not routine."""
+    payload = _sig(identity_resolution_outcome=outcome)
+    context = payload["identity_context"]
+
+    assert payload["identity_assurance"]["tier"] == "strong"
+    assert context["continuity_claim"] == "fresh_uuid_minted_after_resume_miss"
+    assert "detail" not in context
+    for key in CONTRACT_KEYS:
+        assert key in context
+
+
+def test_reactivated_archive_keeps_the_full_record():
+    payload = _sig(identity_status="reactivated", session_resolution_source="unknown_source")
+    assert "detail" not in payload["identity_context"]
