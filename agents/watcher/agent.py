@@ -1979,19 +1979,31 @@ def p006_actually_fires(file_path: str, line: int) -> bool:
             innermost is None or node.lineno > innermost.lineno
         ):
             innermost = node
+    scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+    def _runs_in_handler(target: Any) -> bool:
+        # True when `target` runs as part of some handler's body: reached
+        # from it without crossing a def, lambda or class.
+        for node in ast.walk(tree):
+            if not isinstance(node, try_types):
+                continue
+            for h in node.handlers:
+                stack: list[Any] = list(h.body)
+                while stack:
+                    child = stack.pop()
+                    if child is target:
+                        return True
+                    if not isinstance(child, scope_nodes):
+                        stack.extend(ast.iter_child_nodes(child))
+        return False
+
     # Inside a handler, a nested try's handlers are deliberately not on the
     # path (see `_p006_handler_reacts`), so the step does not run there.
-    if innermost is not None and any(
-        h.lineno <= innermost.lineno <= (h.end_lineno or h.lineno)
-        for node in ast.walk(tree)
-        if isinstance(node, try_types)
-        for h in node.handlers
-    ):
+    if innermost is not None and _runs_in_handler(innermost):
         innermost = None
     if innermost is not None:
         # Tries in the block, not crossing into a nested def, lambda or
         # class: code there does not run as part of the block.
-        scope_nodes = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
         nested: list[Any] = []
         stack: list[Any] = list(innermost.body)
         while stack:

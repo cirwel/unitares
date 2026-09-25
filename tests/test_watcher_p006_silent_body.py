@@ -487,6 +487,30 @@ def test_a_lambda_on_the_cited_line_is_not_a_barrier(tmp_path):
     assert p006_actually_fires(str(path), 3) is True
 
 
+def test_a_def_inside_a_handler_is_its_own_scope(tmp_path):
+    # Round 7: a try in a function defined inside a handler does not run as
+    # part of that handler, so the nested step applies there as anywhere.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        def cb():\n"
+        "            try:\n"
+        "                y = 1\n"
+        "                try:\n"
+        "                    b()\n"
+        "                except Exception:\n"
+        "                    pass\n"
+        "            except ValueError:\n"
+        "                raise\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 6) is True
+    assert p006_actually_fires(str(path), 7) is True
+
+
 def test_try_finally_inside_a_handler_takes_no_nested_handlers(tmp_path):
     # Round 5, P3: citing the handler's log line and citing its clause must
     # agree; nested handlers are never on a handler's path.
