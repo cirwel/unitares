@@ -174,3 +174,19 @@ def test_a_rule_that_really_uses_yaml_without_pyyaml_is_not_checked(tmp_path, mo
     status, lines = rule_check.check(_plugin(tmp_path, checker))
     assert status == rule_check.EXIT_UNUSABLE
     assert "PyYAML is not installed" in lines[0]
+
+
+@pytest.mark.parametrize("where", ["module", "call"])
+def test_a_checker_that_calls_sys_exit_is_not_reported_as_drift(tmp_path, where):
+    # SystemExit is not an Exception; uncaught it would exit 1, the drift code.
+    if where == "module":
+        checker = PORTED + "\nimport sys\nsys.exit(1)\n"
+    else:
+        checker = PORTED + textwrap.dedent('''
+            import sys
+            def attested_date(skills_dir, name, skill_digest):
+                sys.exit(1)
+        ''')
+    status, lines = rule_check.check(_plugin(tmp_path, checker))
+    assert status == rule_check.EXIT_UNUSABLE, lines
+    assert "SystemExit" in lines[0]

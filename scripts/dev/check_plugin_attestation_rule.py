@@ -176,7 +176,7 @@ def check(plugin_repo: Path) -> tuple[int, list[str]]:
                                    "(if the checker moved, update PLUGIN_CHECKER)"]
     try:
         plugin = _load_plugin_checker(plugin_repo)
-    except Exception as exc:  # the plugin's module is foreign code; any failure is "cannot load"
+    except (Exception, SystemExit) as exc:  # foreign code; any failure, sys.exit() included, is "cannot load"
         return EXIT_UNUSABLE, [f"cannot load plugin {PLUGIN_CHECKER}: {type(exc).__name__}: {exc}"]
     missing = [fn for fn in ("attested_date", "skill_text_digest") if not hasattr(plugin, fn)]
     if missing:
@@ -184,7 +184,7 @@ def check(plugin_repo: Path) -> tuple[int, list[str]]:
                             "it predates the port of src/skill_attestations.py THE RULE"]
     try:
         findings = _compare(plugin, plugin_repo)
-    except Exception as exc:  # a crash says nothing about whether the rules agree
+    except (Exception, SystemExit) as exc:  # a crash, or a sys.exit(), says nothing about agreement
         return EXIT_UNUSABLE, [f"comparison raised {type(exc).__name__}: {exc}"]
 
     if not findings:
@@ -243,7 +243,7 @@ def main(argv: list[str]) -> int:
         return EXIT_UNUSABLE
     try:
         status, lines = check(Path(argv[1]))
-    except Exception as exc:  # e.g. canonical's own reader failing; still not drift
+    except (Exception, SystemExit) as exc:  # e.g. canonical's own reader failing; still not drift
         status, lines = EXIT_UNUSABLE, [f"check raised {type(exc).__name__}: {exc}"]
     for line in lines:
         print(line)

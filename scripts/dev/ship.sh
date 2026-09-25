@@ -346,10 +346,19 @@ fi
 if git diff --cached --name-only | grep -q '^skills/'; then
     SKILLS_SYNC_STATUS=0
     "$PROJECT_ROOT/scripts/dev/sync-plugin-skills.sh" --check || SKILLS_SYNC_STATUS=$?
-    if [[ "$SKILLS_SYNC_STATUS" == 5 ]]; then
-        # Mirror in sync; only the plugin's freshness checker has drifted from
-        # canonical's attestation rule. Re-syncing cannot fix that and this
-        # commit did not cause it, so warn instead of blocking every skills ship.
+    if [[ "$SKILLS_SYNC_STATUS" == 5 ]] && git diff --cached --name-only | grep -qx 'src/skill_attestations.py'; then
+        # This commit changes canonical's attestation rule, and the plugin's
+        # copy now disagrees: this commit caused the drift, so it blocks, like
+        # the mirror gate below (plugin side first).
+        echo
+        echo "[ship] staged src/skill_attestations.py changes the attestation rule, and the plugin's freshness checker no longer matches it." >&2
+        echo "[ship] port the rule into unitares-governance-plugin/scripts/_check_freshness.py and commit that first." >&2
+        exit 1
+    elif [[ "$SKILLS_SYNC_STATUS" == 5 ]]; then
+        # Mirror in sync and the canonical rule is not part of this commit:
+        # the plugin's checker drifted on its own, or an earlier commit changed
+        # the rule. Re-syncing cannot fix that, so warn instead of blocking
+        # every skills ship.
         echo "[ship] warning: plugin freshness checker drifted from canonical's attestation rule (see above);" >&2
         echo "[ship] port it in unitares-governance-plugin separately. Continuing." >&2
     elif [[ "$SKILLS_SYNC_STATUS" != 0 ]]; then
