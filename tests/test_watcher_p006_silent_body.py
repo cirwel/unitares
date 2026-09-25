@@ -79,6 +79,34 @@ SILENT_BODIES = [
     # contextlib.suppress swallows a raise the same way (independent review).
     "with contextlib.suppress(Exception):\n    raise RuntimeError('x')",
     "with suppress(ValueError):\n    raise",
+    # A return whose value calls something can raise into the nested handler
+    # (#2424 final review, P3 2).
+    "try:\n    return compute()\nexcept Exception:\n    pass",
+    "try:\n    return {'error': str(exc)}\nexcept Exception:\n    pass",
+    "try:\n    return await fetch()\nexcept Exception:\n    pass",
+    # Not only calls raise (#2442 review, P2).
+    "try:\n    return cache[key]\nexcept KeyError:\n    pass",
+    "try:\n    return self.result\nexcept AttributeError:\n    pass",
+    "try:\n    return total / count\nexcept Exception:\n    pass",
+    "try:\n    return f'{exc}'\nexcept Exception:\n    pass",
+    "try:\n    return {**extra}\nexcept Exception:\n    pass",
+    # Something before the reaction can raise into the nested handler, or
+    # the log call's own arguments can (#2442 review, round 3).
+    "try:\n    cleanup()\n    return False\nexcept Exception:\n    pass",
+    "try:\n    cleanup()\n    logger.warning('x')\nexcept Exception:\n    pass",
+    "try:\n    logger.warning('x %s', compute())\nexcept Exception:\n    pass",
+    "with contextlib.suppress(Exception):\n    cleanup()\n    return False",
+    # A nested else is skipped when the body raised into its handler, and a
+    # log receiver that is not a plain name can raise (round 4).
+    "try:\n    cleanup()\nexcept OSError:\n    pass\nelse:\n    raise",
+    "try:\n    cleanup()\nexcept Exception:\n    pass\nelse:\n    return False",
+    "try:\n    self.logger.warning('x')\nexcept AttributeError:\n    pass",
+    "try:\n    logging.getLogger(name).warning('x')\nexcept Exception:\n    pass",
+    # **mapping can raise; a context manager entered after suppress() can
+    # raise into it before the body runs (round 6).
+    "try:\n    logger.warning('x', **extra)\nexcept Exception:\n    pass",
+    "with suppress(Exception), open(p) as fh:\n    return False",
+    "with contextlib.suppress(Exception):\n    return compute()",
     # Methods named like log levels on something that is not a logger.
     "task.exception()",
     "parser.error('bad input')",
@@ -160,10 +188,17 @@ def test_nested_try_body_and_finally_count_for_the_handler(tmp_path, body):
     [
         # try/finally has no handler to catch the raise.
         "try:\n    raise RuntimeError('wrapped') from exc\nfinally:\n    cleanup()",
-        # The nested else runs outside the nested handlers.
-        "try:\n    cleanup()\nexcept OSError:\n    pass\nelse:\n    raise",
-        # A non-None return is not caught by the nested handler.
-        "try:\n    return {'error': str(exc)}\nexcept Exception:\n    pass",
+        # A non-None return whose value calls nothing cannot raise into the
+        # nested handler.
+        "try:\n    return {'error': 'failed', 'exc': exc}\nexcept Exception:\n    pass",
+        "try:\n    return False\nexcept Exception:\n    pass",
+        # A signed number is a literal too (#2442 review, round 3).
+        "try:\n    return -1\nexcept Exception:\n    pass",
+        # A first-statement log call with inert arguments runs before
+        # anything can be caught.
+        "try:\n    logger.warning('x %s', exc)\n    cleanup()\nexcept Exception:\n    pass",
+        # Outside a caught body a call in the value is fine.
+        "try:\n    cleanup()\nexcept OSError:\n    pass\nreturn {'error': str(exc)}",
         # A log call under suppress() still runs; only a raise is swallowed.
         "with contextlib.suppress(Exception):\n    logger.error('x')",
         # A with block that is not suppress() lets a raise escape.
@@ -290,6 +325,242 @@ def test_flag_on_the_try_line_uses_its_handlers(tmp_path):
     assert p006_actually_fires(str(loud), 4) is False
 
 
+def _outer_with_nested(inner_body: str) -> str:
+    """Line 2 is the outer `try:`, 3 `y = 1`, 4 the nested `try:`, 6 the
+    nested clause, 7 its body; the outer handler (8-9) re-raises."""
+    return (
+        "def f():\n"
+        "    try:\n"
+        "        y = 1\n"
+        "        try:\n"
+        "            x()\n"
+        "        except Exception:\n"
+        f"            {inner_body}\n"
+        "    except ValueError:\n"
+        "        raise\n"
+    )
+
+
+@pytest.mark.parametrize("flagged", [2, 3, 4, 6, 7])
+def test_cite_above_a_nested_silent_try_is_kept(tmp_path, flagged):
+    # #2424 final review, P3 1: citing the outer `try:` (2) or an early body
+    # line (3) once examined only the outer re-raising handler and dropped
+    # the finding, though the nested `except Exception: pass` swallows.
+    path = _write(tmp_path, _outer_with_nested("pass"))
+    assert p006_actually_fires(str(path), flagged) is True
+
+
+@pytest.mark.parametrize("flagged", [2, 3, 4, 6, 7])
+def test_cite_above_a_nested_reacting_try_is_dropped(tmp_path, flagged):
+    path = _write(tmp_path, _outer_with_nested("logger.warning('x')"))
+    assert p006_actually_fires(str(path), flagged) is False
+
+
+def test_nested_try_above_the_cited_line_is_not_added(tmp_path):
+    # Only tries starting below the cited line are brought in.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            x()\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "        y = 1\n"
+        "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 7) is False
+    assert p006_actually_fires(str(path), 2) is True
+
+
+def test_cite_in_an_earlier_nested_handler_adds_no_later_tries(tmp_path):
+    # #2442 review, P3: a line in a nested try's handler is not above a later
+    # swallow. Master dropped this (both handlers on the path react).
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        try:\n"
+        "            a()\n"
+        "        except OSError:\n"
+        "            logger.warning('x')\n"
+        "        try:\n"
+        "            b()\n"
+        "        except Exception:\n"
+        "            pass\n"
+        "    except Exception:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 5) is False
+    assert p006_actually_fires(str(path), 6) is False
+    # A cite above both nested tries still reaches the silent one.
+    assert p006_actually_fires(str(path), 2) is True
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        # A try inside a nested def does not run as part of the block.
+        "        def later():\n"
+        "            try:\n"
+        "                x()\n"
+        "            except Exception:\n"
+        "                pass\n",
+        # The author acknowledged this clause.
+        "        try:\n"
+        "            x()\n"
+        "        except Exception:  # noqa: BLE001\n"
+        "            pass\n",
+    ],
+)
+def test_nested_step_skips_scopes_and_acknowledged_clauses(tmp_path, later):
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        y = 1\n"
+        + later
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 2) is False
+    assert p006_actually_fires(str(path), 3) is False
+
+
+_LATER_SILENT_TRY = "        try:\n            b()\n        except Exception:\n            pass\n"
+
+
+@pytest.mark.parametrize(
+    "region, cites",
+    [
+        # A cite in a nested def runs in another function (round 5, P2).
+        (
+            "        def cb():\n"
+            "            try:\n"
+            "                a()\n"
+            "            except Exception:\n"
+            "                logger.warning('x')\n",
+            (6, 7),
+        ),
+        # A nested else header with a comment before its first statement
+        # (round 5, P3).
+        (
+            "        try:\n"
+            "            a()\n"
+            "        except OSError:\n"
+            "            raise\n"
+            "        else:\n"
+            "            # note\n"
+            "            logger.info('ok')\n",
+            (7, 8, 9),
+        ),
+    ],
+)
+def test_cite_in_a_region_of_its_own_adds_no_later_tries(tmp_path, region, cites):
+    source = (
+        "def f():\n"
+        "    try:\n"
+        + region
+        + _LATER_SILENT_TRY
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    for cite in cites:
+        assert p006_actually_fires(str(path), cite) is False, cite
+    # A cite above everything still reaches the later silent try.
+    assert p006_actually_fires(str(path), 2) is True
+
+
+def test_a_lambda_on_the_cited_line_is_not_a_barrier(tmp_path):
+    # Round 6: the rest of the line runs in the block, above the later try.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        items.sort(key=lambda v: v)\n"
+        + _LATER_SILENT_TRY
+        + "    except ValueError:\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 3) is True
+
+
+def test_a_def_inside_a_handler_is_its_own_scope(tmp_path):
+    # Round 7: a try in a function defined inside a handler does not run as
+    # part of that handler, so the nested step applies there as anywhere.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        def cb():\n"
+        "            try:\n"
+        "                y = 1\n"
+        "                try:\n"
+        "                    b()\n"
+        "                except Exception:\n"
+        "                    pass\n"
+        "            except ValueError:\n"
+        "                raise\n"
+        "        raise\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 6) is True
+    assert p006_actually_fires(str(path), 7) is True
+
+
+def test_try_finally_inside_a_handler_takes_no_nested_handlers(tmp_path):
+    # Round 5, P3: citing the handler's log line and citing its clause must
+    # agree; nested handlers are never on a handler's path.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        try:\n"
+        "            logger.warning('x')\n"
+        "            try:\n"
+        "                cleanup()\n"
+        "            except OSError:\n"
+        "                pass\n"
+        "        finally:\n"
+        "            pass\n"
+    )
+    path = _write(tmp_path, source)
+    assert p006_actually_fires(str(path), 4) is False
+    assert p006_actually_fires(str(path), 6) is False
+
+
+@pytest.mark.parametrize(
+    "above",
+    [
+        "",
+        "        try:\n            w()\n        except Exception:\n            pass\n",
+    ],
+)
+def test_nested_reacting_try_never_drops_a_line_with_no_handler(tmp_path, above):
+    # PR review: in a try/finally the cited line has no handler of its own,
+    # which keeps the finding; the nested step must not turn that path into
+    # one whose handlers all react and so drop it.
+    source = (
+        "def f():\n"
+        "    try:\n"
+        + above
+        + "        y = 1\n"
+        "        try:\n"
+        "            z()\n"
+        "        except Exception:\n"
+        "            logger.warning('x')\n"
+        "    finally:\n"
+        "        cleanup()\n"
+    )
+    path = _write(tmp_path, source)
+    cited = 3 + above.count("\n")
+    assert p006_actually_fires(str(path), cited) is True
+
+
 @pytest.mark.parametrize("block", ["else", "finally"])
 def test_else_and_finally_lines_are_not_governed_by_the_try(tmp_path, block):
     source = (
@@ -404,6 +675,9 @@ NOT_LOGGER_RECEIVERS = [
     "dialog",
     "self.catalog",
     "blog",
+    # Ends in "logger" without being one (#2424 final review, P3 3).
+    "blogger",
+    "self.blogger",
     "login",
     "self.backlog",
 ]
@@ -418,6 +692,8 @@ LOGGER_RECEIVERS = [
     "self.log",
     "self._log",
     "self.app_logger",
+    "APP_LOGGER",
+    "self._logger",
     "structlog.get_logger()",
     "logging.getLogger(__name__)",
 ]
@@ -609,3 +885,60 @@ def test_noqa_on_an_earlier_try_does_not_cover_a_later_one():
         3: "            again()",
     }
     assert _p006_governing_except(3, nested) == 1
+
+
+@pytest.mark.parametrize("owner", ["if retry:", "for item in items:", "while pending:"])
+def test_non_try_else_inside_a_handler_reaches_its_clause(owner):
+    """#2424 final review, P3 4: the `else:` of an if/for/while inside a
+    handler once stopped the walk-back, so `# noqa: BLE001` on the handler's
+    clause was missed and the finding kept."""
+    from agents.watcher.agent import _p006_governing_except
+
+    lines = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: f"        {owner}",
+        3: "            again()",
+        4: "        else:",
+        5: "            give_up()",
+    }
+    assert _p006_governing_except(5, lines) == 1
+
+
+def test_else_after_a_black_split_if_reaches_its_clause():
+    """Round 5, P3: black splits a long condition, so the nearest same-indent
+    line before the `else:` is the closing `):`, not the `if (`."""
+    from agents.watcher.agent import _p006_governing_except
+
+    lines = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: "        if (",
+        3: "            retry and budget",
+        4: "        ):",
+        5: "            again()",
+        6: "        else:",
+        7: "            give_up()",
+    }
+    assert _p006_governing_except(7, lines) == 1
+
+
+def test_try_else_still_stops_the_walk():
+    from agents.watcher.agent import _p006_governing_except
+
+    lines = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: "        try:",
+        3: "            again()",
+        4: "        except OSError:",
+        5: "            logger.warning('x')",
+        6: "        else:",
+        7: "            give_up()",
+    }
+    assert _p006_governing_except(7, lines) is None
+    # An else whose owner is not visible is taken to be a try's, so the walk
+    # stops there instead of reaching the acknowledged clause above it.
+    hidden_owner = {
+        1: "    except Exception:  # noqa: BLE001",
+        2: "        else:",
+        3: "            work()",
+    }
+    assert _p006_governing_except(3, hidden_owner) is None
