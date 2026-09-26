@@ -907,9 +907,15 @@ def _check_display_name_required(agent_id: str, arguments: Dict[str, Any]) -> tu
             except Exception as e:
                 logger.debug(f"Could not save auto-generated display_name: {e}")
 
+        # client_session_id names whose label to set: identity() resumes the
+        # agent under that session key and relabels it. Without it, identity()
+        # resolves the caller from transport signals alone, which on a route
+        # that carries no session (plain REST) need not be this agent.
         warning = (
             f"KG entry attributed to '{auto_name}' (auto-generated). "
-            f"Call identity(name='YourName') to set a personalized name."
+            "Set a personalized name with identity(client_session_id='...', "
+            "name='YourName'), passing the client_session_id this agent's "
+            "writes use."
         )
         return None, warning
 
@@ -1496,8 +1502,14 @@ def _attach_store_response_hints(response: dict[str, Any], state: _KnowledgeStor
     request = state.request
     if request.is_anonymous_writer:
         response["agent_mode"] = "anonymous"
+        # Conditional on purpose, like the unbound metrics read: a process
+        # that already called start_session and dropped the id on this call
+        # would fork its work across two identities by minting again.
         response["_identity_hint"] = (
-            "Stored under a lightweight anonymous writer ID. Bind an identity first if you want authorship continuity."
+            "Stored under a lightweight anonymous writer ID, not an agent "
+            "identity. For authorship continuity, pass on each write the "
+            "client_session_id that start_session returned to this process; "
+            "if it has none, call start_session(force_new=true) first."
         )
     response["_resolve_when_done"] = (
         "When this is addressed, close the loop: "
@@ -3389,6 +3401,101 @@ _CLOSURE_EVIDENCE_REQUIRED = {
     "unobserved": ("window", "instrument_check"),
 }
 
+# Whether the storage layer writes closure_class and closure_evidence. It does
+# not. #1752 added the validation above and the two columns (migration 064),
+# but neither backend's update path writes them: the AGE SQL sync, the AGE
+# SQL-only fallback and the Postgres backend each copy a fixed set of columns
+# that leaves both out, so a validated class is dropped and every row reads
+# NULL. The hints below say so instead of recommending a parameter with no
+# effect. tests/test_kg_closure_hints.py derives this value from those three
+# update paths, so persisting the class without flipping it (or the reverse)
+# fails there, and flipping it switches the hints to the parameter.
+#
+# Persisting is not a one-line change: migration 064's
+# discoveries_closure_class_requires_closed admits a class only on resolved,
+# closed, wont_fix or superseded rows, so once classes are stored the
+# lifecycle's resolved -> archived move (and archived -> cold) would violate it
+# for every classified row.
+CLOSURE_CLASS_PERSISTED = False
+
+
+def _closure_class_choices() -> str:
+    """The closure classes as prose: a list literal reads as a list value."""
+    return ", ".join(f"'{name}'" for name in sorted(CLOSURE_CLASSES))
+
+
+def _closure_evidence_keys_prose() -> str:
+    """Which classes need which closure_evidence keys, from the validator's table."""
+    return "; ".join(
+        f"'{closure_class}' needs {' and '.join(keys)}"
+        for closure_class, keys in sorted(_CLOSURE_EVIDENCE_REQUIRED.items())
+    )
+
+
+def _closure_evidence_examples() -> str:
+    """The closure_evidence object each class needs, as a caller would send it."""
+    return "; ".join(
+        f"'{closure_class}' also needs closure_evidence="
+        "{" + ", ".join(f"'{key}': '...'" for key in keys) + "}"
+        for closure_class, keys in sorted(_CLOSURE_EVIDENCE_REQUIRED.items())
+    )
+
+
+_CLOSURE_PREAMBLE = (
+    "This closure declares no standard and reads as unclassified: a later "
+    "reader cannot tell it from a closure resting on a deployed fix whose "
+    "effect was observed."
+)
+_UNOBSERVED_IS_HONEST = (
+    "'unobserved' is the honest label when the evidence is that a symptom "
+    "stopped appearing."
+)
+
+
+def _unclassified_closure_note(discovery_id: str, status: str) -> str:
+    """What a closing update without closure_class should do next.
+
+    Named in the form that works on every route. update_finding's wire schema
+    does not declare closure_class or closure_evidence, so on a direct /mcp/
+    call the transport drops both before the handler runs; the knowledge
+    router declares them. Until the storage layer writes them, the durable
+    place for the standard is resolution_notes, which every route carries.
+    """
+    if not CLOSURE_CLASS_PERSISTED:
+        return (
+            f"{_CLOSURE_PREAMBLE} Name the standard and its evidence in "
+            "resolution_notes, which is stored: "
+            f"{_resolution_notes_call(discovery_id)} appends them. The "
+            f"standard is one of {_closure_class_choices()} "
+            f"({_closure_evidence_keys_prose()}). {_UNOBSERVED_IS_HONEST} The "
+            "closure_class parameter takes the same values as a string, with "
+            "closure_evidence as an object of those keys, but the server "
+            "validates them without storing them yet."
+        )
+    return (
+        f"{_CLOSURE_PREAMBLE} Pass closure_class as one of: "
+        f"{_closure_class_choices()}, a string, with "
+        f"knowledge(action='update', discovery_id='{discovery_id}', "
+        f"status='{status}', closure_class='...'); "
+        f"{_closure_evidence_examples()}. {_UNOBSERVED_IS_HONEST}"
+    )
+
+
+def _resolution_notes_call(discovery_id: str) -> str:
+    """A call every route carries: update_finding's wire declares both."""
+    return f"update_finding(discovery_id='{discovery_id}', resolution_notes='...')"
+
+
+def _unstored_closure_class_note(discovery_id: str, closure_class: str) -> str:
+    """A class that passed validation, said plainly not to be on the record."""
+    return (
+        f"closure_class '{closure_class}' passed validation, but the server "
+        "does not store closure_class or closure_evidence yet, so this record "
+        "does not carry them. resolution_notes is stored: name the standard "
+        "and its evidence there, with "
+        f"{_resolution_notes_call(discovery_id)} if this call's notes did not."
+    )
+
 
 def _validate_closure_class(
     request: _KnowledgeUpdateRequest, normalized_status: Optional[str]
@@ -3400,8 +3507,8 @@ def _validate_closure_class(
     if request.closure_class not in CLOSURE_CLASSES:
         raise _UpdateResponseError(
             error_response(
-                f"Invalid closure_class '{request.closure_class}'. "
-                f"Valid: {sorted(CLOSURE_CLASSES)}",
+                f"Invalid closure_class '{request.closure_class}'. It is a "
+                f"string, one of: {_closure_class_choices()}.",
                 error_code="INVALID_PARAM",
                 error_category="validation_error",
                 recovery={
@@ -3538,18 +3645,19 @@ def _build_update_response(
 
     if request.closure_class is not None:
         payload["closure_class"] = request.closure_class
+        if not CLOSURE_CLASS_PERSISTED:
+            # The echo above is what the caller sent, not what the row holds.
+            payload["closure_class_note"] = _unstored_closure_class_note(
+                request.discovery_id, request.closure_class
+            )
     elif normalized_status in _CLOSING_STATUSES:
         # Non-breaking on purpose: a required field would break the KG
         # gardener's mechanical auto-resolve on its next run. But a silent
         # accept is how the graph got here, so say it at the moment of closing
         # rather than leaving the reader to discover it later.
         payload["closure_class"] = None
-        payload["closure_class_note"] = (
-            "This closure declares no standard and will read as unclassified. "
-            "A later reader cannot tell it from a closure resting on a deployed "
-            "fix with positively observed effect. Pass closure_class="
-            f"{sorted(CLOSURE_CLASSES)} — 'unobserved' is the honest label when "
-            "the evidence is that a symptom stopped appearing."
+        payload["closure_class_note"] = _unclassified_closure_note(
+            request.discovery_id, normalized_status
         )
     return success_response(payload, arguments=request.arguments)
 
