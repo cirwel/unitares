@@ -268,7 +268,13 @@ def _safe_provenance(
         "constructed_prompt": constructed_prompt_hash,
         # Never trust a backend assertion for the text this facade actually
         # returns. Hash the normalized typed outcome at this boundary.
-        "response": sha256_text(outcome.response),
+        # Guarded: a postcondition failure computes provenance before the
+        # response type is validated.
+        "response": (
+            sha256_text(outcome.response)
+            if isinstance(outcome.response, str)
+            else None
+        ),
     }
     return safe
 
@@ -837,10 +843,15 @@ _RECORD_ROUTE_FIELDS = (
     "tokens_used",
 )
 _IDENTIFIER_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
-# Failure and degradation codes are internal UPPER_SNAKE constants; holding
-# them to that narrower shape keeps a single echoed token out of them too.
-_CODE_SHAPE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
-_CODE_KEYS = frozenset({"code", "reason_code"})
+# Codes and categories are snake_case constants (upstream failure codes are
+# UPPER_SNAKE, this facade's own reason codes lower); holding them to that
+# narrower shape keeps a hyphenated or dotted echoed token out of them.
+_CODE_SHAPE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+_CODE_KEYS = frozenset({"code", "reason_code", "category"})
+# ``reason`` is only ever a literal this module writes (failure_details and
+# the delivery postconditions), never backend text, so it is kept readable.
+_SERVER_TEXT_KEYS = frozenset({"reason"})
+_SERVER_TEXT_MAX = 200
 
 
 def _keyed_hash(key: str, text: str) -> str:
@@ -854,20 +865,22 @@ def _record_value(value: Any, key: str) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, dict):
-        return {
-            str(k): (
-                _record_code(item, key)
-                if k in _CODE_KEYS
-                else _record_value(item, key)
-            )
-            for k, item in value.items()
-        }
+        return {str(k): _record_field(k, item, key) for k, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_record_value(item, key) for item in value]
     text = str(value)
     if _IDENTIFIER_SHAPE.fullmatch(text):
         return text
     return {"unrecorded_text": _keyed_hash(key, text)}
+
+
+def _record_field(name: Any, value: Any, key: str) -> Any:
+    """Apply the rule for a named field inside a recorded dict."""
+    if name in _SERVER_TEXT_KEYS and isinstance(value, str):
+        return value[:_SERVER_TEXT_MAX]
+    if name in _CODE_KEYS:
+        return _record_code(value, key)
+    return _record_value(value, key)
 
 
 def _record_code(value: Any, key: str) -> Any:

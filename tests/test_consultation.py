@@ -1285,3 +1285,47 @@ async def test_identifier_shaped_echo_in_a_code_is_hashed(monkeypatch, audit_sin
 
     _, pg = await audit_sinks()
     assert "SECRETTOKEN" not in json.dumps(pg[0])
+
+
+@pytest.mark.asyncio
+async def test_server_authored_reasons_stay_readable(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+        "privacy": "local",
+        "allow_degraded": True,
+    })
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_completed(
+            route="huggingface",
+            host_id="hf:router",
+            privacy_class="external_cloud",
+        )),
+    )
+    await co.handle_consult({"brief": "Explain"})
+
+    _, pg = await audit_sinks()
+    degraded, violated = (entry["details"] for entry in pg)
+    assert degraded["degradation"]["reason_code"] == "privacy_policy_requires_local"
+    assert violated["failure"]["code"] == "CONSULT_PRIVACY_POSTCONDITION_FAILED"
+    assert violated["failure"]["category"] == "system_error"
+    assert "non-local" in violated["failure"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_non_string_response_still_fails_closed_and_is_recorded(
+    monkeypatch, audit_sinks
+):
+    monkeypatch.setattr(
+        co, "run_model_inference", AsyncMock(return_value=_completed(response=None))
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": "Explain"}))
+
+    assert parsed["error_code"] == "INTERNAL_INFERENCE_CONTRACT"
+    _, pg = await audit_sinks()
+    assert pg[0]["details"]["failure"]["reason"] == "empty_advisory_response"
