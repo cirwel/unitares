@@ -199,6 +199,12 @@ def _patch_health_checks(monkeypatch):
     async def _no_checks(prev_state=None):
         return []
     monkeypatch.setattr(_hb_module, "run_health_checks", _no_checks)
+    # run_cycle's step 4.6 recomputes Watcher's calibration floor when the
+    # live one is over 24h old: it reads the real findings and writes the
+    # floor, or proposes it to the lease plane under this test's MagicMock
+    # identity. Stub it, as test_hygiene_repeat_and_digest does. Sandboxing
+    # the floor dir instead would make the recompute fire on every run.
+    monkeypatch.setattr(_hb_module, "maybe_recompute_watcher_floor", lambda **_: False)
 
 
 class TestSentinelTriggerNamesMatchEmittedTypes:
