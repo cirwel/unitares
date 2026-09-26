@@ -40,24 +40,30 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      TOKEN_CONFIGURED: ${{ secrets.PLUGIN_SYNC_TOKEN != '' }}
     steps:
+      # Secrets are read at step level only (as draft-base-refresh does); the
+      # rest of the job keys on this step's output, never on the secret itself.
+      - name: Is the push credential configured?
+        id: gate
+        env:
+          CONFIGURED: ${{ secrets.PLUGIN_SYNC_TOKEN != '' }}
+        run: echo "configured=$CONFIGURED" >> "$GITHUB_OUTPUT"
+
       - name: Warn when the push credential is missing
-        if: env.TOKEN_CONFIGURED != 'true'
+        if: steps.gate.outputs.configured != 'true'
         run: |
           echo "::warning::PLUGIN_SYNC_TOKEN is not configured, so the plugin skill mirror was not synced. Add a fine-grained token with Contents and Pull requests read/write on cirwel/unitares-governance-plugin."
           echo "Plugin skill sync skipped: PLUGIN_SYNC_TOKEN not configured." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check out unitares
-        if: env.TOKEN_CONFIGURED == 'true'
+        if: steps.gate.outputs.configured == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 1
           persist-credentials: false
 
       - name: Check out the plugin
-        if: env.TOKEN_CONFIGURED == 'true'
+        if: steps.gate.outputs.configured == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: cirwel/unitares-governance-plugin
@@ -66,7 +72,7 @@ jobs:
           fetch-depth: 1
 
       - name: Sync the mirror and open or update the PR
-        if: env.TOKEN_CONFIGURED == 'true'
+        if: steps.gate.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ secrets.PLUGIN_SYNC_TOKEN }}
           UNITARES_REPO_DIR: ${{ github.workspace }}

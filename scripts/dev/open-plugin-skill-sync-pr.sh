@@ -164,7 +164,9 @@ git -C "$DST_WT" commit -q -m "$TITLE" -m "Byte mirror of unitares/skills at $SR
 git -C "$DST_WT" push -q --force-with-lease="refs/heads/$BRANCH:$REMOTE_OID" origin "HEAD:refs/heads/$BRANCH" >/dev/null 2>&1 \
   || fail "push of $BRANCH refused or failed (moved since this run looked?)"
 
-OPEN="$(cd "$DST_WT" && "$GH" pr list --state open --head "$BRANCH" --json number -q '.[0].number' 2>/dev/null)"
+# `.[].number`, not `.[0].number`: iterating yields nothing on an empty list,
+# so "no open PR" can never read as a PR called "null".
+OPEN="$(cd "$DST_WT" && "$GH" pr list --state open --head "$BRANCH" --json number -q '.[].number' 2>/dev/null | head -1)"
 if [ -n "$OPEN" ]; then
   (cd "$DST_WT" && "$GH" pr edit "$OPEN" --title "$TITLE" >/dev/null 2>&1)
   say "plugin mirror behind ($SUMMARY) — updated #$OPEN"
