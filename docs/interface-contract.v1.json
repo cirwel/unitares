@@ -20,13 +20,13 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "c7f608d343c1eb21b5503f23f192e882f35f7642f51a945f9b5527c4659edddd",
+  "surface_sha256": "f6fd9be1e1b526b6e7faa7fcf79abb50164cd8b0061c9c327e0925f1bd0b9fed",
   "capabilities": [
     {
       "name": "start_session",
       "implementation": "onboard",
       "kind": "workflow_alias",
-      "input_schema_sha256": "7e7c964cd0b4a3c868e716415703c99ab5bd07c7464214427487ab845275cdcb",
+      "input_schema_sha256": "59936b4afd49156d65a2a739767618a11adc5bae6cf86fadf100d92d95df2ae7",
       "transport_names": {
         "mcp_streamable_http": "start_session",
         "rest_v1_tools": "start_session",
@@ -367,7 +367,7 @@
       "name": "onboard",
       "implementation": "onboard",
       "kind": "canonical_tool",
-      "input_schema_sha256": "7e7c964cd0b4a3c868e716415703c99ab5bd07c7464214427487ab845275cdcb",
+      "input_schema_sha256": "59936b4afd49156d65a2a739767618a11adc5bae6cf86fadf100d92d95df2ae7",
       "transport_names": {
         "mcp_streamable_http": "onboard",
         "rest_v1_tools": "onboard",

@@ -104,16 +104,14 @@ class OnboardParams(AgentIdentityMixin):
     resume: Union[bool, str, None] = Field(
         default=True,
         description=(
-            "Reuse the identity already bound to this session "
-            "(client_session_id, the transport session, or a weaker IP:UA "
-            "pin) instead of minting. A "
-            "name or agent_id is never looked up, but passing one counts as a "
-            "proof signal for S13, so the call resumes this session's existing "
-            "binding instead of minting. A continuity_token without force_new "
-            "is refused; rebind with identity(agent_uuid, continuity_token, "
-            "resume=true). With no proof signal at all, S13 mints fresh, or "
-            "refuses (lineage_declaration_required) under "
-            "STRICT_IDENTITY_REQUIRED."
+            "When the call carries a proof signal (client_session_id, "
+            "agent_uuid, name or agent_id), reuse the identity already bound "
+            "to this session, a weaker IP:UA pin included, instead of minting. "
+            "A name or agent_id is never looked up; it only keeps S13 from "
+            "forcing a mint. A continuity_token without force_new is refused; "
+            "rebind with identity(agent_uuid, continuity_token, resume=true). "
+            "With no proof signal, S13 mints fresh, or refuses "
+            "(lineage_declaration_required) under STRICT_IDENTITY_REQUIRED."
         )
     )
     force_new: Union[bool, str, None] = Field(
