@@ -56,11 +56,13 @@ RESULT_SCHEMA = "unitares.antigravity_cli_result.v1"
 # One argv element: Linux caps it at 128 KiB.
 PROMPT_BYTES_LIMIT = 120_000
 
-# No XDG_* directories: they point into the operator's real home, which is
-# exactly the config agy must not load. HOME is replaced by isolated_home().
+# No XDG_CONFIG/DATA/CACHE_HOME: they point into the operator's real home,
+# which is exactly the config agy must not load. XDG_RUNTIME_DIR stays: it is
+# /run/user/<uid>, holds no config, and is where a Linux session bus (and so a
+# Secret Service keyring login) is found. HOME is replaced by isolated_home().
 ENV_ALLOWLIST = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
-    "LANG", "LC_ALL", "LC_CTYPE",
+    "LANG", "LC_ALL", "LC_CTYPE", "XDG_RUNTIME_DIR",
     "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
 )
