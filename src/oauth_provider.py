@@ -910,6 +910,14 @@ class OAuthAttemptLogger:
 
         try:
             await self.app(scope, receive, logging_send)
+        except Exception as exc:
+            # Starlette's ServerErrorMiddleware (outside this one) sends the
+            # 500, so no response start passes through here: say so.
+            if outcome["status"] is None:
+                outcome["status"] = 500
+                outcome["error"] = "unhandled_exception"
+                outcome["error_description"] = type(exc).__name__
+            raise
         finally:
             # No return in this finally: it would swallow the app's exception.
             budget = (

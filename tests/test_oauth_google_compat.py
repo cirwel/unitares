@@ -616,3 +616,22 @@ def test_a_foreign_form_client_with_the_static_basic_id_gets_no_allowance():
         "client_id": reg["client_id"], "client_secret": reg["client_secret"],
     }, headers={"Authorization": basic})
     assert resp.status_code == 400 and resp.json()["error"] == "invalid_scope"
+
+
+def test_a_handler_crash_is_logged_as_a_500(caplog):
+    import asyncio
+
+    async def boom(scope, receive, send):
+        raise KeyError("store down")
+
+    async def receive():
+        return {"type": "http.request", "body": b"grant_type=authorization_code", "more_body": False}
+
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        with pytest.raises(KeyError):
+            asyncio.run(OAuthAttemptLogger(boom)(
+                {"type": "http", "method": "POST", "path": "/token", "headers": [], "query_string": b""},
+                receive, None))
+    line = next(r.getMessage() for r in caplog.records
+                if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
+    assert "-> 500" in line and "unhandled_exception" in line and "KeyError" in line
