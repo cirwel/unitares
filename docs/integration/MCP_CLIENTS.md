@@ -352,19 +352,32 @@ envelope (`response_shape: "routine"` marks the trimmed lifecycle ones). Read
 the new identity's uuid from `agent_uuid`. A plain fresh `start_session` carries
 no `raw_governance_hint`; pass `response_mode="full"` on the mint to keep the
 payload. On the others, `raw_governance_hint` names the route to more:
-`response_mode="full"` on `sync_state`, `search_shared_memory` and a later
-`record_result` (an outcome has no read by id, so an ack's own outcome payload
-cannot be fetched again), `verbosity="full"` on `check_working_state`, and a
-`knowledge(action="details", discovery_id=...)` read for `store_finding` and
-`update_finding`, which returns the stored record rather than the ack's payload
-(`response_mode` does not apply to them; the canonical `knowledge` tool returns
-their payload directly). Because neither write route fetches the omitted
-payload, these three write acks do not set `raw_governance_available`.
+`response_mode="full"` on `sync_state` and `search_shared_memory`,
+`verbosity="full"` on `check_working_state`, and for `record_result`, which has
+no read by outcome id, one of two routes. An outcome recorded with a
+`prediction_id` can be replayed: the identical call repeated with
+`response_mode="full"` returns the stored outcome in full
+(`idempotent_replay: true`) and records no second outcome while the binding is
+retained, and a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`.
+Without a `prediction_id` a repeat records a second outcome, so the ack's own
+payload cannot be fetched again and the hint names `response_mode="full"` on a
+later `record_result`. The finding writes, `store_finding` and
+`update_finding`, get a `knowledge(action="details", discovery_id=...)` read,
+which returns the stored record rather than the ack's payload (`response_mode`
+does not apply to them; the canonical `knowledge` tool returns their payload
+directly). Over REST and stdio a finding alias called with an explicit `action`
+other than its own (for example `update_finding(action="details", ...)`) runs
+that `knowledge` action, and its response keeps the payload under
+`raw_governance`, since it is that action's answer rather than a write ack;
+its `next_action` names the action that ran. No read returns the omitted payload (the outcome
+replay is a repeat of the write, safe only under the conditions above), so
+these three write acks do not set `raw_governance_available`.
 Write-time warnings and a bounded `related_discoveries` snapshot are kept in
 the ack itself: the read does not return the warnings or the snapshot's summary
 previews, while the snapshot's ids are the stored record's `related_to`, so a
 `store_finding` ack that carries the snapshot does not repeat them as
-`state_summary.related_to`. Repeating a write to see its payload writes again. The finding writes take `agent_uuid` from the
+`state_summary.related_to`. Repeating a write to see its payload writes again,
+except the identical prediction-bound `record_result` described above. The finding writes take `agent_uuid` from the
 response's signature and add `written_as` (the writer's `agent_id`,
 `display_name` and assurance tier), so a caller can see which identity a write
 was recorded under. `record_result` carries them only when its binding was not

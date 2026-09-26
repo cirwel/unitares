@@ -21,6 +21,7 @@ from mcp.types import TextContent
 
 from src.mcp_handlers.middleware import DispatchContext
 from src.mcp_handlers.middleware.envelope_step import (
+    _raw_governance_policy,
     apply_experience_envelope,
     build_experience_envelope,
 )
@@ -466,10 +467,12 @@ def test_hint_names_only_a_full_route_the_mcp_transport_delivers(
         "raw_governance_hint"
     ]
     if declares_full:
-        # Named for a later outcome, after saying this one cannot be read
-        # again and must not be repeated.
-        assert "response_mode='full' on a later outcome" in hint
-        assert hint.startswith("This outcome's full payload cannot be read again")
+        # The fixture outcome is prediction-bound (it carries
+        # idempotent_replay), so the hint names the identical full-mode
+        # repeat that replays it; test_record_result_hint_names_the_route_*
+        # pin both hints against the handler.
+        assert "response_mode='full'" in hint
+        assert "repeating this identical call" in hint
     else:
         assert "response_mode" not in hint
         assert "knowledge(action='details'" in hint
@@ -652,3 +655,200 @@ async def test_start_session_ack_is_untouched_by_the_write_ack_change(monkeypatc
     assert ack["response_shape"] == "routine"
     assert "raw_governance" not in ack
     assert "raw_governance_hint" not in ack
+
+
+# -- #2457: accuracy follow-ups ----------------------------------------------
+
+
+def _details_payload() -> dict:
+    """What knowledge(action='details') returns: the record, which carries an
+    id the envelope can lift, so an id check alone cannot tell it from an
+    update ack."""
+    return {
+        "success": True,
+        "discovery": {
+            "id": "d-existing",
+            "status": "open",
+            "type": "bug_found",
+            "summary": "write ack bug",
+            "details": "the full stored text " * 20,
+        },
+        "response_chain": [],
+        "agent_signature": {"uuid": _UUID},
+    }
+
+
+async def _through_real_steps(friendly: str, args: dict, payload: dict) -> dict:
+    from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
+
+    ctx = DispatchContext()
+    resolved = await resolve_alias(friendly, dict(args), ctx)
+    assert isinstance(resolved, tuple), resolved
+    name, arguments, ctx = resolved
+    validated = await validate_params(name, arguments, ctx)
+    assert isinstance(validated, tuple), validated
+    name, arguments, ctx = validated
+    return name, arguments, _parse(
+        await apply_experience_envelope(name, arguments, ctx, _result(payload))
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["details", "get", "supersede"])
+async def test_update_finding_with_an_explicit_other_action_keeps_its_payload(action):
+    """An explicit action wins over the alias's injected one, and REST and
+    stdio do not narrow `action` out of update_finding. The rerouted call's
+    result is that action's answer, so the envelope must not omit it as an
+    update ack and point the caller at the read it just made (#2457)."""
+    payload = _details_payload()
+    name, arguments, data = await _through_real_steps(
+        "update_finding", {"action": action, "discovery_id": "d-existing"}, payload
+    )
+    assert name == "knowledge"
+    assert arguments["action"] == action  # the caller's action survived
+    assert data["raw_governance"] == payload
+    assert "raw_governance_hint" not in data
+    assert "raw_governance_available" not in data
+    # next_action names the action that ran, not an update, and makes no
+    # claim about whether it wrote (supersede does).
+    assert "was updated" not in data["next_action"]
+    assert f"knowledge(action='{action}')" in data["next_action"]
+    assert "nothing was" not in data["next_action"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("friendly,args,make", [
+    ("update_finding", {"discovery_id": "d-existing", "action": "update"}, _update_payload),
+    ("store_finding", {"summary": "write ack bug", "action": "store"}, _store_payload),
+])
+async def test_an_explicit_action_equal_to_the_aliass_own_is_still_a_write_ack(
+    friendly, args, make
+):
+    _, _, data = await _through_real_steps(friendly, args, make())
+    assert "raw_governance" not in data
+    assert data["raw_governance_hint"]
+    assert "because an explicit action was passed" not in data["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_store_finding_with_an_explicit_other_action_keeps_its_payload():
+    """store_finding has the same shape as update_finding: its injected action
+    yields to an explicit one."""
+    payload = _details_payload()
+    _, arguments, data = await _through_real_steps(
+        "store_finding", {"action": "details", "discovery_id": "d-existing"}, payload
+    )
+    assert arguments["action"] == "details"
+    assert data["raw_governance"] == payload
+    assert "raw_governance_hint" not in data
+    assert "Finding stored" not in data["next_action"]
+    assert "knowledge(action='details')" in data["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_store_finding_rerouted_to_a_writing_action_does_not_claim_no_write():
+    """store_finding(action='update') runs a real update. The rerouted
+    next_action names it and must not say nothing was written, or a caller
+    could repeat the write (#2457 review)."""
+    _, arguments, data = await _through_real_steps(
+        "store_finding",
+        {"action": "update", "discovery_id": "d-existing", "status": "resolved",
+         "resolution_notes": "fixed"},
+        _update_payload(),
+    )
+    assert arguments["action"] == "update"
+    assert "raw_governance" in data
+    # The friendly-name rewrite may render knowledge(action='update') as
+    # update_finding(); either names the action that ran.
+    assert (
+        "knowledge(action='update')" in data["next_action"]
+        or "store_finding ran update_finding(" in data["next_action"]
+    )
+    assert "nothing was" not in data["next_action"]
+    assert "writes again" in data["next_action"]
+
+
+def _record_result_hint(outcome: dict, arguments: dict) -> str:
+    env = build_experience_envelope(
+        "record_result", "outcome_event", {"success": True, **outcome}, arguments
+    )
+    assert "raw_governance" not in env
+    return env["raw_governance_hint"]
+
+
+@pytest.mark.asyncio
+async def test_record_result_hint_names_the_route_a_prediction_bound_outcome_has():
+    """The hint of a prediction-bound outcome says an identical repeat with
+    response_mode='full' returns the full payload and records nothing new.
+    Follow it against the real handler and check that it does."""
+    from tests.test_outcome_prediction_idempotency import (
+        DurableBindingDB,
+        make_monitor,
+        submit,
+    )
+
+    db = DurableBindingDB()
+    monitor, pid = make_monitor()
+    monitors = {"agent-idempotent": monitor}
+
+    first = await submit(db, monitors, pid)
+    assert first["idempotent_replay"] is False
+    hint = _record_result_hint(first, {"prediction_id": pid})
+    assert "repeating this identical call with response_mode='full'" in hint
+    assert "records no second outcome" in hint
+    assert "idempotent_replay: true" in hint
+    assert "PREDICTION_REUSE_CONFLICT" in hint
+    assert "cannot be read again" not in hint
+    # The warning for the unbound case stays, since a caller may drop the id.
+    assert "without a prediction_id records a second outcome" in hint
+
+    replay = await submit(db, monitors, pid, response_mode="full")
+    assert replay["idempotent_replay"] is True
+    assert replay["outcome_id"] == first["outcome_id"]
+    assert len(db.rows) == 1  # no second outcome
+    # The full payload: the EISV semantics the default ack leaves out.
+    assert "state_semantics" not in first["eisv_snapshot"]
+    assert "state_semantics" in replay["eisv_snapshot"]
+    # And the ack of that repeat keeps it inline.
+    keeps_raw, _ = _raw_governance_policy(
+        "record_result", {"prediction_id": pid, "response_mode": "full"}, replay
+    )
+    assert keeps_raw is True
+
+    # A changed outcome is refused, as the hint says.
+    conflict = await submit(db, monitors, pid, outcome_type="test_failed")
+    assert conflict["error_code"] == "PREDICTION_REUSE_CONFLICT"
+    assert len(db.rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_result_hint_warns_that_an_unbound_outcome_repeat_writes_again():
+    """Without a prediction_id there is no replay: the hint says the payload
+    cannot be read again and a repeat records a second outcome, and the
+    handler does record one."""
+    from tests.test_outcome_prediction_idempotency import (
+        DurableBindingDB,
+        make_monitor,
+        submit,
+    )
+
+    class UnboundDB(DurableBindingDB):
+        async def record_outcome_event(self, **kwargs):
+            self.rows.append(kwargs)
+            return f"outcome-{len(self.rows)}"
+
+    db = UnboundDB()
+    monitor, _ = make_monitor()
+    monitors = {"agent-idempotent": monitor}
+
+    first = await submit(db, monitors, None, confidence=0.8)
+    assert "idempotent_replay" not in first
+    hint = _record_result_hint(first, {})
+    assert hint.startswith("This outcome's full payload cannot be read again")
+    assert "a repeat records a second outcome" in hint
+    assert "response_mode='full' on a later outcome" in hint
+    assert "repeating this identical call" not in hint
+
+    again = await submit(db, monitors, None, confidence=0.8, response_mode="full")
+    assert again["outcome_id"] != first["outcome_id"]
+    assert len(db.rows) == 2
