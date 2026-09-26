@@ -61,8 +61,14 @@ jobs:
         # Default credentials kept: GITHUB_TOKEN is read-only here
         # (permissions: contents: read), and the script's fetch of master
         # then also works on a private fork.
+        #
+        # Full history, not depth 1. When the mirror and canonical declare the
+        # same verification date, sync-plugin-skills.sh's direction guard
+        # decides from canonical's git history whether canonical has moved past
+        # the mirror, and without history it refuses (exit 4, fail closed).
+        # The first live run, 2026-09-26, refused exactly that way.
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Check out the plugin
         if: steps.gate.outputs.configured == 'true'
