@@ -60,9 +60,15 @@ carries a fresh token for the first check-in's rebind. Residents should write
 that fresh token back to the anchor at session end, as the SDK does.
 
     python3 scripts/ops/provision_resident_anchor.py \\
-        --agent-uuid <UUID> --name revenue-worker-1            # dry run
+        --agent-uuid <UUID> --name revenue-worker-1 --transport http   # dry run
     python3 scripts/ops/provision_resident_anchor.py \\
-        --agent-uuid <UUID> --name revenue-worker-1 --apply
+        --agent-uuid <UUID> --name revenue-worker-1 --transport http --apply
+
+``--transport`` names how the RESIDENT connects, and is required whenever
+UNITARES_UDS_SOCKET is set, which the server's environment always does. A
+harness session that resumes over MCP (the revenue-engine worker) is ``http``
+and gets a verified token; an SDK resident whose own environment sets the
+socket is ``uds`` and gets the uuid-only anchor the SDK itself would write.
 
 Run it under the governance server's interpreter, with the server's environment
 loaded, so the signing secret matches and the server modules import.
@@ -286,10 +292,34 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-verify", action="store_true",
                     help="skip BOTH server calls and write an unproven anchor. Last resort "
                          "for an unreachable server; the roster-tag gate is then unchecked too.")
+    ap.add_argument("--transport", choices=("http", "uds"),
+                    help="how the RESIDENT reaches the server. uds: a persistent resident "
+                         "attests by peer credential, so the anchor is uuid-only. http: the "
+                         "anchor carries a verified continuity token. Required when "
+                         "UNITARES_UDS_SOCKET is set, because that variable is also in the "
+                         "server's own environment and says nothing about the resident.")
     args = ap.parse_args(argv)
     if args.dry_run and args.apply:
         print("--dry-run and --apply are contradictory; refusing.", file=sys.stderr)
         return 2
+    # The SDK decides uuid-only from the RESIDENT's environment
+    # (UnitaresAgent._save_session). This script runs under the SERVER's
+    # environment, which sets UNITARES_UDS_SOCKET to the socket the server
+    # listens on, so reading it here chose uuid-only for every persistent
+    # resident -- including one that resumes over MCP HTTP and needs the token
+    # (the revenue-engine worker, 2026-09-25). The resident's transport cannot
+    # be inferred from here, so an ambiguous environment must say it.
+    transport = args.transport
+    if transport is None:
+        if os.environ.get("UNITARES_UDS_SOCKET"):
+            print("UNITARES_UDS_SOCKET is set, which the server's own environment always\n"
+                  "  does, so it does not say how this resident connects. Pass\n"
+                  "  --transport http (the resident presents a continuity token, e.g. a\n"
+                  "  harness session over MCP) or --transport uds (an SDK resident whose\n"
+                  "  own environment sets UNITARES_UDS_SOCKET). Nothing written.",
+                  file=sys.stderr)
+            return 2
+        transport = "http"
 
     api_token = os.environ.get("UNITARES_HTTP_API_TOKEN")
     name = args.name.lower()
@@ -355,8 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     # by token, and the SDK deliberately writes a uuid-only anchor for it
     # (agents/sdk/src/unitares_sdk/agent.py::_save_session). Writing a token
     # into that file would leak a bearer credential the resident never uses.
-    uuid_only = bool(os.environ.get("UNITARES_UDS_SOCKET")) and (
-        tags is None or "persistent" in tags)
+    uuid_only = transport == "uds" and (tags is None or "persistent" in tags)
 
     print(f"anchor  : {anchor} ({'replacing ' + str(existing) if existing else 'absent'})")
     print(f"agent   : {agent_uuid} status={status} tags={sorted(tags) if tags else None} "
