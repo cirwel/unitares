@@ -145,7 +145,7 @@ response marked `response_shape: "routine"` was trimmed because nothing in it
 needed explaining: a clean `sync_state` proceed keeps `action_summary.action`,
 `reason` and `risk_score` and the margin with its scope, but drops the repeated
 approve/safe/healthy values, and a plain fresh `start_session` omits the onboard
-record. A plain fresh mint includes one on a thread earlier sessions occupied:
+record. That includes a mint on a thread earlier sessions occupied:
 `state_summary` then carries `episode_fork_kind: "sibling_locus"` and the
 earlier node's `predecessor_uuid`, and `next_action` says co-location is not
 lineage. A named mint keeps its `resident_registration` verdict at the top
