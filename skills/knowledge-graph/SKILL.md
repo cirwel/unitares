@@ -55,7 +55,7 @@ callers. A blank explicit filter is rejected, and surrounding whitespace is
 trimmed. Search also supports `include_provenance`;
 request `response_mode="full"` when you need the full result fields. The search
 alias omits controls for other actions, such as closure evidence and synthesis;
-use `update_finding` or the corresponding `knowledge` action for those tasks.
+use the corresponding `knowledge` action for those tasks.
 `closure_class` and `closure_evidence` are declared only on
 `knowledge(action="update")`: `update_finding`'s schema omits them, so a direct
 MCP call drops them before the handler runs.
@@ -222,12 +222,15 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
   closed by in `resolution_notes`: `fix_verified`, `unobserved`,
   `not_reproducible`, `obsolete` or `duplicate`, with its evidence (`deployed`
   and `observed` for `fix_verified`, `window` and `instrument_check` for
-  `unobserved`). The `closure_class` parameter (a string) and
-  `closure_evidence` (an object with those keys) take the same values and are
-  validated, but neither storage backend writes them yet, so the row keeps
-  `closure_class` NULL and the response says so in `closure_class_note`;
-  `resolution_notes` is stored. A closure that declares no class is accepted
-  and answered with `closure_class: null` and a `closure_class_note`.
+  `unobserved`). On `knowledge(action="update")` the `closure_class`
+  parameter (a string) and `closure_evidence` (an object with those keys) take
+  the same values and are validated, but neither storage backend writes them
+  yet, so the row keeps `closure_class` NULL and the response says so in
+  `closure_class_note`; `resolution_notes` is stored. A closure that declares
+  no class is accepted and answered with `closure_class: null` and a
+  `closure_class_note`. On another agent's high or critical finding,
+  `resolution_notes` is accepted only in the same call as a cross-agent
+  closing status (`resolved`, `closed` or `wont_fix`).
 - **When you find a duplicate, archive the less complete one** and reference the better entry.
 - **When a finding is outdated, archive it** with a note about what superseded it.
 - **Periodically audit stale open entries** with `knowledge(action="audit")`
