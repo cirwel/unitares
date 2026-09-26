@@ -93,6 +93,11 @@ ALIAS_SCHEMA_KEEP = {
         "discovery_type",
         "tags",
         "superseded_by",
+        # Declared since the class is stored (interface contract 1.20.0).
+        # Before that FastMCP dropped both from a direct /mcp/ call, and only
+        # knowledge(action='update') carried them to the handler.
+        "closure_class",
+        "closure_evidence",
     }),
     "request_review": frozenset({
         "issue_description",

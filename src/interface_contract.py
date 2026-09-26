@@ -146,7 +146,20 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # (its advertised brief is unchanged, so only describe_tool shows that). No
 # parameter is added, removed, retyped or renamed; the two metrics input
 # digests and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.19.0"
+# 1.20.0 (2026-09-26), numbered after 1.19.0 (#2472): update_finding declares
+# closure_class and closure_evidence, with the knowledge router's
+# descriptions. The server now stores both (migration 071 lets a classified
+# row move to archived and cold); until now /mcp/ dropped them from an
+# update_finding call, and only knowledge(action='update') carried them to the
+# handler. Descriptions that lagged their handlers are corrected: knowledge
+# discovery_type says store defaults it to note (it said "Required"); observe
+# target_agent_id names the audit_events and outcome_evidence filters and says
+# they match a UUID without resolving labels, until names outcome_evidence, and
+# agent_ids names the anomalies and aggregate scope; dialectic
+# issue_description names action=quick. Nothing is removed, retyped or
+# renamed; the input digests of update_finding, knowledge, store_finding,
+# observe, dialectic and request_review, and the surface digest, move.
+INTERFACE_CONTRACT_VERSION = "1.20.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

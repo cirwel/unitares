@@ -104,8 +104,25 @@ class ObserveParams(AgentIdentityMixin):
         ),
     }
     action: Literal["agent", "compare", "similar", "anomalies", "aggregate", "telemetry", "audit_events", "outcome_evidence", "bridge"] = Field(..., description="Operation to perform")
-    target_agent_id: Optional[str] = Field(None, description="Agent to observe — UUID or label (for action=agent). Use list_agents to find.")
-    agent_ids: Optional[List[Any]] = Field(None, description="Agent identifiers to compare (for action=compare, min 2)")
+    # action=agent resolves a label through the agent metadata
+    # (_resolve_agent_from_memory); audit_events and outcome_evidence pass the
+    # value to their query as-is and match it against the stored agent_id.
+    target_agent_id: Optional[str] = Field(
+        None,
+        description=(
+            "Agent to observe or filter by. action=agent takes a UUID or label; "
+            "audit_events and outcome_evidence match it exactly against the "
+            "stored agent_id, a UUID, and do not resolve labels. Use list_agents "
+            "to find."
+        ),
+        json_schema_extra={
+            "brief": (
+                "Agent to observe (action=agent: UUID or label) or filter by "
+                "(audit_events, outcome_evidence: UUID, no label lookup)."
+            )
+        },
+    )
+    agent_ids: Optional[List[Any]] = Field(None, description="Agent identifiers to compare (for action=compare, min 2), or to restrict the scan to (for action=anomalies/aggregate).")
     include_history: bool = Field(True, description="Include recent history (for action=agent). Default true.")
     analyze_patterns: bool = Field(True, description="Perform pattern analysis (for action=agent). Default true.")
     compare_metrics: Optional[List[Any]] = Field(
@@ -120,7 +137,7 @@ class ObserveParams(AgentIdentityMixin):
     event_type: Optional[str] = Field(None, description="Audit event type to filter on (for action=audit_events)")
     event_types: Optional[List[str]] = Field(None, description="IN-list of audit event types (for action=audit_events, alternative to event_type)")
     since: Optional[str] = Field(None, description="Window start: '14d'/'24h'/'30m' shorthand or ISO 8601 (for action=audit_events/outcome_evidence/bridge). Default 7d for audit evidence, 24h for bridge.")
-    until: Optional[str] = Field(None, description="Window end: ISO 8601 (for action=audit_events/bridge). Default now.")
+    until: Optional[str] = Field(None, description="Window end: ISO 8601 (for action=audit_events/outcome_evidence/bridge). Default now.")
     include_events: Optional[bool] = Field(None, description="Include event payloads in response. audit_events defaults false; outcome_evidence defaults true except agent_summary; bridge defaults true.")
     include_test_fixtures: bool = Field(True, description="Include agents matching Test_Agent_* fixture pattern (for action=audit_events). Default true.")
     diagnostic: Optional[Literal["claim_only_task_completed", "agent_summary", "field_verification", "events"]] = Field(None, description="Outcome evidence diagnostic mode (for action=outcome_evidence).")

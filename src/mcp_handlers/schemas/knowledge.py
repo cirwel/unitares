@@ -482,12 +482,21 @@ class KnowledgeParams(AgentIdentityMixin):
     summary: Optional[str] = Field(None, description="Discovery summary (for action=store or promote)")
     discovery_type: Optional[str] = Field(
         None,
-        description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".",
+        # Not required: the store handler defaults an omitted type to note
+        # (_parse_single_store_request). It said "Required for action=store" until
+        # 2026-09-26.
+        description=(
+            "Discovery type for action=store; defaults to note. One of: "
+            + ", ".join(get_args(DiscoveryType)) + "."
+        ),
         # The list IS the description here, so the authored brief keeps it and
         # spends its savings on the framing instead. An authored brief is a
         # deliberate choice and is not held to BRIEF_BUDGET.
         json_schema_extra={
-            "brief": "action=store; one of " + ", ".join(get_args(DiscoveryType)) + ".",
+            "brief": (
+                "action=store; defaults to note; one of "
+                + ", ".join(get_args(DiscoveryType)) + "."
+            ),
         },
     )
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")

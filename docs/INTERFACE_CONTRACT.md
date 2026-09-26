@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.19.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.20.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.19.0` is the negotiated interface release. Compatible additions
+- `version: 1.20.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -210,7 +210,21 @@ The two identifiers serve different jobs:
   and `sync_state` names the degraded-identity and warnings triggers that make
   `auto` resolve to mirror (its advertised brief is unchanged). Nothing is
   added, removed, retyped or renamed; the two metrics input digests and the
-  surface digest move).
+  surface digest move;
+  1.20.0, 2026-09-26, numbered after 1.19.0 (#2472): `update_finding` declares
+  `closure_class` and `closure_evidence`, with the `knowledge` router's
+  descriptions. The server now stores both, and migration 071 lets a
+  classified finding move to `archived` and `cold`; until now `/mcp/` dropped
+  them from an `update_finding` call, and only `knowledge(action='update')`
+  carried them to the handler. Descriptions that lagged their handlers are
+  corrected: `knowledge`'s `discovery_type` says store defaults it to `note`
+  (it said "Required"); `observe`'s `target_agent_id` names the `audit_events`
+  and `outcome_evidence` filters and says they match a UUID without resolving
+  labels, `until` names `outcome_evidence`, and `agent_ids` names the
+  `anomalies` and `aggregate` scope; `dialectic`'s `issue_description` names
+  `action=quick`. Nothing is removed, retyped or renamed; the input digests of
+  `update_finding`, `knowledge`, `store_finding`, `observe`, `dialectic` and
+  `request_review`, and the surface digest, move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
