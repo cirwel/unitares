@@ -7,6 +7,8 @@ separate from governed dialectic review.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import hashlib
 import hmac
 import re
@@ -531,6 +533,12 @@ def _success(
             failure_details={"reason": "non_advisory_accountability_class"},
             degradation=degradation,
         )
+    provenance = _safe_provenance(
+        outcome,
+        requester_uuid=request.requester_uuid,
+        brief_hash=brief_hash,
+        constructed_prompt_hash=prompt_hash,
+    )
     postcondition_error = _delivery_postcondition_error(
         outcome,
         delivery_policy,
@@ -538,7 +546,9 @@ def _success(
     )
     if postcondition_error:
         code, reason = postcondition_error
-        return _failed(
+        # The inference already ran on the wrong route; the record must say
+        # where it went even though no advice is returned.
+        return dataclasses.replace(_failed(
             request,
             message=(
                 "Inference returned on a route that does not satisfy the "
@@ -552,7 +562,7 @@ def _success(
             ),
             failure_details={"reason": reason},
             degradation=degradation,
-        )
+        ), provenance=provenance)
     if not isinstance(outcome.response, str) or not outcome.response.strip():
         return _failed(
             request,
@@ -564,12 +574,6 @@ def _success(
             degradation=degradation,
         )
 
-    provenance = _safe_provenance(
-        outcome,
-        requester_uuid=request.requester_uuid,
-        brief_hash=brief_hash,
-        constructed_prompt_hash=prompt_hash,
-    )
     data = _base_data(request)
     privacy_class = provenance.get("privacy_class", "unknown")
     external_processing = privacy_class != "local"
@@ -801,6 +805,13 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
     )
 
 
+def _cancelled(request: ConsultRequest) -> ConsultationOutcome:
+    """The outcome recorded when the caller's request is cancelled mid-route."""
+    data = _base_data(request)
+    data["status"] = "cancelled"
+    return ConsultationOutcome(data=data)
+
+
 _RECORD_SCHEMA = "unitares.consultation_record.v1"
 
 # Route facts a record keeps. Every string among them is backend-reported
@@ -826,6 +837,10 @@ _RECORD_ROUTE_FIELDS = (
     "tokens_used",
 )
 _IDENTIFIER_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+# Failure and degradation codes are internal UPPER_SNAKE constants; holding
+# them to that narrower shape keeps a single echoed token out of them too.
+_CODE_SHAPE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+_CODE_KEYS = frozenset({"code", "reason_code"})
 
 
 def _keyed_hash(key: str, text: str) -> str:
@@ -839,13 +854,27 @@ def _record_value(value: Any, key: str) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, dict):
-        return {str(k): _record_value(item, key) for k, item in value.items()}
+        return {
+            str(k): (
+                _record_code(item, key)
+                if k in _CODE_KEYS
+                else _record_value(item, key)
+            )
+            for k, item in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [_record_value(item, key) for item in value]
     text = str(value)
     if _IDENTIFIER_SHAPE.fullmatch(text):
         return text
     return {"unrecorded_text": _keyed_hash(key, text)}
+
+
+def _record_code(value: Any, key: str) -> Any:
+    """A code as-is only when it has the internal constant shape."""
+    if isinstance(value, str) and _CODE_SHAPE.fullmatch(value):
+        return value
+    return {"unrecorded_text": _keyed_hash(key, str(value))}
 
 
 def _consultation_record(
@@ -861,8 +890,11 @@ def _consultation_record(
     consultation happened and how it was routed, but cannot test a guessed
     brief against the row; the caller, holding the key and the text, can
     prove which exchange the row describes. Every other string passes
-    ``_record_value``, so text a backend reported in a field meant for an
-    identifier or a code is kept as a keyed hash rather than verbatim.
+    ``_record_value``: it is kept only when it has the shape of an
+    identifier (codes: of an internal constant), and otherwise as a keyed
+    hash. The limit of that guarantee is an identifier-shaped echo -- a
+    single token of the brief that a backend reports as a model name would
+    be kept as-is.
     """
     data = outcome.data
     hashes = {
@@ -928,8 +960,11 @@ def _record_consultation(
         "hash_key": key,
         "note": (
             "The server kept keyed hashes of the brief and advice, not their "
-            "text. Keep this key with the text to prove which audit row "
-            "describes this exchange; it is not stored."
+            "text, and does not store this key. To prove which audit row "
+            "describes this exchange: HMAC-SHA256 with bytes.fromhex(hash_key) "
+            "as the key over the UTF-8 text; the brief is hashed after "
+            "stripping leading and trailing whitespace. The row is written "
+            "asynchronously, so a key is not proof the row landed."
         ),
     }
 
@@ -1014,7 +1049,13 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             recovery_action="Use compact or full.",
         )
     else:
-        outcome = await run_consultation(request)
+        try:
+            outcome = await run_consultation(request)
+        except asyncio.CancelledError:
+            # A thorough call may already be running on an external host;
+            # the record must show the consultation was started.
+            _record_consultation(request, _cancelled(request))
+            raise
         # Argument-validation refusals are not recorded (tool-usage counts
         # them); every call that reaches the router is, policy refusals
         # included.

@@ -1161,12 +1161,11 @@ async def test_argument_refusals_leave_no_consultation_record(
 
 @pytest.mark.asyncio
 async def test_audit_failure_never_fails_the_consultation(monkeypatch):
-    import src.audit_log as audit_log
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("record could not be built")
 
-    def _boom(**_kwargs):
-        raise RuntimeError("audit sink down")
-
-    monkeypatch.setattr(audit_log.audit_logger, "log_consultation", _boom)
+    # The reachable failure: building the record raises before the writer.
+    monkeypatch.setattr(co, "_consultation_record", _boom)
     monkeypatch.setattr(
         co, "run_model_inference", AsyncMock(return_value=_completed())
     )
@@ -1215,3 +1214,74 @@ async def test_backend_text_in_failure_codes_is_hashed(monkeypatch, audit_sinks)
     _, pg = await audit_sinks()
     assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
     assert "unrecorded_text" in pg[0]["details"]["failure"]["code"]
+
+
+@pytest.mark.asyncio
+async def test_consultation_row_is_not_a_confidence_claim(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    await co.handle_consult({"brief": "Explain"})
+
+    _, pg = await audit_sinks()
+    # Postgres confidence readers take the newest row with confidence > 0.
+    assert pg[0]["confidence"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_route_violation_records_where_the_inference_went(monkeypatch, audit_sinks):
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_completed(
+            route="huggingface",
+            host_id="hf:router",
+            privacy_class="external_cloud",
+        )),
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": "Explain"}))
+
+    assert parsed["error_code"] == "CONSULT_PRIVACY_POSTCONDITION_FAILED"
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["status"] == "failed"
+    assert record["route"]["host_id"] == "hf:router"
+    assert record["route"]["privacy_class"] == "external_cloud"
+    assert "advice" not in record["hashes"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_consultation_is_recorded_then_reraised(monkeypatch, audit_sinks):
+    import asyncio
+
+    monkeypatch.setattr(
+        co,
+        "run_delegated_inference",
+        AsyncMock(side_effect=asyncio.CancelledError()),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await co.handle_consult({
+            "brief": _BRIEF_SENTINEL,
+            "effort": "thorough",
+            "privacy": "cloud_allowed",
+        })
+
+    _, pg = await audit_sinks()
+    assert len(pg) == 1
+    assert pg[0]["details"]["status"] == "cancelled"
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+
+
+@pytest.mark.asyncio
+async def test_identifier_shaped_echo_in_a_code_is_hashed(monkeypatch, audit_sinks):
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_failure("sk-live-SECRETTOKEN123")),
+    )
+
+    await co.handle_consult({"brief": "sk-live-SECRETTOKEN123"})
+
+    _, pg = await audit_sinks()
+    assert "SECRETTOKEN" not in json.dumps(pg[0])

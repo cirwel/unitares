@@ -675,7 +675,11 @@ class AuditLogger:
             timestamp=datetime.now().isoformat(),
             agent_id=agent_id,
             event_type="consultation",
-            confidence=1.0,
+            # 0.0, not 1.0: the Postgres confidence readers
+            # (get_latest_confidence_before, outcome calibration scoring)
+            # take the newest row with confidence > 0 of any type, and a
+            # consultation is not a confidence claim by the agent.
+            confidence=0.0,
             details=record,
         )
         self._schedule_postgres_write(asdict(entry))
