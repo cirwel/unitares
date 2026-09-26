@@ -967,9 +967,11 @@ def _antigravity_text(stdout: str) -> str:
 AGY_RESUME_LIMITS = {"denied": 2, "truncated": 1}
 AGY_RESUME_PROMPTS = {
     "denied": (
-        "Your command was denied: this review session cannot run commands. Do not "
-        "try a command again; only your file-reading tool works, on diff.patch and "
-        "files/. Write your complete review now: every finding, then the VERDICT line."
+        "A tool call was denied. This review session cannot run commands, and file "
+        "reads work only inside your working directory (diff.patch, files/, and "
+        "omitted.txt if present), using relative paths. Continue the review with "
+        "those reads only, then write your complete review: every finding, then "
+        "the VERDICT line."
     ),
     "truncated": (
         "Your previous answer was cut off by the output limit before it was delivered "

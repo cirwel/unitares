@@ -1990,3 +1990,12 @@ def test_a_denied_file_read_is_resumed_like_a_denied_command():
     assert rg._agy_stall(out, err) == ("denied", "c")
     listed = '{"conversation_id":"c","status":"SUCCESS","response":"","denied_actions":[{"action":"read_file"}]}'
     assert rg._agy_stall(listed, "") == ("denied", "c")
+
+
+def test_the_denied_resume_prompt_fits_a_denied_file_read():
+    # PR #2476 (antigravity): after a denied read_file, "only your file-reading
+    # tool works ... write your review now" contradicted the denial and cut
+    # the review short. Reads work inside the workspace; keep reviewing.
+    text = rg.AGY_RESUME_PROMPTS["denied"]
+    assert "inside your working directory" in text and "Continue the review" in text
+    assert "diff.patch" in text and "files/" in text
