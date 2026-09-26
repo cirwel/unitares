@@ -1350,8 +1350,9 @@ async def test_padded_brief_verifies_against_its_stripped_form(monkeypatch, audi
 
 @pytest.mark.asyncio
 async def test_server_set_values_survive_a_brief_that_mentions_them(monkeypatch, audit_sinks):
-    # Every value asserted below is 8+ characters and appears in its brief,
-    # so each would be hashed if the scrub reached server-set fields.
+    # Regression guard against any future brief-dependent hashing rule: every
+    # value asserted below appears in its brief, and must still be recorded
+    # readably (see _RECORD_ROUTE_FIELDS for why no such rule exists).
     monkeypatch.setattr(
         co,
         "run_model_inference",

@@ -832,8 +832,10 @@ _RECORD_SCHEMA = "unitares.consultation_record.v1"
 # Nothing here is hashed for *resembling the brief*. Any such rule makes the
 # hashing itself an oracle (a reader sees which values were hashed and learns
 # what the brief mentions) and costs the row the model it exists to name. The
-# accepted limit: a backend that echoes an identifier-shaped piece of the
-# brief into a model-name field has it stored as reported.
+# accepted limit: an identifier-shaped piece of the brief that a backend
+# echoes into any backend-reported value other than a code -- a model name,
+# an orchestrator execution or agent id, an upstream execution id -- is
+# stored as reported. Codes are held to the narrower constant shape.
 _RECORD_ROUTE_FIELDS = (
     "host_id",
     "provider_kind",
