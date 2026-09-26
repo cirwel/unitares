@@ -76,6 +76,7 @@ from src.knowledge_graph import (
     normalize_response_type,
     VALID_RESPONSE_TYPES, VALID_DISCOVERY_STATUSES,
     VALID_SEVERITIES as _SHARED_VALID_SEVERITIES,
+    CLOSURE_CLASS_ADMITTING_STATUSES, CLOSURE_CLASS_CLEARING_STATUSES,
 )
 from src.knowledge_authority import (
     GOVERNED_CLAIM,
@@ -2452,6 +2453,7 @@ def _serialize_search_discoveries(
             "created_at",
             "updated_at",
             "superseded_by",
+            "closure_class",
             "has_details",
             "details_preview",
             "details_length",
@@ -2462,6 +2464,9 @@ def _serialize_search_discoveries(
                 item[key] = value
         if include_details and serialized.get("details"):
             item["details"] = serialized.get("details")
+        # The evidence rides with an expanded result only, as details do.
+        if include_details and serialized.get("closure_evidence") is not None:
+            item["closure_evidence"] = serialized.get("closure_evidence")
         item["_agent_id"] = document.agent_id
         item["system_version"] = provenance.get("system_version") if provenance else None
         if document.status == "open":
@@ -3154,13 +3159,16 @@ def _parse_knowledge_update_request(
         request.discovery_type,
         request.tags,
         request.superseded_by,
+        # A class alone classifies a finding closed earlier; it is validated
+        # against the stored status.
+        request.closure_class,
     )
     if not any(value is not None for value in update_values):
         raise _UpdateResponseError(
             error_response(
                 "At least one updatable field is required. Provide status, "
                 "details/content, resolution_notes, summary, severity, "
-                "discovery_type, tags, or superseded_by."
+                "discovery_type, tags, superseded_by, or closure_class."
             )
         )
     return request
@@ -3241,6 +3249,13 @@ def _requested_non_owner_edits(
         and request.status not in allowed_statuses
     ):
         requested_edits.append("resolution_notes")
+    # Same rule as resolution_notes: a non-owner declares the standard of a
+    # closure only in the call that makes it.
+    if (
+        request.closure_class is not None
+        and request.status not in allowed_statuses
+    ):
+        requested_edits.append("closure_class")
     return requested_edits
 
 
@@ -3388,6 +3403,13 @@ CLOSURE_CLASSES = {
 
 _CLOSING_STATUSES = {"resolved", "closed", "wont_fix", "superseded"}
 
+# Where a class may sit: the closing statuses, and archived and cold, where the
+# lifecycle moves closed rows for retention without reopening them. Migration
+# 071 made discoveries_closure_class_requires_closed admit exactly this set;
+# tests/test_kg_closure_class.py holds the two together.
+# Reopening a row (open, disputed) clears its class.
+_CLASS_ADMITTING_STATUSES = CLOSURE_CLASS_ADMITTING_STATUSES
+
 # Evidence each class must actually carry. These two encode the specific ways a
 # closure went wrong on 2026-08-19 and are not generic diligence prompts.
 #
@@ -3405,22 +3427,19 @@ _CLOSURE_EVIDENCE_REQUIRED = {
     "unobserved": ("window", "instrument_check"),
 }
 
-# Whether the storage layer writes closure_class and closure_evidence. It does
-# not. #1752 added the validation above and the two columns (migration 064),
-# but neither backend's update path writes them: the AGE SQL sync, the AGE
-# SQL-only fallback and the Postgres backend each copy a fixed set of columns
-# that leaves both out, so a validated class is dropped and every row reads
-# NULL. The hints below say so instead of recommending a parameter with no
-# effect. tests/test_kg_closure_hints.py derives this value from those three
-# update paths, so persisting the class without flipping it (or the reverse)
-# fails there, and flipping it switches the hints to the parameter.
+# Whether the storage layer writes closure_class and closure_evidence. It does.
+# #1752 added the validation above and migration 064's two columns, but until
+# 2026-09-26 no update path wrote them. Now the AGE SQL sync, the AGE SQL-only
+# fallback and the Postgres backend each write both (the AGE node mirrors
+# them), and each clears both on an update that reopens the row.
+# tests/test_kg_closure_hints.py derives this value from those three update
+# paths, so dropping a write without flipping it (or the reverse) fails there.
 #
-# Persisting is not a one-line change: migration 064's
-# discoveries_closure_class_requires_closed admits a class only on resolved,
-# closed, wont_fix or superseded rows, so once classes are stored the
-# lifecycle's resolved -> archived move (and archived -> cold) would violate it
-# for every classified row.
-CLOSURE_CLASS_PERSISTED = False
+# Storing the class needs migration 071. 064's
+# discoveries_closure_class_requires_closed admitted a class only on resolved,
+# closed, wont_fix or superseded rows, so the lifecycle's resolved -> archived
+# move (and archived -> cold) would have been refused for every classified row.
+CLOSURE_CLASS_PERSISTED = True
 
 
 def _closure_class_choices() -> str:
@@ -3454,16 +3473,23 @@ _UNOBSERVED_IS_HONEST = (
     "'unobserved' is the honest label when the evidence is that a symptom "
     "stopped appearing."
 )
-# Which tool takes the structured fields, said on the route that matters:
-# update_finding's wire schema does not declare closure_class or
-# closure_evidence, so on /mcp/ the transport drops both from an update_finding
-# call before the handler runs, and they are neither validated nor stored.
-_CLOSURE_CLASS_ROUTE = (
-    "knowledge(action='update') also takes closure_class as one of those "
-    "strings, with closure_evidence as an object of those keys, and validates "
-    "them, but the server does not store either yet; update_finding does not "
-    "declare them."
-)
+
+
+def _closure_class_call(discovery_id: str, status: Optional[str]) -> str:
+    """The follow-up that records a class, as this caller can make it.
+
+    update_finding declares closure_class and closure_evidence (interface
+    contract 1.20.0). The status this update set is repeated for the reason
+    _resolution_notes_call gives: a non-owner of a high or critical finding may
+    set a class only together with a cross-agent closing status. For anyone
+    else the repeated status is a no-op, except that repeating 'resolved'
+    re-stamps resolved_at.
+    """
+    status_argument = f", status='{status}'" if status else ""
+    return (
+        f"update_finding(discovery_id='{discovery_id}'{status_argument}, "
+        "closure_class='...')"
+    )
 
 
 def _unclassified_closure_note(
@@ -3471,39 +3497,37 @@ def _unclassified_closure_note(
 ) -> str:
     """What a closing update without closure_class should do next.
 
-    Until the storage layer writes closure_class, the durable place for the
-    standard is resolution_notes. A call that already carried notes is told
-    they are the record rather than that it declares nothing: the notes may
-    name the standard, which is what this note and the knowledge-graph skill
-    recommend.
+    A call that already carried notes is told they are on the record rather
+    than that it declares nothing: the notes may name the standard, and the
+    class records it as a field of its own.
     """
     if not CLOSURE_CLASS_PERSISTED:
+        # Kept so the notes stay true if storage stops writing the class
+        # again: resolution_notes is then the only durable place for it.
         standards = (
             f"{_closure_class_choices()} ({_closure_evidence_keys_prose()})"
         )
-        if notes_passed:
-            return (
-                "This closure passed no closure_class. Its resolution_notes "
-                "are stored with the record, and they are where a later "
-                "reader will look for the standard it rests on: one of "
-                f"{standards}. If they do not name it, "
-                f"{_resolution_notes_call(discovery_id, status)} appends a "
-                f"note that does. {_UNOBSERVED_IS_HONEST} "
-                f"{_CLOSURE_CLASS_ROUTE}"
-            )
         return (
-            f"{_CLOSURE_PREAMBLE} Name the standard and its evidence in "
-            "resolution_notes, which is stored: "
-            f"{_resolution_notes_call(discovery_id, status)} appends them. The "
-            f"standard is one of {standards}. {_UNOBSERVED_IS_HONEST} "
-            f"{_CLOSURE_CLASS_ROUTE}"
+            f"{_CLOSURE_PREAMBLE} The server does not store closure_class, so "
+            "name the standard and its evidence in resolution_notes, which is "
+            f"stored: {_resolution_notes_call(discovery_id, status)} appends "
+            f"them. The standard is one of {standards}. {_UNOBSERVED_IS_HONEST}"
+        )
+    classes = (
+        f"closure_class is a string, one of: {_closure_class_choices()}; "
+        f"{_closure_evidence_examples()}."
+    )
+    call = _closure_class_call(discovery_id, status)
+    if notes_passed:
+        return (
+            "This closure passed no closure_class. Its resolution_notes are "
+            "stored with the record; the class records the standard they rest "
+            f"on as a field of its own, and {call} sets it. {classes} "
+            f"{_UNOBSERVED_IS_HONEST}"
         )
     return (
-        f"{_CLOSURE_PREAMBLE} Pass closure_class as one of: "
-        f"{_closure_class_choices()}, a string, with "
-        f"knowledge(action='update', discovery_id='{discovery_id}', "
-        f"status='{status}', closure_class='...'); "
-        f"{_closure_evidence_examples()}. {_UNOBSERVED_IS_HONEST}"
+        f"{_CLOSURE_PREAMBLE} {call} records the standard. {classes} "
+        f"{_UNOBSERVED_IS_HONEST}"
     )
 
 
@@ -3534,11 +3558,11 @@ def _unstored_closure_class_note(
     *,
     notes_passed: bool = False,
 ) -> str:
-    """A class that passed validation, said plainly not to be on the record."""
+    """A class that passed validation but is not on the record read back."""
     unstored = (
-        f"closure_class '{closure_class}' passed validation, but the server "
-        "does not store closure_class or closure_evidence yet, so this record "
-        "does not carry them. resolution_notes is stored"
+        f"closure_class '{closure_class}' passed validation, but the record "
+        "read back after this update does not carry it. resolution_notes is "
+        "stored"
     )
     call = _resolution_notes_call(discovery_id, status)
     if notes_passed:
@@ -3550,11 +3574,38 @@ def _unstored_closure_class_note(
     return f"{unstored}: name the standard and its evidence there with {call}."
 
 
+def _invalid_closure_param(message: str, recovery: Optional[str] = None) -> _UpdateResponseError:
+    return _UpdateResponseError(
+        error_response(
+            message,
+            error_code="INVALID_PARAM",
+            error_category="validation_error",
+            recovery={"action": recovery} if recovery else None,
+        )
+    )
+
+
 def _validate_closure_class(
-    request: _KnowledgeUpdateRequest, normalized_status: Optional[str]
+    request: _KnowledgeUpdateRequest,
+    normalized_status: Optional[str],
+    stored_status: Optional[str] = None,
 ) -> None:
-    """Reject an ill-formed or contradictory closure class."""
+    """Reject an ill-formed or contradictory closure class.
+
+    ``normalized_status`` is the status this update sets, if any; otherwise the
+    class is judged against ``stored_status``, the status the row already has.
+    Without that fallback, now that storage writes the class, a class sent to
+    an open row would reach storage, the constraint would refuse it, and the
+    AGE backend would report the refusal as "Discovery not found".
+    """
     if request.closure_class is None:
+        if request.closure_evidence is not None:
+            # Evidence is stored with its class, never alone.
+            raise _invalid_closure_param(
+                "closure_evidence is evidence for a closure_class and is "
+                "stored only with one; pass closure_class in the same call, "
+                f"one of: {_closure_class_choices()}."
+            )
         return
 
     if request.closure_class not in CLOSURE_CLASSES:
@@ -3579,22 +3630,39 @@ def _validate_closure_class(
 
     # A standard for a closure that is not happening. The DB rejects this too;
     # failing here gives the caller a usable message instead of a constraint.
-    if normalized_status is not None and normalized_status not in _CLOSING_STATUSES:
-        raise _UpdateResponseError(
-            error_response(
-                f"closure_class is only meaningful on a closing status; "
-                f"got status='{normalized_status}'. "
-                f"Closing statuses: {sorted(_CLOSING_STATUSES)}",
-                error_code="INVALID_PARAM",
-                error_category="validation_error",
+    admitted = ", ".join(sorted(_CLASS_ADMITTING_STATUSES))
+    if normalized_status is not None:
+        if normalized_status not in _CLASS_ADMITTING_STATUSES:
+            raise _invalid_closure_param(
+                "closure_class names the standard a closure rests on, so it "
+                f"cannot sit on status='{normalized_status}'. It is admitted "
+                f"on: {admitted}."
             )
+    elif stored_status is not None:
+        stored = str(stored_status).lower()
+        if stored not in _CLASS_ADMITTING_STATUSES:
+            raise _invalid_closure_param(
+                "closure_class names the standard a closure rests on, and "
+                f"discovery '{request.discovery_id}' is '{stored}' while this "
+                "call sets no status.",
+                recovery=(
+                    "Close it in the same call: pass status as one of "
+                    f"{', '.join(sorted(_CLOSING_STATUSES))} with the class."
+                ),
+            )
+
+    evidence = request.closure_evidence
+    if evidence is not None and not isinstance(evidence, dict):
+        raise _invalid_closure_param(
+            "closure_evidence is an object of named evidence, not "
+            f"{type(evidence).__name__}.",
+            recovery=_closure_evidence_hint(request.closure_class),
         )
 
     required = _CLOSURE_EVIDENCE_REQUIRED.get(request.closure_class)
     if not required:
         return
 
-    evidence = request.closure_evidence
     if not isinstance(evidence, dict):
         raise _UpdateResponseError(
             error_response(
@@ -3632,11 +3700,16 @@ def _closure_evidence_hint(closure_class: str) -> str:
             "is not an observation of the fix — if that is all you have, the "
             "class is 'unobserved'."
         )
+    if closure_class == "unobserved":
+        return (
+            "window: the period over which the condition did not occur. "
+            "instrument_check: how you established the recorder for THIS "
+            "condition is still live. A sibling signal still arriving does not "
+            "establish it; siblings share the sink, not the emitter."
+        )
     return (
-        "window: the period over which the condition did not occur. "
-        "instrument_check: how you established the recorder for THIS condition "
-        "is still live. A sibling signal still arriving does not establish it; "
-        "siblings share the sink, not the emitter."
+        "Send closure_evidence as an object of named facts, for example "
+        "{'of': '<discovery_id>'} for 'duplicate', or omit it."
     )
 
 
@@ -3668,11 +3741,16 @@ def _build_discovery_updates(
             # ...or backfill a resolved row that never got one.
             updates["resolved_at"] = _utc_now_iso()
 
-    _validate_closure_class(request, normalized_status)
+    _validate_closure_class(request, normalized_status, discovery.status)
     if request.closure_class is not None:
+        # The pair is written together, so a class changed to one that needs
+        # no evidence does not keep the previous class's evidence.
         updates["closure_class"] = request.closure_class
-        if isinstance(request.closure_evidence, dict):
-            updates["closure_evidence"] = request.closure_evidence
+        updates["closure_evidence"] = request.closure_evidence
+    elif normalized_status in CLOSURE_CLASS_CLEARING_STATUSES:
+        # Reopening: the closure the class described is no longer the state.
+        updates["closure_class"] = None
+        updates["closure_evidence"] = None
 
     _apply_update_text_fields(request, discovery, updates)
     _apply_update_metadata_fields(request, updates)
@@ -3685,7 +3763,11 @@ def _build_update_response(
     normalized_status: Optional[str],
     supersession_warning: Optional[str],
 ) -> Sequence[TextContent]:
-    """Render the stable update response shape."""
+    """Render the stable update response shape.
+
+    ``discovery`` is the record read back after the write, so closure_class in
+    the response is what the row holds, not what the caller sent.
+    """
     message = f"Discovery '{request.discovery_id}' updated"
     if normalized_status is not None:
         message = (
@@ -3704,10 +3786,10 @@ def _build_update_response(
         if supersession_warning:
             payload["supersession_warning"] = supersession_warning
 
+    stored_class = getattr(discovery, "closure_class", None) if discovery else None
     if request.closure_class is not None:
-        payload["closure_class"] = request.closure_class
-        if not CLOSURE_CLASS_PERSISTED:
-            # The echo above is what the caller sent, not what the row holds.
+        payload["closure_class"] = stored_class
+        if stored_class != request.closure_class:
             payload["closure_class_note"] = _unstored_closure_class_note(
                 request.discovery_id,
                 request.closure_class,
@@ -3718,13 +3800,16 @@ def _build_update_response(
         # Non-breaking on purpose: a required field would break the KG
         # gardener's mechanical auto-resolve on its next run. But a silent
         # accept is how the graph got here, so say it at the moment of closing
-        # rather than leaving the reader to discover it later.
-        payload["closure_class"] = None
-        payload["closure_class_note"] = _unclassified_closure_note(
-            request.discovery_id,
-            normalized_status,
-            notes_passed=request.resolution_note is not None,
-        )
+        # rather than leaving the reader to discover it later. A row that kept
+        # a class from an earlier update is not unclassified: its class is
+        # echoed and nothing is said.
+        payload["closure_class"] = stored_class
+        if stored_class is None:
+            payload["closure_class_note"] = _unclassified_closure_note(
+                request.discovery_id,
+                normalized_status,
+                notes_passed=request.resolution_note is not None,
+            )
     return success_response(payload, arguments=request.arguments)
 
 
@@ -3824,8 +3909,13 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
             details_slice = details[offset:offset + length]
             has_more = (offset + length) < total_length
 
+            summary_view = discovery.to_dict(include_details=False)
+            # The page slices details only; the closure evidence is part of
+            # the record this route returns, as on the unpaginated branch.
+            if discovery.closure_class is not None and discovery.closure_evidence is not None:
+                summary_view["closure_evidence"] = discovery.closure_evidence
             response = {
-                "discovery": discovery.to_dict(include_details=False),
+                "discovery": summary_view,
                 "details": details_slice,
                 "pagination": {
                     "offset": offset,

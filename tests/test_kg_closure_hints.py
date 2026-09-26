@@ -9,6 +9,10 @@ the class echoed back, left the row's ``closure_class`` NULL. Neither storage
 backend writes the column (0 of 1,936 live rows carry a class), so the note
 recommended a parameter with no effect.
 
+The class is stored now (the three update paths write it, migration 071 lets a
+classified row move to archived and cold), and update_finding declares it
+(interface contract 1.20.0), so the notes name update_finding(closure_class=...).
+
 These tests hold every closure hint to what the code does instead of to a
 restated copy of it:
 
@@ -16,12 +20,12 @@ restated copy of it:
   behaviour, not from its table;
 - whether the class is stored is derived from the three storage update paths,
   fed the update payload the real handler builds;
-- the resolution_notes call and the knowledge(action='update') call the notes
-  name are checked against the /mcp/ argument model of the tool they name,
-  since FastMCP drops undeclared arguments before dispatch, and the
-  resolution_notes call is also run through the real handler as the caller
-  who got the note, including a non-owner who just closed another agent's
-  high-severity finding.
+- the closure_class and resolution_notes calls the notes name are checked
+  against the /mcp/ argument model of the tool they name, since FastMCP drops
+  undeclared arguments before dispatch, and are run through the real handler
+  as the caller who got the note, including a non-owner who just closed
+  another agent's high-severity finding;
+- the class the response reports is the one read back from the record.
 """
 
 from __future__ import annotations
@@ -128,7 +132,13 @@ class _Conn:
         return "d-1"
 
 
-class _Pool(_Conn):
+class _Pool:
+    """The ExecutorPool's surface (#218): acquire() and no query methods, so
+    a storage path that queries the pool directly fails here as it does live."""
+
+    def __init__(self, capture: _Capture):
+        self._capture = capture
+
     @asynccontextmanager
     async def acquire(self):
         yield _Conn(self._capture)
@@ -253,7 +263,7 @@ def test_note_names_the_classes_as_prose_not_a_list_value():
             assert f"'{closure_class}'" in note
 
 
-def test_interim_note_names_each_class_evidence_the_validator_demands():
+def test_fallback_note_names_each_class_evidence_the_validator_demands():
     with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
         note = _note()
     for closure_class, keys in _derived_evidence_requirements().items():
@@ -262,11 +272,21 @@ def test_interim_note_names_each_class_evidence_the_validator_demands():
         assert f"'{closure_class}' needs {' and '.join(keys)}" in note, note
 
 
-def test_interim_note_is_honest_that_the_class_is_not_stored():
+def test_fallback_note_is_honest_that_the_class_is_not_stored():
+    """If storage stops writing the class, the note must stop recommending it."""
     with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
         note = _note()
     assert "resolution_notes, which is stored" in note
-    assert "does not store either yet" in note
+    assert "closure_class='...'" not in note
+
+
+def test_persisted_note_names_each_class_evidence_the_validator_demands():
+    note = _note()
+    for closure_class, keys in _derived_evidence_requirements().items():
+        if not keys:
+            continue
+        shown = "{" + ", ".join(f"'{key}': '...'" for key in keys) + "}"
+        assert f"'{closure_class}' also needs closure_evidence={shown}" in note, note
 
 
 _NOTES = "fix_verified: deployed x; observed y"
@@ -288,6 +308,37 @@ def _named_resolution_call(note: str, discovery_id: str) -> tuple[str, dict]:
     return call.group(1), arguments
 
 
+def _named_class_call(
+    note: str, discovery_id: str, closure_class: str
+) -> tuple[str, dict]:
+    """The closure_class call a note names, filled in for ``closure_class``.
+
+    The evidence comes from the note too: the object it shows for the class,
+    with each '...' replaced by a value. A class the note shows no evidence
+    for is sent without any.
+    """
+    call = re.search(
+        rf"(\w+)\((discovery_id='{re.escape(discovery_id)}'[^)]*closure_class='\.\.\.')\)",
+        note,
+    )
+    assert call, f"no closure_class call named: {note}"
+    parsed = ast.parse(f"f({call.group(2)})", mode="eval").body
+    arguments = {
+        keyword.arg: ast.literal_eval(keyword.value) for keyword in parsed.keywords
+    }
+    assert arguments.pop("closure_class") == "..."
+    arguments["closure_class"] = closure_class
+    shown = re.search(
+        rf"'{closure_class}' also needs closure_evidence=(\{{[^}}]*\}})", note
+    )
+    if shown:
+        evidence = ast.literal_eval(shown.group(1))
+        arguments["closure_evidence"] = {
+            key: f"what the {key} was" for key in evidence
+        }
+    return call.group(1), arguments
+
+
 def _through_mcp(tool_name: str, arguments: dict) -> dict:
     """What the handler receives when a client sends ``arguments`` on /mcp/."""
     from src import mcp_server
@@ -302,30 +353,26 @@ def _through_mcp(tool_name: str, arguments: dict) -> dict:
 @pytest.mark.parametrize(
     "note",
     [
-        pytest.param(lambda: _note("d-7", "resolved"), id="unclassified-close"),
-        pytest.param(
-            lambda: _note("d-7", "resolved", notes_passed=True),
-            id="unclassified-close-with-notes",
-        ),
         pytest.param(
             lambda: kg_handlers._unstored_closure_class_note(
                 "d-7", "duplicate", "resolved"
             ),
-            id="unstored-class",
+            id="class-not-on-record",
         ),
         pytest.param(
             lambda: kg_handlers._unstored_closure_class_note(
                 "d-7", "duplicate", None, notes_passed=True
             ),
-            id="unstored-class-no-status",
+            id="class-not-on-record-no-status",
+        ),
+        pytest.param(
+            lambda: _fallback_note("d-7", "resolved"), id="fallback-unclassified"
         ),
     ],
 )
-def test_interim_notes_name_a_resolution_notes_call_that_works_as_written(note):
+def test_resolution_notes_calls_the_notes_name_work_as_written(note):
     """The named call survives the /mcp/ argument model and the update parser."""
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
-        text = note()
-    tool_name, arguments = _named_resolution_call(text, "d-7")
+    tool_name, arguments = _named_resolution_call(note(), "d-7")
     received = _through_mcp(tool_name, arguments)
     assert received == arguments, "the transport dropped part of the named call"
     parsed = kg_handlers._parse_knowledge_update_request(received)
@@ -333,50 +380,31 @@ def test_interim_notes_name_a_resolution_notes_call_that_works_as_written(note):
     assert parsed.resolution_note == _NOTES
 
 
-def test_interim_note_names_the_tool_that_takes_the_class_on_every_route():
-    """The note must not send a caller to update_finding(closure_class=...).
-
-    On /mcp/ that tool's argument model drops the class before the handler
-    runs, so the caller would get neither validation nor storage, only this
-    note again.
-    """
+def _fallback_note(discovery_id: str, status: str) -> str:
     with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
-        notes = [_note(), _note(notes_passed=True)]
-    sent = {"discovery_id": "d-1", "status": "resolved", "closure_class": "duplicate"}
-    for note in notes:
-        named = re.search(r"(\w+)\(action='update'\) also takes closure_class", note)
-        assert named, note
-        assert (
-            _through_mcp(named.group(1), {"action": "update", **sent})["closure_class"]
-            == "duplicate"
-        )
-        assert "update_finding does not declare them" in note
-        assert "closure_class" not in _through_mcp("update_finding", sent)
+        return _note(discovery_id, status)
 
 
 def test_a_closure_that_carried_notes_is_not_told_it_declares_nothing():
-    """The notes are where the standard lives while the class is not stored."""
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
-        with_notes = _note(notes_passed=True)
-        without = _note()
-        class_with_notes = kg_handlers._unstored_closure_class_note(
-            "d-1", "duplicate", "resolved", notes_passed=True
-        )
+    """Notes may already name the standard; the class records it as a field."""
+    with_notes = _note(notes_passed=True)
+    without = _note()
+    class_with_notes = kg_handlers._unstored_closure_class_note(
+        "d-1", "duplicate", "resolved", notes_passed=True
+    )
     assert "declares no standard" not in with_notes
     assert "resolution_notes are stored with the record" in with_notes
-    assert "If they do not name it" in with_notes
+    assert "closure_class='...'" in with_notes
     assert "declares no standard" in without
     assert "this call's notes are on the record" in class_with_notes
 
 
-def test_update_finding_on_mcp_carries_resolution_notes_but_not_the_class():
-    """The premise both notes are written against, on the /mcp/ argument model.
+def test_update_finding_on_mcp_carries_the_class_and_its_evidence():
+    """update_finding declares closure_class and closure_evidence (1.20.0).
 
-    update_finding's wire schema does not declare closure_class or
-    closure_evidence, and FastMCP discards undeclared arguments, so a direct
-    /mcp/ update_finding(closure_class=...) never reaches the handler. The
-    knowledge router declares both. When update_finding gains them, this test
-    fails and the persisted note may name update_finding instead.
+    Until then its wire schema left both out, FastMCP discarded them, and a
+    direct /mcp/ update_finding(closure_class=...) never reached the handler.
+    The notes name update_finding, so this premise is what makes them resolve.
     """
     from src import mcp_server
 
@@ -393,58 +421,45 @@ def test_update_finding_on_mcp_carries_resolution_notes_but_not_the_class():
         "closure_class": "fix_verified",
         "closure_evidence": {"deployed": "x", "observed": "y"},
     }
-    alias = dumped("update_finding", sent)
-    assert alias["resolution_notes"] == sent["resolution_notes"]
-    assert "closure_class" not in alias and "closure_evidence" not in alias
+    for tool_name, arguments in (
+        ("update_finding", sent),
+        ("knowledge", {"action": "update", **sent}),
+    ):
+        received = dumped(tool_name, arguments)
+        assert received["resolution_notes"] == sent["resolution_notes"], tool_name
+        assert received["closure_class"] == "fix_verified", tool_name
+        assert received["closure_evidence"] == sent["closure_evidence"], tool_name
 
-    router = dumped("knowledge", {"action": "update", **sent})
-    assert router["closure_class"] == "fix_verified"
-    assert router["closure_evidence"] == sent["closure_evidence"]
+
+def test_update_finding_advertises_the_routers_closure_descriptions():
+    """The alias keeps KnowledgeParams' texts; it does not grow its own."""
+    from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+    from src import mcp_server
+
+    alias = mcp_server.mcp._tool_manager.get_tool("update_finding").parameters
+    router = mcp_server.mcp._tool_manager.get_tool("knowledge").parameters
+    for field in ("closure_class", "closure_evidence"):
+        assert field in alias["properties"], field
+        assert (
+            alias["properties"][field].get("description")
+            == router["properties"][field].get("description")
+        ), field
+        assert KnowledgeParams.model_fields[field].description
 
 
 def test_persisted_note_names_a_call_that_works_as_written():
-    """Once classes are stored, the note's call must pass validation and /mcp/."""
-    from src import mcp_server
+    """Every class, sent as the note says, passes /mcp/ and the real validator."""
+    note = _note("d-9", "resolved")
+    assert "update_finding(discovery_id='d-9', status='resolved', closure_class='...')" in note
 
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", True):
-        note = _note("d-9", "resolved")
-
-    call = re.search(
-        r"(\w+)\(action='update', discovery_id='d-9', status='resolved', closure_class='\.\.\.'\)",
-        note,
-    )
-    assert call, note
-    tool = mcp_server.mcp._tool_manager.get_tool(call.group(1))
-
-    derived = _derived_evidence_requirements()
-    for closure_class, keys in derived.items():
-        evidence = None
-        if keys:
-            shown = re.search(
-                rf"'{closure_class}' also needs closure_evidence=(\{{[^}}]*\}})", note
-            )
-            assert shown, f"{closure_class} evidence not named: {note}"
-            evidence = ast.literal_eval(shown.group(1))
-            assert tuple(evidence) == keys
-            evidence = {key: f"what the {key} was" for key in evidence}
-        arguments = {
-            "action": "update",
-            "discovery_id": "d-9",
-            "status": "resolved",
-            "closure_class": closure_class,
-        }
-        if evidence is not None:
-            arguments["closure_evidence"] = evidence
-        received = tool.fn_metadata.arg_model.model_validate(
-            arguments
-        ).model_dump_one_level()
-        _validate_closure_class(
-            _request(
-                closure_class=received["closure_class"],
-                closure_evidence=received.get("closure_evidence"),
-            ),
-            received["status"],
-        )
+    for closure_class in sorted(CLOSURE_CLASSES):
+        tool_name, arguments = _named_class_call(note, "d-9", closure_class)
+        assert tool_name == "update_finding"
+        received = _through_mcp(tool_name, arguments)
+        assert received == arguments, "the transport dropped part of the named call"
+        request = kg_handlers._parse_knowledge_update_request(received)
+        _validate_closure_class(request, received["status"])
 
 
 # ---------------------------------------------------------------------------
@@ -500,47 +515,60 @@ def _discovery(**overrides) -> DiscoveryNode:
     return DiscoveryNode(**fields)
 
 
+def _stores_what_it_is_sent(graph, stored: DiscoveryNode) -> None:
+    """A graph whose read-back reflects the update it was sent, as storage does."""
+
+    async def update(discovery_id, updates):
+        for key in ("status", "closure_class", "closure_evidence"):
+            if key in updates:
+                setattr(stored, key, updates[key])
+        return True
+
+    graph.get_discovery = AsyncMock(return_value=stored)
+    graph.update_discovery = AsyncMock(side_effect=update)
+
+
 @pytest.mark.asyncio
-async def test_a_passed_class_is_not_acknowledged_as_recorded(handler_env):
+async def test_a_class_the_record_does_not_carry_is_not_acknowledged(handler_env):
+    """The response reports the record read back, not the caller's echo."""
     _server, graph = handler_env
     graph.get_discovery = AsyncMock(side_effect=[_discovery(), _discovery()])
 
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
-        data = parse_result(
-            await kg_handlers.handle_update_discovery_status_graph(
-                {
-                    "agent_id": "a-1",
-                    "discovery_id": "d-1",
-                    "status": "resolved",
-                    "closure_class": "duplicate",
-                }
-            )
+    data = parse_result(
+        await kg_handlers.handle_update_discovery_status_graph(
+            {
+                "agent_id": "a-1",
+                "discovery_id": "d-1",
+                "status": "resolved",
+                "closure_class": "duplicate",
+            }
         )
+    )
 
     assert data["success"] is True
-    assert data["closure_class"] == "duplicate"
-    assert "does not store closure_class" in data["closure_class_note"]
+    assert data["closure_class"] is None
+    assert "does not carry it" in data["closure_class_note"]
     assert "resolution_notes is stored" in data["closure_class_note"]
 
 
 @pytest.mark.asyncio
 async def test_a_stored_class_gets_no_caveat(handler_env):
     _server, graph = handler_env
-    graph.get_discovery = AsyncMock(side_effect=[_discovery(), _discovery()])
+    _stores_what_it_is_sent(graph, _discovery())
 
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", True):
-        data = parse_result(
-            await kg_handlers.handle_update_discovery_status_graph(
-                {
-                    "agent_id": "a-1",
-                    "discovery_id": "d-1",
-                    "status": "resolved",
-                    "closure_class": "duplicate",
-                }
-            )
+    data = parse_result(
+        await kg_handlers.handle_update_discovery_status_graph(
+            {
+                "agent_id": "a-1",
+                "discovery_id": "d-1",
+                "status": "resolved",
+                "closure_class": "duplicate",
+            }
         )
+    )
 
     assert data["closure_class"] == "duplicate"
+    assert data["discovery"]["closure_class"] == "duplicate"
     assert "closure_class_note" not in data
 
 
@@ -549,18 +577,52 @@ async def test_unclassified_close_note_names_its_own_discovery_and_status(handle
     _server, graph = handler_env
     graph.get_discovery = AsyncMock(side_effect=[_discovery(), _discovery()])
 
-    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", True):
-        data = parse_result(
-            await kg_handlers.handle_update_discovery_status_graph(
-                {
-                    "agent_id": "a-1",
-                    "discovery_id": "d-1",
-                    "status": "wont_fix",
-                }
-            )
+    data = parse_result(
+        await kg_handlers.handle_update_discovery_status_graph(
+            {
+                "agent_id": "a-1",
+                "discovery_id": "d-1",
+                "status": "wont_fix",
+            }
         )
+    )
 
     assert "discovery_id='d-1', status='wont_fix'" in data["closure_class_note"]
+
+
+@pytest.mark.asyncio
+async def test_a_reclose_keeps_the_stored_class_and_says_nothing(handler_env):
+    """A row classified earlier is not unclassified because this call sent none."""
+    _server, graph = handler_env
+    _stores_what_it_is_sent(
+        graph,
+        _discovery(
+            status="resolved",
+            closure_class="duplicate",
+            closure_evidence={"of": "d-0"},
+        ),
+    )
+
+    data = parse_result(
+        await kg_handlers.handle_update_discovery_status_graph(
+            {"agent_id": "a-1", "discovery_id": "d-1", "status": "closed"}
+        )
+    )
+
+    assert data["closure_class"] == "duplicate"
+    assert "closure_class_note" not in data
+    written = graph.update_discovery.await_args.args[1]
+    assert "closure_class" not in written, "a re-close must not touch the class"
+
+
+def _as_closer():
+    return (
+        patch(
+            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            return_value=("closer-b", None),
+        ),
+        patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
+    )
 
 
 @pytest.mark.asyncio
@@ -568,37 +630,66 @@ async def test_unclassified_close_note_names_its_own_discovery_and_status(handle
     "closing",
     [
         pytest.param({}, id="unclassified"),
-        pytest.param({"closure_class": "duplicate"}, id="class-passed"),
         pytest.param({"resolution_notes": "closed by triage"}, id="with-notes"),
     ],
 )
-async def test_a_non_owner_can_make_the_call_its_closure_note_names(
-    handler_env, closing
+@pytest.mark.parametrize("closure_class", sorted(CLOSURE_CLASSES))
+async def test_a_non_owner_can_make_the_class_call_its_closure_note_names(
+    handler_env, closing, closure_class
 ):
-    """A cross-agent close of a high-severity finding is allowed; the follow-up
-    the note names must be allowed to the same caller.
+    """A cross-agent close of a high-severity finding is allowed; the class call
+    the note names must be allowed to the same caller, and must land.
 
-    Non-owners may edit resolution_notes on a high or critical finding only
-    together with a cross-agent closing status, so a status-less
-    update_finding(discovery_id=..., resolution_notes=...) is refused to exactly
-    the caller that received the note. The KG gardener's auto-resolve takes this
-    path.
+    Non-owners may set closure_class on a high or critical finding only together
+    with a cross-agent closing status, so the note repeats the status it just
+    set. The KG gardener's auto-resolve takes this path.
     """
     _server, graph = handler_env
-    stored = _discovery(agent_id="owner-a", severity="high")
-    graph.get_discovery = AsyncMock(return_value=stored)
-    as_closer = (
-        patch(
-            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
-            return_value=("closer-b", None),
-        ),
-        patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
-        patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False),
-    )
-    with as_closer[0], as_closer[1], as_closer[2]:
+    _stores_what_it_is_sent(graph, _discovery(agent_id="owner-a", severity="high"))
+    as_closer = _as_closer()
+    with as_closer[0], as_closer[1]:
         closed = parse_result(
             await kg_handlers.handle_update_discovery_status_graph(
                 {"discovery_id": "d-1", "status": "resolved", **closing}
+            )
+        )
+        assert closed["success"] is True, closed
+        tool_name, arguments = _named_class_call(
+            closed["closure_class_note"], "d-1", closure_class
+        )
+        assert tool_name == "update_finding"
+        followed = parse_result(
+            await kg_handlers.handle_update_discovery_status_graph(
+                _through_mcp(tool_name, arguments)
+            )
+        )
+
+    assert followed["success"] is True, followed
+    assert followed["closure_class"] == closure_class
+    assert "closure_class_note" not in followed
+    written = graph.update_discovery.await_args.args[1]
+    assert written["closure_class"] == closure_class
+    assert written["closure_evidence"] == arguments.get("closure_evidence")
+
+
+@pytest.mark.asyncio
+async def test_a_non_owner_can_make_the_notes_call_a_missing_class_note_names(
+    handler_env,
+):
+    """When the record read back lacks the class, the note sends the standard to
+    resolution_notes; that call must work for the non-owner who got the note."""
+    _server, graph = handler_env
+    stored = _discovery(agent_id="owner-a", severity="high")
+    graph.get_discovery = AsyncMock(return_value=stored)
+    as_closer = _as_closer()
+    with as_closer[0], as_closer[1]:
+        closed = parse_result(
+            await kg_handlers.handle_update_discovery_status_graph(
+                {
+                    "discovery_id": "d-1",
+                    "status": "resolved",
+                    "closure_class": "duplicate",
+                }
             )
         )
         assert closed["success"] is True, closed

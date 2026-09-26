@@ -542,6 +542,9 @@ class KnowledgeGraphMixin:
             d['provenance'] = json.loads(d['provenance'])
         if d.get('provenance_chain') and isinstance(d['provenance_chain'], str):
             d['provenance_chain'] = json.loads(d['provenance_chain'])
+        if d.get('closure_evidence') and isinstance(d['closure_evidence'], str):
+            from src.knowledge_graph import closure_evidence_from_stored
+            d['closure_evidence'] = closure_evidence_from_stored(d['closure_evidence'])
         d.pop('search_vector', None)
         # 'rank' is deliberately NOT popped. Only kg_full_text_search's SQL
         # emits it (no other caller's SELECT produces the column), and both

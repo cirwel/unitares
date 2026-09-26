@@ -180,3 +180,208 @@ class TestTheHintNamesTheTrap:
     def test_unobserved_hint_names_the_sibling_fallacy(self):
         hint = self._hint("unobserved")
         assert "sink" in hint and "emitter" in hint
+
+
+# ---------------------------------------------------------------------------
+# Where a class may sit, now that it is stored (migration 071)
+# ---------------------------------------------------------------------------
+
+from src.mcp_handlers.knowledge import handlers as kg_handlers  # noqa: E402
+from src.mcp_handlers.knowledge.handlers import (  # noqa: E402
+    _build_discovery_updates,
+    _parse_knowledge_update_request,
+)
+from src.knowledge_graph import DiscoveryNode  # noqa: E402
+
+
+def _stored(**overrides):
+    fields = dict(id="d-1", agent_id="a-1", type="bug_found", summary="s", status="open")
+    fields.update(overrides)
+    return DiscoveryNode(**fields)
+
+
+def _refusal(exc) -> str:
+    import json
+
+    return json.loads(exc.value.response.text)["error"]
+
+
+class TestTheClassSurvivesRetention:
+    """archived and cold are retention tiers, not reopenings."""
+
+    @pytest.mark.parametrize("status", ["archived", "cold"])
+    def test_a_class_is_admitted_on_a_retention_status(self, status):
+        _validate_closure_class(_request(closure_class="obsolete"), status)
+
+    @pytest.mark.parametrize("status", ["open", "disputed"])
+    def test_a_class_is_refused_on_a_reopening_status(self, status):
+        with pytest.raises(_UpdateResponseError) as refused:
+            _validate_closure_class(_request(closure_class="obsolete"), status)
+        assert f"status='{status}'" in _refusal(refused)
+
+
+class TestAClassWithoutAStatusIsJudgedAgainstTheStoredOne:
+    """Without this check, a status-less class sent to an open row would reach
+    storage now that storage writes it; the constraint would refuse it there,
+    and the AGE backend would report the refusal as "Discovery not found"."""
+
+    @pytest.mark.parametrize("stored", ["resolved", "closed", "wont_fix", "superseded", "archived", "cold"])
+    def test_a_closed_row_takes_a_class_alone(self, stored):
+        _validate_closure_class(_request(closure_class="duplicate"), None, stored)
+
+    @pytest.mark.parametrize("stored", ["open", "disputed"])
+    def test_an_open_row_refuses_a_class_alone(self, stored):
+        with pytest.raises(_UpdateResponseError) as refused:
+            _validate_closure_class(_request(closure_class="duplicate"), None, stored)
+        message = _refusal(refused)
+        assert f"is '{stored}'" in message and "sets no status" in message
+
+    def test_the_status_being_set_wins_over_the_stored_one(self):
+        # Closing an open row and classifying it in one call is the normal path.
+        _validate_closure_class(_request(closure_class="duplicate"), "resolved", "open")
+        with pytest.raises(_UpdateResponseError):
+            _validate_closure_class(_request(closure_class="duplicate"), "open", "resolved")
+
+    def test_a_class_alone_is_an_updatable_field(self):
+        request = _parse_knowledge_update_request(
+            {"discovery_id": "d-1", "closure_class": "duplicate"}
+        )
+        updates, status = _build_discovery_updates(request, _stored(status="resolved"))
+        assert status is None and "status" not in updates
+        assert updates["closure_class"] == "duplicate"
+
+
+class TestEvidenceTravelsWithItsClass:
+    def test_evidence_without_a_class_is_refused_not_dropped(self):
+        with pytest.raises(_UpdateResponseError) as refused:
+            _validate_closure_class(
+                _request(closure_evidence={"deployed": "x", "observed": "y"}), "resolved"
+            )
+        assert "closure_class" in _refusal(refused)
+
+    def test_evidence_must_be_an_object_for_every_class(self):
+        with pytest.raises(_UpdateResponseError):
+            _validate_closure_class(
+                _request(closure_class="duplicate", closure_evidence="see d-0"), "resolved"
+            )
+
+    def test_changing_the_class_replaces_the_evidence(self):
+        """A class that needs none must not inherit the last class's evidence."""
+        request = _parse_knowledge_update_request(
+            {"discovery_id": "d-1", "status": "resolved", "closure_class": "duplicate"}
+        )
+        updates, _ = _build_discovery_updates(
+            request,
+            _stored(
+                status="resolved",
+                closure_class="fix_verified",
+                closure_evidence={"deployed": "x", "observed": "y"},
+            ),
+        )
+        assert updates["closure_class"] == "duplicate"
+        assert "closure_evidence" in updates and updates["closure_evidence"] is None
+
+
+class TestReopeningClearsTheClass:
+    @pytest.mark.parametrize("status", ["open", "disputed"])
+    def test_a_reopening_update_clears_both_fields(self, status):
+        request = _parse_knowledge_update_request({"discovery_id": "d-1", "status": status})
+        updates, _ = _build_discovery_updates(
+            request, _stored(status="resolved", closure_class="duplicate")
+        )
+        assert updates["closure_class"] is None
+        assert updates["closure_evidence"] is None
+
+    @pytest.mark.parametrize("status", ["resolved", "closed", "archived"])
+    def test_a_non_reopening_update_leaves_the_class_alone(self, status):
+        request = _parse_knowledge_update_request({"discovery_id": "d-1", "status": status})
+        updates, _ = _build_discovery_updates(
+            request, _stored(status="resolved", closure_class="duplicate")
+        )
+        assert "closure_class" not in updates and "closure_evidence" not in updates
+
+
+def test_the_handler_admits_a_class_exactly_where_the_schema_does():
+    """_CLASS_ADMITTING_STATUSES and migration 071's CHECK name one set."""
+    import re
+    from pathlib import Path
+
+    sql = (
+        Path(__file__).resolve().parent.parent
+        / "db/postgres/migrations/071_knowledge_closure_class_survives_tiering.sql"
+    ).read_text()
+    check = sql.split("ADD CONSTRAINT discoveries_closure_class_requires_closed", 1)[1]
+    check = check.split(";", 1)[0]
+    in_list = set(re.findall(r"'(\w+)'", check))
+    assert in_list == set(kg_handlers._CLASS_ADMITTING_STATUSES)
+
+
+# ---------------------------------------------------------------------------
+# Through the real handler
+# ---------------------------------------------------------------------------
+
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+
+from tests.helpers import parse_result  # noqa: E402
+
+
+@pytest.fixture
+def graph():
+    server = MagicMock()
+    server.agent_metadata = {}
+    graph = AsyncMock()
+    graph.update_discovery = AsyncMock(return_value=True)
+    with (
+        patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
+        patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
+        patch("src.mcp_handlers.knowledge.handlers.mcp_server", server),
+        patch(
+            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            new_callable=AsyncMock,
+            return_value=graph,
+        ),
+    ):
+        yield graph
+
+
+@pytest.mark.asyncio
+async def test_a_class_sent_to_an_open_row_is_refused_before_storage(graph):
+    graph.get_discovery = AsyncMock(return_value=_stored(status="open"))
+    data = parse_result(
+        await kg_handlers.handle_update_discovery_status_graph(
+            {"agent_id": "a-1", "discovery_id": "d-1", "closure_class": "duplicate"}
+        )
+    )
+    assert data["success"] is False
+    assert data["error_code"] == "INVALID_PARAM"
+    assert "not found" not in data["error"].lower()
+    graph.update_discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_non_owner_classifies_only_in_the_closing_call(graph):
+    """Same rule as resolution_notes on a high-severity finding."""
+    graph.get_discovery = AsyncMock(
+        return_value=_stored(agent_id="owner-a", severity="high", status="resolved")
+    )
+    with (
+        patch(
+            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            return_value=("closer-b", None),
+        ),
+        patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
+    ):
+        alone = parse_result(
+            await kg_handlers.handle_update_discovery_status_graph(
+                {"discovery_id": "d-1", "closure_class": "duplicate"}
+            )
+        )
+        with_close = parse_result(
+            await kg_handlers.handle_update_discovery_status_graph(
+                {"discovery_id": "d-1", "status": "closed", "closure_class": "duplicate"}
+            )
+        )
+    assert alone["success"] is False
+    assert "closure_class" in alone["error"]
+    assert with_close["success"] is True, with_close
+    assert graph.update_discovery.await_args.args[1]["closure_class"] == "duplicate"

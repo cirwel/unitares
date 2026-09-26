@@ -12,6 +12,7 @@ Backends:
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Literal, Any, get_args
 from datetime import datetime, timezone
+import json
 import os
 import re
 import asyncio
@@ -136,6 +137,51 @@ VALID_DISCOVERY_STATUSES = frozenset({
 
 VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
 
+# Statuses that reopen a discovery. A closure class names the standard a
+# closure rests on, so a row that is open again cannot keep one: migration 064
+# (and 071, which kept that half) refuses a class on these two statuses. Every
+# other status admits one, archived and cold included, because the lifecycle
+# moves closed rows there for retention without reopening them.
+CLOSURE_CLASS_CLEARING_STATUSES = frozenset({"open", "disputed"})
+CLOSURE_CLASS_ADMITTING_STATUSES = VALID_DISCOVERY_STATUSES - CLOSURE_CLASS_CLEARING_STATUSES
+
+
+def apply_closure_reopen_rule(updates: Dict[str, Any]) -> Dict[str, Any]:
+    """Clear closure_class/closure_evidence in an update that reopens the row.
+
+    Storage applies this to every update, so a writer that reopens a row
+    without knowing about closure classes (dialectic's resolution sets
+    status='open', for instance) clears the pair instead of violating
+    discoveries_closure_class_requires_closed. Returns a new dict when it
+    changes anything and the same dict otherwise.
+    """
+    if updates.get("status") not in CLOSURE_CLASS_CLEARING_STATUSES:
+        return updates
+    cleared = dict(updates)
+    cleared["closure_class"] = None
+    cleared["closure_evidence"] = None
+    return cleared
+
+
+def closure_evidence_to_json(value: Any) -> Optional[str]:
+    """closure_evidence as the JSON text a jsonb column or AGE property stores."""
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True)
+
+
+def closure_evidence_from_stored(value: Any) -> Optional[Dict[str, Any]]:
+    """closure_evidence read back from jsonb text or an AGE string property."""
+    if value is None or isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
 
 @dataclass
 class ResponseTo:
@@ -167,6 +213,11 @@ class DiscoveryNode:
     provenance: Optional[Dict[str, Any]] = None
     # PROVENANCE CHAIN: Full lineage context for multi-agent collaboration
     provenance_chain: Optional[List[Dict[str, Any]]] = None
+    # By what standard this was closed (migration 064), and the evidence for
+    # it. NULL on every row closed without one, which reads as "declared no
+    # standard".
+    closure_class: Optional[str] = None
+    closure_evidence: Optional[Dict[str, Any]] = None
 
     def to_dict(self, include_details: bool = True) -> dict:
         """Convert to dictionary for JSON serialization"""
@@ -202,6 +253,14 @@ class DiscoveryNode:
 
         if self.superseded_by is not None:
             result["superseded_by"] = self.superseded_by
+
+        # Present only on a classified row, so an unclassified read is
+        # byte-identical to one from before the class was stored. The evidence
+        # rides with the full record; a summary read names the class alone.
+        if self.closure_class is not None:
+            result["closure_class"] = self.closure_class
+            if include_details and self.closure_evidence is not None:
+                result["closure_evidence"] = self.closure_evidence
 
         # Include provenance if present (agent state at creation)
         if self.provenance:
@@ -262,6 +321,8 @@ class DiscoveryNode:
             provenance=data.get("provenance"),
             provenance_chain=data.get("provenance_chain"),
             superseded_by=data.get("superseded_by"),
+            closure_class=data.get("closure_class"),
+            closure_evidence=closure_evidence_from_stored(data.get("closure_evidence")),
         )
 
 

@@ -26,10 +26,15 @@ def create_discovery_node(
     coherence: Optional[float] = None,
     tags: Optional[List[str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    closure_class: Optional[str] = None,
+    closure_evidence: Optional[str] = None,
 ) -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query to create a Discovery node.
-    
+
+    ``closure_evidence`` is the JSON text of the evidence object, the form the
+    node stores it in (as tags and metadata are stored).
+
     Returns:
         (cypher_query, params_dict)
     """
@@ -68,7 +73,11 @@ def create_discovery_node(
         props["tags"] = tags
     if metadata:
         props["metadata"] = metadata
-    
+    if closure_class:
+        props["closure_class"] = closure_class
+        if closure_evidence:
+            props["closure_evidence"] = closure_evidence
+
     # Build properties string (using ${param} format for substitution)
     props_str = ", ".join(f"{k}: ${{{k}}}" for k in props.keys())
     

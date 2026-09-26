@@ -1173,10 +1173,12 @@ class TestUpdateDiscovery:
         the UPDATE ... RETURNING id touches no row.
         """
         kg, mock_db = make_kg_with_mock_db(graph_available=False)
-        mock_db._pool.fetchval = AsyncMock(return_value=None)
+        mock_db._mock_conn.fetchval = AsyncMock(return_value=None)
         result = await kg.update_discovery("disc-001", {"status": "resolved"})
         assert result is False
-        mock_db._pool.fetchval.assert_awaited_once()
+        mock_db._mock_conn.fetchval.assert_awaited_once()
+        # Through acquire(): the real ExecutorPool has no fetchval (#218).
+        mock_db._pool.fetchval.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_updates_valid_fields(self):
@@ -1246,11 +1248,13 @@ class TestUpdateDiscovery:
         """
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = [{"error": "not found"}]
-        mock_db._pool.fetchval = AsyncMock(return_value=None)
+        mock_db._mock_conn.fetchval = AsyncMock(return_value=None)
 
         result = await kg.update_discovery("disc-001", {"status": "resolved"})
         assert result is False
-        mock_db._pool.fetchval.assert_awaited_once()
+        mock_db._mock_conn.fetchval.assert_awaited_once()
+        # Through acquire(): the real ExecutorPool has no fetchval (#218).
+        mock_db._pool.fetchval.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_false_on_empty_result(self):
@@ -1261,11 +1265,13 @@ class TestUpdateDiscovery:
         """
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = []
-        mock_db._pool.fetchval = AsyncMock(return_value=None)
+        mock_db._mock_conn.fetchval = AsyncMock(return_value=None)
 
         result = await kg.update_discovery("disc-001", {"status": "resolved"})
         assert result is False
-        mock_db._pool.fetchval.assert_awaited_once()
+        mock_db._mock_conn.fetchval.assert_awaited_once()
+        # Through acquire(): the real ExecutorPool has no fetchval (#218).
+        mock_db._pool.fetchval.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_returns_false_on_exception(self):
