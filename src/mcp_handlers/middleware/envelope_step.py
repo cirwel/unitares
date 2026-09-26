@@ -2068,15 +2068,19 @@ def build_experience_envelope(
 
         call_arguments = arguments or {}
         if not _is_alias_injected_action(friendly_name, call_arguments):
-            # An explicit other action (details, get, supersede...) ran that
-            # action, not this alias's write, so an "updated"/"stored" line
-            # would misreport it. Its payload stays inline (#2457).
+            # An explicit other action (details, get, supersede, update...)
+            # ran that action, not this alias's own, so the alias's
+            # "updated"/"stored" line would misreport it. The other action may
+            # itself write (store, update, supersede, note...), so the line
+            # names what ran and makes no claim about whether it wrote. Its
+            # payload stays inline (#2457).
             ran = str(call_arguments.get("action")).strip().lower()
             next_action = (
                 f"{friendly_name} ran knowledge(action='{ran}') because an "
-                "explicit action was passed; nothing was stored or updated "
-                "by this alias. That action's full response is under "
-                "raw_governance."
+                "explicit action was passed, not this alias's own action. "
+                "That action's full response is under raw_governance; read "
+                "it there before repeating the call, since a writing action "
+                "writes again."
             )
         elif friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")

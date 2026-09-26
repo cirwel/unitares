@@ -709,9 +709,11 @@ async def test_update_finding_with_an_explicit_other_action_keeps_its_payload(ac
     assert data["raw_governance"] == payload
     assert "raw_governance_hint" not in data
     assert "raw_governance_available" not in data
-    # next_action names the action that ran, not an update that did not.
+    # next_action names the action that ran, not an update, and makes no
+    # claim about whether it wrote (supersede does).
     assert "was updated" not in data["next_action"]
     assert f"knowledge(action='{action}')" in data["next_action"]
+    assert "nothing was" not in data["next_action"]
 
 
 @pytest.mark.asyncio
@@ -741,6 +743,29 @@ async def test_store_finding_with_an_explicit_other_action_keeps_its_payload():
     assert "raw_governance_hint" not in data
     assert "Finding stored" not in data["next_action"]
     assert "knowledge(action='details')" in data["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_store_finding_rerouted_to_a_writing_action_does_not_claim_no_write():
+    """store_finding(action='update') runs a real update. The rerouted
+    next_action names it and must not say nothing was written, or a caller
+    could repeat the write (#2457 review)."""
+    _, arguments, data = await _through_real_steps(
+        "store_finding",
+        {"action": "update", "discovery_id": "d-existing", "status": "resolved",
+         "resolution_notes": "fixed"},
+        _update_payload(),
+    )
+    assert arguments["action"] == "update"
+    assert "raw_governance" in data
+    # The friendly-name rewrite may render knowledge(action='update') as
+    # update_finding(); either names the action that ran.
+    assert (
+        "knowledge(action='update')" in data["next_action"]
+        or "store_finding ran update_finding(" in data["next_action"]
+    )
+    assert "nothing was" not in data["next_action"]
+    assert "writes again" in data["next_action"]
 
 
 def _record_result_hint(outcome: dict, arguments: dict) -> str:
