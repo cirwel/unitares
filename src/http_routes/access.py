@@ -725,10 +725,14 @@ async def _resolve_http_session_binding(
     )
     from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
 
-    # Whether the caller itself sent a client_session_id, read before the
-    # derivation drops an invalid one (see _record_unbound_resolution).
+    # Whether the caller itself sent a usable client_session_id. One that
+    # normalizes to nothing (blank, whitespace, symbols only) is dropped by
+    # the derivation and never looked up, so it is not "an id that names no
+    # identity"; the caller gets the no-id recovery, as for an omitted one.
+    from src.mcp_handlers.identity.session import normalize_client_session_id
+
     caller_sent_session_id = bool(
-        arguments.get("client_session_id")
+        normalize_client_session_id(arguments.get("client_session_id"))
         and not get_csid_transport_injected()
         and get_csid_injected_source() is None
     )

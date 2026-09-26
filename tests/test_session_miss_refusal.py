@@ -290,14 +290,20 @@ async def test_mcp_session_miss_with_a_caller_id_that_names_nothing_leads_with_t
             {}, {"client_session_id": STALE_SESSION}, True,
             id="body-id",
         ),
-        # The caller sent an id that is not a valid session id. Each
-        # transport's derivation drops it and resolves on the transport, but
-        # the caller did send it, so "you sent no client_session_id" would be
-        # false on either.
+        # An id that normalizes to nothing (symbols or whitespace only) is
+        # dropped by each transport's derivation and never looked up, so
+        # "names no identity" would be false. It gets the no-id recovery
+        # (pass the id start_session returned), whose wording does not claim
+        # that nothing was sent; the same as an omitted or empty id.
         pytest.param(
             {}, {"client_session_id": "!!!"},
-            {}, {"client_session_id": "!!!"}, True,
+            {}, {"client_session_id": "!!!"}, False,
             id="invalid-body-id",
+        ),
+        pytest.param(
+            {}, {"client_session_id": "   "},
+            {}, {"client_session_id": "   "}, False,
+            id="whitespace-body-id",
         ),
     ],
 )

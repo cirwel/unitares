@@ -265,8 +265,8 @@ class AgentMetadata:
     # name a knowledge write gives an agent with no meaningful label (in
     # memory only, where that name is set). The label is server-assigned while
     # it still equals this value; any later write, a claim or a collision
-    # rename of one, makes them differ. None for agents minted before
-    # 2026-09-26 and for lazily persisted mints.
+    # rename of one, makes them differ. None for agents minted on a server
+    # that did not yet run this change (#2478) and for lazily persisted mints.
     auto_label: str = None
     preferences: dict = None
 

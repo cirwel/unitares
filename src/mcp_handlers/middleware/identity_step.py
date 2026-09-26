@@ -998,14 +998,17 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     from src.mcp_handlers.identity_bootstrap import (
                         unbound_call_refusal,
                     )
+                    from ..identity.session import normalize_client_session_id
                     _token_presented = bool(
                         arguments and arguments.get("continuity_token")
                     )
                     _refusal_options, _surface_extra = unbound_call_refusal(
                         name,
                         identity_result,
+                        # A usable id only: one that normalizes to nothing
+                        # was never looked up (same rule as the REST gate).
                         caller_sent_session_id=bool(
-                            client_session_id
+                            normalize_client_session_id(client_session_id)
                             and not get_csid_transport_injected()
                         ),
                         token_failed_verification=(
