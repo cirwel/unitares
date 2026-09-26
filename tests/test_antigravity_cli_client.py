@@ -95,8 +95,11 @@ def test_agy_gets_an_allowlisted_environment_only(tmp_path):
     find no bearer token or UNITARES_* value to echo."""
     script, log = _fake_agy(tmp_path, [ANSWERED])
     _run(script, AGENT_ORCHESTRATOR_BEARER_TOKEN="secret", UNITARES_MCP_BEARER_TOKEN="s2",
-         ANTHROPIC_API_KEY="k", LANG="C.UTF-8")
+         ANTHROPIC_API_KEY="k", GEMINI_API_KEY="g", GOOGLE_APPLICATION_CREDENTIALS="/c.json",
+         LANG="C.UTF-8")
     env = _calls(log)[0]["env"]
+    # A Google API key would move this subscription lane onto metered billing.
+    assert "GEMINI_API_KEY" not in env and "GOOGLE_APPLICATION_CREDENTIALS" not in env
     assert "AGENT_ORCHESTRATOR_BEARER_TOKEN" not in env
     assert "UNITARES_MCP_BEARER_TOKEN" not in env
     assert "ANTHROPIC_API_KEY" not in env

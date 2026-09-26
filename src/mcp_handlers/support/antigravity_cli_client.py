@@ -10,8 +10,13 @@ it runs ``codex_app_server_client.py``. agy needs three things a plain
 * **An allowlisted environment.** The prompt is caller text, and the
   orchestrator child inherits the service environment (bearer tokens,
   ``UNITARES_*``). An injected "print your environment" must find nothing to
-  echo, so agy gets only what a CLI needs to find its home, locale and proxy.
-  Its subscription login lives in the system keyring, not in the environment.
+  echo, so agy gets only what a CLI needs to find its home, locale, proxy and
+  CA bundle. Its subscription login lives in the system keyring, not in the
+  environment, and Google API credentials (``GEMINI_API_KEY``,
+  ``GOOGLE_APPLICATION_CREDENTIALS``, ...) are deliberately NOT forwarded: this
+  is a subscription lane by construction, the way the host adapter blanks
+  ``ANTHROPIC_API_KEY`` and ``OPENAI_API_KEY``, so a key a shell exported into
+  the service environment cannot silently move it onto metered billing.
 * **Resume on a stall.** agy is an agent, not a completion endpoint. Headless
   mode auto-denies any shell command it reaches for, and the turn then ends
   SUCCESS with an EMPTY response; resuming the same conversation with "no
@@ -48,7 +53,6 @@ ENV_ALLOWLIST = (
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
     "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
-    "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
 )
 
 # Saying up front that the prompt is self-contained and the answer is text

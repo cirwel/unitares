@@ -801,7 +801,8 @@ def test_invoke_antigravity_happy_path(monkeypatch):
 
     env = state["calls"][0][1]["json"]["env"]
     assert env["HA_ANTIGRAVITY_CLIENT"].endswith("antigravity_cli_client.py")
-    assert env["HA_TIMEOUT_S"] == "77"
+    # The client's deadline lands before the await window closes.
+    assert env["HA_TIMEOUT_S"] == str(77 - ha._CLIENT_DEADLINE_MARGIN_S)
     assert env["HA_PROMPT"].startswith("q")
     assert r["ok"] is True and r["text"] == "hi"
     prov = r["provenance"]

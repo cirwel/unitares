@@ -104,6 +104,9 @@ _CLI_ENV_OVERRIDES = {
 }
 
 _ANTIGRAVITY_RESULT_SCHEMA = "unitares.antigravity_cli_result.v1"
+# Seconds the agy client's own deadline stays ahead of the orchestrator await:
+# covers child start-up, the kill-and-reap after a timeout, and the envelope.
+_CLIENT_DEADLINE_MARGIN_S = 15
 
 _TERMINAL_ANSWER_SCHEMA = "unitares.terminal_answer.v1"
 _CODEX_APP_SERVER_RESULT_SCHEMA = "unitares.codex_app_server_result.v1"
@@ -683,7 +686,10 @@ async def invoke_host_adapter(
             "HA_ANTIGRAVITY_CLIENT": str(
                 Path(__file__).with_name("antigravity_cli_client.py")
             ),
-            "HA_TIMEOUT_S": str(timeout_s),
+            # Ahead of the await window below, so a hung or over-budget agy
+            # is reported by the client's own envelope rather than surfacing
+            # as an await timeout on a child that is still running.
+            "HA_TIMEOUT_S": str(max(1, timeout_s - _CLIENT_DEADLINE_MARGIN_S)),
             "HA_PYTHON": sys.executable,
             "USER": _current_username(),
             # Neutralise console-API credentials so this stays a SUBSCRIPTION

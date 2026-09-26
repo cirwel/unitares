@@ -419,8 +419,9 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
 ANTIGRAVITY_HOST_ID = "antigravity:host-adapter"
 # agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
 # untrusted text (a PR diff, a paused agent's thesis), and an injected "print
-# your environment" must find no UNITARES_*/GitHub token to echo. One list,
-# shared with the consult/delegate_inference lane's agy client.
+# your environment" must find no UNITARES_*/GitHub token to echo, and no Google
+# API key may move the lane onto metered billing. One list, shared with the
+# consult/delegate_inference lane's agy client.
 AGY_ENV_ALLOWLIST = _AGY_ENV_ALLOWLIST
 
 
