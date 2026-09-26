@@ -1869,15 +1869,28 @@ def _attach_response_size(
         current = _mode_in_effect(friendly_name, arguments, payload)
         reduce_with = None
         if friendly_name == "search_shared_memory":
-            # Name only the levers still open: a lean caller keeps the
-            # include_details and open-one advice without the mode it is in.
-            reduce_with = (
-                "Use include_details=false; open one discovery with "
-                "knowledge(action='details', discovery_id='...')."
-                if current == "lean"
-                else "Use include_details=false and response_mode='lean'; open one "
-                "discovery with knowledge(action='details', discovery_id='...')."
+            # Name only levers that shrink this response. Outside full mode
+            # normalize_compact_search_details already forces
+            # include_details=false, so it is named only in full, where the
+            # caller can still have it on.
+            open_one = (
+                "open one discovery with knowledge(action='details', "
+                "discovery_id='...')"
             )
+            if current == "full":
+                details_on = _as_bool(
+                    (arguments or {}).get("include_details"), default=False
+                )
+                levers = (
+                    "include_details=false, response_mode='lean' or a lower limit"
+                    if details_on
+                    else "response_mode='lean' or a lower limit"
+                )
+                reduce_with = f"Use {levers}; {open_one}."
+            elif current == "compact":
+                reduce_with = f"Use response_mode='lean'; {open_one}."
+            else:
+                reduce_with = f"{open_one[0].upper()}{open_one[1:]}."
         elif friendly_name == "sync_state" and current == "full":
             reduce_with = (
                 "Use response_mode='compact' for routine check-ins or 'mirror' "

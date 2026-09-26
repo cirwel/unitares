@@ -36,7 +36,6 @@ defmodule Wave3aHandlers.Handlers.ListToolsTest do
   @list_tools_data %{
     "success" => true,
     "server_time" => "<MASKED_TIMESTAMP>",
-    "agent_signature" => %{"uuid" => nil},
     "tools" => [
       %{"name" => "start_session"},
       %{"name" => "list_tools"}

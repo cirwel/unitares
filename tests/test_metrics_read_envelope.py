@@ -333,10 +333,12 @@ _PAD = {"padding": "x" * 4_500}
         ("sync_state", {"response_mode": "standard"}, {"_mode": "standard"}, "standard", True),
         ("sync_state", {"response_mode": "full"}, {}, "full", True),
         ("sync_state", {"response_mode": "verbose"}, {}, "full", True),
-        # A lean search keeps the include_details and open-one levers.
+        # A lean search keeps the open-one route. include_details is forced
+        # false outside full mode, so it is a lever only in full.
         ("search_shared_memory", {}, {}, "lean", True),
         ("search_shared_memory", {"response_mode": "compact"}, {}, "compact", True),
         ("search_shared_memory", {"response_mode": "full"}, {}, "full", True),
+        ("search_shared_memory", {"response_mode": "full", "include_details": True}, {}, "full", True),
     ],
 )
 def test_reduce_with_never_names_the_mode_in_effect(
@@ -350,6 +352,10 @@ def test_reduce_with_never_names_the_mode_in_effect(
         assert not _names_mode(reduce_with, current), (current, reduce_with)
     if friendly_name == "search_shared_memory":
         assert "knowledge(action='details'" in reduce_with
+        # Named only where the caller can still have it on.
+        assert ("include_details=false" in reduce_with) is bool(
+            arguments.get("include_details")
+        ), reduce_with
 
 
 @pytest.mark.parametrize(
