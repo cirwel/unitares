@@ -58,9 +58,11 @@ jobs:
       - name: Check out unitares
         if: steps.gate.outputs.configured == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        # Default credentials kept: GITHUB_TOKEN is read-only here
+        # (permissions: contents: read), and the script's fetch of master
+        # then also works on a private fork.
         with:
           fetch-depth: 1
-          persist-credentials: false
 
       - name: Check out the plugin
         if: steps.gate.outputs.configured == 'true'

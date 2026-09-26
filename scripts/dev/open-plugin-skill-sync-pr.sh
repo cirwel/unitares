@@ -70,9 +70,15 @@ mkdir -p "$WT_ROOT" || fail "cannot create $WT_ROOT"
 # Explicit refspecs: a CI checkout is shallow and may lack remote-tracking refs.
 git -C "$UNITARES_REPO" fetch -q origin "+refs/heads/master:refs/remotes/origin/master" || fail "fetch unitares failed"
 git -C "$PLUGIN_REPO" fetch -q origin || fail "fetch plugin failed"
-BASE="$(git -C "$PLUGIN_REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
-BASE="${BASE#origin/}"
-BASE="${BASE:-master}"
+# The plugin's default branch, asked of the remote itself: a CI checkout has no
+# refs/remotes/origin/HEAD, so reading that alone would silently assume master.
+BASE="$(git -C "$PLUGIN_REPO" ls-remote --symref origin HEAD 2>/dev/null \
+  | sed -n 's#^ref: refs/heads/\([^[:space:]]*\)[[:space:]].*#\1#p' | head -1)"
+if [ -z "$BASE" ]; then
+  BASE="$(git -C "$PLUGIN_REPO" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)"
+  BASE="${BASE#origin/}"
+fi
+[ -n "$BASE" ] || fail "cannot tell the plugin's default branch"
 git -C "$PLUGIN_REPO" fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE" || fail "fetch plugin $BASE failed"
 SRC_SHA="$(git -C "$UNITARES_REPO" rev-parse --short=8 origin/master)" || fail "no unitares origin/master"
 
@@ -164,15 +170,6 @@ git -C "$DST_WT" commit -q -m "$TITLE" -m "Byte mirror of unitares/skills at $SR
 git -C "$DST_WT" push -q --force-with-lease="refs/heads/$BRANCH:$REMOTE_OID" origin "HEAD:refs/heads/$BRANCH" >/dev/null 2>&1 \
   || fail "push of $BRANCH refused or failed (moved since this run looked?)"
 
-# `.[].number`, not `.[0].number`: iterating yields nothing on an empty list,
-# so "no open PR" can never read as a PR called "null".
-OPEN="$(cd "$DST_WT" && "$GH" pr list --state open --head "$BRANCH" --json number -q '.[].number' 2>/dev/null | head -1)"
-if [ -n "$OPEN" ]; then
-  (cd "$DST_WT" && "$GH" pr edit "$OPEN" --title "$TITLE" >/dev/null 2>&1)
-  say "plugin mirror behind ($SUMMARY) — updated #$OPEN"
-  exit 0
-fi
-
 # printf, not a heredoc inside $( ): bash 3.2 misparses quotes in that form.
 BODY="$(printf '%s\n' \
   "Byte mirror of \`unitares/skills\` at \`$SRC_SHA\`, written by \`scripts/dev/sync-plugin-skills.sh\`." \
@@ -181,6 +178,20 @@ BODY="$(printf '%s\n' \
   "- Freshness: $FRESH" \
   "" \
   "Opened automatically by \`scripts/dev/open-plugin-skill-sync-pr.sh\` in unitares. Later runs replace this branch with the newest unitares master, so this stays the only sync PR. Nothing outside \`skills/\` changes. Merging is left to the maintainer.")"
+
+# `.[].number`, not `.[0].number`: iterating yields nothing on an empty list,
+# so "no open PR" can never read as a PR called "null".
+OPEN="$(cd "$DST_WT" && "$GH" pr list --state open --head "$BRANCH" --json number -q '.[].number' 2>/dev/null | head -1)"
+if [ -n "$OPEN" ]; then
+  # Title AND body: the body names the source commit and what changed, so a
+  # title-only update would leave the PR describing an older sync.
+  EDIT_ERR="$(cd "$DST_WT" && "$GH" pr edit "$OPEN" --title "$TITLE" --body "$BODY" 2>&1 >/dev/null)" \
+    || fail "pushed $BRANCH but could not update #$OPEN: $EDIT_ERR"
+  say "plugin mirror behind ($SUMMARY) — updated #$OPEN"
+  exit 0
+fi
+
+
 URL="$(cd "$DST_WT" && "$GH" pr create --base "$BASE" --head "$BRANCH" --title "$TITLE" --body "$BODY" 2>&1)" \
   || fail "gh pr create failed: $URL"
 say "plugin mirror behind ($SUMMARY) — opened $URL"

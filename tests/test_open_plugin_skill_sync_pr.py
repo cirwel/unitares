@@ -65,7 +65,7 @@ def _write_exec(path: Path, text: str) -> None:
 
 
 class Fixture:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, plugin_branch: str = "master"):
         self.root = root
         self.env = dict(GIT_ENV)
 
@@ -80,7 +80,7 @@ class Fixture:
         _git(root, "clone", "-q", str(self.u_origin), str(self.unitares))
 
         self.p_bare = root / "plugin-origin.git"
-        _git(root, "init", "-q", "--bare", "--initial-branch=master", str(self.p_bare))
+        _git(root, "init", "-q", "--bare", f"--initial-branch={plugin_branch}", str(self.p_bare))
         seed = root / "plugin-seed"
         _git(root, "clone", "-q", str(self.p_bare), str(seed))
         (seed / "skills" / "alpha").mkdir(parents=True)
@@ -88,10 +88,10 @@ class Fixture:
         (seed / "skills" / "SKILLS_MANIFEST.sha256").write_text("manifest\n")
         _git(seed, "add", "-A")
         _git(seed, "commit", "-qm", "seed")
-        _git(seed, "push", "-q", "origin", "master")
+        _git(seed, "push", "-q", "origin", f"HEAD:{plugin_branch}")
         self.plugin = root / "plugin"
         _git(root, "clone", "-q", str(self.p_bare), str(self.plugin))
-        _git(self.plugin, "remote", "set-head", "origin", "master")
+        _git(self.plugin, "remote", "set-head", "origin", plugin_branch)
 
         self.stub = root / "gh-stub"
         self.stub.mkdir()
@@ -103,6 +103,7 @@ case "$*" in
   "pr list"*"--head"*) cat "{self.stub}/open_pr" ;;
   "pr list"*"--search"*) bash "{self.stub}/on_search"; cat "{self.stub}/other_pr" ;;
   "pr create"*) echo "https://example.invalid/pull/7" ;;
+  "pr edit"*) if [ -n "${{EDIT_FAIL:-}}" ]; then echo "edit refused" >&2; exit 1; fi ;;
 esac
 """)
         self.wt = root / "wt"
@@ -193,6 +194,34 @@ def test_later_run_updates_the_open_pr_instead_of_opening_another(fx):
     assert "updated #7" in _out(proc)
     assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v3"
     assert len(fx.calls("pr create")) == 1
+    edits = fx.calls("pr edit")
+    assert len(edits) == 1 and edits[0].startswith("pr edit 7 ")
+    # The body names the new source commit, not the one the PR was opened for.
+    new_sha = _git(fx.u_origin, "rev-parse", "--short=8", "HEAD")
+    assert "--body" in edits[0] and new_sha in edits[0]
+
+
+def test_failed_pr_update_is_reported_not_claimed(fx):
+    fx.bump("alpha v2")
+    assert fx.run().returncode == 0
+    (fx.stub / "open_pr").write_text("7\n")
+    fx.bump("alpha v3")
+    proc = fx.run(EDIT_FAIL="1")
+    assert proc.returncode == 1, _out(proc)
+    assert "could not update #7" in _out(proc) and "edit refused" in _out(proc)
+    assert "updated #7" not in _out(proc)
+
+
+def test_default_branch_is_asked_of_the_remote(tmp_path):
+    # A plugin whose default branch is not master, with no origin/HEAD in the
+    # clone (as in a CI checkout): the PR must target the real default.
+    fx = Fixture(tmp_path, plugin_branch="main")
+    _git(fx.plugin, "remote", "set-head", "origin", "--delete")
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    creates = fx.calls("pr create")
+    assert len(creates) == 1 and "--base main" in creates[0]
 
 
 def test_hand_opened_sync_pr_makes_it_step_aside(fx):
