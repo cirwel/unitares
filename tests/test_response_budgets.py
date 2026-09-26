@@ -28,8 +28,8 @@ start_session budgets per mint class, measured on the real handler
   (the status plus a short detail: what it costs, that this identity cannot
   gain the tags, and the roster -> restart -> fresh-mint fix) and 70-81 B for
   the other statuses; a written bootstrap ack is
-  224 B. Named at position 1: 1,424 B against 1,500; named sibling_locus:
-  1,733 B against 1,850.
+  224 B. Named at position 1: 1,434 B against 1,500; named sibling_locus:
+  1,743 B against 1,850.
 """
 
 from __future__ import annotations
@@ -493,6 +493,59 @@ def test_a_root_node_with_a_lineage_spawn_reason_keeps_the_whole_record():
         "thread_context.episode_fork_kind=identity_lineage"
     )
     assert env["state_summary"]["episode_fork_kind"] == "identity_lineage"
+
+
+def _root_payload(**thread_overrides):
+    payload = _onboard_payload()
+    payload["thread_context"] = build_fork_context(
+        thread_id="t-f3a8bb1ebde032c8",
+        position=1,
+        parent_uuid=None,
+        spawn_reason="new_session",
+        all_nodes=[],
+        agent_uuid=payload["uuid"],
+        minted_fresh=True,
+    )
+    payload["thread_context"].update(thread_overrides)
+    return payload
+
+
+def test_a_plain_root_node_mint_is_routine():
+    env = build_experience_envelope("start_session", "onboard", _root_payload(), {})
+
+    assert env["response_shape"] == "routine"
+    assert "raw_governance" not in env
+
+
+@pytest.mark.parametrize(
+    "overrides, reason",
+    [
+        ({"predecessor": {"uuid": "earlier-uuid", "position": 0}}, "thread_context.predecessor"),
+        ({"is_fork": True}, "thread_context.is_fork"),
+    ],
+    ids=["predecessor", "is_fork"],
+)
+def test_a_root_node_that_names_a_predecessor_keeps_the_whole_record(overrides, reason):
+    """An inconsistent producer state (a root node pointing at an earlier
+    node, or flagged a fork) is shown whole, not trimmed into a root."""
+    payload = _root_payload(**overrides)
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
+    assert reason in env["response_shape_reason"]
+
+
+def test_a_mint_without_thread_context_keeps_the_whole_record():
+    """Onboard omits thread_context when it could not place the mint (thread
+    lookup raised, or no thread_id). Unknown position is not a root node."""
+    payload = _root_payload()
+    del payload["thread_context"]
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert env["raw_governance"] is payload
+    assert env["response_shape"] == "full"
+    assert "thread_context=missing" in env["response_shape_reason"]
 
 
 def test_start_session_abnormal_weak_binding_keeps_the_full_explanation():

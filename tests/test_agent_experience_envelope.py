@@ -100,6 +100,8 @@ async def test_legacy_alias_passes_through():
 
 @pytest.mark.asyncio
 async def test_experience_alias_gets_envelope():
+    from src.thread_identity import build_fork_context
+
     raw = _result({
         "success": True,
         "agent_uuid": "u-1",
@@ -111,6 +113,12 @@ async def test_experience_alias_gets_envelope():
             "caller_proven": False,
             "baseline": "fresh_identity",
         },
+        # A root node, as handle_onboard_v2 builds it for a first mint.
+        "thread_context": build_fork_context(
+            thread_id="t-root", position=1, parent_uuid=None,
+            spawn_reason="new_session", all_nodes=[], agent_uuid="u-1",
+            minted_fresh=True,
+        ),
     })
     out = await apply_experience_envelope(
         "onboard", {}, _ctx("start_session"), raw

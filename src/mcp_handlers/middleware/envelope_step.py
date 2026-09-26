@@ -165,7 +165,7 @@ _START_SESSION_BUDGET_BYTES = 1_200
 # the earlier node being read as this process's parent.
 _START_SESSION_SIBLING_BUDGET_BYTES = 1_550
 # Each mint notice lifted into a routine envelope (_ROUTINE_MINT_NOTICES) is
-# paid for on top of its class budget; the largest measured is 284 B (a
+# paid for on top of its class budget; the largest measured is 294 B (a
 # not_on_roster verdict), a written bootstrap ack 224 B.
 _START_SESSION_NOTICE_ALLOWANCE_BYTES = 300
 _ONBOARD_RAW_MODES = frozenset({"full", "verbose", "standard"})
@@ -1588,6 +1588,11 @@ def _routine_mint_blockers(
         blocker = _thread_context_blocker(thread_context, payload)
         if blocker:
             blockers.append(blocker)
+    else:
+        # Positive evidence: onboard omits thread_context when it could not
+        # place the mint (thread lookup raised, or no thread_id). Unknown
+        # thread position is not a root node, so the record is shown whole.
+        blockers.append("thread_context=missing")
     assurance = payload.get("identity_assurance")
     if not isinstance(assurance, dict):
         # Positive evidence: a mint whose assurance block is missing is shown
