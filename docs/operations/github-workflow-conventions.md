@@ -294,15 +294,24 @@ Codex, then Antigravity, then Claude, minus anything disabled above.
 It is deliberately **not** run inside the checkout. A PR can carry
 `.agents/` hooks, rules and project permission rules, and `agy` loads those
 from its working directory. That is the same class of hole that ruled out the
-Gemini CLI (#2423, reverted). So `agy` runs in an **empty temporary
-workspace** with `--mode plan --sandbox`, and `review.sh` inlines the diff plus
-the full post-change text of every changed file into the prompt. It reads
-those files itself and never executes them. The trade-off is that the
-reviewer cannot browse the rest of the repository. The whole prompt,
-including the instructions and the inlined files, is capped at about 120 KB,
-counted in bytes, because it is passed as one command-line argument. Files that
-do not fit are marked as omitted. A diff that does not fit on its own is
-refused rather than reviewed in part, and the next reviewer runs instead.
+Gemini CLI (#2423, reverted). So `agy` runs in a **temporary workspace**
+that holds only the review material: `diff.patch` and, under `files/`, the
+full post-change text of every changed file at its repository path. It reads
+them with its own file tool, which needs no permission grant inside its
+workspace, and never executes them. A changed file whose name `agy` would load
+as instructions (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, anything under
+`.agents/` or `.gemini/`) is written with a `.review-copy` suffix. It also gets
+a fresh temporary `HOME` (only the login keychain is linked in), so the
+operator's standing permission grants and MCP servers in `~/.gemini` never
+load, plus `--mode plan --sandbox --disable-slash-commands`. The trade-off is
+that the reviewer cannot browse the rest of the repository. There is no size
+limit: the material used to be inlined as one command-line argument, capped
+at about 120 KB, and PR #2470's 143 KB diff could not be reviewed at all. The
+default model is Gemini 3.1 Pro (High); `REVIEW_AGY_MODEL` overrides it
+(`default` leaves the choice to `agy`). It was chosen on two PRs, where it was
+the only model that found real defects, so treat it as a starting point. A
+shell command `agy` reaches for is denied and the conversation is resumed with
+a reminder that only file reads work.
 Content is read only from committed git objects: symlinks, submodules and paths
 outside the repository never reach the prompt. The dialectic reviewer has the
 same backend: set `UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the
