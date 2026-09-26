@@ -1,0 +1,402 @@
+"""scripts/dev/open-plugin-skill-sync-pr.sh keeps the plugin's skill mirror current.
+
+The plugin's ``skills/`` is a byte mirror of ``unitares/skills/``, but nothing
+ran the sync and the plugin's CI only checks the mirror against its own
+manifest, so on 2026-09-25/26 it fell behind twice unnoticed. This script is
+the one implementation the GitHub workflow and an operator's deploy wrapper
+share. These tests run it against real git fixtures: a unitares origin with a
+stand-in sync script, a bare plugin origin it pushes to, and a fake ``gh``.
+
+What they pin: in sync means no branch and no PR; behind means one commit on
+the one automation branch and exactly one PR; a later run updates that PR; a
+hand-opened sync PR makes it step aside; a branch that moved mid-run is not
+overwritten; and every run removes the worktrees it made and nothing else.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import stat
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = REPO_ROOT / "scripts" / "dev" / "open-plugin-skill-sync-pr.sh"
+BRANCH = "auto/plugin-skill-sync"
+
+pytestmark = pytest.mark.skipif(
+    shutil.which("rsync") is None or shutil.which("jq") is None, reason="needs rsync and jq"
+)
+
+# The stand-in mirrors skills/ the way the real sync script does. --checksum
+# matters as much here as there: both worktrees are created in the same second,
+# so size+mtime cannot see a change between two same-length file versions.
+STUB_SYNC = """#!/usr/bin/env bash
+if [ -n "${FAIL_SYNC:-}" ]; then
+  # Like the real refusals: the REASON first, then several lines of hint.
+  echo "refusal reason: would revert alpha" >&2
+  for i in 1 2 3 4 5 6 7 8; do echo "hint line $i" >&2; done
+  exit 3
+fi
+SRC="$(cd "$(dirname "$0")/../.." && pwd)/skills"
+mkdir -p "$UNITARES_PLUGIN_REPO/skills"
+rsync -a --checksum --delete --exclude /SKILLS_MANIFEST.sha256 "$SRC/" "$UNITARES_PLUGIN_REPO/skills/"
+# Like the real script: the manifest is rewritten from the mirrored tree, so a
+# content change always changes it too.
+(cd "$UNITARES_PLUGIN_REPO/skills" && find . -name SKILL.md | sort | xargs cat | cksum) \
+  >"$UNITARES_PLUGIN_REPO/skills/SKILLS_MANIFEST.sha256"
+[ -n "${RULE_MISMATCH:-}" ] && { echo "rule disagrees" >&2; exit 5; }
+exit 0
+"""
+
+
+# Commits in the fixtures and in the script under test need an identity and no
+# signing, on a CI runner as much as locally -- passed explicitly, never by
+# mutating this process's environment.
+GIT_ENV = {
+    **os.environ,
+    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+    "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "commit.gpgsign",
+    "GIT_CONFIG_VALUE_0": "false",
+}
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True, env=GIT_ENV
+    ).stdout.strip()
+
+
+def _write_exec(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+class Fixture:
+    def __init__(self, root: Path, plugin_branch: str = "master", shallow: bool = False):
+        self.root = root
+        self.env = dict(GIT_ENV)
+
+        self.u_origin = root / "unitares-origin"
+        (self.u_origin / "skills" / "alpha").mkdir(parents=True)
+        _git(root, "init", "-q", "--initial-branch=master", str(self.u_origin))
+        (self.u_origin / "skills" / "alpha" / "SKILL.md").write_text("alpha v1\n")
+        _write_exec(self.u_origin / "scripts" / "dev" / "sync-plugin-skills.sh", STUB_SYNC)
+        _git(self.u_origin, "add", "-A")
+        _git(self.u_origin, "commit", "-qm", "alpha v1")
+        self.unitares = root / "unitares"
+        depth = ["--depth", "1"] if shallow else []
+        _git(root, "clone", "-q", *depth, f"file://{self.u_origin}", str(self.unitares))
+
+        self.p_bare = root / "plugin-origin.git"
+        _git(root, "init", "-q", "--bare", f"--initial-branch={plugin_branch}", str(self.p_bare))
+        seed = root / "plugin-seed"
+        _git(root, "clone", "-q", str(self.p_bare), str(seed))
+        (seed / "skills" / "alpha").mkdir(parents=True)
+        (seed / "skills" / "alpha" / "SKILL.md").write_text("alpha v1\n")
+        (seed / "skills" / "SKILLS_MANIFEST.sha256").write_text(
+            subprocess.run(["cksum"], input="alpha v1\n", capture_output=True, text=True).stdout
+        )
+        _git(seed, "add", "-A")
+        _git(seed, "commit", "-qm", "seed")
+        _git(seed, "push", "-q", "origin", f"HEAD:{plugin_branch}")
+        self.plugin = root / "plugin"
+        _git(root, "clone", "-q", *depth, f"file://{self.p_bare}", str(self.plugin))
+        _git(self.plugin, "remote", "set-head", "origin", plugin_branch)
+
+        self.stub = root / "gh-stub"
+        self.stub.mkdir()
+        # open_pr / other_pr hold the JSON `gh pr list --json` would return;
+        # the stub applies the caller's own -q filter to it with jq.
+        for name, text in (("open_pr", "[]"), ("other_pr", "[]"), ("calls", ""), ("on_search", "")):
+            (self.stub / name).write_text(text)
+        _write_exec(self.stub / "gh", f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >>"{self.stub}/calls"
+query=""; prev=""
+for a in "$@"; do [ "$prev" = "-q" ] && query="$a"; prev="$a"; done
+case "$*" in
+  "pr list"*"--head"*) jq -r "$query" "{self.stub}/open_pr" ;;
+  "pr list"*"--search"*) bash "{self.stub}/on_search"; jq -r "$query" "{self.stub}/other_pr" ;;
+  "pr create"*) echo "https://example.invalid/pull/7" ;;
+  "pr edit"*) if [ -n "${{EDIT_FAIL:-}}" ]; then echo "edit refused" >&2; exit 1; fi ;;
+  "pr close"*) if [ -n "${{CLOSE_FAIL:-}}" ]; then echo "close refused" >&2; exit 1; fi ;;
+esac
+""")
+        self.wt = root / "wt"
+
+    def run(self, *args: str, **extra: str) -> subprocess.CompletedProcess:
+        env = {
+            **self.env,
+            "UNITARES_REPO_DIR": str(self.unitares),
+            "UNITARES_PLUGIN_REPO": str(self.plugin),
+            "SKILL_SYNC_WT_ROOT": str(self.wt),
+            "SKILL_SYNC_GH": str(self.stub / "gh"),
+            **extra,
+        }
+        return subprocess.run(
+            ["bash", str(SCRIPT), *args], capture_output=True, text=True, env=env
+        )
+
+    def bump(self, text: str) -> None:
+        (self.u_origin / "skills" / "alpha" / "SKILL.md").write_text(text + "\n")
+        _git(self.u_origin, "commit", "-qam", text)
+
+    def remote_branch(self) -> str:
+        r = subprocess.run(
+            ["git", "-C", str(self.p_bare), "rev-parse", "-q", "--verify", f"refs/heads/{BRANCH}"],
+            capture_output=True, text=True, env=GIT_ENV,
+        )
+        return r.stdout.strip()
+
+    def branch_file(self, path: str) -> str:
+        return _git(self.p_bare, "show", f"{BRANCH}:{path}")
+
+    def calls(self, prefix: str) -> list[str]:
+        return [c for c in (self.stub / "calls").read_text().splitlines() if c.startswith(prefix)]
+
+    def leftovers(self) -> list[str]:
+        made = sorted(p.name for p in self.wt.iterdir()) if self.wt.exists() else []
+        trees = _git(self.unitares, "worktree", "list").splitlines()[1:]
+        trees += _git(self.plugin, "worktree", "list").splitlines()[1:]
+        return made + trees
+
+
+@pytest.fixture
+def fx(tmp_path: Path) -> Fixture:
+    return Fixture(tmp_path)
+
+
+def _out(proc: subprocess.CompletedProcess) -> str:
+    return proc.stdout + proc.stderr
+
+
+def test_in_sync_reports_and_creates_nothing(fx):
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert "in sync" in _out(proc)
+    assert fx.remote_branch() == ""
+    assert fx.leftovers() == []
+
+
+def test_dry_run_names_the_drift_and_pushes_nothing(fx):
+    fx.bump("alpha v2")
+    proc = fx.run("--dry-run")
+    assert proc.returncode == 0, _out(proc)
+    assert "BEHIND" in _out(proc) and "alpha" in _out(proc)
+    # The manifest changed too (the stand-in rewrites it), but it is derived
+    # data and must not be counted.
+    assert "1 file(s)" in _out(proc), "the mirror-only manifest must not be counted"
+    assert fx.remote_branch() == ""
+    assert fx.calls("pr create") == []
+    assert fx.leftovers() == []
+
+
+def test_behind_commits_one_branch_and_opens_one_pr(fx):
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v2"
+    manifest = fx.branch_file("skills/SKILLS_MANIFEST.sha256")
+    assert manifest and manifest != subprocess.run(
+        ["cksum"], input="alpha v1\n", capture_output=True, text=True
+    ).stdout.strip(), "the regenerated manifest must be committed with the mirror"
+    creates = fx.calls("pr create")
+    assert len(creates) == 1 and "--base master" in creates[0]
+    assert fx.leftovers() == []
+
+
+def test_later_run_updates_the_open_pr_instead_of_opening_another(fx):
+    fx.bump("alpha v2")
+    assert fx.run().returncode == 0
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    fx.bump("alpha v3")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert "updated #7" in _out(proc)
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v3"
+    assert len(fx.calls("pr create")) == 1
+    edits = fx.calls("pr edit")
+    assert len(edits) == 1 and edits[0].startswith("pr edit 7 ")
+    # The body names the new source commit, not the one the PR was opened for.
+    new_sha = _git(fx.u_origin, "rev-parse", "--short=8", "HEAD")
+    assert "--body" in edits[0] and new_sha in edits[0]
+
+
+def test_failed_pr_update_is_reported_not_claimed(fx):
+    fx.bump("alpha v2")
+    assert fx.run().returncode == 0
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    fx.bump("alpha v3")
+    proc = fx.run(EDIT_FAIL="1")
+    assert proc.returncode == 1, _out(proc)
+    assert "could not update #7" in _out(proc) and "edit refused" in _out(proc)
+    assert "updated #7" not in _out(proc)
+
+
+def test_default_branch_is_asked_of_the_remote(tmp_path):
+    # A plugin whose default branch is not master, with no origin/HEAD in the
+    # clone (as in a CI checkout): the PR must target the real default.
+    fx = Fixture(tmp_path, plugin_branch="main")
+    _git(fx.plugin, "remote", "set-head", "origin", "--delete")
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    creates = fx.calls("pr create")
+    assert len(creates) == 1 and "--base main" in creates[0]
+
+
+def test_shallow_ci_style_checkouts_work(tmp_path):
+    # Both repos cloned --depth 1, as the workflow's actions/checkout does:
+    # worktree creation, the sync, the commit and the push must all work.
+    fx = Fixture(tmp_path, shallow=True)
+    assert _git(fx.plugin, "rev-parse", "--is-shallow-repository") == "true"
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v2"
+    assert fx.leftovers() == []
+
+
+def test_attestation_rule_mismatch_is_a_warning_not_a_failure(fx):
+    # sync-plugin-skills.sh exits 5 after writing the mirror when only the
+    # plugin's rule port disagrees; the sync PR must still be opened, with the
+    # note carried into its body.
+    fx.bump("alpha v2")
+    proc = fx.run(RULE_MISMATCH="1")
+    assert proc.returncode == 0, _out(proc)
+    assert "attestation-rule port disagrees" in _out(proc)
+    creates = fx.calls("pr create")
+    assert len(creates) == 1
+    # The body spans several lines of the call log; search all of it.
+    assert "- Attestation rule: the plugin's attestation-rule port disagrees" in (fx.stub / "calls").read_text()
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v2"
+
+
+def test_hand_opened_sync_pr_makes_it_step_aside(fx):
+    (fx.stub / "other_pr").write_text(
+        '[{"number": 151, "headRefName": "claude/hand-sync"}]'
+    )
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 2, _out(proc)
+    assert "#151" in _out(proc)
+    assert fx.remote_branch() == ""
+    assert fx.leftovers() == []
+
+
+def test_own_automation_pr_in_the_title_search_is_not_another_sync(fx):
+    # The title search also finds this automation's own PR; the filter must
+    # exclude it, or every run after the first would step aside from itself.
+    (fx.stub / "other_pr").write_text(
+        f'[{{"number": 9, "headRefName": "{BRANCH}"}}]'
+    )
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert len(fx.calls("pr create")) == 1
+
+
+def test_branch_checked_out_elsewhere_does_not_block(fx):
+    # An operator may have the automation branch checked out in the plugin
+    # checkout itself; the run commits detached and pushes by refspec.
+    fx.bump("alpha v2")
+    assert fx.run().returncode == 0
+    _git(fx.plugin, "fetch", "-q", "origin", f"{BRANCH}:{BRANCH}")
+    _git(fx.plugin, "checkout", "-q", BRANCH)
+    fx.bump("alpha v3")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v3"
+
+
+def test_branch_moved_mid_run_is_not_overwritten(fx):
+    # Another run pushes the automation branch after this one looked at it and
+    # before it pushes: the compare-and-swap must refuse, not replace.
+    fx.bump("alpha v2")
+    racer = fx.root / "racer"
+    _git(fx.root, "clone", "-q", str(fx.p_bare), str(racer))
+    (racer / "RACE").write_text("x\n")
+    _git(racer, "add", "RACE")
+    _git(racer, "commit", "-qm", "race")
+    (fx.stub / "on_search").write_text(
+        f'git -C "{racer}" push -q origin "HEAD:refs/heads/{BRANCH}" >/dev/null 2>&1\n'
+    )
+    proc = fx.run()
+    raced = _git(racer, "rev-parse", "HEAD")
+    assert proc.returncode == 1, _out(proc)
+    assert "refused" in _out(proc)
+    assert fx.remote_branch() == raced, "the racer's push must survive"
+    assert fx.calls("pr create") == []
+    assert fx.leftovers() == []
+
+
+def test_failing_sync_exits_1_and_cleans_up(fx):
+    fx.bump("alpha v2")
+    proc = fx.run(FAIL_SYNC="1")
+    assert proc.returncode == 1, _out(proc)
+    assert "failed" in _out(proc)
+    # The reason precedes the hint; a five-line tail hid it on the first live run.
+    assert "refusal reason: would revert alpha" in _out(proc)
+    assert fx.leftovers() == []
+
+
+def test_missing_checkout_is_a_clean_skip(fx):
+    proc = fx.run(UNITARES_REPO_DIR=str(fx.root / "nope"))
+    assert proc.returncode == 1, _out(proc)
+    assert "no git checkout" in _out(proc)
+    assert fx.leftovers() == []
+
+
+def test_in_sync_closes_its_own_redundant_pr(fx):
+    # The mirror already matches (a hand-made sync merged first, say) but the
+    # automation's PR is still open: close it, delete its branch, say why.
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert "closed the redundant #7" in _out(proc)
+    calls = (fx.stub / "calls").read_text()
+    closes = fx.calls("pr close")
+    assert len(closes) == 1 and closes[0].startswith("pr close 7 ") and "--delete-branch" in closes[0]
+    src = _git(fx.unitares, "rev-parse", "--short=8", "origin/master")
+    assert f"already matches unitares master ({src})" in calls
+    assert fx.leftovers() == []
+
+
+def test_in_sync_dry_run_only_reports_the_close(fx):
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    proc = fx.run("--dry-run")
+    assert proc.returncode == 0, _out(proc)
+    assert "would close the redundant #7" in _out(proc)
+    assert fx.calls("pr close") == []
+
+
+def test_in_sync_without_an_open_pr_closes_nothing(fx):
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert fx.calls("pr close") == []
+
+
+def test_failed_close_is_reported_not_claimed(fx):
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    proc = fx.run(CLOSE_FAIL="1")
+    assert proc.returncode == 1, _out(proc)
+    assert "could not close the redundant #7" in _out(proc) and "close refused" in _out(proc)
+    assert "closed the redundant" not in _out(proc)
+
+
+def test_workflow_checks_out_unitares_with_full_history():
+    # sync-plugin-skills.sh's direction guard reads canonical's git history on
+    # equal verification dates; a depth-1 checkout makes it refuse (exit 4).
+    import yaml
+
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "plugin-skill-sync.yml").read_text())
+    steps = wf["jobs"]["sync"]["steps"]
+    unitares = [s for s in steps if s.get("uses", "").startswith("actions/checkout@")
+                and "repository" not in s.get("with", {})]
+    assert len(unitares) == 1
+    assert unitares[0]["with"]["fetch-depth"] == 0
