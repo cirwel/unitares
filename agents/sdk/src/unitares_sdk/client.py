@@ -14,6 +14,7 @@ from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from unitares_sdk._checkin_fields import resolve_checkin_fields
+from unitares_sdk._metrics_fields import resolve_metrics_fields
 from unitares_sdk._mcp_httpx import mcp_httpx
 from unitares_sdk.errors import (
     GovernanceConnectionError,
@@ -765,9 +766,14 @@ class GovernanceClient:
         tool_stability.py). A current server accepts the raw name on ``/mcp/``
         (#2081), but a lite-mode server between #1292 and #2081 answers it with
         ``Unknown tool`` on :8767 ``/mcp/``; the alias works on both.
+
+        The alias answers with the experience envelope, which carries the
+        reading in ``state_summary`` / ``action_summary`` rather than under a
+        ``metrics`` key; ``_metrics_fields.resolve_metrics_fields`` reads it
+        from there, or from the canonical payload when one is present.
         """
         raw = await self.call_tool("check_working_state", kwargs)
-        return MetricsResult.model_validate(raw)
+        return MetricsResult.model_validate({**raw, **resolve_metrics_fields(raw)})
 
     # --- Model inference ---
 
