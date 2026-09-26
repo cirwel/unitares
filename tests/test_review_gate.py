@@ -1631,7 +1631,12 @@ def _fake_agy(monkeypatch, answers):
     def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
         calls.append({"cmd": cmd, "cwd": cwd, "env": kw.get("env"),
                       "cwd_exists": Path(cwd).exists() if cwd else None})
-        stdout.write(answers.pop(0))
+        answer = answers.pop(0)
+        out, err = answer if isinstance(answer, tuple) else (answer, "")
+        stdout.write(out)
+        if err:
+            stderr.write(err)
+            stderr.flush()
         return Proc()
 
     monkeypatch.setattr(rg.subprocess, "Popen", popen)
@@ -1660,11 +1665,11 @@ def test_a_truncated_agy_answer_is_resumed_not_accepted(monkeypatch, tmp_path):
 
 
 def test_resuming_stops_at_the_limit_and_the_tail_is_never_an_answer(monkeypatch, tmp_path):
-    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMIT + 1))
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMITS["truncated"] + 1))
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
-    assert len(calls) == rg.AGY_RESUME_LIMIT + 1
+    assert len(calls) == rg.AGY_RESUME_LIMITS["truncated"] + 1
     assert note != "exit 0"  # an unrecovered truncation is a failure
-    assert "output limit not recovered after 3 resume(s)" in note
+    assert f"output limit not recovered after {rg.AGY_RESUME_LIMITS['truncated']} resume(s)" in note
 
 
 def test_other_agy_errors_are_not_resumed(monkeypatch, tmp_path):
@@ -1694,7 +1699,7 @@ def test_a_resumed_agy_review_is_recorded_end_to_end(tmp_path, monkeypatch, caps
     rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "antigravity")
     assert rc == 1, capsys.readouterr()
     assert records[0][1].verdict == "FINDINGS" and records[0][1].reviewer == "antigravity"
-    assert "resumed 1x" in capsys.readouterr().err
+    assert "truncated 1x" in capsys.readouterr().err
 
 
 def _clocked_agy(monkeypatch, answers, durations):
@@ -1749,7 +1754,7 @@ def test_an_unrecovered_truncation_is_recorded_as_failed_not_clean(tmp_path, mon
     monkeypatch.setattr(rg, "git", lambda *args: "abcd")
     monkeypatch.setattr(rg, "antigravity_prompt", lambda *args, **kw: "PROMPT")
     monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
-    _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMIT + 1))
+    _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMITS["truncated"] + 1))
     records = []
     monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
     rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "antigravity")
@@ -1799,3 +1804,52 @@ def test_no_resume_starts_with_too_little_budget_left(monkeypatch, tmp_path):
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert len(waits) == 1
     assert note == "output limit not recovered after 0 resume(s)"
+
+
+# --- agy command-denied stall (10 of 15 runs on 2026-09-25) -------------------
+
+_AGY_DENIED = (
+    '{"conversation_id":"conv-2","status":"SUCCESS","response":""}\n',
+    'jetski: no output produced — a tool required the "command" permission that '
+    'headless mode cannot prompt for, so it was auto-denied.\n',
+)
+
+
+def test_a_denied_command_stall_is_resumed_to_an_answer(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED, _AGY_COMPLETE])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note == "exit 0" and rg.parse_verdict(text) == ("FINDINGS", 1)
+    second = calls[1]["cmd"]
+    assert second[second.index("--conversation") + 1] == "conv-2"
+    assert second[2] == rg.AGY_RESUME_PROMPTS["denied"]
+
+
+def test_a_denial_that_persists_is_a_failure_after_its_limit(monkeypatch, tmp_path):
+    n = rg.AGY_RESUME_LIMITS["denied"]
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED] * (n + 1))
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == n + 1
+    assert note == f"no answer after a denied command after {n} resume(s)"
+
+
+def test_an_empty_answer_without_the_denial_mark_is_not_resumed(monkeypatch, tmp_path):
+    empty = '{"conversation_id":"c","status":"SUCCESS","response":""}\n'
+    calls = _fake_agy(monkeypatch, [empty])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 1
+
+
+def test_denied_then_truncated_uses_each_kinds_own_limit(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED, _AGY_TRUNCATED, _AGY_COMPLETE])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note == "exit 0" and len(calls) == 3
+    assert calls[1]["cmd"][2] == rg.AGY_RESUME_PROMPTS["denied"]
+    assert calls[2]["cmd"][2] == rg.AGY_RESUME_PROMPTS["truncated"]
+
+
+def test_a_stale_denial_in_the_log_does_not_trigger_another_resume(monkeypatch, tmp_path):
+    """The log accumulates; only stderr after the latest resume counts."""
+    empty_no_mark = '{"conversation_id":"conv-2","status":"SUCCESS","response":""}\n'
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED, empty_no_mark])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 2

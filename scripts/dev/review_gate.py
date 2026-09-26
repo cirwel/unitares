@@ -876,42 +876,62 @@ def _antigravity_text(stdout: str) -> str:
     return stdout
 
 
-#: How many times a truncated agy answer is resumed (agy reports its own
-#: retry allowance in the error; this bounds ours).
-AGY_RESUME_LIMIT = 3
-AGY_RESUME_PROMPT = (
-    "Your previous answer was cut off by the output limit before it was delivered "
-    "in full. Send your complete final review again from the beginning: every "
-    "finding, then the VERDICT line. Do not investigate further; write it out."
-)
-
-
+#: agy stalls in two ways without answering; each is resumed in the same
+#: conversation (same workspace, env and flags) with a prompt for that case.
+#: Measured on 15 review runs (2026-09-25): 10 ended SUCCESS with an EMPTY
+#: answer because a shell command was auto-denied in headless mode, and a
+#: live resume then answered; 3 hit the output-token limit, and resuming one
+#: of them 3x hit it again each time (agy re-reasons), hence one try only.
+AGY_RESUME_LIMITS = {"denied": 2, "truncated": 1}
+AGY_RESUME_PROMPTS = {
+    "denied": (
+        "Your command was denied: this review session has no tools and cannot run "
+        "commands. Do not try any tool again. Write your complete review now from the "
+        "diff and files already in this conversation: every finding, then the VERDICT line."
+    ),
+    "truncated": (
+        "Your previous answer was cut off by the output limit before it was delivered "
+        "in full. Send your complete final review again from the beginning: every "
+        "finding, then the VERDICT line. Do not investigate further; write it out."
+    ),
+}
 #: A resume needs at least this much budget left to be worth starting.
 AGY_RESUME_MIN_SECONDS = 5.0
+_AGY_DENIED_MARK = 'required the "command" permission'
 
 
-def _agy_truncation(stdout: str) -> tuple[bool, str | None]:
-    """(truncated, conversation id) for an agy JSON result.
+def _agy_stall(stdout: str, stderr: str) -> tuple[str | None, str | None]:
+    """(kind, conversation id) when agy stopped without a usable answer.
 
-    A run that stopped at its output-token limit ends with status ERROR and a
-    ``response`` that is only the tail of the answer (its start is lost), so
-    it is never accepted as the review. With a conversation id it can be
-    resumed for the whole answer, at the same effort; without one it is a
-    failure."""
+    "truncated": status ERROR at the output-token limit; the response is not
+    trusted as the review. "denied": status SUCCESS with an empty response
+    after headless mode auto-denied a command. (None, None) otherwise; a
+    missing conversation id means the stall cannot be resumed."""
     try:
         data = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else {}
     except (ValueError, IndexError):
-        return False, None
-    if not isinstance(data, dict) or data.get("status") == "SUCCESS":
-        return False, None
-    if "output token limit" not in str(data.get("error") or "").lower():
-        return False, None
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
     cid = data.get("conversation_id")
-    return True, (cid if isinstance(cid, str) and cid else None)
+    cid = cid if isinstance(cid, str) and cid else None
+    if data.get("status") != "SUCCESS":
+        if "output token limit" in str(data.get("error") or "").lower():
+            return "truncated", cid
+        return None, None
+    if not str(data.get("response") or "").strip() and _AGY_DENIED_MARK in stderr:
+        return "denied", cid
+    return None, None
+
+
+def _agy_truncation(stdout: str) -> tuple[bool, str | None]:
+    """(truncated, conversation id); see _agy_stall."""
+    kind, cid = _agy_stall(stdout, "")
+    return kind == "truncated", cid if kind == "truncated" else None
 
 
 def _agy_output_limited(stdout: str) -> str | None:
-    """The conversation id to resume, or None (see _agy_truncation)."""
+    """The conversation id to resume after a truncation, or None."""
     return _agy_truncation(stdout)[1]
 
 
@@ -971,37 +991,45 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
             if out is not fh:
                 out.close()
 
-    resumed = 0
+    resumes: dict[str, int] = {}
+    stall: str | None = None
     try:
         with open(log, "w") as fh:
             # The first launch gets exactly the budget, as before resumes existed.
             rc, failure = launch(cmd, fh, budget_s)
-            while (
-                failure is None and isolated and resumed < AGY_RESUME_LIMIT
-                and deadline - time.monotonic() >= AGY_RESUME_MIN_SECONDS
-            ):
-                cid = _agy_output_limited(last.read_text(errors="replace") if last.exists() else "")
-                if cid is None:
+            while failure is None and isolated:
+                fh.flush()
+                # agy writes stderr straight to the log's fd, so scope the
+                # check to what followed the latest resume marker.
+                stderr_now = log.read_text(errors="replace").rsplit("[review_gate] agy", 1)[-1]
+                stall, cid = _agy_stall(
+                    last.read_text(errors="replace") if last.exists() else "", stderr_now)
+                if (
+                    stall is None or cid is None
+                    or resumes.get(stall, 0) >= AGY_RESUME_LIMITS[stall]
+                    or deadline - time.monotonic() < AGY_RESUME_MIN_SECONDS
+                ):
                     break
-                resumed += 1
-                fh.write(f"\n[review_gate] agy hit its output limit; resuming {cid} "
-                         f"({resumed}/{AGY_RESUME_LIMIT})\n")
+                resumes[stall] = resumes.get(stall, 0) + 1
+                fh.write(f"\n[review_gate] agy {stall}; resuming {cid} "
+                         f"({resumes[stall]}/{AGY_RESUME_LIMITS[stall]})\n")
                 fh.flush()
                 # Same flags as the first launch (cmd[3:]), so an isolation
                 # change there can never miss the resumed run.
                 rc, failure = launch(
-                    ["agy", "-p", AGY_RESUME_PROMPT, "--conversation", cid, *cmd[3:]], fh,
-                    deadline - time.monotonic())
+                    ["agy", "-p", AGY_RESUME_PROMPTS[stall], "--conversation", cid, *cmd[3:]],
+                    fh, deadline - time.monotonic())
     finally:
         if workspace:
             workspace.cleanup()
-    if failure is None and isolated:
-        final = last.read_text(errors="replace") if last.exists() else ""
-        if _agy_truncation(final)[0]:
-            # Still truncated after the last resume, too little budget left to
-            # resume, or no conversation to resume: a failure, never "exit 0".
-            failure = (f"output limit not recovered after {resumed} resume(s)"
-                       + ("" if resumed < AGY_RESUME_LIMIT else f" (limit {AGY_RESUME_LIMIT})"))
+    resumed = sum(resumes.values())
+    if failure is None and isolated and stall is not None:
+        # Still stalled after its last resume, too little budget left, or no
+        # conversation to resume: a failure, never "exit 0".
+        failure = {
+            "truncated": "output limit not recovered",
+            "denied": "no answer after a denied command",
+        }[stall] + f" after {resumes.get(stall, 0)} resume(s)"
     if failure is not None:
         if failure.startswith("could not start"):
             note, _, detail = failure.partition("|")
@@ -1015,7 +1043,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
     if resumed:
         # Reported beside the note, never in it: callers accept a review only
         # when the note is exactly "exit 0".
-        print(f"[review] {reviewer} resumed {resumed}x after its output limit", file=sys.stderr)
+        detail = ", ".join(f"{k} {n}x" for k, n in sorted(resumes.items()))
+        print(f"[review] {reviewer} resumed after a stall ({detail})", file=sys.stderr)
     return text, ("exit 0" if rc == 0 else f"exit {rc}")
 
 
