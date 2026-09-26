@@ -591,3 +591,28 @@ def test_the_config_repr_never_shows_the_verifier():
 
     v = static_pkce_verifier(SECRET)
     assert v not in repr(McpAuthConfig(static_client_id=CID, static_pkce_verifier=v))
+
+
+def test_a_foreign_form_client_with_the_static_basic_id_gets_no_allowance():
+    """The SDK authenticates the form client_id; a DCR client adding
+    Basic <static id> must not get the static client's scope narrowing."""
+    client = _app(dcr=True)
+    reg = client.post("/register", json={"redirect_uris": ["https://x.example/cb"]}).json()
+    verifier = "e" * 64
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    resp = client.get("/authorize", params={
+        "response_type": "code", "client_id": reg["client_id"],
+        "redirect_uri": "https://x.example/cb", "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }, follow_redirects=False)
+    code = parse_qs(urlparse(resp.headers["location"]).query)["code"][0]
+    tokens = client.post("/token", data={
+        "grant_type": "authorization_code", "code": code, "redirect_uri": "https://x.example/cb",
+        "code_verifier": verifier, "client_id": reg["client_id"], "client_secret": reg["client_secret"],
+    }).json()
+    basic = "Basic " + base64.b64encode(f"{CID}:x".encode()).decode()
+    resp = client.post("/token", data={
+        "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"], "scope": "openid",
+        "client_id": reg["client_id"], "client_secret": reg["client_secret"],
+    }, headers={"Authorization": basic})
+    assert resp.status_code == 400 and resp.json()["error"] == "invalid_scope"

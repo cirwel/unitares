@@ -146,9 +146,10 @@ tool runs:
      line (client, PKCE and scope facts, status, OAuth error), which is where
      to look when a connector fails to link: an access log records only the
      request line and status, not why a sign-in failed. The `[OAUTH]` line
-     never carries a secret, code, token, URL userinfo or URL query (the
-     access log's request line for `GET /authorize` does include its query,
-     which holds no secret). Other methods (CORS preflight, HEAD) are not
+     never carries a secret, code, token, URL userinfo or URL query. The
+     access log, where enabled, records each request line verbatim, including
+     whatever a caller puts in the `GET /authorize` query; it is not redacted.
+     Other methods (CORS preflight, HEAD) are not
      logged, and a body over 64 KiB is logged as unparsed. Lines are capped
      by two budgets of 60 a minute: one for lines naming the static client,
      so a flood under other ids cannot hide the connector's own failures,

@@ -617,9 +617,11 @@ class StaticClientBasicAuthShim:
             await self.app(scope, receive, send)
             return
 
-        # A bounded peek: at most _MAX_TOKEN_BODY is held, whoever the caller
-        # (the client_id is public). An oversize body, a mid-body disconnect or
-        # any other client's request goes on to the SDK as the untouched stream.
+        # A bounded peek, whoever the caller (the client_id is public): reading
+        # stops at the first message that takes the body past _MAX_TOKEN_BODY
+        # (so at most that plus one server-delivered message is held). An
+        # oversize body, a mid-body disconnect or any other client's request
+        # goes on to the SDK as the untouched stream.
         _seen, body, complete, passthrough = await _peek_body(receive, _MAX_TOKEN_BODY)
         if not complete:
             await self.app(scope, passthrough, send)
@@ -627,7 +629,13 @@ class StaticClientBasicAuthShim:
 
         fields = parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
         values = dict(fields)
-        client = creds[0] if creds is not None else values.get("client_id")
+        # The SDK authenticates the form client_id when present; decide on
+        # that, and leave a request whose Basic and form ids disagree alone.
+        form_id = values.get("client_id")
+        if creds is not None and form_id and form_id != creds[0]:
+            await self.app(scope, passthrough, send)
+            return
+        client = form_id or (creds[0] if creds is not None else None)
         if client != self._client_id:
             await self.app(scope, passthrough, send)
             return
@@ -757,7 +765,9 @@ def _attempt_facts(path: str, values: dict, basic) -> dict:
 
 
 async def _peek_body(receive, limit: int):
-    """Buffer up to ``limit`` bytes of a request body without consuming it.
+    """Read a request body's prefix without consuming it: stop at the first
+    message that takes it past ``limit`` (so at most ``limit`` plus one
+    server-delivered message is held; the server holds that message anyway).
 
     Returns (messages seen, body prefix, whether the whole body was read, a
     receive callable that replays the seen messages and then continues the
