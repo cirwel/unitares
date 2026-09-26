@@ -984,3 +984,152 @@ def test_unavailable_fallback_skips_a_host_the_operator_switched_off(monkeypatch
     assert co._thorough_host_for_caller() == "antigravity:host-adapter"
     monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "codex,antigravity")
     assert co._thorough_host_for_caller() == "codex:host-adapter"
+
+
+# ---------------------------------------------------------------------------
+# Durable consultation record: the envelope is kept, the text never is.
+# ---------------------------------------------------------------------------
+
+_BRIEF_SENTINEL = "BRIEF-SENTINEL-7f3a private operator context"
+_ADVICE_SENTINEL = "ADVICE-SENTINEL-91c2 model answer"
+_WARNING_SENTINEL = "WARNING-SENTINEL-e04d echoed BRIEF-SENTINEL-7f3a"
+
+
+@pytest.fixture
+def audit_sinks(monkeypatch):
+    """Run the real AuditLogger write path, capturing what reaches Postgres."""
+    import src.audit_db as audit_db
+    import src.audit_log as audit_log
+
+    pg_entries = []
+
+    async def _capture(entry, raw_hash=None):
+        pg_entries.append(entry)
+        return True
+
+    monkeypatch.setattr(audit_db, "append_audit_event_async", _capture)
+
+    async def _drain():
+        import asyncio
+
+        pending = list(audit_log._inflight_pg_audit_tasks)
+        if pending:
+            await asyncio.gather(*pending)
+        lines = audit_log.audit_logger.log_file.read_text().splitlines()
+        jsonl = [
+            json.loads(line)
+            for line in lines
+            if json.loads(line)["event_type"] == "consultation"
+        ]
+        pg = [e for e in pg_entries if e["event_type"] == "consultation"]
+        return jsonl, pg
+
+    audit_log.audit_logger.log_file.parent.mkdir(parents=True, exist_ok=True)
+    audit_log.audit_logger.log_file.write_text("")
+    return _drain
+
+
+@pytest.mark.asyncio
+async def test_consultation_record_keeps_envelope_never_text(monkeypatch, audit_sinks):
+    from src.mcp_handlers.support.inference_registry import sha256_text
+
+    outcome = _completed(response=_ADVICE_SENTINEL)
+    outcome.inference["warnings"] = [_WARNING_SENTINEL]
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
+
+    parsed = _payload(await co.handle_consult({"brief": _BRIEF_SENTINEL}))
+    assert parsed["success"] is True
+
+    jsonl, pg = await audit_sinks()
+    assert len(jsonl) == 1 and len(pg) == 1
+    for entry in (jsonl[0], pg[0]):
+        serialized = json.dumps(entry)
+        assert "BRIEF-SENTINEL" not in serialized
+        assert "ADVICE-SENTINEL" not in serialized
+        assert "WARNING-SENTINEL" not in serialized
+        assert entry["agent_id"] == "test-resolved-caller"
+        record = entry["details"]
+        assert record["schema"] == "unitares.consultation_record.v1"
+        assert record["consultation_id"] == parsed["consultation_id"]
+        assert record["status"] == "completed"
+        assert record["request"]["privacy"] == "local"
+        assert record["route"]["host_id"] == "ollama:local"
+        assert record["route"]["model_used"] == "test-model"
+        assert "warnings" not in record["route"]
+        assert record["hashes"]["brief"] == sha256_text(_BRIEF_SENTINEL)
+        assert record["hashes"]["response"] == sha256_text(_ADVICE_SENTINEL)
+        assert record["hashes"]["constructed_prompt"] == sha256_text(
+            co._constructed_prompt(
+                co.ConsultRequest(brief=_BRIEF_SENTINEL, requester_uuid=None)
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_failed_consultation_is_recorded_without_route_or_response(
+    monkeypatch, audit_sinks
+):
+    monkeypatch.setattr(
+        co,
+        "run_delegated_inference",
+        AsyncMock(return_value=_failure("DELEGATED_INFERENCE_TIMEOUT")),
+    )
+
+    parsed = _payload(await co.handle_consult({
+        "brief": _BRIEF_SENTINEL,
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+    }))
+    assert parsed["success"] is False
+
+    jsonl, pg = await audit_sinks()
+    assert len(pg) == 1
+    record = pg[0]["details"]
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+    assert record["status"] == "failed"
+    assert record["failure"]["code"] == "DELEGATED_INFERENCE_TIMEOUT"
+    assert record["request"]["thorough_host_id"]
+    assert "route" not in record
+    assert "response" not in record["hashes"]
+    assert jsonl[0]["details"] == record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments,resolved",
+    [
+        ({"brief": "Explain", "purpose": "not-a-purpose"}, "test-resolved-caller"),
+        ({"brief": "Explain"}, None),
+    ],
+)
+async def test_unrouted_refusals_leave_no_consultation_record(
+    monkeypatch, audit_sinks, arguments, resolved
+):
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "get_context_resolved_agent_id", lambda: resolved)
+
+    parsed = _payload(await co.handle_consult(arguments))
+
+    assert parsed["success"] is False
+    standard.assert_not_awaited()
+    jsonl, pg = await audit_sinks()
+    assert jsonl == [] and pg == []
+
+
+@pytest.mark.asyncio
+async def test_audit_failure_never_fails_the_consultation(monkeypatch):
+    import src.audit_log as audit_log
+
+    def _boom(**_kwargs):
+        raise RuntimeError("audit sink down")
+
+    monkeypatch.setattr(audit_log.audit_logger, "log_consultation", _boom)
+    monkeypatch.setattr(
+        co, "run_model_inference", AsyncMock(return_value=_completed())
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": "Explain"}))
+
+    assert parsed["success"] is True
+    assert parsed["advice"] == "careful advice"

@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from mcp.types import TextContent
 
+from src.logging_utils import get_logger
 from src.mcp_handlers.context import (
     get_context_resolved_agent_id,
     get_session_signals,
@@ -33,6 +34,8 @@ from .model_inference import (
     _provider_timeout_s,
     run_model_inference,
 )
+
+logger = get_logger(__name__)
 
 
 CONSULTATION_SCHEMA = "unitares.consultation.v1"
@@ -155,6 +158,9 @@ class ConsultationFailure:
 class ConsultationOutcome:
     data: dict[str, Any]
     failure: ConsultationFailure | None = None
+    # Safe provenance of a completed inference; feeds the audit record even
+    # when the compact response omits it.
+    provenance: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -590,7 +596,7 @@ def _success(
             "route": outcome.routed_via,
             **provenance,
         }
-    return ConsultationOutcome(data=data)
+    return ConsultationOutcome(data=data, provenance=provenance)
 
 
 def _recovery_for_upstream(failure: InferenceFailure, *, lane: str) -> str:
@@ -791,6 +797,86 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
     )
 
 
+_RECORD_SCHEMA = "unitares.consultation_record.v1"
+
+# Route facts a record keeps. ``warnings`` is deliberately absent: it is
+# backend-authored free text, and the record's contract is that no text an
+# inference service produced (or could echo from the brief) is retained.
+_RECORD_ROUTE_FIELDS = (
+    "host_id",
+    "provider_kind",
+    "transport",
+    "model_used",
+    "models_used",
+    "model_requested",
+    "task_type",
+    "privacy_class",
+    "cost_class",
+    "cost_usd",
+    "orchestrator_execution_id",
+    "orchestrator_agent_id",
+    "latency_ms",
+    "tokens_used",
+    "finish_reason",
+)
+
+
+def _consultation_record(
+    request: ConsultRequest,
+    outcome: ConsultationOutcome,
+) -> dict[str, Any]:
+    """Build the durable envelope for one consultation: who, route, outcome, hashes.
+
+    Never the brief, the constructed prompt, or the advice. Every value here
+    is either server-derived policy or a field copied from the safe
+    provenance, and the three texts appear only as SHA-256 hashes.
+    """
+    data = outcome.data
+    hashes = {
+        "brief": sha256_text(request.brief),
+        "constructed_prompt": sha256_text(_constructed_prompt(request)),
+    }
+    record: dict[str, Any] = {
+        "schema": _RECORD_SCHEMA,
+        "consultation_id": request.consultation_id,
+        "status": data.get("status"),
+        "request": dict(data.get("request") or {}),
+        "hashes": hashes,
+    }
+    if request.effort == "thorough":
+        record["request"]["thorough_host_id"] = request.thorough_host_id
+    for key in ("delivery", "degradation", "completion", "failure"):
+        if data.get(key) is not None:
+            record[key] = data[key]
+    provenance = outcome.provenance
+    if provenance:
+        record["route"] = {
+            key: provenance[key]
+            for key in _RECORD_ROUTE_FIELDS
+            if provenance.get(key) is not None
+        }
+        response_hash = (provenance.get("hashes") or {}).get("response")
+        if response_hash:
+            hashes["response"] = response_hash
+    return record
+
+
+def _record_consultation(
+    request: ConsultRequest,
+    outcome: ConsultationOutcome,
+) -> None:
+    """Append the consultation record; a failed audit write never fails the consult."""
+    try:
+        from src.audit_log import audit_logger
+
+        audit_logger.log_consultation(
+            agent_id=request.requester_uuid,
+            record=_consultation_record(request, outcome),
+        )
+    except Exception as exc:  # pragma: no cover - defensive; audit is best-effort
+        logger.warning(f"consultation audit record failed (non-fatal): {exc}")
+
+
 @mcp_tool("consult", timeout=CONSULT_TIMEOUT_S)
 async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Ask for advisory model help without creating a governed review record."""
@@ -872,6 +958,9 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         )
     else:
         outcome = await run_consultation(request)
+        # Only a routed consultation is recorded: validation refusals never
+        # reach a model and are already counted by the tool-usage audit.
+        _record_consultation(request, outcome)
 
     if not outcome.ok:
         failure = outcome.failure
