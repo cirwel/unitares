@@ -7,6 +7,10 @@ separate from governed dialectic review.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import re
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Sequence
 from uuid import uuid4
@@ -799,9 +803,12 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
 
 _RECORD_SCHEMA = "unitares.consultation_record.v1"
 
-# Route facts a record keeps. ``warnings`` is deliberately absent: it is
-# backend-authored free text, and the record's contract is that no text an
-# inference service produced (or could echo from the brief) is retained.
+# Route facts a record keeps. Every string among them is backend-reported
+# (the model and host names included), so none is trusted as text: a value
+# is kept only when it has the shape of an identifier, and anything else --
+# prose, whitespace, a string long enough to carry echoed brief content --
+# is replaced by its hash. ``warnings`` and the raw ``finish_reason`` are
+# not kept at all; the record carries the normalized completion state.
 _RECORD_ROUTE_FIELDS = (
     "host_id",
     "provider_kind",
@@ -817,24 +824,51 @@ _RECORD_ROUTE_FIELDS = (
     "orchestrator_agent_id",
     "latency_ms",
     "tokens_used",
-    "finish_reason",
 )
+_IDENTIFIER_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+
+
+def _keyed_hash(key: str, text: str) -> str:
+    """HMAC-SHA256 of ``text`` under the caller-held consultation key."""
+    digest = hmac.new(bytes.fromhex(key), text.encode("utf-8"), hashlib.sha256)
+    return "hmac-sha256:" + digest.hexdigest()
+
+
+def _record_value(value: Any, key: str) -> Any:
+    """An identifier-shaped string or a number as-is; any other text as its keyed hash."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _record_value(item, key) for k, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_record_value(item, key) for item in value]
+    text = str(value)
+    if _IDENTIFIER_SHAPE.fullmatch(text):
+        return text
+    return {"unrecorded_text": _keyed_hash(key, text)}
 
 
 def _consultation_record(
     request: ConsultRequest,
     outcome: ConsultationOutcome,
+    key: str,
 ) -> dict[str, Any]:
     """Build the durable envelope for one consultation: who, route, outcome, hashes.
 
-    Never the brief, the constructed prompt, or the advice. Every value here
-    is either server-derived policy or a field copied from the safe
-    provenance, and the three texts appear only as SHA-256 hashes.
+    Never the brief, the constructed prompt, or the advice: those appear only
+    as HMAC-SHA256 hashes under ``key``, which is returned to the caller and
+    not stored. Anyone who can read audit events can see that the
+    consultation happened and how it was routed, but cannot test a guessed
+    brief against the row; the caller, holding the key and the text, can
+    prove which exchange the row describes. Every other string passes
+    ``_record_value``, so text a backend reported in a field meant for an
+    identifier or a code is kept as a keyed hash rather than verbatim.
     """
     data = outcome.data
     hashes = {
-        "brief": sha256_text(request.brief),
-        "constructed_prompt": sha256_text(_constructed_prompt(request)),
+        "scheme": "hmac-sha256",
+        "brief": _keyed_hash(key, request.brief),
+        "constructed_prompt": _keyed_hash(key, _constructed_prompt(request)),
     }
     record: dict[str, Any] = {
         "schema": _RECORD_SCHEMA,
@@ -845,19 +879,24 @@ def _consultation_record(
     }
     if request.effort == "thorough":
         record["request"]["thorough_host_id"] = request.thorough_host_id
-    for key in ("delivery", "degradation", "completion", "failure"):
-        if data.get(key) is not None:
-            record[key] = data[key]
-    provenance = outcome.provenance
-    if provenance:
-        record["route"] = {
-            key: provenance[key]
-            for key in _RECORD_ROUTE_FIELDS
-            if provenance.get(key) is not None
+    for field_name in ("delivery", "degradation", "failure"):
+        if data.get(field_name) is not None:
+            record[field_name] = _record_value(data[field_name], key)
+    completion = data.get("completion")
+    if completion is not None:
+        record["completion"] = {
+            "state": completion.get("state"),
+            "answer_complete": completion.get("answer_complete"),
         }
-        response_hash = (provenance.get("hashes") or {}).get("response")
-        if response_hash:
-            hashes["response"] = response_hash
+    if outcome.provenance:
+        record["route"] = {
+            name: _record_value(outcome.provenance[name], key)
+            for name in _RECORD_ROUTE_FIELDS
+            if outcome.provenance.get(name) is not None
+        }
+    advice = data.get("advice")
+    if isinstance(advice, str):
+        hashes["advice"] = _keyed_hash(key, advice)
     return record
 
 
@@ -865,16 +904,34 @@ def _record_consultation(
     request: ConsultRequest,
     outcome: ConsultationOutcome,
 ) -> None:
-    """Append the consultation record; a failed audit write never fails the consult."""
+    """Append the consultation record and tell the caller how to verify it.
+
+    A failed audit write never fails the consultation; the caller-facing
+    ``record`` block is added only when the row was handed to the audit
+    writer.
+    """
+    key = secrets.token_hex(32)
     try:
         from src.audit_log import audit_logger
 
         audit_logger.log_consultation(
             agent_id=request.requester_uuid,
-            record=_consultation_record(request, outcome),
+            record=_consultation_record(request, outcome, key),
         )
-    except Exception as exc:  # pragma: no cover - defensive; audit is best-effort
+    except Exception as exc:
         logger.warning(f"consultation audit record failed (non-fatal): {exc}")
+        return
+    outcome.data["record"] = {
+        "event_type": "consultation",
+        "consultation_id": request.consultation_id,
+        "hash_scheme": "hmac-sha256",
+        "hash_key": key,
+        "note": (
+            "The server kept keyed hashes of the brief and advice, not their "
+            "text. Keep this key with the text to prove which audit row "
+            "describes this exchange; it is not stored."
+        ),
+    }
 
 
 @mcp_tool("consult", timeout=CONSULT_TIMEOUT_S)
@@ -958,8 +1015,9 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         )
     else:
         outcome = await run_consultation(request)
-        # Only a routed consultation is recorded: validation refusals never
-        # reach a model and are already counted by the tool-usage audit.
+        # Argument-validation refusals are not recorded (tool-usage counts
+        # them); every call that reaches the router is, policy refusals
+        # included.
         _record_consultation(request, outcome)
 
     if not outcome.ok:

@@ -155,9 +155,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "the caller's when the caller's family can be detected (Claude, Codex "
         "or Antigravity, whichever the operator has available); an "
         "undetected caller may get any of them. Requires a bound identity. "
-        "Each routed consultation is audited as event_type='consultation': "
-        "route, outcome and SHA-256 hashes of the brief and advice, never "
-        "their text. Use call_model or "
+        "Each routed consultation is audited as event_type='consultation', "
+        "readable by any bound agent: route, outcome, and HMAC hashes of the "
+        "brief and advice under a key returned only to you in record.hash_key, "
+        "never their text. Use call_model or "
         "delegate_inference only for explicit provider, host, model or "
         "timeout control."
     ),

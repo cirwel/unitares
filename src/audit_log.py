@@ -655,11 +655,21 @@ class AuditLogger:
 
         ``record`` is the envelope built by
         ``consultation._consultation_record``: route, policy, outcome, and
-        SHA-256 hashes of the brief, the constructed prompt and the returned
-        advice. The texts themselves stay with the caller; the hashes let a
-        caller who kept them prove which exchange this row describes. A
-        consultation stays off the governed record (``on_record: False``);
-        this row is the accountability trace that it occurred.
+        keyed hashes of the brief, the constructed prompt and the returned
+        advice. The key goes only to the caller, so a reader of this row
+        cannot confirm a guessed brief, while the caller (or anyone holding
+        its transcript) can prove which exchange the row describes.
+
+        Postgres only, deliberately not JSONL. Several JSONL readers take the
+        agent's recent entries without an event_type filter (the dialectic
+        calibration lookup of confidence-at-pause, the learning-context
+        ``recent_decisions`` window), and the rotated JSONL archive is never
+        pruned. The cost is the documented fire-and-forget loss window: with
+        no running event loop the row is dropped.
+
+        This row does not replace the ``auto_attest`` decision that the
+        inference layer's Energy accounting writes for the same call; it is
+        the only row that says a consultation produced it.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -668,7 +678,7 @@ class AuditLogger:
             confidence=1.0,
             details=record,
         )
-        self._write_entry(entry)
+        self._schedule_postgres_write(asdict(entry))
 
     def _write_entry(self, entry: AuditEntry):
         """Write audit entry to JSONL log file with locking.
@@ -695,10 +705,15 @@ class AuditLogger:
             # Don't crash on audit log failures
             logger.warning(f"Could not write audit log: {e}", exc_info=True)
 
-        # Fire-and-forget Postgres write; see docstring for the loss/latency
-        # tradeoff. The task is pinned in `_inflight_pg_audit_tasks` until
-        # done so CPython GC can't collect it mid-await — bare create_task
-        # is a documented P001 hazard (Watcher #69f2ccbc, 2026-05-18).
+        self._schedule_postgres_write(entry_dict)
+
+    def _schedule_postgres_write(self, entry_dict: dict) -> None:
+        """Fire-and-forget Postgres write; see ``_write_entry`` for the tradeoff.
+
+        The task is pinned in `_inflight_pg_audit_tasks` until done so
+        CPython GC can't collect it mid-await — bare create_task is a
+        documented P001 hazard (Watcher #69f2ccbc, 2026-05-18).
+        """
         try:
             import asyncio
             try:

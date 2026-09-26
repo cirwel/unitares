@@ -997,7 +997,9 @@ _WARNING_SENTINEL = "WARNING-SENTINEL-e04d echoed BRIEF-SENTINEL-7f3a"
 
 @pytest.fixture
 def audit_sinks(monkeypatch):
-    """Run the real AuditLogger write path, capturing what reaches Postgres."""
+    """Run the real AuditLogger path, capturing what reaches Postgres and JSONL."""
+    import asyncio
+
     import src.audit_db as audit_db
     import src.audit_log as audit_log
 
@@ -1008,31 +1010,30 @@ def audit_sinks(monkeypatch):
         return True
 
     monkeypatch.setattr(audit_db, "append_audit_event_async", _capture)
+    log_file = audit_log.audit_logger.log_file
+    offset = log_file.stat().st_size if log_file.exists() else 0
 
     async def _drain():
-        import asyncio
-
         pending = list(audit_log._inflight_pg_audit_tasks)
         if pending:
             await asyncio.gather(*pending)
-        lines = audit_log.audit_logger.log_file.read_text().splitlines()
-        jsonl = [
-            json.loads(line)
-            for line in lines
-            if json.loads(line)["event_type"] == "consultation"
-        ]
+        new_jsonl = ""
+        if log_file.exists():
+            with open(log_file) as handle:
+                handle.seek(offset)
+                new_jsonl = handle.read()
         pg = [e for e in pg_entries if e["event_type"] == "consultation"]
-        return jsonl, pg
+        return new_jsonl, pg
 
-    audit_log.audit_logger.log_file.parent.mkdir(parents=True, exist_ok=True)
-    audit_log.audit_logger.log_file.write_text("")
     return _drain
+
+
+def _verify(key, text):
+    return co._keyed_hash(key, text)
 
 
 @pytest.mark.asyncio
 async def test_consultation_record_keeps_envelope_never_text(monkeypatch, audit_sinks):
-    from src.mcp_handlers.support.inference_registry import sha256_text
-
     outcome = _completed(response=_ADVICE_SENTINEL)
     outcome.inference["warnings"] = [_WARNING_SENTINEL]
     monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
@@ -1041,32 +1042,59 @@ async def test_consultation_record_keeps_envelope_never_text(monkeypatch, audit_
     assert parsed["success"] is True
 
     jsonl, pg = await audit_sinks()
-    assert len(jsonl) == 1 and len(pg) == 1
-    for entry in (jsonl[0], pg[0]):
-        serialized = json.dumps(entry)
-        assert "BRIEF-SENTINEL" not in serialized
-        assert "ADVICE-SENTINEL" not in serialized
-        assert "WARNING-SENTINEL" not in serialized
-        assert entry["agent_id"] == "test-resolved-caller"
-        record = entry["details"]
-        assert record["schema"] == "unitares.consultation_record.v1"
-        assert record["consultation_id"] == parsed["consultation_id"]
-        assert record["status"] == "completed"
-        assert record["request"]["privacy"] == "local"
-        assert record["route"]["host_id"] == "ollama:local"
-        assert record["route"]["model_used"] == "test-model"
-        assert "warnings" not in record["route"]
-        assert record["hashes"]["brief"] == sha256_text(_BRIEF_SENTINEL)
-        assert record["hashes"]["response"] == sha256_text(_ADVICE_SENTINEL)
-        assert record["hashes"]["constructed_prompt"] == sha256_text(
-            co._constructed_prompt(
-                co.ConsultRequest(brief=_BRIEF_SENTINEL, requester_uuid=None)
-            )
-        )
+    assert len(pg) == 1
+    # Postgres only: JSONL readers take entries without a type filter.
+    assert "consultation" not in jsonl
+    entry = pg[0]
+    serialized = json.dumps(entry)
+    assert "BRIEF-SENTINEL" not in serialized
+    assert "ADVICE-SENTINEL" not in serialized
+    assert "WARNING-SENTINEL" not in serialized
+    assert entry["agent_id"] == "test-resolved-caller"
+
+    record = entry["details"]
+    key = parsed["record"]["hash_key"]
+    assert key not in serialized
+    assert record["schema"] == "unitares.consultation_record.v1"
+    assert record["consultation_id"] == parsed["consultation_id"]
+    assert parsed["record"]["consultation_id"] == parsed["consultation_id"]
+    assert record["status"] == "completed"
+    assert record["request"]["privacy"] == "local"
+    assert record["route"]["host_id"] == "ollama:local"
+    assert record["route"]["model_used"] == "test-model"
+    assert "warnings" not in record["route"]
+    assert record["hashes"]["scheme"] == "hmac-sha256"
+    assert record["hashes"]["brief"] == _verify(key, _BRIEF_SENTINEL)
+    assert record["hashes"]["advice"] == _verify(key, parsed["advice"])
+    assert record["hashes"]["constructed_prompt"] == _verify(
+        key,
+        co._constructed_prompt(
+            co.ConsultRequest(brief=_BRIEF_SENTINEL, requester_uuid=None)
+        ),
+    )
 
 
 @pytest.mark.asyncio
-async def test_failed_consultation_is_recorded_without_route_or_response(
+async def test_record_hashes_cannot_confirm_a_guess_without_the_key(
+    monkeypatch, audit_sinks
+):
+    from src.mcp_handlers.support.inference_registry import sha256_text
+
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    first = _payload(await co.handle_consult({"brief": "yes"}))
+    second = _payload(await co.handle_consult({"brief": "yes"}))
+
+    _, pg = await audit_sinks()
+    hashes = [entry["details"]["hashes"]["brief"] for entry in pg]
+    assert sha256_text("yes") not in json.dumps(pg)
+    # The same brief twice does not link the two rows.
+    assert hashes[0] != hashes[1]
+    assert first["record"]["hash_key"] != second["record"]["hash_key"]
+
+
+@pytest.mark.asyncio
+async def test_failed_consultation_is_recorded_without_route_or_advice(
     monkeypatch, audit_sinks
 ):
     monkeypatch.setattr(
@@ -1081,8 +1109,9 @@ async def test_failed_consultation_is_recorded_without_route_or_response(
         "privacy": "cloud_allowed",
     }))
     assert parsed["success"] is False
+    assert parsed["record"]["hash_key"]
 
-    jsonl, pg = await audit_sinks()
+    _, pg = await audit_sinks()
     assert len(pg) == 1
     record = pg[0]["details"]
     assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
@@ -1090,8 +1119,20 @@ async def test_failed_consultation_is_recorded_without_route_or_response(
     assert record["failure"]["code"] == "DELEGATED_INFERENCE_TIMEOUT"
     assert record["request"]["thorough_host_id"]
     assert "route" not in record
-    assert "response" not in record["hashes"]
-    assert jsonl[0]["details"] == record
+    assert "advice" not in record["hashes"]
+
+
+@pytest.mark.asyncio
+async def test_policy_refusal_is_recorded(monkeypatch, audit_sinks):
+    parsed = _payload(await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+    }))
+
+    assert parsed["error_code"] == "CONSULT_POLICY_UNSATISFIED"
+    _, pg = await audit_sinks()
+    assert len(pg) == 1
+    assert pg[0]["details"]["failure"]["code"] == "CONSULT_POLICY_UNSATISFIED"
 
 
 @pytest.mark.asyncio
@@ -1102,7 +1143,7 @@ async def test_failed_consultation_is_recorded_without_route_or_response(
         ({"brief": "Explain"}, None),
     ],
 )
-async def test_unrouted_refusals_leave_no_consultation_record(
+async def test_argument_refusals_leave_no_consultation_record(
     monkeypatch, audit_sinks, arguments, resolved
 ):
     standard = AsyncMock(return_value=_completed())
@@ -1112,9 +1153,10 @@ async def test_unrouted_refusals_leave_no_consultation_record(
     parsed = _payload(await co.handle_consult(arguments))
 
     assert parsed["success"] is False
+    assert "record" not in parsed
     standard.assert_not_awaited()
-    jsonl, pg = await audit_sinks()
-    assert jsonl == [] and pg == []
+    _, pg = await audit_sinks()
+    assert pg == []
 
 
 @pytest.mark.asyncio
@@ -1133,3 +1175,43 @@ async def test_audit_failure_never_fails_the_consultation(monkeypatch):
 
     assert parsed["success"] is True
     assert parsed["advice"] == "careful advice"
+    # No row was handed to the writer, so no verification key is offered.
+    assert "record" not in parsed
+
+
+@pytest.mark.asyncio
+async def test_backend_reported_text_in_identifier_fields_is_hashed(monkeypatch, audit_sinks):
+    echoed = "echoing BRIEF-SENTINEL-7f3a back"
+    outcome = _completed(response=_ADVICE_SENTINEL, finish_reason=echoed)
+    outcome.inference["model_used"] = echoed
+    outcome.inference["models_used"] = ["test-model", echoed]
+    outcome.inference["model_requested"] = echoed
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
+
+    parsed = _payload(await co.handle_consult({"brief": _BRIEF_SENTINEL}))
+
+    _, pg = await audit_sinks()
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+    record = pg[0]["details"]
+    hashed = {"unrecorded_text": _verify(parsed["record"]["hash_key"], echoed)}
+    assert record["route"]["model_used"] == hashed
+    assert record["route"]["models_used"] == ["test-model", hashed]
+    assert record["route"]["model_requested"] == hashed
+    assert "finish_reason" not in record["route"]
+    assert record["completion"] == {"state": "unknown", "answer_complete": False}
+
+
+@pytest.mark.asyncio
+async def test_backend_text_in_failure_codes_is_hashed(monkeypatch, audit_sinks):
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_failure("provider said BRIEF-SENTINEL-7f3a")),
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": _BRIEF_SENTINEL}))
+    assert parsed["success"] is False
+
+    _, pg = await audit_sinks()
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+    assert "unrecorded_text" in pg[0]["details"]["failure"]["code"]
