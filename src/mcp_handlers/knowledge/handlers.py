@@ -3660,7 +3660,11 @@ def _build_discovery_updates(
         # status='resolved' (the closure note's follow-up names it so a
         # non-owner of a high/critical finding can append notes) must not move
         # when the finding was actually resolved.
-        if normalized_status == "resolved" and getattr(discovery, "status", None) != "resolved":
+        if normalized_status == "resolved" and (
+            getattr(discovery, "status", None) != "resolved"
+            or not getattr(discovery, "resolved_at", None)
+        ):
+            # ...or backfill a resolved row that never got one.
             updates["resolved_at"] = _utc_now_iso()
 
     _validate_closure_class(request, normalized_status)

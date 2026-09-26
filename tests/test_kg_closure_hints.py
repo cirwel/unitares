@@ -672,10 +672,16 @@ def test_display_name_hint_names_whose_label_to_set():
 
 
 @pytest.mark.parametrize(
-    "stored_status, stamps",
-    [("open", True), ("disputed", True), ("resolved", False)],
+    "stored_status, stored_resolved_at, stamps",
+    [
+        ("open", None, True),
+        ("disputed", None, True),
+        ("resolved", "2026-09-01T00:00:00+00:00", False),
+        # A resolved row that never got a timestamp is backfilled.
+        ("resolved", None, True),
+    ],
 )
-def test_resolved_at_is_stamped_only_on_the_transition(stored_status, stamps):
+def test_resolved_at_is_stamped_only_on_the_transition(stored_status, stored_resolved_at, stamps):
     """The closure note's follow-up repeats status='resolved' so a non-owner of
     a high/critical finding may append notes; that repeat must not move when
     the finding was actually resolved."""
@@ -683,7 +689,7 @@ def test_resolved_at_is_stamped_only_on_the_transition(stored_status, stamps):
         _request(status="resolved", resolution_note="appended context"),
         DiscoveryNode(
             id="d-1", agent_id="a-1", type="bug_found", summary="s", details="body",
-            status=stored_status,
+            status=stored_status, resolved_at=stored_resolved_at,
         ),
     )
     assert ("resolved_at" in updates) is stamps
