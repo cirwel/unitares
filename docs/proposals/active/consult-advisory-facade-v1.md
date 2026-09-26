@@ -23,8 +23,10 @@ Expose two primary verbs for model-mediated help:
 > (`unitares.consultation_record.v1`): requester, policy, outcome, the route
 > whenever a well-formed inference result came back, and HMAC hashes of the
 > brief, prompt and advice under a key returned only to the caller. A failed
-> upstream attempt records no route block, but its `failure.upstream.route`
-> names the registry host, provider kind and privacy class it was sent to
+> upstream attempt records no route block, but when the brief was actually
+> sent its failure entry (`failure.upstream`, or `failure.primary` /
+> `failure.fallback` on a fallback path) carries a `route` naming the
+> registry host, provider kind and privacy class it went to
 > (under `privacy='cloud_allowed'` a thorough call also records its target
 > host; under `privacy='local'` none is contacted and none is named). The
 > advice stays advisory and off the governed record; the fact that it was

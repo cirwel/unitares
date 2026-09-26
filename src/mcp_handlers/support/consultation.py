@@ -262,7 +262,11 @@ def _safe_provenance(
                     for name, source in (
                         ("from_model", "fromModel"),
                         ("to_model", "toModel"),
-                        ("reason", "reason"),
+                        # Not "reason": that key is reserved for literals
+                        # this module writes and kept readable, while a
+                        # reroute reason is backend text and must pass the
+                        # shape-or-hash rule.
+                        ("reroute_reason", "reason"),
                     )
                     if isinstance(item, dict) and item.get(source) is not None
                 }
@@ -311,14 +315,19 @@ def _safe_failure(failure: InferenceFailure) -> dict[str, Any]:
             "id": str(execution_id)[:200],
             "possibly_running": True,
         }
-    # Registry route facts of the attempted host, when the lane reports them,
-    # so a failed call still says where the brief was sent. Never base_url.
+    # Registry route facts of the attempted host, so a failed call still says
+    # where the brief was sent. Never base_url. Only when the brief left: a
+    # delegated failure at preflight/spawn_rejected (execution_started false)
+    # proves no child ran, and naming a host there would read as the brief
+    # having gone to it. Standard-lane details carry these keys only from the
+    # catch around the provider request itself.
     route = {
         key: str(failure.details[key])[:200]
         for key in ("host_id", "provider_kind", "privacy_class")
         if failure.details.get(key)
     }
-    if route:
+    sent = failure.execution_started or failure.details.get("dispatch_phase") is None
+    if route and sent:
         safe["route"] = route
     return safe
 
