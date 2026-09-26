@@ -129,6 +129,13 @@ def unbound_metrics_payload() -> dict:
     For an unbound caller the safe canonical path is ``onboard(force_new=true)``
     for a fresh process identity, or a continuity-declaring mint when this
     process is inheriting a finished predecessor's work.
+
+    The note leads with the caller's own id. An unbound read also reaches a
+    process that already called start_session and dropped the id on this
+    call; telling that process to mint forks its work across two identities.
+    The server cannot tell it from a process with no identity without naming
+    a binding it only inferred, so the guidance is conditional and names no
+    uuid.
     """
     from src.governance_glossary import explain_verdict
     return {
@@ -139,11 +146,12 @@ def unbound_metrics_payload() -> dict:
             "tool": "start_session",
             "example": "start_session(force_new=true)",
             "note": (
-                "get_governance_metrics is read-only; it creates no "
-                "identity and no state for unbound callers. Mint a fresh "
-                "process identity with start_session(force_new=true); to continue "
-                "a finished predecessor's work add "
-                "parent_agent_id=<prior_uuid>, spawn_reason='explicit'. "
+                "If this process already called start_session, repeat this "
+                "read with the client_session_id it returned: "
+                "check_working_state(client_session_id=...). Otherwise "
+                "start_session(force_new=true); add parent_agent_id only for "
+                "a finished predecessor. get_governance_metrics is read-only; "
+                "it creates no identity and no state for unbound callers. "
                 "Avoid bare identity()/start_session() — without force_new or a "
                 "proof (client_session_id / continuity_token) they can mint "
                 "an orphan identity."
