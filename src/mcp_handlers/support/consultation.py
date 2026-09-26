@@ -907,11 +907,12 @@ def _consultation_record(
     hold only server-validated values (the purpose/effort/privacy enums, a
     boolean, a thorough host id from ``_THOROUGH_PEERS``, the normalized
     completion state). Every other string passes ``_record_value``: it is
-    kept only when it has the shape of an
-    identifier (codes: of a snake_case constant), and otherwise as a keyed
-    hash; any kept string that occurs verbatim in the brief is hashed as
-    well (``_scrub_brief_echo``), so an identifier-shaped echo of a brief
-    token is not stored as text either.
+    kept only when it has the shape of an identifier (codes: of a
+    snake_case constant), and otherwise as a keyed hash. A backend-reported
+    identifier or upstream code that contains any 8+ word-character token
+    of the brief is hashed as well (``_scrub_brief_echo``). The limit: a
+    brief token shorter than that, echoed back inside a model name or code,
+    is kept as text.
     """
     data = outcome.data
     record: dict[str, Any] = {
@@ -951,34 +952,69 @@ def _consultation_record(
             for name in _RECORD_ROUTE_FIELDS
             if outcome.provenance.get(name) is not None
         }
-    for field_name in ("route", "delivery", "degradation", "failure"):
-        if field_name in record:
-            record[field_name] = _scrub_brief_echo(
-                record[field_name], request.brief, key
-            )
+    tokens = _brief_tokens(request.brief)
+    if tokens:
+        route = record.get("route") or {}
+        for name in _BACKEND_ROUTE_FIELDS & route.keys():
+            route[name] = _scrub_brief_echo(route[name], tokens, key)
+        for field_name in ("degradation", "failure"):
+            if field_name in record:
+                record[field_name] = _scrub_backend_keys(
+                    record[field_name], tokens, key
+                )
     advice = data.get("advice")
     if isinstance(advice, str) and record["hashes"] is not None:
         hashes["advice"] = _keyed_hash(key, advice)
     return record
 
 
-_ECHO_MIN_CHARS = 4
+# Backend-reported identifiers. Only these are checked against the brief:
+# server-set values (privacy class, provider kind, effort, fallback lane,
+# failure category and reason) are never hashed for resembling the brief,
+# because whether they were hashed would itself tell a reader which words
+# the brief contains.
+_BACKEND_ROUTE_FIELDS = frozenset({
+    "model_used",
+    "models_used",
+    "model_requested",
+    "orchestrator_execution_id",
+    "orchestrator_agent_id",
+})
+# Keys inside failure/degradation blocks whose values come from upstream.
+_BACKEND_BLOCK_KEYS = frozenset({"code", "reason_code", "id"})
+_ECHO_TOKEN = re.compile(r"[A-Za-z0-9_]{8,}")
 
 
-def _scrub_brief_echo(value: Any, brief: str, key: str) -> Any:
-    """Hash any kept string that occurs verbatim in the brief.
+def _brief_tokens(brief: str) -> frozenset[str]:
+    """Word-character runs of 8+ in the brief: the size a secret or key has."""
+    return frozenset(_ECHO_TOKEN.findall(brief))
 
-    The identifier-shape check alone would keep a single brief token a
-    backend echoed back as, say, a model name. A legitimate route value
-    that the brief happens to mention is hashed too; that loss is the price
-    of the guarantee that no part of the brief is stored as text.
+
+def _scrub_brief_echo(value: Any, tokens: frozenset[str], key: str) -> Any:
+    """Hash a backend-reported identifier that contains a brief token.
+
+    Tokens shorter than 8 word characters are not checked; that is the
+    documented limit, traded against hashing ordinary model names whenever
+    the brief mentions a short word they contain.
     """
-    if isinstance(value, dict):
-        return {k: _scrub_brief_echo(item, brief, key) for k, item in value.items()}
     if isinstance(value, list):
-        return [_scrub_brief_echo(item, brief, key) for item in value]
-    if isinstance(value, str) and len(value) >= _ECHO_MIN_CHARS and value in brief:
+        return [_scrub_brief_echo(item, tokens, key) for item in value]
+    if isinstance(value, str) and any(token in value for token in tokens):
         return {"unrecorded_text": _keyed_hash(key, value)}
+    return value
+
+
+def _scrub_backend_keys(value: Any, tokens: frozenset[str], key: str) -> Any:
+    """Apply the brief-echo check to upstream-sourced keys inside a block."""
+    if isinstance(value, dict):
+        return {
+            k: (
+                _scrub_brief_echo(item, tokens, key)
+                if k in _BACKEND_BLOCK_KEYS
+                else _scrub_backend_keys(item, tokens, key)
+            )
+            for k, item in value.items()
+        }
     return value
 
 

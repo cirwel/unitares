@@ -1371,3 +1371,31 @@ async def test_padded_brief_verifies_against_its_stripped_form(monkeypatch, audi
     _, pg = await audit_sinks()
     key = parsed["record"]["hash_key"]
     assert pg[0]["details"]["hashes"]["brief"] == _verify(key, "needs review")
+
+
+@pytest.mark.asyncio
+async def test_server_set_values_survive_a_brief_that_mentions_them(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    await co.handle_consult({"brief": "Is a standard local ollama setup enough?"})
+
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["delivery"]["effort"] == "standard"
+    assert record["route"]["privacy_class"] == "local"
+    assert record["route"]["provider_kind"] == "ollama"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reported", ["sk_live_ABC123/v2", "ns:sk_live_ABC123"])
+async def test_backend_identifier_containing_a_brief_token_is_hashed(
+    monkeypatch, audit_sinks, reported
+):
+    outcome = _completed()
+    outcome.inference["model_used"] = reported
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
+
+    await co.handle_consult({"brief": "rotate sk_live_ABC123 please"})
+
+    _, pg = await audit_sinks()
+    assert "sk_live_ABC123" not in json.dumps(pg[0])

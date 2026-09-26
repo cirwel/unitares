@@ -657,8 +657,9 @@ class AuditLogger:
         ``consultation._consultation_record``: route, policy, outcome, and
         keyed hashes of the brief, the constructed prompt and the returned
         advice. The key goes only to the caller, so a reader of this row
-        cannot confirm a guessed brief, while the caller (or anyone holding
-        its transcript) can prove which exchange the row describes.
+        cannot test a guessed brief against its hashes, while the caller (or
+        anyone holding its transcript) can prove which exchange the row
+        describes.
 
         Postgres only, deliberately not JSONL. Several JSONL readers take the
         agent's recent entries without an event_type filter (the dialectic
