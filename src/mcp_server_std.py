@@ -624,7 +624,7 @@ from src.tool_modes import build_server_instructions
 from src.versioning import load_version_from_file
 
 server = make_lowlevel_server(
-    "governance-monitor-v1",
+    "unitares",
     list_tools=list_tools,
     call_tool=call_tool,
     list_resources=list_resources,

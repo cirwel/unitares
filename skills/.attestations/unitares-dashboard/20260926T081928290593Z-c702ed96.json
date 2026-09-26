@@ -1,0 +1,35 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-dashboard",
+  "verified_at": "2026-09-26T08:19:28Z",
+  "verified_date": "2026-09-26",
+  "verifier": "Kenny Wang",
+  "source_digests": {
+    "unitares/dashboard/package.json": "ebf9c825a86eeccd",
+    "unitares/dashboard/redesign/app.html": "ac37237f646e7bde",
+    "unitares/dashboard/redesign/data.js": "a8cfadb8774525ad",
+    "unitares/dashboard/redesign/sections/adjudication.js": "c54bd9f6eb859249",
+    "unitares/dashboard/redesign/sections/discoveries.js": "987622e5448645e7",
+    "unitares/dashboard/redesign/sections/eisv.js": "91e5cf78ab13eeef",
+    "unitares/dashboard/redesign/sections/landing.js": "814fce6a97c1139a",
+    "unitares/dashboard/redesign/sections/metrics.js": "9412b1a03348fbea",
+    "unitares/dashboard/redesign/sections/risk.js": "d36e47793c9b31e4",
+    "unitares/dashboard/redesign/sections/security.js": "a9ebbfd8c2186a21",
+    "unitares/dashboard/redesign/sections/telemetry-health.js": "b6fed2a82727ddcb",
+    "unitares/dashboard/redesign/snapshot.js": "2586812a9522e2ea",
+    "unitares/dashboard/redesign/tokens.css": "ffad3d92c1033924",
+    "unitares/dashboard/redesign/ws.js": "27bf5088dc4db8a3",
+    "unitares/dashboard/tests/telemetry-health.test.js": "efbb8e0db3f89f6b",
+    "unitares/src/dashboard_auth.py": "bb47591c1956df8a",
+    "unitares/src/http_api.py": "d3054404b560e162",
+    "unitares/src/http_routes/dashboard.py": "0fb5b075664dc0e6",
+    "unitares/src/http_routes/sentinel.py": "6edaa08630ea5d32",
+    "unitares/src/http_routes/telemetry.py": "a49c4c1b1c5fcaed"
+  },
+  "skill_digest": "d98449e0076fc584",
+  "superseded_digests": {
+    "unitares/src/http_api.py": [
+      "5abb17ed7c08df6b"
+    ]
+  }
+}

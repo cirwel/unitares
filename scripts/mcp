@@ -83,7 +83,7 @@ case "$COMMAND" in
       cat <<EOF
 {
   "mcpServers": {
-    "governance-monitor-v1": {
+    "unitares": {
       "url": "${SSE_URL}"
     }
   }
@@ -96,7 +96,7 @@ EOF
     cat <<EOF
 {
   "mcpServers": {
-    "governance-monitor-v1": {
+    "unitares": {
       "command": "python3",
       "args": [
         "${PROJECT_DIR}/src/mcp_server_std.py"

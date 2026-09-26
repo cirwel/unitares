@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "dev" / "cloud-session-setup.sh"
@@ -33,7 +35,7 @@ def _run_setup(
         'event: message\n'
         'data: {"jsonrpc":"2.0","id":"unitares-cloud-preflight",'
         '"result":{"protocolVersion":"2025-03-26","capabilities":{},'
-        '"serverInfo":{"name":"governance-monitor-v1","version":"test"}}}'
+        '"serverInfo":{"name":"unitares","version":"test"}}}'
     ),
     health_exit: int = 0,
     tool_exit: int = 0,
@@ -369,6 +371,29 @@ def test_runtime_preflight_rejects_a_different_mcp_server(tmp_path: Path) -> Non
     assert proc.returncode == 1
     assert "without a valid UNITARES MCP" in proc.stdout
     assert "UNITARES MCP initialize succeeded" not in proc.stdout
+
+
+@pytest.mark.parametrize("name", ["unitares", "governance-monitor-v1"])
+def test_runtime_preflight_accepts_the_new_and_the_legacy_server_name(
+    tmp_path: Path, name: str
+) -> None:
+    """The server reported "governance-monitor-v1" until the rename to
+    "unitares"; a cloud session can reach a not-yet-redeployed server."""
+    body = (
+        'event: message\n'
+        'data: {"jsonrpc":"2.0","id":"unitares-cloud-preflight",'
+        '"result":{"protocolVersion":"2025-03-26","capabilities":{},'
+        f'"serverInfo":{{"name":"{name}","version":"test"}}}}}}'
+    )
+    proc, _ = _run_setup(
+        tmp_path,
+        plugin_enabled=True,
+        mcp_status=200,
+        mcp_body=body,
+        script_args=["--verify-runtime"],
+    )
+
+    assert "without a valid UNITARES MCP" not in proc.stdout
 
 
 def test_runtime_preflight_rejects_loopback_bypass_as_authentication_proof(
