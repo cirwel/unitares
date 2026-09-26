@@ -133,7 +133,20 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # "claude:host-adapter" and nothing is removed or renamed;
 # delegate_inference's and list_inference_hosts' input_schema_sha256 and the
 # surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.18.0"
+# 1.19.0 (2026-09-26), numbered after 1.18.0 (#2470): parameter
+# descriptions only. include_state on
+# get_governance_metrics and check_working_state says it is retained for
+# compatibility and has no effect: the handler no longer requests the
+# monitor's nested state (it surfaced only when interpret_state failed), and
+# the envelope no longer escalates the default read on it. verbosity says
+# what 'standard' holds (bare EISV, coherence and risk; the verdict, basin
+# and mode with their meanings; guidance) instead of promising EISV meanings
+# it never carried. process_agent_update and sync_state's response_mode names the
+# degraded-identity and warnings triggers that make 'auto' resolve to mirror
+# (its advertised brief is unchanged, so only describe_tool shows that). No
+# parameter is added, removed, retyped or renamed; the two metrics input
+# digests and the surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.19.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

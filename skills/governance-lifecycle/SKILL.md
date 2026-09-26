@@ -139,8 +139,9 @@ present for the action, verdict, and evidence maturity, then `next_action`,
 present. `check_working_state()` and `search_shared_memory()` omit the repeated
 canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
 `response_mode="full"`, respectively, when you need it under `raw_governance`.
-`check_working_state(verbosity="standard")` is the middle tier: EISV, verdict,
-risk_score, basin and mode with their meanings, without the diagnostics. A
+`check_working_state(verbosity="standard")` is the middle tier: basin and mode
+with their meanings, and guidance, beside the verdict, risk_score and bare EISV
+values, without the diagnostics. A
 response marked `response_shape: "routine"` was trimmed because nothing in it
 needed explaining: a clean `sync_state` proceed keeps `action_summary.action`,
 `reason` and `risk_score` and the margin with its scope, but drops the repeated
