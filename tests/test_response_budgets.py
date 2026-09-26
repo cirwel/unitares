@@ -1,14 +1,33 @@
 """Byte budgets for the default lifecycle responses.
 
 The onboard payload below is the live shape a default ``start_session``
-returned on 2026-09-25. The sync source is a hand-built minimal proceed in the
-live shape, so a field a real handler adds later does not reach this budget;
-the live check after deploy is the complement. A budget is a ceiling on the
-normal case only: guide, pause, provisional, weak-binding and non-plain-mint
-responses keep their full explanations and are asserted to. Budgets count
-UTF-8 bytes, not tokens; the base64 continuity_token costs more tokens per
-byte than prose. Restoring a field an abnormal case needs is a reason to raise
-a budget, stated in the PR, not a regression.
+returned on 2026-09-25; the rule tests mutate it. The start_session budgets
+are measured on the real onboard handler's output instead
+(tests/helpers/onboard_producer.py), one mint class each, because that
+hand-written fixture is an anonymous mint at thread position 1 and the common
+classes never reached the budget. The sync source is a hand-built minimal
+proceed in the live shape, so a field a real handler adds later does not reach
+this budget; the live check after deploy is the complement. A budget is a
+ceiling on the normal case only: guide, pause, provisional, weak-binding and
+non-plain-mint responses keep their full explanations and are asserted to.
+Budgets count UTF-8 bytes, not tokens; the base64 continuity_token costs more
+tokens per byte than prose. Restoring a field an abnormal case needs is a
+reason to raise a budget, stated in the PR, not a regression.
+
+start_session budgets per mint class, measured on the real handler
+(2026-09-26):
+
+- anonymous, thread position 1: 1,152 B against 1,200.
+- sibling_locus (a fresh uuid on a thread earlier process-instances
+  occupied): 1,461 B against 1,550. It adds predecessor_uuid,
+  episode_fork_kind and the ~230 B sentence saying co-location does not
+  establish lineage. That sentence is kept, not trimmed to fit: it is what
+  stops the earlier node's uuid being read as this process's parent.
+- each lifted mint notice adds up to 300 B on top of its class. A named
+  mint's compact resident_registration is 248 B for not_on_roster (the
+  status plus one sentence on what it costs) and ~85 B for the other
+  statuses; a written bootstrap ack is ~215 B. Named at position 1:
+  1,388 B against 1,500; named sibling_locus: 1,697 B against 1,850.
 """
 
 from __future__ import annotations
@@ -20,8 +39,11 @@ from pathlib import Path
 
 import pytest
 
+from src.mcp_handlers.middleware import envelope_step
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
 from src.mcp_handlers.response_formatter import format_response
+from src.thread_identity import build_fork_context
+from tests.helpers import onboard_producer
 
 SDK_SRC = Path(__file__).resolve().parent.parent / "agents" / "sdk" / "src"
 if str(SDK_SRC) not in sys.path:
@@ -29,7 +51,10 @@ if str(SDK_SRC) not in sys.path:
 
 from unitares_sdk._checkin_fields import resolve_checkin_fields  # noqa: E402
 
+# start_session, per mint class; see the module docstring.
 START_SESSION_BUDGET = 1_200
+START_SESSION_SIBLING_BUDGET = 1_550
+START_SESSION_NOTICE_ALLOWANCE = 300
 # Raised from 900 in #2448: the margin now carries its scope (~75 B), which
 # is the cost of an honest "comfortable" on the normal live decision.
 ROUTINE_SYNC_BUDGET = 960
