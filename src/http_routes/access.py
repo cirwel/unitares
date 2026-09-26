@@ -677,6 +677,8 @@ def _record_unbound_resolution(
     resolved,
     arguments: dict,
     token_agent_uuid: str | None,
+    *,
+    caller_sent_session_id: bool,
 ) -> None:
     """Keep why the resolver bound nothing, for the REST strict gate.
 
@@ -685,6 +687,11 @@ def _record_unbound_resolution(
     a substrate resident over HTTP, or a server-side failure (see
     identity_bootstrap.unbound_call_refusal). The MCP middleware reads the
     same resolver result directly.
+
+    ``caller_sent_session_id`` is taken before the derivation, which drops an
+    invalid client_session_id from the arguments: a caller that sent one sent
+    an id that names nothing, as the MCP middleware (which reads the id
+    before its derivation) also judges it.
     """
     from src.mcp_handlers.context import set_http_prebind_resolution
 
@@ -695,6 +702,7 @@ def _record_unbound_resolution(
     }
     if arguments.get("continuity_token") and not token_agent_uuid:
         record["token_failed_verification"] = True
+    record["caller_sent_session_id"] = caller_sent_session_id
     set_http_prebind_resolution(record)
 
 
@@ -705,6 +713,8 @@ async def _resolve_http_session_binding(
     consult,
 ) -> str | None:
     from src.mcp_handlers.context import (
+        get_csid_injected_source,
+        get_csid_transport_injected,
         get_session_resolution_source,
         set_session_resolution_source,
         update_context_agent_id,
@@ -715,6 +725,13 @@ async def _resolve_http_session_binding(
     )
     from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
 
+    # Whether the caller itself sent a client_session_id, read before the
+    # derivation drops an invalid one (see _record_unbound_resolution).
+    caller_sent_session_id = bool(
+        arguments.get("client_session_id")
+        and not get_csid_transport_injected()
+        and get_csid_injected_source() is None
+    )
     # The derivation stamps the source that won. Clear the slot first so the
     # value read below is this derivation's, never one left by the
     # transport's own derivation in _inject_http_client_session.
@@ -757,10 +774,7 @@ async def _resolve_http_session_binding(
             # processes of one client could read each other's state. REST
             # session signals (_build_http_session_signals) carry no OAuth
             # client id and no Mcp-Session-Id.
-            from src.mcp_handlers.context import (
-                get_csid_injected_source,
-                get_session_proof_origin,
-            )
+            from src.mcp_handlers.context import get_session_proof_origin
             from src.mcp_handlers.identity.session import (
                 transport_session_is_read_proof,
             )
@@ -805,11 +819,21 @@ async def _resolve_http_session_binding(
         or resolved.get("resume_failed")
         or resolved.get("error")
     ):
-        _record_unbound_resolution(resolved, arguments, token_agent_uuid)
+        _record_unbound_resolution(
+            resolved,
+            arguments,
+            token_agent_uuid,
+            caller_sent_session_id=caller_sent_session_id,
+        )
         return None
     agent_uuid = resolved.get("agent_uuid")
     if not agent_uuid:
-        _record_unbound_resolution(resolved, arguments, token_agent_uuid)
+        _record_unbound_resolution(
+            resolved,
+            arguments,
+            token_agent_uuid,
+            caller_sent_session_id=caller_sent_session_id,
+        )
         return None
 
     update_context_agent_id(agent_uuid)

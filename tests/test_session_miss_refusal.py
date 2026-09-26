@@ -290,6 +290,15 @@ async def test_mcp_session_miss_with_a_caller_id_that_names_nothing_leads_with_t
             {}, {"client_session_id": STALE_SESSION}, True,
             id="body-id",
         ),
+        # The caller sent an id that is not a valid session id. Each
+        # transport's derivation drops it and resolves on the transport, but
+        # the caller did send it, so "you sent no client_session_id" would be
+        # false on either.
+        pytest.param(
+            {}, {"client_session_id": "!!!"},
+            {}, {"client_session_id": "!!!"}, True,
+            id="invalid-body-id",
+        ),
     ],
 )
 async def test_rest_and_mcp_session_miss_refusals_match_for_the_same_caller_sent_fact(

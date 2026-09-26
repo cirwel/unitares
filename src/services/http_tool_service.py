@@ -325,13 +325,17 @@ def _strict_identity_refusal_or_none(
     )
     from src.mcp_handlers.identity_bootstrap import unbound_call_refusal
 
-    caller_sent_session_id = bool(
-        isinstance(arguments, dict)
-        and arguments.get("client_session_id")
-        and not get_csid_transport_injected()
-        and get_csid_injected_source() is None
-    )
     resolution = get_http_prebind_resolution()
+    if resolution is not None and "caller_sent_session_id" in resolution:
+        # Judged by the prebind before its derivation dropped an invalid id.
+        caller_sent_session_id = bool(resolution["caller_sent_session_id"])
+    else:
+        caller_sent_session_id = bool(
+            isinstance(arguments, dict)
+            and arguments.get("client_session_id")
+            and not get_csid_transport_injected()
+            and get_csid_injected_source() is None
+        )
     options, surface_extra = unbound_call_refusal(
         tool_name,
         resolution,
