@@ -109,7 +109,11 @@ def _assess_thermodynamic_significance(
     }
 
 
-def unbound_metrics_payload(*, caller_sent_session_id: bool = False) -> dict:
+def unbound_metrics_payload(
+    *,
+    caller_sent_session_id: bool = False,
+    resolution: Optional[dict] = None,
+) -> dict:
     """The unbound ignorance shape for get_governance_metrics (trust
     contract §5). ONE definition shared by the MCP handler below and the
     REST direct handler (`http_tool_service._execute_http_get_governance_
@@ -137,25 +141,169 @@ def unbound_metrics_payload(*, caller_sent_session_id: bool = False) -> dict:
     a binding it only inferred, so the guidance is conditional and names no
     uuid.
 
-    The structured next_action branches only on what the caller itself sent.
-    With no client_session_id on the call, tool/example lead with the retry
-    (an agent that acts on the structured fields and skips the note must not
-    fork its work across a second identity); the mint is ``otherwise``. With
-    a client_session_id that names no agent, repeating it cannot help, so the
-    mint leads.
+    The structured next_action is keyed on why nothing bound.
+    ``resolution`` is what identity resolution returned for this call
+    (context.get_unbound_resolution, read through ``unbound_read_cause``),
+    classified by ``identity_bootstrap.unbound_cause``, the classification
+    the strict refusal uses for the same resolver result:
+
+    - No resolution ran (a read without proof) or a session miss: keyed on
+      what the caller itself sent. With no client_session_id on the call,
+      tool/example lead with the retry (an agent that acts on the structured
+      fields and skips the note must not fork its work across a second
+      identity); the mint is ``otherwise``. With a client_session_id that
+      names no agent, repeating it cannot help, so the rebind leads.
+    - A server-side failure (the session lookup raised,
+      ``pg_lookup_exception``, or resolution produced nothing usable): retry,
+      and no onboarding, because the id on the call may be valid.
+    - A refused resume (a hijack guard, a substrate resident over HTTP, a
+      continuity_token naming an inactive agent): the refusal's own reason.
+
+    Those last two used to get the session-miss text, which told a caller
+    with a valid id that its id "names no identity" and offered a rebind or
+    a mint. ``unbound_reason`` then carries the keys the strict refusal puts
+    in its ``surface_context`` for the same result.
     """
     from src.governance_glossary import explain_verdict
-    return {
+
+    next_action, guidance, reason = _unbound_recovery(
+        caller_sent_session_id, resolution
+    )
+    payload = {
         "status": "⚪ unbound",
         "verdict": explain_verdict("unbound"),
-        "guidance": "Establish identity before reading agent metrics.",
-        "next_action": _unbound_next_action(caller_sent_session_id),
+        "guidance": guidance,
+        "next_action": next_action,
         "related_tools": ["onboard", "process_agent_update", "identity"],
     }
+    if reason:
+        payload["unbound_reason"] = reason
+    return payload
+
+
+def unbound_read_cause(arguments) -> tuple:
+    """``(caller_sent_session_id, resolution)`` for an unbound metrics read.
+
+    Both read handlers call this, the same way the REST strict gate reads the
+    record: the resolution this call's identity step recorded
+    (context.get_unbound_resolution; REST prebind or /mcp/ identity step),
+    and whether the caller itself sent a usable client_session_id, as the
+    recording step judged it, or by the same rule
+    (identity_bootstrap.caller_sent_usable_session_id) when nothing was
+    recorded.
+    """
+    from src.mcp_handlers.context import get_unbound_resolution
+    from src.mcp_handlers.identity_bootstrap import caller_sent_usable_session_id
+
+    resolution = get_unbound_resolution()
+    if resolution is not None and "caller_sent_session_id" in resolution:
+        return bool(resolution["caller_sent_session_id"]), resolution
+    return caller_sent_usable_session_id(arguments), resolution
+
+
+# The last sentence of every unbound read's note: reading changed nothing.
+_UNBOUND_READ_IS_PURE = (
+    " get_governance_metrics is read-only; it creates no identity and no "
+    "state for unbound callers."
+)
+
+
+def _unbound_recovery(
+    caller_sent_session_id: bool, resolution: Optional[dict]
+) -> tuple:
+    """``(next_action, guidance, unbound_reason)`` for an unbound read.
+
+    The recovery sentences are the strict refusal's for the same resolver
+    result (identity_bootstrap.unbound_call_refusal), so the two surfaces
+    cannot disagree about what a caller should do next.
+    """
+    from src.mcp_handlers.identity_bootstrap import (
+        RESOLUTION_FAILED_DO_NOT,
+        RESOLUTION_FAILED_NEXT_STEP,
+        TOKEN_FAILED_VERIFICATION,
+        USE_THIS_PROCESS_LATEST_TOKEN,
+        unbound_call_refusal,
+        unbound_cause,
+    )
+
+    cause = unbound_cause(resolution)
+    token_failed = bool(resolution and resolution.get("token_failed_verification"))
+    options, reason = unbound_call_refusal(
+        "check_working_state",
+        resolution,
+        caller_sent_session_id=caller_sent_session_id,
+        token_failed_verification=token_failed,
+    )
+    if cause == "resolution_failed":
+        return (
+            {
+                "tool": "check_working_state",
+                "example": "the same call, unchanged",
+                "note": (
+                    "Identity resolution failed on the server for this read, "
+                    "so it shows no agent state; the proof on the call may be "
+                    "valid. " + RESOLUTION_FAILED_NEXT_STEP + " "
+                    + RESOLUTION_FAILED_DO_NOT
+                ),
+            },
+            "Identity resolution failed on the server; retry this read.",
+            reason,
+        )
+    if cause == "hijack_guard":
+        # The hint names the guard, whether the presented token failed, and
+        # the two ways back, in the order the structured fields give them.
+        return (
+            {
+                "tool": "start_session",
+                "example": (
+                    "start_session(force_new=true, parent_agent_id=<your prior "
+                    "uuid, which must have exited>, spawn_reason='explicit')"
+                ),
+                "otherwise": (
+                    "identity(agent_uuid=<uuid>, continuity_token=<a valid "
+                    "token>, resume=true)"
+                ),
+                "note": options["hint"] + _UNBOUND_READ_IS_PURE,
+            },
+            "The identity hijack guard refused to resume the session this read named.",
+            reason,
+        )
+    if cause == "resume_refused":
+        # The resolver's own message names the cause. A substrate resident
+        # over HTTP also gets the channel it must use; any other refusal gets
+        # the strict refusal's default step, a fresh mint.
+        if options.get("next_step"):
+            action = {
+                "tool": "check_working_state",
+                "example": options["safe_options"][0]["call"],
+                "note": options["hint"] + " " + options["next_step"],
+                "do_not": list(options["do_not"]),
+            }
+        else:
+            action = {
+                "tool": "start_session",
+                "example": "start_session(force_new=true)",
+                "note": options["hint"] + _UNBOUND_READ_IS_PURE,
+            }
+        return (
+            action,
+            "Identity resolution refused the session this read named.",
+            reason,
+        )
+    action = _unbound_next_action(caller_sent_session_id)
+    if cause == "session_miss" and token_failed:
+        # As the strict refusal says it (_with_failed_token): the failure
+        # leads, and where the rebind is offered it asks for a current token.
+        note = TOKEN_FAILED_VERIFICATION + " " + action["note"]
+        if caller_sent_session_id:
+            note += " " + USE_THIS_PROCESS_LATEST_TOKEN
+        action = {**action, "note": note}
+    return action, "Establish identity before reading agent metrics.", reason
 
 
 def _unbound_next_action(caller_sent_session_id: bool) -> dict:
-    """The unbound read's next step, keyed only on what the caller sent.
+    """The unbound read's next step when no resolution ran or the session
+    missed, keyed only on what the caller sent.
 
     The shared sentences come from identity_bootstrap, the one source for
     recovery wording that the strict refusals quote as well.
@@ -181,8 +329,7 @@ def _unbound_next_action(caller_sent_session_id: bool) -> dict:
                 "resume=true) and repeat this read with the client_session_id "
                 "it returns. Otherwise mint one: "
                 + FRESH_MINT_STEP
-                + " get_governance_metrics is read-only; it "
-                "creates no identity and no state for unbound callers."
+                + _UNBOUND_READ_IS_PURE
             ),
         }
     return {
@@ -304,14 +451,32 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
         # fingerprint/pin fallback) is enough to protect strict writes, but it
         # is not caller proof for a pre-onboard read. Otherwise a fresh
         # no-proof Hermes/MCP episode can display a resident sibling's state.
+        #
+        # Where that is enforced: the identity step never binds a pre_onboard
+        # read to a server-inferred source (identity_step.resolve_identity: no
+        # sticky consult for such a read, and no agent_uuid / X-Agent-Id read
+        # proof), and neither does the REST prebind
+        # (http_routes/access._resolve_http_bound_agent). Through dispatch
+        # this branch sees only unbound calls, because inject_identity fills
+        # agent_id whenever the context is bound, so the server_inferred
+        # clause is defensive: it holds for a handler called with a bound
+        # context and no agent_id.
         if not bound_agent_id or proof_origin == "server_inferred":
-            from src.mcp_handlers.identity_bootstrap import (
-                caller_sent_usable_session_id,
-            )
+            if bound_agent_id:
+                # A binding existed, so no resolution failed: key only on
+                # what the caller sent.
+                from src.mcp_handlers.identity_bootstrap import (
+                    caller_sent_usable_session_id,
+                )
 
+                caller_sent_session_id = caller_sent_usable_session_id(arguments)
+                resolution = None
+            else:
+                caller_sent_session_id, resolution = unbound_read_cause(arguments)
             return success_response(
                 unbound_metrics_payload(
-                    caller_sent_session_id=caller_sent_usable_session_id(arguments)
+                    caller_sent_session_id=caller_sent_session_id,
+                    resolution=resolution,
                 )
             )
 
