@@ -128,6 +128,13 @@ REBIND_RETURNS_SESSION_ID = (
     "identity(agent_uuid=..., continuity_token=..., resume=true) returns it"
 )
 
+# A presented continuity_token that failed its signature check. Said on
+# every refusal that has the fact, so a caller is not sent to rebind with it.
+TOKEN_FAILED_VERIFICATION = (
+    "The continuity_token you presented failed verification (malformed, "
+    "truncated, or expired secret) and could not prove ownership."
+)
+
 DO_NOT_MINT_A_SECOND_IDENTITY = (
     "If this process already called start_session, do not call "
     "start_session(force_new=true) to clear this refusal: a second identity "
@@ -341,10 +348,7 @@ def hijack_guard_refusal_hint(
         "hijack guard "
         f"({resolve_result.get('reason', 'unknown')})."
         + (
-            " The continuity_token you presented failed "
-            "verification (malformed, truncated, or "
-            "expired secret) and could not prove "
-            "ownership."
+            " " + TOKEN_FAILED_VERIFICATION
             if token_failed_verification
             else ""
         )
@@ -397,6 +401,27 @@ def hard_resume_refusal_options(resolve_result: dict) -> dict:
     return options
 
 
+def _with_failed_token(options: dict) -> dict:
+    """Session-miss recovery for a call whose continuity_token failed: the
+    failure leads the hint and next step, and the rebind option asks for a
+    current token instead of the one that just failed."""
+    out = dict(options)
+    out["hint"] = TOKEN_FAILED_VERIFICATION + " " + options["hint"]
+    out["next_step"] = TOKEN_FAILED_VERIFICATION + " " + options["next_step"]
+    out["safe_options"] = tuple(
+        {
+            **option,
+            "when": option["when"]
+            + " The token on this call failed verification, so use the one "
+            "from this process's latest start_session or identity response.",
+        }
+        if option.get("action") == "rebind_then_retry"
+        else option
+        for option in options["safe_options"]
+    )
+    return out
+
+
 def unbound_call_refusal(
     tool_name: str,
     resolve_result: dict | None,
@@ -437,12 +462,14 @@ def unbound_call_refusal(
                 "identity_resolution": "failed",
                 "identity_resolution_failure": "pg_lookup_exception",
             }
-        return (
-            session_miss_refusal_options(
-                tool_name, caller_sent_session_id=caller_sent_session_id
-            ),
-            {},
+        options = session_miss_refusal_options(
+            tool_name, caller_sent_session_id=caller_sent_session_id
         )
+        if token_failed_verification:
+            # A malformed or expired token also lands here (no uuid in it to
+            # resume). Say so, and do not offer that token for the rebind.
+            return _with_failed_token(options), {"continuity_token_invalid": True}
+        return options, {}
     if error == "resume_rejected_hijack_guard":
         surface = {"resume_rejected_reason": resolve_result.get("reason")}
         if token_failed_verification:

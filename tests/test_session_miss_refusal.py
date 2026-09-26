@@ -432,3 +432,23 @@ def test_the_bare_onboard_refusal_still_leads_with_the_mint():
     )
     assert payload["safe_options"][0]["call"] == "onboard(force_new=true)"
     assert payload["next_step"].startswith("Call onboard(force_new=true)")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_token_on_a_session_miss_is_named_not_reused(monkeypatch):
+    """A malformed continuity_token carries no uuid to resume, so the call
+    misses its session. The refusal must say the token failed and must not
+    send the caller to rebind with that same token; both transports agree."""
+    from src.mcp_handlers.identity_bootstrap import TOKEN_FAILED_VERIFICATION
+
+    body = {"continuity_token": "v1.not-a-real-token"}
+    mcp = await _mcp_refusal(monkeypatch, "sync_state", body)
+    rest = await _rest_refusal(monkeypatch, "sync_state", {}, body)
+
+    for payload in (mcp, rest):
+        assert payload["hint"].startswith(TOKEN_FAILED_VERIFICATION), payload["hint"]
+        assert payload["next_step"].startswith(TOKEN_FAILED_VERIFICATION)
+        rebind = [o for o in payload["safe_options"] if o["action"] == "rebind_then_retry"]
+        assert rebind and "failed verification" in rebind[0]["when"]
+    assert mcp["hint"] == rest["hint"]
+    assert mcp["safe_options"] == rest["safe_options"]
