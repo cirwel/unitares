@@ -197,10 +197,11 @@ The two identifiers serve different jobs:
   callable is removed or renamed; many input digests and the surface digest
   move; 1.18.0, 2026-09-26: `onboard`'s `resume` description, and so the
   `start_session` alias's, no longer names `continuity_token`, `agent_id` and
-  `name` as resume signals. A name is never looked up (it still counts as an
-  S13 proof signal, so it resumes the session's binding), and a token without
-  `force_new` is refused (S1-c). No parameter changes; `onboard`'s and
-  `start_session`'s input digests and the surface digest move).
+  `name` as resume signals. A name is never looked up, and a token without
+  `force_new` is refused (S1-c); the text now points at
+  `docs/ontology/identity.md` for the resolution rules. No parameter changes;
+  `onboard`'s and `start_session`'s input digests and the surface digest
+  move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

@@ -104,14 +104,13 @@ class OnboardParams(AgentIdentityMixin):
     resume: Union[bool, str, None] = Field(
         default=True,
         description=(
-            "When the call carries a proof signal (client_session_id, "
-            "agent_uuid, name or agent_id), reuse the identity already bound "
-            "to this session, a weaker IP:UA pin included, instead of minting. "
-            "A name or agent_id is never looked up; it only keeps S13 from "
-            "forcing a mint. A continuity_token without force_new is refused; "
-            "rebind with identity(agent_uuid, continuity_token, resume=true). "
-            "With no proof signal, S13 mints fresh, or refuses "
-            "(lineage_declaration_required) under STRICT_IDENTITY_REQUIRED."
+            "Reuse this session's existing identity instead of minting when "
+            "the call proves it owns that binding, e.g. with the "
+            "client_session_id this process received; the full resolution "
+            "rules (S13 and the IP:UA pin check) are in docs/ontology/"
+            "identity.md. A name is never looked up. A continuity_token "
+            "without force_new is refused; rebind with identity(agent_uuid, "
+            "continuity_token, resume=true)."
         )
     )
     force_new: Union[bool, str, None] = Field(
