@@ -313,10 +313,14 @@ def test_onboard_envelope_does_not_turn_sibling_predecessor_into_parent():
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
     assert "co-location does not establish lineage" in env["next_action"]
     assert "Do not use its uuid as parent_agent_id" in env["next_action"]
-    # A thread with a predecessor is the case the caller must read, so the
-    # whole onboard record comes with it.
+    assert env["state_summary"]["episode_fork_kind"] == "sibling_locus"
+    # Nothing here shows a plain fresh mint (no is_new, outcome or
+    # assurance), so the whole onboard record comes with it, and the reason
+    # says so. A real fresh sibling_locus mint is routine
+    # (tests/test_response_budgets.py).
     assert env["raw_governance"] is payload
     assert env["response_shape"] == "full"
+    assert "is_new=missing" in env["response_shape_reason"]
     full = build_experience_envelope(
         "start_session", "onboard", payload, {"response_mode": "full"}
     )

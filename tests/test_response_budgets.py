@@ -1,14 +1,33 @@
 """Byte budgets for the default lifecycle responses.
 
 The onboard payload below is the live shape a default ``start_session``
-returned on 2026-09-25. The sync source is a hand-built minimal proceed in the
-live shape, so a field a real handler adds later does not reach this budget;
-the live check after deploy is the complement. A budget is a ceiling on the
-normal case only: guide, pause, provisional, weak-binding and non-plain-mint
-responses keep their full explanations and are asserted to. Budgets count
-UTF-8 bytes, not tokens; the base64 continuity_token costs more tokens per
-byte than prose. Restoring a field an abnormal case needs is a reason to raise
-a budget, stated in the PR, not a regression.
+returned on 2026-09-25; the rule tests mutate it. The start_session budgets
+are measured on the real onboard handler's output instead
+(tests/helpers/onboard_producer.py), one mint class each, because that
+hand-written fixture is an anonymous mint at thread position 1 and the common
+classes never reached the budget. The sync source is a hand-built minimal
+proceed in the live shape, so a field a real handler adds later does not reach
+this budget; the live check after deploy is the complement. A budget is a
+ceiling on the normal case only: guide, pause, provisional, weak-binding and
+non-plain-mint responses keep their full explanations and are asserted to.
+Budgets count UTF-8 bytes, not tokens; the base64 continuity_token costs more
+tokens per byte than prose. Restoring a field an abnormal case needs is a
+reason to raise a budget, stated in the PR, not a regression.
+
+start_session budgets per mint class, measured on the real handler
+(2026-09-26):
+
+- anonymous, thread position 1: 1,152 B against 1,200.
+- sibling_locus (a fresh uuid on a thread earlier process-instances
+  occupied): 1,461 B against 1,550. It adds predecessor_uuid,
+  episode_fork_kind and the ~210 B sentence saying co-location does not
+  establish lineage. That sentence is kept, not trimmed to fit: it is what
+  stops the earlier node's uuid being read as this process's parent.
+- each lifted mint notice adds up to 300 B on top of its class. A named
+  mint's compact resident_registration is 248 B for not_on_roster (the
+  status plus one sentence on what it costs) and 70-81 B for the other
+  statuses; a written bootstrap ack is 224 B. Named at position 1:
+  1,388 B against 1,500; named sibling_locus: 1,697 B against 1,850.
 """
 
 from __future__ import annotations
@@ -17,11 +36,15 @@ import json
 import sys
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.mcp_handlers.middleware import envelope_step
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
 from src.mcp_handlers.response_formatter import format_response
+from src.thread_identity import build_fork_context
+from tests.helpers import onboard_producer
 
 SDK_SRC = Path(__file__).resolve().parent.parent / "agents" / "sdk" / "src"
 if str(SDK_SRC) not in sys.path:
@@ -29,7 +52,10 @@ if str(SDK_SRC) not in sys.path:
 
 from unitares_sdk._checkin_fields import resolve_checkin_fields  # noqa: E402
 
+# start_session, per mint class; see the module docstring.
 START_SESSION_BUDGET = 1_200
+START_SESSION_SIBLING_BUDGET = 1_550
+START_SESSION_NOTICE_ALLOWANCE = 300
 # Raised from 900 in #2448: the margin now carries its scope (~75 B), which
 # is the cost of an honest "comfortable" on the normal live decision.
 ROUTINE_SYNC_BUDGET = 960
@@ -253,13 +279,205 @@ def test_a_mint_that_did_not_go_as_asked_keeps_the_whole_record(change):
     assert env["response_shape"] == "full"
 
 
-def test_start_session_with_predecessor_keeps_the_whole_record():
+_EARLIER = onboard_producer.EARLIER_UUID
+_MODEL = {"force_new": True, "model_type": "claude-opus-5-5"}
+_NAMED = {**_MODEL, "name": "my-agent"}
+# (arguments, thread position, byte budget) per mint class.
+_MINT_CLASSES = {
+    "anonymous": (_MODEL, 1, START_SESSION_BUDGET),
+    "sibling_locus": (_MODEL, 2, START_SESSION_SIBLING_BUDGET),
+    "named": (_NAMED, 1, START_SESSION_BUDGET + START_SESSION_NOTICE_ALLOWANCE),
+    "named_sibling_locus": (
+        _NAMED, 2, START_SESSION_SIBLING_BUDGET + START_SESSION_NOTICE_ALLOWANCE,
+    ),
+}
+
+
+def _field_exists(env: dict, reason: str) -> bool:
+    """A response_shape_reason entry names a field the response carries."""
+    path = reason.split("=", 1)[0].split(".")
+    for container in (env, env.get("raw_governance") or {}):
+        node = container
+        for part in path:
+            if not isinstance(node, dict) or part not in node:
+                break
+            node = node[part]
+        else:
+            return True
+    # A reason may name a field by its absence ("...=missing").
+    return reason.endswith("=missing")
+
+
+def test_the_envelope_budgets_are_the_ones_stated_here():
+    assert envelope_step._START_SESSION_BUDGET_BYTES == START_SESSION_BUDGET
+    assert envelope_step._START_SESSION_SIBLING_BUDGET_BYTES == START_SESSION_SIBLING_BUDGET
+    assert (
+        envelope_step._START_SESSION_NOTICE_ALLOWANCE_BYTES
+        == START_SESSION_NOTICE_ALLOWANCE
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mint_class", list(_MINT_CLASSES))
+async def test_a_default_mint_is_routine_within_its_class_budget(mint_class):
+    """Built by the real onboard handler, not a hand-written payload."""
+    arguments, position, budget = _MINT_CLASSES[mint_class]
+    payload = await onboard_producer.mint(arguments, position=position)
+    env, wire = await onboard_producer.start_session(arguments, payload)
+
+    # The premise: the handler produced the class this case is about.
+    fork_kind = payload["thread_context"]["episode_fork_kind"]
+    assert fork_kind == ("sibling_locus" if position > 1 else "none")
+    assert ("resident_registration" in payload) is ("name" in arguments)
+
+    assert env["response_shape"] == "routine", env.get("response_shape_reason")
+    assert "raw_governance" not in env
+    assert "response_shape_reason" not in env
+    assert "_response_size" not in env
+    assert wire <= budget, (mint_class, wire, budget)
+    assert env["agent_uuid"] == payload["uuid"]
+    assert env["client_session_id"] == payload["client_session_id"]
+    assert env["rebind"]["continuity_token"] == payload["continuity_token"]
+    if position > 1:
+        # R6's discriminator and the earlier node, with the sentence that
+        # keeps that node from being read as a parent.
+        assert env["state_summary"]["episode_fork_kind"] == "sibling_locus"
+        assert env["state_summary"]["predecessor_uuid"] == _EARLIER
+        assert "co-location does not establish lineage" in env["next_action"]
+    else:
+        assert "episode_fork_kind" not in env["state_summary"]
+        assert "predecessor_uuid" not in env["state_summary"]
+    if "name" in arguments:
+        registration = payload["resident_registration"]
+        assert env["resident_registration"]["status"] == registration["status"]
+        assert env["resident_registration"]["on_roster"] is registration["on_roster"]
+    else:
+        assert "resident_registration" not in env
+
+
+@pytest.mark.asyncio
+async def test_a_declared_lineage_mint_keeps_the_whole_record_and_says_why():
+    arguments = {**_MODEL, "parent_agent_id": _EARLIER, "spawn_reason": "explicit"}
+    payload = await onboard_producer.mint(
+        arguments,
+        position=2,
+        lineage_row={"parent_agent_id": _EARLIER, "provisional_lineage": True},
+    )
+    env, _wire_bytes = await onboard_producer.start_session(arguments, payload)
+
+    assert payload["thread_context"]["episode_fork_kind"] == "identity_lineage"
+    assert env["response_shape"] == "full"
+    assert env["raw_governance"] == payload
+    reasons = env["response_shape_reason"].split(", ")
+    assert f"lineage_state={payload['lineage_state']}" in reasons
+    assert "thread_context.episode_fork_kind=identity_lineage" in reasons
+    assert all(_field_exists(env, reason) for reason in reasons), reasons
+    assert env["state_summary"]["episode_fork_kind"] == "identity_lineage"
+    assert env["state_summary"]["predecessor_uuid"] == _EARLIER
+    assert "Declared lineage for this fork is already recorded" in env["next_action"]
+    assert "co-location does not establish lineage" not in env["next_action"]
+
+
+@pytest.mark.asyncio
+async def test_a_label_rename_keeps_the_whole_record_and_says_why():
+    """A refused label is abnormal and exists only in this response."""
+    with patch(
+        "src.mcp_handlers.identity.handlers.set_agent_label_resolved",
+        AsyncMock(return_value="my-agent_4dc58779"),
+    ):
+        payload = await onboard_producer.mint(_NAMED)
+    env, _wire_bytes = await onboard_producer.start_session(_NAMED, payload)
+
+    assert payload["label_renamed"]["requested"] == "my-agent"
+    assert env["response_shape"] == "full"
+    assert env["raw_governance"]["label_renamed"] == payload["label_renamed"]
+    assert env["response_shape_reason"] == "label_renamed"
+    # The registration verdict is lifted the same way in the full shape.
+    assert env["resident_registration"]["status"] == "not_on_roster"
+
+
+def _sibling_payload(**thread_overrides) -> dict:
     payload = _onboard_payload()
-    payload["thread_context"]["predecessor"] = {"uuid": "u-prior"}
+    payload["thread_context"] = build_fork_context(
+        thread_id="t-f3a8bb1ebde032c8",
+        position=2,
+        parent_uuid=None,
+        spawn_reason="new_session",
+        all_nodes=[onboard_producer.EARLIER_NODE],
+        agent_uuid=payload["uuid"],
+        minted_fresh=True,
+    )
+    payload["thread_context"].update(thread_overrides)
+    return payload
+
+
+def test_a_sibling_locus_mint_is_routine():
+    payload = _sibling_payload()
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert env["response_shape"] == "routine"
+    assert "raw_governance" not in env
+    assert env["state_summary"]["predecessor_uuid"] == _EARLIER
+    assert env["state_summary"]["episode_fork_kind"] == "sibling_locus"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"thread": {"episode_fork_kind": None}},
+        {"thread": {"episode_fork_kind": "continuation"}},
+        {"thread": {"identity_lineage_fork": True}},
+        {"thread": {"identity_lineage_fork": None}},
+        {"thread": {"spawn_reason": "subagent"}},
+        {"payload": {"lineage_state": None}},
+        {"payload": {"lineage_state": "rejected_coincidental"}},
+    ],
+    ids=[
+        "kind_missing",
+        "kind_unknown",
+        "lineage_fork",
+        "lineage_fork_missing",
+        "lineage_spawn_reason",
+        "lineage_state_missing",
+        "rejected_coincidental",
+    ],
+)
+def test_a_sibling_locus_with_any_lineage_signal_keeps_the_whole_record(change):
+    """Positive evidence only: the sibling case is routine only when every
+    lineage signal says none was declared."""
+    payload = _sibling_payload(**change.get("thread", {}))
+    for key, value in change.get("payload", {}).items():
+        if value is None:
+            payload.pop(key)
+        else:
+            payload[key] = value
     env = build_experience_envelope("start_session", "onboard", payload, {})
 
     assert env["raw_governance"] is payload
-    assert env["state_summary"]["predecessor_uuid"] == "u-prior"
+    assert env["response_shape"] == "full"
+    assert env["response_shape_reason"]
+
+
+def test_a_root_node_with_a_lineage_spawn_reason_keeps_the_whole_record():
+    # A lineage spawn reason with no parent is a self-declared continuation
+    # (build_fork_context classifies it identity_lineage at position 1 too).
+    payload = _onboard_payload()
+    payload["thread_context"] = build_fork_context(
+        thread_id="t-f3a8bb1ebde032c8",
+        position=1,
+        parent_uuid=None,
+        spawn_reason="compaction",
+        all_nodes=[],
+        agent_uuid=payload["uuid"],
+        minted_fresh=True,
+    )
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert env["raw_governance"] is payload
+    assert env["response_shape_reason"] == (
+        "thread_context.episode_fork_kind=identity_lineage"
+    )
+    assert env["state_summary"]["episode_fork_kind"] == "identity_lineage"
 
 
 def test_start_session_abnormal_weak_binding_keeps_the_full_explanation():
@@ -458,22 +676,43 @@ def test_a_proceed_carrying_a_review_nudge_is_not_trimmed():
     assert "response_shape" not in env
 
 
+def _deprecation_block() -> dict:
+    from src.mcp_handlers.identity.session import build_token_deprecation_block
+
+    return build_token_deprecation_block(
+        used_token_for_resume=True, token_issued_at=1790321276
+    )
+
+
 @pytest.mark.parametrize(
     "extra",
     [
-        {"label_renamed": {"from": "taken", "to": "taken_54d62846"}},
+        # The handler's shape (identity/handlers.py); the real-handler rename
+        # is test_a_label_rename_keeps_the_whole_record_and_says_why.
+        {"label_renamed": {
+            "requested": "taken",
+            "applied": "taken_54d62846",
+            "reason": "label_taken_by_active_agent",
+            "detail": "'taken' is already held by another active agent.",
+        }},
+        {"resident_registration": {"status": "a_future_status", "on_roster": False}},
         {"resident_registration": {"status": "not_on_roster"}},
-        {"bootstrap": {"status": "written"}},
-        {"deprecations": ["old_param"]},
+        {"bootstrap": {"written": False, "reason": "error", "detail": "RuntimeError"}},
+        {"bootstrap": {"written": True, "state_id": 7, "a_future_field": 1}},
+        {"deprecations": "real"},
+        {"temporal_context": "Last session: 3 days ago."},
         {"lineage_state": "rejected_cross_role"},
         {"lineage_state": "rejected_coincidental"},
         {"some_future_notice": {"note": "x"}},
     ],
     ids=[
         "label_renamed",
-        "resident_registration",
-        "bootstrap",
+        "resident_registration_unknown_status",
+        "resident_registration_without_on_roster",
+        "bootstrap_not_written",
+        "bootstrap_unknown_field",
         "deprecations",
+        "temporal_context",
         "rejected_cross_role",
         "rejected_coincidental",
         "unknown_key",
@@ -481,13 +720,100 @@ def test_a_proceed_carrying_a_review_nudge_is_not_trimmed():
 )
 def test_a_mint_with_anything_extra_to_say_keeps_the_whole_record(extra):
     """Onboard adds keys after building the record; an allowlist, not a
-    denylist, decides routine, so an unknown notice is shown, not dropped."""
+    denylist, decides routine, so an unknown notice (or a known one in a
+    shape the envelope does not know) is shown, not dropped."""
+    if extra.get("deprecations") == "real":
+        extra = {"deprecations": [_deprecation_block()]}
     payload = _onboard_payload()
     payload.update(extra)
     env = build_experience_envelope("start_session", "onboard", payload, {})
 
     assert env["raw_governance"] is payload
     assert env["response_shape"] == "full"
+    (key,) = extra
+    reasons = env["response_shape_reason"].split(", ")
+    assert any(reason.split("=")[0] == key for reason in reasons), reasons
+    assert all(_field_exists(env, reason) for reason in reasons), reasons
+
+
+_RESIDENT = "ResidentX"
+
+
+@pytest.mark.parametrize(
+    "name, stamped, roster, status",
+    [
+        (_RESIDENT, ["persistent", "autonomous"], [_RESIDENT], "registered"),
+        ("my-agent", ["ephemeral"], [_RESIDENT], "not_on_roster"),
+        ("my-agent", ["ephemeral"], [], "no_roster_configured"),
+        ("my-agent", None, [_RESIDENT], "caller_supplied_tags"),
+    ],
+)
+def test_a_resident_registration_verdict_is_lifted_compact(name, stamped, roster, status):
+    """Every named mint carries one; the verdict stays, the prose goes."""
+    from src.grounding.onboard_classifier import resident_registration
+
+    registration = resident_registration(name, stamped, roster=roster)
+    assert registration["status"] == status
+    payload = _onboard_payload()
+    payload["display_name"] = name
+    payload["resident_registration"] = registration
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert env["response_shape"] == "routine"
+    assert "raw_governance" not in env
+    lifted = env["resident_registration"]
+    assert lifted["status"] == status
+    assert lifted["on_roster"] is registration["on_roster"]
+    assert set(lifted) == (
+        {"status", "on_roster", "detail"}
+        if status == "not_on_roster"
+        else {"status", "on_roster"}
+    )
+    if status == "not_on_roster":
+        # What it costs, and that it cannot be fixed on this identity; no
+        # invitation to mint again.
+        assert "only at mint" in lifted["detail"]
+        assert "auto-archive" in lifted["detail"]
+        assert "bootstrap" not in lifted["detail"]
+    assert _wire({"resident_registration": lifted}) <= START_SESSION_NOTICE_ALLOWANCE
+    assert _wire(env) <= START_SESSION_BUDGET + START_SESSION_NOTICE_ALLOWANCE
+
+
+def test_the_envelope_knows_every_resident_registration_status():
+    from src.grounding.onboard_classifier import _REGISTRATION_DETAIL
+
+    assert envelope_step._RESIDENT_REGISTRATION_STATUSES == set(_REGISTRATION_DETAIL)
+
+
+@pytest.mark.asyncio
+async def test_a_written_bootstrap_is_lifted_whole():
+    """The ack of the bootstrap row the caller asked for (initial_state),
+    from the real writer."""
+    from src.mcp_handlers.identity.bootstrap_checkin import write_bootstrap
+    from src.mcp_handlers.schemas.core import BootstrapStateParams
+
+    db = AsyncMock()
+    db.is_substrate_earned = AsyncMock(return_value=False)
+    db.record_bootstrap_state = AsyncMock(return_value=(42, True))
+    bootstrap = await write_bootstrap(
+        db, identity_id=1, agent_id="u", params=BootstrapStateParams(),
+    )
+    payload = _onboard_payload()
+    payload["bootstrap"] = bootstrap
+    env = build_experience_envelope("start_session", "onboard", payload, {})
+
+    assert env["response_shape"] == "routine"
+    assert env["bootstrap"] == bootstrap
+    assert _wire({"bootstrap": bootstrap}) <= START_SESSION_NOTICE_ALLOWANCE
+    assert "_response_size" not in env
+
+
+def test_an_explicit_full_request_on_a_routine_mint_gives_no_reason():
+    env = build_experience_envelope(
+        "start_session", "onboard", _onboard_payload(), {"response_mode": "full"}
+    )
+    assert env["response_shape"] == "full"
+    assert "response_shape_reason" not in env
 
 
 def test_empty_extras_do_not_make_a_mint_unusual():
