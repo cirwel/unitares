@@ -1,0 +1,85 @@
+name: Plugin Skill Sync
+
+# unitares-governance-plugin/skills/ is a byte mirror of skills/ here. Nothing
+# used to run the sync, and the plugin's CI only checks the mirror against its
+# OWN manifest, so a stale mirror passed; on 2026-09-25/26 it fell behind twice
+# and was caught only by comparing the two repos by hand.
+#
+# On every push to master that touches skills/, this runs
+# scripts/dev/open-plugin-skill-sync-pr.sh: in sync -> nothing happens; behind
+# -> the mirror is committed to ONE automation branch (auto/plugin-skill-sync)
+# in the plugin repo and a PR is opened there, or the open one is updated. An
+# operator's local deploy wrapper runs the same script, so the two can never
+# open competing PRs, and the push is a compare-and-swap either way. It never
+# merges; merging is the maintainer's.
+#
+# Credentials. GITHUB_TOKEN cannot write to another repository, so the plugin
+# checkout, push and PR use the repository secret PLUGIN_SYNC_TOKEN: a
+# fine-grained token scoped to cirwel/unitares-governance-plugin with
+# Contents and Pull requests read/write. Without it the job warns and does
+# nothing. It runs only on master pushes and manual dispatch -- never on
+# pull_request -- so no PR's code ever runs with that secret.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "skills/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One at a time; a queued run supersedes an older queued one. Each run syncs to
+# the newest master, so nothing is lost by skipping the ones in between.
+concurrency:
+  group: plugin-skill-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TOKEN_CONFIGURED: ${{ secrets.PLUGIN_SYNC_TOKEN != '' }}
+    steps:
+      - name: Warn when the push credential is missing
+        if: env.TOKEN_CONFIGURED != 'true'
+        run: |
+          echo "::warning::PLUGIN_SYNC_TOKEN is not configured, so the plugin skill mirror was not synced. Add a fine-grained token with Contents and Pull requests read/write on cirwel/unitares-governance-plugin."
+          echo "Plugin skill sync skipped: PLUGIN_SYNC_TOKEN not configured." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check out unitares
+        if: env.TOKEN_CONFIGURED == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out the plugin
+        if: env.TOKEN_CONFIGURED == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: cirwel/unitares-governance-plugin
+          token: ${{ secrets.PLUGIN_SYNC_TOKEN }}
+          path: _plugin
+          fetch-depth: 1
+
+      - name: Sync the mirror and open or update the PR
+        if: env.TOKEN_CONFIGURED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PLUGIN_SYNC_TOKEN }}
+          UNITARES_REPO_DIR: ${{ github.workspace }}
+          UNITARES_PLUGIN_REPO: ${{ github.workspace }}/_plugin
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          set +e
+          out="$(bash scripts/dev/open-plugin-skill-sync-pr.sh 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "$out"
+          printf '%s\n' "$out" >> "$GITHUB_STEP_SUMMARY"
+          # 2 = a hand-opened sync PR is already doing this; not a failure.
+          if [ "$rc" -eq 2 ]; then exit 0; fi
+          exit "$rc"
