@@ -129,7 +129,9 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or "
         "openai/gpt-oss model still routes off-box. host_id rejects the "
         "Claude, Codex and Antigravity adapters; those are delegate_inference's. "
-        "Requires a bound identity."
+        "Requires a bound identity. A successful call also runs one governance "
+        "update on your state (Energy accounting), logged as an ordinary "
+        "auto_attest row."
     ),
     "delegate_inference": (
         "Send one bounded prompt to an operator-authorized subscription CLI "
@@ -143,7 +145,9 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "timeout the child may still be running — the failure carries an "
         "execution id flagged possibly_running, so have it reconciled rather "
         "than reissuing. consult at effort='thorough' takes this same lane "
-        "without host controls."
+        "without host controls. A successful call also runs one governance "
+        "update on your state (Energy accounting), logged as an ordinary "
+        "auto_attest row."
     ),
     "consult": (
         "Primary advisory model-help surface: send a brief, get back advisory "

@@ -133,6 +133,8 @@ _SAFE_PROVENANCE_FIELDS = (
     "finish_reason",
     "configured_by",
     "warnings",
+    "model_reporting_status",
+    "model_reroutes",
 )
 
 
@@ -251,7 +253,22 @@ def _safe_provenance(
         value = inference.get(key)
         if value is None:
             continue
-        if key in {"models_used", "warnings"}:
+        if key == "model_reroutes":
+            if not isinstance(value, (list, tuple)):
+                continue
+            safe[key] = [
+                {
+                    name: str(item[source])[:200]
+                    for name, source in (
+                        ("from_model", "fromModel"),
+                        ("to_model", "toModel"),
+                        ("reason", "reason"),
+                    )
+                    if isinstance(item, dict) and item.get(source) is not None
+                }
+                for item in value[:8]
+            ]
+        elif key in {"models_used", "warnings"}:
             if not isinstance(value, (list, tuple)):
                 continue
             max_chars = 200 if key == "models_used" else 500
@@ -294,6 +311,15 @@ def _safe_failure(failure: InferenceFailure) -> dict[str, Any]:
             "id": str(execution_id)[:200],
             "possibly_running": True,
         }
+    # Registry route facts of the attempted host, when the lane reports them,
+    # so a failed call still says where the brief was sent. Never base_url.
+    route = {
+        key: str(failure.details[key])[:200]
+        for key in ("host_id", "provider_kind", "privacy_class")
+        if failure.details.get(key)
+    }
+    if route:
+        safe["route"] = route
     return safe
 
 
@@ -530,9 +556,10 @@ def _success(
     # so every failure below carries the route: once a result came back, the
     # record says where the brief went even when no advice is returned. An
     # upstream failure (no result) records no route block: the lane,
-    # requested privacy and failure code, plus, for a thorough call, the
-    # target host (request.thorough_host_id) and any possibly-running
-    # execution id. A failed standard call does not say where it was tried.
+    # requested privacy and failure code, the attempted host's registry route
+    # under failure.upstream.route (_safe_failure), any possibly-running
+    # execution id, and -- for a thorough call under privacy='cloud_allowed'
+    # -- request.thorough_host_id.
     provenance = _safe_provenance(
         outcome,
         requester_uuid=request.requester_uuid,
@@ -855,6 +882,8 @@ _RECORD_ROUTE_FIELDS = (
     "orchestrator_agent_id",
     "latency_ms",
     "tokens_used",
+    "model_reporting_status",
+    "model_reroutes",
 )
 _IDENTIFIER_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 # Codes and categories are snake_case constants (upstream failure codes are

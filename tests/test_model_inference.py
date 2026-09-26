@@ -1353,6 +1353,32 @@ class TestErrorHandling:
         # The error details include model_requested, base_url, task_type
         assert "task_type" in parsed or "model_requested" in parsed
 
+    @pytest.mark.asyncio
+    async def test_failed_attempt_names_its_registry_route(self):
+        """A failed call says where it was tried: registry host, not base_url."""
+        from src.mcp_handlers.support.model_inference import (
+            CallModelRequest,
+            run_model_inference,
+        )
+
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.side_effect = Exception("Something broke")
+
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
+            outcome = await run_model_inference(CallModelRequest(
+                prompt="test",
+                requesting_agent_uuid=None,
+                provider="ollama",
+                privacy="local",
+            ))
+
+        assert outcome.failure is not None
+        details = outcome.failure.details
+        assert details["host_id"] == "ollama:local"
+        assert details["privacy_class"] == "local"
+        assert details["provider_kind"] == "ollama"
+
 
 # =============================================================================
 # Tests: Routing via detection

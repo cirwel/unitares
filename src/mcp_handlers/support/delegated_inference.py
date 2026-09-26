@@ -279,6 +279,8 @@ async def run_delegated_inference(
             category="system_error",
             details={
                 "host_id": host_id,
+                "provider_kind": host.get("provider_kind"),
+                "privacy_class": host.get("privacy_class"),
                 "adapter_status": adapter_result.get("status"),
                 "dispatch_phase": dispatch_phase,
                 "orchestrator_execution_id": orchestrator_execution_id,
@@ -326,6 +328,10 @@ async def run_delegated_inference(
         "transport": host.get("transport", "host_adapter"),
         "model_used": adapter_provenance.get("model_used"),
         "models_used": models_used,
+        # Why model_used may be None (the CLI did not report one) and any
+        # mid-run model switch the host observed; dropped here until 2026-09-26.
+        "model_reporting_status": adapter_provenance.get("model_reporting_status"),
+        "model_reroutes": adapter_provenance.get("model_reroutes") or [],
         "model_requested": request.model,
         "task_type": request.task_type,
         "privacy_class": host.get("privacy_class"),

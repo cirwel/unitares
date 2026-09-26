@@ -1289,7 +1289,7 @@ Primary advisory model-help surface: send a brief, get back advisory model evide
 - **Timeout:** 240s
 - **Related:** `consult`, `list_inference_hosts`, `describe_inference_host`, `knowledge`, `dialectic`
 
-Run one synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record; consult is the better default unless you need this route control. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude, Codex and Antigravity adapters; those are delegate_inference's. Requires a bound identity.
+Run one synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record; consult is the better default unless you need this route control. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude, Codex and Antigravity adapters; those are delegate_inference's. Requires a bound identity. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
 ### `delegate_inference`
 
@@ -1299,7 +1299,7 @@ Run one synchronous advisory completion on the local Ollama lane or the Hugging 
 - **Depends on:** `list_inference_hosts`
 - **Related:** `consult`, `describe_inference_host`, `dialectic`
 
-Send one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls.
+Send one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
 ## Export & History
 
