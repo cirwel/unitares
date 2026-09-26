@@ -1,14 +1,14 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-09-26T05:28:21Z",
+  "verified_at": "2026-09-26T06:56:54Z",
   "verified_date": "2026-09-26",
   "verifier": "Kenny Wang",
   "source_digests": {
-    "unitares/skills/dialectic-reasoning/SKILL.md": "fbc3833e02e65b63",
+    "unitares/skills/dialectic-reasoning/SKILL.md": "c25b13bc3ac17565",
     "unitares/skills/discord-bridge/SKILL.md": "b1bf0f1276d8756a",
     "unitares/skills/governance-fundamentals/SKILL.md": "18df94e4b5c77c9c",
-    "unitares/skills/governance-lifecycle/SKILL.md": "84e47f4fd144c1c8",
+    "unitares/skills/governance-lifecycle/SKILL.md": "0aac7b1091c6bcaa",
     "unitares/skills/knowledge-graph/SKILL.md": "49568211dd3bd6f6",
     "unitares/skills/unitares-dashboard/SKILL.md": "d98449e0076fc584",
     "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
@@ -18,7 +18,7 @@
     "unitares/src/mcp_handlers/identity/session.py": "e0918cc3410bf61a",
     "unitares/src/mcp_handlers/introspection/tool_introspection.py": "63ca5495b23a8b0e",
     "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
-    "unitares/src/mcp_handlers/middleware/envelope_step.py": "ccbeb314d6c72a05",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "1c88ba85dc956102",
     "unitares/src/mcp_handlers/middleware/identity_step.py": "f50ccc2629ef7832",
     "unitares/src/mcp_handlers/schemas/identity.py": "35c5919dceac4c44",
     "unitares/src/mcp_handlers/tool_stability.py": "a527552f03a9eff9",
@@ -26,13 +26,13 @@
     "unitares/src/schema_brief.py": "401bbce563c30439",
     "unitares/src/tool_modes.py": "cce173b777ca01c3"
   },
-  "skill_digest": "cde8a77fdb710807",
+  "skill_digest": "1c927a199f153219",
   "superseded_digests": {
     "unitares/skills/governance-lifecycle/SKILL.md": [
-      "ca77c9c80d0e61a1"
+      "344917459270f773"
     ],
     "unitares/src/mcp_handlers/middleware/envelope_step.py": [
-      "019b7f1be17e2266"
+      "4437488d72ffcead"
     ]
   }
 }
