@@ -327,11 +327,12 @@ A resolved session read also carries an `attestation` block saying what party
 signatures the record actually holds: `bilateral`, `single_signer`, `unsigned`,
 or `legacy_v1`. Read it rather than inferring from the signature fields, and do
 not read `signature_version` as a claim that anyone signed — it names the
-scheme, not the act. As of 2026-09-08 essentially every live resolution is
-`unsigned`, because agents are no longer minted with the api_key the party HMAC
-needs. That is a known gap under decision, not a fault in your session, and it
+scheme, not the act. Party-HMAC signing of resolutions is retired (decided
+2026-09-25), so a new resolution is `unsigned` with `unsigned_by_design: true`
+(`signature_version` 3). That is expected, not a fault in your session, and it
 does not weaken the conditions you agreed to: the resolution record is governed
-by the transcript either way.
+by the transcript either way. Older records keep whatever state they were
+finalized with.
 
 ## How to Participate Well
 

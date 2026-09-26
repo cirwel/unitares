@@ -73,7 +73,7 @@ def test_resolution_recovers_reviewer_rationale_from_its_own_antithesis():
     ))
     session.phase = DialecticPhase.RESOLVED
 
-    resolution = session.finalize_resolution("key-a", "key-b")
+    resolution = session.finalize_resolution()
 
     assert resolution.reasoning == ANTITHESIS_TEXT, (
         "dropping the duplicated synthesis reasoning must not blank the "
@@ -97,7 +97,7 @@ def test_fallback_never_borrows_the_other_agents_argument():
     ))
     session.phase = DialecticPhase.RESOLVED
 
-    resolution = session.finalize_resolution("key-a", "key-b")
+    resolution = session.finalize_resolution()
 
     assert ANTITHESIS_TEXT not in (resolution.reasoning or ""), (
         "the paused agent has no antithesis of its own; it must not be "
@@ -117,7 +117,7 @@ def test_explicit_synthesis_reasoning_still_wins():
     ))
     session.phase = DialecticPhase.RESOLVED
 
-    resolution = session.finalize_resolution("key-a", "key-b")
+    resolution = session.finalize_resolution()
 
     assert resolution.reasoning == "On reflection the narrowed scope answers my concern."
 
