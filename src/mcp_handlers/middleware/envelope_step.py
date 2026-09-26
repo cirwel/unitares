@@ -1869,8 +1869,13 @@ def _attach_response_size(
         current = _mode_in_effect(friendly_name, arguments, payload)
         reduce_with = None
         if friendly_name == "search_shared_memory":
+            # Name only the levers still open: a lean caller keeps the
+            # include_details and open-one advice without the mode it is in.
             reduce_with = (
-                "Use include_details=false and response_mode='lean'; open one "
+                "Use include_details=false; open one discovery with "
+                "knowledge(action='details', discovery_id='...')."
+                if current == "lean"
+                else "Use include_details=false and response_mode='lean'; open one "
                 "discovery with knowledge(action='details', discovery_id='...')."
             )
         elif friendly_name == "sync_state" and current == "full":

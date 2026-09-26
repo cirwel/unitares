@@ -288,11 +288,11 @@ async def test_metrics_hints_never_name_the_tier_in_effect(arguments):
     env = await _metrics_envelope(arguments)
     _, validated = await real_metrics_payload(arguments)
     current = resolve_metrics_verbosity(validated)
-    for text in (
-        env.get("raw_governance_hint") or "",
-        env.get("_response_size", {}).get("reduce_with") or "",
-    ):
-        assert not _names_mode(text, current), (current, text)
+    # These envelopes stay under the 4,000 B size-hint threshold, so only
+    # raw_governance_hint is exercised here; reduce_with has its own padded
+    # table below, which also asserts when advice must be present.
+    hint = env.get("raw_governance_hint") or ""
+    assert not _names_mode(hint, current), (current, hint)
 
 
 @pytest.mark.parametrize("mode", _SYNC_MODES)
@@ -304,11 +304,11 @@ def test_sync_hints_never_name_the_mode_in_effect(mode):
         "sync_state", "process_agent_update", formatted, {"response_mode": mode}
     )
     current = formatted.get("_mode") or ("full" if mode == "full" else mode)
-    for text in (
-        env.get("raw_governance_hint") or "",
-        env.get("_response_size", {}).get("reduce_with") or "",
-    ):
-        assert not _names_mode(text, current), (current, text)
+    # These envelopes stay under the 4,000 B size-hint threshold, so only
+    # raw_governance_hint is exercised here; reduce_with has its own padded
+    # table below, which also asserts when advice must be present.
+    hint = env.get("raw_governance_hint") or ""
+    assert not _names_mode(hint, current), (current, hint)
 
 
 # Direct table over the size hint: every alias that has one, every mode, with
@@ -317,33 +317,39 @@ def test_sync_hints_never_name_the_mode_in_effect(mode):
 _PAD = {"padding": "x" * 4_500}
 
 
+# advised: whether a smaller route exists from this mode. The smallest tier
+# of a tool has none, so it gets no advice rather than advice naming itself.
 @pytest.mark.parametrize(
-    "friendly_name, arguments, payload, current",
+    "friendly_name, arguments, payload, current, advised",
     [
-        ("check_working_state", {}, {}, "minimal"),
-        ("check_working_state", {"include_state": True}, {}, "minimal"),
-        ("check_working_state", {"verbosity": "standard"}, {}, "standard"),
-        ("check_working_state", {"verbosity": "full"}, {}, "full"),
-        ("check_working_state", {"lite": False}, {}, "full"),
-        ("sync_state", {"response_mode": "minimal"}, {"_mode": "minimal"}, "minimal"),
-        ("sync_state", {}, {"_mode": "compact"}, "compact"),
-        ("sync_state", {}, {"_mode": "mirror"}, "mirror"),
-        ("sync_state", {"response_mode": "standard"}, {"_mode": "standard"}, "standard"),
-        ("sync_state", {"response_mode": "full"}, {}, "full"),
-        ("sync_state", {"response_mode": "verbose"}, {}, "full"),
-        ("search_shared_memory", {}, {}, "lean"),
-        ("search_shared_memory", {"response_mode": "compact"}, {}, "compact"),
-        ("search_shared_memory", {"response_mode": "full"}, {}, "full"),
+        ("check_working_state", {}, {}, "minimal", False),
+        ("check_working_state", {"include_state": True}, {}, "minimal", False),
+        ("check_working_state", {"verbosity": "standard"}, {}, "standard", True),
+        ("check_working_state", {"verbosity": "full"}, {}, "full", True),
+        ("check_working_state", {"lite": False}, {}, "full", True),
+        ("sync_state", {"response_mode": "minimal"}, {"_mode": "minimal"}, "minimal", False),
+        ("sync_state", {}, {"_mode": "compact"}, "compact", True),
+        ("sync_state", {}, {"_mode": "mirror"}, "mirror", True),
+        ("sync_state", {"response_mode": "standard"}, {"_mode": "standard"}, "standard", True),
+        ("sync_state", {"response_mode": "full"}, {}, "full", True),
+        ("sync_state", {"response_mode": "verbose"}, {}, "full", True),
+        # A lean search keeps the include_details and open-one levers.
+        ("search_shared_memory", {}, {}, "lean", True),
+        ("search_shared_memory", {"response_mode": "compact"}, {}, "compact", True),
+        ("search_shared_memory", {"response_mode": "full"}, {}, "full", True),
     ],
 )
 def test_reduce_with_never_names_the_mode_in_effect(
-    friendly_name, arguments, payload, current
+    friendly_name, arguments, payload, current, advised
 ):
     envelope = {"success": True, "tool": friendly_name, **_PAD}
     _attach_response_size(envelope, friendly_name, arguments, payload)
     reduce_with = envelope["_response_size"].get("reduce_with")
+    assert (reduce_with is not None) is advised, (current, reduce_with)
     if reduce_with:
         assert not _names_mode(reduce_with, current), (current, reduce_with)
+    if friendly_name == "search_shared_memory":
+        assert "knowledge(action='details'" in reduce_with
 
 
 @pytest.mark.parametrize(
