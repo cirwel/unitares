@@ -188,6 +188,29 @@ class TestTheProgressProbeRunsWithNoManifest:
         ]
 
 
+class TestANamedMintIsRoutine:
+    @pytest.mark.asyncio
+    async def test_start_session_lifts_the_no_roster_verdict_compact(self, residentless):
+        # With no roster every named mint reads no_roster_configured, "the
+        # correct outcome for a residentless install". start_session lifts that
+        # verdict without its prose and keeps the routine shape.
+        from tests.helpers import onboard_producer
+
+        arguments = {"force_new": True, "name": "my-agent"}
+        payload = await onboard_producer.mint(arguments)
+        env, wire = await onboard_producer.start_session(arguments, payload)
+
+        assert payload["resident_registration"]["status"] == "no_roster_configured"
+        assert env["resident_registration"] == {
+            "status": "no_roster_configured",
+            "on_roster": False,
+        }
+        assert env["response_shape"] == "routine"
+        assert "raw_governance" not in env
+        assert "_response_size" not in env
+        assert wire <= 1_500  # tests/test_response_budgets.py, named class
+
+
 class TestTheGuardCoversWhatShips:
     def test_guard_scope_tracks_the_packaging_include_list(self):
         """The guard must scan every package pyproject actually ships.
