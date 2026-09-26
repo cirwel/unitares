@@ -215,17 +215,34 @@ fallback validation.
 
 #### Round cap
 
-A PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
-round is one completed native Codex run, counted by the distinct commits
-Codex names. Codex can post a result three ways: a submitted review, a clean
-comment, or a completed activity row. All three count. These don't count: a
-reply inside an existing thread, the receipt that records a native result, a
-disposition, a fix verification, and a local fallback record. A local record
-names no commit, no start time and no per-finding severity, and counting it
-opened a new gap each time it was tried on #2401. After any base change the
-cap no longer applies: the gate stops trusting native evidence then, because
-a native run does not say which base it reviewed. The `review` check shows
-the count ("review round 2 of 3").
+A PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`).
+Native Codex runs and local runs are counted separately, and either count can
+reach the cap.
+
+- **Native:** a round is one completed native Codex run, counted by the
+  distinct commits Codex names. Codex can post a result three ways: a
+  submitted review, a clean comment, or a completed activity row. All three
+  count.
+- **Local:** a round is one completed local run (`codex`, `claude` or
+  `antigravity`) on a distinct diff. Only records that name the commit they
+  reviewed count (`head=` in the marker, written since the local cap landed),
+  so a record written before then never caps a PR. Its findings are cut at
+  their severity labels. When the labels do not number exactly the findings
+  the record claims, the round counts as severe and is not capped.
+- **Never counted:** a reply inside an existing thread, the receipt that
+  records a native result, a disposition, a fix verification, a FAILED run,
+  and a `review.sh record`.
+
+Local runs were once left out because a record named no commit and gave no
+per-finding severity, and each attempt to count them on #2401 opened a new
+gap. That mattered little while local runs were only a fallback. With Codex
+disabled repo-wide from 2026-09-25, every review became a local run and none
+was capped: 74 merged PRs got 490 runs in two days, median 4 per PR, up to
+33. Replayed with the local count, 89 of those 344 full runs on new diffs, on
+20 PRs, would have reached the cap instead. After any base change neither
+count applies: the gate stops trusting the evidence then, because a run does
+not say which base it reviewed. The `review` check shows the native count
+("review round 2 of 3").
 
 Why: every run spends the same subscription quota that authoring does. In the
 first ~14 hours of native review (2026-09-23/24) there were 137 Codex runs
@@ -241,9 +258,7 @@ The rule is for fix loops only:
 - A **clean** last round is not a fix loop. A push after it is new work, and
   new work gets a full review.
 - Past the cap, with only P2s open, `review.sh` does not request Codex and
-  does not start the local fallback, which spends the same quota. The
-  fallback runs only when native review is unavailable, and its own rounds are
-  bounded by the review budget, not by this cap. Answer the
+  does not start a local run, which spends the same quota. Answer the
   remaining findings in one batch:
   - **Don't push:** dispose them on the reviewed diff with
     `review.sh dispose` (fixed later in #N, or rebutted). This costs no model

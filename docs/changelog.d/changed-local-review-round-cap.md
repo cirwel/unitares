@@ -1,0 +1,9 @@
+- **review:** the three-round cap now also counts local review runs.
+  - **Before:** it counted only native Codex runs. Local runs were left out on purpose (#2401), because a local record named no commit and gave no per-finding severity. That mattered little while local runs were only a fallback.
+  - **Why it changed:** with Codex disabled repo-wide since 2026-09-25, every review is a local run and none was capped. 74 merged PRs got 490 runs in two days, median 4 per PR and up to 33. Claude, the most frequent reviewer, returned FINDINGS in 90% of its runs, and 70% of the severity labels were P3.
+  - **What counts:**
+    - A local run now records the commit it reviewed, as `head=` in the record marker.
+    - Completed `codex`, `claude` and `antigravity` runs are counted, one per distinct diff, and only when they name that commit, so no PR in flight is capped retroactively.
+    - The last round's findings are cut at their severity labels. An unlabelled finding, a P0/P1, or a label count that does not match the finding count keeps the round uncapped.
+  - **Past the cap:** a push is checked by the configured fix verifier (`review.verifier`, a local model at no subscription cost) instead of another full run, or the author disposes. `--reviewer` still spends a round deliberately.
+  - **Expected effect:** replayed over those 74 PRs, 89 of 344 full runs on new diffs, on 20 PRs, would have reached the cap instead.
