@@ -668,3 +668,16 @@ async def test_after_a_complete_body_the_real_stream_is_handed_back():
     assert (await chained())["body"] == b"a=1"
     nxt = await chained()
     assert nxt["type"] == "http.request"  # from the real stream, not a fake disconnect
+
+
+def test_a_raw_semicolon_body_is_unparsed_not_misattributed(caplog):
+    client = _app()
+    body = ("grant_type=refresh_token&refresh_token=x&client_id=someone-else"
+            f"&z=1;client_id={CID};client_secret={SECRET}")
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        client.post("/token", content=body.encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"})
+    line = next(r.getMessage() for r in caplog.records
+                if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
+    assert "unparsed (raw ';' in body)" in line
+    assert "someone-else" not in line and SECRET not in line

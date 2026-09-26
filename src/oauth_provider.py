@@ -626,7 +626,9 @@ class StaticClientBasicAuthShim:
             await self.app(scope, receive, send)
             return
         _seen, body, complete, passthrough = await _peek_body(receive, _MAX_TOKEN_BODY)
-        if not complete:
+        if not complete or b";" in body:
+            # A raw ";" never appears in a properly urlencoded body, and
+            # Starlette splits on it where parse_qsl does not; don't guess.
             await self.app(scope, passthrough, send)
             return
 
@@ -895,6 +897,10 @@ class OAuthAttemptLogger:
                 )
                 if not complete:
                     unparsed_reason = f"over {_MAX_TOKEN_BODY} bytes or disconnected"
+                elif b";" in body:
+                    # Starlette splits on ";" where parse_qsl does not; a raw
+                    # ";" is never urlencoded, so report instead of guessing.
+                    fields, unparsed_reason = None, "raw ';' in body"
         else:
             await self.app(scope, receive, send)
             return
