@@ -134,9 +134,18 @@ def _is_executable(path: str) -> bool:
 
 
 def _configured_cli_override(host_id: str) -> str:
-    """Return the operator-pinned CLI path for a known adapter, if any."""
-    env_var = _CLI_ENV_OVERRIDES.get(host_id)
-    return os.environ.get(env_var, "").strip() if env_var else ""
+    """Return the operator-pinned CLI path for a known adapter, if any.
+
+    Literal reads, not a lookup through _CLI_ENV_OVERRIDES: the flag catalog
+    (docs/FLAGS.md) finds readers by scanning for literal variable names.
+    """
+    if host_id == "claude:host-adapter":
+        return os.environ.get("UNITARES_CLAUDE_CLI", "").strip()
+    if host_id == "codex:host-adapter":
+        return os.environ.get("UNITARES_CODEX_CLI", "").strip()
+    if host_id == "antigravity:host-adapter":
+        return os.environ.get("UNITARES_ANTIGRAVITY_CLI", "").strip()
+    return ""
 
 
 def resolve_host_cli(host_id: str) -> Optional[str]:

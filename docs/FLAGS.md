@@ -43,7 +43,7 @@ additions merge cleanly. -->
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
-| `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Operator override, then PATH, then the per-user/Homebrew locations a sparse launchd PATH misses | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
+| `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_API_TOKEN` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
@@ -58,9 +58,9 @@ additions merge cleanly. -->
 | `UNITARES_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/calibration.py |
 | `UNITARES_CALL_MODEL_TIMEOUT` | `None (no reader fallback)` | Wall-clock budget for one call_model round-trip | src/mcp_handlers/support/model_inference.py |
 | `UNITARES_CLASS_CALIBRATION` | `''` | Merge a deployment-local per-class calibration overlay into the class-keyed dicts, if ``UNITARES_CLASS_CALIBRATION`` names a JSON file | config/governance_config.py |
-| `UNITARES_CLAUDE_CLI` | `None (no reader fallback)` | — | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
+| `UNITARES_CLAUDE_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_CODEX_APP_SERVER_INSTRUMENTATION` | `'1'` | Whether Codex consults use model-aware app-server before exec fallback. | src/mcp_handlers/support/host_adapter.py |
-| `UNITARES_CODEX_CLI` | `None (no reader fallback)` | — | src/mcp_handlers/dialectic/orchestrator_dispatch.py |
+| `UNITARES_CODEX_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_COHERENCE_GATE_SHADOW` | `''` | Whether to record the behavioral-V-vs-legacy-gate comparison | src/coherence_gate_shadow.py |
 | `UNITARES_COHORT_PRIOR` | `None (no reader fallback)` | Whether cohort-prior warm-start is active at all | src/cohort_prior.py |
 | `UNITARES_COHORT_PRIOR_MODE` | `None (no reader fallback)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |

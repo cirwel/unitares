@@ -183,7 +183,7 @@ The two identifiers serve different jobs:
   call returns an index without content, which is what the handler now
   returns; no parameter changes, and `skills`' input digest and the surface
   digest move;
-  1.18.0, 2026-09-25, numbered after 1.16.0 (#2435): the
+  1.17.0, 2026-09-25, numbered after 1.16.0 (#2435): the
   progressive `tools/list` shrinks from 44,199 to 40,455 bytes.
   `search_shared_memory` stops advertising six fields only other `knowledge`
   actions read (`offset`, `epoch_scope`, `scope`, `evidence_ids`,
@@ -195,7 +195,10 @@ The two identifiers serve different jobs:
   Identity briefs, several alias parameter texts and six leaked model
   docstrings (`inputSchema.description`) are shortened or corrected. Nothing
   callable is removed or renamed; many input digests and the surface digest
-  move).
+  move; 1.18.0, 2026-09-26: `delegate_inference.host_id` accepts a third
+  value, `antigravity:host-adapter`; the default stays `claude:host-adapter`,
+  nothing is removed or renamed, and the input digests of `delegate_inference`
+  and `list_inference_hosts` and the surface digest move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
