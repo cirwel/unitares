@@ -23,6 +23,11 @@ from src import agent_storage
 from src.perf_monitor import record_ms as _perf_record_ms
 
 from .context import UpdateContext
+from ..identity_bootstrap import (
+    CALLER_PROOF_REMEDY as _CALLER_PROOF_REMEDY,
+    DO_NOT_MINT_A_SECOND_IDENTITY as _DO_NOT_MINT_A_SECOND_IDENTITY,
+    REBIND_RETURNS_SESSION_ID as _REBIND_RETURNS_SESSION_ID,
+)
 from ..utils import error_response
 from ..support.tool_hints import (
     KNOWLEDGE_SEARCH_SUGGESTION,
@@ -92,16 +97,9 @@ def _tier_for_source(source_key: str) -> tuple[str, str]:
 # write-path assurance breadcrumb and the strict write refusal both quote it,
 # so the refusal cannot drift from the `identity_assurance` it embeds (the
 # refusal kept leading with continuity_token after #1715 reordered the
-# breadcrumb). The rebind names the id identity() returns: a retry without it
-# resolves by transport inference again and is refused again.
-_CALLER_PROOF_REMEDY = (
-    "pass the client_session_id returned by start_session explicitly on "
-    "the next call; adapters may inject it automatically. If this transport "
-    "cannot retain that binding, use identity(agent_uuid=..., "
-    "continuity_token=..., resume=true) as an explicit same-live-process "
-    "rebind and pass the client_session_id it returns, instead of attaching "
-    "continuity_token to ordinary tool calls"
-)
+# breadcrumb). The text lives in identity_bootstrap (imported above as
+# _CALLER_PROOF_REMEDY), beside the strict refusal for a call that resolved no
+# identity, which quotes it too.
 
 
 def _how_to_strengthen(
@@ -432,8 +430,8 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                         "Retry this write (sync_state / process_agent_update) "
                         "with the client_session_id your start_session() "
                         "returned. If you no longer have it, "
-                        "identity(agent_uuid=..., continuity_token=..., "
-                        "resume=true) returns it; a retry without it is refused "
+                        + _REBIND_RETURNS_SESSION_ID
+                        + "; a retry without it is refused "
                         "again. If this process never called start_session, "
                         "call start_session(force_new=true) first."
                     ),
@@ -480,9 +478,7 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                     ],
                     do_not=[
                         *_DEFAULT_REFUSAL_DO_NOT,
-                        "If this process already called start_session, do not call "
-                        "start_session(force_new=true) to clear this refusal: a "
-                        "second identity splits this process's work from the first.",
+                        _DO_NOT_MINT_A_SECOND_IDENTITY,
                     ],
                     identity_assurance=ctx.identity_assurance,
                     surface_context={

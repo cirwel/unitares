@@ -673,20 +673,71 @@ async def _touch_http_session_activity(
                 )
 
 
+def _record_unbound_resolution(
+    resolved,
+    arguments: dict,
+    token_agent_uuid: str | None,
+    *,
+    caller_sent_session_id: bool,
+) -> None:
+    """Keep why the resolver bound nothing, for the REST strict gate.
+
+    The prebind returns only "no binding", but the refusal a required call
+    then gets depends on the cause: a session miss, a hijack-guard rejection,
+    a substrate resident over HTTP, or a server-side failure (see
+    identity_bootstrap.unbound_call_refusal). The MCP middleware reads the
+    same resolver result directly.
+
+    ``caller_sent_session_id`` comes from
+    identity_bootstrap.caller_sent_usable_session_id, the one rule the MCP
+    middleware applies too. It normalizes the id first, so an invalid id
+    counts as not sent whether it is judged before or after the derivation
+    drops it.
+    """
+    from src.mcp_handlers.context import set_http_prebind_resolution
+
+    record = {
+        key: resolved[key]
+        for key in ("error", "reason", "message", "resume_failed", "created")
+        if isinstance(resolved, dict) and key in resolved
+    }
+    if arguments.get("continuity_token") and not token_agent_uuid:
+        record["token_failed_verification"] = True
+    record["caller_sent_session_id"] = caller_sent_session_id
+    set_http_prebind_resolution(record)
+
+
 async def _resolve_http_session_binding(
     tool_name: str,
     arguments: dict,
     signals,
     consult,
 ) -> str | None:
-    from src.mcp_handlers.context import update_context_agent_id
+    from src.mcp_handlers.context import (
+        get_csid_injected_source,
+        get_session_resolution_source,
+        set_session_resolution_source,
+        update_context_agent_id,
+    )
     from src.mcp_handlers.identity.handlers import (
         derive_session_key,
         resolve_session_identity,
     )
     from src.mcp_handlers.identity.session import extract_token_agent_uuid_safe
 
+    # Whether the caller itself sent a usable client_session_id. One that
+    # normalizes to nothing (blank, whitespace, symbols only) is dropped by
+    # the derivation and never looked up, so it is not "an id that names no
+    # identity"; the caller gets the no-id recovery, as for an omitted one.
+    from src.mcp_handlers.identity_bootstrap import caller_sent_usable_session_id
+
+    caller_sent_session_id = caller_sent_usable_session_id(arguments)
+    # The derivation stamps the source that won. Clear the slot first so the
+    # value read below is this derivation's, never one left by the
+    # transport's own derivation in _inject_http_client_session.
+    set_session_resolution_source(None)
     session_key = await derive_session_key(signals, arguments)
+    derived_source = get_session_resolution_source()
     token_agent_uuid = extract_token_agent_uuid_safe(
         arguments.get("continuity_token")
     )
@@ -697,21 +748,54 @@ async def _resolve_http_session_binding(
         if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
             # The REST form of the MCP middleware's rule (#945 section 1): a
             # pre_onboard read short-circuits only when the caller transmitted
-            # no proof in this request. A caller-asserted session (an explicit,
-            # non-transport-injected client_session_id, or an X-Session-ID
-            # header) resolves read-only, so an agent can read its own state
-            # over REST, as it can on /mcp/. The two gates are not the same
-            # predicate: this one takes any caller_asserted derivation, which
-            # on REST also admits an X-Client-Id header that the MCP
-            # short-circuit does not count (it names a client, not a process),
-            # while the MCP one checks argument presence (a verified
-            # continuity_token, client_session_id, agent_uuid, a UUID
-            # X-Agent-Id) plus an X-Session-ID that won the derivation. A server-inferred derivation (fingerprint, pin,
-            # injected session id) still stays unbound: a read never mints,
-            # and never shows a co-located sibling's state.
+            # proof of its own process session in this request. That is a
+            # client_session_id the caller sent in the body, or an
+            # X-Session-ID header (a verified continuity_token is handled
+            # above). A server-inferred derivation (fingerprint, pin) stays
+            # unbound: a read never mints, and never shows a co-located
+            # sibling's state.
+            #
+            # A header is judged by the predicate the /mcp/ short-circuit
+            # uses (identity/session.transport_session_is_read_proof). It
+            # reaches the derivation in one of two ways, and the gate judges
+            # the source that actually produced the key:
+            #   - As a client_session_id that
+            #     http_routes/tools._inject_http_client_session derived from
+            #     it when the body had no client_session_id key. The
+            #     derivation then reports explicit_client_session_id, and the
+            #     injection recorded which header produced the id.
+            #   - Directly, when the body carried a client_session_id that is
+            #     null, empty or invalid: the injection leaves such a body
+            #     alone, and the derivation skips it and falls through to the
+            #     header.
+            # This gate once took any caller_asserted derivation, which on
+            # REST admitted an X-Client-Id / X-MCP-Client-Id header that
+            # /mcp/ does not count: it names a client, not a process, so two
+            # processes of one client could read each other's state. REST
+            # session signals (_build_http_session_signals) carry no OAuth
+            # client id and no Mcp-Session-Id.
             from src.mcp_handlers.context import get_session_proof_origin
+            from src.mcp_handlers.identity.session import (
+                transport_session_is_read_proof,
+            )
 
             if get_session_proof_origin() != "caller_asserted":
+                return None
+            if derived_source is None or derived_source in (
+                "explicit_client_session_id",
+                "explicit_client_session_id_scoped",
+            ):
+                # The key is the client_session_id in the arguments (or the
+                # derivation reported no source): judge the header the
+                # transport derived the id from, or nothing when the caller
+                # sent it.
+                header_source = get_csid_injected_source()
+            else:
+                # The derivation fell through to a transport signal.
+                header_source = derived_source
+            if header_source is not None and not transport_session_is_read_proof(
+                header_source
+            ):
                 return None
             proof_read = True
 
@@ -735,9 +819,21 @@ async def _resolve_http_session_binding(
         or resolved.get("resume_failed")
         or resolved.get("error")
     ):
+        _record_unbound_resolution(
+            resolved,
+            arguments,
+            token_agent_uuid,
+            caller_sent_session_id=caller_sent_session_id,
+        )
         return None
     agent_uuid = resolved.get("agent_uuid")
     if not agent_uuid:
+        _record_unbound_resolution(
+            resolved,
+            arguments,
+            token_agent_uuid,
+            caller_sent_session_id=caller_sent_session_id,
+        )
         return None
 
     update_context_agent_id(agent_uuid)
@@ -765,6 +861,10 @@ async def _resolve_http_bound_agent(
     signals,
 ) -> str | None:
     """Resolve an existing identity before dispatching a direct HTTP tool."""
+    from src.mcp_handlers.context import set_http_prebind_resolution
+
+    # Each prebind, nested ones included, starts with no resolver result.
+    set_http_prebind_resolution(None)
     if not isinstance(arguments, dict) or _skips_http_prebind(tool_name):
         return None
 

@@ -334,8 +334,13 @@ class TestGetGovernanceMetrics:
             # unbound caller to "onboard" named a tool a schema-driven client
             # was never shown -- in the one state where it has no identity to
             # improvise with.
-            assert data["next_action"]["tool"] == "start_session"
-            assert "force_new=true" in data["next_action"]["example"]
+            # The caller sent an id that names no identity: a process that
+            # still holds its uuid and continuity_token rebinds (so a stale
+            # id does not fork its work); only one that cannot mints, named
+            # under "otherwise" with force_new=true.
+            assert data["next_action"]["tool"] == "identity"
+            assert "resume=true" in data["next_action"]["example"]
+            assert "force_new=true" in data["next_action"]["otherwise"]
             assert "onboard(" not in data["next_action"]["example"]
             mock_mcp_server.get_or_create_monitor.assert_not_called()
 
