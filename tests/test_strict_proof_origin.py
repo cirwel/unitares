@@ -219,8 +219,9 @@ async def test_strict_refusal_hint_agrees_with_its_embedded_assurance(monkeypatc
     payload = _refusal_payload(await resolve_identity_and_guards(_new_ctx()))
 
     breadcrumb = payload["identity_assurance"]["how_to_strengthen"]
-    remedy = breadcrumb.split("; ", 1)[1]
-    assert remedy.startswith("pass the client_session_id")
+    # Anchor on the remedy, not on the prefix separator, which differs by tier.
+    assert "pass the client_session_id" in breadcrumb
+    remedy = breadcrumb[breadcrumb.index("pass the client_session_id"):]
     assert remedy in payload["hint"]
 
 

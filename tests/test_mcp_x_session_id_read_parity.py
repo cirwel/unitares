@@ -134,6 +134,7 @@ async def _resolve(tool_name: str, signals: SessionSignals, resolve_result: dict
     """The real identity step with the real derive_session_key; only storage
     (session lookup, sticky cache, pin, anchor, TTL) is stubbed."""
     from src.mcp_handlers.context import (
+        get_context_agent_id,
         get_session_proof_origin,
         get_session_resolution_source,
         reset_session_signals,
@@ -170,6 +171,7 @@ async def _resolve(tool_name: str, signals: SessionSignals, resolve_result: dict
                 "session_key": ctx.session_key,
                 "proof_origin": get_session_proof_origin(),
                 "source": get_session_resolution_source(),
+                "context_agent_id": get_context_agent_id(),
             }
     finally:
         reset_session_signals(token)
@@ -198,6 +200,7 @@ async def test_header_only_read_resolves_on_the_key_a_header_only_write_uses(rea
         assert seen["source"] == "x_session_id"
         assert seen["proof_origin"] == "caller_asserted"
     assert read_seen["ctx"].bound_agent_id == AGENT_UUID
+    assert read_seen["context_agent_id"] == AGENT_UUID
 
 
 @pytest.mark.asyncio
@@ -236,17 +239,15 @@ async def test_header_only_read_returns_the_callers_own_state():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("read", READS)
 async def test_header_naming_an_unknown_session_stays_unbound(read):
-    import src.mcp_handlers.core as core_mod
-
     seen = await _resolve(read, _signals(), _miss())
 
     assert seen["resolve"].await_count == 1
     assert seen["ctx"].bound_agent_id is None
+    # The handler answers unbound exactly when the context carries no agent;
+    # a hit binds it (see the header-only read test), a miss must not.
+    assert seen["context_agent_id"] is None
     # No middleware auto-mint for a pre_onboard read.
     assert all(not call.kwargs.get("force_new") for call in seen["resolve"].await_args_list)
-    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
-        payload = json.loads((await core_mod.handle_get_governance_metrics({}))[0].text)
-    assert payload["status"] == "⚪ unbound"
 
 
 @pytest.mark.asyncio
