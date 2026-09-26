@@ -1120,6 +1120,33 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                         lite_action = action_view.get("action")
                     else:
                         lite_action = None
+
+                    # A router narrowed with describe_tool(action=...) is
+                    # reached only by passing that action. The action fields
+                    # below never include the selector, and where the schema
+                    # gives `action` a default it is not required either, so
+                    # without this line self_recovery(action='quick') was
+                    # described as `reason` alone, and a caller passing just
+                    # that ran the default 'check' instead.
+                    if (
+                        action_view is not None
+                        and lite_action
+                        and "action" in properties
+                        and "action" not in shown_fields
+                    ):
+                        selector_default = properties["action"].get("default")
+                        if (
+                            selector_default is not None
+                            and selector_default != lite_action
+                        ):
+                            params_simple.append(
+                                f"action (pass '{lite_action}'; omitted, the "
+                                f"tool runs '{selector_default}')"
+                            )
+                            shown_fields.add("action")
+                        else:
+                            add_lite_field("action", force=True)
+
                     for field_name in declared_action_required_fields(
                         pydantic_model, lite_action
                     ):

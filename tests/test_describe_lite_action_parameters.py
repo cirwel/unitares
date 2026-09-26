@@ -6,8 +6,8 @@ out discovery_id, which the update refuses to run without, and status and
 resolution_notes, which are what the tool exists to set. Lite filled five
 slots in the router schema's property order, and knowledge declares the store
 action's text fields first. Legacy aliases that inherit the whole router
-schema fared worse: get_discovery_details' lite view led with query, a search
-parameter, and never named discovery_id.
+schema fared worse: get_discovery_details' lite view listed response_mode,
+query, content, details and summary, and never named discovery_id.
 
 A router's flat wire schema can only require `action`, so "required" here has
 two sources: the schema's own `required`, and what the action's handler
@@ -31,6 +31,7 @@ import pytest
 
 from src.mcp_handlers.decorators import get_tool_registry
 from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+from src.mcp_handlers.schemas.dialectic import DialecticParams
 from src.mcp_handlers.schemas.knowledge import KnowledgeParams
 from src.mcp_handlers.schemas.router_actions import declared_action_fields
 from src.mcp_handlers.tool_stability import (
@@ -254,6 +255,56 @@ def test_pinned_alias_lite_view_stays_inside_its_action(
     assert not missing, f"{alias_name} omits call-time required {missing}"
 
 
+def _router_models():
+    """Every router model that declares ACTION_FIELDS, with its tool name."""
+    return sorted(
+        (name, model)
+        for name, model in get_pydantic_schemas().items()
+        if declared_action_fields(model)
+    )
+
+
+ROUTERS = _router_models()
+_NARROWED = [
+    (name, action, model)
+    for name, model in ROUTERS
+    for action in sorted(declared_action_fields(model))
+]
+
+
+def _selector_default(model):
+    """The router's default action, or None where `action` is required."""
+    field = model.model_fields["action"]
+    return None if field.is_required() else field.default
+
+
+def test_the_survey_found_the_routers_with_a_default_action():
+    """Guard the fixture: the selector check below matters where a default exists."""
+    defaults = {name for name, model in ROUTERS if _selector_default(model)}
+    assert defaults == {"self_recovery", "dialectic", "calibration", "config", "export"}
+
+
+@pytest.mark.parametrize(
+    "router,action,model", _NARROWED, ids=[f"{n}-{a}" for n, a, _ in _NARROWED]
+)
+def test_narrowed_lite_view_says_to_pass_the_action(router, action, model):
+    """describe_tool(tool_name=router, action=X, lite=true) is read by a caller
+    who fills in the listed parameters. The action fields never include the
+    selector, so on a router whose `action` has a default the view named
+    neither it nor the value: self_recovery(action='quick') came back as
+    `reason` alone, and self_recovery(reason='...') runs the default 'check'.
+    """
+    lite = _lite(router, action=action)
+    assert "action" in lite, (
+        f"{router}(action={action!r}) lite view omits the selector: "
+        f"{list(lite.values())}"
+    )
+    assert list(lite)[0] == "action", list(lite.values())
+    default = _selector_default(model)
+    if default is not None and default != action:
+        assert f"'{action}'" in lite["action"], lite["action"]
+
+
 def test_router_lite_view_narrowed_to_an_action_leads_with_its_requirements():
     lite = _lite("knowledge", action="update")
     names = list(lite)
@@ -269,47 +320,132 @@ def test_router_lite_view_narrowed_to_an_action_leads_with_its_requirements():
 # ---------------------------------------------------------------------------
 
 
-def test_every_knowledge_action_declares_the_parameters_its_handler_reads():
+# self_recovery dispatches by hand rather than through action_router, so it
+# has no action table to walk; test_router_action_fields.py holds its
+# declaration to its known_actions.
+_NO_ACTION_TABLE = {"self_recovery"}
+_WALKED = [(name, model) for name, model in ROUTERS if name not in _NO_ACTION_TABLE]
+
+
+def test_every_router_but_the_listed_ones_has_an_action_table_to_walk():
+    """A router added without an action_router table must be listed, not skipped."""
+    unwalkable = set()
+    for name, _model in ROUTERS:
+        try:
+            _router_actions(name)
+        except AssertionError:
+            unwalkable.add(name)
+    assert unwalkable == _NO_ACTION_TABLE
+
+
+@pytest.mark.parametrize("router,model", _WALKED, ids=[n for n, _ in _WALKED])
+def test_every_action_declares_the_parameters_its_handler_reads(router, model):
     """Lite now shows only an action's declared fields, so a lagging declaration
-    would hide a working parameter. update's summary, discovery_type and tags
-    were read by _parse_knowledge_update_request and missing from it."""
+    hides a working parameter. knowledge update's summary, discovery_type and
+    tags, observe anomalies' and aggregate's agent_ids, and dialectic quick's
+    issue_description were read by their handlers and missing from it.
+
+    The walk follows helpers in the handler's own module only: a read made
+    through another module (observe bridge hands its arguments to
+    src/bridge_events.py) is not seen here.
+    """
     from src.mcp_handlers.schemas.router_actions import (
         COMMON_ROUTER_FIELDS,
         wire_field_names,
     )
 
-    handlers = _router_actions("knowledge")
-    fields = set(wire_field_names(KnowledgeParams))
-    declared = declared_action_fields(KnowledgeParams)
+    handlers = _router_actions(router)
+    fields = set(wire_field_names(model))
+    declared = declared_action_fields(model)
     for action, handler in sorted(handlers.items()):
         reads = _read_by_source(handler, stop_at=handlers.values()) & fields
         undeclared = sorted(reads - set(declared[action]) - COMMON_ROUTER_FIELDS)
         assert not undeclared, (
-            f"knowledge action={action} reads {undeclared}, which its "
+            f"{router} action={action} reads {undeclared}, which its "
             "ACTION_FIELDS entry does not declare"
         )
 
 
-def test_declaration_names_every_requirement_its_handlers_reach():
-    handlers = _router_actions("knowledge")
-    declared = KnowledgeParams.ACTION_REQUIRED_FIELDS
+@pytest.mark.parametrize("router,model", _WALKED, ids=[n for n, _ in _WALKED])
+def test_declaration_names_every_requirement_its_handlers_reach(router, model):
+    handlers = _router_actions(router)
+    declared = getattr(model, "ACTION_REQUIRED_FIELDS", {})
     for action, handler in sorted(handlers.items()):
         found = _required_by_source(handler, stop_at=handlers.values())
         missing = sorted(found - set(declared.get(action, ())))
         assert not missing, (
-            f"knowledge action={action} requires {missing} (require_argument in "
+            f"{router} action={action} requires {missing} (require_argument in "
             "its handler) but ACTION_REQUIRED_FIELDS does not declare it"
         )
 
 
-def test_declared_requirements_are_real_parameters_of_their_action():
-    own = declared_action_fields(KnowledgeParams)
-    for action, names in KnowledgeParams.ACTION_REQUIRED_FIELDS.items():
-        assert action in own, f"{action} is not a knowledge action"
+_DECLARING = [
+    (name, model)
+    for name, model in ROUTERS
+    if getattr(model, "ACTION_REQUIRED_FIELDS", None)
+]
+
+
+def test_the_survey_found_every_requirement_declaration():
+    assert {name for name, _ in _DECLARING} == {"knowledge", "dialectic"}
+
+
+@pytest.mark.parametrize("router,model", _DECLARING, ids=[n for n, _ in _DECLARING])
+def test_declared_requirements_are_real_parameters_of_their_action(router, model):
+    own = declared_action_fields(model)
+    for action, names in model.ACTION_REQUIRED_FIELDS.items():
+        assert action in own, f"{action} is not a {router} action"
         stray = sorted(set(names) - set(own[action]))
         assert not stray, (
-            f"action={action} requires {stray}, not among its ACTION_FIELDS"
+            f"{router} action={action} requires {stray}, not among its ACTION_FIELDS"
         )
+
+
+_DECLARED_ANYWHERE = [
+    (router, action, name)
+    for router, model in _DECLARING
+    for action, names in sorted(model.ACTION_REQUIRED_FIELDS.items())
+    for name in names
+]
+
+
+@pytest.mark.parametrize(
+    "router,action,name",
+    _DECLARED_ANYWHERE,
+    ids=[f"{r}-{a}-{n}" for r, a, n in _DECLARED_ANYWHERE],
+)
+def test_narrowed_lite_view_marks_each_declared_requirement(router, action, name):
+    lite = _lite(router, action=action)
+    assert lite.get(name) == f"{name} (required at call time)", list(lite.values())
+
+
+_DIALECTIC_QUICK_PROBE = {
+    "issue_description": "ship the lite fix",
+    "position": "ship it",
+    "reasoning": "the focused tests pass",
+}
+
+
+@pytest.mark.parametrize(
+    "name", sorted(DialecticParams.ACTION_REQUIRED_FIELDS.get("quick", ()))
+)
+def test_quick_dialectic_refuses_a_call_without_a_declared_requirement(name):
+    """Soundness for dialectic's declaration, checked like knowledge's below.
+
+    handle_quick_dialectic is a read: it triages the arguments it is given and
+    touches no session state, so it runs unwrapped and unpatched.
+    """
+    quick = inspect.unwrap(_router_actions("dialectic")["quick"])
+
+    def run(arguments):
+        return json.loads(asyncio.run(quick(arguments))[0].text)
+
+    answered = run(dict(_DIALECTIC_QUICK_PROBE))
+    assert answered.get("success") is not False, answered
+
+    refused = run({k: v for k, v in _DIALECTIC_QUICK_PROBE.items() if k != name})
+    assert refused.get("success") is False, refused
+    assert name in refused.get("error", ""), refused
 
 
 # One plausible value per declared parameter, so each probe removes exactly one.
