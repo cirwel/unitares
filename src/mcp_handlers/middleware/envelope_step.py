@@ -958,13 +958,28 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     suggestions = []
     for item in candidates[:_MEMORY_SUGGESTION_LIMIT]:
         if isinstance(item, dict):
+            # Freshness travels as the handler's structured `age_days` (days
+            # since the last write, present only past the staleness threshold),
+            # not its `staleness_warning` sentence: three copies of the same
+            # suffix used to outbid attribution for the digest budget. One
+            # response-level note explains the field (_note_stale_digests).
             suggestion = _lift(
                 item,
                 "title",
                 "type",
                 "status",
-                "staleness_warning",
+                "age_days",
             )
+            # A superseded row names what replaced it, so "prefer the newer
+            # entry" can be followed without a full-mode re-call. First id
+            # only; details on this row lists every successor. A core field,
+            # not attribution: the budget steps measure it before any
+            # attribution is restored.
+            successor = item.get("superseded_by")
+            if isinstance(successor, list):
+                successor = successor[0] if successor else None
+            if successor:
+                suggestion["superseded_by"] = str(successor)
             discovery_id = item.get("discovery_id") or item.get("id")
             if discovery_id is not None:
                 suggestion["discovery_id"] = discovery_id
@@ -1663,7 +1678,7 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     # which digests and fields survive), then give each survivor back as much
     # attribution as still fits, in rank order: label and identity, else the
     # identity alone, else neither. An identity is only ever whole. One
-    # envelope-level marker says something was withheld, if it fits.
+    # envelope-level marker says something was withheld.
     suggestions = envelope.get("memory_suggestions")
     set_aside: List[Dict[str, Any]] = []
     if isinstance(suggestions, list):
@@ -1675,18 +1690,45 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
                         snap[key] = item.pop(key)
             set_aside.append(snap)
 
+    # The staleness note is written before the budget steps so they measure
+    # it, and re-checked after them: it goes if no stale digest survived.
+    _note_stale_digests(envelope)
     if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
         _truncate_search_projection(envelope, wire_bytes)
+        _note_stale_digests(envelope)
     _restore_digest_attribution(envelope, set_aside, wire_bytes)
 
 
-def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
-    """The budget steps proper, run on the attribution-free envelope: drop
-    optional coaching, then lower-ranked digests, then compact the last."""
-    envelope["projection_truncated"] = True
-    envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
-    envelope.pop("response_options", None)
+_STALENESS_NOTE = (
+    "age_days (stale results only) = days since last write; verify before acting."
+)
 
+
+def _note_stale_digests(envelope: Dict[str, Any]) -> None:
+    """Explain `age_days` once per response, only while a shown digest has it.
+
+    The canonical per-row `staleness_warning` sentence is not lifted into the
+    digest, so this is the one place the reader learns what the field means
+    and that it calls for verification.
+    """
+    state = envelope.get("state_summary")
+    if not isinstance(state, dict):
+        return
+    suggestions = envelope.get("memory_suggestions")
+    if isinstance(suggestions, list) and any(
+        isinstance(item, dict) and "age_days" in item for item in suggestions
+    ):
+        state["staleness_note"] = _STALENESS_NOTE
+    else:
+        state.pop("staleness_note", None)
+
+
+def _drop_optional_coaching(envelope: Dict[str, Any]) -> bool:
+    """Drop the mode/retrieval coaching a digest can do without: the tier
+    ladder (raw_governance_hint still names full mode) and every retrieval
+    option except the current tier and the open-one route. Returns whether
+    anything was dropped."""
+    dropped = envelope.pop("response_options", None) is not None
     retrieval = envelope.get("discovery_retrieval_options")
     if isinstance(retrieval, dict):
         keep = {
@@ -1694,10 +1736,28 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
             for key in ("current_tier", "open_one")
             if retrieval.get(key) is not None
         }
-        if keep:
+        if keep and len(keep) < len(retrieval):
             envelope["discovery_retrieval_options"] = keep
+            dropped = True
+    return dropped
+
+
+def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
+    """The budget steps proper, run on the attribution-free envelope: drop
+    optional coaching, then lower-ranked digests, then compact the last."""
+    envelope["projection_truncated"] = True
+    envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
+    _drop_optional_coaching(envelope)
 
     suggestions = envelope.get("memory_suggestions")
+    # The digest-set summary fields go in before the digests are measured, so
+    # the budget below holds them too (written after the loop, they used to
+    # push a digest that had just been fitted back over it). Only the count
+    # changes afterwards, and a count of at most three keeps its width.
+    state = envelope.get("state_summary")
+    if isinstance(state, dict) and isinstance(suggestions, list):
+        state["results_shown_in_digest"] = len(suggestions)
+        state["result_set_truncated"] = True
     while (
         isinstance(suggestions, list)
         and suggestions
@@ -1709,13 +1769,19 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
 
         # A single result can still carry unbounded historical fields (for
         # example, a legacy title or tag). Reduce the last surviving digest to
-        # its stable handle and short preview before dropping it entirely.
+        # its stable handle, its lifecycle markers and a short preview before
+        # dropping it entirely: a superseded row keeps its successor and a
+        # stale one its age, so the survivor is not presented as current.
         item = suggestions[0]
         if isinstance(item, dict):
             compact = {}
             discovery_id = item.get("discovery_id")
             if discovery_id is not None:
                 compact["discovery_id"] = str(discovery_id)[:128]
+            for key in ("status", "superseded_by", "age_days"):
+                value = item.get(key)
+                if value is not None:
+                    compact[key] = value[:128] if isinstance(value, str) else value
             summary = item.get("summary")
             if isinstance(summary, str) and summary:
                 compact["summary"] = summary[:96].rstrip() + (
@@ -1728,13 +1794,11 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
 
-    # The digest set is final now, so its summary fields go in before any
-    # attribution is restored: they must be inside the budget the restore
+    # The digest set is final now, so its count is settled before any
+    # attribution is restored: it must be inside the budget the restore
     # measures against, not appended after it.
-    state = envelope.get("state_summary")
     if isinstance(state, dict) and isinstance(suggestions, list):
         state["results_shown_in_digest"] = len(suggestions)
-        state["result_set_truncated"] = True
 
 
 def _restore_digest_attribution(
@@ -1744,11 +1808,17 @@ def _restore_digest_attribution(
     order: label and identity, else the identity alone, else neither.
 
     First without the withheld-marker: if everything fits, no marker is
-    needed and its room is not taken from attribution. Only if something must
-    be withheld is the restore redone with the marker's room reserved, so the
-    marker says so. If the marker itself does not fit, the marker-free restore
-    stands; only then can a digest lose attribution unmarked, and only when
-    not even the marker's ~36 bytes were free."""
+    needed and its room is not taken from attribution. If something must be
+    withheld, what is optional goes first and the restore is retried: the
+    coaching the budget steps already treat as optional, and a truncated
+    digest's `expand_with`, which repeats the full-mode route
+    `raw_governance_hint` names. Neither is a result or a field of one. Only
+    if something must still be withheld is the restore redone with the
+    marker's room reserved, so the marker says so. In a bounded search the
+    room freed is always more than the marker's ~36 bytes (the tier ladder
+    alone is ~190, and once truncation has dropped it `expand_with` is ~65),
+    so withheld attribution there is always marked; the marker-free restore
+    below is the fallback for an envelope with nothing optional left."""
     suggestions = envelope.get("memory_suggestions")
     if not isinstance(suggestions, list) or not any(set_aside[: len(suggestions)]):
         return
@@ -1779,6 +1849,16 @@ def _restore_digest_attribution(
 
     if not restore():
         return
+    freed = _drop_optional_coaching(envelope)
+    if (
+        envelope.get("raw_governance_hint")
+        and envelope.pop("expand_with", None) is not None
+    ):
+        freed = True
+    if freed:
+        strip()
+        if not restore():
+            return
     strip()
     envelope["digest_attribution_omitted"] = True
     if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
@@ -2160,9 +2240,10 @@ def build_experience_envelope(
             "search_degraded",
             "tag_filter_dropped",
         )
-        note = source_payload.get("confidence_note")
-        if note:
-            state_summary["confidence_note"] = note
+        # `confidence_note` is not copied here: the envelope lifts it to the
+        # top level for every alias (next to search_degraded_message), and a
+        # second ~270 B copy was paid out of the lean digest's budget before
+        # attribution. The `low_confidence` flag stays in both places.
         if retrieval_options and retrieval_options.get("current_tier"):
             state_summary["result_tier"] = retrieval_options["current_tier"]
         state_summary["results_shown_in_digest"] = min(
