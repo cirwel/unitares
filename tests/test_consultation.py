@@ -1384,3 +1384,6 @@ async def test_server_set_values_survive_a_brief_that_mentions_them(monkeypatch,
     assert degraded["degradation"]["reason_code"] == "privacy_policy_requires_local"
     assert degraded["delivery"]["effort"] == "standard"
     assert refused["failure"]["code"] == "CONSULT_POLICY_UNSATISFIED"
+    # privacy='local' never contacts a thorough host, so neither row names one.
+    assert "thorough_host_id" not in degraded["request"]
+    assert "thorough_host_id" not in refused["request"]

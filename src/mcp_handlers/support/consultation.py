@@ -947,7 +947,10 @@ def _consultation_record(
             "constructed_prompt": _keyed_hash(key, _constructed_prompt(request)),
         }
         record["hashes"] = hashes
-    if request.effort == "thorough":
+    if request.effort == "thorough" and request.privacy == "cloud_allowed":
+        # Only when the thorough lane can be attempted: under privacy='local'
+        # the call is refused or degraded before any host is contacted, and
+        # naming one would read as the brief having gone there.
         record["request"]["thorough_host_id"] = request.thorough_host_id
     for field_name in ("delivery", "degradation", "failure"):
         if data.get(field_name) is not None:
