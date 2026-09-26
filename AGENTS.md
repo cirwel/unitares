@@ -275,9 +275,18 @@ Operational rules:
    canonical tool underneath). Save the returned `uuid` and `client_session_id`.
 2. For later check-ins and writes in the same running process, pass
    `client_session_id`. Adapters should do this automatically. If your adapter
-   does not thread it, you fall back to the weak transport-fingerprint pin and
-   can fragment under co-residency — check `session_source`/`tier` in the
-   onboard response to confirm you bound as expected.
+   does not thread it, the server falls back to the weak transport-fingerprint
+   pin, which can fragment under co-residency; under `STRICT_IDENTITY_REQUIRED`
+   a `sync_state` resolved that way is refused. On a transport with no session
+   signal of its own (stateless `/mcp/` without an `X-Session-ID` header, plain
+   REST), the `start_session` response reports `tier` weak and `caller_proven`
+   false, with `baseline` `fresh_identity` and a `session_source` naming how
+   the server inferred that call (`ip_ua_fingerprint`, for example): that
+   describes the minting call, not whether later calls are threaded. Confirm
+   threading on the next call:
+   `check_working_state(client_session_id=...)` returning your `uuid` as
+   `agent_uuid`, or `identity(client_session_id=...)` reporting
+   `caller_proven` true.
 3. To continue prior work in a fresh process, mint fresh and declare the cause:
    `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`.
    Use this only for a real handoff from a finished predecessor. `explicit` is
