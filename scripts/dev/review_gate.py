@@ -562,15 +562,17 @@ ANTIGRAVITY_PROMPT_LIMIT = 120_000
 # agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
 # untrusted text (a PR diff, a paused agent's thesis), and an injected "print
 # your environment" must find no UNITARES_*/GitHub token to echo. Kept: what a
-# CLI needs to find its home, locale, proxy and agy's OWN optional Google
-# credentials. Its subscription login lives in the system keyring, not env.
+# CLI needs to find its home, locale, proxy and CA bundle. Its subscription
+# login lives in the system keyring, not env; Google API credentials are left
+# out so a key exported into the shell cannot move reviews onto metered
+# billing. Same list as src/mcp_handlers/support/antigravity_cli_client.py
+# (this script runs standalone, so it keeps its own copy).
 AGY_ENV_ALLOWLIST = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
     "LANG", "LC_ALL", "LC_CTYPE",
     "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
     "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
-    "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
 )
 
 

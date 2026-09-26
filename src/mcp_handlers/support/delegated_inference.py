@@ -16,6 +16,7 @@ from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
 from .host_adapter import (
     codex_answer_region_located,
+    host_adapter_disabled_hosts,
     host_cli_env_var,
     invoke_host_adapter,
 )
@@ -183,6 +184,21 @@ async def run_delegated_inference(
                 "action": (
                     "Choose a host whose accepts_host_id_from includes "
                     "delegate_inference"
+                ),
+                "related_tools": ["list_inference_hosts"],
+            },
+        )
+
+    if host_id in host_adapter_disabled_hosts():
+        return InferenceOutcome.failed(
+            f"Inference host '{host_id}' is switched off by the operator",
+            code="INFERENCE_HOST_UNAVAILABLE",
+            category="system_error",
+            details={"host": host},
+            recovery={
+                "action": (
+                    f"Choose another host, or remove {host_id} from "
+                    "UNITARES_HOST_ADAPTER_DISABLED_HOSTS"
                 ),
                 "related_tools": ["list_inference_hosts"],
             },

@@ -113,6 +113,16 @@ def stall(data: dict[str, Any], stderr: str) -> str | None:
     return None
 
 
+def add_usage(total: dict[str, Any], usage: Any) -> None:
+    """Sum one turn's integer usage fields into ``total``; a resumed call
+    spends every turn's tokens, not only the last one's."""
+    if not isinstance(usage, dict):
+        return
+    for key, value in usage.items():
+        if isinstance(value, int) and not isinstance(value, bool):
+            total[key] = total.get(key, 0) + value
+
+
 def _run(cmd: list[str], *, cwd: str, env: dict[str, str], timeout_s: float
          ) -> tuple[int | None, str, str]:
     """(exit status or None on timeout, stdout, stderr). Kills the whole group
@@ -162,6 +172,7 @@ def run(environ: dict[str, str], stream: Any = sys.stdout) -> int:
              *(["--model", model] if model else [])]
     env = agy_env(environ)
     resumes: dict[str, int] = {}
+    usage: dict[str, Any] = {}
 
     with tempfile.TemporaryDirectory(prefix="consult-agy-") as workspace:
         if any((d / m).exists() for d in Path(workspace).resolve().parents
@@ -182,6 +193,7 @@ def run(environ: dict[str, str], stream: Any = sys.stdout) -> int:
                 return _emit({"status": "ERROR", "error": "Antigravity CLI timed out",
                               "resumes": resumes}, stream)
             data = parse_output(out)
+            add_usage(usage, data.get("usage"))
             kind = stall(data, err)
             cid = data.get("conversation_id")
             cid = cid if isinstance(cid, str) and cid else None
@@ -193,7 +205,6 @@ def run(environ: dict[str, str], stream: Any = sys.stdout) -> int:
             cmd = [cli, "-p", RESUME_PROMPTS[kind], "--conversation", cid, *flags]
 
     response = data.get("response") if isinstance(data.get("response"), str) else ""
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
     result: dict[str, Any] = {
         "status": data.get("status") or "ERROR",
         "response": response,

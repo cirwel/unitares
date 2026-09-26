@@ -130,6 +130,21 @@ async def test_delegate_inference_fails_closed_when_adapter_unavailable(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_a_switched_off_host_names_the_switch_not_the_setup(monkeypatch):
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "claude")
+    monkeypatch.setattr(
+        di,
+        "get_inference_host",
+        lambda _host_id: _claude_host(configured=True, available=False),
+    )
+    parsed = _payload(await di.handle_delegate_inference({"prompt": "hello"}))
+    assert parsed["error_code"] == "INFERENCE_HOST_UNAVAILABLE"
+    assert parsed["possibly_running"] is False
+    assert "UNITARES_HOST_ADAPTER_DISABLED_HOSTS" in parsed["recovery"]["action"]
+    assert "UNITARES_CLAUDE_CLI" not in parsed["recovery"]["action"]
+
+
+@pytest.mark.asyncio
 async def test_delegate_inference_rejects_unwired_host(monkeypatch):
     codex_host = _claude_host(accepts=[])
     codex_host["host_id"] = "codex:host-adapter"

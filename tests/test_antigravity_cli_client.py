@@ -119,6 +119,14 @@ def test_a_denied_command_is_resumed_in_the_same_conversation(tmp_path):
     assert second["cwd"] == first["cwd"]
 
 
+def test_usage_is_summed_across_resumed_turns(tmp_path):
+    denied = {**DENIED, "stdout": {**DENIED["stdout"], "usage": {"total_tokens": 5,
+                                                                 "output_tokens": 2}}}
+    script, _ = _fake_agy(tmp_path, [denied, ANSWERED])
+    _, result = _run(script)
+    assert result["usage"] == {"total_tokens": 14, "output_tokens": 2}
+
+
 def test_denied_actions_in_the_json_also_count_as_a_denial(tmp_path):
     denied = {"stdout": {**DENIED["stdout"], "denied_actions": [{"action": "RunCommand"}]}}
     script, _ = _fake_agy(tmp_path, [denied, ANSWERED])

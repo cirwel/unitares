@@ -914,6 +914,9 @@ _ALL_HOSTS = {"claude:host-adapter", "codex:host-adapter", "antigravity:host-ada
         # The Gemini connector names itself only in the user agent.
         (SessionSignals(user_agent="Google"), _ALL_HOSTS, "claude:host-adapter"),
         (SessionSignals(reported_model="gemini-3-pro"), _ALL_HOSTS, "claude:host-adapter"),
+        # The model decides before the harness: Antigravity also hosts Claude.
+        (SessionSignals(reported_harness_type="antigravity", reported_model="claude-sonnet-4-5"),
+         _ALL_HOSTS, "codex:host-adapter"),
         # The first AVAILABLE peer wins: with Codex switched off, Claude asks
         # Antigravity and Gemini asks Codex only if Claude is also out.
         (SessionSignals(reported_harness_type="claude-code"),
@@ -968,3 +971,16 @@ async def test_thorough_antigravity_route_passes_the_postcondition(monkeypatch):
     assert parsed["success"] is True
     assert thorough.await_args.args[0].host_id == "antigravity:host-adapter"
     assert parsed["diagnostics"]["host_id"] == "antigravity:host-adapter"
+
+
+def test_unavailable_fallback_skips_a_host_the_operator_switched_off(monkeypatch):
+    """Naming a deliberately disabled host would send the operator to fix a
+    route they turned off on purpose."""
+    monkeypatch.setattr(
+        co, "get_session_signals", lambda: SessionSignals(reported_harness_type="claude-code")
+    )
+    monkeypatch.setattr(co, "host_adapter_available", lambda host_id: False)
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "codex")
+    assert co._thorough_host_for_caller() == "antigravity:host-adapter"
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "codex,antigravity")
+    assert co._thorough_host_for_caller() == "codex:host-adapter"

@@ -25,7 +25,7 @@ from .delegated_inference import (
     DelegatedInferenceRequest,
     run_delegated_inference,
 )
-from .host_adapter import host_adapter_available
+from .host_adapter import host_adapter_available, host_adapter_disabled_hosts
 from .inference_outcome import InferenceFailure, InferenceOutcome
 from .inference_registry import sha256_text
 from .model_inference import (
@@ -182,19 +182,21 @@ def _family_of(value: Any) -> str | None:
 def _caller_family() -> str | None:
     """The caller's model family from descriptive transport data, or None.
 
-    The harness the caller reported wins, then the detected client, then the
-    reported model and provider, then the raw user agent (the Gemini connector
-    announces itself only as ``Google``). None of these is proof; they choose
-    between already-authorized peers and never grant authority.
+    The reported model and provider decide first, because a harness can host
+    several families (Antigravity runs Claude and GPT-OSS models as well as
+    Gemini); then the reported harness, the detected client, and the raw user
+    agent (the Gemini connector announces itself only as ``Google``). None of
+    these is proof; they choose between already-authorized peers and never
+    grant authority.
     """
     signals = get_session_signals()
     if signals is None:
         return None
     for value in (
-        signals.reported_harness_type,
-        signals.client_hint,
         signals.reported_model,
         signals.model_provider,
+        signals.reported_harness_type,
+        signals.client_hint,
         signals.user_agent,
     ):
         family = _family_of(value)
@@ -209,7 +211,9 @@ def _thorough_host_for_caller() -> str:
     The caller's own family is excluded; of the rest, the first the operator
     has available wins (``host_adapter_available`` covers the opt-in flag,
     per-host switch-off, CLI and bearer). When none is available the first
-    eligible peer is returned so the failure names a real, fixable route.
+    peer the operator has not switched off is returned, so the failure names
+    a route that setup can fix; a switched-off host is named only when every
+    peer is switched off.
     Every route has the same privacy/cost/accountability class, so this
     selects between already-authorized peers; the public consult schema
     exposes no host control.
@@ -218,7 +222,8 @@ def _thorough_host_for_caller() -> str:
     for host_id in peers:
         if host_adapter_available(host_id):
             return host_id
-    return peers[0]
+    disabled = host_adapter_disabled_hosts()
+    return next((host_id for host_id in peers if host_id not in disabled), peers[0])
 
 
 def _safe_provenance(
