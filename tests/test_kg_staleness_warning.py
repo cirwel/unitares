@@ -114,10 +114,13 @@ def test_backend_object_without_updated_at_attr():
 
 
 def test_structured_age_is_the_same_last_write_fact():
-    """`age_days` is what search rows and the lean digest carry: the same
-    last-write basis as the sentence, and only when the sentence exists."""
-    age_days, warning = _compute_staleness(_discovery(days_old=120, updated_days_ago=70))
-    assert age_days == 70
+    """`last_activity_days` is what search rows and the lean digest carry:
+    the same last-write basis as the sentence, and only when the sentence
+    exists. Days since the last write, not since creation, which is what
+    knowledge(action='audit') calls `last_activity_days` too (its `age_days`
+    counts from creation)."""
+    days, warning = _compute_staleness(_discovery(days_old=120, updated_days_ago=70))
+    assert days == 70
     assert warning == _compute_staleness_warning(
         _discovery(days_old=120, updated_days_ago=70)
     )

@@ -233,16 +233,18 @@ Unresolved entries create noise. Closed loops create trust in the graph.
 Search flags an open entry whose latest write (`updated_at` when present, not
 merely the original creation time) is more than 60 days old, so a genuinely
 maintained finding does not age as if untouched. The result carries
-`staleness_warning` (a sentence) and `age_days` (days since that write). For a
-durable entry, one the lifecycle keeps permanently (the permanent types and
-tags above) or an `insight`, the sentence gives the age without calling the
-entry "still open", since open is its resting status. It still says to verify,
+`staleness_warning` (a sentence) and `last_activity_days` (days since that
+write, the name `knowledge(action="audit")` uses for the same quantity; the
+audit's `age_days` counts from creation). For a durable entry, one the
+lifecycle keeps permanently (the permanent types and tags above) or an
+`insight`, the sentence gives the age without calling the entry "still open",
+since open is its resting status. It still says to verify,
 because durable rules carry volatile details such as ports, paths and refs.
 The classification is the retention one, so an open bug tagged `architecture`
 also gets the neutral sentence. There is no release-version clause:
 `system_version` on a result is store-time provenance, not a staleness signal.
-The default `search_shared_memory` digest carries `age_days` without the
-sentence and explains the field once, in `state_summary.staleness_note`.
+The default `search_shared_memory` digest carries `last_activity_days` without
+the sentence and explains the field once, in `state_summary.staleness_note`.
 
 ## Synthesis: rolling up topics
 
