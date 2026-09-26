@@ -854,10 +854,27 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # unbound caller still PRODUCED a cacheable identity as a side effect.
     # Guarding-first instead: when the call resolves to pre_onboard, is not an
     # identity-lifecycle tool, and the caller supplied no proof (continuity
-    # token / client_session_id / agent_uuid / UUID X-Agent-Id), skip resolution
-    # entirely and leave the request unbound. Reads that DO carry proof still
-    # resume-resolve — reading an existing identity is legitimate, not
-    # "producing" one — preserving the test_read_only_*_session_miss contract.
+    # token / client_session_id / agent_uuid / UUID X-Agent-Id / X-Session-ID),
+    # skip resolution entirely and leave the request unbound. Reads that DO
+    # carry proof still resume-resolve — reading an existing identity is
+    # legitimate, not "producing" one — preserving the
+    # test_read_only_*_session_miss contract.
+    #
+    # X-Session-ID is transmitted by the caller in this request, and
+    # derive_session_key already keyed the call on it (step 4) and marked it
+    # caller_asserted, exactly as it does for a header-only write on the same
+    # connection and as the REST read gate honours it. Counting it only when it
+    # won the derivation keeps the read on the key a write would use: a
+    # client-sent Mcp-Session-Id outranks it (step 3) and is connection-scoped
+    # — Claude Code subagents share the parent's connection — so it is not
+    # proof here, and neither are oauth_client_id / x_client_id, which name a
+    # client rather than a process.
+    from ..context import get_session_resolution_source
+    _header_session_proof = bool(
+        signals
+        and signals.x_session_id
+        and get_session_resolution_source() == "x_session_id"
+    )
     _has_identity_proof = bool(
         _token_agent_uuid
         or (arguments and arguments.get("client_session_id"))
@@ -867,6 +884,7 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
             and len(x_agent_id_header) == 36
             and x_agent_id_header.count("-") == 4
         )
+        or _header_session_proof
     )
     if not _has_identity_proof and canonical_name not in _IDENTITY_LIFECYCLE_TOOLS:
         if call_identity_requirement == "pre_onboard":

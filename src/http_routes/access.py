@@ -695,14 +695,20 @@ async def _resolve_http_session_binding(
         from src.mcp_handlers.decorators import get_call_identity_requirement
 
         if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
-            # Same rule as the MCP middleware (#945 section 1): a pre_onboard
-            # read short-circuits only when the caller transmitted no proof in
-            # this request. A caller-asserted session (an explicit, non-
-            # transport-injected client_session_id, or an X-Session-ID header)
-            # resolves read-only, so an agent can read its own state over
-            # REST. A server-inferred derivation (fingerprint, pin, injected
-            # session id) still stays unbound: a read never mints, and never
-            # shows a co-located sibling's state.
+            # The REST form of the MCP middleware's rule (#945 section 1): a
+            # pre_onboard read short-circuits only when the caller transmitted
+            # no proof in this request. A caller-asserted session (an explicit,
+            # non-transport-injected client_session_id, or an X-Session-ID
+            # header) resolves read-only, so an agent can read its own state
+            # over REST, as it can on /mcp/. The two gates are not the same
+            # predicate: this one takes any caller_asserted derivation, which
+            # on REST also admits an X-Client-Id header that the MCP
+            # short-circuit does not count (it names a client, not a process),
+            # while the MCP one checks argument presence (client_session_id,
+            # agent_uuid, a UUID X-Agent-Id) plus an X-Session-ID that won the
+            # derivation. A server-inferred derivation (fingerprint, pin,
+            # injected session id) still stays unbound: a read never mints,
+            # and never shows a co-located sibling's state.
             from src.mcp_handlers.context import get_session_proof_origin
 
             if get_session_proof_origin() != "caller_asserted":
