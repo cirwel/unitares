@@ -168,7 +168,8 @@ inventory](dev/GOVERNANCE_SENSITIVITY.md) enumerates the constants and
 anti-gaming tests whose movement materially changes enforcement, and CI labels
 any PR touching them and asks for the expected effect on pause/verdict rates —
 conspicuousness, deliberately not a block, so the human merge gate stays the
-control rather than being routed around. **This binds hardest on federation.** A
+control rather than being routed around. **This binds hardest on cross-operator
+trust.** A
 partner governor calibrating a peer's telemetry has to model who authored that
 peer's thresholds; an operator who cannot answer that is asking to be trusted
 rather than verified, which is the one thing a mutually-distrustful exchange
@@ -182,8 +183,13 @@ signature, and a party holding that key could also forge one.
 decision to keep a symmetric stack, with asymmetric DPoP shelved on 2026-04-19,
 covers agent identity (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md));
 it is not a decision to keep the party HMAC. Whether to restore key issuance for
-that scheme or delete it is still open, as the `describe_attestation` docstring
-in `src/dialectic_protocol.py` records. The scheme is designed for one operator
+that scheme or retire it was decided on 2026-09-25: D5 of the
+[federation trust decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+retires minting for new resolutions and keeps existing signatures readable. As
+of that date the change is not implemented; it is tracked in
+[#2449](https://github.com/cirwel/unitares/issues/2449), and until it lands the
+`describe_attestation` docstring in `src/dialectic_protocol.py` still describes
+the choice as open. The scheme is designed for one operator
 attesting inside their own trust boundary. As of 2026-09-25 no
 resolution record in the maintainer deployment carries a signature keyed on a
 party's `api_key` under the current scheme: the four 2026 records that carry a
@@ -217,7 +223,14 @@ a witness that authenticates an issuer through a separate channel can sign a
 receipt third parties verify. Both introduce different trust assumptions rather
 than removing them. The decision genuinely upstream of any exchange work is
 therefore which verification semantics a multi-principal deployment requires;
-what key material that implies follows from it, and is not settled here.
+what key material that implies follows from it, and is not settled here. No
+multi-principal trust work is scheduled to settle it: D3a of the
+[decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+records it as not scheduled, because as of 2026-09-25 no second principal and
+no external verifier exist. The recorded wake condition is a real outside
+party, a person or organisation with its own administrative root, asking to
+verify a record from this deployment. Custody for the receipt key is deferred
+behind that wake (D3b).
 
 **The highest-stakes surface: the governed-effect execute plane.** Everything above
 concerns the *signal* and whether an agent can game it. The most security-relevant

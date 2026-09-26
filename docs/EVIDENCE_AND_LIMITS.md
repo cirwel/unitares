@@ -122,12 +122,12 @@ declarations, not from a directory count; that module carries one record per
 dispatch tool plus the eight workflow aliases, so the tool figure is its
 non-alias records.
 
-## Local control and future federation
+## Local control and cross-operator trust
 
 Identity, telemetry, evidence, and policy history stay on infrastructure the
 operator controls, with no outbound dependency on a vendor service.
 
-The architecture exposes several of the seams a later federation experiment
+The architecture exposes several of the seams a later cross-operator experiment
 would need: process-bound identity, evidence provenance, a
 [versioned telemetry envelope](ontology/eisv-telemetry-envelope-v1.md), and
 policy decisions with named reasons.
@@ -155,10 +155,19 @@ stored record, not either party's intent; its
 [decision packet](proposals/active/dialectic-resolution-receipt-v0.md) names
 what has to exist before enabling it would be honest. So a record from this
 system cannot today be verified by an operator who does not already trust its
-issuer, which is the whole problem a federation exchange has to solve. Whether
-the remaining records suffice to exchange cross-operator attestations without
-centralizing raw telemetry is open on the **multi-principal trust** track in the
-[roadmap](ROADMAP.md).
+issuer, which is the whole problem a cross-operator exchange has to solve.
+Whether the remaining records suffice to exchange cross-operator attestations
+without centralizing raw telemetry is not settled, and the **multi-principal
+trust** track that would settle it is not scheduled. That was decided on
+2026-09-25 (D3a in the
+[federation trust decision record](proposals/active/federation-trust-decisions-2026-09-25.md)):
+as of that date no second principal and no external verifier exist. The
+recorded wake condition is a real outside party, a person or organisation with
+its own administrative root, asking to verify a record from this deployment.
+The [roadmap](ROADMAP.md) carries the track as not scheduled. The same record
+decides to retire minting of party-level HMAC signatures while keeping existing
+ones readable (D5); as of 2026-09-25 that change is not implemented, and it is
+tracked in [#2449](https://github.com/cirwel/unitares/issues/2449).
 
 ## Identity binding and the lease plane
 
@@ -169,7 +178,7 @@ producers carry proofs. Governance keeps the continuity credential and private
 signing key; the lease plane verifies a short-lived token bound to a
 deployment-specific audience plus the exact method, path, and request-body hash,
 then consumes its nonce once. This version accepts one explicitly trusted issuer.
-Multi-issuer federation remains blocked until lease principals persist both
-issuer and subject; active leases must be drained before changing issuer.
+Multi-issuer trust, which any cross-operator lease exchange would need, remains
+blocked until lease principals persist both issuer and subject; active leases must be drained before changing issuer.
 `legacy`, `hybrid`, and `attestation` proof modes support staged upgrades. The
 lease plane listens on `http://127.0.0.1:8788` with bearer auth.
