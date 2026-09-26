@@ -331,19 +331,37 @@ def test_rest_never_trusts_the_public_listener():
     assert _is_trusted_network(Request(scope)) is True
     assert _is_trusted_network(Request({**scope, PUBLIC_LISTENER_SCOPE_KEY: True})) is False
 
-def test_an_oversized_basic_token_request_is_refused_before_buffering():
+@pytest.mark.asyncio
+async def test_an_oversized_basic_token_request_is_not_buffered_unbounded():
     """The client_id is public; an anonymous Basic caller must not make the
-    shim buffer an unbounded body ahead of the SDK's own limit."""
-    client = TestClient(_app(_provider()))
-    resp = client.post(
-        "/token",
-        content=b"grant_type=authorization_code&code=" + b"x" * (128 * 1024),
-        headers={
-            "Authorization": _basic(CLIENT_ID, "wrong"),
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-    )
-    assert resp.status_code == 413
+    shim hold an unbounded body. It peeks at most _MAX_TOKEN_BODY, then hands
+    the untouched stream to the app, which still receives every byte."""
+    from src.oauth_provider import _MAX_TOKEN_BODY
+
+    chunk = b"x" * 8192
+    total = 64  # 512 KiB
+    sent = {"n": 0}
+
+    async def receive():
+        sent["n"] += 1
+        return {"type": "http.request", "body": chunk, "more_body": sent["n"] < total}
+
+    got = {"at_start": None, "bytes": 0}
+
+    async def inner(scope, recv, send):
+        got["at_start"] = sent["n"]
+        while True:
+            message = await recv()
+            got["bytes"] += len(message.get("body", b""))
+            if not message.get("more_body"):
+                break
+
+    scope = {"type": "http", "method": "POST", "path": "/token", "query_string": b"",
+             "headers": [(b"authorization", _basic(CLIENT_ID, "wrong").encode()),
+                         (b"content-type", b"application/x-www-form-urlencoded")]}
+    await StaticClientBasicAuthShim(inner, client_id=CLIENT_ID)(scope, receive, None)
+    assert got["at_start"] <= _MAX_TOKEN_BODY // len(chunk) + 1
+    assert got["bytes"] == len(chunk) * total
 
 
 @pytest.mark.parametrize(

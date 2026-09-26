@@ -147,6 +147,7 @@ _oauth_setup_error: Exception | None = None
 # only the public listener the operator asked to gate.
 _oauth_public_port = oauth_public_port()
 _oauth_static_client_id = os.environ.get("UNITARES_OAUTH_STATIC_CLIENT_ID") or None
+_static_pkce_verifier: str | None = None
 
 if _oauth_issuer_url:
     try:
@@ -155,6 +156,7 @@ if _oauth_issuer_url:
             GovernanceOAuthProvider,
             RedisOAuthStore,
             static_clients_from_env,
+            static_pkce_verifier,
         )
 
         _oauth_secret = os.environ.get("UNITARES_OAUTH_SECRET")
@@ -164,6 +166,10 @@ if _oauth_issuer_url:
             or f"{_oauth_issuer_url.rstrip('/')}/mcp"
         )
         _static_clients = static_clients_from_env()
+        if _static_clients:
+            # Lets a confidential connector without PKCE sign in; see
+            # StaticClientBasicAuthShim. Derived, never logged or stored.
+            _static_pkce_verifier = static_pkce_verifier(_static_clients[0].client_secret)
         _oauth_provider = GovernanceOAuthProvider(
             secret=_oauth_secret,
             auto_approve=_auto_approve,
@@ -448,6 +454,7 @@ async def main():
                 # Same condition as the public socket's bind: no issuer, no listener.
                 oauth_public_listener_only=bool(_oauth_issuer_url and _oauth_public_port),
                 static_client_id=_oauth_static_client_id,
+                static_pkce_verifier=_static_pkce_verifier,
             ),
             host=args.host,
             port=args.port,

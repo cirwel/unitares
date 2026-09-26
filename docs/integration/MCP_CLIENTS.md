@@ -134,6 +134,28 @@ tool runs:
      never written to Redis, so rotating its secret takes effect on the next
      restart); its tokens persist like any other. The token
      endpoint accepts its secret either in the form body or as HTTP Basic.
+     A connector that sends no PKCE (the likely reason Google's custom MCP
+     connector failed to link; unconfirmed, which is what the log below is
+     for) still signs in as the static client: the server
+     supplies a PKCE pair it derives from the client secret, and redeeming
+     the code still requires that secret. Requested scopes other than
+     `mcp:tools` are narrowed away rather than refused, on every static-client
+     sign-in and refresh. A client's own PKCE is never altered, and no other client gets
+     either allowance.
+     Each GET or POST to `/authorize` and `/token` is logged as one `[OAUTH]`
+     line (client, PKCE and scope facts, status, OAuth error), which is where
+     to look when a connector fails to link: an access log records only the
+     request line and status, not why a sign-in failed. The `[OAUTH]` line
+     never carries a secret, code, token, URL userinfo or URL query. The
+     access log, where enabled, records each request line verbatim, including
+     whatever a caller puts in the `GET /authorize` query; it is not redacted.
+     Other methods (CORS preflight, HEAD) are not
+     logged, and a body over 64 KiB is logged as unparsed. Lines are capped
+     by two budgets of 60 a minute: one for lines naming the static client,
+     so a flood under other ids cannot hide the connector's own failures,
+     and one for everything else, with a count of any dropped. The static
+     client id is public, so a caller who sends it can still spend that
+     budget.
      An incomplete static-client configuration fails OAuth setup, which
      closes the gated route rather than opening it (see below).
 
