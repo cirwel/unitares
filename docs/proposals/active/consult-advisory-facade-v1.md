@@ -20,7 +20,9 @@ Expose two primary verbs for model-mediated help:
 > consultation produced it (the same holds for `call_model` and
 > `delegate_inference`). Second, every consultation that reaches the router
 > now also writes an `audit.events` row, `event_type='consultation'`
-> (`unitares.consultation_record.v1`): requester, policy, route, outcome,
+> (`unitares.consultation_record.v1`): requester, policy, outcome, the route
+> whenever an inference result came back (an upstream failure records the
+> lane, requested privacy and failure code but not where the attempt went),
 > and HMAC hashes of the brief, prompt and advice under a key returned only
 > to the caller. The advice stays advisory and off the governed record; the
 > fact that it was sought is on it.

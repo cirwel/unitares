@@ -527,8 +527,10 @@ def _success(
             degradation=degradation,
         )
     # From here on the inference has run and its provenance is well-formed,
-    # so every failure below carries the route: the record must say where a
-    # brief went even when no advice comes back.
+    # so every failure below carries the route: once a result came back, the
+    # record says where the brief went even when no advice is returned. An
+    # upstream failure (no result) records the lane, requested privacy and
+    # failure code, not where the attempt went.
     provenance = _safe_provenance(
         outcome,
         requester_uuid=request.requester_uuid,
