@@ -38,8 +38,9 @@ def test_runs_read_only_from_an_empty_workspace_and_parses_the_verdict(monkeypat
     _spawn(monkeypatch, json.dumps(out).encode(), seen=seen)
     result = asyncio.run(hb.call_antigravity_backend("PROMPT"))
     assert seen["argv"][:2] == ("/Users/op/.local/bin/agy", "-p")
-    assert seen["argv"][2] == "PROMPT" + hb._ANTIGRAVITY_TEXT_ONLY
-    assert {"--sandbox", "plan", "json", "--disable-slash-commands"} <= set(seen["argv"])
+    assert seen["argv"][2] == hb._guard_prompt("PROMPT" + hb._ANTIGRAVITY_TEXT_ONLY)
+    assert {"--sandbox", "plan", "json"} <= set(seen["argv"])
+    assert "--disable-slash-commands" not in seen["argv"]  # it switches plan mode off
     assert seen["listing"] == [] and not Path(seen["cwd"]).exists()
     # Not the operator's home: ~/.gemini holds standing grants and MCP servers.
     home = seen["kw"]["env"]["HOME"]
@@ -73,7 +74,7 @@ def test_prompt_tells_agy_to_answer_in_text_without_tools(monkeypatch):
            seen=seen)
     asyncio.run(hb.call_antigravity_backend("PROMPT"))
     sent = seen["argv"][2]
-    assert sent.startswith("PROMPT") and "Do not run commands" in sent
+    assert sent.startswith(hb._guard_prompt("PROMPT")) and "Do not run commands" in sent
     assert "JSON object" in sent
 
 

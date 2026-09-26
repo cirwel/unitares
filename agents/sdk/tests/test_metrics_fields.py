@@ -229,11 +229,12 @@ def test_default_envelope_yields_the_reading(read):
 
 @pytest.mark.parametrize("read", CLIENTS)
 def test_full_envelope_reads_the_canonical_payload_first(read):
-    """raw_governance outranks state_summary; the copies are made to disagree."""
+    """raw_governance outranks state_summary for the reading; the copies are
+    made to disagree. The action is the envelope's normalized
+    action_summary.action (see the action tests below)."""
     raw = deepcopy(FULL)
     raw["state_summary"]["E"] = 0.01
     raw["state_summary"]["coherence"] = 0.99
-    raw["action_summary"]["action"] = "pause"
 
     result = read(raw)
 
@@ -241,6 +242,41 @@ def test_full_envelope_reads_the_canonical_payload_first(read):
     assert result.coherence == FULL["raw_governance"]["coherence"]
     assert result.action == "proceed"
     assert result.verdict == "safe"
+
+
+@pytest.mark.parametrize("read", CLIENTS)
+@pytest.mark.parametrize("word", ["guide", "resumed", "not_paused", "approve"])
+def test_a_canonical_lifecycle_word_reads_as_the_policy_action(read, word):
+    """A direct get_governance_metrics caller (no envelope: the canonical
+    payload at the top level) gets the same proceed/pause the envelope would
+    report, not the raw lifecycle word."""
+    canonical = {"success": True, **deepcopy(FULL["raw_governance"])}
+    canonical["last_decision_action"] = word
+    if isinstance(canonical.get("verdict"), dict):
+        canonical["verdict"]["decision_action"] = word
+    assert "action_summary" not in canonical and "raw_governance" not in canonical
+
+    assert read(canonical).action == "proceed"
+
+
+@pytest.mark.parametrize("read", CLIENTS)
+@pytest.mark.parametrize(
+    "envelope_action, canonical_word",
+    [("pause", "guide"), ("proceed", "pause")],
+)
+def test_the_envelope_action_outranks_a_disagreeing_canonical_word(
+    read, envelope_action, canonical_word
+):
+    """At full verbosity both sources ride along. When they disagree, the
+    envelope's action_summary.action wins; a canonical-first order would read
+    the mapped lifecycle word instead."""
+    raw = deepcopy(FULL)
+    raw["action_summary"]["action"] = envelope_action
+    raw["raw_governance"]["last_decision_action"] = canonical_word
+    if isinstance(raw["raw_governance"].get("verdict"), dict):
+        raw["raw_governance"]["verdict"]["decision_action"] = canonical_word
+
+    assert read(raw).action == envelope_action
 
 
 @pytest.mark.parametrize("read", CLIENTS)

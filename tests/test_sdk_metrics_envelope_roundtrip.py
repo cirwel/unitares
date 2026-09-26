@@ -117,3 +117,25 @@ async def test_an_unbound_read_carries_no_reading():
     for result in await _read_both(env):
         assert result.metrics == {"verdict": "unbound"}
         assert result.coherence is None and result.risk is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", [{}, {"verbosity": "standard"}, {"verbosity": "full"}])
+@pytest.mark.parametrize("decisions", [[], ["guide"], ["resumed"]])
+async def test_the_action_does_not_depend_on_the_requested_verbosity(arguments, decisions):
+    """The canonical payload carries the raw lifecycle word (not_paused,
+    guide, resumed); the envelope maps it to the policy action. get_metrics
+    must report the same action whether or not raw_governance rides along."""
+    _payload, env = await _envelope(arguments, check_ins=5, recent_decisions=decisions)
+    async_result, sync_result = await _read_both(env)
+
+    assert env["action_summary"]["action"] == "proceed"
+    assert async_result.action == sync_result.action == "proceed"
+
+
+def test_the_sdk_policy_map_matches_the_server_aliases():
+    from src.mcp_handlers.middleware.envelope_step import _ACTION_ALIASES
+    from unitares_sdk._metrics_fields import _POLICY_ACTION
+
+    for word, (action, _sub) in _ACTION_ALIASES.items():
+        assert _POLICY_ACTION[word] == action, word

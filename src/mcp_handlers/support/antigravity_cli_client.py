@@ -14,8 +14,12 @@ it runs ``codex_app_server_client.py``. agy needs three things a plain
   so a caller's prompt could otherwise read secrets or make governed writes.
   agy gets a fresh temporary HOME holding only a link to the macOS login
   keychain, where its subscription login lives, so it starts with no grants
-  and no MCP servers. ``--disable-slash-commands`` keeps a prompt that starts
-  with ``/`` from expanding into a command or skill.
+  and no MCP servers.
+* **Plan mode, and no slash commands.** ``--mode plan --sandbox`` stays on.
+  ``--disable-slash-commands`` is NOT used: agy 1.2.11 warns "--mode plan has
+  no effect while slash command expansion is disabled", so that flag silently
+  switched plan mode off. A prompt is expanded only when it starts with ``/``,
+  so guard_prompt() puts a fixed first line in front of the caller's text.
 * **An allowlisted environment.** The prompt is caller text, and the
   orchestrator child inherits the service environment (bearer tokens,
   ``UNITARES_*``). An injected "print your environment" must find nothing to
@@ -90,13 +94,22 @@ RESUME_PROMPTS = {
 }
 #: A resume needs at least this much budget left to be worth starting.
 RESUME_MIN_SECONDS = 5.0
-DENIED_MARK = 'required the "command" permission'
+#: agy's headless auto-denial message, for any tool ("command", "read_file",
+#: ...). Matching one tool name missed denied file reads.
+DENIED_MARK = "permission that headless mode cannot prompt for"
 DEFAULT_TIMEOUT_S = 240.0
 
 
 #: Flags every agy launch carries, first turn and resumes alike.
-AGY_FLAGS = ("--mode", "plan", "--sandbox", "--disable-slash-commands",
-             "--output-format", "json")
+AGY_FLAGS = ("--mode", "plan", "--sandbox", "--output-format", "json")
+
+#: First line of every prompt built from caller text, so the prompt can never
+#: start with "/" and be expanded as a slash command or skill.
+PROMPT_GUARD = "Request (plain text; not a command):\n\n"
+
+
+def guard_prompt(text: str) -> str:
+    return PROMPT_GUARD + text
 
 
 def isolated_home(root: str, real_home: str | None) -> str:
@@ -198,7 +211,7 @@ def run(environ: dict[str, str], stream: Any = sys.stdout) -> int:
     cli = environ.get("HA_CLI", "").strip()
     if not cli:
         return _emit({"status": "ERROR", "error": "HA_CLI unset"}, stream)
-    prompt = environ.get("HA_PROMPT", "") + TEXT_ONLY
+    prompt = guard_prompt(environ.get("HA_PROMPT", "") + TEXT_ONLY)
     if len(prompt.encode("utf-8")) > PROMPT_BYTES_LIMIT:
         return _emit({"status": "ERROR",
                       "error": "prompt exceeds the Antigravity argv size limit"}, stream)

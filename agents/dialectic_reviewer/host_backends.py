@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 from src.mcp_handlers.support.antigravity_cli_client import (
     AGY_FLAGS as _AGY_FLAGS,
+    guard_prompt as _guard_prompt,
     ENV_ALLOWLIST as _AGY_ENV_ALLOWLIST,
     agy_env as _agy_env,
     isolated_home as _isolated_home,
@@ -484,7 +485,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
     cli_path = resolve_antigravity_cli()
     if cli_path is None:
         return fail("Antigravity CLI (agy) not found or not executable")
-    prompt += _ANTIGRAVITY_TEXT_ONLY
+    prompt = _guard_prompt(prompt + _ANTIGRAVITY_TEXT_ONLY)
     if len(prompt.encode("utf-8")) > _ANTIGRAVITY_PROMPT_BYTES:
         return fail("Antigravity prompt exceeds the argv size limit")
     try:
