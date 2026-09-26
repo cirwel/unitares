@@ -413,8 +413,11 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                 )
                 # Every route below leads back to this process's own
                 # client_session_id. continuity_token appears only inside
-                # identity(), and nothing here tells a process that already
-                # holds an identity to mint a second one.
+                # identity(), and a mint is offered last and only to a process
+                # that never called start_session (the pin can resolve a
+                # never-onboarded process to a co-located sibling); nothing
+                # here tells a process that already holds an identity to mint
+                # a second one.
                 return success_response(strict_identity_refusal_payload(
                     "process_agent_update",
                     hint=(
@@ -431,7 +434,8 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                         "returned. If you no longer have it, "
                         "identity(agent_uuid=..., continuity_token=..., "
                         "resume=true) returns it; a retry without it is refused "
-                        "again."
+                        "again. If this process never called start_session, "
+                        "call start_session(force_new=true) first."
                     ),
                     safe_options=[
                         {
@@ -460,6 +464,17 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                             "when": (
                                 "You want to read state without writing. Without the "
                                 "client_session_id the read returns unbound."
+                            ),
+                        },
+                        {
+                            "action": "start_session_first",
+                            "call": (
+                                "start_session(force_new=true), then sync_state(..., "
+                                "client_session_id=<from start_session>)"
+                            ),
+                            "when": (
+                                "This process never called start_session; the "
+                                "identity this write resolved to is not its own."
                             ),
                         },
                     ],

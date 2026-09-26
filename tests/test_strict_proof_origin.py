@@ -145,11 +145,13 @@ async def test_strict_refuses_injected_csid_write(monkeypatch):
 async def test_strict_refusal_payload_leads_with_client_session_id(monkeypatch):
     """A denied write points the caller back to its own client_session_id.
 
-    The refusal is reached in exactly the dropped-id case, so every route in
-    it leads with the id start_session returned; continuity_token appears only
-    inside an identity(..., resume=true) rebind, which then hands back the id
-    to retry with. It used to lead with continuity_token on the write itself,
-    contradicting the contract and the how_to_strengthen block it embeds.
+    The refusal is reached mostly in the dropped-id case, so its routes lead
+    with the id start_session returned; continuity_token appears only inside
+    an identity(..., resume=true) rebind, which then hands back the id to
+    retry with. It used to lead with continuity_token on the write itself,
+    contradicting the contract and the how_to_strengthen block it embeds. A
+    mint is offered last, and only to a process that never called
+    start_session (the pin can resolve such a process to a sibling).
     """
     monkeypatch.setattr(ib, "is_strict_identity_required", lambda: True)
     _patch_ctx(monkeypatch, agent_uuid="sibling-uuid",
@@ -166,10 +168,20 @@ async def test_strict_refusal_payload_leads_with_client_session_id(monkeypatch):
     assert hint.index("client_session_id") < hint.index("continuity_token")
     next_step = payload["next_step"]
     assert next_step.index("client_session_id") < next_step.index("continuity_token")
+    assert next_step.index("continuity_token") < next_step.index("never called start_session")
+    assert next_step.index("never called start_session") < next_step.index("force_new=true")
 
     options = payload["safe_options"]
     assert options[0]["action"] == "retry_with_client_session_id"
     assert "client_session_id=" in options[0]["call"]
+    # The only mint is the last option, for a process with no identity of its
+    # own; it declares no lineage and retries with the id the mint returns.
+    mint = options[-1]
+    assert mint["action"] == "start_session_first"
+    assert "never called start_session" in mint["when"]
+    assert mint["call"].startswith("start_session(force_new=true)")
+    assert "parent_agent_id" not in mint["call"]
+    assert re.search(r"then sync_state\(.*client_session_id=<from start_session>", mint["call"])
     for option in options:
         call = option["call"]
         # A write never carries the token; only identity() does.
@@ -178,7 +190,8 @@ async def test_strict_refusal_payload_leads_with_client_session_id(monkeypatch):
         for token_use in re.finditer("continuity_token", call):
             opener = call.rfind("identity(", 0, token_use.start())
             assert opener != -1 and ")" not in call[opener:token_use.start()], option
-        assert "force_new" not in call, option
+        if option is not mint:
+            assert "force_new" not in call, option
     rebind = next(o for o in options if "identity(" in o["call"])
     assert "resume=true" in rebind["call"]
     # The rebind is not a dead end: the retry after it carries the id identity() returns.
