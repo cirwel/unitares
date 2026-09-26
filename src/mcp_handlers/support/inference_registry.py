@@ -2,15 +2,16 @@
 
 Exposes what the server can route today: the synchronous local hosts (Ollama, HF
 via ``call_model``) plus the strong-heterogeneous subscription-CLI hosts (Codex,
-Claude) served ASYNCHRONOUSLY via the agent-orchestrator (``host_adapter.py``).
+Claude, Antigravity) served ASYNCHRONOUSLY via the agent-orchestrator
+(``host_adapter.py``).
 It does not store credentials; availability is probed live (socket / resolved CLI /
 opt-in flag). The strong hosts are gated by ``UNITARES_HOST_ADAPTER_ENABLED``.
 
 **Availability is not callability.** ``available`` answers "could this adapter
 run if something invoked it". ``accepts_host_id_from`` answers the question an
 agent actually has: "which tools will accept this host as a ``host_id``
-argument". They diverge in the ordinary case: both subscription-CLI adapters
-are reachable from ``delegate_inference`` on every install, while ``available``
+argument". They diverge in the ordinary case: every subscription-CLI adapter
+is reachable from ``delegate_inference`` on every install, while ``available``
 goes false on any install where the opt-in flag is off, the CLI is absent, or
 the orchestrator bearer is unset. Reachability is a routing contract and must
 not flap with runtime readiness. A host that advertises itself as usable while
@@ -230,6 +231,33 @@ def _base_hosts() -> list[InferenceHost]:
                 "(PATH, ~/.local/bin/claude, or UNITARES_CLAUDE_CLI), and "
                 "AGENT_ORCHESTRATOR_BEARER_TOKEN. Exact provider-reported model "
                 "IDs, usage, cost, hashes, and latency are returned as evidence."
+            ),
+        ),
+        InferenceHost(
+            host_id="antigravity:host-adapter",
+            display_name="Antigravity host adapter",
+            provider_kind="antigravity_host_adapter",
+            transport="host_adapter",
+            configured=host_adapter_enabled(),
+            available=host_adapter_available("antigravity:host-adapter"),
+            privacy_class="operator_authorized_external",
+            cost_class="subscription_backed",
+            accountability_class="tool_evidence",
+            capabilities=["reasoning", "review", "summarize"],
+            models=["antigravity"],
+            implementation_status="active",
+            accepts_host_id_from=["delegate_inference"],
+            notes=(
+                "Agent-callable through delegate_inference. Subscription-backed "
+                "Antigravity (`agy -p`, Google) runs in plan mode and its "
+                "sandbox, from an empty temporary workspace with an "
+                "allowlisted environment, via the agent-orchestrator. A turn "
+                "that stalls on a denied command is resumed up to twice, and "
+                "one cut off at the output limit once. Requires "
+                "UNITARES_HOST_ADAPTER_ENABLED=1, an authenticated agy CLI "
+                "(PATH, ~/.local/bin/agy, or UNITARES_ANTIGRAVITY_CLI), and "
+                "AGENT_ORCHESTRATOR_BEARER_TOKEN. The CLI reports usage but no "
+                "exact model identifier."
             ),
         ),
     ]

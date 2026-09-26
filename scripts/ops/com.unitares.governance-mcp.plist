@@ -166,8 +166,11 @@
              hf:router is a plain HTTPS call to router.huggingface.co. -->
         <key>HF_TOKEN</key>
         <string>YOUR_HF_TOKEN_OR_OMIT_THIS_KEY</string>
-        <!-- ONE flag for BOTH strong-model lanes: claude:host-adapter and
-             codex:host-adapter. There is no per-lane switch. Enabling it lets
+        <!-- ONE flag for ALL THREE strong-model lanes: claude:host-adapter,
+             codex:host-adapter and antigravity:host-adapter. To keep one lane
+             off while the others run (a suspended provider account still has
+             a working CLI, so nothing local notices), list it in
+             UNITARES_HOST_ADAPTER_DISABLED_HOSTS, e.g. "codex". Enabling it lets
              any bound agent spend the operator's subscription quota through
              delegate_inference; it adds no metered model-API dependency (these
              drive subscription-auth CLIs), but the quota is real. Each lane
@@ -178,8 +181,8 @@
              rather than a file may be unreadable from a service-spawned child
              even when HOME is correct, and reports itself as simply logged out.
              Verify by running the CLI under `env -i HOME=... PATH=...` before
-             concluding the adapter is broken. Leave this unset to keep both
-             strong lanes off. -->
+             concluding the adapter is broken. Leave this unset to keep every
+             strong lane off. -->
         <key>UNITARES_HOST_ADAPTER_ENABLED</key>
         <string>0</string>
     </dict>

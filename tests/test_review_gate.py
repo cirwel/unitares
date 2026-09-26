@@ -1566,7 +1566,12 @@ def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path)
     # Review of da5835a (P2): no caller secrets reach a prompt-steerable agent.
     assert seen["env"] is not None and "GITHUB_TOKEN" not in seen["env"]
     assert "UNITARES_MCP_BEARER_TOKEN" not in seen["env"]
-    assert {"--sandbox", "plan", "json"} <= set(seen["cmd"])
+    assert {"--sandbox", "plan", "json", "--disable-slash-commands"} <= set(seen["cmd"])
+    # Round 4 of #2470: the operator's ~/.gemini holds standing permission
+    # grants and MCP servers that headless mode does not deny, and this lane
+    # posts its output publicly, so agy must get a fresh HOME.
+    home = Path(seen["env"]["HOME"])
+    assert home != Path.home() and home.resolve().parent == Path(seen["cwd"]).resolve().parent
     assert seen["cwd"] != str(tmp_path) and seen["cwd"] != os.getcwd() and seen["listing"] == []
     assert not Path(seen["cwd"]).exists()  # the workspace is removed afterwards
     assert rg.parse_verdict(text) == ("CLEAN", 0) and note == "exit 0"
@@ -1661,6 +1666,9 @@ def test_a_truncated_agy_answer_is_resumed_not_accepted(monkeypatch, tmp_path):
     # same isolated workspace, still present, same scrubbed environment
     assert second["cwd"] == first["cwd"] and second["cwd_exists"]
     assert second["env"] is not None and "GITHUB_TOKEN" not in second["env"]
+    # the resume keeps the isolated HOME, where agy stores the conversation
+    assert second["env"]["HOME"] == first["env"]["HOME"] != str(Path.home())
+    assert "--disable-slash-commands" in second["cmd"]
     assert not Path(first["cwd"]).exists()  # removed once, at the end
 
 
@@ -1860,3 +1868,23 @@ def test_a_stale_denial_in_the_log_does_not_trigger_another_resume(monkeypatch, 
     calls = _fake_agy(monkeypatch, [_AGY_DENIED, empty_no_mark])
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
     assert len(calls) == 2
+
+
+def test_the_agy_env_allowlist_matches_the_consult_client():
+    """review_gate.py runs standalone and keeps its own copy; the copies must
+    not drift (for example a Google API key added back to one of them)."""
+    from src.mcp_handlers.support import antigravity_cli_client as client
+
+    assert tuple(rg.AGY_ENV_ALLOWLIST) == tuple(client.ENV_ALLOWLIST)
+
+
+def test_agy_isolated_home_links_only_the_keychain(monkeypatch, tmp_path):
+    real = tmp_path / "real"
+    (real / "Library" / "Keychains").mkdir(parents=True)
+    (real / ".gemini").mkdir()
+    monkeypatch.setenv("HOME", str(real))
+    root = tmp_path / "root"
+    root.mkdir()
+    home = Path(rg.agy_isolated_home(str(root)))
+    assert sorted(p.name for p in home.iterdir()) == ["Library"]
+    assert (home / "Library" / "Keychains").resolve() == (real / "Library" / "Keychains")

@@ -873,14 +873,17 @@ class DelegateInferenceParams(AgentIdentityMixin):
         max_length=100_000,
         description="Prompt to send to the operator-authorized strong model.",
     )
-    host_id: Literal["claude:host-adapter", "codex:host-adapter"] = Field(
+    host_id: Literal[
+        "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"
+    ] = Field(
         "claude:host-adapter",
         description=(
-            "Long-running host adapter to invoke. Both subscription-CLI "
+            "Long-running host adapter to invoke. All three subscription-CLI "
             "adapters are reachable here; each is opt-in and unavailable "
             "until the operator enables it. Claude remains the compatibility "
             "default; Codex app-server consults also report selected/effective "
-            "model identifiers, reroutes, and usage."
+            "model identifiers, reroutes, and usage; Antigravity reports usage "
+            "but no model identifier."
         ),
     )
     model: Optional[str] = Field(
@@ -966,14 +969,14 @@ class ListInferenceHostsParams(AgentIdentityMixin):
         True,
         description=(
             "Include known but unconfigured adapter placeholders such as "
-            "codex:host-adapter and claude:host-adapter."
+            "codex:host-adapter, claude:host-adapter and antigravity:host-adapter."
         ),
     )
     provider_kind: Optional[str] = Field(
         None,
         description=(
             "Optional provider kind filter, e.g. ollama, hf, codex_host_adapter, "
-            "claude_host_adapter."
+            "claude_host_adapter, antigravity_host_adapter."
         ),
     )
 

@@ -1280,7 +1280,7 @@ Return the registry record for one inference host named by host_id, including re
 - **Timeout:** 480s
 - **Related:** `call_model`, `delegate_inference`, `request_review`
 
-Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' needs privacy='cloud_allowed'; against the default privacy='local' it refuses outright unless allow_degraded=true, which returns a standard local answer instead. Requires a bound identity. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
+Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' needs privacy='cloud_allowed'; against the default privacy='local' it refuses outright unless allow_degraded=true, which returns a standard local answer instead. effort='thorough' asks a strong model from a different family than the caller's when the caller's family can be detected (Claude, Codex or Antigravity, whichever the operator has available); an undetected caller may get any of them. Requires a bound identity. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
 
 ### `call_model`
 
@@ -1289,7 +1289,7 @@ Primary advisory model-help surface: send a brief, get back advisory model evide
 - **Timeout:** 240s
 - **Related:** `consult`, `list_inference_hosts`, `describe_inference_host`, `knowledge`, `dialectic`
 
-Run one synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record; consult is the better default unless you need this route control. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude and Codex adapters; those are delegate_inference's. Requires a bound identity.
+Run one synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record; consult is the better default unless you need this route control. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude, Codex and Antigravity adapters; those are delegate_inference's. Requires a bound identity.
 
 ### `delegate_inference`
 
@@ -1299,7 +1299,7 @@ Run one synchronous advisory completion on the local Ollama lane or the Hugging 
 - **Depends on:** `list_inference_hosts`
 - **Related:** `consult`, `describe_inference_host`, `dialectic`
 
-Send one bounded prompt to an operator-authorized subscription CLI (Claude or Codex), spawned as an isolated child with no tools or a read-only sandbox: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls.
+Send one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls.
 
 ## Export & History
 
@@ -1734,7 +1734,7 @@ Structured peer review and recovery protocol
 - **Workflow alias:** `request_review` (action `request`)
 - **Related:** `request_review`, `process_agent_update`
 
-Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. UNITARES_DIALECTIC_REVIEWER_HOST picks the orchestrated reviewer backend (local, codex, claude, or external, alias gemini); a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
+Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. UNITARES_DIALECTIC_REVIEWER_HOST picks the orchestrated reviewer backend (local, codex, claude, antigravity, or external, alias gemini); a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|

@@ -1,11 +1,12 @@
 """Strong-heterogeneous inference host adapter — subscription-CLI models via the orchestrator.
 
-This wires the `codex:host-adapter` / `claude:host-adapter` registry placeholders
-(see ``inference_registry.py``) into a *working* path. It does NOT add a metered
-model-API dependency (CLAUDE.md execution-cost policy): it drives the operator's
-**subscription-auth CLIs** — Codex app-server with a ``codex exec`` compatibility
-fallback (ChatGPT subscription, ``~/.codex/auth.json``), and ``claude -p`` (Claude
-subscription). Provider-reported usage and cost metadata are preserved when the
+This wires the `codex:host-adapter` / `claude:host-adapter` /
+`antigravity:host-adapter` registry entries (see ``inference_registry.py``) into a
+*working* path. It does NOT add a metered model-API dependency (CLAUDE.md
+execution-cost policy): it drives the operator's **subscription-auth CLIs** —
+Codex app-server with a ``codex exec`` compatibility fallback (ChatGPT
+subscription, ``~/.codex/auth.json``), ``claude -p`` (Claude subscription), and
+Antigravity ``agy -p`` (Google subscription, via ``antigravity_cli_client.py``). Provider-reported usage and cost metadata are preserved when the
 CLI exposes them; subscription-backed does not mean zero-cost.
 
 Architecture (the load-bearing decision): strong models run for *minutes*, so they
@@ -15,8 +16,11 @@ This is the §5.6 lesson — strong-heterogeneous reasoners route via BEAM coord
 never a blocking compute endpoint. The orchestrator owns lifecycle (kill_tree,
 max_runtime); this module only builds the spec and relays the result.
 
-Gated by ``UNITARES_HOST_ADAPTER_ENABLED`` (default OFF — deferred, opt-in). Every
-failure mode degrades to a structured error; it never raises into a handler.
+Gated by ``UNITARES_HOST_ADAPTER_ENABLED`` (default OFF — deferred, opt-in).
+``UNITARES_HOST_ADAPTER_DISABLED_HOSTS`` switches individual hosts off while the
+rest stay on (a suspended provider account still has a working CLI binary, so
+nothing local can detect it). Every failure mode degrades to a structured
+error; it never raises into a handler.
 """
 
 from __future__ import annotations
@@ -83,12 +87,53 @@ _HOST_COMMANDS = {
         ),
         "anthropic_claude",
     ),
+    "antigravity:host-adapter": (
+        "agy",
+        # The client owns the empty workspace, the allowlisted environment and
+        # resume-on-stall; see antigravity_cli_client.py.
+        'exec "$HA_PYTHON" "$HA_ANTIGRAVITY_CLIENT" </dev/null',
+        "google_antigravity",
+    ),
 }
 
 _CLI_ENV_OVERRIDES = {
     "codex:host-adapter": "UNITARES_CODEX_CLI",
     "claude:host-adapter": "UNITARES_CLAUDE_CLI",
+    # Shared with the dialectic reviewer's Antigravity backend.
+    "antigravity:host-adapter": "UNITARES_ANTIGRAVITY_CLI",
 }
+
+_ANTIGRAVITY_RESULT_SCHEMA = "unitares.antigravity_cli_result.v1"
+
+#: Unknown disabled-host names already warned about, so a typo logs once per
+#: process rather than on every availability probe.
+_WARNED_UNKNOWN_DISABLED: set[str] = set()
+
+#: Short names accepted by UNITARES_HOST_ADAPTER_DISABLED_HOSTS.
+_HOST_ALIASES = {
+    "claude": "claude:host-adapter",
+    "anthropic": "claude:host-adapter",
+    "codex": "codex:host-adapter",
+    "openai": "codex:host-adapter",
+    "antigravity": "antigravity:host-adapter",
+    "agy": "antigravity:host-adapter",
+    # Not "gemini": UNITARES_DIALECTIC_REVIEWER_HOST=gemini means the external
+    # OpenAI-compatible reviewer, and the two must not share a name.
+}
+# Seconds the agy client's own deadline stays ahead of the orchestrator await:
+# covers child start-up, the kill-and-reap after a timeout, and the envelope.
+# Scaled down for shorter budgets, but not below the client's own 5 s
+# post-kill reap plus start-up, or a hung agy outlives the await window. Below
+# timeout_s=9 the client gets 1 s and the margin cannot hold: such a budget is
+# too small for this lane, and a hung agy there surfaces as still_running.
+_CLIENT_DEADLINE_MARGIN_S = 15
+_CLIENT_DEADLINE_MIN_MARGIN_S = 8
+
+
+def _client_deadline_s(timeout_s: int) -> int:
+    margin = min(_CLIENT_DEADLINE_MARGIN_S,
+                 max(_CLIENT_DEADLINE_MIN_MARGIN_S, timeout_s // 4))
+    return max(1, timeout_s - margin)
 
 _TERMINAL_ANSWER_SCHEMA = "unitares.terminal_answer.v1"
 _CODEX_APP_SERVER_RESULT_SCHEMA = "unitares.codex_app_server_result.v1"
@@ -119,11 +164,17 @@ def _is_executable(path: str) -> bool:
 
 
 def _configured_cli_override(host_id: str) -> str:
-    """Return the operator-pinned CLI path for a known adapter, if any."""
+    """Return the operator-pinned CLI path for a known adapter, if any.
+
+    Literal reads, not a lookup through _CLI_ENV_OVERRIDES: the flag catalog
+    (docs/FLAGS.md) finds readers by scanning for literal variable names.
+    """
     if host_id == "claude:host-adapter":
         return os.environ.get("UNITARES_CLAUDE_CLI", "").strip()
     if host_id == "codex:host-adapter":
         return os.environ.get("UNITARES_CODEX_CLI", "").strip()
+    if host_id == "antigravity:host-adapter":
+        return os.environ.get("UNITARES_ANTIGRAVITY_CLI", "").strip()
     return ""
 
 
@@ -185,6 +236,38 @@ def host_adapter_enabled() -> bool:
     )
 
 
+def host_adapter_disabled_hosts() -> frozenset[str]:
+    """Hosts the operator switched off individually.
+
+    Comma-separated host ids, or a short name for one (``codex``, ``openai``;
+    ``claude``, ``anthropic``; ``antigravity``, ``agy``). It covers the
+    host-adapter lanes (``delegate_inference`` and thorough ``consult``) only;
+    the dialectic reviewer's backend is chosen by
+    ``UNITARES_DIALECTIC_REVIEWER_HOST``. Exists because availability probing only sees the local side:
+    a CLI whose provider account is suspended still resolves and still looks
+    available. A name that matches no host is logged, not silently accepted,
+    since a typo here leaves the lane it meant to switch off running.
+    """
+    raw = os.environ.get("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "")
+    disabled = set()
+    for item in raw.split(","):
+        name = item.strip().lower()
+        if not name:
+            continue
+        host_id = name if name in _HOST_COMMANDS else _HOST_ALIASES.get(name)
+        if host_id is None:
+            if name not in _WARNED_UNKNOWN_DISABLED:
+                _WARNED_UNKNOWN_DISABLED.add(name)
+                logger.warning(
+                    "[host_adapter] UNITARES_HOST_ADAPTER_DISABLED_HOSTS names "
+                    "unknown host %r; known: %s",
+                    name, ", ".join(sorted(_HOST_COMMANDS)),
+                )
+            continue
+        disabled.add(host_id)
+    return frozenset(disabled)
+
+
 def codex_app_server_instrumentation_enabled() -> bool:
     """Whether Codex consults use model-aware app-server before exec fallback."""
     return os.environ.get(
@@ -204,6 +287,8 @@ def host_adapter_available(host_id: str) -> bool:
         return False
     spec = _HOST_COMMANDS.get(host_id)
     if spec is None:
+        return False
+    if host_id in host_adapter_disabled_hosts():
         return False
     if resolve_host_cli(host_id) is None:
         return False
@@ -443,6 +528,40 @@ def _validate_terminal_answer(text: str) -> tuple[str, Dict[str, str], Optional[
     return answer.strip(), terminal_answer, None
 
 
+def _extract_antigravity_result(output_lines: List[str]) -> tuple[str, Dict[str, Any]]:
+    """Unwrap the one-shot agy client's envelope; see antigravity_cli_client.py."""
+    payload: Dict[str, Any] = {}
+    for candidate in reversed(_codex_jsonl_payloads(output_lines)):
+        if candidate.get("schema") == _ANTIGRAVITY_RESULT_SCHEMA:
+            payload = candidate
+            break
+    if not payload:
+        return "", {
+            "models_used": [],
+            "provider_errors": ["Antigravity client printed no result envelope"],
+            "warnings": [],
+        }
+    response = payload.get("response")
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        usage = {}
+    tokens_used = usage.get("total_tokens")
+    resumes = payload.get("resumes")
+    error = payload.get("error")
+    return (response if isinstance(response, str) else ""), {
+        "model_used": None,
+        "models_used": [],
+        "model_reporting_status": "unavailable_from_antigravity_json",
+        "provider_usage": usage,
+        "tokens_used": tokens_used if isinstance(tokens_used, int) else 0,
+        "finish_reason": payload.get("status"),
+        "provider_thread_id": payload.get("conversation_id"),
+        "antigravity_resumes": resumes if isinstance(resumes, dict) else {},
+        "provider_errors": [error] if isinstance(error, str) and error else [],
+        "warnings": ["Antigravity CLI does not report an exact model identifier"],
+    }
+
+
 def extract_cli_result(
     output_lines: List[str],
     *,
@@ -452,6 +571,8 @@ def extract_cli_result(
     raw = "\n".join(line.rstrip("\n") for line in output_lines)
     if family == "openai_codex":
         return _extract_codex_jsonl(output_lines)
+    if family == "google_antigravity":
+        return _extract_antigravity_result(output_lines)
     if family != "anthropic_claude":
         return _extract_text(output_lines, family=family), {"warnings": []}
 
@@ -545,6 +666,13 @@ async def invoke_host_adapter(
             "dispatch_phase": dispatch_phase,
             "error": "host adapter disabled (UNITARES_HOST_ADAPTER_ENABLED unset)",
         }
+    if host_id in host_adapter_disabled_hosts():
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": f"{host_id} disabled by UNITARES_HOST_ADAPTER_DISABLED_HOSTS",
+        }
 
     cli, shell_cmd, family = spec_def
     cli_path = resolve_host_cli(host_id)
@@ -596,6 +724,13 @@ async def invoke_host_adapter(
             "HA_CODEX_APP_SERVER_CLIENT": str(
                 Path(__file__).with_name("codex_app_server_client.py")
             ),
+            "HA_ANTIGRAVITY_CLIENT": str(
+                Path(__file__).with_name("antigravity_cli_client.py")
+            ),
+            # Ahead of the await window below, so a hung or over-budget agy
+            # is reported by the client's own envelope rather than surfacing
+            # as an await timeout on a child that is still running.
+            "HA_TIMEOUT_S": str(_client_deadline_s(timeout_s)),
             "HA_PYTHON": sys.executable,
             "USER": _current_username(),
             # Neutralise console-API credentials so this stays a SUBSCRIPTION
@@ -716,11 +851,14 @@ async def invoke_host_adapter(
             if provider_metadata.get("provider_is_error"):
                 adapter_ok = False
                 adapter_error = "Claude CLI reported an error result"
-        elif family == "openai_codex":
+        elif family in ("openai_codex", "google_antigravity"):
             provider_errors = provider_metadata.get("provider_errors")
             if isinstance(provider_errors, list) and provider_errors:
                 adapter_ok = False
-                adapter_error = f"Codex app-server reported: {provider_errors[-1]}"
+                source = (
+                    "Codex app-server" if family == "openai_codex" else "Antigravity CLI"
+                )
+                adapter_error = f"{source} reported: {provider_errors[-1]}"
         if adapter_ok and terminal_answer_error:
             adapter_ok = False
             adapter_error = terminal_answer_error

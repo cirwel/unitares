@@ -39,8 +39,12 @@ def test_runs_read_only_from_an_empty_workspace_and_parses_the_verdict(monkeypat
     result = asyncio.run(hb.call_antigravity_backend("PROMPT"))
     assert seen["argv"][:2] == ("/Users/op/.local/bin/agy", "-p")
     assert seen["argv"][2] == "PROMPT" + hb._ANTIGRAVITY_TEXT_ONLY
-    assert {"--sandbox", "plan", "json"} <= set(seen["argv"])
+    assert {"--sandbox", "plan", "json", "--disable-slash-commands"} <= set(seen["argv"])
     assert seen["listing"] == [] and not Path(seen["cwd"]).exists()
+    # Not the operator's home: ~/.gemini holds standing grants and MCP servers.
+    home = seen["kw"]["env"]["HOME"]
+    assert home != str(Path.home())
+    assert Path(home).resolve().parent == Path(seen["cwd"]).resolve().parent
     assert json.loads(result.text)["agrees"] is False
     assert result.backend == "antigravity" and result.tokens_used == 1234 and result.error is None
 
@@ -137,7 +141,8 @@ def test_agy_gets_an_allowlisted_environment_not_the_callers(monkeypatch):
     _spawn(monkeypatch, json.dumps(out).encode(), seen=seen)
     asyncio.run(hb.call_antigravity_backend("P"))
     env = seen["kw"]["env"]
-    assert env["HOME"] == "/Users/op"
+    # A fresh HOME, not the operator's: ~/.gemini holds standing grants.
+    assert env["HOME"] != "/Users/op" and env["HOME"].endswith("/home")
     assert "UNITARES_MCP_BEARER_TOKEN" not in env and "GITHUB_TOKEN" not in env
     assert seen["kw"]["start_new_session"] is True
 

@@ -14,6 +14,12 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from src.mcp_handlers.support.antigravity_cli_client import (
+    AGY_FLAGS as _AGY_FLAGS,
+    ENV_ALLOWLIST as _AGY_ENV_ALLOWLIST,
+    agy_env as _agy_env,
+    isolated_home as _isolated_home,
+)
 from src.mcp_handlers.support.host_adapter import (
     extract_cli_result,
     resolve_host_cli,
@@ -415,21 +421,14 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
 ANTIGRAVITY_HOST_ID = "antigravity:host-adapter"
 # agy gets an ALLOWLISTED environment, never the caller's: the prompt carries
 # untrusted text (a PR diff, a paused agent's thesis), and an injected "print
-# your environment" must find no UNITARES_*/GitHub token to echo. Kept: what a
-# CLI needs to find its home, locale, proxy and agy's OWN optional Google
-# credentials. Its subscription login lives in the system keyring, not env.
-AGY_ENV_ALLOWLIST = (
-    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
-    "LANG", "LC_ALL", "LC_CTYPE",
-    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
-    "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
-    "SSL_CERT_FILE", "SSL_CERT_DIR",
-    "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT", "GOOGLE_APPLICATION_CREDENTIALS",
-)
+# your environment" must find no UNITARES_*/GitHub token to echo, and no Google
+# API key may move the lane onto metered billing. One list, shared with the
+# consult/delegate_inference lane's agy client.
+AGY_ENV_ALLOWLIST = _AGY_ENV_ALLOWLIST
 
 
-def agy_env() -> dict[str, str]:
-    return {k: os.environ[k] for k in AGY_ENV_ALLOWLIST if k in os.environ}
+def agy_env(home: Optional[str] = None) -> dict[str, str]:
+    return _agy_env(home=home)
 
 # One argv element: Linux caps it at 128 KiB. A dialectic prompt is far smaller.
 _ANTIGRAVITY_PROMPT_BYTES = 120_000
@@ -495,17 +494,21 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
     timeout_s = max(1.0, timeout_s)
 
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="dialectic-agy-") as workspace:
-        if any((d / m).exists() for d in Path(workspace).resolve().parents
+    with tempfile.TemporaryDirectory(prefix="dialectic-agy-") as root:
+        if any((d / m).exists() for d in Path(root).resolve().parents
                for m in (".git", ".agents")):
             return fail("Antigravity workspace is not isolated (a parent holds .git/.agents)")
+        workspace = os.path.join(root, "workspace")
+        os.mkdir(workspace, 0o700)
+        # An isolated HOME too: the operator's ~/.gemini holds standing
+        # permission grants and MCP servers (see antigravity_cli_client.py).
+        home = _isolated_home(root, os.environ.get("HOME"))
         try:
             # exec, not a shell: the prompt is one argv element, never parsed.
             proc = await asyncio.create_subprocess_exec(
-                cli_path, "-p", prompt, "--mode", "plan", "--sandbox",
-                "--output-format", "json",
+                cli_path, "-p", prompt, *_AGY_FLAGS,
                 cwd=workspace,
-                env=agy_env(),
+                env=agy_env(home),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
