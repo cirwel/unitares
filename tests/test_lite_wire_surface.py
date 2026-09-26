@@ -278,41 +278,96 @@ def test_workflow_aliases_are_lite_visible():
     )
 
 
-def _signature_for(binding):
-    """The agent_signature success_response would attach for ``binding``."""
-    if binding == "unbound":
-        return {"uuid": None}
-    from tests.helpers.metrics_producer import agent_signature
+# (proof_origin, session_resolution_source) as dispatch stamps them
+# (identity/session.py _mark); None is an unbound request.
+_LIST_TOOLS_BINDINGS = {
+    "unbound": None,
+    "explicit-session": ("caller_asserted", "explicit_client_session_id"),
+    "transport-session": ("caller_asserted", "mcp_session_id"),
+    "x-client-id": ("caller_asserted", "x_client_id"),
+    "server-inferred": ("server_inferred", "ip_ua_fingerprint"),
+}
 
-    proof_origin, source = {
-        "strong": ("caller_asserted", "explicit_client_session_id"),
-        "medium": ("caller_asserted", "pinned_onboard_session"),
-        "weak": ("server_inferred", "ip_ua_fingerprint"),
-    }[binding]
-    return agent_signature(proof_origin=proof_origin, session_source=source)
+
+async def _in_bound_request(binding, call):
+    """Run ``call`` in a request bound the way dispatch binds it.
+
+    success_response's real compute_agent_signature then sees that binding.
+    Returns the call's result and the signature the request computes, which
+    is what an unsuppressed agent_signature would carry.
+    """
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from src.mcp_handlers import context
+    from src.mcp_handlers.shared import get_mcp_server
+    from src.mcp_handlers.support.agent_auth import compute_agent_signature
+    from tests.helpers.metrics_producer import (
+        AGENT_UUID,
+        DISPLAY_NAME,
+        PUBLIC_AGENT_ID,
+    )
+
+    meta = SimpleNamespace(
+        display_name=DISPLAY_NAME,
+        label=DISPLAY_NAME,
+        public_agent_id=PUBLIC_AGENT_ID,
+        structured_id=PUBLIC_AGENT_ID,
+        model_type="claude-opus-5-5",
+    )
+
+    async def _run():
+        if binding is not None:
+            proof_origin, source = binding
+            context.set_session_context(
+                client_session_id="agent-1856bb5c-255", agent_id=AGENT_UUID
+            )
+            context.set_session_proof_origin(proof_origin)
+            context.set_session_resolution_source(source)
+            context.set_transport_client_hint("claude_code")
+        with patch.dict(get_mcp_server().agent_metadata, {AGENT_UUID: meta}):
+            return await call(), compute_agent_signature()
+
+    # A task runs in a copy of the current context, so the binding does not
+    # leak into later tests.
+    return await asyncio.create_task(_run())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("binding", ["unbound", "strong", "medium", "weak"])
+@pytest.mark.parametrize("binding", list(_LIST_TOOLS_BINDINGS))
 async def test_orientation_compact_view_is_name_only_and_under_four_kib(binding):
     """Lite is a bounded handshake, not a second copy of tool metadata.
 
-    Measured bound, not only unbound: an agent_signature rode on it, 635 B for
-    a strong binding (4,030 B of the 4,096 B cap) and 1.6-2.0 KB for a medium
-    or server-inferred one, over the cap. The handshake is identity-
-    independent, so it carries none.
+    Measured under real bindings, not only unbound. The agent_signature that
+    rode on it (the real compute_agent_signature) was 635 B for a routine
+    explicit session (4,033 B, just under the 4,096 B cap), and about 1.56 KB
+    for a caller-asserted transport session and 1.94 KB for x_client_id
+    (4.96 and 5.34 KB, over it). A server-inferred binding already collapsed
+    to {"uuid": null}. The handshake is identity-independent, so it carries
+    none.
     """
     import json
-    from unittest.mock import patch
 
     from src.mcp_handlers.introspection import tool_introspection
 
-    with patch(
-        "src.mcp_handlers.support.agent_auth.compute_agent_signature",
-        return_value=_signature_for(binding),
-    ):
-        raw = (await tool_introspection.handle_list_tools({"lite": True}))[0].text
+    result, signature = await _in_bound_request(
+        _LIST_TOOLS_BINDINGS[binding],
+        lambda: tool_introspection.handle_list_tools({"lite": True}),
+    )
+    raw = result[0].text
     payload = json.loads(raw)
+
+    # The binding is real: a bound caller-asserted request computes a
+    # signature, and the transport-session and x_client_id ones would put
+    # this handshake over the cap.
+    if binding in {"unbound", "server-inferred"}:
+        assert signature == {"uuid": None}
+    else:
+        assert signature.get("uuid")
+    if binding in {"transport-session", "x-client-id"}:
+        signature_bytes = len(json.dumps(signature).encode("utf-8"))
+        assert len(raw.encode("utf-8")) + signature_bytes > 4096
 
     assert len(raw.encode("utf-8")) <= 4096
     assert "agent_signature" not in payload

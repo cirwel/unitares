@@ -505,9 +505,11 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "window": "7 days"
             }
 
-        # The handshake is identity-independent: no agent_signature, which
-        # for a weak or transport-bound caller is 1.6-2.0 KB and put the
-        # capped handshake over its own 4 KiB bound. lite=false keeps it.
+        # The handshake is identity-independent: no agent_signature. For a
+        # caller-asserted binding that is not a routine explicit session
+        # (mcp_session_id, x_client_id) the signature is 1.5-1.9 KB and put the
+        # capped handshake over its own 4 KiB bound; a server-inferred one
+        # already collapses to {"uuid": null}. lite=false keeps it.
         return success_response(response_data, arguments={"lite_response": True})
     
     tier_counts = {
