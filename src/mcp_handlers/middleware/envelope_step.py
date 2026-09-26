@@ -522,8 +522,11 @@ def _is_routine_proceed(envelope: Dict[str, Any]) -> bool:
     """A clean proceed: nothing in the envelope asks the agent to act.
 
     Anything else — a guide, a pause, a provisional or caveated verdict, a
-    near or unassessed edge, a recovery hint — keeps the full shape, because
-    those are the responses where the repeated fields carry meaning.
+    near edge, a review nudge, a recovery hint — keeps the full shape, because
+    those are the responses where the repeated fields carry meaning. An
+    unassessed edge does not disqualify: the coherence edge is unassessed for
+    every agent today, so the margin keeps its scope and unassessed edges
+    beside it on a routine proceed instead.
     """
     state = envelope.get("state_summary")
     if not isinstance(state, dict) or state.get("action") != "proceed":

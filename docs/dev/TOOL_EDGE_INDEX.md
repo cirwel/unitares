@@ -69,7 +69,7 @@ note for why the raw rendering is not.
 | `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
 | `request_review` | `dialectic` | 9 | — | `sha256:8e51f6a859b59a6a3b5fd795f74279c9f3ba3be023a2439a87307700419ca9c2` |
 | `search_shared_memory` | `knowledge` | 21 | — | `sha256:6176bfbfaba48d9f404cd7989c9f008be2fe87986c83b2b6ff58746a5d3bdb33` |
-| `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
+| `start_session` | `onboard` | 17 | — | `sha256:1497b9345f92c3a94692ede848d06f0c928a092eba241b13783a00992fb8983d` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:938f0ad1a527818f675654a2635387068501a288cf31f8e5e8bfeca53713bb4e` |
 | `sync_state` | `process_agent_update` | 23 | — | `sha256:d5c7581ba2664c1e8870fe6784f6dd7fbb48339e6dad928807a1fc1af6d9b198` |
 | `update_finding` | `knowledge` | 13 | — | `sha256:86d3ae8277f33fc0393ab12c09fd46d3d2e0b57f38fc8a713b19ed74534c8908` |

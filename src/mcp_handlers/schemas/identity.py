@@ -104,11 +104,12 @@ class OnboardParams(AgentIdentityMixin):
     resume: Union[bool, str, None] = Field(
         default=True,
         description=(
-            "Resume existing identity when a proof signal is present "
-            "(continuity_token, agent_uuid, agent_id, client_session_id, "
-            "or name). Per identity.md v2 ontology (S13), an arg-less "
-            "onboard() with no proof signal mints fresh — the server "
-            "gates `force_new=True` automatically when nothing is presented."
+            "Reuse the identity already bound to this session (from "
+            "client_session_id or the transport session) instead of minting. "
+            "A name is never proof, and a continuity_token without force_new "
+            "is refused; rebind with identity(agent_uuid, continuity_token, "
+            "resume=true). Per identity.md v2 (S13), a call with no proof "
+            "signal mints fresh."
         )
     )
     force_new: Union[bool, str, None] = Field(
