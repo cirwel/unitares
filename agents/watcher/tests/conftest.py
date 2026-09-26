@@ -35,11 +35,11 @@ Three seams close these leaks for every test in this directory:
    ``surface_pending``) reads the floor, so it is repointed here too.
    Without that, a developer's own ``pattern_floor.json`` demoted the
    fixtures' medium findings to low, which the listing never shows. No
-   floor on CI demotes these fixtures (a fresh runner has none, and the one
-   Vigil's ``run_cycle`` tests can write earlier in the shard is recomputed
-   from the runner's own findings), so this failed only locally, and only
-   on UTC days when the demoted bucket was not drawn for an exploration
-   probe.
+   floor on CI demoted these fixtures (a fresh runner has none; before
+   this change Vigil's ``run_cycle`` tests could write one earlier in the
+   shard, recomputed from the runner's own findings, and they no longer
+   do), so this failed only locally, and only on UTC days when the demoted
+   bucket was not drawn for an exploration probe.
    ``findings.STATE_DIR`` and its files are bound the same way;
    ``test_agent.py`` repoints those in its own fixture.
 """
