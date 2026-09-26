@@ -647,9 +647,11 @@ def _metrics_state_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
     shape stays for canonical readers (the discord-bridge HUD parses it). Here
     they are bare values: the per-dimension contract rides once on this
     tool's description (EISV_INLINE_SUMMARY), and risk_summary carries the
-    risk band. Coherence keeps its inline badge in the same
-    {value, status, source, role} shape sync_state uses (#1872), so a legacy
-    reading is never a bare float read as health.
+    risk band. On the minimal tier coherence keeps its inline badge in the
+    same {value, status, source, role} shape sync_state uses (#1872). The
+    canonical standard tier builds coherence as a bare float with no source
+    or role, so it passes through bare there (pre-existing; full carries
+    legacy_diagnostics instead).
     """
     verdict = payload.get("verdict")
     if verdict is not None:
