@@ -1717,7 +1717,12 @@ def _clocked_agy(monkeypatch, answers, durations):
             return 0
 
     def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
-        stdout.write(answers.pop(0))
+        answer = answers.pop(0)
+        out, err = answer if isinstance(answer, tuple) else (answer, "")
+        stdout.write(out)
+        if err:
+            stderr.write(err)
+            stderr.flush()
         return Proc()
 
     monkeypatch.setattr(rg.subprocess, "Popen", popen)
@@ -1734,11 +1739,13 @@ def test_a_resume_gets_only_the_remaining_budget(monkeypatch, tmp_path):
 
 
 def test_a_budget_that_runs_out_mid_resume_is_a_failure(monkeypatch, tmp_path):
-    """First resume runs, is still truncated, and the budget is then spent."""
-    waits = _clocked_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_TRUNCATED], [20.0, 15.0])
+    """Denied stalls allow 2 resumes, so here the BUDGET ends the loop: one
+    resume runs, is still stalled, and too little budget is left for another."""
+    waits = _clocked_agy(monkeypatch, [_AGY_DENIED, _AGY_DENIED, _AGY_COMPLETE], [20.0, 7.0, 1.0])
     text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
-    assert len(waits) == 2  # it did resume once
-    assert note == "output limit not recovered after 1 resume(s)"
+    assert rg.AGY_RESUME_LIMITS["denied"] >= 2
+    assert len(waits) == 2  # resumed once; 3s left is under the 5s minimum
+    assert note == "no answer after a denied command after 1 resume(s)"
 
 
 def test_a_resume_carries_every_flag_of_the_first_launch(monkeypatch, tmp_path):
