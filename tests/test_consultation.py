@@ -1375,15 +1375,39 @@ async def test_padded_brief_verifies_against_its_stripped_form(monkeypatch, audi
 
 @pytest.mark.asyncio
 async def test_server_set_values_survive_a_brief_that_mentions_them(monkeypatch, audit_sinks):
+    # Every value asserted below is 8+ characters and appears in its brief,
+    # so each would be hashed if the scrub reached server-set fields.
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_completed(
+            route="huggingface",
+            host_id="hf:router",
+            privacy_class="external_cloud",
+        )),
+    )
+    await co.handle_consult({
+        "brief": "why CONSULT_PRIVACY_POSTCONDITION_FAILED on external_cloud standard?",
+    })
     monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
-
-    await co.handle_consult({"brief": "Is a standard local ollama setup enough?"})
+    await co.handle_consult({
+        "brief": "what does privacy_policy_requires_local mean",
+        "effort": "thorough",
+        "privacy": "local",
+        "allow_degraded": True,
+    })
+    await co.handle_consult({
+        "brief": "I got CONSULT_POLICY_UNSATISFIED again, why?",
+        "effort": "thorough",
+    })
 
     _, pg = await audit_sinks()
-    record = pg[0]["details"]
-    assert record["delivery"]["effort"] == "standard"
-    assert record["route"]["privacy_class"] == "local"
-    assert record["route"]["provider_kind"] == "ollama"
+    violated, degraded, refused = (entry["details"] for entry in pg)
+    assert violated["failure"]["code"] == "CONSULT_PRIVACY_POSTCONDITION_FAILED"
+    assert violated["route"]["privacy_class"] == "external_cloud"
+    assert degraded["degradation"]["reason_code"] == "privacy_policy_requires_local"
+    assert degraded["delivery"]["effort"] == "standard"
+    assert refused["failure"]["code"] == "CONSULT_POLICY_UNSATISFIED"
 
 
 @pytest.mark.asyncio

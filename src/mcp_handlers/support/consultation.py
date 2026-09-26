@@ -980,8 +980,22 @@ _BACKEND_ROUTE_FIELDS = frozenset({
     "orchestrator_execution_id",
     "orchestrator_agent_id",
 })
-# Keys inside failure/degradation blocks whose values come from upstream.
+# Keys inside failure/degradation blocks whose values can come from upstream.
 _BACKEND_BLOCK_KEYS = frozenset({"code", "reason_code", "id"})
+# Codes this module writes. A known constant reveals nothing about the
+# brief, so it is never hashed for resembling it -- otherwise a caller who
+# pastes the error they are asking about would lose the code from the row
+# and signal the mention to every reader. An upstream code the brief names
+# is still hashed, and that one reveals the mention: the documented limit.
+_FACADE_CODES = frozenset({
+    "CONSULT_AUTHORITY_POSTCONDITION_FAILED",
+    "CONSULT_FALLBACK_FAILED",
+    "CONSULT_POLICY_UNSATISFIED",
+    "CONSULT_PRIVACY_POSTCONDITION_FAILED",
+    "CONSULT_ROUTE_POSTCONDITION_FAILED",
+    "INTERNAL_INFERENCE_CONTRACT",
+    "privacy_policy_requires_local",
+})
 _ECHO_TOKEN = re.compile(r"[A-Za-z0-9_]{8,}")
 
 
@@ -999,7 +1013,11 @@ def _scrub_brief_echo(value: Any, tokens: frozenset[str], key: str) -> Any:
     """
     if isinstance(value, list):
         return [_scrub_brief_echo(item, tokens, key) for item in value]
-    if isinstance(value, str) and any(token in value for token in tokens):
+    if (
+        isinstance(value, str)
+        and value not in _FACADE_CODES
+        and any(token in value for token in tokens)
+    ):
         return {"unrecorded_text": _keyed_hash(key, value)}
     return value
 
