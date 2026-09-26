@@ -476,6 +476,47 @@ async def test_unbound_guidance_leads_with_the_callers_own_id():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments, injected, leads_with",
+    [
+        pytest.param({}, False, "check_working_state", id="no-id"),
+        # A transport-injected id is not something the caller sent.
+        pytest.param({"client_session_id": "http:127.0.0.1:1"}, True,
+                     "check_working_state", id="transport-injected"),
+        # An id the caller sent that names no agent: repeating it cannot help.
+        pytest.param({"client_session_id": "agent-missing"}, False,
+                     "start_session", id="caller-sent-unknown"),
+    ],
+)
+async def test_unbound_structured_next_action_forks_no_identity(arguments, injected, leads_with):
+    """An agent that acts on next_action.tool/example and skips the prose must
+    not be sent to a second mint when it merely dropped its id."""
+    from src.mcp_handlers.context import (
+        reset_csid_transport_injected,
+        set_csid_transport_injected,
+    )
+    from src.mcp_handlers.core import handle_get_governance_metrics
+
+    token = set_csid_transport_injected(injected)
+    try:
+        with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
+            data = _parse_tc(await handle_get_governance_metrics(dict(arguments)))
+    finally:
+        reset_csid_transport_injected(token)
+
+    step = data["next_action"]
+    assert data["status"] == "⚪ unbound"
+    assert step["tool"] == leads_with
+    if leads_with == "check_working_state":
+        assert "client_session_id=" in step["example"]
+        assert "force_new" not in step["example"]
+        assert step["otherwise"] == "start_session(force_new=true)"
+    else:
+        assert step["example"] == "start_session(force_new=true)"
+        assert "cannot help" in step["note"]
+
+
 def test_unbound_guidance_names_no_binding():
     """The guidance must not confirm, name or hint at an inferred binding: that
     would expose a co-located sibling or present a fingerprint as the caller."""

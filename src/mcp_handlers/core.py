@@ -109,7 +109,7 @@ def _assess_thermodynamic_significance(
     }
 
 
-def unbound_metrics_payload() -> dict:
+def unbound_metrics_payload(*, caller_sent_session_id: bool = False) -> dict:
     """The unbound ignorance shape for get_governance_metrics (trust
     contract §5). ONE definition shared by the MCP handler below and the
     REST direct handler (`http_tool_service._execute_http_get_governance_
@@ -136,29 +136,56 @@ def unbound_metrics_payload() -> dict:
     The server cannot tell it from a process with no identity without naming
     a binding it only inferred, so the guidance is conditional and names no
     uuid.
+
+    The structured next_action branches only on what the caller itself sent.
+    With no client_session_id on the call, tool/example lead with the retry
+    (an agent that acts on the structured fields and skips the note must not
+    fork its work across a second identity); the mint is ``otherwise``. With
+    a client_session_id that names no agent, repeating it cannot help, so the
+    mint leads.
     """
     from src.governance_glossary import explain_verdict
     return {
         "status": "⚪ unbound",
         "verdict": explain_verdict("unbound"),
         "guidance": "Establish identity before reading agent metrics.",
-        "next_action": {
+        "next_action": _unbound_next_action(caller_sent_session_id),
+        "related_tools": ["onboard", "process_agent_update", "identity"],
+    }
+
+
+def _unbound_next_action(caller_sent_session_id: bool) -> dict:
+    """The unbound read's next step, keyed only on what the caller sent."""
+    if caller_sent_session_id:
+        return {
             "tool": "start_session",
             "example": "start_session(force_new=true)",
             "note": (
-                "If this process already called start_session, repeat this "
-                "read with the client_session_id it returned: "
-                "check_working_state(client_session_id=...). Otherwise "
+                "The client_session_id on this call names no identity on this "
+                "server (never minted here, or its binding expired), so "
+                "repeating it cannot help. Mint one: "
                 "start_session(force_new=true); add parent_agent_id=<prior_uuid>, "
                 "spawn_reason='explicit' only to continue a finished "
-                "predecessor's work. get_governance_metrics is read-only; "
-                "it creates no identity and no state for unbound callers. "
-                "Avoid bare identity()/start_session() — without force_new or a "
-                "proof (client_session_id / continuity_token) they can mint "
-                "an orphan identity."
+                "predecessor's work. get_governance_metrics is read-only; it "
+                "creates no identity and no state for unbound callers."
             ),
-        },
-        "related_tools": ["onboard", "process_agent_update", "identity"],
+        }
+    return {
+        "tool": "check_working_state",
+        "example": "check_working_state(client_session_id=<the id start_session returned>)",
+        "otherwise": "start_session(force_new=true)",
+        "note": (
+            "If this process already called start_session, repeat this "
+            "read with the client_session_id it returned: "
+            "check_working_state(client_session_id=...). Otherwise "
+            "start_session(force_new=true); add parent_agent_id=<prior_uuid>, "
+            "spawn_reason='explicit' only to continue a finished "
+            "predecessor's work. get_governance_metrics is read-only; "
+            "it creates no identity and no state for unbound callers. "
+            "Avoid bare identity()/start_session() — without force_new or a "
+            "proof (client_session_id / continuity_token) they can mint "
+            "an orphan identity."
+        ),
     }
 
 
@@ -249,19 +276,25 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
         try:
             from src.mcp_handlers.context import (
                 get_context_agent_id,
+                get_csid_transport_injected,
                 get_session_proof_origin,
             )
             bound_agent_id = get_context_agent_id()
             proof_origin = get_session_proof_origin()
+            transport_injected = get_csid_transport_injected()
         except Exception:
             bound_agent_id = None
             proof_origin = None
+            transport_injected = False
         # A server-inferred binding (transport-injected CSID, sticky cache, or
         # fingerprint/pin fallback) is enough to protect strict writes, but it
         # is not caller proof for a pre-onboard read. Otherwise a fresh
         # no-proof Hermes/MCP episode can display a resident sibling's state.
         if not bound_agent_id or proof_origin == "server_inferred":
-            return success_response(unbound_metrics_payload())
+            sent = bool(arguments.get("client_session_id")) and not transport_injected
+            return success_response(
+                unbound_metrics_payload(caller_sent_session_id=sent)
+            )
 
     agent_id, error = require_agent_id(arguments)
     if error:
