@@ -422,7 +422,8 @@ async def test_a_disconnect_mid_body_passes_through_unchanged():
     async def send(_message):
         pass
 
-    scope = {"type": "http", "method": "POST", "path": "/token", "headers": [], "query_string": b""}
+    scope = {"type": "http", "method": "POST", "path": "/token", "query_string": b"",
+             "headers": [(b"content-type", b"application/x-www-form-urlencoded")]}
     await OAuthAttemptLogger(inner)(scope, receive, send)
     assert seen == ["http.request", "http.disconnect"]
 
@@ -630,8 +631,40 @@ def test_a_handler_crash_is_logged_as_a_500(caplog):
     with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
         with pytest.raises(KeyError):
             asyncio.run(OAuthAttemptLogger(boom)(
-                {"type": "http", "method": "POST", "path": "/token", "headers": [], "query_string": b""},
+                {"type": "http", "method": "POST", "path": "/token", "query_string": b"",
+                 "headers": [(b"content-type", b"application/x-www-form-urlencoded")]},
                 receive, None))
     line = next(r.getMessage() for r in caplog.records
                 if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
     assert "-> 500" in line and "unhandled_exception" in line and "KeyError" in line
+
+
+def test_a_multipart_token_body_is_logged_as_unparsed_and_passed_through(caplog):
+    """The SDK accepts multipart; this code parses only urlencoded (RFC 6749)
+    and must neither rewrite nor report defaults for anything else."""
+    client = _app()
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        client.post("/token", files={"client_id": (None, CID), "grant_type": (None, "authorization_code")})
+    line = next(r.getMessage() for r in caplog.records
+                if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
+    assert "unparsed (content-type multipart/form-data)" in line
+    assert 'grant="-"' not in line and 'auth="none"' not in line
+
+
+@pytest.mark.asyncio
+async def test_after_a_complete_body_the_real_stream_is_handed_back():
+    """No invented disconnect: once the peeked body is replayed, the next
+    receive is the client's real stream."""
+    from src.oauth_provider import _peek_body
+
+    real = [{"type": "http.request", "body": b"a=1", "more_body": False},
+            {"type": "http.request", "body": b"", "more_body": False}]
+
+    async def receive():
+        return real.pop(0)
+
+    _seen, body, complete, chained = await _peek_body(receive, 1024)
+    assert complete and body == b"a=1"
+    assert (await chained())["body"] == b"a=1"
+    nxt = await chained()
+    assert nxt["type"] == "http.request"  # from the real stream, not a fake disconnect

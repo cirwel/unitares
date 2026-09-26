@@ -357,7 +357,8 @@ async def test_an_oversized_basic_token_request_is_not_buffered_unbounded():
                 break
 
     scope = {"type": "http", "method": "POST", "path": "/token", "query_string": b"",
-             "headers": [(b"authorization", _basic(CLIENT_ID, "wrong").encode())]}
+             "headers": [(b"authorization", _basic(CLIENT_ID, "wrong").encode()),
+                         (b"content-type", b"application/x-www-form-urlencoded")]}
     await StaticClientBasicAuthShim(inner, client_id=CLIENT_ID)(scope, receive, None)
     assert got["at_start"] <= _MAX_TOKEN_BODY // len(chunk) + 1
     assert got["bytes"] == len(chunk) * total

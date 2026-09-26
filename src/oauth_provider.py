@@ -622,6 +622,9 @@ class StaticClientBasicAuthShim:
         # (so at most that plus one server-delivered message is held). An
         # oversize body, a mid-body disconnect or any other client's request
         # goes on to the SDK as the untouched stream.
+        if not _is_urlencoded(scope):
+            await self.app(scope, receive, send)
+            return
         _seen, body, complete, passthrough = await _peek_body(receive, _MAX_TOKEN_BODY)
         if not complete:
             await self.app(scope, passthrough, send)
@@ -689,6 +692,23 @@ def _narrow_scope(fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
     if kept:
         out.append(("scope", " ".join(kept)))
     return out
+
+
+def _is_urlencoded(scope) -> bool:
+    """Only an application/x-www-form-urlencoded body is parsed here (RFC 6749);
+    the SDK also accepts multipart, which is passed through untouched."""
+    for key, value in scope.get("headers", []):
+        if key.lower() == b"content-type":
+            return value.decode("latin-1").split(";")[0].strip().lower() == \
+                "application/x-www-form-urlencoded"
+    return False
+
+
+def _content_type(scope) -> str:
+    for key, value in scope.get("headers", []):
+        if key.lower() == b"content-type":
+            return value.decode("latin-1").split(";")[0].strip().lower() or "-"
+    return "-"
 
 
 def static_pkce_verifier(client_secret: str) -> str:
@@ -787,13 +807,12 @@ async def _peek_body(receive, limit: int):
         if len(body) > limit:
             break
     pending = list(seen)
-    exhausted = complete or seen[-1]["type"] != "http.request"
 
     async def chained():
+        # Replay what was read, then hand back to the real stream, which
+        # blocks until the client really leaves; never invent a disconnect.
         if pending:
             return pending.pop(0)
-        if exhausted:
-            return {"type": "http.disconnect"}
         return await receive()
 
     return seen, bytes(body), complete and len(body) <= limit, chained
@@ -864,11 +883,18 @@ class OAuthAttemptLogger:
             # Read a prefix only, then hand the SDK the whole stream untouched:
             # an oversize body or a mid-body disconnect reaches it exactly as
             # it would without this logger.
-            seen, body, complete, receive = await _peek_body(receive, _MAX_TOKEN_BODY)
-            fields = (
-                parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
-                if complete else None
-            )
+            unparsed_reason = None
+            if not _is_urlencoded(scope):
+                fields = None
+                unparsed_reason = f"content-type {_content_type(scope)}"
+            else:
+                seen, body, complete, receive = await _peek_body(receive, _MAX_TOKEN_BODY)
+                fields = (
+                    parse_qsl(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+                    if complete else None
+                )
+                if not complete:
+                    unparsed_reason = f"over {_MAX_TOKEN_BODY} bytes or disconnected"
         else:
             await self.app(scope, receive, send)
             return
@@ -878,7 +904,7 @@ class OAuthAttemptLogger:
             if fields is None:
                 # Unparsed body: report that, never defaults as if observed.
                 basic = _basic_credentials(scope)
-                facts = {"body": f"unparsed (over {_MAX_TOKEN_BODY} bytes or disconnected)"}
+                facts = {"body": f"unparsed ({unparsed_reason})"}
                 if basic:
                     facts["client"] = basic[0]
             else:
