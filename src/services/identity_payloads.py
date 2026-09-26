@@ -903,7 +903,8 @@ def _how_to_strengthen(
         "the next call; adapters may inject it automatically. If this transport "
         "cannot retain that binding, use identity(agent_uuid=..., "
         "continuity_token=..., resume=true) as an explicit same-live-process "
-        "rebind instead of attaching continuity_token to ordinary tool calls"
+        "rebind and pass the client_session_id it returns, instead of "
+        "attaching continuity_token to ordinary tool calls"
     )
 
 

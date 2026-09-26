@@ -128,8 +128,12 @@ VERDICTS: Dict[str, Dict[str, str]] = {
         "next_action": "Submit one process_agent_update to activate governance.",
     },
     "unbound": {
-        "meaning": "No identity bound to this session.",
-        "next_action": "Call onboard(force_new=true) to mint a fresh identity.",
+        "meaning": "No caller-proven identity on this call.",
+        "next_action": (
+            "If this process already called start_session, repeat the read "
+            "with the client_session_id it returned. Otherwise call "
+            "start_session(force_new=true)."
+        ),
     },
     "continue": {
         "meaning": "Synonym of proceed; legacy label still used in some payloads.",
