@@ -219,7 +219,10 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
   closed by with `closure_class`, a string: `fix_verified`, `unobserved`,
   `not_reproducible`, `obsolete` or `duplicate`. Its evidence goes in
   `closure_evidence`, an object: `deployed` and `observed` for
-  `fix_verified`, `window` and `instrument_check` for `unobserved`. Both are
+  `fix_verified`, `window` and `instrument_check` for `unobserved`. Keep each
+  evidence value to a short statement or a pointer (a commit, a build_sha, a
+  query): evidence over 8 KiB as stored JSON is refused, and long material
+  such as a log excerpt belongs in `resolution_notes`. Both are
   parameters of `update_finding` and `knowledge(action="update")`, are
   validated, and are stored. The response's `closure_class` is the value read
   back from the record. `knowledge(action="details")` returns the class and
