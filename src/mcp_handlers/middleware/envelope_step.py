@@ -155,8 +155,19 @@ _RELATED_DISCOVERY_LIMIT = 5
 _RELATED_SUMMARY_PREVIEW_CHARS = 120
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
-# Default start_session. continuity_token alone is ~330 B of it.
+# Default start_session, per mint class (tests/test_response_budgets.py states
+# the measurements). An anonymous mint at thread position 1: continuity_token
+# alone is ~330 B of it.
 _START_SESSION_BUDGET_BYTES = 1_200
+# A fresh mint on a thread earlier process-instances occupied (sibling_locus)
+# also carries predecessor_uuid, episode_fork_kind and the ~210 B sentence
+# saying co-location does not establish lineage, which stays: it is what stops
+# the earlier node being read as this process's parent.
+_START_SESSION_SIBLING_BUDGET_BYTES = 1_550
+# Each mint notice lifted into a routine envelope (_ROUTINE_MINT_NOTICES) is
+# paid for on top of its class budget; the largest measured is 294 B (a
+# not_on_roster verdict), a written bootstrap ack 224 B.
+_START_SESSION_NOTICE_ALLOWANCE_BYTES = 300
 _ONBOARD_RAW_MODES = frozenset({"full", "verbose", "standard"})
 # Onboard fields a caller or adapter reads off the friendly envelope. The
 # plugin's post-identity hook and identity_sidecar read agent_id/display_name
@@ -1555,8 +1566,8 @@ def _onboard_assurance_is_abnormal(assurance: Any) -> bool:
 # Every key a plain fresh minimal onboard carries (live shape, 2026-09-25).
 # An allowlist, not a denylist: onboard adds keys after building the record
 # (label_renamed, resident_registration, bootstrap, deprecations, ...), and a
-# key this list does not know about must show the full record rather than be
-# dropped as routine.
+# key neither this list nor _ROUTINE_MINT_NOTICES knows about must show the
+# full record rather than be dropped as routine.
 _ROUTINE_MINT_KEYS = frozenset({
     "success",
     "server_time",
@@ -1581,39 +1592,259 @@ _ROUTINE_MINT_KEYS = frozenset({
     "_response_size",
 })
 
+# Keys only onboard's full and verbose shapes carry
+# (build_onboard_response_data). A caller that asked for that shape gets them
+# on a plain mint too, so they never name why the record was kept; a fact
+# the full shape shares with the minimal one (label_renamed, a lineage state)
+# still does.
+_FULL_ONBOARD_SHAPE_KEYS = frozenset({
+    "session_resolution_source",
+    "continuity_token_supported",
+    "identity_context",
+    "date_context",
+    "ownership_proof_version",
+    "welcome_message",
+    "force_new_applied",
+    "session_continuity",
+    "next_calls_ref",
+    "next_calls",
+    "system_activity",
+    "skill_resource",
+    "tool_mode",
+    "workflow",
+})
 
-def _is_routine_mint(payload: Dict[str, Any]) -> bool:
-    """A fresh mint that went as asked: nothing about it needs explaining.
 
-    Positive evidence only. A missing outcome is not routine, so a producer
-    regression that drops the field shows the full record instead of looking
-    like a clean mint. Any non-empty key outside _ROUTINE_MINT_KEYS (a label
-    rename, a resident-registration notice, a bootstrap write, a deprecation)
-    also keeps the record.
+# resident_registration statuses (src/grounding/onboard_classifier.py). Every
+# one is a normal outcome of a named mint; an unknown status is not routine.
+_RESIDENT_REGISTRATION_STATUSES = frozenset({
+    "registered",
+    "not_on_roster",
+    "no_roster_configured",
+    "caller_supplied_tags",
+})
+
+
+def _compact_resident_registration(value: Any) -> Optional[Dict[str, Any]]:
+    """A named mint's resident-registration verdict, without the prose.
+
+    Onboard attaches one to every fresh mint that passes a name, and for an
+    ordinary agent it reads not_on_roster or no_roster_configured: ~450-600 B
+    explaining how resident registration works. The verdict stays visible, so
+    a resident bootstrapped off the roster still sees that it was not
+    registered; not_on_roster keeps what that costs and the producer's
+    remedy (roster, restart, a fresh mint), since the tags cannot be added to
+    this identity later. None when the block is not a shape this knows, which keeps
+    the full record.
     """
-    if payload.get("is_new") is not True:
-        return False
-    if payload.get("identity_resolution_outcome") not in _ROUTINE_MINT_OUTCOMES:
-        return False
-    if payload.get("lineage_state") not in (None, "no_lineage_declared"):
-        # Declared, provisional or rejected lineage is something to read.
-        return False
-    if payload.get("provisional_lineage"):
-        return False
-    for key, value in payload.items():
-        if key not in _ROUTINE_MINT_KEYS and value not in (None, False, "", [], {}):
-            return False
-    thread_context = payload.get("thread_context")
-    if isinstance(thread_context, dict) and (
-        thread_context.get("predecessor") or thread_context.get("is_fork")
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    on_roster = value.get("on_roster")
+    if status not in _RESIDENT_REGISTRATION_STATUSES or not isinstance(on_roster, bool):
+        return None
+    compact: Dict[str, Any] = {"status": status, "on_roster": on_roster}
+    if status == "not_on_roster":
+        required = " + ".join(value.get("required_tags") or []) or "the resident tags"
+        roster = value.get("roster_env") or "the resident roster"
+        compact["detail"] = (
+            f"Not on {roster}: no {required}; not protected from auto-archive. "
+            "Granted only at mint, only to roster names; this identity cannot "
+            "gain them. Fix: roster the name, restart, mint fresh."
+        )
+    elif status == "caller_supplied_tags":
+        # Same reason not_on_roster keeps a detail: whatever tags this mint
+        # carried are all it will ever carry.
+        required = " + ".join(value.get("required_tags") or []) or "the resident tags"
+        compact["detail"] = (
+            f"Caller-supplied tags: {required} present only if passed at this "
+            "mint; this identity cannot gain them later."
+        )
+    return compact
+
+
+# write_bootstrap's success shape (identity/bootstrap_checkin.py). Any other
+# shape (not written, an error, a field this does not know) keeps the record.
+_BOOTSTRAP_WRITTEN_KEYS = frozenset({"written", "state_id", "next_step"})
+
+
+def _compact_bootstrap(value: Any) -> Optional[Dict[str, Any]]:
+    """The bootstrap check-in a caller asked for (initial_state), when written.
+
+    Three short fields, lifted whole: the state_id and the note that the row
+    is provisional exist only in this response.
+    """
+    if (
+        isinstance(value, dict)
+        and value.get("written") is True
+        and set(value) <= _BOOTSTRAP_WRITTEN_KEYS
     ):
-        return False
+        return dict(value)
+    return None
+
+
+# Keys onboard adds after building the record that a mint can carry and still
+# be routine, each with the compact form the envelope lifts in its place. Not
+# here, so they keep the full record: label_renamed (a refused label is an
+# abnormal event), deprecations (the caller used a retired resume path) and
+# temporal_context (the narrator has no history to report for a just-created
+# identity, so on a mint it would be a surprise worth the whole record).
+_ROUTINE_MINT_NOTICES = {
+    "resident_registration": _compact_resident_registration,
+    "bootstrap": _compact_bootstrap,
+}
+
+
+def _lift_mint_notices(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The compact form of each mint notice the payload carries."""
+    lifted: Dict[str, Any] = {}
+    for key, compact in _ROUTINE_MINT_NOTICES.items():
+        value = payload.get(key)
+        if value in (None, False, "", [], {}):
+            continue
+        compacted = compact(value)
+        if compacted is not None:
+            lifted[key] = compacted
+    return lifted
+
+
+def _thread_context_blocker(
+    thread_context: Dict[str, Any], payload: Dict[str, Any]
+) -> Optional[str]:
+    """What in the mint's thread position needs the record, or None.
+
+    Positive evidence only: a missing or unknown episode_fork_kind is not
+    routine. A root node ("none") is. So is a fresh uuid on a thread earlier,
+    unrelated process-instances occupied ("sibling_locus", the common case
+    behind a shared IP:UA fingerprint): the envelope lifts the earlier node's
+    uuid, the fork kind and the sentence saying co-location does not establish
+    lineage. A declared, provisional or rejected lineage, any spawn reason
+    other than the default new_session, or a sibling whose earlier nodes were
+    pruned (no uuid to lift beside the sentence) is something to read, so it
+    keeps the record.
+    """
+    kind = thread_context.get("episode_fork_kind")
+    if kind not in ("none", "sibling_locus"):
+        return f"thread_context.episode_fork_kind={kind or 'missing'}"
+    lineage_fork = thread_context.get("identity_lineage_fork")
+    if lineage_fork is not False:
+        shown = "missing" if lineage_fork is None else json.dumps(lineage_fork)
+        return f"thread_context.identity_lineage_fork={shown}"
+    # Any declared spawn reason other than the default is a claim to read,
+    # including "explicit" without a parent: the caller meant succession and
+    # got none, and the reason appears nowhere in the routine shape.
+    spawn_reason = thread_context.get("spawn_reason")
+    if spawn_reason not in (None, "new_session"):
+        return f"thread_context.spawn_reason={spawn_reason}"
+    if kind == "none":
+        for key in ("predecessor", "is_fork"):
+            if thread_context.get(key):
+                return f"thread_context.{key}"
+        return None
+    # The routine sibling shape says co-location is not lineage only beside
+    # the earlier node's uuid. With the earlier nodes pruned there is no uuid
+    # to lift, so keep the record and its honest_message.
+    predecessor = thread_context.get("predecessor")
+    if not (isinstance(predecessor, dict) and predecessor.get("uuid")):
+        return "thread_context.predecessor=missing"
+    lineage_state = payload.get("lineage_state")
+    if lineage_state != "no_lineage_declared":
+        return f"lineage_state={lineage_state or 'missing'}"
+    if payload.get("provisional_lineage"):
+        return "provisional_lineage"
+    return None
+
+
+def _routine_mint_blockers(
+    payload: Dict[str, Any], shape_keys: frozenset = frozenset()
+) -> List[str]:
+    """What keeps a mint from being routine, each named by its field.
+
+    Empty for a fresh mint that went as asked: nothing about it needs
+    explaining. Positive evidence only. A missing outcome is not routine, so a
+    producer regression that drops the field shows the full record instead of
+    looking like a clean mint. Any non-empty key outside _ROUTINE_MINT_KEYS
+    that is not a notice in a shape _ROUTINE_MINT_NOTICES knows (a label
+    rename, a deprecation, an unknown key) also keeps the record.
+    ``shape_keys`` are keys the requested shape carries on any mint, which
+    therefore say nothing about this one.
+    """
+    blockers: List[str] = []
+    is_new = payload.get("is_new")
+    if is_new is not True:
+        blockers.append(f"is_new={'missing' if is_new is None else json.dumps(is_new)}")
+    outcome = payload.get("identity_resolution_outcome")
+    if outcome not in _ROUTINE_MINT_OUTCOMES:
+        blockers.append(f"identity_resolution_outcome={outcome or 'missing'}")
+    lineage_state = payload.get("lineage_state")
+    if lineage_state not in (None, "no_lineage_declared"):
+        # Declared, provisional or rejected lineage is something to read.
+        blockers.append(f"lineage_state={lineage_state}")
+    if payload.get("provisional_lineage"):
+        blockers.append("provisional_lineage")
+    for key, value in payload.items():
+        if key in _ROUTINE_MINT_KEYS or key in shape_keys:
+            continue
+        if value in (None, False, "", [], {}):
+            continue
+        compact = _ROUTINE_MINT_NOTICES.get(key)
+        if compact is None or compact(value) is None:
+            blockers.append(key)
+    thread_context = payload.get("thread_context")
+    if isinstance(thread_context, dict):
+        blocker = _thread_context_blocker(thread_context, payload)
+        if blocker:
+            blockers.append(blocker)
+    else:
+        # Positive evidence: onboard omits thread_context when it could not
+        # place the mint (thread lookup raised, or no thread_id). Unknown
+        # thread position is not a root node, so the record is shown whole.
+        blockers.append("thread_context=missing")
     assurance = payload.get("identity_assurance")
     if not isinstance(assurance, dict):
         # Positive evidence: a mint whose assurance block is missing is shown
         # whole, not trimmed into a response with no assurance at all.
-        return False
-    return not _onboard_assurance_is_abnormal(assurance)
+        blockers.append("identity_assurance=missing")
+    elif _onboard_assurance_is_abnormal(assurance):
+        blockers.append("identity_assurance")
+    return list(dict.fromkeys(blockers))
+
+
+def _is_routine_mint(payload: Dict[str, Any]) -> bool:
+    """A fresh mint that went as asked (see _routine_mint_blockers)."""
+    return not _routine_mint_blockers(payload)
+
+
+def _onboard_raw_requested(arguments: Dict[str, Any]) -> bool:
+    """The caller asked for the record, by the signals onboard uses to pick
+    its own full or verbose shape (_derive_onboard_response_mode)."""
+    requested = str(arguments.get("response_mode") or "").strip().lower()
+    return requested in _ONBOARD_RAW_MODES or (
+        not requested and _as_bool(arguments.get("verbose"), default=False)
+    )
+
+
+def _onboard_built_full_shape(arguments: Dict[str, Any]) -> bool:
+    """Whether onboard built its full shape, by onboard's own rule.
+
+    Differs from _onboard_raw_requested for an unknown response_mode:
+    onboard then falls back to the verbose flag, so ("detailed", verbose)
+    builds the full shape although the envelope sees no explicit request.
+    """
+    from src.mcp_handlers.identity.handlers import _derive_onboard_response_mode
+
+    return _derive_onboard_response_mode(arguments)[1] == "full"
+
+
+def _start_session_budget(envelope: Dict[str, Any]) -> int:
+    """The byte ceiling of a routine start_session, by mint class."""
+    state = envelope.get("state_summary")
+    sibling = isinstance(state, dict) and state.get("episode_fork_kind") == "sibling_locus"
+    notices = sum(1 for key in _ROUTINE_MINT_NOTICES if key in envelope)
+    return (
+        (_START_SESSION_SIBLING_BUDGET_BYTES if sibling else _START_SESSION_BUDGET_BYTES)
+        + notices * _START_SESSION_NOTICE_ALLOWANCE_BYTES
+    )
 
 
 def _raw_governance_policy(
@@ -1656,19 +1887,13 @@ def _raw_governance_policy(
     if friendly_name == "start_session":
         # A mint that went as asked is fully described by the lifted fields,
         # so repeating the whole onboard record beneath them was the same
-        # record twice. Anything else about the mint (resume miss, reactivated
-        # archive, lineage, trajectory, abnormal assurance) keeps the record:
-        # those facts exist only here. An explicit request uses the signals
-        # onboard uses to pick its own verbose shape
-        # (_derive_onboard_response_mode).
-        arguments = arguments or {}
-        payload = payload or {}
-        requested = str(arguments.get("response_mode") or "").strip().lower()
-        include_raw = (
-            requested in _ONBOARD_RAW_MODES
-            or (not requested and _as_bool(arguments.get("verbose"), default=False))
-            or not _is_routine_mint(payload)
-        )
+        # record twice. That includes a co-located sibling and a named mint's
+        # registration verdict (see _routine_mint_blockers). Anything else
+        # about the mint (resume miss, reactivated archive, lineage,
+        # trajectory, abnormal assurance, a label rename) keeps the record:
+        # those facts exist only here. An explicit request always gets it.
+        requested = _onboard_raw_requested(arguments or {})
+        include_raw = requested or not _is_routine_mint(payload or {})
         # No hint: the only way to act on one is another mint, and a mint that
         # was not routine already carries the record.
         return include_raw, None
@@ -2294,13 +2519,31 @@ def build_experience_envelope(
                 "continuity_token": token,
                 "use_only_for": "identity(agent_uuid=..., continuity_token=..., resume=true)",
             }
+        # Also in every mode: a named mint's registration verdict, compact.
+        envelope.update(_lift_mint_notices(payload))
         envelope["response_shape"] = "full" if include_raw else "routine"
+        if include_raw:
+            # Name what kept the record, so the agent knows where to look.
+            # Absent when the only reason is an explicit full request: the
+            # keys that shape adds to every mint are not reasons.
+            blockers = _routine_mint_blockers(
+                source_payload,
+                _FULL_ONBOARD_SHAPE_KEYS
+                if _onboard_built_full_shape(arguments or {})
+                else frozenset(),
+            )
+            if blockers:
+                envelope["response_shape_reason"] = ", ".join(blockers)
+        thread_context = payload.get("thread_context")
+        thread_context = thread_context if isinstance(thread_context, dict) else {}
+        fork_kind = thread_context.get("episode_fork_kind")
+        if fork_kind not in (None, "none"):
+            # R6's discriminator stays on the entry-point response when the
+            # routine shape drops thread_context.
+            state_summary["episode_fork_kind"] = fork_kind
         if isinstance(predecessor, dict) and predecessor.get("uuid"):
             state_summary["predecessor_uuid"] = predecessor["uuid"]
-            fork_kind = payload.get("thread_context", {}).get("episode_fork_kind")
-            lineage_fork = payload.get("thread_context", {}).get(
-                "identity_lineage_fork"
-            )
+            lineage_fork = thread_context.get("identity_lineage_fork")
             if fork_kind == "identity_lineage" and lineage_fork is True:
                 next_action += (
                     " Declared lineage for this fork is already recorded; do not "
@@ -2837,7 +3080,7 @@ def build_experience_envelope(
             _attach_response_size(envelope, friendly_name, arguments, source_payload)
     elif bounded_start:
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
-        if measured_bytes > _START_SESSION_BUDGET_BYTES:
+        if measured_bytes > _start_session_budget(envelope):
             _attach_response_size(envelope, friendly_name, arguments, source_payload)
     else:
         _attach_response_size(envelope, friendly_name, arguments, source_payload)
