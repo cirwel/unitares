@@ -129,6 +129,8 @@ def build_identity_response_data(
         response_data["resumed"] = resumed
 
     if verbose:
+        from src.mcp_handlers.identity_bootstrap import SET_DISPLAY_NAME_CALL
+
         # Doctrine: `display_name` is cosmetic (name-claim resolution removed
         # 2026-04-17). KG queries key on `agent_id`; canonical identity is
         # `agent_uuid`. Do not fall back to display_name for any functional key.
@@ -136,7 +138,7 @@ def build_identity_response_data(
             "for_knowledge_graph": agent_id,
             "for_session_continuity": client_session_id,
             "for_internal_lookup": agent_uuid,
-            "to_set_display_name": "identity(name='YourName')",
+            "to_set_display_name": SET_DISPLAY_NAME_CALL,
         }
         if continuity_token:
             response_data["quick_reference"]["for_path0_ownership_proof"] = continuity_token

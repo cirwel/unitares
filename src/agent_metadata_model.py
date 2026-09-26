@@ -265,9 +265,9 @@ class AgentMetadata:
     # name a knowledge write gives an agent with no meaningful label (in
     # memory only, where that name is set). label_source reads "auto" while
     # the name it reads (display_name, else label) still equals this value.
-    # A claim through set_agent_label updates label only, so after a
-    # knowledge-write auto-name the stale display_name can keep reading
-    # "auto" (pre-existing display_name staleness, not fixed here). None for
+    # A claim (set_agent_label, or a name on a check-in) clears that
+    # in-memory display_name (identity/persistence.drop_stale_display_name),
+    # so the claimed label is displayed and reads "claimed". None for
     # agents minted on a server that did not yet run this change (#2478) and
     # for lazily persisted mints.
     auto_label: str = None

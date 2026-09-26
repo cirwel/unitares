@@ -572,6 +572,11 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
         if ctx.agent_uuid in mcp_server.agent_metadata:
             meta = mcp_server.agent_metadata[ctx.agent_uuid]
             meta.label = ctx.label
+            # The label set here is the one displayed, not a knowledge
+            # write's earlier Agent_<uuid8> auto-name.
+            from ..identity.persistence import drop_stale_display_name
+
+            drop_stale_display_name(meta, ctx.label)
 
     # Substrate-agnostic resident-tag reconcile: server-side equivalent of the
     # SDK's GovernanceAgent._reconcile_resident_tags (#754). The creation-time
@@ -678,9 +683,11 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                         purpose=purpose_hint,
                         existing_names=existing_names
                     )
+                    from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
+
                     ctx.onboarding_guidance["naming"] = {
                         "message": "Name yourself to make your work easier to find",
-                        "action": "Call identity(name='your_chosen_name') to set your name",
+                        "action": f"Call {SET_DISPLAY_NAME_CALL} to set your name",
                         "suggestions": suggestions[:3],
                         "quick_example": suggestions[0]["name"] if suggestions else None
                     }

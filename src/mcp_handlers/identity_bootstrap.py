@@ -99,6 +99,18 @@ FRESH_MINT_STEP = (
     "spawn_reason='explicit' only to continue a finished predecessor's work."
 )
 
+# How a caller sets its own cosmetic display name. identity() resolves the
+# caller from what the call carries; a call carrying only name= falls back to
+# the transport's signals, and on a shared route (an IP:UA fingerprint, an
+# onboard pin) those can resolve a co-located agent, which then gets the name
+# (the identity tool's description says so). Every hint that shows how to set
+# a name uses this form, the one the knowledge write's auto-name warning uses.
+SET_DISPLAY_NAME_CALL = "identity(client_session_id='...', name='YourName')"
+SET_DISPLAY_NAME_SESSION_NOTE = (
+    "pass the client_session_id start_session returned to this process"
+)
+
+
 def caller_sent_usable_session_id(arguments) -> bool:
     """Whether the caller itself sent a usable client_session_id on this call.
 

@@ -749,6 +749,27 @@ async def ensure_agent_persisted(
 # LABEL MANAGEMENT
 # =============================================================================
 
+def drop_stale_display_name(meta, label: str) -> None:
+    """Make a newly set label the name every reader displays.
+
+    ``display_name`` is not an AgentMetadata field and is never persisted.
+    Its one writer is the ``Agent_<uuid8>`` name a knowledge write gives an
+    agent with no meaningful label
+    (knowledge/handlers._check_display_name_required), which sets
+    display_name, label and auto_label together, in memory. Readers prefer
+    display_name to label (support/agent_auth.compute_agent_signature, the
+    knowledge display payload, services/runtime_queries), so after that
+    auto-name a claim that updated only the label went on displaying
+    ``Agent_<uuid8>``, and label_source went on reading ``auto`` because the
+    displayed name still equalled auto_label. Clearing it leaves the agent
+    as one that was never auto-named: the claimed label is displayed and
+    label_source reads ``claimed``. The cold-start loader never restores
+    display_name, so a restart already had this effect.
+    """
+    if getattr(meta, "display_name", None) not in (None, label):
+        meta.display_name = None
+
+
 async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str] = None) -> bool:
     """Set display name for an agent. ``True`` iff the write succeeded.
 
@@ -906,6 +927,7 @@ async def set_agent_label_resolved(
                 if agent_uuid in mcp_server.agent_metadata:
                     meta = mcp_server.agent_metadata[agent_uuid]
                     meta.label = label
+                    drop_stale_display_name(meta, label)
 
                     # Generate structured_id if missing (migration for pre-v2.5.0 agents)
                     if not getattr(meta, 'structured_id', None):

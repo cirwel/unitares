@@ -529,6 +529,7 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
                 existing_names=existing_names
             )
             naming_guidance = format_naming_guidance(suggestions=suggestions)
+            from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
 
             return None, error_response(
                 f"Agent '{agent_id}' is not registered. Identity auto-creates on first tool call.",
@@ -540,7 +541,7 @@ def require_registered_agent(arguments: Dict[str, Any]) -> Tuple[str, Optional[T
                         "1. Call start_session(force_new=true) — a fresh session onboards fresh with no parent",
                         "   — per v2 ontology, fresh process-instances mint fresh identity; declare parent_agent_id only for a real spawn (spawn_reason='subagent') or a handoff from an exited session (spawn_reason='explicit'); declaring a live agent as parent is rejected",
                         "2. Save client_session_id from response",
-                        "3. Call identity(name='your_name') to set a cosmetic label",
+                        f"3. Call {SET_DISPLAY_NAME_CALL} with that id to set a cosmetic label",
                         "4. Include client_session_id in all future calls within this process-instance",
                         "5. Then call this tool again"
                     ],

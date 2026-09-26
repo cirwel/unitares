@@ -194,7 +194,7 @@ def generate_structured_id(
     This is the "agent_id" tier in the three-tier identity model:
     - UUID (immutable) - technical identifier
     - agent_id (structured) - this function, auto-generated
-    - display_name (nickname) - user-chosen via identity(name=...)
+    - display_name (nickname) - user-chosen via identity(client_session_id=..., name=...)
 
     Format: {interface}_{model}_{date}_{uuid8} e.g.,
         "chatgpt_claude_20251226_a4be406c"
@@ -366,11 +366,13 @@ def format_naming_guidance(
     Returns:
         Formatted guidance dict
     """
+    from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
+
     guidance = {
         "message": "Choose a meaningful name to help identify your work",
         "convention": "{purpose}_{interface}_{date} or {interface}_{model}_{date}",
         "suggestions": suggestions,
-        "how_to": "Call identity(name='your_chosen_name') to set your name",
+        "how_to": f"Call {SET_DISPLAY_NAME_CALL} to set your name",
         "examples": [
             "feedback_governance_20251221",
             "cursor_claude_20251221",

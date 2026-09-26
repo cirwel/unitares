@@ -89,7 +89,9 @@ def enrich_identity_reminder(ctx: UpdateContext) -> None:
             return
         missing = []
         if not has_label:
-            missing.append("label (identity(name='YourName'))")
+            from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
+
+            missing.append(f"label ({SET_DISPLAY_NAME_CALL})")
         if not has_purpose:
             missing.append("purpose (process_agent_update with purpose='...')")
         ctx.response_data['identity_reminder'] = {
@@ -725,14 +727,17 @@ def enrich_onboarding_info(ctx: UpdateContext) -> None:
 
         meta = ctx.meta
         if meta and meta.total_updates == 1:
+            from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
+
             ctx.response_data["welcome"] = (
                 "Welcome to the governance system! This is your first update. "
                 "The system tracks your work's thermodynamic state (E, I, S, V) and provides "
                 "supportive feedback. Use the metrics and sampling parameters as helpful guidance, "
                 "not requirements. The knowledge graph contains discoveries from other agents - "
                 "feel free to explore it when relevant. "
-                "\n\nYour identity auto-binds to this session. Use identity() to check it, "
-                "or identity(name='YourName_model_date') to name yourself."
+                "\n\nPass the client_session_id start_session returned on every "
+                "call. identity(client_session_id='...') reports the identity "
+                f"it names, and {SET_DISPLAY_NAME_CALL} names it."
             )
     except Exception as e:
         logger.debug(f"Could not enrich onboarding info: {e}")
