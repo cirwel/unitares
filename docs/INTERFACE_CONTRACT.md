@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.18.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.19.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.18.0` is the negotiated interface release. Compatible additions
+- `version: 1.19.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -198,7 +198,19 @@ The two identifiers serve different jobs:
   move; 1.18.0, 2026-09-26: `delegate_inference.host_id` accepts a third
   value, `antigravity:host-adapter`; the default stays `claude:host-adapter`,
   nothing is removed or renamed, and the input digests of `delegate_inference`
-  and `list_inference_hosts` and the surface digest move).
+  and `list_inference_hosts` and the surface digest move;
+  1.19.0, 2026-09-26, numbered after 1.18.0 (#2470): parameter
+  descriptions only. `include_state` on
+  `get_governance_metrics` and `check_working_state` says it is retained for
+  compatibility and has no effect (the handler no longer requests the nested
+  state, which surfaced only when state interpretation failed); `verbosity`
+  says what `standard` holds (bare EISV, coherence and risk; the verdict, basin
+  and mode with their meanings; guidance) instead of EISV meanings it never
+  carried; and the `response_mode` description of `process_agent_update`
+  and `sync_state` names the degraded-identity and warnings triggers that make
+  `auto` resolve to mirror (its advertised brief is unchanged). Nothing is
+  added, removed, retyped or renamed; the two metrics input digests and the
+  surface digest move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

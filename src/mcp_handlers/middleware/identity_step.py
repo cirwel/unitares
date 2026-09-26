@@ -62,47 +62,21 @@ def _hard_resume_refusal_response(
     identity_result: Dict[str, Any],
 ) -> Any:
     """Return an identity-neutral response for a terminal resolver refusal."""
-    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+    from src.mcp_handlers.identity_bootstrap import (
+        hard_resume_refusal_options,
+        strict_identity_refusal_payload,
+    )
     from src.mcp_handlers.response_base import success_response
 
     resolve_error = identity_result.get("error") or "resume_failed"
-    hint = identity_result.get("message") or (
-        f"Identity resume was refused ({resolve_error}). Nothing was written."
-    )
-    payload_options: Dict[str, Any] = {}
-
-    if resolve_error == "substrate_anchored_uuid_requires_uds":
-        payload_options = {
-            "next_step": (
-                "Retry this substrate-enrolled resident through "
-                "UNITARES_UDS_SOCKET so governance can verify kernel peer "
-                "credentials."
-            ),
-            "safe_options": (
-                {
-                    "action": "use_attested_uds",
-                    "call": "Retry the same request through UNITARES_UDS_SOCKET.",
-                    "when": (
-                        "The resident is launchd-managed and its substrate "
-                        "claim matches the running executable."
-                    ),
-                },
-                {
-                    "action": "inspect_enrollment",
-                    "call": "Verify the registered launchd label and executable path.",
-                    "when": "The attested UDS request is still refused.",
-                },
-            ),
-            "do_not": (
-                "Do not retry a substrate-anchored session over HTTP; bearer "
-                "or session material is not process attestation.",
-            ),
-        }
+    # The hint (the resolver's own message) and the substrate resident's UDS
+    # options are single-sourced with the REST gate's refusal for the same
+    # resolver result (identity_bootstrap.unbound_call_refusal).
+    payload_options: Dict[str, Any] = hard_resume_refusal_options(identity_result)
 
     return success_response(
         strict_identity_refusal_payload(
             tool_name,
-            hint=hint,
             surface_context={
                 "transport_surface": "mcp_dispatch",
                 "lifecycle_automation": "not_confirmed",
@@ -868,12 +842,15 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # client-sent Mcp-Session-Id outranks it (step 3) and is connection-scoped
     # — Claude Code subagents share the parent's connection — so it is not
     # proof here, and neither are oauth_client_id / x_client_id, which name a
-    # client rather than a process.
+    # client rather than a process. The REST prebind judges a header through
+    # the same predicate (identity/session.transport_session_is_read_proof),
+    # so the two read gates cannot drift on which transport sources count.
     from ..context import get_session_resolution_source
+    from ..identity.session import transport_session_is_read_proof
     _header_session_proof = bool(
         signals
         and signals.x_session_id
-        and get_session_resolution_source() == "x_session_id"
+        and transport_session_is_read_proof(get_session_resolution_source())
     )
     _has_identity_proof = bool(
         _token_agent_uuid
@@ -1003,41 +980,41 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                             "not prove client lifecycle-hook automation."
                         ),
                     }
-                    _hint_override = None
-                    if _resolve_error == "resume_rejected_hijack_guard":
-                        # #1319: tell the caller precisely why the resume was
-                        # refused — the whole point of failing closed here is
-                        # that the old silent phantom mint told them nothing.
-                        _surface_context["resume_rejected_reason"] = (
-                            identity_result.get("reason")
-                        )
-                        _token_presented = bool(
-                            arguments and arguments.get("continuity_token")
-                        )
-                        if _token_presented and not _token_agent_uuid:
-                            _surface_context["continuity_token_invalid"] = True
-                        _hint_override = (
-                            "Your session resume was rejected by the identity "
-                            "hijack guard "
-                            f"({identity_result.get('reason', 'unknown')})."
-                            + (
-                                " The continuity_token you presented failed "
-                                "verification (malformed, truncated, or "
-                                "expired secret) and could not prove "
-                                "ownership."
-                                if _token_presented and not _token_agent_uuid
-                                else ""
-                            )
-                            + " Nothing was written. Re-onboard with "
-                            "start_session(force_new=true, parent_agent_id="
-                            "<your prior uuid, which must have exited>, "
-                            "spawn_reason=\"explicit\") "
-                            "or retry with a valid continuity_token."
-                        )
+                    # Keyed on why nothing resolved, by the builder the REST
+                    # gate uses for the same resolver result, so the
+                    # transports cannot drift. A session_resolve_miss most
+                    # often comes from a process that called start_session
+                    # and did not send its id on this call, so its recovery
+                    # leads with that id, not with a second mint; it keys
+                    # only on what the caller itself sent. A resume the
+                    # hijack guard rejected (#1319) says precisely why: the
+                    # whole point of failing closed is that the old silent
+                    # phantom mint told the caller nothing. A session lookup
+                    # that raised (pg_lookup_exception) is a server failure,
+                    # not a miss.
+                    from src.mcp_handlers.identity_bootstrap import (
+                        caller_sent_usable_session_id,
+                        unbound_call_refusal,
+                    )
+                    _token_presented = bool(
+                        arguments and arguments.get("continuity_token")
+                    )
+                    _refusal_options, _surface_extra = unbound_call_refusal(
+                        name,
+                        identity_result,
+                        # One rule with the REST gate and the unbound reads.
+                        caller_sent_session_id=caller_sent_usable_session_id(
+                            arguments
+                        ),
+                        token_failed_verification=(
+                            _token_presented and not _token_agent_uuid
+                        ),
+                    )
+                    _surface_context.update(_surface_extra)
                     return success_response(strict_identity_refusal_payload(
                         name,
-                        hint=_hint_override,
                         surface_context=_surface_context,
+                        **_refusal_options,
                     ))
                 # Pre-mint recovery: a rotated session key is not a new agent.
                 # Only a genuine session_resolve_miss is recoverable — a resume
@@ -1187,39 +1164,13 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 )
                 failure_kind = "unusable_result"
 
+            from src.mcp_handlers.identity_bootstrap import (
+                resolution_failed_refusal_options,
+            )
             from src.mcp_handlers.response_base import success_response
             return success_response(strict_identity_refusal_payload(
                 name,
-                hint=(
-                    "The server could not resolve an identity for this call "
-                    "because identity resolution failed internally, and "
-                    "strict identity mode refuses rather than running the "
-                    "tool unattributed. The tool handler did not run."
-                ),
-                next_step=(
-                    "Retry the call. If it keeps failing, report it to the "
-                    "operator: this is a server-side failure, not a missing "
-                    "onboard."
-                ),
-                # The defaults steer a caller toward onboarding, which is the
-                # right advice for a missing identity and the wrong one here.
-                safe_options=(
-                    {
-                        "action": "retry",
-                        "call": "the same call, unchanged",
-                        "when": "Identity resolution failed on the server and may recover.",
-                    },
-                    {
-                        "action": "stay_read_only",
-                        "call": "get_governance_metrics() or list_tools()",
-                        "when": "Calls that need no identity keep working while resolution fails.",
-                    },
-                ),
-                do_not=(
-                    "Do not onboard a fresh identity only to get past this: the "
-                    "failure is on the server, and if you already have an "
-                    "identity a new one would split your work from it.",
-                ),
+                **resolution_failed_refusal_options(),
                 surface_context={
                     "transport_surface": "mcp_dispatch",
                     "lifecycle_automation": "not_confirmed",

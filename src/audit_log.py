@@ -645,6 +645,46 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_consultation(
+        self,
+        *,
+        agent_id: Optional[str],
+        record: Dict,
+    ) -> None:
+        """Record that an advisory consultation happened, never what was said.
+
+        ``record`` is the envelope built by
+        ``consultation._consultation_record``: route, policy, outcome, and
+        keyed hashes of the brief, the constructed prompt and the returned
+        advice. The key goes only to the caller, so a reader of this row
+        cannot test a guessed brief against its hashes, while the caller (or
+        anyone holding its transcript) can prove which exchange the row
+        describes.
+
+        Postgres only, deliberately not JSONL. Several JSONL readers take the
+        agent's recent entries without an event_type filter (the dialectic
+        calibration lookup of confidence-at-pause, the learning-context
+        ``recent_decisions`` window), and the rotated JSONL archive is never
+        pruned. The cost is the documented fire-and-forget loss window: with
+        no running event loop the row is dropped.
+
+        This row does not replace the ``auto_attest`` decision that the
+        inference layer's Energy accounting writes for the same call; it is
+        the only row that says a consultation produced it.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="consultation",
+            # 0.0, not 1.0: the Postgres confidence readers
+            # (get_latest_confidence_before, outcome calibration scoring)
+            # take the newest row with confidence > 0 of any type, and a
+            # consultation is not a confidence claim by the agent.
+            confidence=0.0,
+            details=record,
+        )
+        self._schedule_postgres_write(asdict(entry))
+
     def _write_entry(self, entry: AuditEntry):
         """Write audit entry to JSONL log file with locking.
 
@@ -670,10 +710,15 @@ class AuditLogger:
             # Don't crash on audit log failures
             logger.warning(f"Could not write audit log: {e}", exc_info=True)
 
-        # Fire-and-forget Postgres write; see docstring for the loss/latency
-        # tradeoff. The task is pinned in `_inflight_pg_audit_tasks` until
-        # done so CPython GC can't collect it mid-await — bare create_task
-        # is a documented P001 hazard (Watcher #69f2ccbc, 2026-05-18).
+        self._schedule_postgres_write(entry_dict)
+
+    def _schedule_postgres_write(self, entry_dict: dict) -> None:
+        """Fire-and-forget Postgres write; see ``_write_entry`` for the tradeoff.
+
+        The task is pinned in `_inflight_pg_audit_tasks` until done so
+        CPython GC can't collect it mid-await — bare create_task is a
+        documented P001 hazard (Watcher #69f2ccbc, 2026-05-18).
+        """
         try:
             import asyncio
             try:
