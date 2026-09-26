@@ -834,9 +834,12 @@ def test_a_resident_registration_verdict_is_lifted_compact(name, stamped, roster
     assert lifted["on_roster"] is registration["on_roster"]
     assert set(lifted) == (
         {"status", "on_roster", "detail"}
-        if status == "not_on_roster"
+        if status in ("not_on_roster", "caller_supplied_tags")
         else {"status", "on_roster"}
     )
+    if status == "caller_supplied_tags":
+        # The tags this mint carried are all it will ever carry.
+        assert "cannot gain them later" in lifted["detail"]
     if status == "not_on_roster":
         # What it costs, that it cannot be fixed on this identity, and the
         # producer's remedy, whose fresh mint helps only after the roster

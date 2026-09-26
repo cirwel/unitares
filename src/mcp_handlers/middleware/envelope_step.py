@@ -1453,6 +1453,14 @@ def _compact_resident_registration(value: Any) -> Optional[Dict[str, Any]]:
             "Granted only at mint, only to roster names; this identity cannot "
             "gain them. Fix: roster the name, restart, mint fresh."
         )
+    elif status == "caller_supplied_tags":
+        # Same reason not_on_roster keeps a detail: whatever tags this mint
+        # carried are all it will ever carry.
+        required = " + ".join(value.get("required_tags") or []) or "the resident tags"
+        compact["detail"] = (
+            f"Caller-supplied tags: {required} present only if passed at this "
+            "mint; this identity cannot gain them later."
+        )
     return compact
 
 
