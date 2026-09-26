@@ -1604,3 +1604,259 @@ def test_a_workspace_under_a_repo_is_refused(monkeypatch, tmp_path):
     out.mkdir()
     text, note = rg.run_reviewer("antigravity", "P", out, 30)
     assert note == "skipped: workspace not isolated"
+
+
+# --- agy output-limit resume -------------------------------------------------
+
+_AGY_TRUNCATED = (
+    '{"conversation_id":"conv-1","status":"ERROR",'
+    '"response":"...tail of a review\\nVERDICT: CLEAN",'
+    '"error":"Your previous response was cut off because it exceeded the output token limit\\n'
+    'Please continue from where you left off, keeping your response shorter\\nRetries remaining: 3"}\n'
+)
+_AGY_COMPLETE = (
+    '{"conversation_id":"conv-1","status":"SUCCESS",'
+    '"response":"Full review.\\n- [P3] something\\nVERDICT: FINDINGS(1)\\n"}\n'
+)
+
+
+def _fake_agy(monkeypatch, answers):
+    calls = []
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        calls.append({"cmd": cmd, "cwd": cwd, "env": kw.get("env"),
+                      "cwd_exists": Path(cwd).exists() if cwd else None})
+        answer = answers.pop(0)
+        out, err = answer if isinstance(answer, tuple) else (answer, "")
+        stdout.write(out)
+        if err:
+            stderr.write(err)
+            stderr.flush()
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    return calls
+
+
+def test_a_truncated_agy_answer_is_resumed_not_accepted(monkeypatch, tmp_path):
+    """agy hit its output limit: the response is only the tail (its start
+    is lost), so resume the conversation for the whole answer, same effort."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert rg.parse_verdict(text) == ("FINDINGS", 1)
+    assert "Full review." in text
+    assert note == "exit 0"  # callers accept only exactly this
+    first, second = calls
+    assert "--conversation" not in first["cmd"]
+    i = second["cmd"].index("--conversation")
+    assert second["cmd"][i + 1] == "conv-1"
+    assert {"--sandbox", "plan", "json"} <= set(second["cmd"])
+    assert "--effort" not in second["cmd"]  # no capping
+    # same isolated workspace, still present, same scrubbed environment
+    assert second["cwd"] == first["cwd"] and second["cwd_exists"]
+    assert second["env"] is not None and "GITHUB_TOKEN" not in second["env"]
+    assert not Path(first["cwd"]).exists()  # removed once, at the end
+
+
+def test_resuming_stops_at_the_limit_and_the_tail_is_never_an_answer(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMITS["truncated"] + 1))
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == rg.AGY_RESUME_LIMITS["truncated"] + 1
+    assert note != "exit 0"  # an unrecovered truncation is a failure
+    assert f"output limit not recovered after {rg.AGY_RESUME_LIMITS['truncated']} resume(s)" in note
+
+
+def test_other_agy_errors_are_not_resumed(monkeypatch, tmp_path):
+    other = '{"conversation_id":"c","status":"ERROR","error":"permission denied"}\n'
+    calls = _fake_agy(monkeypatch, [other])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 1
+
+
+def test_output_limit_detection_needs_error_status_and_a_conversation():
+    assert rg._agy_output_limited(_AGY_TRUNCATED) == "conv-1"
+    assert rg._agy_output_limited(_AGY_COMPLETE) is None
+    assert rg._agy_output_limited(_AGY_TRUNCATED.replace('"conversation_id":"conv-1",', "")) is None
+    assert rg._agy_output_limited("not json") is None
+
+
+def test_a_resumed_agy_review_is_recorded_end_to_end(tmp_path, monkeypatch, capsys):
+    """Through _review_locked, not run_reviewer alone: a resumed success must
+    land as a real verdict, not FAILED/UNREVIEWED."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff --git a/x b/x\n+x\n")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    monkeypatch.setattr(rg, "antigravity_prompt", lambda *args, **kw: "PROMPT")
+    _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE])
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "antigravity")
+    assert rc == 1, capsys.readouterr()
+    assert records[0][1].verdict == "FINDINGS" and records[0][1].reviewer == "antigravity"
+    assert "truncated 1x" in capsys.readouterr().err
+
+
+def _clocked_agy(monkeypatch, answers, durations):
+    """Fake agy whose runs each take durations[i] seconds of a fake clock,
+    recording the wait timeout every launch was given."""
+    now = {"t": 0.0}
+    waits = []
+    runs = iter(durations)
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            now["t"] += next(runs)
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        answer = answers.pop(0)
+        out, err = answer if isinstance(answer, tuple) else (answer, "")
+        stdout.write(out)
+        if err:
+            stderr.write(err)
+            stderr.flush()
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    monkeypatch.setattr(rg.time, "monotonic", lambda: now["t"])
+    return waits
+
+
+def test_a_resume_gets_only_the_remaining_budget(monkeypatch, tmp_path):
+    """--budget bounds the whole review, resumes included."""
+    waits = _clocked_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE], [20.0, 1.0])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note == "exit 0"
+    assert waits[0] == 30 and waits[1] == 10
+
+
+def test_a_budget_that_runs_out_mid_resume_is_a_failure(monkeypatch, tmp_path):
+    """Denied stalls allow 2 resumes, so here the BUDGET ends the loop: one
+    resume runs, is still stalled, and too little budget is left for another."""
+    waits = _clocked_agy(monkeypatch, [_AGY_DENIED, _AGY_DENIED, _AGY_COMPLETE], [20.0, 7.0, 1.0])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert rg.AGY_RESUME_LIMITS["denied"] >= 2
+    assert len(waits) == 2  # resumed once; 3s left is under the 5s minimum
+    assert note == "no answer after a denied command after 1 resume(s)"
+
+
+def test_a_resume_carries_every_flag_of_the_first_launch(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE])
+    rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    first, second = calls
+    assert second["cmd"][-len(first["cmd"][3:]):] == first["cmd"][3:]
+
+
+def test_an_unrecovered_truncation_is_recorded_as_failed_not_clean(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff --git a/x b/x\n+x\n")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    monkeypatch.setattr(rg, "antigravity_prompt", lambda *args, **kw: "PROMPT")
+    monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
+    _fake_agy(monkeypatch, [_AGY_TRUNCATED] * (rg.AGY_RESUME_LIMITS["truncated"] + 1))
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "antigravity")
+    assert rc == rg.UNREVIEWED
+    assert records[0][1].verdict == "FAILED"
+
+
+@pytest.mark.parametrize("reviewer", ["codex", "claude", "antigravity"])
+def test_the_first_launch_gets_exactly_the_budget(monkeypatch, tmp_path, reviewer):
+    """With a clock that moves, the first wait is still the whole budget (no
+    flooring); only resumes get the remainder."""
+    waits = []
+    clock = {"t": 0.0}
+
+    def tick():
+        clock["t"] += 0.37
+        return clock["t"]
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, cwd=None, **kw):
+        stdout.write('{"status":"SUCCESS","response":"ok\\nVERDICT: CLEAN\\n"}\n')
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    monkeypatch.setattr(rg.time, "monotonic", tick)
+    rg.run_reviewer(reviewer, "PROMPT", tmp_path, 30)
+    assert waits == [30]
+
+
+def test_a_truncation_without_a_conversation_is_a_failure_not_exit_0(monkeypatch, tmp_path):
+    no_cid = _AGY_TRUNCATED.replace('"conversation_id":"conv-1",', "")
+    calls = _fake_agy(monkeypatch, [no_cid])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 1
+    assert note == "output limit not recovered after 0 resume(s)"
+
+
+def test_no_resume_starts_with_too_little_budget_left(monkeypatch, tmp_path):
+    """Under AGY_RESUME_MIN_SECONDS left, resuming cannot finish: report the
+    unrecovered limit instead of a resume killed at the budget."""
+    waits = _clocked_agy(monkeypatch, [_AGY_TRUNCATED, _AGY_COMPLETE], [29.5, 1.0])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(waits) == 1
+    assert note == "output limit not recovered after 0 resume(s)"
+
+
+# --- agy command-denied stall (10 of 15 runs on 2026-09-25) -------------------
+
+_AGY_DENIED = (
+    '{"conversation_id":"conv-2","status":"SUCCESS","response":""}\n',
+    'jetski: no output produced — a tool required the "command" permission that '
+    'headless mode cannot prompt for, so it was auto-denied.\n',
+)
+
+
+def test_a_denied_command_stall_is_resumed_to_an_answer(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED, _AGY_COMPLETE])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note == "exit 0" and rg.parse_verdict(text) == ("FINDINGS", 1)
+    second = calls[1]["cmd"]
+    assert second[second.index("--conversation") + 1] == "conv-2"
+    assert second[2] == rg.AGY_RESUME_PROMPTS["denied"]
+
+
+def test_a_denial_that_persists_is_a_failure_after_its_limit(monkeypatch, tmp_path):
+    n = rg.AGY_RESUME_LIMITS["denied"]
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED] * (n + 1))
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == n + 1
+    assert note == f"no answer after a denied command after {n} resume(s)"
+
+
+def test_an_empty_answer_without_the_denial_mark_is_not_resumed(monkeypatch, tmp_path):
+    empty = '{"conversation_id":"c","status":"SUCCESS","response":""}\n'
+    calls = _fake_agy(monkeypatch, [empty])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 1
+
+
+def test_denied_then_truncated_uses_each_kinds_own_limit(monkeypatch, tmp_path):
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED, _AGY_TRUNCATED, _AGY_COMPLETE])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note == "exit 0" and len(calls) == 3
+    assert calls[1]["cmd"][2] == rg.AGY_RESUME_PROMPTS["denied"]
+    assert calls[2]["cmd"][2] == rg.AGY_RESUME_PROMPTS["truncated"]
+
+
+def test_a_stale_denial_in_the_log_does_not_trigger_another_resume(monkeypatch, tmp_path):
+    """The log accumulates; only stderr after the latest resume counts."""
+    empty_no_mark = '{"conversation_id":"conv-2","status":"SUCCESS","response":""}\n'
+    calls = _fake_agy(monkeypatch, [_AGY_DENIED, empty_no_mark])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert len(calls) == 2
