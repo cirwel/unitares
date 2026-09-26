@@ -37,7 +37,8 @@
 #       SKILL_SYNC_GH          gh binary (tests substitute a fake)
 #
 # exit: 0 in sync / PR opened or updated / dry-run
-#       1 could not complete (the caller warns and carries on)
+#       1 could not complete (a deploy wrapper warns and carries on; the
+#         workflow run fails, which is how a broken sync gets noticed)
 #       2 skipped: another open PR is already syncing the mirror
 set -uo pipefail
 
@@ -69,7 +70,6 @@ mkdir -p "$WT_ROOT" || fail "cannot create $WT_ROOT"
 
 # Explicit refspecs: a CI checkout is shallow and may lack remote-tracking refs.
 git -C "$UNITARES_REPO" fetch -q origin "+refs/heads/master:refs/remotes/origin/master" || fail "fetch unitares failed"
-git -C "$PLUGIN_REPO" fetch -q origin || fail "fetch plugin failed"
 # The plugin's default branch, asked of the remote itself: a CI checkout has no
 # refs/remotes/origin/HEAD, so reading that alone would silently assume master.
 BASE="$(git -C "$PLUGIN_REPO" ls-remote --symref origin HEAD 2>/dev/null \
@@ -116,7 +116,7 @@ git -C "$PLUGIN_REPO" worktree add -q --detach "$DST_WT" "origin/$BASE" >/dev/nu
   || fail "could not create $DST_WT"
 DST_MADE=1
 
-SYNC_LOG="$(UNITARES_PLUGIN_REPO="$DST_WT" bash "$SYNC" 2>&1)" \
+SYNC_LOG="$(cd "$SRC_WT" && UNITARES_PLUGIN_REPO="$DST_WT" bash "$SYNC" 2>&1)" \
   || { printf '%s\n' "$SYNC_LOG" | tail -5 >&2; fail "sync-plugin-skills.sh failed"; }
 
 CHANGED="$(git -C "$DST_WT" status --porcelain -- skills)"
@@ -156,7 +156,6 @@ if [ -x "$DST_WT/scripts/check-skill-freshness.sh" ]; then
 fi
 
 TITLE="$SYNC_TITLE_PREFIX with unitares master ($SRC_SHA)"
-git -C "$DST_WT" checkout -q -B "$BRANCH" || fail "could not create branch $BRANCH"
 git -C "$DST_WT" add skills || fail "git add failed"
 git -C "$DST_WT" commit -q -m "$TITLE" -m "Byte mirror of unitares/skills at $SRC_SHA via sync-plugin-skills.sh ($SUMMARY). Opened by open-plugin-skill-sync-pr.sh." \
   || fail "commit failed"

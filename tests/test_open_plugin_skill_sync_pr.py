@@ -27,7 +27,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "dev" / "open-plugin-skill-sync-pr.sh"
 BRANCH = "auto/plugin-skill-sync"
 
-pytestmark = pytest.mark.skipif(shutil.which("rsync") is None, reason="needs rsync")
+pytestmark = pytest.mark.skipif(
+    shutil.which("rsync") is None or shutil.which("jq") is None, reason="needs rsync and jq"
+)
 
 # The stand-in mirrors skills/ the way the real sync script does. --checksum
 # matters as much here as there: both worktrees are created in the same second,
@@ -95,13 +97,17 @@ class Fixture:
 
         self.stub = root / "gh-stub"
         self.stub.mkdir()
-        for name in ("open_pr", "other_pr", "calls", "on_search"):
-            (self.stub / name).write_text("")
+        # open_pr / other_pr hold the JSON `gh pr list --json` would return;
+        # the stub applies the caller's own -q filter to it with jq.
+        for name, text in (("open_pr", "[]"), ("other_pr", "[]"), ("calls", ""), ("on_search", "")):
+            (self.stub / name).write_text(text)
         _write_exec(self.stub / "gh", f"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >>"{self.stub}/calls"
+query=""; prev=""
+for a in "$@"; do [ "$prev" = "-q" ] && query="$a"; prev="$a"; done
 case "$*" in
-  "pr list"*"--head"*) cat "{self.stub}/open_pr" ;;
-  "pr list"*"--search"*) bash "{self.stub}/on_search"; cat "{self.stub}/other_pr" ;;
+  "pr list"*"--head"*) jq -r "$query" "{self.stub}/open_pr" ;;
+  "pr list"*"--search"*) bash "{self.stub}/on_search"; jq -r "$query" "{self.stub}/other_pr" ;;
   "pr create"*) echo "https://example.invalid/pull/7" ;;
   "pr edit"*) if [ -n "${{EDIT_FAIL:-}}" ]; then echo "edit refused" >&2; exit 1; fi ;;
 esac
@@ -187,7 +193,7 @@ def test_behind_commits_one_branch_and_opens_one_pr(fx):
 def test_later_run_updates_the_open_pr_instead_of_opening_another(fx):
     fx.bump("alpha v2")
     assert fx.run().returncode == 0
-    (fx.stub / "open_pr").write_text("7\n")
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
     fx.bump("alpha v3")
     proc = fx.run()
     assert proc.returncode == 0, _out(proc)
@@ -204,7 +210,7 @@ def test_later_run_updates_the_open_pr_instead_of_opening_another(fx):
 def test_failed_pr_update_is_reported_not_claimed(fx):
     fx.bump("alpha v2")
     assert fx.run().returncode == 0
-    (fx.stub / "open_pr").write_text("7\n")
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
     fx.bump("alpha v3")
     proc = fx.run(EDIT_FAIL="1")
     assert proc.returncode == 1, _out(proc)
@@ -225,13 +231,40 @@ def test_default_branch_is_asked_of_the_remote(tmp_path):
 
 
 def test_hand_opened_sync_pr_makes_it_step_aside(fx):
-    (fx.stub / "other_pr").write_text("151\n")
+    (fx.stub / "other_pr").write_text(
+        '[{"number": 151, "headRefName": "claude/hand-sync"}]'
+    )
     fx.bump("alpha v2")
     proc = fx.run()
     assert proc.returncode == 2, _out(proc)
     assert "#151" in _out(proc)
     assert fx.remote_branch() == ""
     assert fx.leftovers() == []
+
+
+def test_own_automation_pr_in_the_title_search_is_not_another_sync(fx):
+    # The title search also finds this automation's own PR; the filter must
+    # exclude it, or every run after the first would step aside from itself.
+    (fx.stub / "other_pr").write_text(
+        f'[{{"number": 9, "headRefName": "{BRANCH}"}}]'
+    )
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert len(fx.calls("pr create")) == 1
+
+
+def test_branch_checked_out_elsewhere_does_not_block(fx):
+    # An operator may have the automation branch checked out in the plugin
+    # checkout itself; the run commits detached and pushes by refspec.
+    fx.bump("alpha v2")
+    assert fx.run().returncode == 0
+    _git(fx.plugin, "fetch", "-q", "origin", f"{BRANCH}:{BRANCH}")
+    _git(fx.plugin, "checkout", "-q", BRANCH)
+    fx.bump("alpha v3")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v3"
 
 
 def test_branch_moved_mid_run_is_not_overwritten(fx):
