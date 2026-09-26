@@ -1731,7 +1731,10 @@ def _note_stale_digests(envelope: Dict[str, Any]) -> None:
 # its tier, the open-one route, and the include_details override disclosure.
 # A lean envelope carries no `normalized_parameters`, so `requested_tier` and
 # `details_omitted_by` are the only in-band notice that include_details=true
-# was not honoured; that is a disclosure, not coaching.
+# was not honoured; that is a disclosure, not coaching, so it never yields to
+# attribution. Over-budget truncation (_truncate_search_projection) still cuts
+# retrieval options to current_tier and open_one, as it did before; this
+# tuple does not protect the disclosure from that step.
 _RETRIEVAL_KEPT_FOR_ATTRIBUTION = (
     "current_tier",
     "open_one",

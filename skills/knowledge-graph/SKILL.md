@@ -234,8 +234,10 @@ Search flags an open entry whose latest write (`updated_at` when present, not
 merely the original creation time) is more than 60 days old, so a genuinely
 maintained finding does not age as if untouched. The result carries
 `staleness_warning` (a sentence) and `last_activity_days` (days since that
-write, the name `knowledge(action="audit")` uses for the same quantity; the
-audit's `age_days` counts from creation). For a durable entry, one the
+write, in UTC; `knowledge(action="audit")` uses the same name for days since
+its own last-activity time, computed in server-local time, so the two can
+differ by a day near a day boundary; the audit's `age_days` counts from
+creation). For a durable entry, one the
 lifecycle keeps permanently (the permanent types and tags above) or an
 `insight`, the sentence gives the age without calling the entry "still open",
 since open is its resting status. It still says to verify,
