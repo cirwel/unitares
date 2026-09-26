@@ -1377,6 +1377,7 @@ def cmd_review(args) -> int:
                     rounds = pr_rounds(repo, pr, key, head, comments)
                     if rounds.capped():
                         return capped_review(args, repo, pr, key, head, rounds)
+                args.prior_round = prior_open_round(comments, key)
                 args.failed_providers = {p for p in KNOWN_PROVIDERS
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
@@ -1418,6 +1419,97 @@ def cmd_review(args) -> int:
 
 def pr_rounds(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> CodexRounds:
     return read_native(repo, pr, key, head, comments).rounds or CodexRounds()
+
+
+#: Appended to a review prompt when the previous completed round, on an
+#: earlier diff, raised findings the author answered with a push instead of
+#: dispositions. Those findings otherwise end with no recorded outcome: the
+#: next round reviews the new diff and nothing says whether they were fixed.
+#: Measured over 30 merged PRs on 2026-09-26: 88% of findings ended that way,
+#: so the written dispositions (mostly rebuttals) were a biased remainder.
+PRIOR_FINDINGS_PROMPT = """
+
+===== EARLIER FINDINGS =====
+An earlier review round on this pull request (diff key {key12}, reviewer
+{reviewer}) raised {n} finding(s), quoted below. The author pushed changes
+instead of answering them in writing, so nothing records whether they were
+fixed. Review the current change on its own first. Then check each earlier
+finding against the current code and report it in this block, placed
+immediately before the VERDICT line:
+
+PRIOR-FINDINGS:
+1. RESOLVED|STILL-PRESENT|UNCLEAR: <one line of evidence, citing file:line>
+END-PRIOR-FINDINGS
+
+Report every earlier finding, numbered as it was. Say UNCLEAR rather than
+guessing. A finding that is STILL-PRESENT must also be one of your own
+findings, counted in the VERDICT.
+
+<earlier-review>
+{text}
+</earlier-review>
+"""
+PRIOR_TEXT_LIMIT = 12000  # characters of the earlier review quoted into the prompt
+PRIOR_MARKER = "unitares-review-prior v1"
+PRIOR_STATES = ("RESOLVED", "STILL-PRESENT", "UNCLEAR")
+_PRIOR_BLOCK_RE = re.compile(r"^\s*\**PRIOR-FINDINGS:?\**\s*$(?P<body>.*?)^\s*\**END-PRIOR-FINDINGS\**\s*$",
+                             re.M | re.S)
+_PRIOR_ITEM_RE = re.compile(r"^\s*#?(\d+)[.):]\s*\**(RESOLVED|STILL-PRESENT|UNCLEAR)\b", re.M)
+
+
+def prior_open_round(comments: list[dict], key: str) -> Record | None:
+    """The latest completed round on an EARLIER diff, when it left findings
+    that were never answered in writing. None when that round was clean, was
+    disposed, or there is none. Comments arrive oldest first."""
+    latest = None
+    for c in comments:
+        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            continue
+        body = c.get("body", "")
+        rec = parse_record(body)
+        if not rec or rec.key == key or rec.verdict not in {"CLEAN", "FINDINGS"}:
+            continue
+        if rec.disposed and not dispositions_complete(body, rec.findings):
+            rec.disposed = False
+        rec.url, rec.text, rec.created_at = c.get("html_url", ""), body, c.get("created_at", "")
+        latest = rec
+    if latest and latest.verdict == "FINDINGS" and not latest.disposed and latest.findings > 0:
+        return latest
+    return None
+
+
+def prior_findings_prompt(prior: Record) -> str:
+    text = RECORD_RE.sub("", prior.text or "").strip()
+    if len(text) > PRIOR_TEXT_LIMIT:
+        text = text[:PRIOR_TEXT_LIMIT] + "\n… (truncated; the full review is at " + prior.url + ")"
+    return PRIOR_FINDINGS_PROMPT.format(key12=prior.key[:12], reviewer=prior.reviewer,
+                                        n=prior.findings, text=text)
+
+
+def parse_prior_findings(text: str, n: int) -> dict[int, str]:
+    """Finding number -> state, from the reviewer's PRIOR-FINDINGS block.
+
+    Only numbers 1..n inside the block count; the first answer for a number
+    wins. A missing block or number is simply absent: unreported, not
+    resolved."""
+    m = None
+    for m in _PRIOR_BLOCK_RE.finditer(text or ""):
+        pass  # the last block is the answer; an earlier one may be quoted
+    if m is None:
+        return {}
+    states: dict[int, str] = {}
+    for item in _PRIOR_ITEM_RE.finditer(m.group("body")):
+        i = int(item.group(1))
+        if 1 <= i <= n and i not in states:
+            states[i] = item.group(2)
+    return states
+
+
+def render_prior_marker(prior: Record, states: dict[int, str]) -> str:
+    counts = {s: sum(1 for v in states.values() if v == s) for s in PRIOR_STATES}
+    return (f"<!-- {PRIOR_MARKER} of={prior.key} n={prior.findings} "
+            f"resolved={counts['RESOLVED']} present={counts['STILL-PRESENT']} "
+            f"unclear={counts['UNCLEAR']} unreported={prior.findings - len(states)} -->")
 
 
 VERIFY_PROMPT = """\
@@ -1607,6 +1699,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         # It cannot see the checkout; the material is written into its workspace.
         prompt = antigravity_prompt(args.base, git("rev-parse", "--short", "HEAD").strip())
         materials = antigravity_materials(diff_path.read_text(errors="replace"), args.base)
+    prior = getattr(args, "prior_round", None)
+    if prior is not None:
+        prompt += prior_findings_prompt(prior)
     text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials)
     minutes = (time.monotonic() - t0) / 60
     parsed = parse_verdict(text) if note == "exit 0" else None
@@ -1621,6 +1716,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
+    if prior is not None and parsed is not None:
+        # Metadata only: the status is still decided by the VERDICT alone.
+        text = render_prior_marker(prior, parse_prior_findings(text, prior.findings)) + "\n" + text
     post_record(pr, rec, heading, text)
     print(f"[review] full result: {out_dir / 'review.txt'}")
     if parsed is not None:

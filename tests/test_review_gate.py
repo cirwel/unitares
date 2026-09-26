@@ -2009,3 +2009,103 @@ def test_the_denied_resume_prompt_fits_a_denied_file_read():
     text = rg.AGY_RESUME_PROMPTS["denied"]
     assert "inside your working directory" in text and "Continue the review" in text
     assert "diff.patch" in text and "files/" in text
+
+
+# --- earlier findings answered by a push ------------------------------------
+
+_K1, _K2, _K3 = "1" * 64, "2" * 64, "3" * 64
+
+
+def test_prior_open_round_is_the_last_undisposed_findings_round_on_an_earlier_diff():
+    comments = [
+        _comment(rg.Record(_K1, "FINDINGS", 2, False, "codex"), url="r1", text="1. a\n2. b"),
+        _comment(rg.Record(_K2, "FAILED", 0, False, "codex"), url="r2", text="crashed"),
+        _comment(rg.Record(_K3, "FINDINGS", 1, False, "claude"), url="current", text="1. c"),
+    ]
+    prior = rg.prior_open_round(comments, _K3)
+    assert (prior.key, prior.findings, prior.url) == (_K1, 2, "r1")
+
+
+@pytest.mark.parametrize("later", [
+    # a clean round on a later diff already superseded it
+    lambda: _comment(rg.Record(_K2, "CLEAN", 0, False, "codex"), url="r2", text="ok"),
+    # the author answered it in writing
+    lambda: _comment(rg.Record(_K1, "FINDINGS", 2, True, "codex"), url="d1",
+                     text="1. fixed in abc\n2. rebutted: no"),
+])
+def test_prior_open_round_is_none_once_answered(later):
+    comments = [_comment(rg.Record(_K1, "FINDINGS", 2, False, "codex"), url="r1"), later()]
+    assert rg.prior_open_round(comments, _K3) is None
+
+
+def test_prior_open_round_ignores_untrusted_and_the_current_diff():
+    comments = [
+        _comment(rg.Record(_K1, "FINDINGS", 2, False, "codex"), association="NONE"),
+        _comment(rg.Record(_K3, "FINDINGS", 1, False, "codex")),
+    ]
+    assert rg.prior_open_round(comments, _K3) is None
+
+
+def test_parse_prior_findings_reads_the_last_block_within_range():
+    text = (
+        "quoting the prompt: PRIOR-FINDINGS:\n1. RESOLVED: example\nEND-PRIOR-FINDINGS\n"
+        "my findings...\n"
+        "**PRIOR-FINDINGS:**\n"
+        "1. STILL-PRESENT: a.py:3 still drops it\n"
+        "2) **RESOLVED**: guarded at b.py:9\n"
+        "2. UNCLEAR: duplicate number, first answer wins\n"
+        "7. RESOLVED: out of range\n"
+        "**END-PRIOR-FINDINGS**\n"
+        "VERDICT: FINDINGS(1)"
+    )
+    assert rg.parse_prior_findings(text, 3) == {1: "STILL-PRESENT", 2: "RESOLVED"}
+    assert rg.parse_prior_findings("VERDICT: CLEAN", 2) == {}
+
+
+def test_prior_marker_is_not_a_review_record():
+    prior = rg.Record(_K1, "FINDINGS", 3, False, "codex")
+    marker = rg.render_prior_marker(prior, {1: "RESOLVED", 3: "UNCLEAR"})
+    assert f"of={_K1} n=3 resolved=1 present=0 unclear=1 unreported=1" in marker
+    assert rg.parse_record(marker) is None
+
+
+def _locked_review(monkeypatch, tmp_path, output, prior):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    prompts, records = [], []
+    monkeypatch.setattr(rg, "run_reviewer", lambda reviewer, prompt, *a: prompts.append(prompt) or (output, "exit 0"))
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    args = SimpleNamespace(base="master", budget=10, prior_round=prior)
+    return rg._review_locked(args, 1, _K3, "claude"), prompts, records
+
+
+def test_an_earlier_open_round_is_checked_and_recorded_without_changing_the_status(tmp_path, monkeypatch):
+    earlier = _comment(rg.Record(_K1, "FINDINGS", 2, False, "codex"), url="r1",
+                       text="1. [P2] a.py:3 drops the result\n2. [P3] stale docstring")
+    prior = rg.prior_open_round([earlier], _K3)
+    output = ("PRIOR-FINDINGS:\n1. RESOLVED: a.py:3 now returns it\n2. UNCLEAR: docstring not in diff\n"
+              "END-PRIOR-FINDINGS\nVERDICT: CLEAN")
+    result, prompts, records = _locked_review(monkeypatch, tmp_path, output, prior)
+    assert result == 0, "the earlier-findings block never decides the status"
+    assert "a.py:3 drops the result" in prompts[0] and "PRIOR-FINDINGS:" in prompts[0]
+    assert rg.render_marker(prior) not in prompts[0], "the quoted review carries no record marker"
+    rec, text = records[0][1], records[0][3]
+    assert rec.verdict == "CLEAN"
+    assert text.startswith(f"<!-- {rg.PRIOR_MARKER} of={_K1} n=2 resolved=1 present=0 unclear=1 unreported=0 -->")
+    assert rg.parse_verdict(text) == ("CLEAN", 0)
+
+
+def test_without_an_earlier_open_round_the_prompt_and_record_are_unchanged(tmp_path, monkeypatch):
+    result, prompts, records = _locked_review(monkeypatch, tmp_path, "VERDICT: CLEAN", None)
+    assert result == 0
+    assert "EARLIER FINDINGS" not in prompts[0]
+    assert rg.PRIOR_MARKER not in records[0][3]
+
+
+def test_a_failed_run_posts_no_prior_marker(tmp_path, monkeypatch):
+    prior = rg.Record(_K1, "FINDINGS", 1, False, "codex")
+    prior.text, prior.url = "1. x", "r1"
+    result, prompts, records = _locked_review(monkeypatch, tmp_path, "no verdict here", prior)
+    assert result == rg.UNREVIEWED
+    assert rg.PRIOR_MARKER not in records[0][3]

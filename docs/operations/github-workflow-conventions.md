@@ -275,6 +275,28 @@ this operator's machine, run once:
 git config review.verifier ollama:gemma4:latest
 ```
 
+#### Earlier findings answered by a push
+
+When a local review runs on a new diff and the previous completed round, on
+an earlier diff, left findings that were never disposed, `review.sh` quotes
+that round into the prompt. The reviewer reviews the change on its own first,
+then reports each earlier finding as `RESOLVED`, `STILL-PRESENT` or `UNCLEAR`
+in a `PRIOR-FINDINGS:` … `END-PRIOR-FINDINGS` block before the VERDICT line.
+The posted record carries the counts in a hidden
+`<!-- unitares-review-prior v1 of=<earlier diff key> … -->` line.
+
+This is a record, not a gate: the review's status still comes from its
+VERDICT alone, and a `STILL-PRESENT` finding counts only because the reviewer
+must also list it as one of its own. It exists because a push leaves no
+outcome behind. Over 30 merged PRs checked on 2026-09-26, 88% of findings
+ended that way, so the written dispositions, mostly rebuttals, were a biased
+remainder. The judgement is the reviewer's, a different model from the author
+when the providers allow, so it is not the author's self-report. Quoting
+earlier findings can also steer the new review toward them; the prompt asks
+for the independent review first, but that ordering is an instruction, not a
+guarantee. Native Codex rounds and the capped fix-verification path are
+unchanged.
+
 #### Review provider availability
 
 `scripts/dev/review_providers.json` is the one repo-wide switch for reviewers
