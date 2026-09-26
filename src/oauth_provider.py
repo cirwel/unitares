@@ -748,7 +748,9 @@ def _strip_queries(text):
     if not text:
         return text
     text = re.sub(r"//[^/\s'\"@]*@", "//", str(text))
-    return re.sub(r"\?[^\s'\"]*", "?...", text)
+    # Everything from "?" to whitespace: a custom-scheme redirect URI need
+    # not percent-encode quotes, so stopping at a quote would leak the rest.
+    return re.sub(r"\?\S*", "?...", text)
 
 
 def _url_for_log(url: str | None, *, host_only: bool = False) -> str:
@@ -756,6 +758,9 @@ def _url_for_log(url: str | None, *, host_only: bool = False) -> str:
     query or fragment. Unparseable input is named as such, never raised."""
     if not url:
         return "-"
+    # Userinfo before any "/", "?" or "#", with or without a scheme:
+    # urlparse reads "user:pass@host" as scheme "user", keeping the password.
+    url = re.sub(r"^([A-Za-z][\w+.-]*://)?[^/?#@]*@", r"\1", url)
     try:
         parts = urlparse(url)
         host = parts.netloc.rsplit("@", 1)[-1]

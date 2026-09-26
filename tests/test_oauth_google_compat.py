@@ -431,7 +431,8 @@ async def test_a_disconnect_mid_body_passes_through_unchanged():
 @pytest.mark.parametrize("grant", ["authorization_code", "refresh_token"])
 def test_an_oversized_body_gets_the_sdks_answer_not_the_loggers(grant):
     """The logger reads a prefix only; the SDK still answers (its limit is
-    4 MiB), so a 100 KB body is not turned into a 413."""
+    4 MiB via RequestBodyLimitMiddleware in the installed mcp 2.1.1), so a
+    100 KB body is not turned into a 413."""
     plain = TestClient(Starlette(routes=create_auth_routes(
         GovernanceOAuthProvider(static_clients=[build_static_client(CID, SECRET, [REDIRECT])]),
         issuer_url=AnyHttpUrl("https://gov.example.org"),
@@ -681,3 +682,21 @@ def test_a_raw_semicolon_body_is_unparsed_not_misattributed(caplog):
                 if r.name == "src.oauth_provider" and r.getMessage().startswith("[OAUTH]"))
     assert "unparsed (raw ';' in body)" in line
     assert "someone-else" not in line and SECRET not in line
+
+
+@pytest.mark.parametrize("raw,leak", [
+    ("Redirect URI 'myapp://cb?x=\'QSECRET\'' not registered", "QSECRET"),
+    ('see "https://e.x/cb?a=1&t=QSECRET2"', "QSECRET2"),
+])
+def test_query_redaction_does_not_stop_at_a_quote(raw, leak):
+    assert leak not in _op._strip_queries(raw)
+
+
+@pytest.mark.parametrize("url", [
+    "alice:hunter2@evil.example/mcp",
+    "https://alice:hunter2@evil.example/mcp?t=x",
+    "//alice:hunter2@evil.example/mcp",
+])
+def test_userinfo_is_stripped_with_or_without_a_scheme(url):
+    assert "hunter2" not in _op._url_for_log(url)
+    assert "evil.example" in _op._url_for_log(url) or _op._url_for_log(url) == "unparseable"
