@@ -662,3 +662,72 @@ async def test_answer_region_signal_is_codex_only(monkeypatch):
     ))
 
     assert "adapter_answer_region_located" not in outcome.failure.details
+
+
+@pytest.mark.asyncio
+async def test_delegate_inference_carries_model_reporting_status_and_reroutes(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _codex_host())
+    monkeypatch.setattr(di, "get_context_resolved_agent_id", lambda: "uuid-requester")
+
+    async def fake_invoke(host_id, prompt, **kwargs):
+        return {
+            "ok": True,
+            "host_id": host_id,
+            "text": "answer",
+            "exit_status": 0,
+            "provenance": {
+                "model_used": None,
+                "model_reporting_status": "unavailable_from_exec_jsonl",
+                "model_reroutes": [
+                    {"threadId": "t1", "turnId": "u1", "fromModel": "gpt-a", "toModel": "gpt-b", "reason": "capacity"},
+                ],
+                "tokens_used": 3,
+                "terminal_answer": {
+                    "schema": "unitares.terminal_answer.v1",
+                    "status": "complete",
+                },
+            },
+        }
+
+    async def fake_track(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(di, "invoke_host_adapter", fake_invoke)
+    monkeypatch.setattr(di, "_track_energy", fake_track)
+
+    parsed = _payload(await di.handle_delegate_inference({
+        "prompt": "question",
+        "host_id": "codex:host-adapter",
+    }))
+
+    inference = parsed["inference"]
+    assert inference["model_used"] is None
+    assert inference["model_reporting_status"] == "unavailable_from_exec_jsonl"
+    assert inference["model_reroutes"][0]["toModel"] == "gpt-b"
+
+
+@pytest.mark.asyncio
+async def test_failed_delegation_names_its_privacy_class(monkeypatch):
+    monkeypatch.setattr(di, "get_inference_host", lambda _host_id: _claude_host())
+
+    async def fake_invoke(*_args, **_kwargs):
+        return {
+            "ok": False,
+            "status": "still_running",
+            "execution_id": "orch-1",
+            "provenance": {},
+        }
+
+    monkeypatch.setattr(di, "invoke_host_adapter", fake_invoke)
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="hard problem",
+        requesting_agent_uuid="uuid-requester",
+        timeout_s=5,
+    ))
+
+    assert outcome.failure is not None
+    details = outcome.failure.details
+    assert details["host_id"] == "claude:host-adapter"
+    assert details["provider_kind"] == "claude_host_adapter"
+    assert details["privacy_class"] == "operator_authorized_external"
+

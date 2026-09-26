@@ -21,13 +21,26 @@ Expose two primary verbs for model-mediated help:
 > `delegate_inference`). Second, every consultation that reaches the router
 > now also writes an `audit.events` row, `event_type='consultation'`
 > (`unitares.consultation_record.v1`): requester, policy, outcome, the route
-> whenever a well-formed inference result came back (an upstream failure, or a
-> result without valid provenance, records no route block: a failed thorough
-> call still names its target host, a failed standard call does not say
-> where it was tried),
-> and HMAC hashes of the brief, prompt and advice under a key returned only
-> to the caller. The advice stays advisory and off the governed record; the
-> fact that it was sought is on it.
+> whenever a well-formed inference result came back, and HMAC hashes of the
+> brief, prompt and advice under a key returned only to the caller. A failed
+> upstream attempt records no route block, but when the brief was actually
+> sent its failure entry (`failure.upstream`, or `failure.primary` /
+> `failure.fallback` on a fallback path) carries a `route` naming the
+> registry host, provider kind and privacy class it went to
+> (under `privacy='cloud_allowed'` a thorough call also records its target
+> host; under `privacy='local'` none is contacted and none is named). The
+> advice stays advisory and off the governed record; the fact that it was
+> sought is on it.
+>
+> Retention: consultation rows live in `audit.events` partitions, dropped at
+> 180 days, while `audit.outcome_events` keeps 365. Nothing references a
+> `consultation_id` today; if an outcome, finding or review record starts to,
+> consultation rows need a store that lives at least as long as it.
+>
+> The synthetic Energy-accounting update is scheduled for removal, together
+> with a route-level record for `call_model` and `delegate_inference`, after
+> the pre-registered 2026-12-01 read, so that read's inputs do not change
+> mid-window.
 - `request_review` requests governed, on-record judgment with actual reviewer provenance.
 
 `call_model`, `delegate_inference`, and raw `dialectic` remain compatible route or

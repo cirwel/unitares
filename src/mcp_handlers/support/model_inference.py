@@ -697,6 +697,17 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             error_code = "INFERENCE_ERROR"
             recovery_hint = "Check provider configuration and model availability"
         
+        # Registry route facts for the attempt, so a failed call still says
+        # whether it was tried locally or off-box. Only for a resolved
+        # provider: an unresolved one names no route.
+        route_details: dict[str, Any] = {}
+        if provider in ("ollama", "hf"):
+            routed_host = host_for_routed_provider(provider)
+            route_details = {
+                "host_id": routed_host.get("host_id"),
+                "provider_kind": routed_host.get("provider_kind"),
+                "privacy_class": routed_host.get("privacy_class"),
+            }
         return InferenceOutcome.failed(
             f"Model inference failed: {error_msg}",
             code=error_code,
@@ -704,7 +715,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             details={
                 "model_requested": model,
                 "base_url": base_url,
-                "task_type": task_type
+                "task_type": task_type,
+                **route_details,
             },
             recovery={
                 "action": recovery_hint,

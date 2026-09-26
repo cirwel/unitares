@@ -1387,3 +1387,122 @@ async def test_server_set_values_survive_a_brief_that_mentions_them(monkeypatch,
     # privacy='local' never contacts a thorough host, so neither row names one.
     assert "thorough_host_id" not in degraded["request"]
     assert "thorough_host_id" not in refused["request"]
+
+
+@pytest.mark.asyncio
+async def test_record_carries_model_reporting_status_and_reroutes(monkeypatch, audit_sinks):
+    outcome = _completed(
+        route="agent_orchestrator",
+        host_id="codex:host-adapter",
+        privacy_class="operator_authorized_external",
+    )
+    outcome.inference["model_used"] = None
+    outcome.inference["model_reporting_status"] = "unavailable_from_exec_jsonl"
+    outcome.inference["model_reroutes"] = [
+        {"threadId": "t1", "fromModel": "gpt-a", "toModel": "gpt-b", "reason": "capacity"},
+    ]
+    monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(return_value=outcome))
+    monkeypatch.setattr(co, "_thorough_host_for_caller", lambda: "codex:host-adapter")
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+        "response_mode": "full",
+    }))
+
+    assert parsed["diagnostics"]["model_reporting_status"] == "unavailable_from_exec_jsonl"
+    assert parsed["diagnostics"]["model_reroutes"] == [
+        {"from_model": "gpt-a", "to_model": "gpt-b", "reroute_reason": "capacity"},
+    ]
+    _, pg = await audit_sinks()
+    route = pg[0]["details"]["route"]
+    assert route["model_reporting_status"] == "unavailable_from_exec_jsonl"
+    assert route["model_reroutes"] == [
+        {"from_model": "gpt-a", "to_model": "gpt-b", "reroute_reason": "capacity"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_failed_attempt_route_reaches_the_caller_and_the_record(monkeypatch, audit_sinks):
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_failure(
+            "TIMEOUT",
+            details={
+                "host_id": "hf:router",
+                "provider_kind": "hf",
+                "privacy_class": "external_cloud",
+                "base_url": "https://router.huggingface.co/v1",
+            },
+        )),
+    )
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "Explain",
+        "privacy": "cloud_allowed",
+    }))
+
+    expected = {
+        "host_id": "hf:router",
+        "provider_kind": "hf",
+        "privacy_class": "external_cloud",
+    }
+    assert parsed["failure"]["upstream"]["route"] == expected
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["failure"]["upstream"]["route"] == expected
+    assert "router.huggingface.co" not in json.dumps(pg[0])
+
+
+@pytest.mark.asyncio
+async def test_backend_reroute_reason_prose_is_hashed(monkeypatch, audit_sinks):
+    outcome = _completed(
+        route="agent_orchestrator",
+        host_id="codex:host-adapter",
+        privacy_class="operator_authorized_external",
+    )
+    outcome.inference["model_reroutes"] = [
+        {"fromModel": "gpt-a", "toModel": "gpt-b", "reason": "high risk activity detected in your prompt"},
+    ]
+    monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(return_value=outcome))
+    monkeypatch.setattr(co, "_thorough_host_for_caller", lambda: "codex:host-adapter")
+
+    await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+    })
+
+    _, pg = await audit_sinks()
+    assert "high risk activity" not in json.dumps(pg[0])
+    reroute = pg[0]["details"]["route"]["model_reroutes"][0]
+    assert "unrecorded_text" in reroute["reroute_reason"]
+
+
+@pytest.mark.asyncio
+async def test_failure_before_dispatch_names_no_route(monkeypatch, audit_sinks):
+    monkeypatch.setattr(
+        co,
+        "run_delegated_inference",
+        AsyncMock(return_value=_failure(
+            "INFERENCE_HOST_UNAVAILABLE",
+            details={
+                "host_id": "claude:host-adapter",
+                "privacy_class": "operator_authorized_external",
+                "dispatch_phase": "preflight",
+            },
+        )),
+    )
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+    }))
+
+    assert "route" not in parsed["failure"]["upstream"]
+    _, pg = await audit_sinks()
+    assert "route" not in pg[0]["details"]["failure"]["upstream"]
+
