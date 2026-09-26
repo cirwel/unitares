@@ -96,7 +96,12 @@ async def test_default_read_says_each_fact_once(check_ins):
     assert state["coherence"]["role"] == "ode_control_feedback"
     if check_ins:
         assert "not health-rated" in state["coherence"]["status"]
-    assert "legacy_diagnostics" not in env
+        assert "legacy_diagnostics" not in env
+    else:
+        # Before the first check-in the badge reads "pending", so the block
+        # that says "not a health score" stays.
+        assert "not health-rated" not in state["coherence"]["status"]
+        assert env["legacy_diagnostics"]["health_evidence"] is False
 
     # One tier ladder, not two.
     assert ("response_options" in env) + ("raw_governance_hint" in env) == 1
@@ -346,9 +351,10 @@ _PAD = {"padding": "x" * 4_500}
         # false outside full mode, so it is a lever only in full.
         ("search_shared_memory", {}, {}, "lean", True),
         ("search_shared_memory", {"response_mode": "compact"}, {}, "compact", True),
-        ("search_shared_memory", {"response_mode": "full"}, {}, "full", True),
-        ("search_shared_memory", {"response_mode": "full", "include_details": True}, {}, "full", True),
-        ("search_shared_memory", {"response_mode": "full", "include_details": False}, {}, "full", True),
+        ("search_shared_memory", {"response_mode": "full"}, {"discoveries": [{"id": "a"}]}, "full", True),
+        # Details inline (asked for, or auto-included for 1-3 results).
+        ("search_shared_memory", {"response_mode": "full"}, {"discoveries": [{"id": "a", "details": "x"}]}, "full", True),
+        ("search_shared_memory", {"response_mode": "full", "include_details": True}, {"discoveries": [{"id": "a", "details": "x"}]}, "full", True),
     ],
 )
 def test_reduce_with_never_names_the_mode_in_effect(
@@ -362,10 +368,9 @@ def test_reduce_with_never_names_the_mode_in_effect(
         assert not _names_mode(reduce_with, current), (current, reduce_with)
     if friendly_name == "search_shared_memory":
         assert "knowledge(action='details'" in reduce_with
-        # Named only in full mode, and there unless the caller explicitly
-        # turned details off (omitted auto-includes them for 1-3 results).
-        can_be_on = current == "full" and arguments.get("include_details") is not False
-        assert ("include_details=false" in reduce_with) is can_be_on, reduce_with
+        # Named exactly when details are inline in this response.
+        inline = any(d.get("details") for d in payload.get("discoveries", []))
+        assert ("include_details=false" in reduce_with) is inline, reduce_with
 
 
 @pytest.mark.parametrize(

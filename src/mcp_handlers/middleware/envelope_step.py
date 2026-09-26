@@ -1871,23 +1871,24 @@ def _attach_response_size(
         if friendly_name == "search_shared_memory":
             # Name only levers that shrink this response. Outside full mode
             # normalize_compact_search_details already forces
-            # include_details=false, so it is named only in full, and there
-            # unless the caller explicitly turned details off: an omitted
-            # include_details auto-includes them for 1-3 results
-            # (_resolve_detail_inclusion).
+            # include_details=false, so it can matter only in full.
             open_one = (
                 "open one discovery with knowledge(action='details', "
                 "discovery_id='...')"
             )
             if current == "full":
-                requested = (arguments or {}).get("include_details")
-                details_off = requested is not None and not _as_bool(
-                    requested, default=False
+                # Name include_details=false only when details are actually
+                # inline in this response, whether the caller asked for them
+                # or the handler auto-included them for 1-3 results
+                # (_resolve_detail_inclusion).
+                discoveries = (payload or {}).get("discoveries") or []
+                details_inline = any(
+                    isinstance(d, dict) and d.get("details") for d in discoveries
                 )
                 levers = (
-                    "response_mode='lean' or a lower limit"
-                    if details_off
-                    else "include_details=false, response_mode='lean' or a lower limit"
+                    "include_details=false, response_mode='lean' or a lower limit"
+                    if details_inline
+                    else "response_mode='lean' or a lower limit"
                 )
                 reduce_with = f"Use {levers}; {open_one}."
             elif current == "compact":
@@ -2431,9 +2432,12 @@ def build_experience_envelope(
             and coherence_badge.get("source") == legacy.get("source")
             and coherence_badge.get("role") == legacy.get("role")
             and coherence_badge.get("value") == legacy.get("coherence")
+            and "not health-rated" in str(coherence_badge.get("status") or "")
         ):
             # The inline badge already says this reading is legacy control
-            # feedback, not a health rating.
+            # feedback, not a health rating. Before the first check-in its
+            # status reads "pending" instead, so legacy_diagnostics stays
+            # there and carries the disclosure.
             legacy = None
 
     elif canonical_name == "knowledge" and friendly_name in {
