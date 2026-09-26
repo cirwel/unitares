@@ -1852,8 +1852,10 @@ def _restore_digest_attribution(
     has dropped it `expand_with` is ~65), so withheld attribution there is
     always marked; the marker-free restore is the fallback for an envelope
     with nothing optional left. Last, each piece that gave way comes back,
-    most useful first, if it still fits beside the attribution, so coaching
-    loses only the room attribution actually took. The room left by then is
+    most useful first, if the whole piece still fits beside the attribution.
+    Pieces move whole, so a small attribution need can still cost a whole
+    piece (the ~190-byte ladder for a ~20-byte label); what changed is that
+    coaching yields piece by piece, not all at once. The room left by then is
     smaller than any withheld attribution needed (each was tried with at
     least that much free), so nothing that comes back displaces one."""
     suggestions = envelope.get("memory_suggestions")
