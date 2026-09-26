@@ -504,14 +504,19 @@ FOREIGN_DESTINATION_SOURCES = frozenset({"pinned_onboard_session"})
 # processes of one client present the same value. Such a read stays unbound
 # instead of serving another process's state.
 #
-# Both read gates judge a header through this one predicate: the /mcp/
-# short-circuit (middleware/identity_step.py) and the REST prebind
-# (http_routes/access.py). They drifted before it existed: REST accepted
-# any caller-asserted derivation, X-Client-Id included, while /mcp/ accepted
-# only X-Session-ID. Argument-level proof (a client_session_id the caller sent,
-# a verified continuity_token) is judged by each gate on its own, because
-# only the transport knows whether an id in the arguments was sent or put
-# there.
+# Both read gates judge a session header through this one predicate, applied
+# to the source that produced the session key: the /mcp/ short-circuit
+# (middleware/identity_step.py) and the REST prebind (http_routes/access.py).
+# They drifted before it existed: REST accepted any caller-asserted
+# derivation, X-Client-Id included, while /mcp/ accepted only X-Session-ID.
+# The predicate covers session headers only. Argument-level proof is judged
+# by each gate on its own, because only the transport knows whether an id in
+# the arguments was sent or put there, and the two gates do not count the
+# same arguments: both count a client_session_id the caller sent and a
+# verified continuity_token, and /mcp/ also counts an agent_uuid argument and
+# a UUID X-Agent-Id header, which REST does not. The derivation ignores those
+# two, so such a read resolves on the transport's own signals (the onboard
+# pin, for example) and is server-inferred.
 READ_PROOF_TRANSPORT_SOURCES = frozenset({"x_session_id"})
 
 

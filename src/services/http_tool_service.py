@@ -310,27 +310,43 @@ def _strict_identity_refusal_or_none(
         "typed refusal (no auto-mint)",
         tool_name,
     )
-    # Same recovery as the MCP middleware's session_resolve_miss refusal,
-    # keyed on the same fact: did the caller itself send a client_session_id?
-    # On REST every call carries one, so an id the transport put there (from
-    # the fingerprint, a pin, or a header it derived) does not count.
+    # The recovery depends on why nothing bound, and the prebind recorded the
+    # resolver's result (access._record_unbound_resolution). The builder is the
+    # one the MCP middleware uses for the same result, so a session miss, a
+    # hijack-guard rejection, a substrate resident over HTTP and a server-side
+    # failure each get the same recovery on both transports. A session miss's
+    # recovery keys on whether the caller itself sent a client_session_id. On
+    # REST every call carries one, so an id the transport put there (from the
+    # fingerprint, a pin, or a header it derived) does not count.
     from src.mcp_handlers.context import (
         get_csid_injected_source,
         get_csid_transport_injected,
+        get_http_prebind_resolution,
     )
-    from src.mcp_handlers.identity_bootstrap import session_miss_refusal_options
+    from src.mcp_handlers.identity_bootstrap import unbound_call_refusal
 
-    caller_sent_session_id = bool(
-        isinstance(arguments, dict)
-        and arguments.get("client_session_id")
-        and not get_csid_transport_injected()
-        and get_csid_injected_source() is None
+    resolution = get_http_prebind_resolution()
+    if resolution is not None and "caller_sent_session_id" in resolution:
+        # Judged by the prebind before its derivation dropped an invalid id.
+        caller_sent_session_id = bool(resolution["caller_sent_session_id"])
+    else:
+        caller_sent_session_id = bool(
+            isinstance(arguments, dict)
+            and arguments.get("client_session_id")
+            and not get_csid_transport_injected()
+            and get_csid_injected_source() is None
+        )
+    options, surface_extra = unbound_call_refusal(
+        tool_name,
+        resolution,
+        caller_sent_session_id=caller_sent_session_id,
+        token_failed_verification=bool(
+            resolution and resolution.get("token_failed_verification")
+        ),
     )
     return strict_identity_refusal_payload(
         tool_name,
-        **session_miss_refusal_options(
-            tool_name, caller_sent_session_id=caller_sent_session_id
-        ),
+        **options,
         surface_context={
             "transport_surface": "rest_tool_call",
             "lifecycle_automation": "not_confirmed",
@@ -338,6 +354,7 @@ def _strict_identity_refusal_or_none(
                 "REST /v1/tools/call refusal; direct tool reachability does "
                 "not prove client lifecycle-hook automation."
             ),
+            **surface_extra,
         },
     )
 

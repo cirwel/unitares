@@ -393,8 +393,8 @@ def _create_session_wrapper(
         # Only direct wrapper calls (tests) reach an injection. The nested
         # use_tool path (tool_registration._invoke_mcp_nested_tool) enters the
         # target through get_tool_wrapper, not this wrapper, and injects
-        # nothing, so a target named through use_tool resolves exactly as it
-        # does named directly. Do not "repair" this by testing the value
+        # nothing, so a target named through use_tool resolves its session as
+        # it does named directly. Do not "repair" this by testing the value
         # instead of the key: that would copy an X-Session-ID header into
         # arguments flagged transport-injected, downgrading header callers'
         # writes to server_inferred, which STRICT_IDENTITY_REQUIRED refuses.

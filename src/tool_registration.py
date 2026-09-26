@@ -519,13 +519,14 @@ async def _invoke_mcp_nested_tool(
 ):
     """Re-enter the MCP target wrapper with direct-call session semantics.
 
-    A target named through ``use_tool`` must resolve exactly as the same
-    target named directly with the same credentials. On a direct /mcp/ call
-    nothing copies the transport session into ``client_session_id``: FastMCP
-    None-fills the declared argument before the typed wrapper runs, so the
-    wrapper's inject branch never fires (see the comment at its inject site),
-    and ``derive_session_key`` resolves an omitted id from the transport
-    signals themselves. This path therefore injects nothing either.
+    A target named through ``use_tool`` must resolve its session exactly as
+    the same target named directly with the same credentials. On a direct
+    /mcp/ call nothing copies the transport session into
+    ``client_session_id``: FastMCP None-fills the declared argument before
+    the typed wrapper runs, so the wrapper's inject branch never fires (see
+    the comment at its inject site), and ``derive_session_key`` resolves an
+    omitted id from the transport signals themselves. This path therefore
+    injects nothing either.
 
     It used to reproduce the typed wrapper's per-target injection for the
     session-injected set (``TOOLS_NEEDING_SESSION_INJECTION``), flagged as
@@ -538,6 +539,11 @@ async def _invoke_mcp_nested_tool(
     proof and the read resolved; and a fingerprint-only write was keyed on the
     raw fingerprint instead of reaching the step-7 pin. Pinned by
     tests/test_use_tool_session_parity.py.
+
+    Session parity is all this path gives. It does not apply the target's
+    FastMCP argument schema, so an argument that schema drops on a direct
+    call (``agent_id`` or ``agent_uuid`` on the metrics tools) still reaches
+    a nested target.
     """
     from src.mcp_handlers.context import (
         reset_csid_transport_injected,

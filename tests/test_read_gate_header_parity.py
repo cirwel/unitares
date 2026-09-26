@@ -13,6 +13,11 @@ REST the header arrives as a client_session_id that
 ``_inject_http_client_session`` derived from it, so the injection records which
 header produced it and the gate judges that header.
 
+The REST gate judges the source that produced the session key, not only who
+put an id in the arguments. A body client_session_id that is null, empty or
+invalid is left alone by the injection and skipped by the derivation, which
+then keys the call on the header itself; that header is judged the same way.
+
 Each case runs the real session-key derivation on both transports. Only
 storage (session lookup, onboard pin, Redis, operator lookup) is stubbed.
 """
@@ -62,6 +67,11 @@ def _storage_stubs(stack: ExitStack, resolve) -> None:
         "src.mcp_handlers.middleware.identity_step._anchor_resolved_identity",
     ))
     stack.enter_context(patch("src.db.get_db", MagicMock(return_value=db)))
+    # No sticky binding from another test: a REST body with a null or empty
+    # client_session_id is cacheable, and the consult runs before the gate.
+    stack.enter_context(patch(
+        "src.mcp_handlers.middleware.identity_step._transport_identity_cache", {},
+    ))
 
 
 def _request(headers: dict) -> Request:
@@ -108,7 +118,6 @@ async def _rest_read(tool_name: str, headers: dict, body: dict | None = None):
 async def _mcp_read(tool_name: str, signal_fields: dict, body: dict | None = None):
     from src.mcp_handlers.context import reset_session_signals, set_session_signals
     from src.mcp_handlers.middleware import DispatchContext, resolve_identity
-    from src.mcp_handlers.middleware import identity_step
 
     resolve = AsyncMock(return_value=_hit())
     signals = SessionSignals(
@@ -119,9 +128,9 @@ async def _mcp_read(tool_name: str, signal_fields: dict, body: dict | None = Non
     )
     token = set_session_signals(signals)
     try:
-        with ExitStack() as stack, patch.object(
-            identity_step, "_transport_identity_cache", {}
-        ):
+        with ExitStack() as stack:
+            # _storage_stubs also empties the sticky cache, inside the stack,
+            # so the patches unwind in order.
             _storage_stubs(stack, resolve)
             ctx = DispatchContext()
             await resolve_identity(tool_name, dict(body or {}), ctx)
@@ -171,6 +180,38 @@ async def test_a_client_session_id_the_caller_sent_still_proves_the_read(header)
 
     assert bound == AGENT_UUID
     assert resolve.await_args.args[0] == BODY_SESSION
+
+
+# A body client_session_id that names nothing usable. The REST injection
+# leaves a body that has the key alone, and the derivation skips a falsy or
+# invalid id and falls through to the header.
+BODY_IDS_NAMING_NOTHING = [
+    pytest.param(None, id="null"),
+    pytest.param("", id="empty"),
+    pytest.param("!!!", id="invalid"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_id", BODY_IDS_NAMING_NOTHING)
+@pytest.mark.parametrize("rest_headers, mcp_signals, proves", HEADER_CASES)
+async def test_a_body_id_naming_nothing_leaves_the_header_to_be_judged(
+    body_id, rest_headers, mcp_signals, proves
+):
+    body = {"client_session_id": body_id}
+    rest_bound, rest_context, rest_resolve = await _rest_read(
+        "check_working_state", rest_headers, body
+    )
+    mcp_bound, mcp_resolve = await _mcp_read("check_working_state", mcp_signals, body)
+
+    expected = AGENT_UUID if proves else None
+    assert rest_bound == expected
+    assert rest_context == expected
+    assert mcp_bound == expected
+    assert rest_resolve.await_count == mcp_resolve.await_count == (1 if proves else 0)
+    if proves:
+        # Keyed on the header itself, the key a header-only write uses.
+        assert rest_resolve.await_args.args[0] == HEADER
 
 
 def test_only_x_session_id_is_transport_read_proof():
@@ -257,6 +298,31 @@ async def test_nested_rest_read_with_its_own_session_is_judged_on_that_session()
 @pytest.mark.asyncio
 async def test_nested_rest_read_inherits_an_x_session_id_header_as_proof():
     bound, resolve = await _nested_rest_read({"X-Session-ID": HEADER}, {})
+
+    assert bound == AGENT_UUID
+    assert resolve.await_args.args[0] == HEADER
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_id", BODY_IDS_NAMING_NOTHING)
+@pytest.mark.parametrize("header", ["X-Client-Id", "X-MCP-Client-Id"])
+async def test_nested_rest_read_with_an_id_naming_nothing_does_not_read_on_a_client_header(
+    body_id, header
+):
+    bound, resolve = await _nested_rest_read(
+        {header: "client-1"}, {"client_session_id": body_id},
+    )
+
+    assert bound is None
+    assert resolve.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body_id", BODY_IDS_NAMING_NOTHING)
+async def test_nested_rest_read_with_an_id_naming_nothing_reads_on_x_session_id(body_id):
+    bound, resolve = await _nested_rest_read(
+        {"X-Session-ID": HEADER}, {"client_session_id": body_id},
+    )
 
     assert bound == AGENT_UUID
     assert resolve.await_args.args[0] == HEADER

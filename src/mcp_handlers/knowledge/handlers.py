@@ -904,6 +904,10 @@ def _check_display_name_required(agent_id: str, arguments: Dict[str, Any]) -> tu
             try:
                 meta.label = auto_name
                 meta.display_name = auto_name
+                # The server chose this name, so label_source reads "auto"
+                # while the label still equals it (services/identity_payloads
+                # .label_source_for). Recorded where the name is: in memory.
+                meta.auto_label = auto_name
             except Exception as e:
                 logger.debug(f"Could not save auto-generated display_name: {e}")
 
