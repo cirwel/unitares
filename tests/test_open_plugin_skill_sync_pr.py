@@ -35,7 +35,12 @@ pytestmark = pytest.mark.skipif(
 # matters as much here as there: both worktrees are created in the same second,
 # so size+mtime cannot see a change between two same-length file versions.
 STUB_SYNC = """#!/usr/bin/env bash
-[ -n "${FAIL_SYNC:-}" ] && { echo boom >&2; exit 3; }
+if [ -n "${FAIL_SYNC:-}" ]; then
+  # Like the real refusals: the REASON first, then several lines of hint.
+  echo "refusal reason: would revert alpha" >&2
+  for i in 1 2 3 4 5 6 7 8; do echo "hint line $i" >&2; done
+  exit 3
+fi
 SRC="$(cd "$(dirname "$0")/../.." && pwd)/skills"
 mkdir -p "$UNITARES_PLUGIN_REPO/skills"
 rsync -a --checksum --delete --exclude /SKILLS_MANIFEST.sha256 "$SRC/" "$UNITARES_PLUGIN_REPO/skills/"
@@ -119,6 +124,7 @@ case "$*" in
   "pr list"*"--search"*) bash "{self.stub}/on_search"; jq -r "$query" "{self.stub}/other_pr" ;;
   "pr create"*) echo "https://example.invalid/pull/7" ;;
   "pr edit"*) if [ -n "${{EDIT_FAIL:-}}" ]; then echo "edit refused" >&2; exit 1; fi ;;
+  "pr close"*) if [ -n "${{CLOSE_FAIL:-}}" ]; then echo "close refused" >&2; exit 1; fi ;;
 esac
 """)
         self.wt = root / "wt"
@@ -334,6 +340,8 @@ def test_failing_sync_exits_1_and_cleans_up(fx):
     proc = fx.run(FAIL_SYNC="1")
     assert proc.returncode == 1, _out(proc)
     assert "failed" in _out(proc)
+    # The reason precedes the hint; a five-line tail hid it on the first live run.
+    assert "refusal reason: would revert alpha" in _out(proc)
     assert fx.leftovers() == []
 
 
@@ -342,3 +350,53 @@ def test_missing_checkout_is_a_clean_skip(fx):
     assert proc.returncode == 1, _out(proc)
     assert "no git checkout" in _out(proc)
     assert fx.leftovers() == []
+
+
+def test_in_sync_closes_its_own_redundant_pr(fx):
+    # The mirror already matches (a hand-made sync merged first, say) but the
+    # automation's PR is still open: close it, delete its branch, say why.
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert "closed the redundant #7" in _out(proc)
+    calls = (fx.stub / "calls").read_text()
+    closes = fx.calls("pr close")
+    assert len(closes) == 1 and closes[0].startswith("pr close 7 ") and "--delete-branch" in closes[0]
+    src = _git(fx.unitares, "rev-parse", "--short=8", "origin/master")
+    assert f"already matches unitares master ({src})" in calls
+    assert fx.leftovers() == []
+
+
+def test_in_sync_dry_run_only_reports_the_close(fx):
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    proc = fx.run("--dry-run")
+    assert proc.returncode == 0, _out(proc)
+    assert "would close the redundant #7" in _out(proc)
+    assert fx.calls("pr close") == []
+
+
+def test_in_sync_without_an_open_pr_closes_nothing(fx):
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert fx.calls("pr close") == []
+
+
+def test_failed_close_is_reported_not_claimed(fx):
+    (fx.stub / "open_pr").write_text('[{"number": 7}]')
+    proc = fx.run(CLOSE_FAIL="1")
+    assert proc.returncode == 1, _out(proc)
+    assert "could not close the redundant #7" in _out(proc) and "close refused" in _out(proc)
+    assert "closed the redundant" not in _out(proc)
+
+
+def test_workflow_checks_out_unitares_with_full_history():
+    # sync-plugin-skills.sh's direction guard reads canonical's git history on
+    # equal verification dates; a depth-1 checkout makes it refuse (exit 4).
+    import yaml
+
+    wf = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "plugin-skill-sync.yml").read_text())
+    steps = wf["jobs"]["sync"]["steps"]
+    unitares = [s for s in steps if s.get("uses", "").startswith("actions/checkout@")
+                and "repository" not in s.get("with", {})]
+    assert len(unitares) == 1
+    assert unitares[0]["with"]["fetch-depth"] == 0

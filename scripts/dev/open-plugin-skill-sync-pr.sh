@@ -126,12 +126,30 @@ case "$SYNC_RC" in
   # fix that (ship.sh treats it as a warning too), so carry on and say so.
   5) RULE_NOTE="the plugin's attestation-rule port disagrees with canonical (sync-plugin-skills.sh exit 5); port src/skill_attestations.py into the plugin's _check_freshness.py"
      printf '  skills: warning: %s\n' "$RULE_NOTE" >&2 ;;
-  *) printf '%s\n' "$SYNC_LOG" | tail -5 >&2
+  # Enough of the log to include the refusal's REASONS, which the sync script
+  # prints before its fix-it hint; five lines showed only the hint.
+  *) printf '%s\n' "$SYNC_LOG" | tail -40 >&2
      fail "sync-plugin-skills.sh failed (exit $SYNC_RC)" ;;
 esac
 
 CHANGED="$(git -C "$DST_WT" status --porcelain -- skills)"
 if [ -z "$CHANGED" ]; then
+  # A sync PR from this automation that is still open is now redundant (a
+  # hand-made sync merged first, say). Close it and say why, so it does not
+  # sit in the queue describing a sync nobody needs. If gh cannot answer, the
+  # lookup is empty and the run just reports "in sync".
+  STALE="$(cd "$DST_WT" && "$GH" pr list --state open --head "$BRANCH" --json number -q '.[].number' 2>/dev/null | head -1)"
+  if [ -n "$STALE" ]; then
+    if [ -n "$DRY_RUN" ]; then
+      say "plugin mirror in sync with unitares master ($SRC_SHA); update would close the redundant #$STALE"
+      exit 0
+    fi
+    CLOSE_ERR="$(cd "$DST_WT" && "$GH" pr close "$STALE" --delete-branch \
+      --comment "The plugin mirror already matches unitares master ($SRC_SHA), so this sync is no longer needed. Closed by open-plugin-skill-sync-pr.sh." 2>&1 >/dev/null)" \
+      || fail "mirror in sync, but could not close the redundant #$STALE: $CLOSE_ERR"
+    say "plugin mirror in sync with unitares master ($SRC_SHA); closed the redundant #$STALE"
+    exit 0
+  fi
   say "plugin mirror in sync with unitares master ($SRC_SHA)"
   exit 0
 fi
