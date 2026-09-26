@@ -3514,8 +3514,9 @@ def _resolution_notes_call(discovery_id: str, status: Optional[str]) -> str:
     The status this update set is repeated because a non-owner of a high or
     critical finding may add resolution_notes only together with a cross-agent
     closing status (_requested_non_owner_edits): without it the same call is
-    refused. For anyone else the repeated status is a no-op, except that
-    repeating 'resolved' re-stamps resolved_at. An update that set no status
+    refused. For anyone else the repeated status is a no-op; resolved_at is
+    stamped only on the transition into resolved, so repeating 'resolved'
+    leaves it alone. An update that set no status
     needs none: a non-owner of a gated finding cannot make one succeed.
     """
     status_argument = f", status='{status}'" if status else ""
@@ -3655,7 +3656,11 @@ def _build_discovery_updates(
                 )
             )
         updates["status"] = normalized_status
-        if normalized_status == "resolved":
+        # Stamp resolved_at on the transition into resolved only. Repeating
+        # status='resolved' (the closure note's follow-up names it so a
+        # non-owner of a high/critical finding can append notes) must not move
+        # when the finding was actually resolved.
+        if normalized_status == "resolved" and getattr(discovery, "status", None) != "resolved":
             updates["resolved_at"] = _utc_now_iso()
 
     _validate_closure_class(request, normalized_status)

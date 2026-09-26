@@ -38,6 +38,36 @@ READING_KEYS = (
 )
 
 
+# Lifecycle words the canonical payload carries (last_decision_action,
+# verdict.decision_action) mapped to the policy action the envelope reports in
+# action_summary.action. Mirrors the server's envelope_step._ACTION_ALIASES,
+# pinned by tests/test_sdk_metrics_envelope_roundtrip.py. "uninitialized" and
+# "unbound" have no decision and pass through, as the envelope repeats them.
+_POLICY_ACTION = {
+    "proceed": "proceed",
+    "approve": "proceed",
+    "continue": "proceed",
+    "healthy": "proceed",
+    "ok": "proceed",
+    "safe": "proceed",
+    "caution": "proceed",
+    "guide": "proceed",
+    "resumed": "proceed",
+    "not_paused": "proceed",
+    "pause": "pause",
+    "block": "pause",
+    "high-risk": "pause",
+    "reject": "pause",
+    "stop": "pause",
+}
+
+
+def _policy_action(word: Any) -> Any:
+    if isinstance(word, str):
+        return _POLICY_ACTION.get(word.strip().lower(), word)
+    return word
+
+
 def resolve_metrics_fields(raw: dict) -> dict[str, Any]:
     """Return ``metrics``, ``verdict``, ``action``, ``coherence`` and ``risk``.
 
@@ -67,13 +97,21 @@ def resolve_metrics_fields(raw: dict) -> dict[str, Any]:
         if value is not None:
             reading[key] = value
 
+    # The envelope's action_summary.action is already the policy action;
+    # read it first. Otherwise map the canonical lifecycle word, so a
+    # resumed or guided agent reads "proceed" at every verbosity, not
+    # "resumed"/"guide" only when raw_governance rides along.
     action = _first(
-        _dict(raw.get("verdict")).get("decision_action"),
-        raw.get("last_decision_action"),
-        _dict(governance.get("verdict")).get("decision_action"),
-        governance.get("last_decision_action"),
         action_summary.get("action"),
-        summary.get("decision_action"),
+        _policy_action(
+            _first(
+                _dict(raw.get("verdict")).get("decision_action"),
+                raw.get("last_decision_action"),
+                _dict(governance.get("verdict")).get("decision_action"),
+                governance.get("last_decision_action"),
+                summary.get("decision_action"),
+            )
+        ),
     )
 
     # No server shape carries a top-level metrics dict, but a caller's own
