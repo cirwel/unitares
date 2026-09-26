@@ -223,6 +223,43 @@ def build_identity_diag_payload(
     return payload
 
 
+def label_source_for(
+    label: Optional[str],
+    *,
+    public_agent_id: Optional[str],
+    structured_id: Optional[str],
+    auto_label: Optional[str] = None,
+    has_public_handle: bool = False,
+) -> str:
+    """Where a displayed label came from: ``claimed``, ``auto`` or ``uuid``.
+
+    Identity invariant: the name is cosmetic. This field says only whether
+    the agent (or someone naming it) chose the label, or the server did.
+
+    - ``claimed``: a label the server did not derive. Caller-supplied names
+      (start_session(name=...), identity(name=...)) land here, including one
+      renamed ``{name}_{uuid8}`` by a label collision.
+    - ``auto``: the label equals the public handle, the structured id, or a
+      label the server assigned (``auto_label``: the mint's [AUTO_NAME] label
+      such as ``claude_code-opus_1856bb5c``, or the ``Agent_<uuid8>`` name a
+      knowledge write gives an agent with no meaningful label); or there is
+      no label and a public handle is displayed instead.
+    - ``uuid``: nothing to display but the uuid.
+
+    The server-assigned label cannot be recognised by its shape: a claimed
+    name that collides is renamed to the same ``<name>_<uuid8>`` form. The
+    mint records the label it chose (``auto_label``) and the label is
+    server-assigned exactly while it still equals that record. Agents minted
+    without the record keep the older reading, which calls such a label
+    ``claimed``.
+    """
+    if label and label not in (public_agent_id, structured_id) and label != auto_label:
+        return "claimed"
+    if label or has_public_handle:
+        return "auto"
+    return "uuid"
+
+
 def build_identity_signature_payload(
     *,
     agent_uuid: Optional[str],

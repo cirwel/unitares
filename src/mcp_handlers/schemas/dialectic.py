@@ -180,15 +180,22 @@ class DialecticParams(AgentIdentityMixin):
         "list": (
                 "status", "limit", "include_transcript",
         ),
+        # quick triages issue_description (or reason) and reads the thesis
+        # and antithesis fields as context; until 2026-09-26 this entry named
+        # only position, decision and reasoning, so describe_tool left out
+        # the one parameter the handler refuses to run without.
         "quick": (
-                "position", "decision", "reasoning",
+                "issue_description", "position", "decision", "reasoning",
+                "root_cause", "concerns", "proposed_conditions", "conditions",
+                "observed_metrics", "reason",
         ),
         "request": (
                 "issue_description", "reason", "use_brief_as_thesis",
+                "reasoning", "root_cause", "proposed_conditions",
         ),
         "thesis": (
                 "session_id", "position", "reasoning", "root_cause",
-                "proposed_conditions", "conditions",
+                "proposed_conditions", "conditions", "use_brief_as_thesis",
         ),
         "antithesis": (
                 "session_id", "concerns", "reasoning", "observed_metrics",
@@ -197,11 +204,19 @@ class DialecticParams(AgentIdentityMixin):
         ),
         "synthesis": (
                 "session_id", "agrees", "reasoning", "proposed_conditions",
-                "conditions", "judgment_formed",
+                "conditions", "judgment_formed", "root_cause",
+                "observed_metrics", "reviewer_provenance",
         ),
         "reassign": (
-                "session_id", "new_reviewer_id",
+                "session_id", "new_reviewer_id", "reason",
         ),
+    }
+    # Parameters an action's handler refuses to run without, which the flat
+    # wire schema cannot mark required for one action (see
+    # KnowledgeParams.ACTION_REQUIRED_FIELDS). handle_quick_dialectic refuses
+    # a call with no issue_description ('reason' is accepted in its place).
+    ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "quick": ("issue_description",),
     }
     # default mirrors action_router's default_action="list" — the schema
     # validated BEFORE the router and a required field here made

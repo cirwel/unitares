@@ -130,7 +130,13 @@ def _format_lite_parameter(
     field_info: Dict[str, Any],
     *,
     required: bool = False,
+    required_at_call_time: bool = False,
 ) -> str:
+    if required_at_call_time:
+        # The schema marks it optional (a router's flat schema can only
+        # require `action`), so a client validating against the schema will
+        # not catch its absence; the handler will.
+        return f"{field_name} (required at call time)"
     if required:
         return f"{field_name} (required)"
 
@@ -486,7 +492,12 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "total_available": len(tools_list),
             "shown": len(lite_tools),
             "more": "list_tools(lite=false) for descriptions, categories, tiers, workflows, and relationships",
-            "tip": "describe_tool(tool_name=...) for parameters; use_tool(tool_name=..., arguments={...}) when the capability is absent from the initial tools/list",
+            # An unqualified describe_tool returns the full record on the
+            # Python route (lite=false is its advertised default, 10-17 KB for
+            # the core write tools); with WAVE_3A_DESCRIBE_TOOL_ON_BEAM on,
+            # BEAM serves it through the Wave 3a probe, which asks for lite.
+            # The tip names lite explicitly, so it holds on both.
+            "tip": "describe_tool(tool_name=..., lite=true) for parameters (action=... on a router); lite=false for the full schema; use_tool(tool_name=..., arguments={...}) when the capability is absent from the initial tools/list",
             "advertisement": {
                 "mode": TOOL_MODE,
                 "direct_count": len(advertised_names or lite_tools),
@@ -501,8 +512,13 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "ordered_by": "usage_frequency",
                 "window": "7 days"
             }
-        
-        return success_response(response_data)
+
+        # The handshake is identity-independent: no agent_signature. For a
+        # caller-asserted binding that is not a routine explicit session
+        # (mcp_session_id, x_client_id) the signature is 1.5-1.9 KB and put the
+        # capped handshake over its own 4 KiB bound; a server-inferred one
+        # already collapses to {"uuid": null}. lite=false keeps it.
+        return success_response(response_data, arguments={"lite_response": True})
     
     tier_counts = {
         "essential": sum(1 for t in tools_list if t.get("tier") == "essential"),
@@ -872,8 +888,14 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         requested_action = (arguments.get("action") or "").strip().lower() or None
         include_schema = arguments.get("include_schema", True)
         include_full_description = arguments.get("include_full_description", True)
-        # LITE-FIRST: Simpler schemas by default for local models
-        lite = arguments.get("lite", True)
+        # The schema default (DescribeToolParams.lite=False, the advertised
+        # contract) decides on every validated Python route; this matches it
+        # for in-process callers, which pass lite explicitly for the short
+        # form. Exception: with WAVE_3A_DESCRIBE_TOOL_ON_BEAM on, the wrappers
+        # hand raw arguments to BEAM, whose Wave 3a probe passes lite=True, so
+        # an unqualified call is served short there (pre-existing; the
+        # probe's pinned parity bytes depend on it).
+        lite = arguments.get("lite", False)
 
         from ..tool_stability import (
             expand_description_pointers,
@@ -1057,6 +1079,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                         field_name: str,
                         *,
                         required: bool = False,
+                        required_at_call_time: bool = False,
                         force: bool = False,
                     ) -> bool:
                         if field_name in shown_fields:
@@ -1069,6 +1092,7 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                                 field_name,
                                 field_info,
                                 required=required,
+                                required_at_call_time=required_at_call_time,
                             )
                         )
                         shown_fields.add(field_name)
@@ -1077,26 +1101,99 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     for field_name in required_fields:
                         add_lite_field(field_name, required=True)
 
+                    from src.mcp_handlers.schemas.router_actions import (
+                        action_fields_by_priority,
+                        declared_action_required_fields,
+                    )
+
+                    # The one action this view describes: the action an
+                    # alias pins, or the one describe_tool(action=...) narrowed
+                    # a router to. Its handler's call-time requirements lead,
+                    # then its own parameters, primary first. Filling from the
+                    # schema's property order instead listed update_finding as
+                    # content, details, summary, discovery_type and tags, and
+                    # left out discovery_id, which the update refuses to run
+                    # without, and status, which it exists to set.
+                    if alias_info is not None and alias_info.inject_action:
+                        lite_action = alias_info.inject_action
+                    elif action_view is not None:
+                        lite_action = action_view.get("action")
+                    else:
+                        lite_action = None
+
+                    # A router narrowed with describe_tool(action=...) is
+                    # reached only by passing that action. The action fields
+                    # below never include the selector, and where the schema
+                    # gives `action` a default it is not required either, so
+                    # without this line self_recovery(action='quick') was
+                    # described as `reason` alone, and a caller passing just
+                    # that ran the default 'check' instead.
+                    if (
+                        action_view is not None
+                        and lite_action
+                        and "action" in properties
+                        and "action" not in shown_fields
+                    ):
+                        selector_default = properties["action"].get("default")
+                        if (
+                            selector_default is not None
+                            and selector_default != lite_action
+                        ):
+                            params_simple.append(
+                                f"action (pass '{lite_action}'; omitted, the "
+                                f"tool runs '{selector_default}')"
+                            )
+                            shown_fields.add("action")
+                        else:
+                            add_lite_field("action", force=True)
+
+                    for field_name in declared_action_required_fields(
+                        pydantic_model, lite_action
+                    ):
+                        # Only what this tool's wire carries: an alias
+                        # schema is narrower than its router's.
+                        if field_name in properties:
+                            add_lite_field(
+                                field_name,
+                                required_at_call_time=True,
+                                force=True,
+                            )
+
                     shown = 0
                     priorities = (
                         tool_catalog.LITE_PARAMETER_PRIORITIES.get(requested_tool_name)
                         or tool_catalog.LITE_PARAMETER_PRIORITIES.get(tool_name, [])
                     )
+                    action_priorities = (
+                        None
+                        if priorities
+                        else action_fields_by_priority(pydantic_model, lite_action)
+                    )
                     for field_name in priorities:
                         if add_lite_field(field_name, force=True):
                             shown += 1
 
-                    for field_name in properties:
-                        if field_name in required_fields:
-                            continue
-                        if field_name in shown_fields:
-                            continue
-                        if shown >= 5 and tool_name not in tool_catalog.LITE_PARAMETER_PRIORITIES:
-                            break
-                        if shown >= 8:
-                            break
-                        if add_lite_field(field_name):
-                            shown += 1
+                    if action_priorities is not None:
+                        # No fill from the rest of the schema: on an alias
+                        # that does not narrow its router's schema, the other
+                        # properties belong to other actions.
+                        for field_name in action_priorities:
+                            if shown >= 5:
+                                break
+                            if field_name in properties and add_lite_field(field_name):
+                                shown += 1
+                    else:
+                        for field_name in properties:
+                            if field_name in required_fields:
+                                continue
+                            if field_name in shown_fields:
+                                continue
+                            if shown >= 5 and tool_name not in tool_catalog.LITE_PARAMETER_PRIORITIES:
+                                break
+                            if shown >= 8:
+                                break
+                            if add_lite_field(field_name):
+                                shown += 1
 
                     lite_schema = {"params_simple": params_simple, "required": required_fields}
             except Exception:

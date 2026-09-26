@@ -139,15 +139,25 @@ present for the action, verdict, and evidence maturity, then `next_action`,
 present. `check_working_state()` and `search_shared_memory()` omit the repeated
 canonical payload by default; use `verbosity="full"` (alias `lite=false`) or
 `response_mode="full"`, respectively, when you need it under `raw_governance`.
-`check_working_state(verbosity="standard")` is the middle tier: EISV, verdict,
-risk_score, basin and mode with their meanings, without the diagnostics. A
+`check_working_state(verbosity="standard")` is the middle tier: basin and mode
+with their meanings, and guidance, beside the verdict, risk_score and bare EISV
+values, without the diagnostics. A
 response marked `response_shape: "routine"` was trimmed because nothing in it
 needed explaining: a clean `sync_state` proceed keeps `action_summary.action`,
 `reason` and `risk_score` and the margin with its scope, but drops the repeated
 approve/safe/healthy values, and a plain fresh `start_session` omits the onboard
-record. Anything
-unusual (a guide, a pause, a resume miss, a reactivated identity, a declared
-lineage) keeps the full shape.
+record. That includes a mint on a thread earlier sessions occupied:
+`state_summary` then carries `episode_fork_kind: "sibling_locus"` and the
+earlier node's `predecessor_uuid`, and `next_action` says co-location is not
+lineage. A named mint keeps its `resident_registration` verdict at the top
+level in compact form (`status`, `on_roster`, and for `not_on_roster` (and,
+briefly, `caller_supplied_tags`) a short `detail`: what that costs, that this
+identity cannot gain the tags, and the fix: add the name to the roster,
+restart, mint fresh). Anything unusual (a guide, a pause, a resume miss, a
+reactivated identity, a declared lineage, a spawn reason other than
+`new_session`, a sibling whose earlier nodes were pruned, a label rename)
+keeps the full shape; on `start_session`, `response_shape_reason` then names
+the field that kept it.
 
 One response is deliberately **not** that envelope. When a call is refused for
 identity, you get the typed refusal contract instead: `status`

@@ -1,0 +1,25 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-09-26T14:19:49Z",
+  "verified_date": "2026-09-26",
+  "verifier": "Claude (finding-hints review round: closure-note status and routes, narrowed lite selector, router action fields)",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "aca06973cf9e8a76",
+    "unitares/src/db/mixins/knowledge_graph.py": "f3f00b0381c5fa10",
+    "unitares/src/knowledge_authority.py": "14ca01da11026c91",
+    "unitares/src/knowledge_graph.py": "5e29c9483595cb70",
+    "unitares/src/knowledge_graph_lifecycle.py": "3d943c8664beedd6",
+    "unitares/src/mcp_handlers/consolidated.py": "1dceedc26c4a3144",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "d69f422cf798b54f",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "f33e76c5d5364ce9",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "d96f7a03913d208b",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "34eb1560b9b542f8",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "c4f33d12a062c18d",
+    "unitares/src/mcp_handlers/tool_stability.py": "a527552f03a9eff9",
+    "unitares/src/storage/knowledge_graph_age.py": "b4dd7ab8f35309ba",
+    "unitares/src/storage/knowledge_graph_postgres.py": "47ea4d27622e7318",
+    "unitares/src/tool_descriptions.json": "2d50b479435b6401"
+  },
+  "skill_digest": "f8af7b3c711897e3"
+}

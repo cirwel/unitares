@@ -12,6 +12,7 @@ import urllib.request
 from typing import Any
 
 from unitares_sdk._checkin_fields import resolve_checkin_fields
+from unitares_sdk._metrics_fields import resolve_metrics_fields
 from unitares_sdk.errors import (
     GovernanceConnectionError,
     GovernanceTimeoutError,
@@ -336,9 +337,10 @@ class SyncGovernanceClient:
 
     def get_metrics(self, **kwargs: Any) -> MetricsResult:
         # check_working_state: advertised alias of get_governance_metrics.
-        # The alias works on servers before and after #2081 (see client.py).
+        # The alias works on servers before and after #2081 (see client.py),
+        # and answers with the envelope that resolve_metrics_fields reads.
         raw = self.call_tool("check_working_state", kwargs)
-        return MetricsResult.model_validate(raw)
+        return MetricsResult.model_validate({**raw, **resolve_metrics_fields(raw)})
 
     # --- Model inference ---
 

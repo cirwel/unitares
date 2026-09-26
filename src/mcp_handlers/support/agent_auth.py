@@ -105,6 +105,7 @@ def compute_agent_signature(
         display_label = None
         public_agent_id = None
         structured_id = None
+        auto_label = None
         model_type = None
         if bound_id in mcp_server.agent_metadata:
             meta = mcp_server.agent_metadata[bound_id]
@@ -118,6 +119,7 @@ def compute_agent_signature(
             display_label = _meta_text('display_name') or _meta_text('label')
             public_agent_id = _meta_text('public_agent_id')
             structured_id = _meta_text('structured_id')
+            auto_label = _meta_text('auto_label')
             model_type = _meta_text('model_type')
 
         # P1.3/S22 contract: `agent_id` is a public structured-handle slot.
@@ -126,22 +128,21 @@ def compute_agent_signature(
         auto_id = public_agent_id or structured_id
 
         # Dual-label visibility (identity-invariants #4: "Name is cosmetic").
-        # label_source surfaces whether the displayed label reflects an
-        # explicit choice by the agent or a server-derived auto-fill:
-        #   "claimed" — label differs from auto-derived IDs, agent picked it
-        #   "auto"    — label equals public_agent_id/structured_id, or the
-        #               label is absent and the signature displays auto_id
-        #   "uuid"    — neither label nor auto_id; display falls back to UUID
-        # Heuristic (no schema change): identity is inferred from whether
-        # the label matches known auto patterns. A future schema change can
-        # replace this with an explicit label_claimed_at timestamp on the
-        # agent metadata row.
-        if display_label and display_label not in (public_agent_id, structured_id):
-            label_source = "claimed"
-        elif display_label or auto_id:
-            label_source = "auto"
-        else:
-            label_source = "uuid"
+        # label_source says whether the displayed label is one a caller chose
+        # ("claimed") or one the server derived or assigned ("auto"), or
+        # whether only the uuid is left ("uuid"). The [AUTO_NAME] label the
+        # mint assigns (claude_code-opus_1856bb5c) used to read "claimed",
+        # because it matches neither public id; the mint now records it as
+        # auto_label. Single-sourced with the knowledge display payload.
+        from src.services.identity_payloads import label_source_for
+
+        label_source = label_source_for(
+            display_label,
+            public_agent_id=public_agent_id,
+            structured_id=structured_id,
+            auto_label=auto_label,
+            has_public_handle=bool(auto_id),
+        )
 
         return build_identity_signature_payload(
             agent_uuid=agent_uuid,

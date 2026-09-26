@@ -670,7 +670,10 @@ async def _describe_tool(request: Request) -> JSONResponse:
     )
 
     tool_name = request.query_params.get("tool_name")
-    result = await handle_describe_tool({"tool_name": tool_name})
+    # lite=True is the short form this probe has always served: the handler
+    # used to default to it for in-process callers, and now follows the
+    # schema default (lite=False) instead, so the probe asks for it.
+    result = await handle_describe_tool({"tool_name": tool_name, "lite": True})
     payload = _extract_handler_payload(result)
     masked = mask_timestamps(payload)
     response = JSONResponse(_envelope_ok(masked), status_code=200)

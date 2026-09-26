@@ -7,12 +7,19 @@ separate from governed dialectic review.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import hashlib
+import hmac
+import re
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Sequence
 from uuid import uuid4
 
 from mcp.types import TextContent
 
+from src.logging_utils import get_logger
 from src.mcp_handlers.context import (
     get_context_resolved_agent_id,
     get_session_signals,
@@ -33,6 +40,8 @@ from .model_inference import (
     _provider_timeout_s,
     run_model_inference,
 )
+
+logger = get_logger(__name__)
 
 
 CONSULTATION_SCHEMA = "unitares.consultation.v1"
@@ -155,6 +164,9 @@ class ConsultationFailure:
 class ConsultationOutcome:
     data: dict[str, Any]
     failure: ConsultationFailure | None = None
+    # Safe provenance of a completed inference; feeds the audit record even
+    # when the compact response omits it.
+    provenance: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -256,7 +268,13 @@ def _safe_provenance(
         "constructed_prompt": constructed_prompt_hash,
         # Never trust a backend assertion for the text this facade actually
         # returns. Hash the normalized typed outcome at this boundary.
-        "response": sha256_text(outcome.response),
+        # Guarded: a postcondition failure computes provenance before the
+        # response type is validated.
+        "response": (
+            sha256_text(outcome.response)
+            if isinstance(outcome.response, str)
+            else None
+        ),
     }
     return safe
 
@@ -508,8 +526,21 @@ def _success(
             failure_details={"reason": "invalid_inference_schema"},
             degradation=degradation,
         )
+    # From here on the inference has run and its provenance is well-formed,
+    # so every failure below carries the route: once a result came back, the
+    # record says where the brief went even when no advice is returned. An
+    # upstream failure (no result) records no route block: the lane,
+    # requested privacy and failure code, plus, for a thorough call, the
+    # target host (request.thorough_host_id) and any possibly-running
+    # execution id. A failed standard call does not say where it was tried.
+    provenance = _safe_provenance(
+        outcome,
+        requester_uuid=request.requester_uuid,
+        brief_hash=brief_hash,
+        constructed_prompt_hash=prompt_hash,
+    )
     if outcome.inference.get("accountability_class") != "tool_evidence":
-        return _failed(
+        return dataclasses.replace(_failed(
             request,
             message="Inference returned an authority class that consult cannot carry",
             code="CONSULT_AUTHORITY_POSTCONDITION_FAILED",
@@ -520,7 +551,7 @@ def _success(
             ),
             failure_details={"reason": "non_advisory_accountability_class"},
             degradation=degradation,
-        )
+        ), provenance=provenance)
     postcondition_error = _delivery_postcondition_error(
         outcome,
         delivery_policy,
@@ -528,7 +559,7 @@ def _success(
     )
     if postcondition_error:
         code, reason = postcondition_error
-        return _failed(
+        return dataclasses.replace(_failed(
             request,
             message=(
                 "Inference returned on a route that does not satisfy the "
@@ -542,9 +573,9 @@ def _success(
             ),
             failure_details={"reason": reason},
             degradation=degradation,
-        )
+        ), provenance=provenance)
     if not isinstance(outcome.response, str) or not outcome.response.strip():
-        return _failed(
+        return dataclasses.replace(_failed(
             request,
             message="Inference completed without an advisory response",
             code="INTERNAL_INFERENCE_CONTRACT",
@@ -552,14 +583,8 @@ def _success(
             recovery_action="Retry once; if this persists, inspect the inference service logs.",
             failure_details={"reason": "empty_advisory_response"},
             degradation=degradation,
-        )
+        ), provenance=provenance)
 
-    provenance = _safe_provenance(
-        outcome,
-        requester_uuid=request.requester_uuid,
-        brief_hash=brief_hash,
-        constructed_prompt_hash=prompt_hash,
-    )
     data = _base_data(request)
     privacy_class = provenance.get("privacy_class", "unknown")
     external_processing = privacy_class != "local"
@@ -590,7 +615,7 @@ def _success(
             "route": outcome.routed_via,
             **provenance,
         }
-    return ConsultationOutcome(data=data)
+    return ConsultationOutcome(data=data, provenance=provenance)
 
 
 def _recovery_for_upstream(failure: InferenceFailure, *, lane: str) -> str:
@@ -791,6 +816,200 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
     )
 
 
+def _cancelled(request: ConsultRequest) -> ConsultationOutcome:
+    """The outcome recorded when the caller's request is cancelled mid-route."""
+    data = _base_data(request)
+    data["status"] = "cancelled"
+    return ConsultationOutcome(data=data)
+
+
+_RECORD_SCHEMA = "unitares.consultation_record.v1"
+
+# Route facts a record keeps. host_id, provider_kind, transport,
+# privacy_class and cost_class come from the server's inference registry and
+# task_type from the request; the model names and orchestrator ids are
+# reported by the backend. Every string, from either source, is kept only
+# when it has the shape of an identifier and is otherwise stored as a keyed
+# hash. ``warnings`` and the raw ``finish_reason`` are not kept at all; the
+# record carries the normalized completion state.
+#
+# Nothing here is hashed for *resembling the brief*. Any such rule makes the
+# hashing itself an oracle (a reader sees which values were hashed and learns
+# what the brief mentions) and costs the row the model it exists to name. The
+# accepted limit: an identifier-shaped piece of the brief that a backend
+# echoes into any backend-reported value other than a code -- a model name,
+# an orchestrator execution or agent id, an upstream execution id -- is
+# stored as reported. Codes are held to the narrower constant shape.
+_RECORD_ROUTE_FIELDS = (
+    "host_id",
+    "provider_kind",
+    "transport",
+    "model_used",
+    "models_used",
+    "model_requested",
+    "task_type",
+    "privacy_class",
+    "cost_class",
+    "cost_usd",
+    "orchestrator_execution_id",
+    "orchestrator_agent_id",
+    "latency_ms",
+    "tokens_used",
+)
+_IDENTIFIER_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+# Codes and categories are snake_case constants (upstream failure codes are
+# UPPER_SNAKE, this facade's own reason codes lower); holding them to that
+# narrower shape keeps a hyphenated or dotted echoed token out of them.
+_CODE_SHAPE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+_CODE_KEYS = frozenset({"code", "reason_code", "category"})
+# ``reason`` is only ever a literal this module writes (failure_details and
+# the delivery postconditions), never backend text, so it is kept readable.
+_SERVER_TEXT_KEYS = frozenset({"reason"})
+_SERVER_TEXT_MAX = 200
+
+
+def _keyed_hash(key: str, text: str) -> str:
+    """HMAC-SHA256 of ``text`` under the caller-held consultation key."""
+    digest = hmac.new(bytes.fromhex(key), text.encode("utf-8"), hashlib.sha256)
+    return "hmac-sha256:" + digest.hexdigest()
+
+
+def _record_value(value: Any, key: str) -> Any:
+    """An identifier-shaped string or a number as-is; any other text as its keyed hash."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _record_field(k, item, key) for k, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_record_value(item, key) for item in value]
+    text = str(value)
+    if _IDENTIFIER_SHAPE.fullmatch(text):
+        return text
+    return {"unrecorded_text": _keyed_hash(key, text)}
+
+
+def _record_field(name: Any, value: Any, key: str) -> Any:
+    """Apply the rule for a named field inside a recorded dict."""
+    if name in _SERVER_TEXT_KEYS and isinstance(value, str):
+        return value[:_SERVER_TEXT_MAX]
+    if name in _CODE_KEYS:
+        return _record_code(value, key)
+    return _record_value(value, key)
+
+
+def _record_code(value: Any, key: str) -> Any:
+    """A code as-is only when it has the internal constant shape."""
+    if isinstance(value, str) and _CODE_SHAPE.fullmatch(value):
+        return value
+    return {"unrecorded_text": _keyed_hash(key, str(value))}
+
+
+def _consultation_record(
+    request: ConsultRequest,
+    outcome: ConsultationOutcome,
+    key: str,
+) -> dict[str, Any]:
+    """Build the durable envelope for one consultation: who, route, outcome, hashes.
+
+    Never the brief, the constructed prompt, or the advice: those appear only
+    as HMAC-SHA256 hashes under ``key``, which is returned to the caller and
+    not stored. Anyone who can read audit events can see that the
+    consultation happened and how it was routed, but cannot test a guessed
+    brief against the row; the caller, holding the key and the text, can
+    prove which exchange the row describes. ``request`` and ``completion``
+    hold only server-validated values (the purpose/effort/privacy enums, a
+    boolean, a thorough host id from ``_THOROUGH_PEERS``, the normalized
+    completion state). Every other string passes ``_record_value``: it is
+    kept only when it has the shape of an identifier (codes: of a
+    snake_case constant), and otherwise as a keyed hash. Backend-reported
+    identifiers are stored as reported; see ``_RECORD_ROUTE_FIELDS`` for
+    why nothing is hashed for resembling the brief, and for the limit that
+    leaves.
+    """
+    data = outcome.data
+    record: dict[str, Any] = {
+        "schema": _RECORD_SCHEMA,
+        "consultation_id": request.consultation_id,
+        "status": data.get("status"),
+        "request": dict(data.get("request") or {}),
+    }
+    if data.get("status") == "cancelled":
+        # The caller never receives a cancelled call's key, so hashes under
+        # it could never be verified; the row records only that it happened.
+        record["hashes"] = None
+        hashes: dict[str, Any] = {}
+    else:
+        hashes = {
+            "scheme": "hmac-sha256",
+            # handle_consult already strips; stripping here too makes the
+            # caller note's recipe hold for any ConsultRequest.
+            "brief": _keyed_hash(key, request.brief.strip()),
+            "constructed_prompt": _keyed_hash(key, _constructed_prompt(request)),
+        }
+        record["hashes"] = hashes
+    if request.effort == "thorough" and request.privacy == "cloud_allowed":
+        # Only when the thorough lane can be attempted: under privacy='local'
+        # the call is refused or degraded before any host is contacted, and
+        # naming one would read as the brief having gone there.
+        record["request"]["thorough_host_id"] = request.thorough_host_id
+    for field_name in ("delivery", "degradation", "failure"):
+        if data.get(field_name) is not None:
+            record[field_name] = _record_value(data[field_name], key)
+    completion = data.get("completion")
+    if completion is not None:
+        record["completion"] = {
+            "state": completion.get("state"),
+            "answer_complete": completion.get("answer_complete"),
+        }
+    if outcome.provenance:
+        record["route"] = {
+            name: _record_value(outcome.provenance[name], key)
+            for name in _RECORD_ROUTE_FIELDS
+            if outcome.provenance.get(name) is not None
+        }
+    advice = data.get("advice")
+    if isinstance(advice, str) and record["hashes"] is not None:
+        hashes["advice"] = _keyed_hash(key, advice)
+    return record
+
+
+def _record_consultation(
+    request: ConsultRequest,
+    outcome: ConsultationOutcome,
+) -> None:
+    """Append the consultation record and tell the caller how to verify it.
+
+    A failed audit write never fails the consultation; the caller-facing
+    ``record`` block is added only when the row was handed to the audit
+    writer.
+    """
+    key = secrets.token_hex(32)
+    try:
+        from src.audit_log import audit_logger
+
+        audit_logger.log_consultation(
+            agent_id=request.requester_uuid,
+            record=_consultation_record(request, outcome, key),
+        )
+    except Exception as exc:
+        logger.warning(f"consultation audit record failed (non-fatal): {exc}")
+        return
+    outcome.data["record"] = {
+        "event_type": "consultation",
+        "consultation_id": request.consultation_id,
+        "hash_scheme": "hmac-sha256",
+        "hash_key": key,
+        "note": (
+            "The server kept keyed hashes of the brief and advice, not their "
+            "text, and does not store this key. To prove which audit row "
+            "describes this exchange: HMAC-SHA256 with bytes.fromhex(hash_key) "
+            "as the key over the UTF-8 text; the brief is hashed after "
+            "stripping leading and trailing whitespace. The row is written "
+            "asynchronously, so a key is not proof the row landed."
+        ),
+    }
+
+
 @mcp_tool("consult", timeout=CONSULT_TIMEOUT_S)
 async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Ask for advisory model help without creating a governed review record."""
@@ -871,7 +1090,17 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             recovery_action="Use compact or full.",
         )
     else:
-        outcome = await run_consultation(request)
+        try:
+            outcome = await run_consultation(request)
+        except asyncio.CancelledError:
+            # A thorough call may already be running on an external host;
+            # the record must show the consultation was started.
+            _record_consultation(request, _cancelled(request))
+            raise
+        # Argument-validation refusals are not recorded (tool-usage counts
+        # them); every call that reaches the router is, policy refusals
+        # included.
+        _record_consultation(request, outcome)
 
     if not outcome.ok:
         failure = outcome.failure

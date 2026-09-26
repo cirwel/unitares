@@ -95,6 +95,7 @@ def test_a_real_routine_start_session_envelope_is_attributed():
     import json
 
     from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+    from src.thread_identity import build_fork_context
 
     payload = {
         "success": True,
@@ -107,6 +108,12 @@ def test_a_real_routine_start_session_envelope_is_attributed():
             "caller_proven": False,
             "baseline": "fresh_identity",
         },
+        # A root node, as handle_onboard_v2 builds it for a first mint.
+        "thread_context": build_fork_context(
+            thread_id="t-root", position=1, parent_uuid=None,
+            spawn_reason="new_session", all_nodes=[], agent_uuid=MINTED,
+            minted_fresh=True,
+        ),
     }
     envelope = build_experience_envelope("start_session", "onboard", payload, {})
     assert "raw_governance" not in envelope

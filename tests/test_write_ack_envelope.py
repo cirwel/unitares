@@ -53,6 +53,7 @@ def _onboard_payload() -> dict:
     """
     from src.mcp_handlers.response_base import success_response
     from src.services.identity_payloads import build_onboard_response_data
+    from src.thread_identity import build_fork_context
 
     data = build_onboard_response_data(
         agent_uuid=_UUID,
@@ -65,7 +66,12 @@ def _onboard_payload() -> dict:
         was_archived=False,
         trajectory_result=None,
         parent_agent_id=None,
-        thread_context=None,
+        # A root node, as handle_onboard_v2 builds it for a first mint.
+        thread_context=build_fork_context(
+            thread_id="t-root", position=1, parent_uuid=None,
+            spawn_reason="new_session", all_nodes=[], agent_uuid=_UUID,
+            minted_fresh=True,
+        ),
         verbose=False,
         continuity_source="ip_ua_fingerprint",
         continuity_support={"enabled": True},

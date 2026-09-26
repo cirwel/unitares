@@ -76,21 +76,32 @@ class ObserveParams(AgentIdentityMixin):
         ),
         # No paging parameter: anomalies returns every finding that passes the
         # filters, so nothing a caller asked to see is withheld from them.
-        "anomalies": (),
-        "aggregate": (),
+        # agent_ids narrows the scan (and aggregate's scope); both handlers
+        # read it, and until 2026-09-26 neither entry declared it.
+        "anomalies": (
+                "agent_ids",
+        ),
+        "aggregate": (
+                "agent_ids",
+        ),
         "telemetry": (
                 "window_hours", "include_calibration",
         ),
         "audit_events": (
-                "event_type", "event_types", "since", "until", "include_events",
-                "include_test_fixtures",
+                "event_type", "event_types", "target_agent_id", "since",
+                "until", "include_events", "include_test_fixtures", "limit",
         ),
         "outcome_evidence": (
-                "outcome_type", "corroboration_grade", "diagnostic",
-                "include_detail", "include_events", "low_weight_threshold",
-                "min_completions",
+                "outcome_type", "target_agent_id", "since", "until",
+                "corroboration_grade", "diagnostic", "include_detail",
+                "include_events", "low_weight_threshold", "min_completions",
+                "limit",
         ),
-        "bridge": (),
+        # Read by src/bridge_events.build_bridge_summary, which the handler
+        # hands its arguments to.
+        "bridge": (
+                "since", "until", "limit", "include_events",
+        ),
     }
     action: Literal["agent", "compare", "similar", "anomalies", "aggregate", "telemetry", "audit_events", "outcome_evidence", "bridge"] = Field(..., description="Operation to perform")
     target_agent_id: Optional[str] = Field(None, description="Agent to observe — UUID or label (for action=agent). Use list_agents to find.")

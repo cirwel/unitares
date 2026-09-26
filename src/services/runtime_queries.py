@@ -271,8 +271,12 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
     # has history, the monitor would otherwise report "uninitialized" forever.
     from src.agent_monitor_state import hydrate_from_db_if_fresh
     await hydrate_from_db_if_fresh(monitor, agent_id)
-    include_state = arguments.get("include_state", False)
-    metrics = monitor.get_metrics(include_state=include_state)
+    # include_state is retained for compatibility only and has no effect. The
+    # monitor's raw state dict is never requested: on success interpret_state
+    # replaced it before any tier was built, but when interpretation raised it
+    # survived, leaking into full and making standard emit basin/mode as
+    # {"value": null}.
+    metrics = monitor.get_metrics(include_state=False)
 
     # Zero-observation honesty (dogfood 2026-06-10, cold-caller probe):
     # everything below that ASSESSES the agent (summary, health/mode/
@@ -511,7 +515,13 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             standard_metrics["agent_uuid"] = agent_id
         if reflection:
             standard_metrics["reflection"] = reflection
-        standard_metrics["_note"] = "Use verbosity='full' for diagnostics, 'minimal' for quick check"
+        # Not "minimal for a quick check": on this canonical tool minimal is the
+        # annotated default (per-field EISV notes, thresholds, eisv_contract)
+        # and is larger than this tier, while check_working_state's minimal
+        # envelope is smaller. This payload reaches both, so it names no size.
+        standard_metrics["_note"] = (
+            "Use verbosity='full' for diagnostics; verbosity='minimal' is the default"
+        )
         return standard_metrics
 
     standardized_metrics["_debug_lite_received"] = lite
