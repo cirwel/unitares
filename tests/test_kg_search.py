@@ -300,7 +300,7 @@ class TestSearchKnowledgeGraph:
         mock_graph.get_superseded_by.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_stale_row_carries_age_days_beside_the_warning(self, patch_common):
+    async def test_stale_row_carries_last_activity_days_beside_the_warning(self, patch_common):
         """The structured age is computed where the warning is, on the same
         last-write basis, and survives the canonical lean projection. A
         fresh entry stored under an older release carries neither (the
@@ -324,9 +324,9 @@ class TestSearchKnowledgeGraph:
                 {"query": "deploy runbook", "response_mode": mode}
             ))
             rows = {d["id"]: d for d in data["discoveries"]}
-            assert rows["stale-1"]["age_days"] == 90, mode
+            assert rows["stale-1"]["last_activity_days"] == 90, mode
             assert "90 days old and still open" in rows["stale-1"]["staleness_warning"], mode
-            assert "age_days" not in rows["fresh-1"], mode
+            assert "last_activity_days" not in rows["fresh-1"], mode
             assert "staleness_warning" not in rows["fresh-1"], mode
         full = parse_result(await handle_search_knowledge_graph({"query": "deploy runbook"}))
         fresh_row = next(d for d in full["discoveries"] if d["id"] == "fresh-1")
@@ -1203,11 +1203,11 @@ def _live_row(rank, *, days_old=5, type="note", status="open", label=None,
     )
 
 
-async def _friendly_search(graph, rows, *, lexical=True, **arguments):
-    """search_shared_memory as served: the alias's argument normalization,
-    the canonical handler (and its response-mode shaping), then the envelope."""
+async def _friendly_payload(graph, rows, *, lexical=True, **arguments):
+    """The canonical payload search_shared_memory's envelope receives: the
+    alias's argument normalization, then the canonical handler (and its
+    response-mode shaping). Returns ``(payload, arguments)``."""
     from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
-    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
     from src.mcp_handlers.support.param_normalization import (
         normalize_compact_search_details,
     )
@@ -1220,6 +1220,14 @@ async def _friendly_search(graph, rows, *, lexical=True, **arguments):
             **arguments}
     normalize_compact_search_details(args)
     payload = parse_result(await handle_search_knowledge_graph(dict(args)))
+    return payload, args
+
+
+async def _friendly_search(graph, rows, *, lexical=True, **arguments):
+    """search_shared_memory as served: _friendly_payload, then the envelope."""
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+    payload, args = await _friendly_payload(graph, rows, lexical=lexical, **arguments)
     return build_experience_envelope("search_shared_memory", "knowledge", payload, args)
 
 
@@ -1263,9 +1271,9 @@ class TestFriendlySearchDigest:
         _assert_attribution_whole(env, rows)
 
     @pytest.mark.asyncio
-    async def test_stale_rows_carry_age_days_and_one_note(self, patch_common):
+    async def test_stale_rows_carry_last_activity_days_and_one_note(self, patch_common):
         """A durable stale row and an open-means-unresolved stale row both
-        carry `age_days` in the digest, never the per-row sentence; one note
+        carry `last_activity_days` in the digest, never the per-row sentence; one note
         explains the field. A fresh row stored two releases back carries no
         staleness at all (D1)."""
         mock_mcp_server, mock_graph = patch_common
@@ -1278,12 +1286,12 @@ class TestFriendlySearchDigest:
         env = await _friendly_search(mock_graph, rows)
 
         digests = {d["discovery_id"]: d for d in env["memory_suggestions"]}
-        assert digests[rows[0].id]["age_days"] == 108
-        assert digests[rows[1].id]["age_days"] == 90
-        assert "age_days" not in digests[rows[2].id]
+        assert digests[rows[0].id]["last_activity_days"] == 108
+        assert digests[rows[1].id]["last_activity_days"] == 90
+        assert "last_activity_days" not in digests[rows[2].id]
         assert all("staleness_warning" not in d for d in digests.values())
         note = env["state_summary"]["staleness_note"]
-        assert "age_days" in note and "verify" in note
+        assert "last_activity_days" in note and "verify" in note
         assert json.dumps(env).count(note) == 1
         assert _wire_bytes(env) <= 3_000
         _assert_attribution_whole(env, rows)
@@ -1317,7 +1325,7 @@ class TestFriendlySearchDigest:
         assert json.dumps(env, ensure_ascii=False).count(note) == 1
         digests = env["memory_suggestions"]
         assert [d["discovery_id"] for d in digests] == [row.id for row in rows]
-        assert [("age_days" in d) for d in digests] == [True, False, True]
+        assert [("last_activity_days" in d) for d in digests] == [True, False, True]
         assert "staleness_note" in env["state_summary"]
         assert _wire_bytes(env) <= 3_000
         top_label, top_id = _LIVE_WRITERS[0]
@@ -1367,6 +1375,68 @@ class TestFriendlySearchDigest:
         # still withhold a label or a digest's attribution; the sweep must
         # reach them so the marker equality above is actually exercised.
         assert withheld_seen
+
+    @pytest.mark.asyncio
+    async def test_coaching_gives_attribution_only_the_room_it_takes(self, patch_common):
+        """Review on this change: coaching used to yield to attribution all
+        at once, so a response that was never over budget lost the tier
+        ladder, the all-inline route and the include_details override
+        disclosure together, and ended hundreds of bytes under budget. Each
+        piece now yields in turn and comes back if it still fits, and the
+        override disclosure never yields (a lean envelope carries no
+        normalized_parameters, so it is the only notice). Compared with the
+        same real payload stripped of attribution."""
+        from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+        mock_mcp_server, mock_graph = patch_common
+        ladder_only, ladder_back = 0, 0
+        for summary_len in range(150, 300, 10):
+            for label_len in (15, 59):
+                for days_old in (5, 90):
+                    for details in (False, True):
+                        rows = [
+                            _live_row(
+                                rank, days_old=days_old + rank,
+                                label=f"writer-{rank}-" + "x" * (label_len - 9),
+                                summary=_LIVE_SUMMARY[:summary_len],
+                            )
+                            for rank in range(3)
+                        ]
+                        extra = {"include_details": True} if details else {}
+                        payload, args = await _friendly_payload(mock_graph, rows, **extra)
+                        bare_payload = json.loads(json.dumps(payload))
+                        for row in bare_payload["discoveries"]:
+                            row.pop("by", None)
+                            row.pop("_agent_id", None)
+                        env = build_experience_envelope(
+                            "search_shared_memory", "knowledge", payload, dict(args))
+                        bare = build_experience_envelope(
+                            "search_shared_memory", "knowledge", bare_payload, dict(args))
+                        case = (summary_len, label_len, days_old, details)
+                        if bare.get("projection_truncated"):
+                            continue  # the budget steps' own trimming, not attribution's
+                        assert _wire_bytes(env) <= 3_000, case
+                        _assert_attribution_whole(env, rows)
+                        # Whatever gave way would not fit back; the rest is
+                        # exactly as the attribution-free response had it,
+                        # in the same place.
+                        gave_way = [
+                            key for key in ("response_options", "discovery_retrieval_options")
+                            if env.get(key) != bare.get(key)
+                        ]
+                        for key in gave_way:
+                            assert _wire_bytes({**env, key: bare[key]}) > 3_000, (case, key)
+                        assert [k for k in env if k in bare] == [k for k in bare if k in env], case
+                        if details:
+                            retrieval = env["discovery_retrieval_options"]
+                            assert retrieval["requested_tier"] == "full_inline", case
+                            assert "before serialization" in retrieval["details_omitted_by"], case
+                        ladder_only += gave_way == ["response_options"]
+                        ladder_back += gave_way == ["discovery_retrieval_options"]
+        # Both outcomes the old wholesale drop threw away are reached: the
+        # ladder alone yielding, and the ladder coming back once the
+        # retrieval extras made room.
+        assert ladder_only and ladder_back
 
 
 # ============================================================================

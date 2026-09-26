@@ -1469,7 +1469,8 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
 
     What attribution may cost is only what is optional (the coaching the
     budget steps already drop, and a truncated digest's `expand_with`, which
-    repeats `raw_governance_hint`), and only instead of being withheld."""
+    repeats `raw_governance_hint`), only instead of being withheld, and only
+    as much as it takes: a piece that gave way would not fit back."""
     saw_labels, saw_ids_only, saw_none, saw_coaching_yield = False, False, False, False
     for n in range(0, 2600, 2):
         extra = {"total_count": n_results, "confidence_note": "c" * n, "success": True}
@@ -1503,12 +1504,14 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
         assert env.get("projection_truncated") == bare.get("projection_truncated"), n
         assert env.get("state_summary") == bare.get("state_summary"), n
         # Optional coaching and the repeated full-mode pointer may yield to
-        # attribution, but are only ever dropped or trimmed, and the full-mode
-        # route stays named.
+        # attribution, but are only ever dropped or trimmed, only when they
+        # would not fit back, and the full-mode route stays named.
         for key in ("response_options", "discovery_retrieval_options", "expand_with"):
             got, want = env.get(key), bare.get(key)
             if got != want:
                 assert got is None or got.items() <= want.items(), (n, key)
+                put_back = json.dumps({**env, key: want}, ensure_ascii=False)
+                assert len(put_back.encode("utf-8")) > 3_000, (n, key)
                 assert env["raw_governance_hint"] == bare["raw_governance_hint"], n
                 saw_coaching_yield = True
         for got, want in zip(env_d, bare_d):

@@ -958,17 +958,18 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
     suggestions = []
     for item in candidates[:_MEMORY_SUGGESTION_LIMIT]:
         if isinstance(item, dict):
-            # Freshness travels as the handler's structured `age_days` (days
-            # since the last write, present only past the staleness threshold),
-            # not its `staleness_warning` sentence: three copies of the same
-            # suffix used to outbid attribution for the digest budget. One
-            # response-level note explains the field (_note_stale_digests).
+            # Freshness travels as the handler's structured
+            # `last_activity_days` (days since the last write, present only
+            # past the staleness threshold), not its `staleness_warning`
+            # sentence: three copies of the same suffix used to outbid
+            # attribution for the digest budget. One response-level note
+            # explains the field (_note_stale_digests).
             suggestion = _lift(
                 item,
                 "title",
                 "type",
                 "status",
-                "age_days",
+                "last_activity_days",
             )
             # A superseded row names what replaced it, so "prefer the newer
             # entry" can be followed without a full-mode re-call. First id
@@ -1700,12 +1701,14 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
 
 
 _STALENESS_NOTE = (
-    "age_days (stale results only) = days since last write; verify before acting."
+    "last_activity_days (stale results only) = days since last write; "
+    "verify before acting."
 )
 
 
 def _note_stale_digests(envelope: Dict[str, Any]) -> None:
-    """Explain `age_days` once per response, only while a shown digest has it.
+    """Explain `last_activity_days` once per response, only while a shown
+    digest has it.
 
     The canonical per-row `staleness_warning` sentence is not lifted into the
     digest, so this is the one place the reader learns what the field means
@@ -1716,30 +1719,48 @@ def _note_stale_digests(envelope: Dict[str, Any]) -> None:
         return
     suggestions = envelope.get("memory_suggestions")
     if isinstance(suggestions, list) and any(
-        isinstance(item, dict) and "age_days" in item for item in suggestions
+        isinstance(item, dict) and "last_activity_days" in item
+        for item in suggestions
     ):
         state["staleness_note"] = _STALENESS_NOTE
     else:
         state.pop("staleness_note", None)
 
 
-def _drop_optional_coaching(envelope: Dict[str, Any]) -> bool:
-    """Drop the mode/retrieval coaching a digest can do without: the tier
-    ladder (raw_governance_hint still names full mode) and every retrieval
-    option except the current tier and the open-one route. Returns whether
-    anything was dropped."""
-    dropped = envelope.pop("response_options", None) is not None
+# The retrieval options a digest keeps when coaching yields to attribution:
+# its tier, the open-one route, and the include_details override disclosure.
+# A lean envelope carries no `normalized_parameters`, so `requested_tier` and
+# `details_omitted_by` are the only in-band notice that include_details=true
+# was not honoured; that is a disclosure, not coaching.
+_RETRIEVAL_KEPT_FOR_ATTRIBUTION = (
+    "current_tier",
+    "open_one",
+    "requested_tier",
+    "details_omitted_by",
+)
+
+
+def _coaching_yields(envelope: Dict[str, Any]) -> List[tuple]:
+    """The optional coaching that can give way to attribution, least useful
+    first, as ``(key, what stays of it)``; ``None`` drops the key. None of it
+    is a result or a field of one."""
+    steps: List[tuple] = []
+    # The tier ladder: raw_governance_hint still names full mode.
+    if "response_options" in envelope:
+        steps.append(("response_options", None))
     retrieval = envelope.get("discovery_retrieval_options")
     if isinstance(retrieval, dict):
-        keep = {
+        kept = {
             key: retrieval[key]
-            for key in ("current_tier", "open_one")
+            for key in _RETRIEVAL_KEPT_FOR_ATTRIBUTION
             if retrieval.get(key) is not None
         }
-        if keep and len(keep) < len(retrieval):
-            envelope["discovery_retrieval_options"] = keep
-            dropped = True
-    return dropped
+        if kept and len(kept) < len(retrieval):
+            steps.append(("discovery_retrieval_options", kept))
+    # A truncated digest's pointer repeats the route raw_governance_hint names.
+    if envelope.get("raw_governance_hint") and "expand_with" in envelope:
+        steps.append(("expand_with", None))
+    return steps
 
 
 def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
@@ -1747,7 +1768,17 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
     optional coaching, then lower-ranked digests, then compact the last."""
     envelope["projection_truncated"] = True
     envelope["expand_with"] = "search_shared_memory(..., response_mode='full')"
-    _drop_optional_coaching(envelope)
+    envelope.pop("response_options", None)
+
+    retrieval = envelope.get("discovery_retrieval_options")
+    if isinstance(retrieval, dict):
+        keep = {
+            key: retrieval[key]
+            for key in ("current_tier", "open_one")
+            if retrieval.get(key) is not None
+        }
+        if keep:
+            envelope["discovery_retrieval_options"] = keep
 
     suggestions = envelope.get("memory_suggestions")
     # The digest-set summary fields go in before the digests are measured, so
@@ -1778,7 +1809,7 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
             discovery_id = item.get("discovery_id")
             if discovery_id is not None:
                 compact["discovery_id"] = str(discovery_id)[:128]
-            for key in ("status", "superseded_by", "age_days"):
+            for key in ("status", "superseded_by", "last_activity_days"):
                 value = item.get(key)
                 if value is not None:
                     compact[key] = value[:128] if isinstance(value, str) else value
@@ -1809,16 +1840,19 @@ def _restore_digest_attribution(
 
     First without the withheld-marker: if everything fits, no marker is
     needed and its room is not taken from attribution. If something must be
-    withheld, what is optional goes first and the restore is retried: the
-    coaching the budget steps already treat as optional, and a truncated
-    digest's `expand_with`, which repeats the full-mode route
-    `raw_governance_hint` names. Neither is a result or a field of one. Only
-    if something must still be withheld is the restore redone with the
-    marker's room reserved, so the marker says so. In a bounded search the
-    room freed is always more than the marker's ~36 bytes (the tier ladder
-    alone is ~190, and once truncation has dropped it `expand_with` is ~65),
-    so withheld attribution there is always marked; the marker-free restore
-    below is the fallback for an envelope with nothing optional left."""
+    withheld, optional coaching gives way one piece at a time, least useful
+    first (_coaching_yields), and the restore is retried after each, stopping
+    once attribution is whole. Only if something must still be withheld is
+    the restore redone with the marker's room reserved, so the marker says
+    so. In a bounded search the room freed by then is always more than the
+    marker's ~36 bytes (the tier ladder alone is ~190, and once truncation
+    has dropped it `expand_with` is ~65), so withheld attribution there is
+    always marked; the marker-free restore is the fallback for an envelope
+    with nothing optional left. Last, each piece that gave way comes back,
+    most useful first, if it still fits beside the attribution, so coaching
+    loses only the room attribution actually took. The room left by then is
+    smaller than any withheld attribution needed (each was tried with at
+    least that much free), so nothing that comes back displaces one."""
     suggestions = envelope.get("memory_suggestions")
     if not isinstance(suggestions, list) or not any(set_aside[: len(suggestions)]):
         return
@@ -1849,23 +1883,40 @@ def _restore_digest_attribution(
 
     if not restore():
         return
-    freed = _drop_optional_coaching(envelope)
-    if (
-        envelope.get("raw_governance_hint")
-        and envelope.pop("expand_with", None) is not None
-    ):
-        freed = True
-    if freed:
+    order = list(envelope)
+    yielded: Dict[str, Any] = {}
+    withheld = True
+    for key, kept in _coaching_yields(envelope):
+        yielded[key] = envelope[key]
+        if kept is None:
+            del envelope[key]
+        else:
+            envelope[key] = kept
         strip()
-        if not restore():
-            return
-    strip()
-    envelope["digest_attribution_omitted"] = True
-    if wire_bytes() <= _SEARCH_LEAN_BUDGET_BYTES:
+        withheld = restore()
+        if not withheld:
+            break
+    if withheld:
+        strip()
+        envelope["digest_attribution_omitted"] = True
+        if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+            del envelope["digest_attribution_omitted"]
         restore()
-        return
-    envelope.pop("digest_attribution_omitted", None)
-    restore()
+    for key in reversed(list(yielded)):
+        trimmed = envelope.get(key)
+        envelope[key] = yielded[key]
+        if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
+            if trimmed is None:
+                del envelope[key]
+            else:
+                envelope[key] = trimmed
+    if yielded:
+        # A key that came back goes back to its place, not the end.
+        rank = {key: index for index, key in enumerate(order)}
+        items = sorted(envelope.items(), key=lambda kv: rank.get(kv[0], len(rank)))
+        envelope.clear()
+        envelope.update(items)
+
 
 def build_experience_envelope(
     friendly_name: str,

@@ -165,7 +165,7 @@ _LEAN_DISCOVERY_FIELDS = (
     "superseded",
     "superseded_by",
     "staleness_warning",
-    "age_days",
+    "last_activity_days",
     "authority",
     # Who wrote it: the write-time display label and the identity a reader
     # passes back as agent_id_filter. Without them the default lean search
@@ -2452,10 +2452,12 @@ def _serialize_search_discoveries(
             staleness = _compute_staleness(document)
             if staleness:
                 # The prose is the canonical field (the dashboard reads it);
-                # `age_days` is the same fact in structured form, present only
-                # when the warning is, so a digest can carry it without the
-                # sentence.
-                item["age_days"], item["staleness_warning"] = staleness
+                # `last_activity_days` is the same fact in structured form,
+                # present only when the warning is, so a digest can carry it
+                # without the sentence. The name is the one
+                # knowledge(action='audit') already gives days since the last
+                # write; its `age_days` counts from creation instead.
+                item["last_activity_days"], item["staleness_warning"] = staleness
         if state.request.include_provenance:
             item["provenance"] = document.provenance
             if document.provenance_chain:
