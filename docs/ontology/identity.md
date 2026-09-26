@@ -96,7 +96,7 @@ resolvers (`src/mcp_handlers/support/agent_auth.py`).
 | `agent_id` (argument) | Target selector. **Cross-agent: UUID only.** An alias (`display_name`/`label`, `structured_agent_id`, `public_agent_id`) canonicalizes to a UUID *only when it names the caller's own identity*; a cross-agent alias is honored verbatim rather than canonicalized (`require_agent_id`), and whether it then resolves is per-tool: `require_registered_agent` scans registered metadata for a matching alias, while a UUID-keyed lookup such as `get_governance_metrics`'s refuses it (`error_type: unknown_agent`). | You are targeting a **different** agent (cross-agent/admin op) — pass its UUID. For *self*, leave it unset; the session binding resolves it. | Self-identification when you're already session-bound (passing your own label round-trips through alias resolution for nothing). |
 | `agent_id` (return field) | The **display** value (chosen `display_name`, else an auto id). | — (read-only output) | An input proof — it is cosmetic on the way out. |
 | `structured_agent_id` / `public_agent_id` | Auto-derived model+date style label. | Rarely; only as a human-readable cross-agent reference. | Proof of anything; it is server-generated and cosmetic. |
-| `display_name` / `label` | Cosmetic name: one a caller chose, or one the server assigned (at mint, `claude_code-opus_<uuid8>`; on a knowledge write by an agent with no meaningful label, `Agent_<uuid8>`). `label_source` says which (`claimed` / `auto`); the server records the label it assigned, so a claimed name that a collision renamed to the same `<name>_<uuid8>` shape still reads `claimed`. Agents minted on a server that did not yet run this change (#2478), and lazily persisted mints, carry no record and read `claimed` for the server's label. | Display only. | Identity. "Name is cosmetic" (identity-invariant #4). |
+| `display_name` / `label` | Cosmetic name: one a caller chose, or one the server assigned (at mint, `claude_code-opus_<uuid8>`; on a knowledge write by an agent with no meaningful label, `Agent_<uuid8>`). `label_source` says which (`claimed` / `auto`); the server records the label it assigned, so a claimed name that a collision renamed to the same `<name>_<uuid8>` shape still reads `claimed`. A later claim (`identity(client_session_id=..., name=...)`, or a name on a check-in) is the name displayed from then on, including after a knowledge write's `Agent_<uuid8>`, and reads `claimed`. Agents minted on a server that did not yet run this change (#2478), and lazily persisted mints, carry no record and read `claimed` for the server's label. | Display only. | Identity. "Name is cosmetic" (identity-invariant #4). |
 | `continuity_token` | Advanced **same-live-process** rebind proof (signed, carries the `aid` claim). | Resume-by-proof together with `agent_uuid`, in a still-live process. Not the day-to-day path. | A cross-process or cross-channel identity credential (performative — see "Three stances"). |
 | `thread_id` | Conversation/thread anchor. Short opaque `t-<16hex>` form (`generate_thread_id`, `src/thread_identity.py`) **and** a full-UUID form are both accepted. | Claiming thread membership/position when the caller already knows it. | A substitute for `client_session_id` — a thread groups forks; it is not the per-process write binding. |
 
@@ -160,17 +160,25 @@ is**:
    `identity/session.transport_session_is_read_proof`, to the source that
    actually produced the session key. Argument-level proof is judged by each
    gate: a `client_session_id` the caller sent and a verified
-   `continuity_token` prove a read on both, and `/mcp/` also counts an
-   `agent_uuid` argument and a UUID `X-Agent-Id` header, which REST does not.
-   The session-key derivation ignores those two, so such a read resolves on
-   the transport's own signals (the onboard pin, for example) and is
-   server-inferred. The sticky transport binding is consulted before the
-   short-circuit, so a read can also be served from a binding an earlier call
-   established: on `/mcp/` when the client sends its own `Mcp-Session-Id`, on
-   REST when the body carries a null or empty `client_session_id` and no
-   session header. See
+   `continuity_token` prove a read on both. An `agent_uuid` argument and a
+   UUID `X-Agent-Id` header are not read proof on either transport: each names
+   an agent without proving who is calling, and the session-key derivation
+   ignores both, so `/mcp/` counting them resolved such a read on the
+   transport's own signals (the onboard pin, or a connection's
+   `Mcp-Session-Id`) and served that binding's state. Neither gate consults
+   the sticky transport binding for a pre_onboard read either: it is server
+   inference, and consulted first it answered a proof-less read from a binding
+   an earlier call established (on `/mcp/` when the client sends its own
+   `Mcp-Session-Id`, which Claude Code subagents share with their parent, or
+   over UDS on the bare fingerprint; on REST when the body carries a null or
+   empty `client_session_id` and no session header). So a pre-onboard
+   self-read never shows state from a binding the server only inferred. An
+   unbound read's `next_action` is keyed on why nothing bound, with the
+   recovery the strict refusal gives for the same resolver result: a session
+   miss as above, a server-side failure retried with no onboarding offered, a
+   refused resume named with its reason. See
    `src/mcp_handlers/middleware/identity_step.py` and the REST parity guard in
-   `src/http_api.py::_resolve_http_bound_agent`.) Through `use_tool`, a target
+   `src/http_routes/access.py::_resolve_http_bound_agent`.) Through `use_tool`, a target
    resolves its session as it does named directly: the nested path does not
    copy the transport session into `client_session_id`. It does not apply the
    target's `/mcp/` argument schema, though, so an argument that schema drops
