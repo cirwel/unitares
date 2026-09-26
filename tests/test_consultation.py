@@ -1270,18 +1270,29 @@ async def test_cancelled_consultation_is_recorded_then_reraised(monkeypatch, aud
     _, pg = await audit_sinks()
     assert len(pg) == 1
     assert pg[0]["details"]["status"] == "cancelled"
+    # No caller ever holds this call's key, so no unverifiable hashes.
+    assert pg[0]["details"]["hashes"] is None
     assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
 
 
 @pytest.mark.asyncio
-async def test_identifier_shaped_echo_in_a_code_is_hashed(monkeypatch, audit_sinks):
+@pytest.mark.parametrize(
+    "token",
+    [
+        # Fails the code shape outright.
+        "sk-live-SECRETTOKEN123",
+        # Passes the code shape; only the brief-echo scrub catches it.
+        "sk_live_SECRETTOKEN123",
+    ],
+)
+async def test_identifier_shaped_echo_in_a_code_is_hashed(monkeypatch, audit_sinks, token):
     monkeypatch.setattr(
         co,
         "run_model_inference",
-        AsyncMock(return_value=_failure("sk-live-SECRETTOKEN123")),
+        AsyncMock(return_value=_failure(token)),
     )
 
-    await co.handle_consult({"brief": "sk-live-SECRETTOKEN123"})
+    await co.handle_consult({"brief": f"please rotate {token}"})
 
     _, pg = await audit_sinks()
     assert "SECRETTOKEN" not in json.dumps(pg[0])

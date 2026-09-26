@@ -903,26 +903,35 @@ def _consultation_record(
     not stored. Anyone who can read audit events can see that the
     consultation happened and how it was routed, but cannot test a guessed
     brief against the row; the caller, holding the key and the text, can
-    prove which exchange the row describes. Every other string passes
-    ``_record_value``: it is kept only when it has the shape of an
+    prove which exchange the row describes. ``request`` and ``completion``
+    hold only server-validated values (the purpose/effort/privacy enums, a
+    boolean, a thorough host id from ``_THOROUGH_PEERS``, the normalized
+    completion state). Every other string passes ``_record_value``: it is
+    kept only when it has the shape of an
     identifier (codes: of a snake_case constant), and otherwise as a keyed
     hash; any kept string that occurs verbatim in the brief is hashed as
     well (``_scrub_brief_echo``), so an identifier-shaped echo of a brief
     token is not stored as text either.
     """
     data = outcome.data
-    hashes = {
-        "scheme": "hmac-sha256",
-        "brief": _keyed_hash(key, request.brief),
-        "constructed_prompt": _keyed_hash(key, _constructed_prompt(request)),
-    }
     record: dict[str, Any] = {
         "schema": _RECORD_SCHEMA,
         "consultation_id": request.consultation_id,
         "status": data.get("status"),
         "request": dict(data.get("request") or {}),
-        "hashes": hashes,
     }
+    if data.get("status") == "cancelled":
+        # The caller never receives a cancelled call's key, so hashes under
+        # it could never be verified; the row records only that it happened.
+        record["hashes"] = None
+        hashes: dict[str, Any] = {}
+    else:
+        hashes = {
+            "scheme": "hmac-sha256",
+            "brief": _keyed_hash(key, request.brief),
+            "constructed_prompt": _keyed_hash(key, _constructed_prompt(request)),
+        }
+        record["hashes"] = hashes
     if request.effort == "thorough":
         record["request"]["thorough_host_id"] = request.thorough_host_id
     for field_name in ("delivery", "degradation", "failure"):
@@ -946,7 +955,7 @@ def _consultation_record(
                 record[field_name], request.brief, key
             )
     advice = data.get("advice")
-    if isinstance(advice, str):
+    if isinstance(advice, str) and record["hashes"] is not None:
         hashes["advice"] = _keyed_hash(key, advice)
     return record
 
