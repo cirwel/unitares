@@ -166,7 +166,7 @@ _START_SESSION_BUDGET_BYTES = 1_200
 # the earlier node being read as this process's parent.
 _START_SESSION_SIBLING_BUDGET_BYTES = 1_550
 # Each mint notice lifted into a routine envelope (_ROUTINE_MINT_NOTICES) is
-# paid for on top of its class budget; the largest measured is 248 B (a
+# paid for on top of its class budget; the largest measured is 284 B (a
 # not_on_roster verdict), a written bootstrap ack 224 B.
 _START_SESSION_NOTICE_ALLOWANCE_BYTES = 300
 _ONBOARD_RAW_MODES = frozenset({"full", "verbose", "standard"})
@@ -1378,6 +1378,28 @@ _ROUTINE_MINT_KEYS = frozenset({
     "_response_size",
 })
 
+# Keys only onboard's full and verbose shapes carry
+# (build_onboard_response_data). A caller that asked for that shape gets them
+# on a plain mint too, so they never name why the record was kept; a fact
+# the full shape shares with the minimal one (label_renamed, a lineage state)
+# still does.
+_FULL_ONBOARD_SHAPE_KEYS = frozenset({
+    "session_resolution_source",
+    "continuity_token_supported",
+    "identity_context",
+    "date_context",
+    "ownership_proof_version",
+    "welcome_message",
+    "force_new_applied",
+    "session_continuity",
+    "next_calls_ref",
+    "next_calls",
+    "system_activity",
+    "skill_resource",
+    "tool_mode",
+    "workflow",
+})
+
 
 # resident_registration statuses (src/grounding/onboard_classifier.py). Every
 # one is a normal outcome of a named mint; an unknown status is not routine.
@@ -1396,9 +1418,10 @@ def _compact_resident_registration(value: Any) -> Optional[Dict[str, Any]]:
     ordinary agent it reads not_on_roster or no_roster_configured: ~450-600 B
     explaining how resident registration works. The verdict stays visible, so
     a resident bootstrapped off the roster still sees that it was not
-    registered; not_on_roster keeps one sentence on what that costs, since the
-    tags cannot be added to this identity later. None when the block is not a
-    shape this knows, which keeps the full record.
+    registered; not_on_roster keeps what that costs, and the roster condition
+    that makes minting again no remedy, since the tags cannot be added to this
+    identity later. None when the block is not a shape this knows, which keeps
+    the full record.
     """
     if not isinstance(value, dict):
         return None
@@ -1411,9 +1434,9 @@ def _compact_resident_registration(value: Any) -> Optional[Dict[str, Any]]:
         required = " + ".join(value.get("required_tags") or []) or "the resident tags"
         roster = value.get("roster_env") or "the resident roster"
         compact["detail"] = (
-            f"Not on {roster}: minted as an ordinary agent without {required}, "
-            "so not protected from auto-archive. Those tags are granted only at "
-            "mint."
+            f"Not on {roster}: minted without {required}, so not protected from "
+            "auto-archive. Those tags are granted only at mint and only to "
+            "roster names; this identity cannot gain them."
         )
     return compact
 
@@ -1499,7 +1522,9 @@ def _thread_context_blocker(
     return None
 
 
-def _routine_mint_blockers(payload: Dict[str, Any]) -> List[str]:
+def _routine_mint_blockers(
+    payload: Dict[str, Any], shape_keys: frozenset = frozenset()
+) -> List[str]:
     """What keeps a mint from being routine, each named by its field.
 
     Empty for a fresh mint that went as asked: nothing about it needs
@@ -1508,6 +1533,8 @@ def _routine_mint_blockers(payload: Dict[str, Any]) -> List[str]:
     looking like a clean mint. Any non-empty key outside _ROUTINE_MINT_KEYS
     that is not a notice in a shape _ROUTINE_MINT_NOTICES knows (a label
     rename, a deprecation, an unknown key) also keeps the record.
+    ``shape_keys`` are keys the requested shape carries on any mint, which
+    therefore say nothing about this one.
     """
     blockers: List[str] = []
     is_new = payload.get("is_new")
@@ -1523,7 +1550,9 @@ def _routine_mint_blockers(payload: Dict[str, Any]) -> List[str]:
     if payload.get("provisional_lineage"):
         blockers.append("provisional_lineage")
     for key, value in payload.items():
-        if key in _ROUTINE_MINT_KEYS or value in (None, False, "", [], {}):
+        if key in _ROUTINE_MINT_KEYS or key in shape_keys:
+            continue
+        if value in (None, False, "", [], {}):
             continue
         compact = _ROUTINE_MINT_NOTICES.get(key)
         if compact is None or compact(value) is None:
@@ -1546,6 +1575,15 @@ def _routine_mint_blockers(payload: Dict[str, Any]) -> List[str]:
 def _is_routine_mint(payload: Dict[str, Any]) -> bool:
     """A fresh mint that went as asked (see _routine_mint_blockers)."""
     return not _routine_mint_blockers(payload)
+
+
+def _onboard_raw_requested(arguments: Dict[str, Any]) -> bool:
+    """The caller asked for the record, by the signals onboard uses to pick
+    its own full or verbose shape (_derive_onboard_response_mode)."""
+    requested = str(arguments.get("response_mode") or "").strip().lower()
+    return requested in _ONBOARD_RAW_MODES or (
+        not requested and _as_bool(arguments.get("verbose"), default=False)
+    )
 
 
 def _start_session_budget(envelope: Dict[str, Any]) -> int:
@@ -1603,17 +1641,9 @@ def _raw_governance_policy(
         # registration verdict (see _routine_mint_blockers). Anything else
         # about the mint (resume miss, reactivated archive, lineage,
         # trajectory, abnormal assurance, a label rename) keeps the record:
-        # those facts exist only here. An explicit request uses the signals
-        # onboard uses to pick its own verbose shape
-        # (_derive_onboard_response_mode).
-        arguments = arguments or {}
-        payload = payload or {}
-        requested = str(arguments.get("response_mode") or "").strip().lower()
-        include_raw = (
-            requested in _ONBOARD_RAW_MODES
-            or (not requested and _as_bool(arguments.get("verbose"), default=False))
-            or not _is_routine_mint(payload)
-        )
+        # those facts exist only here. An explicit request always gets it.
+        requested = _onboard_raw_requested(arguments or {})
+        include_raw = requested or not _is_routine_mint(payload or {})
         # No hint: the only way to act on one is another mint, and a mint that
         # was not routine already carries the record.
         return include_raw, None
@@ -2050,8 +2080,14 @@ def build_experience_envelope(
         envelope["response_shape"] = "full" if include_raw else "routine"
         if include_raw:
             # Name what kept the record, so the agent knows where to look.
-            # Absent when the only reason is an explicit full request.
-            blockers = _routine_mint_blockers(source_payload)
+            # Absent when the only reason is an explicit full request: the
+            # keys that shape adds to every mint are not reasons.
+            blockers = _routine_mint_blockers(
+                source_payload,
+                _FULL_ONBOARD_SHAPE_KEYS
+                if _onboard_raw_requested(arguments or {})
+                else frozenset(),
+            )
             if blockers:
                 envelope["response_shape_reason"] = ", ".join(blockers)
         thread_context = payload.get("thread_context")
