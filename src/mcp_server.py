@@ -15,7 +15,7 @@ Usage:
 
 Configuration (in claude_desktop_config.json or cursor mcp config):
     {
-      "governance-monitor-v1": {
+      "unitares": {
         "url": "http://127.0.0.1:8767/mcp/"
       }
     }
@@ -273,7 +273,7 @@ _LISTEN_HOST = default_listen_host()
 # MCPServer dropped both (host is applied at run time, transport security moved
 # to the streamable-HTTP manager). Pass the 1.x-only kwargs only when supported.
 _server_kwargs = dict(
-    name="governance-monitor-v1",
+    name="unitares",
     auth_server_provider=_oauth_provider,
     auth=_auth_settings,
 )

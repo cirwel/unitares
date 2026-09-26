@@ -405,7 +405,9 @@ for candidate in candidates:
         and isinstance(result, dict)
         and result.get("protocolVersion")
         and isinstance(result.get("serverInfo"), dict)
-        and result["serverInfo"].get("name") == "governance-monitor-v1"
+        # "governance-monitor-v1" was the name until the rename to "unitares";
+        # accept both so a cloud session still verifies a not-yet-redeployed server.
+        and result["serverInfo"].get("name") in ("unitares", "governance-monitor-v1")
     ):
         print("valid")
         break

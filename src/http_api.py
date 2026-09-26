@@ -207,7 +207,7 @@ def register_http_routes(
     server_start_time: float,
     server_version: str,
     has_streamable_http: bool,
-    mcp_server_name: str = "governance-monitor-v1",
+    mcp_server_name: str = "unitares",
     server_build_sha: str = "unknown",
 ):
     """
