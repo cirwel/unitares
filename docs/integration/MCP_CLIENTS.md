@@ -143,12 +143,18 @@ tool runs:
      sign-in and refresh. A client's own PKCE is never altered, and no other client gets
      either allowance.
      Each GET or POST to `/authorize` and `/token` is logged as one `[OAUTH]`
-     line (client, PKCE and scope facts, status, OAuth error; never a secret
-     or code), which is where to look when a connector fails to link. Other
-     methods (CORS preflight, HEAD) are not logged, a body over 64 KiB is
-     logged without its fields, and lines are capped at 60 a minute with a
-     count of any dropped, so an anonymous caller cannot grow the log at
-     request rate.
+     line (client, PKCE and scope facts, status, OAuth error), which is where
+     to look when a connector fails to link: an access log records only the
+     request line and status, not why a sign-in failed. The `[OAUTH]` line
+     never carries a secret, code, token, URL userinfo or URL query (the
+     access log's request line for `GET /authorize` does include its query,
+     which holds no secret). Other methods (CORS preflight, HEAD) are not
+     logged, and a body over 64 KiB is logged as unparsed. Lines are capped
+     by two budgets of 60 a minute: one for lines naming the static client,
+     so a flood under other ids cannot hide the connector's own failures,
+     and one for everything else, with a count of any dropped. The static
+     client id is public, so a caller who sends it can still spend that
+     budget.
      An incomplete static-client configuration fails OAuth setup, which
      closes the gated route rather than opening it (see below).
 

@@ -825,14 +825,18 @@ class OAuthAttemptLogger:
     """Log one line per ``/authorize`` and ``/token`` request: client, PKCE
     and scope facts, the auth style, the status and any OAuth error.
 
-    Without it a failed connector sign-in leaves no trace (the server keeps no
-    access log). Never logs a secret, a code, a verifier, a token, URL
-    userinfo or a URL query. Installed outside ``StaticClientBasicAuthShim``
+    Without it a failed connector sign-in does not say WHY: an access log,
+    where enabled, records only the request line and status. This line adds
+    the OAuth error, PKCE and scope facts, and the auth style. The line
+    itself never carries a secret, a code, a verifier, a token, URL userinfo
+    or a URL query (the access log's request line is a separate matter). Installed outside ``StaticClientBasicAuthShim``
     so it sees what the client actually sent, not the compat rewrite (other
     outer layers ignore these paths). Never changes a response: it only reads
     a prefix of a POST body and passes the whole stream on. GET and POST are
     logged; other methods (CORS preflight, HEAD) are not. Lines are
-    rate-limited (``_LineBudget``); drops are counted in the next line.
+    rate-limited by two ``_LineBudget``s of 60 a minute each: one for lines
+    naming the static client, one for all others; drops are counted in the
+    next line.
     """
 
     def __init__(self, app, *, static_client_id: str | None = None):
