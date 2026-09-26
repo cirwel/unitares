@@ -88,6 +88,22 @@ def _tier_for_source(source_key: str) -> tuple[str, str]:
     return "weak", "heuristic or unknown session source"
 
 
+# How a caller turns a server-inferred binding into a caller-proven one. The
+# write-path assurance breadcrumb and the strict write refusal both quote it,
+# so the refusal cannot drift from the `identity_assurance` it embeds (the
+# refusal kept leading with continuity_token after #1715 reordered the
+# breadcrumb). The rebind names the id identity() returns: a retry without it
+# resolves by transport inference again and is refused again.
+_CALLER_PROOF_REMEDY = (
+    "pass the client_session_id returned by start_session explicitly on "
+    "the next call; adapters may inject it automatically. If this transport "
+    "cannot retain that binding, use identity(agent_uuid=..., "
+    "continuity_token=..., resume=true) as an explicit same-live-process "
+    "rebind and pass the client_session_id it returns, instead of attaching "
+    "continuity_token to ordinary tool calls"
+)
+
+
 def _how_to_strengthen(
     tier: str,
     source_key: str,
@@ -111,14 +127,7 @@ def _how_to_strengthen(
         prefix = "to strengthen this medium-assurance binding, "
     else:
         prefix = "to strengthen this weak binding, "
-    return (
-        prefix
-        + "pass the client_session_id returned by start_session explicitly on "
-        "the next call; adapters may inject it automatically. If this transport "
-        "cannot retain that binding, use identity(agent_uuid=..., "
-        "continuity_token=..., resume=true) as an explicit same-live-process "
-        "rebind instead of attaching continuity_token to ordinary tool calls"
-    )
+    return prefix + _CALLER_PROOF_REMEDY
 
 
 def _compute_identity_assurance(
@@ -390,7 +399,10 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
             except Exception:
                 exempt = False
             if not exempt:
-                from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+                from src.mcp_handlers.identity_bootstrap import (
+                    _DEFAULT_REFUSAL_DO_NOT,
+                    strict_identity_refusal_payload,
+                )
                 from src.mcp_handlers.response_base import success_response
                 logger.info(
                     "[PROCESS_UPDATE] STRICT refusing write: identity resolved via "
@@ -399,37 +411,78 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                     ctx.identity_assurance.get("proof_origin"),
                     (ctx.agent_uuid or "")[:12],
                 )
+                # Every route below leads back to this process's own
+                # client_session_id. continuity_token appears only inside
+                # identity(), and a mint is offered last and only to a process
+                # that never called start_session (the pin can resolve a
+                # never-onboarded process to a co-located sibling); nothing
+                # here tells a process that already holds an identity to mint
+                # a second one.
                 return success_response(strict_identity_refusal_payload(
                     "process_agent_update",
                     hint=(
-                        "This write resolved your identity by transport fingerprint, "
-                        "not by a proof you supplied — under strict identity, writes "
-                        "require a caller-proven binding. Echo the continuity_token "
-                        "from your start_session() response as ownership proof; a "
-                        "session-maintaining client may instead pass an explicit "
-                        "client_session_id."
+                        "This write resolved an identity by transport inference "
+                        "(fingerprint, pin or injected session id), not by a proof "
+                        "you supplied, and under strict identity a write needs a "
+                        "caller-proven binding. To retry, "
+                        + _CALLER_PROOF_REMEDY
+                        + "."
                     ),
                     next_step=(
-                        "Retry process_agent_update with the continuity_token from "
-                        "your start_session()/identity() response; use client_session_id "
-                        "only when this client maintains a proven session binding."
+                        "Retry this write (sync_state / process_agent_update) "
+                        "with the client_session_id your start_session() "
+                        "returned. If you no longer have it, "
+                        "identity(agent_uuid=..., continuity_token=..., "
+                        "resume=true) returns it; a retry without it is refused "
+                        "again. If this process never called start_session, "
+                        "call start_session(force_new=true) first."
                     ),
                     safe_options=[
                         {
-                            "action": "retry_with_ownership_proof",
-                            "call": "process_agent_update(..., continuity_token=<onboard token>)",
-                            "when": "You have the ownership proof from this live process.",
+                            "action": "retry_with_client_session_id",
+                            "call": "sync_state(..., client_session_id=<from start_session>)",
+                            "when": (
+                                "This process called start_session and still has "
+                                "the client_session_id it returned."
+                            ),
                         },
                         {
-                            "action": "retry_with_session_binding",
-                            "call": "process_agent_update(..., client_session_id=<active session id>)",
-                            "when": "A session-maintaining client has a caller-proven active binding.",
+                            "action": "rebind_then_retry",
+                            "call": (
+                                "identity(agent_uuid=<uuid>, continuity_token=<token>, "
+                                "resume=true), then sync_state(..., "
+                                "client_session_id=<from identity>)"
+                            ),
+                            "when": (
+                                "You lost the client_session_id but still hold this "
+                                "live process's uuid and continuity_token."
+                            ),
                         },
                         {
                             "action": "stay_read_only",
-                            "call": "get_governance_metrics()",
-                            "when": "You cannot present caller-proven identity yet.",
+                            "call": "check_working_state(client_session_id=<from start_session>)",
+                            "when": (
+                                "You want to read state without writing. Without the "
+                                "client_session_id the read returns unbound."
+                            ),
                         },
+                        {
+                            "action": "start_session_first",
+                            "call": (
+                                "start_session(force_new=true), then sync_state(..., "
+                                "client_session_id=<from start_session>)"
+                            ),
+                            "when": (
+                                "This process never called start_session; the "
+                                "identity this write resolved to is not its own."
+                            ),
+                        },
+                    ],
+                    do_not=[
+                        *_DEFAULT_REFUSAL_DO_NOT,
+                        "If this process already called start_session, do not call "
+                        "start_session(force_new=true) to clear this refusal: a "
+                        "second identity splits this process's work from the first.",
                     ],
                     identity_assurance=ctx.identity_assurance,
                     surface_context={

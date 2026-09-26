@@ -533,6 +533,12 @@ async def _invoke_mcp_nested_tool(
         # Reproduce create_typed_wrapper's per-target policy. Targets outside
         # this set resolve the caller-proven MCP session from transport context;
         # copying it into arguments would downgrade it to server_inferred.
+        # This is the one /mcp/ path where that injection still runs: on a
+        # direct call FastMCP None-fills client_session_id before the typed
+        # wrapper sees it, so the wrapper never injects (see the comment at
+        # its inject site). An X-Session-ID header copied in here is therefore
+        # server_inferred on the nested path while the same header on a direct
+        # call derives caller_asserted.
         if (
             TOOLS_NEEDING_SESSION_INJECTION.matches(tool_name)
             and "client_session_id" not in nested

@@ -16,7 +16,16 @@ the full ontology:
 1. **New driver process:** call `start_session(force_new=true)` and save the
    returned `uuid` plus `client_session_id`.
 2. **Same running process:** pass `client_session_id` on check-ins and writes.
-   Client adapters should do this automatically.
+   Client adapters should do this automatically. When the minting call
+   carries no session or client signal of its own (bearer-token `/mcp/` or
+   plain REST with no `X-Session-ID`, `Mcp-Session-Id`, `X-Client-Id` or
+   OAuth client id), the `start_session` response reports `tier` weak and
+   `caller_proven` false, with `baseline` `fresh_identity`: that describes the
+   minting call, which cannot carry the id it is about to receive, not whether
+   later calls are threaded. Confirm threading on the next call:
+   `check_working_state(client_session_id=...)` returning your uuid as
+   `agent_uuid`, or `identity(client_session_id=...)` reporting
+   `caller_proven` true.
 3. **Continuing prior work in a fresh process:** call
    `start_session(force_new=true, parent_agent_id=<prior_uuid>, spawn_reason="explicit")`
    only when there is a real handoff from a finished predecessor.
@@ -96,7 +105,8 @@ resolvers (`src/mcp_handlers/support/agent_auth.py`).
 > `client_session_id`; adapters should inject it automatically. If a stateless
 > transport cannot retain that binding, the returned `continuity_token` remains
 > available for an explicit same-live-process
-> `identity(agent_uuid=..., continuity_token=..., resume=true)` rebind. It is
+> `identity(agent_uuid=..., continuity_token=..., resume=true)` rebind, which
+> returns the `client_session_id` to pass on the calls that follow. It is
 > not a field to persist or attach to every ordinary tool call, and it does not
 > resume identity across process boundaries.
 
@@ -370,6 +380,15 @@ properties, not surprises:
   `continuity_claim: resumed_by_recent_onboard_pin`, tier weak-medium).
   Long-running drivers should record the `client_session_id` their
   onboard returns and pass it on every call.
+- **Under `STRICT_IDENTITY_REQUIRED` the pin does not carry a check-in.**
+  A `sync_state` / `process_agent_update` whose binding was server-inferred
+  (pin, fingerprint, sticky cache, transport-injected session id) is refused
+  unless the resolved agent is substrate-earned, and the refusal points the
+  caller back to the `client_session_id` its `start_session` returned. That
+  refusal belongs to the check-in path; it is not a general write gate. A
+  low- or medium-severity `store_finding` resolves its writer from the bound
+  context without checking proof origin, so it can still be attributed
+  through the pin, and the co-residency caveats above still apply to it.
 - **`tier: strong` on an echoed `agent-{uuid}` is itself a
   performative claim across a process boundary — a known, bounded
   over-claim, named here so it is a property and not a surprise.** The
