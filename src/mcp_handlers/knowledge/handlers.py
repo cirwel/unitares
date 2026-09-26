@@ -3450,27 +3450,49 @@ _UNOBSERVED_IS_HONEST = (
     "'unobserved' is the honest label when the evidence is that a symptom "
     "stopped appearing."
 )
+# Which tool takes the structured fields, said on the route that matters:
+# update_finding's wire schema does not declare closure_class or
+# closure_evidence, so on /mcp/ the transport drops both from an update_finding
+# call before the handler runs, and they are neither validated nor stored.
+_CLOSURE_CLASS_ROUTE = (
+    "knowledge(action='update') also takes closure_class as one of those "
+    "strings, with closure_evidence as an object of those keys, and validates "
+    "them, but the server does not store either yet; update_finding does not "
+    "declare them."
+)
 
 
-def _unclassified_closure_note(discovery_id: str, status: str) -> str:
+def _unclassified_closure_note(
+    discovery_id: str, status: str, *, notes_passed: bool = False
+) -> str:
     """What a closing update without closure_class should do next.
 
-    Named in the form that works on every route. update_finding's wire schema
-    does not declare closure_class or closure_evidence, so on a direct /mcp/
-    call the transport drops both before the handler runs; the knowledge
-    router declares them. Until the storage layer writes them, the durable
-    place for the standard is resolution_notes, which every route carries.
+    Until the storage layer writes closure_class, the durable place for the
+    standard is resolution_notes. A call that already carried notes is told
+    they are the record rather than that it declares nothing: the notes may
+    name the standard, which is what this note and the knowledge-graph skill
+    recommend.
     """
     if not CLOSURE_CLASS_PERSISTED:
+        standards = (
+            f"{_closure_class_choices()} ({_closure_evidence_keys_prose()})"
+        )
+        if notes_passed:
+            return (
+                "This closure passed no closure_class. Its resolution_notes "
+                "are stored with the record, and they are where a later "
+                "reader will look for the standard it rests on: one of "
+                f"{standards}. If they do not name it, "
+                f"{_resolution_notes_call(discovery_id, status)} appends a "
+                f"note that does. {_UNOBSERVED_IS_HONEST} "
+                f"{_CLOSURE_CLASS_ROUTE}"
+            )
         return (
             f"{_CLOSURE_PREAMBLE} Name the standard and its evidence in "
             "resolution_notes, which is stored: "
-            f"{_resolution_notes_call(discovery_id)} appends them. The "
-            f"standard is one of {_closure_class_choices()} "
-            f"({_closure_evidence_keys_prose()}). {_UNOBSERVED_IS_HONEST} The "
-            "closure_class parameter takes the same values as a string, with "
-            "closure_evidence as an object of those keys, but the server "
-            "validates them without storing them yet."
+            f"{_resolution_notes_call(discovery_id, status)} appends them. The "
+            f"standard is one of {standards}. {_UNOBSERVED_IS_HONEST} "
+            f"{_CLOSURE_CLASS_ROUTE}"
         )
     return (
         f"{_CLOSURE_PREAMBLE} Pass closure_class as one of: "
@@ -3481,20 +3503,45 @@ def _unclassified_closure_note(discovery_id: str, status: str) -> str:
     )
 
 
-def _resolution_notes_call(discovery_id: str) -> str:
-    """A call every route carries: update_finding's wire declares both."""
-    return f"update_finding(discovery_id='{discovery_id}', resolution_notes='...')"
+def _resolution_notes_call(discovery_id: str, status: Optional[str]) -> str:
+    """The follow-up that appends resolution_notes, as this caller can make it.
 
-
-def _unstored_closure_class_note(discovery_id: str, closure_class: str) -> str:
-    """A class that passed validation, said plainly not to be on the record."""
+    update_finding's wire declares discovery_id, status and resolution_notes.
+    The status this update set is repeated because a non-owner of a high or
+    critical finding may add resolution_notes only together with a cross-agent
+    closing status (_requested_non_owner_edits): without it the same call is
+    refused. For anyone else the repeated status is a no-op, except that
+    repeating 'resolved' re-stamps resolved_at. An update that set no status
+    needs none: a non-owner of a gated finding cannot make one succeed.
+    """
+    status_argument = f", status='{status}'" if status else ""
     return (
+        f"update_finding(discovery_id='{discovery_id}'{status_argument}, "
+        "resolution_notes='...')"
+    )
+
+
+def _unstored_closure_class_note(
+    discovery_id: str,
+    closure_class: str,
+    status: Optional[str],
+    *,
+    notes_passed: bool = False,
+) -> str:
+    """A class that passed validation, said plainly not to be on the record."""
+    unstored = (
         f"closure_class '{closure_class}' passed validation, but the server "
         "does not store closure_class or closure_evidence yet, so this record "
-        "does not carry them. resolution_notes is stored: name the standard "
-        "and its evidence there, with "
-        f"{_resolution_notes_call(discovery_id)} if this call's notes did not."
+        "does not carry them. resolution_notes is stored"
     )
+    call = _resolution_notes_call(discovery_id, status)
+    if notes_passed:
+        return (
+            f"{unstored}, and this call's notes are on the record: if they do "
+            f"not name the standard and its evidence, {call} appends a note "
+            "that does."
+        )
+    return f"{unstored}: name the standard and its evidence there with {call}."
 
 
 def _validate_closure_class(
@@ -3648,7 +3695,10 @@ def _build_update_response(
         if not CLOSURE_CLASS_PERSISTED:
             # The echo above is what the caller sent, not what the row holds.
             payload["closure_class_note"] = _unstored_closure_class_note(
-                request.discovery_id, request.closure_class
+                request.discovery_id,
+                request.closure_class,
+                normalized_status,
+                notes_passed=request.resolution_note is not None,
             )
     elif normalized_status in _CLOSING_STATUSES:
         # Non-breaking on purpose: a required field would break the KG
@@ -3657,7 +3707,9 @@ def _build_update_response(
         # rather than leaving the reader to discover it later.
         payload["closure_class"] = None
         payload["closure_class_note"] = _unclassified_closure_note(
-            request.discovery_id, normalized_status
+            request.discovery_id,
+            normalized_status,
+            notes_passed=request.resolution_note is not None,
         )
     return success_response(payload, arguments=request.arguments)
 

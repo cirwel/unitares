@@ -16,8 +16,12 @@ restated copy of it:
   behaviour, not from its table;
 - whether the class is stored is derived from the three storage update paths,
   fed the update payload the real handler builds;
-- the call a hint names is checked against the /mcp/ argument model of the tool
-  it names, since FastMCP drops undeclared arguments before dispatch.
+- the resolution_notes call and the knowledge(action='update') call the notes
+  name are checked against the /mcp/ argument model of the tool they name,
+  since FastMCP drops undeclared arguments before dispatch, and the
+  resolution_notes call is also run through the real handler as the caller
+  who got the note, including a non-owner who just closed another agent's
+  high-severity finding.
 """
 
 from __future__ import annotations
@@ -85,8 +89,12 @@ def _derived_evidence_requirements() -> dict[str, tuple[str, ...]]:
     return required
 
 
-def _note(discovery_id: str = "d-1", status: str = "resolved") -> str:
-    return kg_handlers._unclassified_closure_note(discovery_id, status)
+def _note(
+    discovery_id: str = "d-1", status: str = "resolved", *, notes_passed: bool = False
+) -> str:
+    return kg_handlers._unclassified_closure_note(
+        discovery_id, status, notes_passed=notes_passed
+    )
 
 
 def test_the_derivation_sees_both_evidence_rules():
@@ -258,16 +266,37 @@ def test_interim_note_is_honest_that_the_class_is_not_stored():
     with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
         note = _note()
     assert "resolution_notes, which is stored" in note
-    assert "without storing them" in note
+    assert "does not store either yet" in note
 
 
-def _named_resolution_call(note: str, discovery_id: str) -> str:
+_NOTES = "fix_verified: deployed x; observed y"
+
+
+def _named_resolution_call(note: str, discovery_id: str) -> tuple[str, dict]:
+    """The resolution_notes call a note names, as (tool, arguments to send)."""
     call = re.search(
-        rf"(\w+)\(discovery_id='{re.escape(discovery_id)}', resolution_notes='\.\.\.'\)",
+        rf"(\w+)\((discovery_id='{re.escape(discovery_id)}'[^)]*resolution_notes='\.\.\.')\)",
         note,
     )
     assert call, f"no resolution_notes call named: {note}"
-    return call.group(1)
+    parsed = ast.parse(f"f({call.group(2)})", mode="eval").body
+    arguments = {
+        keyword.arg: ast.literal_eval(keyword.value) for keyword in parsed.keywords
+    }
+    assert arguments.pop("resolution_notes") == "..."
+    arguments["resolution_notes"] = _NOTES
+    return call.group(1), arguments
+
+
+def _through_mcp(tool_name: str, arguments: dict) -> dict:
+    """What the handler receives when a client sends ``arguments`` on /mcp/."""
+    from src import mcp_server
+
+    tool = mcp_server.mcp._tool_manager.get_tool(tool_name)
+    received = tool.fn_metadata.arg_model.model_validate(
+        arguments
+    ).model_dump_one_level()
+    return {key: value for key, value in received.items() if value is not None}
 
 
 @pytest.mark.parametrize(
@@ -275,31 +304,69 @@ def _named_resolution_call(note: str, discovery_id: str) -> str:
     [
         pytest.param(lambda: _note("d-7", "resolved"), id="unclassified-close"),
         pytest.param(
-            lambda: kg_handlers._unstored_closure_class_note("d-7", "duplicate"),
+            lambda: _note("d-7", "resolved", notes_passed=True),
+            id="unclassified-close-with-notes",
+        ),
+        pytest.param(
+            lambda: kg_handlers._unstored_closure_class_note(
+                "d-7", "duplicate", "resolved"
+            ),
             id="unstored-class",
+        ),
+        pytest.param(
+            lambda: kg_handlers._unstored_closure_class_note(
+                "d-7", "duplicate", None, notes_passed=True
+            ),
+            id="unstored-class-no-status",
         ),
     ],
 )
 def test_interim_notes_name_a_resolution_notes_call_that_works_as_written(note):
     """The named call survives the /mcp/ argument model and the update parser."""
-    from src import mcp_server
-
     with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
         text = note()
-    tool_name = _named_resolution_call(text, "d-7")
-    tool = mcp_server.mcp._tool_manager.get_tool(tool_name)
-    received = tool.fn_metadata.arg_model.model_validate(
-        {
-            "discovery_id": "d-7",
-            "resolution_notes": "fix_verified: deployed x; observed y",
-        }
-    ).model_dump_one_level()
-    assert received["resolution_notes"]
-    parsed = kg_handlers._parse_knowledge_update_request(
-        {key: value for key, value in received.items() if value is not None}
-    )
+    tool_name, arguments = _named_resolution_call(text, "d-7")
+    received = _through_mcp(tool_name, arguments)
+    assert received == arguments, "the transport dropped part of the named call"
+    parsed = kg_handlers._parse_knowledge_update_request(received)
     assert parsed.discovery_id == "d-7"
-    assert parsed.resolution_note == "fix_verified: deployed x; observed y"
+    assert parsed.resolution_note == _NOTES
+
+
+def test_interim_note_names_the_tool_that_takes_the_class_on_every_route():
+    """The note must not send a caller to update_finding(closure_class=...).
+
+    On /mcp/ that tool's argument model drops the class before the handler
+    runs, so the caller would get neither validation nor storage, only this
+    note again.
+    """
+    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
+        notes = [_note(), _note(notes_passed=True)]
+    sent = {"discovery_id": "d-1", "status": "resolved", "closure_class": "duplicate"}
+    for note in notes:
+        named = re.search(r"(\w+)\(action='update'\) also takes closure_class", note)
+        assert named, note
+        assert (
+            _through_mcp(named.group(1), {"action": "update", **sent})["closure_class"]
+            == "duplicate"
+        )
+        assert "update_finding does not declare them" in note
+        assert "closure_class" not in _through_mcp("update_finding", sent)
+
+
+def test_a_closure_that_carried_notes_is_not_told_it_declares_nothing():
+    """The notes are where the standard lives while the class is not stored."""
+    with patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False):
+        with_notes = _note(notes_passed=True)
+        without = _note()
+        class_with_notes = kg_handlers._unstored_closure_class_note(
+            "d-1", "duplicate", "resolved", notes_passed=True
+        )
+    assert "declares no standard" not in with_notes
+    assert "resolution_notes are stored with the record" in with_notes
+    assert "If they do not name it" in with_notes
+    assert "declares no standard" in without
+    assert "this call's notes are on the record" in class_with_notes
 
 
 def test_update_finding_on_mcp_carries_resolution_notes_but_not_the_class():
@@ -494,6 +561,60 @@ async def test_unclassified_close_note_names_its_own_discovery_and_status(handle
         )
 
     assert "discovery_id='d-1', status='wont_fix'" in data["closure_class_note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "closing",
+    [
+        pytest.param({}, id="unclassified"),
+        pytest.param({"closure_class": "duplicate"}, id="class-passed"),
+        pytest.param({"resolution_notes": "closed by triage"}, id="with-notes"),
+    ],
+)
+async def test_a_non_owner_can_make_the_call_its_closure_note_names(
+    handler_env, closing
+):
+    """A cross-agent close of a high-severity finding is allowed; the follow-up
+    the note names must be allowed to the same caller.
+
+    Non-owners may edit resolution_notes on a high or critical finding only
+    together with a cross-agent closing status, so a status-less
+    update_finding(discovery_id=..., resolution_notes=...) is refused to exactly
+    the caller that received the note. The KG gardener's auto-resolve takes this
+    path.
+    """
+    _server, graph = handler_env
+    stored = _discovery(agent_id="owner-a", severity="high")
+    graph.get_discovery = AsyncMock(return_value=stored)
+    as_closer = (
+        patch(
+            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            return_value=("closer-b", None),
+        ),
+        patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
+        patch.object(kg_handlers, "CLOSURE_CLASS_PERSISTED", False),
+    )
+    with as_closer[0], as_closer[1], as_closer[2]:
+        closed = parse_result(
+            await kg_handlers.handle_update_discovery_status_graph(
+                {"discovery_id": "d-1", "status": "resolved", **closing}
+            )
+        )
+        assert closed["success"] is True, closed
+        tool_name, arguments = _named_resolution_call(
+            closed["closure_class_note"], "d-1"
+        )
+        assert tool_name == "update_finding"
+        followed = parse_result(
+            await kg_handlers.handle_update_discovery_status_graph(
+                _through_mcp(tool_name, arguments)
+            )
+        )
+
+    assert followed["success"] is True, followed
+    written = graph.update_discovery.await_args.args[1]
+    assert _NOTES in written["details"]
 
 
 def test_invalid_class_refusal_names_values_as_prose():
