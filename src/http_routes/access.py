@@ -697,21 +697,42 @@ async def _resolve_http_session_binding(
         if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
             # The REST form of the MCP middleware's rule (#945 section 1): a
             # pre_onboard read short-circuits only when the caller transmitted
-            # no proof in this request. A caller-asserted session (an explicit,
-            # non-transport-injected client_session_id, or an X-Session-ID
-            # header) resolves read-only, so an agent can read its own state
-            # over REST, as it can on /mcp/. The two gates are not the same
-            # predicate: this one takes any caller_asserted derivation, which
-            # on REST also admits an X-Client-Id header that the MCP
-            # short-circuit does not count (it names a client, not a process),
-            # while the MCP one checks argument presence (a verified
-            # continuity_token, client_session_id, agent_uuid, a UUID
-            # X-Agent-Id) plus an X-Session-ID that won the derivation. A server-inferred derivation (fingerprint, pin,
-            # injected session id) still stays unbound: a read never mints,
-            # and never shows a co-located sibling's state.
-            from src.mcp_handlers.context import get_session_proof_origin
+            # proof of its own process session in this request. That is a
+            # client_session_id the caller sent in the body, or an
+            # X-Session-ID header (a verified continuity_token is handled
+            # above). A server-inferred derivation (fingerprint, pin) stays
+            # unbound: a read never mints, and never shows a co-located
+            # sibling's state.
+            #
+            # A header reaches this point as a client_session_id that
+            # http_routes/tools._inject_http_client_session derived from it,
+            # so the derivation below sees only explicit_client_session_id.
+            # The injection recorded which header produced it, and the header
+            # is judged by the predicate the /mcp/ short-circuit uses. Until
+            # 2026-09 this gate took any caller_asserted derivation, which on
+            # REST admitted an X-Client-Id header that /mcp/ does not count:
+            # it names a client, not a process, so two processes of one client
+            # could read each other's state. No caller in this repo, the
+            # governance plugin, the discord bridge, anima-mcp or the host
+            # adapter sends X-Client-Id, and in the 14 days to 2026-09-26 no
+            # pre-onboard read on audit.tool_usage carried a session id of any
+            # shape an X-Client-Id value would take. The OAuth client id and
+            # Mcp-Session-Id never reach this gate: REST session signals
+            # (_build_http_session_signals) carry neither.
+            from src.mcp_handlers.context import (
+                get_csid_injected_source,
+                get_session_proof_origin,
+            )
+            from src.mcp_handlers.identity.session import (
+                transport_session_is_read_proof,
+            )
 
             if get_session_proof_origin() != "caller_asserted":
+                return None
+            injected_source = get_csid_injected_source()
+            if injected_source is not None and not transport_session_is_read_proof(
+                injected_source
+            ):
                 return None
             proof_read = True
 

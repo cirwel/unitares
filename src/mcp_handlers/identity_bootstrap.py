@@ -60,6 +60,195 @@ _DEFAULT_REFUSAL_DO_NOT = (
 )
 
 
+# ─── Recovery wording for a process that may already hold an identity ───
+#
+# One source for every surface that tells a caller how to get back to its own
+# identity: the unbound metrics read (core._unbound_next_action), the strict
+# write refusal for a server-inferred binding and the identity_assurance
+# breadcrumb (updates/phases.py, mirrored word for word by
+# services/identity_payloads._how_to_strengthen), and the strict refusal for a
+# call that resolved no identity (session_miss_refusal_options below). When
+# the caller sent no id of its own, each leads with the client_session_id its
+# own start_session returned, and a mint is offered only to a process that
+# never called start_session: a process that already holds an identity and
+# mints again splits its work across two. When the caller sent an id that
+# names nothing, repeating it cannot help; the rebind leads there, and the
+# mint is for a process with nothing on this server to rebind to.
+
+# How a caller turns a server-inferred binding into a caller-proven one. The
+# rebind names the id identity() returns: a retry without it resolves by
+# transport inference again and is refused again.
+CALLER_PROOF_REMEDY = (
+    "pass the client_session_id returned by start_session explicitly on "
+    "the next call; adapters may inject it automatically. If this transport "
+    "cannot retain that binding, use identity(agent_uuid=..., "
+    "continuity_token=..., resume=true) as an explicit same-live-process "
+    "rebind and pass the client_session_id it returns, instead of attaching "
+    "continuity_token to ordinary tool calls"
+)
+
+# A caller-sent id that resolves to nothing: repeating it cannot help.
+SESSION_ID_NAMES_NO_IDENTITY = (
+    "The client_session_id on this call names no identity on this server "
+    "(never minted here, or its binding expired), so repeating it cannot help."
+)
+
+# The mint, with lineage only for a real handoff.
+FRESH_MINT_STEP = (
+    "start_session(force_new=true); add parent_agent_id=<prior_uuid>, "
+    "spawn_reason='explicit' only to continue a finished predecessor's work."
+)
+
+REBIND_RETURNS_SESSION_ID = (
+    "identity(agent_uuid=..., continuity_token=..., resume=true) returns it"
+)
+
+DO_NOT_MINT_A_SECOND_IDENTITY = (
+    "If this process already called start_session, do not call "
+    "start_session(force_new=true) to clear this refusal: a second identity "
+    "splits this process's work from the first."
+)
+
+
+def session_miss_refusal_options(
+    tool_name: str,
+    *,
+    caller_sent_session_id: bool,
+) -> dict:
+    """hint / next_step / safe_options / do_not for a call that resolved no
+    identity under STRICT_IDENTITY_REQUIRED (``session_resolve_miss`` on
+    /mcp/, an unbound required call on REST).
+
+    The defaults above lead with ``onboard(force_new=true)``, which is right
+    for the bare-onboard lineage refusal and wrong here: the most common
+    caller of a required tool that resolves nothing is a process that called
+    start_session and did not send its id on this call. Telling it to mint
+    splits its work across two identities.
+
+    Branches only on what the caller itself sent, as the unbound read does.
+    With no client_session_id of its own on the call, the retry with that id
+    leads and the mint is the branch for a process that never called
+    start_session. With a caller-sent id that names nothing, repeating it
+    cannot help, so the rebind leads, and the mint is for a process that
+    cannot rebind (it never onboarded here, or lost its uuid and token).
+    ``caller_sent_session_id`` must exclude an id the transport put on the
+    call: that id is the server's inference, not the caller's.
+    """
+    retry_call = f"{tool_name}(..., client_session_id=<from start_session>)"
+    retry_option = {
+        "action": "retry_with_client_session_id",
+        "call": retry_call,
+        "when": (
+            "This process called start_session and still has the "
+            "client_session_id it returned."
+        ),
+    }
+    rebind_option = {
+        "action": "rebind_then_retry",
+        "call": (
+            "identity(agent_uuid=<uuid>, continuity_token=<token>, "
+            f"resume=true), then {tool_name}(..., "
+            "client_session_id=<from identity>)"
+        ),
+        "when": (
+            "You lost the client_session_id but still hold this live "
+            "process's uuid and continuity_token."
+        ),
+    }
+    read_only_option = {
+        "action": "stay_read_only",
+        "call": "check_working_state(client_session_id=<from start_session>)",
+        "when": (
+            "You want to read state without writing. Without the "
+            "client_session_id the read returns unbound."
+        ),
+    }
+    mint_option = {
+        "action": "start_session_first",
+        "call": (
+            f"start_session(force_new=true), then {tool_name}(..., "
+            "client_session_id=<from start_session>)"
+        ),
+        "when": "This process never called start_session on this server.",
+    }
+    lineage_option = {
+        "action": "declare_lineage",
+        "call": (
+            "start_session(force_new=true, parent_agent_id=<prior UUID>, "
+            "spawn_reason='explicit')"
+        ),
+        "when": (
+            "This process never called start_session, and a finished "
+            "predecessor explicitly handed its work to you."
+        ),
+    }
+    if caller_sent_session_id:
+        # The id this process sent is gone (or was never minted here), so no
+        # retry with it can succeed. A process that still holds its uuid and
+        # continuity_token rebinds; one that cannot (never onboarded here, or
+        # lost both) has no identity on this server to split, and mints.
+        return {
+            "hint": (
+                SESSION_ID_NAMES_NO_IDENTITY
+                + " Under strict identity nothing is minted for this call. "
+                "If this process still holds its uuid and continuity_token, "
+                "use identity(agent_uuid=..., continuity_token=..., "
+                "resume=true) as an explicit same-live-process rebind and "
+                "pass the client_session_id it returns. Otherwise mint one: "
+                + FRESH_MINT_STEP
+            ),
+            "next_step": (
+                "If this process still holds its uuid and continuity_token, "
+                "rebind with identity(agent_uuid=..., continuity_token=..., "
+                f"resume=true) and retry {tool_name} with the "
+                "client_session_id it returns. Otherwise call "
+                "start_session(force_new=true) first."
+            ),
+            "safe_options": (
+                rebind_option,
+                {
+                    **mint_option,
+                    "when": (
+                        "This process cannot rebind: it never called "
+                        "start_session on this server, or it no longer holds "
+                        "its uuid and continuity_token."
+                    ),
+                },
+                {
+                    **lineage_option,
+                    "when": (
+                        "As start_session_first, and a finished predecessor "
+                        "explicitly handed its work to you."
+                    ),
+                },
+            ),
+            "do_not": _DEFAULT_REFUSAL_DO_NOT,
+        }
+    return {
+        "hint": (
+            "No identity resolved for this call, and under strict identity "
+            "nothing is minted for it: you sent no client_session_id, and "
+            "nothing else on the call names a session this server knows. To "
+            "retry, " + CALLER_PROOF_REMEDY + "."
+        ),
+        "next_step": (
+            "If this process already called start_session, retry "
+            f"{tool_name} with the client_session_id it returned. If you no "
+            "longer have it, " + REBIND_RETURNS_SESSION_ID + ". If this "
+            "process never called start_session, call "
+            "start_session(force_new=true) first."
+        ),
+        "safe_options": (
+            retry_option,
+            rebind_option,
+            read_only_option,
+            mint_option,
+            lineage_option,
+        ),
+        "do_not": (*_DEFAULT_REFUSAL_DO_NOT, DO_NOT_MINT_A_SECOND_IDENTITY),
+    }
+
+
 # The #425 typed refusal is the one success-SHAPED payload that is not a
 # success: `strict_identity_refusal_payload` is deliberately "a structured
 # success-shape, not an error" (see below), so it carries `success: true` with

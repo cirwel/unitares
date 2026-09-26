@@ -953,15 +953,15 @@ def _build_agent_display_payload(
         payload["structured_agent_id"] = public_handle
     if display_name:
         payload["display_name"] = display_name
-    if display_name and display_name not in (
-        public_agent_id,
-        structured_id,
-    ):
-        payload["label_source"] = "claimed"
-    elif display_name or public_handle:
-        payload["label_source"] = "auto"
-    else:
-        payload["label_source"] = "uuid"
+    from src.services.identity_payloads import label_source_for
+
+    payload["label_source"] = label_source_for(
+        display_name,
+        public_agent_id=public_agent_id,
+        structured_id=structured_id,
+        auto_label=_agent_metadata_text(meta, "auto_label"),
+        has_public_handle=bool(public_handle),
+    )
     return payload
 
 

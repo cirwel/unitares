@@ -495,6 +495,35 @@ def _build_pin_fingerprint_candidates(
 # stranger's session. Every other ladder source names the caller's own transport.
 FOREIGN_DESTINATION_SOURCES = frozenset({"pinned_onboard_session"})
 
+# Transport-carried session sources that a pre-onboard read accepts as proof
+# that the caller named its OWN process session. Only X-Session-ID qualifies:
+# a client sets it per process. The other caller-asserted transport sources
+# name something wider than a process: a client-sent Mcp-Session-Id is scoped
+# to a connection (Claude Code subagents share the parent's connection), and
+# the OAuth client id and an X-Client-Id header name a client, so two
+# processes of one client present the same value. Such a read stays unbound
+# instead of serving another process's state.
+#
+# Both read gates judge a header through this one predicate: the /mcp/
+# short-circuit (middleware/identity_step.py) and the REST prebind
+# (http_routes/access.py). They drifted before it existed: REST accepted
+# any caller-asserted derivation, X-Client-Id included, while /mcp/ accepted
+# only X-Session-ID. Argument-level proof (a client_session_id the caller sent,
+# a verified continuity_token) is judged by each gate on its own, because
+# only the transport knows whether an id in the arguments was sent or put
+# there.
+READ_PROOF_TRANSPORT_SOURCES = frozenset({"x_session_id"})
+
+
+def transport_session_is_read_proof(source: Optional[str]) -> bool:
+    """Whether a session the transport carried proves a pre-onboard read.
+
+    ``source`` is the ``derive_session_key`` ladder source that produced the
+    key from transport signals (never ``explicit_client_session_id``: an id
+    in the arguments is judged by the gate that knows who put it there).
+    """
+    return source in READ_PROOF_TRANSPORT_SOURCES
+
 # Refusal reason for a destination whose provenance the caller did not declare.
 # Not a ladder source; named so a log line or payload can be told apart from a
 # source-label refusal without knowing the helper's internals.

@@ -155,18 +155,25 @@ def unbound_metrics_payload(*, caller_sent_session_id: bool = False) -> dict:
 
 
 def _unbound_next_action(caller_sent_session_id: bool) -> dict:
-    """The unbound read's next step, keyed only on what the caller sent."""
+    """The unbound read's next step, keyed only on what the caller sent.
+
+    The shared sentences come from identity_bootstrap, the one source for
+    recovery wording that the strict refusals quote as well.
+    """
+    from src.mcp_handlers.identity_bootstrap import (
+        FRESH_MINT_STEP,
+        SESSION_ID_NAMES_NO_IDENTITY,
+    )
+
     if caller_sent_session_id:
         return {
             "tool": "start_session",
             "example": "start_session(force_new=true)",
             "note": (
-                "The client_session_id on this call names no identity on this "
-                "server (never minted here, or its binding expired), so "
-                "repeating it cannot help. Mint one: "
-                "start_session(force_new=true); add parent_agent_id=<prior_uuid>, "
-                "spawn_reason='explicit' only to continue a finished "
-                "predecessor's work. get_governance_metrics is read-only; it "
+                SESSION_ID_NAMES_NO_IDENTITY
+                + " Mint one: "
+                + FRESH_MINT_STEP
+                + " get_governance_metrics is read-only; it "
                 "creates no identity and no state for unbound callers."
             ),
         }
@@ -178,9 +185,8 @@ def _unbound_next_action(caller_sent_session_id: bool) -> dict:
             "If this process already called start_session, repeat this "
             "read with the client_session_id it returned: "
             "check_working_state(client_session_id=...). Otherwise "
-            "start_session(force_new=true); add parent_agent_id=<prior_uuid>, "
-            "spawn_reason='explicit' only to continue a finished "
-            "predecessor's work. get_governance_metrics is read-only; "
+            + FRESH_MINT_STEP
+            + " get_governance_metrics is read-only; "
             "it creates no identity and no state for unbound callers. "
             "Avoid bare identity()/start_session() — without force_new or a "
             "proof (client_session_id / continuity_token) they can mint "
