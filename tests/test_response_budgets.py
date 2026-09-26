@@ -24,10 +24,11 @@ start_session budgets per mint class, measured on the real handler
   establish lineage. That sentence is kept, not trimmed to fit: it is what
   stops the earlier node's uuid being read as this process's parent.
 - each lifted mint notice adds up to 300 B on top of its class. A named
-  mint's compact resident_registration is 248 B for not_on_roster (the
-  status plus one sentence on what it costs) and 70-81 B for the other
-  statuses; a written bootstrap ack is 224 B. Named at position 1:
-  1,388 B against 1,500; named sibling_locus: 1,697 B against 1,850.
+  mint's compact resident_registration is 284 B for not_on_roster (the
+  status plus one sentence on what it costs and why minting again does not
+  help) and 70-81 B for the other statuses; a written bootstrap ack is
+  224 B. Named at position 1: 1,424 B against 1,500; named sibling_locus:
+  1,733 B against 1,850.
 """
 
 from __future__ import annotations
@@ -381,14 +382,17 @@ async def test_a_declared_lineage_mint_keeps_the_whole_record_and_says_why():
 
 
 @pytest.mark.asyncio
-async def test_a_label_rename_keeps_the_whole_record_and_says_why():
-    """A refused label is abnormal and exists only in this response."""
+@pytest.mark.parametrize("mode", [{}, {"response_mode": "full"}], ids=["default", "full"])
+async def test_a_label_rename_keeps_the_whole_record_and_says_why(mode):
+    """A refused label is abnormal and exists only in this response, so it is
+    named as the reason under an explicit full request too."""
+    arguments = {**_NAMED, **mode}
     with patch(
         "src.mcp_handlers.identity.handlers.set_agent_label_resolved",
         AsyncMock(return_value="my-agent_4dc58779"),
     ):
-        payload = await onboard_producer.mint(_NAMED)
-    env, _wire_bytes = await onboard_producer.start_session(_NAMED, payload)
+        payload = await onboard_producer.mint(arguments)
+    env, _wire_bytes = await onboard_producer.start_session(arguments, payload)
 
     assert payload["label_renamed"]["requested"] == "my-agent"
     assert env["response_shape"] == "full"
@@ -777,6 +781,9 @@ def test_a_resident_registration_verdict_is_lifted_compact(name, stamped, roster
         assert "only at mint" in lifted["detail"]
         assert "auto-archive" in lifted["detail"]
         assert "bootstrap" not in lifted["detail"]
+        # The condition that makes minting again no remedy stays with it.
+        assert "only to roster names" in lifted["detail"]
+        assert "this identity cannot gain them" in lifted["detail"]
     assert _wire({"resident_registration": lifted}) <= START_SESSION_NOTICE_ALLOWANCE
     assert _wire(env) <= START_SESSION_BUDGET + START_SESSION_NOTICE_ALLOWANCE
 
@@ -810,12 +817,44 @@ async def test_a_written_bootstrap_is_lifted_whole():
     assert "_response_size" not in env
 
 
-def test_an_explicit_full_request_on_a_routine_mint_gives_no_reason():
-    env = build_experience_envelope(
-        "start_session", "onboard", _onboard_payload(), {"response_mode": "full"}
-    )
+_EXPLICIT_FULL = {
+    "full": {"response_mode": "full"},
+    "full_verbose": {"response_mode": "full", "verbose": True},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", list(_EXPLICIT_FULL))
+@pytest.mark.parametrize("mint_class", list(_MINT_CLASSES))
+async def test_an_explicit_full_request_on_a_plain_mint_gives_no_reason(mint_class, mode):
+    """The handler builds its full (and verbose) shape for these, so the keys
+    that shape adds to every mint must not read as why the record was kept.
+    governance-start tells agents to ask for it to read
+    session_resolution_source."""
+    arguments, position, _budget = _MINT_CLASSES[mint_class]
+    arguments = {**arguments, **_EXPLICIT_FULL[mode]}
+    payload = await onboard_producer.mint(arguments, position=position)
+    env, _wire_bytes = await onboard_producer.start_session(arguments, payload)
+
+    # The premise: the handler built the full shape.
+    assert "identity_context" in payload
+    assert ("next_calls" in payload) is (mode == "full_verbose")
     assert env["response_shape"] == "full"
-    assert "response_shape_reason" not in env
+    assert env["raw_governance"] == payload
+    assert "response_shape_reason" not in env, env.get("response_shape_reason")
+    assert env["session_resolution_source"] == payload["session_resolution_source"]
+
+
+@pytest.mark.asyncio
+async def test_the_full_shape_keys_are_exactly_what_the_full_shape_adds():
+    """_FULL_ONBOARD_SHAPE_KEYS is taken from the handler, not written down: a
+    key the full shape starts carrying must be classified here (shape or
+    fact), and a fact both shapes carry must never be in the set."""
+    minimal = await onboard_producer.mint(_MODEL)
+    full = await onboard_producer.mint({**_MODEL, **_EXPLICIT_FULL["full_verbose"]})
+
+    assert minimal["response_mode"] == "minimal"
+    assert set(full) - set(minimal) == envelope_step._FULL_ONBOARD_SHAPE_KEYS
 
 
 def test_empty_extras_do_not_make_a_mint_unusual():

@@ -3,18 +3,21 @@
 The routine-mint budget test used to feed the envelope a hand-written
 anonymous mint at thread position 1, the one class that fit its budget. The
 common cases (a fresh uuid on a shared thread, a named mint) kept returning
-the whole onboard record a second time under raw_governance, ~4.4 KB, while
+the whole onboard record a second time under raw_governance, 4.4-5.2 KB, while
 the test stayed green.
 
 `mint()` runs the real onboard handler (``handle_onboard_v2``) with its I/O
-mocked, so the payload is whatever the handler builds: the thread context
+mocked, on the arguments dispatch hands it for a start_session call (the
+alias resolved and the parameters validated, which fills response_mode's
+default), so the payload is whatever the handler builds: the thread context
 from ``build_fork_context``, the lineage state from the R2 path, the resident
 verdict from ``resident_registration`` and a signed continuity_token. Only
 storage is faked: the thread position and its earlier nodes, the recorded
 onboard provenance, and the tag write. `start_session()` then passes it
 through the real alias, validation and envelope steps and returns the wire
-text. Run it under pytest: tests/conftest.py isolates ``src.db.get_db`` and
-the audit writers, which some onboard paths reach directly.
+text. It runs only under pytest: tests/conftest.py isolates ``src.db.get_db``
+and the audit writers, which some onboard paths reach directly, and outside
+it they write to the configured governance database.
 """
 
 from __future__ import annotations
@@ -73,6 +76,17 @@ def _db(position: int, nodes: list, lineage_row: Optional[dict]) -> AsyncMock:
     return db
 
 
+async def _dispatched(arguments: Dict[str, Any]) -> Tuple[str, Dict[str, Any], Any]:
+    """A start_session call through the real alias and validation steps, as
+    dispatch runs them before the handler."""
+    from src.mcp_handlers.middleware import DispatchContext
+    from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
+
+    ctx = DispatchContext()
+    name, resolved, ctx = await resolve_alias("start_session", dict(arguments), ctx)
+    return await validate_params(name, resolved, ctx)
+
+
 async def mint(
     arguments: Dict[str, Any],
     *,
@@ -85,8 +99,14 @@ async def mint(
     ``lineage_row`` is what storage reports for the new row's lineage
     (``read_lineage_state``) after a declaration.
     """
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        raise RuntimeError(
+            "onboard_producer.mint must run under pytest: tests/conftest.py "
+            "isolates the database and the audit writers the handler reaches"
+        )
     from src.mcp_handlers.identity import handlers
 
+    _name, resolved, _ctx = await _dispatched(arguments)
     nodes = [EARLIER_NODE] if position > 1 else []
     nodes = nodes + [{"agent_id": "self", "thread_position": position, "label": None}]
     db = _db(position, nodes, lineage_row)
@@ -113,6 +133,7 @@ async def mint(
          patch("src.mcp_handlers.identity.resolution.get_db", return_value=db), \
          patch("src.mcp_handlers.identity.persistence.get_db", return_value=db), \
          patch("src.cache.redis_client.get_redis", new=_get_raw_redis), \
+         patch("src.cache.metadata_cache.get_redis", new=_get_raw_redis), \
          patch("src.mcp_handlers.context.get_mcp_session_id", return_value=None), \
          patch("src.mcp_handlers.context.get_context_session_key",
                return_value="203.0.113.7:ua-0f3e"), \
@@ -124,7 +145,7 @@ async def mint(
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
          patch("src.mcp_handlers.identity.shared._register_uuid_prefix"), \
          patch("src.agent_storage.update_agent", AsyncMock(return_value=True)):
-        result = await handlers.handle_onboard_v2(dict(arguments))
+        result = await handlers.handle_onboard_v2(dict(resolved))
     return json.loads(result[0].text)
 
 
@@ -133,13 +154,9 @@ async def start_session(
 ) -> Tuple[Dict[str, Any], int]:
     """The start_session envelope for ``payload`` and its wire size in bytes,
     through the real alias, validation and envelope steps."""
-    from src.mcp_handlers.middleware import DispatchContext
     from src.mcp_handlers.middleware.envelope_step import apply_experience_envelope
-    from src.mcp_handlers.middleware.params_step import resolve_alias, validate_params
 
-    ctx = DispatchContext()
-    name, resolved, ctx = await resolve_alias("start_session", dict(arguments), ctx)
-    name, resolved, ctx = await validate_params(name, resolved, ctx)
+    name, resolved, ctx = await _dispatched(arguments)
     out = await apply_experience_envelope(
         name, dict(resolved), ctx,
         [TextContent(type="text", text=json.dumps(payload))],
