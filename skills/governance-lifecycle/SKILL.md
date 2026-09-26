@@ -94,7 +94,7 @@ Default rules:
 1. Any fresh process: call `start_session(force_new=true)` with no parent. Co-location in a workspace is not lineage.
 2. Declare lineage only for a real causal event — a dispatched subagent (`parent_agent_id="<dispatcher-uuid>", spawn_reason="subagent"`, usually set automatically by the dispatcher) or a deliberate handoff from an exited prior session (`parent_agent_id="<prior-uuid>", spawn_reason="explicit"`). Declaring a currently-live succession parent is rejected.
 3. Same live process or explicit ownership rebind: call `identity(agent_uuid="<uuid>", continuity_token="<token>", resume=true)`.
-4. Ordinary same-process check-ins: rely on the active session binding or `client_session_id`; reserve `continuity_token` for explicit proof-owned rebinds.
+4. Ordinary same-process check-ins: pass `client_session_id` (adapters may inject it). Bearer-token `/mcp/` with no session header keeps no binding between calls, and an OAuth client's binding is per client, shared across its conversations, not per process. Reserve `continuity_token` for explicit proof-owned rebinds.
 
 Avoid these patterns:
 
@@ -223,7 +223,7 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 ## Identity
 
 - UUID is an identity anchor, not proof that the current process owns that identity
-- Session binding can happen via transport session, `client_session_id`, or short-lived continuity token
+- Session binding can happen via a transport session signal the client sends (for example an `X-Session-ID` header set per process, never a static value shared across processes; stateless `/mcp/` issues no protocol session of its own), `client_session_id`, or short-lived continuity token
 - Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. A destination that is another agent's stable `agent-...` session id (for example one sent in an `X-Session-ID` header) is refused the same way, as `rebind_refused: "foreign_stable_session_id"`, whichever transport header carried it. Your identity is unchanged; retry from a client that sends its own session identifier.
 - When continuity seems unclear, call `identity(client_session_id="<your client_session_id>")`. Do not call it with no arguments: a call carrying no proof signal at all is gated to a fresh mint (`[FRESH_INSTANCE]`, S13), so it answers with a newly created identity rather than reporting on yours, and leaves a spurious record behind. The gate is what keeps the unauthenticated read off the User-Agent pin path; passing your own `client_session_id` is what makes the answer about you.
 - Trust the answer only when `identity_assurance.caller_proven` is true; a `weak` tier with `proof_origin: "server_inferred"` means the server guessed.
@@ -235,7 +235,7 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
   - `identity_assurance`
   - `deprecations`
 
-Strong ownership proof is better than implicit continuity. If the runtime falls back to weak signals such as fingerprinting, mint a fresh process identity and declare lineage.
+Strong ownership proof is better than implicit continuity. If a call in a process that already called `start_session` resolved only by weak signals such as fingerprinting, pass that process's `client_session_id` on the next call; minting again would split its work across two identities. Mint a fresh identity only for a new process, and declare lineage only from a finished predecessor.
 
 ## Recovery
 

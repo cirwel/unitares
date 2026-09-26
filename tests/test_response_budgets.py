@@ -174,7 +174,9 @@ def test_default_start_session_fits_budget_and_keeps_what_adapters_read():
     assert env["is_new"] is True
     # "fresh because asked" vs "fresh because a resume missed".
     assert env["identity_resolution_outcome"] == "minted_force_new"
-    # The operator guide tells agents to confirm the binding from these.
+    # The minting call's own assurance: weak / ip_ua_fingerprint by
+    # construction on a transport with no session signal, and `baseline` says
+    # that is expected. The operator guide confirms threading on the NEXT call.
     assert env["identity_assurance"] == {
         "tier": "weak",
         "session_source": "ip_ua_fingerprint",

@@ -377,14 +377,33 @@ def _create_session_wrapper(
             set_csid_transport_injected(False)
         except Exception:
             pass
-        # Inject session if available and not already provided
+        # Inject session if available and not already provided.
+        #
+        # UNREACHABLE on a direct /mcp/ call for any tool whose schema declares
+        # client_session_id (every session-injected tool and alias does).
+        # FastMCP validates the arguments before this wrapper runs and hands it
+        # every declared parameter, None-filled when the caller omitted it
+        # (mcp 2.x `func_metadata.ArgModelBase.model_dump_one_level`), so the
+        # key is always present here; the filter below then drops the None.
+        # An omitted id therefore reaches dispatch absent, and derive_session_key
+        # resolves the call from transport signals (steps 3-7): a client-sent
+        # Mcp-Session-Id, an X-Session-ID header, the OAuth client id and an
+        # X-Client-Id header are caller_asserted; only the fingerprint pin is
+        # server_inferred.
+        # Only direct wrapper calls (tests) and the nested use_tool path
+        # (tool_registration._invoke_mcp_nested_tool, which injects on its own)
+        # reach an injection. Do not "repair" this by testing the value instead
+        # of the key: that would copy an X-Session-ID header into arguments
+        # flagged transport-injected, downgrading header callers' writes to
+        # server_inferred, which STRICT_IDENTITY_REQUIRED refuses. Pinned by
+        # tests/test_mcp_x_session_id_read_parity.py.
         if session_extractor and ctx:
             session_id = session_extractor(ctx)
             if session_id and "client_session_id" not in kwargs:
                 kwargs["client_session_id"] = session_id
                 logger.debug(f"[TYPED_WRAPPER] {tool_name}: injected session_id={session_id}")
                 # Transport-injected, not caller-sent — mark so resolution does
-                # not treat it as caller-proven (parity with the REST inject site).
+                # not treat it as caller-proven.
                 try:
                     set_csid_transport_injected(True)
                 except Exception:

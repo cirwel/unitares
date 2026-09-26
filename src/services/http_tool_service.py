@@ -178,13 +178,19 @@ async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any
     # ignorance payload, guard carried per-transport.
     if not arguments.get("agent_id"):
         try:
-            from src.mcp_handlers.context import get_context_resolved_agent_id
+            from src.mcp_handlers.context import (
+                get_context_resolved_agent_id,
+                get_csid_transport_injected,
+            )
 
             bound_agent_id = get_context_resolved_agent_id()
+            transport_injected = get_csid_transport_injected()
         except Exception:
             bound_agent_id = None
+            transport_injected = False
         if not bound_agent_id:
-            return unbound_metrics_payload()
+            sent = bool(arguments.get("client_session_id")) and not transport_injected
+            return unbound_metrics_payload(caller_sent_session_id=sent)
     agent_id, error = require_agent_id(arguments)
     if error:
         return [error]

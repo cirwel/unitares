@@ -7,6 +7,7 @@ substrate-earned residents, which legitimately re-resolve by fingerprint.
 """
 
 import json
+import re
 
 import pytest
 from unittest.mock import MagicMock
@@ -141,10 +142,17 @@ async def test_strict_refuses_injected_csid_write(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_strict_refusal_payload_leads_with_continuity_token(monkeypatch):
-    """A denied write teaches the same credential order as success paths:
-    continuity_token first, client_session_id only as the session-maintaining
-    alternative. It also carries structured state instead of prose only."""
+async def test_strict_refusal_payload_leads_with_client_session_id(monkeypatch):
+    """A denied write points the caller back to its own client_session_id.
+
+    The refusal is reached mostly in the dropped-id case, so its routes lead
+    with the id start_session returned; continuity_token appears only inside
+    an identity(..., resume=true) rebind, which then hands back the id to
+    retry with. It used to lead with continuity_token on the write itself,
+    contradicting the contract and the how_to_strengthen block it embeds. A
+    mint is offered last, and only to a process that never called
+    start_session (the pin can resolve such a process to a sibling).
+    """
     monkeypatch.setattr(ib, "is_strict_identity_required", lambda: True)
     _patch_ctx(monkeypatch, agent_uuid="sibling-uuid",
                source="explicit_client_session_id", proof_origin="server_inferred")
@@ -157,12 +165,64 @@ async def test_strict_refusal_payload_leads_with_continuity_token(monkeypatch):
     hint = payload["hint"]
     assert "continuity_token" in hint
     assert "client_session_id" in hint
-    assert hint.index("continuity_token") < hint.index("client_session_id")
-    assert "bare identity" in " ".join(payload["do_not"])
-    assert "continuity_token" in payload["next_step"]
+    assert hint.index("client_session_id") < hint.index("continuity_token")
+    next_step = payload["next_step"]
+    assert next_step.index("client_session_id") < next_step.index("continuity_token")
+    assert next_step.index("continuity_token") < next_step.index("never called start_session")
+    assert next_step.index("never called start_session") < next_step.index("force_new=true")
+
+    options = payload["safe_options"]
+    assert options[0]["action"] == "retry_with_client_session_id"
+    assert "client_session_id=" in options[0]["call"]
+    # The only mint is the last option, for a process with no identity of its
+    # own; it declares no lineage and retries with the id the mint returns.
+    mint = options[-1]
+    assert mint["action"] == "start_session_first"
+    assert "never called start_session" in mint["when"]
+    assert mint["call"].startswith("start_session(force_new=true)")
+    assert "parent_agent_id" not in mint["call"]
+    assert re.search(r"then sync_state\(.*client_session_id=<from start_session>", mint["call"])
+    for option in options:
+        call = option["call"]
+        # A write never carries the token; only identity() does.
+        for write in re.findall(r"(?:sync_state|process_agent_update)\([^)]*\)", call):
+            assert "continuity_token" not in write, option
+        for token_use in re.finditer("continuity_token", call):
+            opener = call.rfind("identity(", 0, token_use.start())
+            assert opener != -1 and ")" not in call[opener:token_use.start()], option
+        if option is not mint:
+            assert "force_new" not in call, option
+    rebind = next(o for o in options if "identity(" in o["call"])
+    assert "resume=true" in rebind["call"]
+    # The rebind is not a dead end: the retry after it carries the id identity() returns.
+    assert re.search(r"then (?:sync_state|process_agent_update)\(.*client_session_id=", rebind["call"])
+    read_only = next(o for o in options if o["action"] == "stay_read_only")
+    assert read_only["call"].startswith("check_working_state(client_session_id=")
+
+    do_not = " ".join(payload["do_not"])
+    assert "bare identity" in do_not
+    assert "force_new=true" in do_not
+
     assert payload["identity_assurance"]["proof_origin"] == "server_inferred"
     assert payload["surface_context"]["session_resolution_source"] == "explicit_client_session_id"
     assert payload["surface_context"]["proof_origin"] == "server_inferred"
+
+
+@pytest.mark.asyncio
+async def test_strict_refusal_hint_agrees_with_its_embedded_assurance(monkeypatch):
+    """The refusal quotes the breadcrumb its own identity_assurance carries."""
+    monkeypatch.setattr(ib, "is_strict_identity_required", lambda: True)
+    _patch_ctx(monkeypatch, agent_uuid="sibling-uuid",
+               source="pinned_onboard_session", proof_origin="server_inferred")
+    _patch_db(monkeypatch, earned=False)
+
+    payload = _refusal_payload(await resolve_identity_and_guards(_new_ctx()))
+
+    breadcrumb = payload["identity_assurance"]["how_to_strengthen"]
+    # Anchor on the remedy, not on the prefix separator, which differs by tier.
+    assert "pass the client_session_id" in breadcrumb
+    remedy = breadcrumb[breadcrumb.index("pass the client_session_id"):]
+    assert remedy in payload["hint"]
 
 
 @pytest.mark.asyncio
