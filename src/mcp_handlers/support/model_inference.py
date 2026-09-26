@@ -132,7 +132,7 @@ def _invocation_gate(host: Dict[str, Any] | None = None) -> Dict[str, Any]:
     ``host`` names the single host being described, and is None for the list
     read. The scalar ``tool`` stayed "call_model" for every host long after the
     adapters moved to ``delegate_inference``, so a caller that followed it was
-    sent to the one tool guaranteed to reject a Claude or Codex host — exactly
+    sent to the one tool guaranteed to reject a Claude, Codex or Antigravity host — exactly
     the shape the paragraph above says this block exists to prevent, reproduced
     inside it. The scalar cannot be made host-correct and kept compatible with
     a client that requires it to equal "call_model"; those are contradictory.
@@ -327,7 +327,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 recovery={
                     "action": (
                         "Pick a host whose accepts_host_id_from includes call_model. "
-                        "The Claude and Codex strong-model hosts run through "
+                        "The Claude, Codex and Antigravity strong-model hosts run through "
                         "delegate_inference instead."
                     ),
                     "related_tools": ["list_inference_hosts", "delegate_inference"],
