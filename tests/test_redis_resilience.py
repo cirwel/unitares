@@ -130,8 +130,10 @@ class TestCircuitBreaker:
 class TestRedisConfig:
     """Tests for RedisConfig class."""
 
-    def test_default_values(self):
-        """Config has sensible defaults."""
+    def test_default_values(self, monkeypatch):
+        """Config has sensible defaults (the code default, not this process's
+        environment: the repo-root conftest points REDIS_URL away from live)."""
+        monkeypatch.delenv("REDIS_URL", raising=False)
         config = RedisConfig()
 
         assert config.url == "redis://localhost:6379/0"
