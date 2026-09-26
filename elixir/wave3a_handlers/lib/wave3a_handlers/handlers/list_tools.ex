@@ -16,10 +16,10 @@ defmodule Wave3aHandlers.Handlers.ListTools do
   directly and surfaces its `TextContent` output verbatim
   (`src/mcp_handlers/wave3a_probe.py::_list_tools`), so the probe `data`
   payload is the Python handler's own payload by construction — including the
-  `success_response` envelope fields (`success`, `server_time`,
-  `agent_signature`). `server_time` is masked on the probe side for
-  byte-determinism (§2.6), exactly as `tool_registry` masks its volatile
-  fields.
+  `success_response` envelope fields (`success`, `server_time`; the lite
+  handshake carries no `agent_signature`). `server_time` is masked on the probe
+  side for byte-determinism (§2.6), exactly as `tool_registry` masks its
+  volatile fields.
 
   ## Handler contract
 

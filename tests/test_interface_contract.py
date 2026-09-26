@@ -144,11 +144,6 @@ async def test_list_tools_is_the_live_federation_handshake(monkeypatch):
             {"success": True, "decision": {"action": "proceed"}},
         ),
         (
-            "check_working_state",
-            "get_governance_metrics",
-            {"success": True, "guidance": "Continue working normally."},
-        ),
-        (
             "record_result",
             "outcome_event",
             {"success": True, "outcome_id": "outcome-1"},
@@ -169,6 +164,31 @@ def test_federation_lifecycle_aliases_emit_required_success_envelope(
     assert set(LIFECYCLE_SUCCESS_REQUIRED_FIELDS) <= envelope.keys()
     assert envelope["success"] is True
     assert envelope["tool"] == friendly_name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("check_ins", [0, 2, 30])
+@pytest.mark.parametrize(
+    "arguments",
+    [{}, {"verbosity": "standard"}, {"verbosity": "full"}, {"include_state": True}],
+)
+async def test_check_working_state_emits_required_success_envelope_on_every_tier(
+    check_ins, arguments
+):
+    """From the real handler, not a fixture: this case used to hand-supply a
+    `guidance` the minimal tier sets only for an uninitialized agent, so the
+    default read passed while shipping without next_action."""
+    from tests.helpers.metrics_producer import real_metrics_payload
+
+    payload, validated = await real_metrics_payload(arguments, check_ins=check_ins)
+    envelope = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
+
+    assert set(LIFECYCLE_SUCCESS_REQUIRED_FIELDS) <= envelope.keys()
+    assert envelope["success"] is True
+    assert envelope["tool"] == "check_working_state"
+    assert envelope["next_action"]
 
 
 @pytest.mark.asyncio

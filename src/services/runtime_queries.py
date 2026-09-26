@@ -511,7 +511,13 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
             standard_metrics["agent_uuid"] = agent_id
         if reflection:
             standard_metrics["reflection"] = reflection
-        standard_metrics["_note"] = "Use verbosity='full' for diagnostics, 'minimal' for quick check"
+        # Not "minimal for a quick check": on this canonical tool minimal is the
+        # annotated default (per-field EISV notes, thresholds, eisv_contract)
+        # and is larger than this tier, while check_working_state's minimal
+        # envelope is smaller. This payload reaches both, so it names no size.
+        standard_metrics["_note"] = (
+            "Use verbosity='full' for diagnostics; verbosity='minimal' is the default"
+        )
         return standard_metrics
 
     standardized_metrics["_debug_lite_received"] = lite

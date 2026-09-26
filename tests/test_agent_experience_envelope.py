@@ -618,7 +618,12 @@ def test_sync_state_compact_envelope_lifts_provisional_evidence_and_legacy_diagn
         "evidence_basis": "ode_fallback",
     }
     assert "cold-start prior" in env["verdict_caveat"]
-    assert "metrics.verdict.evidence" in env["verdict_caveat"]
+    # A compact check-in omits raw_governance and carries no evidence object,
+    # so the caveat states its basis inline and points nowhere; it used to
+    # name raw_governance.metrics.verdict.evidence, a path no mode returns.
+    assert "Evidence basis: ode_fallback." in env["verdict_caveat"]
+    assert "raw_governance" not in env["verdict_caveat"]
+    assert " See " not in env["verdict_caveat"]
     assert env["state_summary"]["verdict_provisional"] is True
     assert "legacy_diagnostics" not in env
     # state_summary.coherence carries the same "not health-rated" badge inline
@@ -700,7 +705,11 @@ def test_filtered_modes_keep_action_and_cold_start_caveat(
     assert env["action_summary"]["evidence_basis"] == "ode_fallback"
     assert env["state_summary"]["action"] == "proceed"
     assert env["state_summary"]["verdict_provisional"] is True
-    assert "raw_governance.verdict.evidence" in env["verdict_caveat"]
+    # These bounded modes omit raw_governance, so the caveat names no path in
+    # it (re-calling a check-in to follow one would write another check-in).
+    assert "raw_governance" not in env
+    assert "Evidence basis: ode_fallback." in env["verdict_caveat"]
+    assert "raw_governance" not in env["verdict_caveat"]
     assert env["legacy_diagnostics"]["health_evidence"] is False
 
 
@@ -806,12 +815,15 @@ def test_metrics_envelope_maps_existing_friendly_fields():
 
 
 def test_metrics_envelope_translates_state_summary_coaching():
-    """Glossary coaching lifted into state_summary speaks the friendly register.
+    """Glossary coaching lifted out of the verdict speaks the friendly register.
 
     An uninitialized verdict's next_action names process_agent_update (the
     canonical tool); at the friendly surface that read as a register mismatch
-    (dogfood 2026-08-20). state_summary now runs through the same alias
-    translation as next_action; scalar fields pass through untouched.
+    (dogfood 2026-08-20). state_summary runs through the same alias
+    translation as next_action; scalar fields pass through untouched. With no
+    top-level next_action in the payload, the verdict's step is lifted to the
+    envelope's next_action (the lifecycle contract requires one) and said
+    once, so state_summary no longer repeats it.
     """
     payload = {
         "success": True,
@@ -824,11 +836,31 @@ def test_metrics_envelope_translates_state_summary_coaching():
         "E": 0.5,
     }
     env = build_experience_envelope("check_working_state", "get_governance_metrics", payload)
-    assert "sync_state" in env["state_summary"]["next_action"]
-    assert "process_agent_update" not in env["state_summary"]["next_action"]
+    assert "sync_state" in env["next_action"]
+    assert "process_agent_update" not in env["next_action"]
+    assert "next_action" not in env["state_summary"]
     assert env["state_summary"]["E"] == 0.5
     # the source payload keeps its canonical wording
     assert "process_agent_update" in payload["verdict"]["next_action"]
+
+
+def test_metrics_state_summary_coaching_still_speaks_the_friendly_register():
+    """A verdict step that differs from the top-level next_action stays in
+    state_summary, translated like next_action."""
+    payload = {
+        "success": True,
+        "verdict": {
+            "verdict": "uninitialized",
+            "meaning": "Agent has no recorded state yet.",
+            "next_action": "Submit one process_agent_update to activate governance.",
+        },
+        "guidance": "Submit one check-in to activate governance.",
+        "status": "uninitialized",
+    }
+    env = build_experience_envelope("check_working_state", "get_governance_metrics", payload)
+    assert env["next_action"] == "Submit one check-in to activate governance."
+    assert "sync_state" in env["state_summary"]["next_action"]
+    assert "process_agent_update" not in env["state_summary"]["next_action"]
 
 
 def test_metrics_envelope_full_escape_hatch_preserves_raw_payload():
@@ -2108,6 +2140,22 @@ def test_risk_summary_uses_policy_bands_not_recovery_ceiling(risk, band):
 # (~15 KB) and was then told to go back to lite=true (external agent, 2026-09-24).
 
 
+def _served_tier(env):
+    """The tier a check_working_state envelope reports.
+
+    A non-default tier reports itself in response_options.current. The
+    default envelope teaches the tier ladder once, in raw_governance_hint, as
+    a bounded sync_state does, so it carries no response_options; it is the
+    one tier with raw_governance omitted.
+    """
+    if "response_options" in env:
+        assert "raw_governance" in env
+        return env["response_options"]["current"]
+    assert "raw_governance" not in env
+    assert "verbosity='standard'" in env["raw_governance_hint"]
+    return "minimal"
+
+
 @pytest.mark.parametrize(
     "arguments, current",
     [
@@ -2123,9 +2171,13 @@ def test_metrics_response_options_report_the_tier_actually_served(arguments, cur
     env = build_experience_envelope(
         "check_working_state", "get_governance_metrics", {"success": True}, arguments
     )
-    options = env["response_options"]
-    assert options["current"] == current
-    assert "verbosity='standard'" in options["interpreted_state"]
+    assert _served_tier(env) == current
+    if current == "minimal":
+        # One ladder per response: the hint, not a second copy.
+        assert "response_options" not in env
+    else:
+        assert "verbosity='standard'" in env["response_options"]["interpreted_state"]
+        assert "raw_governance_hint" not in env
 
 
 def test_oversized_full_metrics_point_at_the_standard_tier():
@@ -2146,12 +2198,18 @@ def test_oversized_full_metrics_point_at_the_standard_tier():
         {"lite": "banana"},
         {"verbosity": "bogus", "lite": False},
         {"verbosity": "standard", "lite": None},
+        # include_state adds no state on any tier; it used to force the raw
+        # payload onto the minimal tier (a 3.3 KB read became 7.1 KB).
+        {"include_state": True},
+        {"include_state": "true", "lite": "true"},
+        {"include_state": True, "verbosity": "standard"},
     ],
 )
 def test_metrics_tier_reported_matches_the_tier_the_handler_builds(arguments):
     """Review of #2430: lite=null made the handler build full while the
     envelope reported minimal. Both now resolve through one function; this
-    pins the envelope to the handler on raw AND schema-validated arguments."""
+    pins the envelope to the handler on raw AND schema-validated arguments,
+    and pins include_state out of the tier decision."""
     from src.mcp_handlers.schemas.core import GetGovernanceMetricsParams
     from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
 
@@ -2168,7 +2226,7 @@ def test_metrics_tier_reported_matches_the_tier_the_handler_builds(arguments):
     env = build_experience_envelope(
         "check_working_state", "get_governance_metrics", {"success": True}, arguments
     )
-    assert env["response_options"]["current"] == raw_tier
+    assert _served_tier(env) == raw_tier
     assert ("raw_governance" in env) == (raw_tier != "minimal")
 
 
@@ -2194,11 +2252,14 @@ def _tier_built(data):
         {"verbosity": "standard"},
         {"verbosity": "standard", "lite": None},
         {"verbosity": "full", "lite": True},
+        {"include_state": True},
+        {"include_state": "true", "lite": "true"},
     ],
 )
 async def test_envelope_reports_the_tier_the_real_handler_built(arguments):
     """Runs the handler itself, so reverting runtime_queries' tier logic fails
-    here even though the envelope and resolver would still agree."""
+    here even though the envelope and resolver would still agree. The envelope
+    is built from that same handler output."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
 
@@ -2215,9 +2276,12 @@ async def test_envelope_reports_the_tier_the_real_handler_built(arguments):
             "test-tier-parity", dict(arguments), server=server
         )
     env = build_experience_envelope(
-        "check_working_state", "get_governance_metrics", {"success": True}, arguments
+        "check_working_state",
+        "get_governance_metrics",
+        {"success": True, **data},
+        arguments,
     )
-    assert env["response_options"]["current"] == _tier_built(data)
+    assert _served_tier(env) == _tier_built(data)
 
 
 def test_metrics_verbosity_is_matched_exactly_like_the_handler_always_did():

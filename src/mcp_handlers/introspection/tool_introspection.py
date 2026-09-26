@@ -486,7 +486,10 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "total_available": len(tools_list),
             "shown": len(lite_tools),
             "more": "list_tools(lite=false) for descriptions, categories, tiers, workflows, and relationships",
-            "tip": "describe_tool(tool_name=...) for parameters; use_tool(tool_name=..., arguments={...}) when the capability is absent from the initial tools/list",
+            # An unqualified describe_tool returns the full record (lite=false
+            # is its advertised default, 10-17 KB for the core write tools), so
+            # the pointer "for parameters" names the parameter view.
+            "tip": "describe_tool(tool_name=..., lite=true) for parameters (action=... on a router); lite=false for the full schema; use_tool(tool_name=..., arguments={...}) when the capability is absent from the initial tools/list",
             "advertisement": {
                 "mode": TOOL_MODE,
                 "direct_count": len(advertised_names or lite_tools),
@@ -501,8 +504,11 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "ordered_by": "usage_frequency",
                 "window": "7 days"
             }
-        
-        return success_response(response_data)
+
+        # The handshake is identity-independent: no agent_signature, which
+        # for a weak or transport-bound caller is 1.6-2.0 KB and put the
+        # capped handshake over its own 4 KiB bound. lite=false keeps it.
+        return success_response(response_data, arguments={"lite_response": True})
     
     tier_counts = {
         "essential": sum(1 for t in tools_list if t.get("tier") == "essential"),
@@ -872,8 +878,10 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         requested_action = (arguments.get("action") or "").strip().lower() or None
         include_schema = arguments.get("include_schema", True)
         include_full_description = arguments.get("include_full_description", True)
-        # LITE-FIRST: Simpler schemas by default for local models
-        lite = arguments.get("lite", True)
+        # The schema default (DescribeToolParams.lite=False, the advertised
+        # contract) decides on every validated route; this matches it for
+        # in-process callers, which pass lite explicitly for the short form.
+        lite = arguments.get("lite", False)
 
         from ..tool_stability import (
             expand_description_pointers,

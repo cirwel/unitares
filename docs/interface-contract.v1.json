@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "d0cf4995b022823588b0d89afaf5fd1b58962e4f2d5b616600a8c9da4d1d38c0",
+  "surface_sha256": "641da6cb76463fcbf7d481949a19b4146f939c811e4b44771c04151afc2015da",
   "capabilities": [
     {
       "name": "start_session",
@@ -48,7 +48,7 @@
       "name": "check_working_state",
       "implementation": "get_governance_metrics",
       "kind": "workflow_alias",
-      "input_schema_sha256": "06b47c24da2bcf0809d09c2fa63ad55102cfb2f20e26dcf6cb06ff522b5c5587",
+      "input_schema_sha256": "1c29a7aa131e88cbb7d0a41f7f0618964d51c97c1aab6f681c4ca253c03dd1f1",
       "transport_names": {
         "mcp_streamable_http": "check_working_state",
         "rest_v1_tools": "check_working_state",
@@ -147,7 +147,7 @@
       "name": "get_governance_metrics",
       "implementation": "get_governance_metrics",
       "kind": "canonical_tool",
-      "input_schema_sha256": "06b47c24da2bcf0809d09c2fa63ad55102cfb2f20e26dcf6cb06ff522b5c5587",
+      "input_schema_sha256": "1c29a7aa131e88cbb7d0a41f7f0618964d51c97c1aab6f681c4ca253c03dd1f1",
       "transport_names": {
         "mcp_streamable_http": "get_governance_metrics",
         "rest_v1_tools": "get_governance_metrics",
