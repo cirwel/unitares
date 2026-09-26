@@ -307,3 +307,100 @@ async def test_a_proven_self_read_carries_no_mark(monkeypatch):
 
     assert seen["metrics_for"] == [rt.AGENT_UUID]
     assert "identity_assurance" not in seen["result"]
+
+
+# The descriptions scope that claim: agent_id names the agent to read unless
+# the caller is bound as a different agent, which inject_identity refuses
+# with identity_mismatch on every route that runs it (/mcp/ use_tool for
+# both reads, check_working_state over REST). REST get_governance_metrics
+# runs a direct handler with no inject step and answers the named agent.
+
+
+def _mismatch(payload) -> bool:
+    if isinstance(payload, list):
+        import json
+
+        payload = json.loads(payload[0].text)
+    details = payload.get("details") or {}
+    return details.get("error_type") == "identity_mismatch" or (
+        payload.get("error_type") == "identity_mismatch"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read", READS)
+async def test_through_use_tool_a_caller_bound_as_another_agent_is_refused(
+    monkeypatch, read
+):
+    seen = await rt.mcp_call(
+        monkeypatch, "use_tool", read, rt.signals(),
+        target_arguments={
+            "client_session_id": rt.AGENT_SESSION,
+            "agent_id": rt.OTHER_UUID,
+        },
+    )
+
+    assert _mismatch(seen["result"]), seen["result"]
+    assert seen["metrics_served"] is False
+
+
+REST_CHECK_WORKING_STATE = [
+    pytest.param(
+        "check_working_state",
+        {"client_session_id": rt.AGENT_SESSION, "agent_id": rt.OTHER_UUID},
+        id="direct",
+    ),
+    pytest.param(
+        "use_tool",
+        {
+            "tool_name": "check_working_state",
+            "arguments": {
+                "client_session_id": rt.AGENT_SESSION,
+                "agent_id": rt.OTHER_UUID,
+            },
+        },
+        id="use_tool",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tool_name", "arguments"), REST_CHECK_WORKING_STATE)
+async def test_over_rest_check_working_state_refuses_a_caller_bound_as_another_agent(
+    monkeypatch, tool_name, arguments
+):
+    payload, metrics, _resolve = await rt.rest_call(monkeypatch, tool_name, arguments)
+
+    assert _mismatch(payload), payload
+    assert metrics.await_count == 0
+
+
+REST_GET_GOVERNANCE_METRICS = [
+    pytest.param(
+        "get_governance_metrics",
+        {"client_session_id": rt.AGENT_SESSION, "agent_id": rt.OTHER_UUID},
+        id="direct",
+    ),
+    pytest.param(
+        "use_tool",
+        {
+            "tool_name": "get_governance_metrics",
+            "arguments": {
+                "client_session_id": rt.AGENT_SESSION,
+                "agent_id": rt.OTHER_UUID,
+            },
+        },
+        id="use_tool",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("tool_name", "arguments"), REST_GET_GOVERNANCE_METRICS)
+async def test_over_rest_get_governance_metrics_reads_the_named_agent_for_a_bound_caller(
+    monkeypatch, tool_name, arguments
+):
+    payload, metrics, _resolve = await rt.rest_call(monkeypatch, tool_name, arguments)
+
+    assert not _mismatch(payload), payload
+    assert [call.args[0] for call in metrics.await_args_list] == [rt.OTHER_UUID]

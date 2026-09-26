@@ -221,13 +221,16 @@ The two identifiers serve different jobs:
   state (your `client_session_id`, an `X-Session-ID` header, or a verified
   `continuity_token`). `get_governance_metrics` no longer offers an explicit
   `agent_id` as a way to be sure the reading is yours: `/mcp/` does not
-  declare `agent_id` and drops it, and through `use_tool` or REST it names the
-  agent to read and proves nothing about the caller; `check_working_state`
-  says the same, and that such a reading is marked `caller_proven=false` when
-  the call's session was only inferred. `identity`'s description names
-  `client_session_id` in the call that sets a display name. No parameter is
-  added, removed, retyped or renamed, and no input digest or the surface
-  digest moves).
+  declare `agent_id` and drops it, and it proves nothing about the caller.
+  Both texts say where it names the agent to read: `check_working_state`
+  through `use_tool` or REST, and `get_governance_metrics` through `/mcp/`'s
+  `use_tool`, unless the caller is bound as a different agent, which is
+  refused (`identity_mismatch`); `get_governance_metrics` over REST answers it
+  for any caller. `check_working_state` marks such a reading
+  `caller_proven=false` on an inferred session. `identity`'s description
+  names `client_session_id` in the call that sets a display name. No
+  parameter is added, removed, retyped or renamed, and no input digest or the
+  surface digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
