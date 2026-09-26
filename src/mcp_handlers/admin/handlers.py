@@ -1045,4 +1045,5 @@ async def handle_get_connection_status(arguments: Dict[str, Any]) -> Sequence[Te
     }, arguments=arguments)
 
 # REMOVED: quick_start - deprecated Dec 2025, identity auto-binds on first tool call
-# Use identity(name="...") to set display name, or just call any tool (identity auto-creates)
+# Mint with start_session(force_new=true); set a display name with
+# identity(client_session_id=..., name=...).
