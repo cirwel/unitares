@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "c19e62617b489ea7496abe7af5920d4e283d9aca664ac3756e992266802ae5b8",
+  "surface_sha256": "acd86ba0c4d08393e6bc74ca1b8cda1cdde7d23df35123ce8a721990b69265fb",
   "capabilities": [
     {
       "name": "start_session",
@@ -48,7 +48,7 @@
       "name": "check_working_state",
       "implementation": "get_governance_metrics",
       "kind": "workflow_alias",
-      "input_schema_sha256": "1c29a7aa131e88cbb7d0a41f7f0618964d51c97c1aab6f681c4ca253c03dd1f1",
+      "input_schema_sha256": "8200940da20fd2755d2e0647feb8a915eff49cd904e94c0d22f7be508befba3d",
       "transport_names": {
         "mcp_streamable_http": "check_working_state",
         "rest_v1_tools": "check_working_state",
@@ -147,7 +147,7 @@
       "name": "get_governance_metrics",
       "implementation": "get_governance_metrics",
       "kind": "canonical_tool",
-      "input_schema_sha256": "1c29a7aa131e88cbb7d0a41f7f0618964d51c97c1aab6f681c4ca253c03dd1f1",
+      "input_schema_sha256": "8200940da20fd2755d2e0647feb8a915eff49cd904e94c0d22f7be508befba3d",
       "transport_names": {
         "mcp_streamable_http": "get_governance_metrics",
         "rest_v1_tools": "get_governance_metrics",

@@ -202,10 +202,11 @@ The two identifiers serve different jobs:
   1.19.0, 2026-09-26, numbered after 1.18.0 (#2470): parameter
   descriptions only. `include_state` on
   `get_governance_metrics` and `check_working_state` says it is retained for
-  compatibility and has no effect, since no tier ever returned the nested state
-  it promised; `verbosity` says what `standard` holds (bare EISV and risk,
-  basin and mode with their meanings, guidance) instead of EISV meanings it
-  never carried; and the `response_mode` description of `process_agent_update`
+  compatibility and has no effect (the handler no longer requests the nested
+  state, which surfaced only when state interpretation failed); `verbosity`
+  says what `standard` holds (bare EISV, coherence and risk; the verdict, basin
+  and mode with their meanings; guidance) instead of EISV meanings it never
+  carried; and the `response_mode` description of `process_agent_update`
   and `sync_state` names the degraded-identity and warnings triggers that make
   `auto` resolve to mirror (its advertised brief is unchanged). Nothing is
   added, removed, retyped or renamed; the two metrics input digests and the

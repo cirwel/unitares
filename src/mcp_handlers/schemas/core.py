@@ -215,9 +215,8 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
     """
     Get current governance state and metrics for an agent without updating state.
     """
-    # Retained so existing callers still validate. No tier ever returned the
-    # monitor's nested state dict: runtime_queries replaces it with the
-    # interpreted state before any tier is built.
+    # Retained so existing callers still validate. runtime_queries never
+    # requests the monitor's nested state dict, so no tier returns it.
     include_state: Union[bool, str, None] = Field(
         default=False,
         description="Retained for compatibility; has no effect on any tier. Use verbosity to choose what is returned. Accepts boolean or string ('true'/'false')."
@@ -234,15 +233,16 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
         default=None,
         description=(
             "Response tier: 'minimal' (the default, same as lite=true), "
-            "'standard' (EISV, verdict and risk_score as bare values, basin "
-            "and mode with their meanings, and guidance, no diagnostics; "
-            "check_working_state carries it under raw_governance), or 'full' "
-            "(same as lite=false). Overrides lite when set."
+            "'standard' (E/I/S/V, coherence and risk_score as bare values; "
+            "the verdict, basin and mode with their meanings; guidance; no "
+            "diagnostics; check_working_state carries it under "
+            "raw_governance), or 'full' (same as lite=false). Overrides lite "
+            "when set."
         ),
         json_schema_extra={
             "brief": (
-                "Tier: minimal (default); standard: bare EISV and risk, basin "
-                "and mode with meanings, guidance; full: diagnostics."
+                "Tier: minimal (default); standard: bare EISV and risk, "
+                "verdict/basin/mode with meanings, guidance; full: diagnostics."
             )
         },
     )

@@ -136,11 +136,12 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.19.0 (2026-09-26), numbered after 1.18.0 (#2470): parameter
 # descriptions only. include_state on
 # get_governance_metrics and check_working_state says it is retained for
-# compatibility and has no effect: no tier ever returned the nested state it
-# promised, and the envelope no longer escalates the default read on it.
-# verbosity says what 'standard' holds (bare EISV and risk, basin and mode
-# with their meanings, guidance) instead of promising EISV meanings it never
-# carried. process_agent_update and sync_state's response_mode names the
+# compatibility and has no effect: the handler no longer requests the
+# monitor's nested state (it surfaced only when interpret_state failed), and
+# the envelope no longer escalates the default read on it. verbosity says
+# what 'standard' holds (bare EISV, coherence and risk; the verdict, basin
+# and mode with their meanings; guidance) instead of promising EISV meanings
+# it never carried. process_agent_update and sync_state's response_mode names the
 # degraded-identity and warnings triggers that make 'auto' resolve to mirror
 # (its advertised brief is unchanged, so only describe_tool shows that). No
 # parameter is added, removed, retyped or renamed; the two metrics input
