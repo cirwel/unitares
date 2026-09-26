@@ -1181,6 +1181,43 @@ def _as_bool(value: Any, *, default: bool) -> bool:
     return bool(value)
 
 
+# record_result hints. There is no read by outcome id, so the only route back
+# to an omitted outcome payload is the idempotent replay of a prediction-bound
+# outcome; see _write_ack_raw_policy.
+_PREDICTION_BOUND_OUTCOME_HINT = (
+    "There is no read by outcome id. This outcome is bound to its "
+    "prediction_id, so repeating this identical call with "
+    "response_mode='full' returns its complete payload (including the full "
+    "EISV snapshot semantics) as a replay (idempotent_replay: true) and "
+    "records no second outcome, while the binding is retained. A call that "
+    "changes the outcome is refused (PREDICTION_REUSE_CONFLICT). A repeat "
+    "without a prediction_id records a second outcome."
+)
+_UNBOUND_OUTCOME_HINT = (
+    "This outcome's full payload cannot be read again: there is no read by "
+    "outcome id, and it has no prediction_id, so a repeat records a second "
+    "outcome. To get the complete payload (including the full EISV snapshot "
+    "semantics) inline, pass response_mode='full' on a later outcome."
+)
+
+
+def _is_alias_injected_action(friendly_name: str, arguments: Dict[str, Any]) -> bool:
+    """True unless the call resolved to an action other than the alias's own.
+
+    Arguments without an ``action`` (a direct call of the builder) count as
+    the alias's own action; after resolve_alias the key is always present.
+    The comparison folds case the way action_router does before routing.
+    """
+    from ..tool_stability import resolve_tool_alias
+
+    _, alias = resolve_tool_alias(friendly_name)
+    injected = getattr(alias, "inject_action", None)
+    action = arguments.get("action")
+    if not injected or action is None:
+        return True
+    return str(action).strip().lower() == str(injected).strip().lower()
+
+
 def _write_ack_raw_policy(
     friendly_name: str,
     arguments: Dict[str, Any],
@@ -1192,12 +1229,14 @@ def _write_ack_raw_policy(
     so the canonical copy was most of a typical ack and mostly repeated the
     agent signature and the stored record.
 
-    Two things keep the payload inline. An explicit full request does, on
+    Three things keep the payload inline. An explicit full request does, on
     record_result (``response_mode='full'``; outcome_event's
     ``include_semantics`` is the same request under an older name and survives
-    ``/mcp/`` validation). And a payload whose record id the envelope cannot
-    lift does too, because then the canonical copy is the only place the
-    caller could find out what was written.
+    ``/mcp/`` validation). A payload whose record id the envelope cannot lift
+    does too, because then the canonical copy is the only place the caller
+    could find out what was written. And a finding alias whose caller named an
+    action other than the alias's own does, because the result is that
+    action's answer, not a write ack (#2457).
 
     store_finding and update_finding have no full request here. This step sees
     the arguments after canonical validation, and KnowledgeParams fills
@@ -1212,13 +1251,25 @@ def _write_ack_raw_policy(
     outcome_event validates response_mode to None, so on record_result an
     arriving 'full' was the caller's.
 
-    The hint never tells a caller to repeat the write to see the payload: a
+    The hint never tells a caller to repeat a write that would write again: a
     second store mints a second finding. For the finding writes it names a
     details read, which returns the stored record. record_result has no read
-    by outcome id, so its hint names the full-mode parameter for a later
-    outcome and warns that repeating this one records a second outcome.
-    Neither route fetches the omitted payload, so these acks do not set
-    raw_governance_available.
+    by outcome id. An outcome bound to a prediction_id is the one write a
+    repeat does not duplicate: while its binding is retained, the identical
+    call replays the stored outcome (``idempotent_replay``) and writes nothing,
+    and the idempotency digest does not cover ``response_mode`` or
+    ``include_semantics``, so repeating it with ``response_mode='full'``
+    returns the full payload. Its hint names that route (a changed outcome is
+    refused as PREDICTION_REUSE_CONFLICT, so the repeat must be identical).
+    An outcome without a prediction_id has no such route: a repeat records a
+    second outcome, so its hint names the full-mode parameter for a later
+    outcome and says so.
+
+    None of these acks sets raw_governance_available. Elsewhere that flag
+    means a re-call that only reads; here the one route that returns the
+    omitted payload is a repeat of the write, safe only for an identical
+    prediction-bound call inside the binding's retention, and the hint states
+    those conditions where a bare flag could not.
     """
     if friendly_name == "record_result":
         # include_semantics is read the way the handler reads it (the schema
@@ -1231,16 +1282,25 @@ def _write_ack_raw_policy(
         )
         wants_full = full_mode or _coerce_bool_flag(arguments.get("include_semantics"))
         identifiable = payload.get("outcome_id") is not None
+        # The handler sets idempotent_replay exactly when the outcome was
+        # recorded against a prediction_id (outcome_events), so its presence,
+        # not its value, says which route exists.
         hint = (
-            "This outcome's full payload cannot be read again: there is no "
-            "read by outcome id, and without a prediction_id a repeat records "
-            "a second outcome. To get the complete payload (including the full "
-            "EISV snapshot semantics) inline, pass response_mode='full' on a "
-            "later outcome."
+            _PREDICTION_BOUND_OUTCOME_HINT
+            if "idempotent_replay" in payload
+            else _UNBOUND_OUTCOME_HINT
         )
         return wants_full or not identifiable, hint
 
     # store_finding / update_finding: no full request (see above).
+    if not _is_alias_injected_action(friendly_name, arguments):
+        # The alias injects its action only when the caller sent none, and an
+        # explicit one wins (resolve_alias). REST and stdio do not narrow
+        # `action` out of these aliases, so update_finding(action='details',
+        # discovery_id=...) runs a details read. That result is not a write
+        # ack: its payload is what the caller asked for, and the details
+        # hint would send it to repeat the read it just made (#2457).
+        return True, None
     discovery = payload.get("discovery")
     discovery = discovery if isinstance(discovery, dict) else {}
     discovery_id = (
@@ -2006,7 +2066,23 @@ def build_experience_envelope(
                 # so the summary copy would carry the same list twice.
                 state_summary.pop("related_to", None)
 
-        if friendly_name == "store_finding":
+        call_arguments = arguments or {}
+        if not _is_alias_injected_action(friendly_name, call_arguments):
+            # An explicit other action (details, get, supersede, update...)
+            # ran that action, not this alias's own, so the alias's
+            # "updated"/"stored" line would misreport it. The other action may
+            # itself write (store, update, supersede, note...), so the line
+            # names what ran and makes no claim about whether it wrote. Its
+            # payload stays inline (#2457).
+            ran = str(call_arguments.get("action")).strip().lower()
+            next_action = (
+                f"{friendly_name} ran knowledge(action='{ran}') because an "
+                "explicit action was passed, not this alias's own action. "
+                "That action's full response is under raw_governance; read "
+                "it there before repeating the call, since a writing action "
+                "writes again."
+            )
+        elif friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")
             if not next_action:
                 suffix = (
@@ -2286,13 +2362,16 @@ def build_experience_envelope(
     if include_raw:
         envelope["raw_governance"] = payload
     else:
-        # raw_governance_available promises a way to fetch the omitted
-        # payload. A routine start_session's record cannot be fetched
-        # afterwards (only another mint would produce one), so it does not
-        # claim one. The write acks are in the same position: record_result
-        # has no read by outcome id, and a finding's details read returns the
-        # stored record, not this ack's payload. Their hint says what is
-        # reachable instead.
+        # raw_governance_available promises a re-call that fetches the
+        # omitted payload by reading. A routine start_session's record cannot
+        # be fetched afterwards (only another mint would produce one), so it
+        # does not claim one. The write acks have no such read either: a
+        # finding's details read returns the stored record, not this ack's
+        # payload, and record_result has no read by outcome id. Its one route
+        # back is a repeat of the write, which replays instead of writing only
+        # for an identical prediction-bound outcome while the binding is
+        # retained; a bare flag cannot carry those conditions, so the hint
+        # states them (see _write_ack_raw_policy).
         if (
             friendly_name != "start_session"
             and friendly_name not in _COMPACT_WRITE_ALIASES
