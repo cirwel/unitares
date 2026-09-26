@@ -68,7 +68,6 @@ from src.mcp_handlers.support.param_normalization import (
     FRIENDLY_SEARCH_DETAILS_REQUESTED_KEY,
     resolve_metrics_verbosity,
 )
-from src.thread_identity import LINEAGE_SPAWN_REASONS
 
 logger = get_logger(__name__)
 
@@ -1434,9 +1433,9 @@ def _compact_resident_registration(value: Any) -> Optional[Dict[str, Any]]:
     ordinary agent it reads not_on_roster or no_roster_configured: ~450-600 B
     explaining how resident registration works. The verdict stays visible, so
     a resident bootstrapped off the roster still sees that it was not
-    registered; not_on_roster keeps what that costs, and the roster condition
-    that makes minting again no remedy, since the tags cannot be added to this
-    identity later. None when the block is not a shape this knows, which keeps
+    registered; not_on_roster keeps what that costs and the producer's
+    remedy (roster, restart, a fresh mint), since the tags cannot be added to
+    this identity later. None when the block is not a shape this knows, which keeps
     the full record.
     """
     if not isinstance(value, dict):
@@ -1450,9 +1449,9 @@ def _compact_resident_registration(value: Any) -> Optional[Dict[str, Any]]:
         required = " + ".join(value.get("required_tags") or []) or "the resident tags"
         roster = value.get("roster_env") or "the resident roster"
         compact["detail"] = (
-            f"Not on {roster}: minted without {required}, so not protected from "
-            "auto-archive. Those tags are granted only at mint and only to "
-            "roster names; this identity cannot gain them."
+            f"Not on {roster}: no {required}; not protected from auto-archive. "
+            "Granted only at mint, only to roster names; this identity cannot "
+            "gain them. Fix: roster the name, restart, mint fresh."
         )
     return compact
 
@@ -1512,8 +1511,10 @@ def _thread_context_blocker(
     unrelated process-instances occupied ("sibling_locus", the common case
     behind a shared IP:UA fingerprint): the envelope lifts the earlier node's
     uuid, the fork kind and the sentence saying co-location does not establish
-    lineage. A declared, provisional or rejected lineage, or a lineage spawn
-    reason, is something to read, so it keeps the record.
+    lineage. A declared, provisional or rejected lineage, any spawn reason
+    other than the default new_session, or a sibling whose earlier nodes were
+    pruned (no uuid to lift beside the sentence) is something to read, so it
+    keeps the record.
     """
     kind = thread_context.get("episode_fork_kind")
     if kind not in ("none", "sibling_locus"):
@@ -1522,14 +1523,23 @@ def _thread_context_blocker(
     if lineage_fork is not False:
         shown = "missing" if lineage_fork is None else json.dumps(lineage_fork)
         return f"thread_context.identity_lineage_fork={shown}"
+    # Any declared spawn reason other than the default is a claim to read,
+    # including "explicit" without a parent: the caller meant succession and
+    # got none, and the reason appears nowhere in the routine shape.
+    spawn_reason = thread_context.get("spawn_reason")
+    if spawn_reason not in (None, "new_session"):
+        return f"thread_context.spawn_reason={spawn_reason}"
     if kind == "none":
         for key in ("predecessor", "is_fork"):
             if thread_context.get(key):
                 return f"thread_context.{key}"
         return None
-    spawn_reason = thread_context.get("spawn_reason")
-    if spawn_reason in LINEAGE_SPAWN_REASONS:
-        return f"thread_context.spawn_reason={spawn_reason}"
+    # The routine sibling shape says co-location is not lineage only beside
+    # the earlier node's uuid. With the earlier nodes pruned there is no uuid
+    # to lift, so keep the record and its honest_message.
+    predecessor = thread_context.get("predecessor")
+    if not (isinstance(predecessor, dict) and predecessor.get("uuid")):
+        return "thread_context.predecessor=missing"
     lineage_state = payload.get("lineage_state")
     if lineage_state != "no_lineage_declared":
         return f"lineage_state={lineage_state or 'missing'}"
@@ -1600,6 +1610,18 @@ def _onboard_raw_requested(arguments: Dict[str, Any]) -> bool:
     return requested in _ONBOARD_RAW_MODES or (
         not requested and _as_bool(arguments.get("verbose"), default=False)
     )
+
+
+def _onboard_built_full_shape(arguments: Dict[str, Any]) -> bool:
+    """Whether onboard built its full shape, by onboard's own rule.
+
+    Differs from _onboard_raw_requested for an unknown response_mode:
+    onboard then falls back to the verbose flag, so ("detailed", verbose)
+    builds the full shape although the envelope sees no explicit request.
+    """
+    from src.mcp_handlers.identity.handlers import _derive_onboard_response_mode
+
+    return _derive_onboard_response_mode(arguments)[1] == "full"
 
 
 def _start_session_budget(envelope: Dict[str, Any]) -> int:
@@ -2221,7 +2243,7 @@ def build_experience_envelope(
             blockers = _routine_mint_blockers(
                 source_payload,
                 _FULL_ONBOARD_SHAPE_KEYS
-                if _onboard_raw_requested(arguments or {})
+                if _onboard_built_full_shape(arguments or {})
                 else frozenset(),
             )
             if blockers:

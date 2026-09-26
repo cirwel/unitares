@@ -435,6 +435,12 @@ def test_a_sibling_locus_mint_is_routine():
         {"thread": {"identity_lineage_fork": True}},
         {"thread": {"identity_lineage_fork": None}},
         {"thread": {"spawn_reason": "subagent"}},
+        # A declared succession that produced no lineage (no parent given):
+        # the reason appears nowhere in the routine shape.
+        {"thread": {"spawn_reason": "explicit"}},
+        # Earlier nodes pruned: no uuid to lift beside the co-location
+        # sentence, so the record's honest_message is the only statement.
+        {"thread": {"predecessor": None}},
         {"payload": {"lineage_state": None}},
         {"payload": {"lineage_state": "rejected_coincidental"}},
     ],
@@ -444,6 +450,8 @@ def test_a_sibling_locus_mint_is_routine():
         "lineage_fork",
         "lineage_fork_missing",
         "lineage_spawn_reason",
+        "explicit_without_parent",
+        "predecessor_pruned",
         "lineage_state_missing",
         "rejected_coincidental",
     ],
@@ -776,14 +784,16 @@ def test_a_resident_registration_verdict_is_lifted_compact(name, stamped, roster
         else {"status", "on_roster"}
     )
     if status == "not_on_roster":
-        # What it costs, and that it cannot be fixed on this identity; no
-        # invitation to mint again.
+        # What it costs, that it cannot be fixed on this identity, and the
+        # producer's remedy, whose fresh mint helps only after the roster
+        # change and restart (onboard_classifier._REGISTRATION_DETAIL).
         assert "only at mint" in lifted["detail"]
         assert "auto-archive" in lifted["detail"]
         assert "bootstrap" not in lifted["detail"]
-        # The condition that makes minting again no remedy stays with it.
         assert "only to roster names" in lifted["detail"]
         assert "this identity cannot gain them" in lifted["detail"]
+        remedy = lifted["detail"][lifted["detail"].index("Fix:"):]
+        assert remedy.index("roster") < remedy.index("restart") < remedy.index("mint fresh")
     assert _wire({"resident_registration": lifted}) <= START_SESSION_NOTICE_ALLOWANCE
     assert _wire(env) <= START_SESSION_BUDGET + START_SESSION_NOTICE_ALLOWANCE
 
@@ -820,6 +830,9 @@ async def test_a_written_bootstrap_is_lifted_whole():
 _EXPLICIT_FULL = {
     "full": {"response_mode": "full"},
     "full_verbose": {"response_mode": "full", "verbose": True},
+    # Onboard maps an unknown mode plus verbose to its full shape
+    # (_derive_onboard_response_mode); the envelope must follow that rule.
+    "unknown_mode_verbose": {"response_mode": "detailed", "verbose": True},
 }
 
 
@@ -838,7 +851,7 @@ async def test_an_explicit_full_request_on_a_plain_mint_gives_no_reason(mint_cla
 
     # The premise: the handler built the full shape.
     assert "identity_context" in payload
-    assert ("next_calls" in payload) is (mode == "full_verbose")
+    assert ("next_calls" in payload) is (mode != "full")
     assert env["response_shape"] == "full"
     assert env["raw_governance"] == payload
     assert "response_shape_reason" not in env, env.get("response_shape_reason")
