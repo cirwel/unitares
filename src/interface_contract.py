@@ -128,15 +128,7 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # corrected. Numbered after 1.16.0 (#2435). Nothing
 # callable is removed or renamed; many input digests and the surface digest
 # move.
-# 1.18.0 (2026-09-26): onboard's `resume` description (and so the
-# start_session alias) no longer names continuity_token, agent_id and name
-# as resume signals: a name is never looked up (name-based reconnection was
-# removed 2026-04-17) and a continuity_token without force_new is refused
-# (S1-c). The text now says only what holds in every case and points at
-# docs/ontology/identity.md for the resolution rules. No parameter is added,
-# removed, retyped or renamed; onboard's and start_session's
-# input_schema_sha256 and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.18.0"
+INTERFACE_CONTRACT_VERSION = "1.17.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

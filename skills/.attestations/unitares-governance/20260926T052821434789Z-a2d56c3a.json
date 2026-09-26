@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-09-26T05:24:08Z",
+  "verified_at": "2026-09-26T05:28:21Z",
   "verified_date": "2026-09-26",
   "verifier": "Kenny Wang",
   "source_digests": {
@@ -20,7 +20,7 @@
     "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
     "unitares/src/mcp_handlers/middleware/envelope_step.py": "ccbeb314d6c72a05",
     "unitares/src/mcp_handlers/middleware/identity_step.py": "f50ccc2629ef7832",
-    "unitares/src/mcp_handlers/schemas/identity.py": "122101e2730213bd",
+    "unitares/src/mcp_handlers/schemas/identity.py": "35c5919dceac4c44",
     "unitares/src/mcp_handlers/tool_stability.py": "a527552f03a9eff9",
     "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
     "unitares/src/schema_brief.py": "401bbce563c30439",
@@ -28,8 +28,11 @@
   },
   "skill_digest": "cde8a77fdb710807",
   "superseded_digests": {
-    "unitares/src/mcp_handlers/schemas/identity.py": [
-      "8756d4c350c20383"
+    "unitares/skills/governance-lifecycle/SKILL.md": [
+      "ca77c9c80d0e61a1"
+    ],
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "019b7f1be17e2266"
     ]
   }
 }
