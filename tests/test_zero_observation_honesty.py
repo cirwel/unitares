@@ -467,7 +467,10 @@ async def test_unbound_guidance_leads_with_the_callers_own_id():
     state = envelope["state_summary"]
     assert state["value"] == "unbound"
     assert state["meaning"] == "No caller-proven identity on this call."
-    assert _before(state["next_action"], "client_session_id", "force_new=true")
+    # The metrics envelope may state the step once, at the top level only
+    # (#2472); wherever state_summary still repeats it, it leads the same way.
+    if "next_action" in state:
+        assert _before(state["next_action"], "client_session_id", "force_new=true")
     assert _before(
         envelope["next_action"]["note"], "client_session_id it returned", "force_new=true"
     )
