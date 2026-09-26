@@ -368,7 +368,8 @@ does not apply to them; the canonical `knowledge` tool returns their payload
 directly). Over REST and stdio a finding alias called with an explicit `action`
 other than its own (for example `update_finding(action="details", ...)`) runs
 that `knowledge` action, and its response keeps the payload under
-`raw_governance`, since it is that action's answer rather than a write ack. No read returns the omitted payload (the outcome
+`raw_governance`, since it is that action's answer rather than a write ack;
+its `next_action` names the action that ran. No read returns the omitted payload (the outcome
 replay is a repeat of the write, safe only under the conditions above), so
 these three write acks do not set `raw_governance_available`.
 Write-time warnings and a bounded `related_discoveries` snapshot are kept in

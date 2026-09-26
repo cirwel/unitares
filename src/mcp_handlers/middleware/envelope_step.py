@@ -2066,7 +2066,19 @@ def build_experience_envelope(
                 # so the summary copy would carry the same list twice.
                 state_summary.pop("related_to", None)
 
-        if friendly_name == "store_finding":
+        call_arguments = arguments or {}
+        if not _is_alias_injected_action(friendly_name, call_arguments):
+            # An explicit other action (details, get, supersede...) ran that
+            # action, not this alias's write, so an "updated"/"stored" line
+            # would misreport it. Its payload stays inline (#2457).
+            ran = str(call_arguments.get("action")).strip().lower()
+            next_action = (
+                f"{friendly_name} ran knowledge(action='{ran}') because an "
+                "explicit action was passed; nothing was stored or updated "
+                "by this alias. That action's full response is under "
+                "raw_governance."
+            )
+        elif friendly_name == "store_finding":
             next_action = source_payload.get("_resolve_when_done")
             if not next_action:
                 suffix = (

@@ -709,6 +709,9 @@ async def test_update_finding_with_an_explicit_other_action_keeps_its_payload(ac
     assert data["raw_governance"] == payload
     assert "raw_governance_hint" not in data
     assert "raw_governance_available" not in data
+    # next_action names the action that ran, not an update that did not.
+    assert "was updated" not in data["next_action"]
+    assert f"knowledge(action='{action}')" in data["next_action"]
 
 
 @pytest.mark.asyncio
@@ -722,6 +725,7 @@ async def test_an_explicit_action_equal_to_the_aliass_own_is_still_a_write_ack(
     _, _, data = await _through_real_steps(friendly, args, make())
     assert "raw_governance" not in data
     assert data["raw_governance_hint"]
+    assert "because an explicit action was passed" not in data["next_action"]
 
 
 @pytest.mark.asyncio
@@ -735,6 +739,8 @@ async def test_store_finding_with_an_explicit_other_action_keeps_its_payload():
     assert arguments["action"] == "details"
     assert data["raw_governance"] == payload
     assert "raw_governance_hint" not in data
+    assert "Finding stored" not in data["next_action"]
+    assert "knowledge(action='details')" in data["next_action"]
 
 
 def _record_result_hint(outcome: dict, arguments: dict) -> str:
