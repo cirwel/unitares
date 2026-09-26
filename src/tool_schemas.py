@@ -233,9 +233,12 @@ _AUTO_INJECTED_IDENTITY_PARAMS = (
     "agent_id",
     "agent_name",
 )
-# Canonical tools whose session is auto-injected (TOOLS_NEEDING_SESSION_INJECTION).
-# Their aliases (sync_state, check_working_state) inherit this schema downstream,
-# so stripping here at the canonical source covers the alias surfaces too.
+# Canonical tools whose identity params (agent_id, agent_name) the server
+# resolves from the bound session, so they are hidden from the advertised
+# schema. Their aliases (sync_state, check_working_state) inherit this schema
+# downstream, so stripping here at the canonical source covers the alias
+# surfaces too. (Membership in TOOLS_NEEDING_SESSION_INJECTION no longer means
+# a session id is injected on /mcp/; see the comment above.)
 _HIDE_IDENTITY_PARAMS_TOOLS = {
     "process_agent_update",
     "get_governance_metrics",
@@ -243,7 +246,8 @@ _HIDE_IDENTITY_PARAMS_TOOLS = {
 
 
 def _hide_auto_injected_identity(schema: Any) -> Any:
-    """Drop session-auto-injected identity params from an advertised schema.
+    """Drop the identity params the server resolves from the bound session
+    (agent_id, agent_name) from an advertised schema.
 
     Returns a copy; never mutates the (pydantic-cached) input dict.
     """
