@@ -992,24 +992,19 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     # phantom mint told the caller nothing. A session lookup
                     # that raised (pg_lookup_exception) is a server failure,
                     # not a miss.
-                    from src.mcp_handlers.context import (
-                        get_csid_transport_injected,
-                    )
                     from src.mcp_handlers.identity_bootstrap import (
+                        caller_sent_usable_session_id,
                         unbound_call_refusal,
                     )
-                    from ..identity.session import normalize_client_session_id
                     _token_presented = bool(
                         arguments and arguments.get("continuity_token")
                     )
                     _refusal_options, _surface_extra = unbound_call_refusal(
                         name,
                         identity_result,
-                        # A usable id only: one that normalizes to nothing
-                        # was never looked up (same rule as the REST gate).
-                        caller_sent_session_id=bool(
-                            normalize_client_session_id(client_session_id)
-                            and not get_csid_transport_injected()
+                        # One rule with the REST gate and the unbound reads.
+                        caller_sent_session_id=caller_sent_usable_session_id(
+                            arguments
                         ),
                         token_failed_verification=(
                             _token_presented and not _token_agent_uuid

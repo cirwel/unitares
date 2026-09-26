@@ -197,8 +197,13 @@ async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any
             bound_agent_id = None
             transport_injected = False
         if not bound_agent_id:
-            sent = bool(arguments.get("client_session_id")) and not transport_injected
-            return unbound_metrics_payload(caller_sent_session_id=sent)
+            from src.mcp_handlers.identity_bootstrap import (
+                caller_sent_usable_session_id,
+            )
+
+            return unbound_metrics_payload(
+                caller_sent_session_id=caller_sent_usable_session_id(arguments)
+            )
     agent_id, error = require_agent_id(arguments)
     if error:
         return [error]
@@ -319,8 +324,6 @@ def _strict_identity_refusal_or_none(
     # REST every call carries one, so an id the transport put there (from the
     # fingerprint, a pin, or a header it derived) does not count.
     from src.mcp_handlers.context import (
-        get_csid_injected_source,
-        get_csid_transport_injected,
         get_http_prebind_resolution,
     )
     from src.mcp_handlers.identity_bootstrap import unbound_call_refusal
@@ -330,12 +333,11 @@ def _strict_identity_refusal_or_none(
         # Judged by the prebind before its derivation dropped an invalid id.
         caller_sent_session_id = bool(resolution["caller_sent_session_id"])
     else:
-        caller_sent_session_id = bool(
-            isinstance(arguments, dict)
-            and arguments.get("client_session_id")
-            and not get_csid_transport_injected()
-            and get_csid_injected_source() is None
+        from src.mcp_handlers.identity_bootstrap import (
+            caller_sent_usable_session_id,
         )
+
+        caller_sent_session_id = caller_sent_usable_session_id(arguments)
     options, surface_extra = unbound_call_refusal(
         tool_name,
         resolution,

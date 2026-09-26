@@ -99,6 +99,31 @@ FRESH_MINT_STEP = (
     "spawn_reason='explicit' only to continue a finished predecessor's work."
 )
 
+def caller_sent_usable_session_id(arguments) -> bool:
+    """Whether the caller itself sent a usable client_session_id on this call.
+
+    One rule for every surface that branches on it (the REST prebind and
+    strict gate, the /mcp/ session-miss refusal, both unbound metrics reads):
+    an id the transport put there (fingerprint injection, or a REST session
+    header copied into the arguments) is not the caller's, and one that
+    normalizes to nothing (blank, whitespace, symbols only) was never looked
+    up, so neither is "an id that names no identity".
+    """
+    if not isinstance(arguments, dict):
+        return False
+    from src.mcp_handlers.context import (
+        get_csid_injected_source,
+        get_csid_transport_injected,
+    )
+    from src.mcp_handlers.identity.session import normalize_client_session_id
+
+    return bool(
+        normalize_client_session_id(arguments.get("client_session_id"))
+        and not get_csid_transport_injected()
+        and get_csid_injected_source() is None
+    )
+
+
 REBIND_RETURNS_SESSION_ID = (
     "identity(agent_uuid=..., continuity_token=..., resume=true) returns it"
 )

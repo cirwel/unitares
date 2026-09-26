@@ -167,6 +167,48 @@ async def test_rest_and_mcp_read_gates_agree_on_each_header(
     assert rest_resolve.await_count == mcp_resolve.await_count == (1 if proves else 0)
 
 
+async def _rest_read_payload(tool_name: str, headers: dict, body: dict | None = None):
+    """_rest_read, then the REST metrics handler in the same request context,
+    as http_routes/tools runs it: the unbound payload the caller receives."""
+    from src.http_routes import access
+    from src.http_routes.tools import _inject_http_client_session
+    from src.mcp_handlers.context import reset_session_context, set_session_context
+    from src.services.http_tool_service import _execute_http_get_governance_metrics
+
+    resolve = AsyncMock(return_value=_hit())
+    request = _request(headers)
+    arguments = dict(body or {})
+    with ExitStack() as stack:
+        _storage_stubs(stack, resolve)
+        session_id = await _inject_http_client_session(request, arguments)
+        context_token = set_session_context(
+            session_key=session_id, client_session_id=session_id,
+        )
+        try:
+            signals = access._build_http_session_signals(request)
+            await access._resolve_http_bound_agent(tool_name, arguments, signals)
+            payload = await _execute_http_get_governance_metrics(arguments)
+        finally:
+            reset_session_context(context_token)
+    return payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header", ["X-Client-Id", "X-MCP-Client-Id"])
+async def test_a_header_only_rest_read_gets_the_no_id_recovery(header):
+    """The header's id is the transport's, not a client_session_id the caller
+    sent, and the narrowed gate never looks it up: the unbound read must not
+    tell a live process that its id names nothing and to mint. It gets the
+    same no-id recovery as the same call on /mcp/."""
+    from src.mcp_handlers.core import unbound_metrics_payload
+
+    payload = await _rest_read_payload("check_working_state", {header: "client-1"})
+
+    assert payload["status"] == "⚪ unbound"
+    assert payload["next_action"] == unbound_metrics_payload()["next_action"]
+    assert payload["next_action"]["tool"] == "check_working_state"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("header", ["X-Client-Id", "X-MCP-Client-Id"])
 async def test_a_client_session_id_the_caller_sent_still_proves_the_read(header):

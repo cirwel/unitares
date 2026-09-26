@@ -714,7 +714,6 @@ async def _resolve_http_session_binding(
 ) -> str | None:
     from src.mcp_handlers.context import (
         get_csid_injected_source,
-        get_csid_transport_injected,
         get_session_resolution_source,
         set_session_resolution_source,
         update_context_agent_id,
@@ -729,13 +728,9 @@ async def _resolve_http_session_binding(
     # normalizes to nothing (blank, whitespace, symbols only) is dropped by
     # the derivation and never looked up, so it is not "an id that names no
     # identity"; the caller gets the no-id recovery, as for an omitted one.
-    from src.mcp_handlers.identity.session import normalize_client_session_id
+    from src.mcp_handlers.identity_bootstrap import caller_sent_usable_session_id
 
-    caller_sent_session_id = bool(
-        normalize_client_session_id(arguments.get("client_session_id"))
-        and not get_csid_transport_injected()
-        and get_csid_injected_source() is None
-    )
+    caller_sent_session_id = caller_sent_usable_session_id(arguments)
     # The derivation stamps the source that won. Clear the slot first so the
     # value read below is this derivation's, never one left by the
     # transport's own derivation in _inject_http_client_session.

@@ -166,12 +166,20 @@ def _unbound_next_action(caller_sent_session_id: bool) -> dict:
     )
 
     if caller_sent_session_id:
+        # Same order as the strict refusal for the same fact: a process that
+        # still holds its uuid and continuity_token rebinds, so a stale id
+        # does not fork its work; only one that cannot rebind mints.
         return {
-            "tool": "start_session",
-            "example": "start_session(force_new=true)",
+            "tool": "identity",
+            "example": "identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)",
+            "then": "check_working_state(client_session_id=<the id identity returns>)",
+            "otherwise": "start_session(force_new=true)",
             "note": (
                 SESSION_ID_NAMES_NO_IDENTITY
-                + " Mint one: "
+                + " If this process still holds its uuid and continuity_token, "
+                "rebind with identity(agent_uuid=..., continuity_token=..., "
+                "resume=true) and repeat this read with the client_session_id "
+                "it returns. Otherwise mint one: "
                 + FRESH_MINT_STEP
                 + " get_governance_metrics is read-only; it "
                 "creates no identity and no state for unbound callers."
@@ -297,9 +305,14 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
         # is not caller proof for a pre-onboard read. Otherwise a fresh
         # no-proof Hermes/MCP episode can display a resident sibling's state.
         if not bound_agent_id or proof_origin == "server_inferred":
-            sent = bool(arguments.get("client_session_id")) and not transport_injected
+            from src.mcp_handlers.identity_bootstrap import (
+                caller_sent_usable_session_id,
+            )
+
             return success_response(
-                unbound_metrics_payload(caller_sent_session_id=sent)
+                unbound_metrics_payload(
+                    caller_sent_session_id=caller_sent_usable_session_id(arguments)
+                )
             )
 
     agent_id, error = require_agent_id(arguments)
