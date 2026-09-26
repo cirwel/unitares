@@ -390,13 +390,16 @@ def _create_session_wrapper(
         # Mcp-Session-Id, an X-Session-ID header, the OAuth client id and an
         # X-Client-Id header are caller_asserted; only the fingerprint pin is
         # server_inferred.
-        # Only direct wrapper calls (tests) and the nested use_tool path
-        # (tool_registration._invoke_mcp_nested_tool, which injects on its own)
-        # reach an injection. Do not "repair" this by testing the value instead
-        # of the key: that would copy an X-Session-ID header into arguments
-        # flagged transport-injected, downgrading header callers' writes to
-        # server_inferred, which STRICT_IDENTITY_REQUIRED refuses. Pinned by
-        # tests/test_mcp_x_session_id_read_parity.py.
+        # Only direct wrapper calls (tests) reach an injection. The nested
+        # use_tool path (tool_registration._invoke_mcp_nested_tool) enters the
+        # target through get_tool_wrapper, not this wrapper, and injects
+        # nothing, so a target named through use_tool resolves its session as
+        # it does named directly. Do not "repair" this by testing the value
+        # instead of the key: that would copy an X-Session-ID header into
+        # arguments flagged transport-injected, downgrading header callers'
+        # writes to server_inferred, which STRICT_IDENTITY_REQUIRED refuses.
+        # Pinned by tests/test_mcp_x_session_id_read_parity.py and
+        # tests/test_use_tool_session_parity.py.
         if session_extractor and ctx:
             session_id = session_extractor(ctx)
             if session_id and "client_session_id" not in kwargs:

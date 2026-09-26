@@ -307,7 +307,56 @@ async def test_mcp_nested_target_keeps_transport_session_caller_proven(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_mcp_nested_target_applies_target_specific_session_injection(monkeypatch):
+@pytest.mark.parametrize(
+    "target", ["identity", "sync_state", "check_working_state", "process_agent_update"]
+)
+async def test_mcp_nested_session_injected_target_gets_the_direct_call_arguments(
+    monkeypatch, target
+):
+    """A session-injected target named through use_tool receives what a direct
+    /mcp/ call delivers: no transport session copied into client_session_id,
+    and the transport-injected flag down, even if a prior step left it up.
+
+    A direct call never injects, because FastMCP None-fills the declared
+    argument before the typed wrapper sees it
+    (tests/test_mcp_x_session_id_read_parity.py). The nested path used to
+    inject the transport session here, flagged transport-injected, so the same
+    credentials resolved differently through use_tool. The resolution-level
+    parity is pinned by tests/test_use_tool_session_parity.py.
+    """
+    from src import tool_registration
+
+    # Not vacuous: each target is one the typed wrapper would inject for.
+    assert tool_registration.TOOLS_NEEDING_SESSION_INJECTION.matches(target)
+
+    observed = []
+
+    async def fake_wrapper(**arguments):
+        observed.append((dict(arguments), get_csid_transport_injected()))
+        return {"success": True}
+
+    monkeypatch.setattr(tool_registration, "get_tool_wrapper", lambda _name: fake_wrapper)
+    monkeypatch.setattr(tool_registration, "_session_id_from_ctx", lambda _ctx: "mcp-session")
+
+    stale = set_csid_transport_injected(True)
+    try:
+        await tool_registration._invoke_mcp_nested_tool(
+            target,
+            {},
+            outer_arguments={},
+        )
+        # The outer flag is restored once the target returns.
+        assert get_csid_transport_injected() is True
+    finally:
+        reset_csid_transport_injected(stale)
+
+    assert observed == [({}, False)]
+
+
+@pytest.mark.asyncio
+async def test_mcp_nested_target_copies_an_explicit_outer_session_as_caller_input(
+    monkeypatch,
+):
     from src import tool_registration
 
     observed = []
@@ -320,12 +369,12 @@ async def test_mcp_nested_target_applies_target_specific_session_injection(monke
     monkeypatch.setattr(tool_registration, "_session_id_from_ctx", lambda _ctx: "mcp-session")
 
     await tool_registration._invoke_mcp_nested_tool(
-        "identity",
+        "sync_state",
         {},
-        outer_arguments={},
+        outer_arguments={"client_session_id": "agent-outer-session"},
     )
 
-    assert observed == [({"client_session_id": "mcp-session"}, True)]
+    assert observed == [({"client_session_id": "agent-outer-session"}, False)]
 
 
 @pytest.mark.asyncio

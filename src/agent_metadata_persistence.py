@@ -138,6 +138,7 @@ async def _load_metadata_from_postgres_async() -> dict:
             agent_uuid=agent.metadata.get("agent_uuid"),
             public_agent_id=agent.metadata.get("public_agent_id"),
             label=agent.metadata.get("label"),
+            auto_label=agent.metadata.get("auto_label"),
             structured_id=agent.metadata.get("structured_id"),
             preferences=agent.metadata.get("preferences", {}),
             active_session_key=agent.metadata.get("active_session_key"),
@@ -482,6 +483,7 @@ def register_minted_agent_in_dict(
     thread_id: str | None = None,
     node_index: int = 1,
     api_key: str = "",
+    auto_label: str | None = None,
 ) -> bool:
     """Hydrate `agent_metadata` immediately after a fresh `core.identities` mint.
 
@@ -516,6 +518,9 @@ def register_minted_agent_in_dict(
         if node_index is not None and not getattr(existing, "node_index", None):
             existing.node_index = node_index
             backfilled = True
+        if auto_label is not None and getattr(existing, "auto_label", None) is None:
+            existing.auto_label = auto_label
+            backfilled = True
         if backfilled:
             logger.debug(
                 f"Backfilled thread_id/node_index on existing dict entry for "
@@ -530,6 +535,7 @@ def register_minted_agent_in_dict(
         created_at=now,
         last_update=now,
         label=label,
+        auto_label=auto_label,
         public_agent_id=public_agent_id,
         structured_id=structured_id,
         agent_uuid=agent_uuid,

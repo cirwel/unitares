@@ -904,6 +904,10 @@ def _check_display_name_required(agent_id: str, arguments: Dict[str, Any]) -> tu
             try:
                 meta.label = auto_name
                 meta.display_name = auto_name
+                # The server chose this name, so label_source reads "auto"
+                # while the label still equals it (services/identity_payloads
+                # .label_source_for). Recorded where the name is: in memory.
+                meta.auto_label = auto_name
             except Exception as e:
                 logger.debug(f"Could not save auto-generated display_name: {e}")
 
@@ -953,15 +957,15 @@ def _build_agent_display_payload(
         payload["structured_agent_id"] = public_handle
     if display_name:
         payload["display_name"] = display_name
-    if display_name and display_name not in (
-        public_agent_id,
-        structured_id,
-    ):
-        payload["label_source"] = "claimed"
-    elif display_name or public_handle:
-        payload["label_source"] = "auto"
-    else:
-        payload["label_source"] = "uuid"
+    from src.services.identity_payloads import label_source_for
+
+    payload["label_source"] = label_source_for(
+        display_name,
+        public_agent_id=public_agent_id,
+        structured_id=structured_id,
+        auto_label=_agent_metadata_text(meta, "auto_label"),
+        has_public_handle=bool(public_handle),
+    )
     return payload
 
 

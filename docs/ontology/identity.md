@@ -96,7 +96,7 @@ resolvers (`src/mcp_handlers/support/agent_auth.py`).
 | `agent_id` (argument) | Target selector. **Cross-agent: UUID only.** An alias (`display_name`/`label`, `structured_agent_id`, `public_agent_id`) canonicalizes to a UUID *only when it names the caller's own identity*; a cross-agent alias is honored verbatim rather than canonicalized (`require_agent_id`), and whether it then resolves is per-tool: `require_registered_agent` scans registered metadata for a matching alias, while a UUID-keyed lookup such as `get_governance_metrics`'s refuses it (`error_type: unknown_agent`). | You are targeting a **different** agent (cross-agent/admin op) — pass its UUID. For *self*, leave it unset; the session binding resolves it. | Self-identification when you're already session-bound (passing your own label round-trips through alias resolution for nothing). |
 | `agent_id` (return field) | The **display** value (chosen `display_name`, else an auto id). | — (read-only output) | An input proof — it is cosmetic on the way out. |
 | `structured_agent_id` / `public_agent_id` | Auto-derived model+date style label. | Rarely; only as a human-readable cross-agent reference. | Proof of anything; it is server-generated and cosmetic. |
-| `display_name` / `label` | User-chosen cosmetic name. | Display only. | Identity. "Name is cosmetic" (identity-invariant #4). |
+| `display_name` / `label` | Cosmetic name: one a caller chose, or one the server assigned (at mint, `claude_code-opus_<uuid8>`; on a knowledge write by an agent with no meaningful label, `Agent_<uuid8>`). `label_source` says which (`claimed` / `auto`); the server records the label it assigned, so a claimed name that a collision renamed to the same `<name>_<uuid8>` shape still reads `claimed`. Agents minted on a server that did not yet run this change (#2478), and lazily persisted mints, carry no record and read `claimed` for the server's label. | Display only. | Identity. "Name is cosmetic" (identity-invariant #4). |
 | `continuity_token` | Advanced **same-live-process** rebind proof (signed, carries the `aid` claim). | Resume-by-proof together with `agent_uuid`, in a still-live process. Not the day-to-day path. | A cross-process or cross-channel identity credential (performative — see "Three stances"). |
 | `thread_id` | Conversation/thread anchor. Short opaque `t-<16hex>` form (`generate_thread_id`, `src/thread_identity.py`) **and** a full-UUID form are both accepted. | Claiming thread membership/position when the caller already knows it. | A substitute for `client_session_id` — a thread groups forks; it is not the per-process write binding. |
 
@@ -130,11 +130,52 @@ is**:
    for this request (from `client_session_id` / sticky transport binding /
    `continuity_token`).
 3. **Refuse / unbound** — under `STRICT_IDENTITY_REQUIRED` an unresolved write
-   returns a typed identity-required refusal; it does **not** auto-mint.
+   returns a typed identity-required refusal; it does **not** auto-mint. The
+   refusal's recovery depends on why nothing resolved, and both transports
+   pick it from the resolver's result through one builder
+   (`identity_bootstrap.unbound_call_refusal`):
+   - *Session miss* (nothing is bound to the session the call named). The
+     recovery keys on what the caller itself sent. With no
+     `client_session_id` of its own on the call, it leads with retrying with
+     the id `start_session` returned (then the `identity(agent_uuid,
+     continuity_token, resume=true)` rebind that hands it back), and offers
+     `start_session(force_new=true)` only to a process that never called
+     `start_session`. With a caller-sent id that names nothing, repeating it
+     cannot help, so the rebind leads, and the mint is for a process that
+     cannot rebind (it never called `start_session` here, or it no longer
+     holds its uuid and `continuity_token`).
+   - *Refused resume* (the session names an identity and the resolver
+     refused it): the hint names the cause, such as the hijack guard's reason
+     or a substrate-anchored resident resuming over HTTP instead of its UDS
+     socket.
+   - *Server-side failure* (the resolver raised, returned nothing usable, or
+     could not read the session table): retry; onboarding is not offered.
+
    (Pre-`pre_onboard` *reads* with no proof short-circuit to unbound without
-   resolving at all — they never produce a cacheable identity. See
+   resolving at all — they never produce a cacheable identity. Session
+   headers are judged alike on both transports: only `X-Session-ID` proves a
+   read. A client-sent `Mcp-Session-Id` is connection-scoped, and an
+   `X-Client-Id` header or OAuth client id names a client, not a process, so
+   none of them does. Both read gates apply one predicate,
+   `identity/session.transport_session_is_read_proof`, to the source that
+   actually produced the session key. Argument-level proof is judged by each
+   gate: a `client_session_id` the caller sent and a verified
+   `continuity_token` prove a read on both, and `/mcp/` also counts an
+   `agent_uuid` argument and a UUID `X-Agent-Id` header, which REST does not.
+   The session-key derivation ignores those two, so such a read resolves on
+   the transport's own signals (the onboard pin, for example) and is
+   server-inferred. The sticky transport binding is consulted before the
+   short-circuit, so a read can also be served from a binding an earlier call
+   established: on `/mcp/` when the client sends its own `Mcp-Session-Id`, on
+   REST when the body carries a null or empty `client_session_id` and no
+   session header. See
    `src/mcp_handlers/middleware/identity_step.py` and the REST parity guard in
-   `src/http_api.py::_resolve_http_bound_agent`.)
+   `src/http_api.py::_resolve_http_bound_agent`.) Through `use_tool`, a target
+   resolves its session as it does named directly: the nested path does not
+   copy the transport session into `client_session_id`. It does not apply the
+   target's `/mcp/` argument schema, though, so an argument that schema drops
+   (`agent_id` or `agent_uuid` on the metrics tools) still reaches a nested
+   target.
 
 The three resolvers in `src/mcp_handlers/support/agent_auth.py` are
 **specializations of this one order**, not independent priority schemes —

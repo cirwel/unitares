@@ -482,10 +482,15 @@ def get_tool_wrapper(tool_name: str):
 # Instead of manually decorating each tool, we auto-register from tool_schemas.py
 # This prevents tools from getting out of sync between schemas and SSE server.
 
-# Tools that get client_session_id injected from the FastMCP Context when a
-# client omits it. Matched on the call: the tool registrar asks about each
-# registered tool and the alias registrar about each workflow alias, and an
-# alias gets injection exactly when its tool does. The set named thirteen
+# Tools whose typed wrapper is built with a session extractor, which would
+# inject client_session_id from the FastMCP Context when a client omits it.
+# On a real /mcp/ call that injection never runs: FastMCP None-fills the
+# declared argument first (see the comment at the wrapper's inject site), and
+# the nested use_tool path (_invoke_mcp_nested_tool) does not inject either,
+# so membership changes nothing a caller can observe today. Matched on the
+# call: the tool registrar asks about each registered tool and the alias
+# registrar about each workflow alias, and an alias gets the extractor exactly
+# when its tool does. The set named thirteen
 # pre-consolidation names until 2026-09 (store_knowledge_graph, observe_agent,
 # export_to_file, ...); both registrars only ever ask about registered tools
 # and aliases of them, so those entries were never read, and the routers that
@@ -512,41 +517,55 @@ async def _invoke_mcp_nested_tool(
     *,
     outer_arguments: Dict[str, object],
 ):
-    """Re-enter the MCP target wrapper with direct-call session semantics."""
+    """Re-enter the MCP target wrapper with direct-call session semantics.
+
+    A target named through ``use_tool`` must resolve its session exactly as
+    the same target named directly with the same credentials. On a direct
+    /mcp/ call nothing copies the transport session into
+    ``client_session_id``: FastMCP None-fills the declared argument before
+    the typed wrapper runs, so the wrapper's inject branch never fires (see
+    the comment at its inject site), and ``derive_session_key`` resolves an
+    omitted id from the transport signals themselves. This path therefore
+    injects nothing either.
+
+    It used to reproduce the typed wrapper's per-target injection for the
+    session-injected set (``TOOLS_NEEDING_SESSION_INJECTION``), flagged as
+    transport-injected (b79f737e). The same credentials then resolved
+    differently through ``use_tool``: a header-only ``sync_state`` derived
+    ``x_session_id`` / caller_asserted directly but was refused under strict
+    identity through ``use_tool`` (the injected header read as
+    server_inferred); a proof-less ``check_working_state`` short-circuited to
+    unbound directly, while through ``use_tool`` the injected id counted as
+    proof and the read resolved; and a fingerprint-only write was keyed on the
+    raw fingerprint instead of reaching the step-7 pin. Pinned by
+    tests/test_use_tool_session_parity.py.
+
+    Session parity is all this path gives. It does not apply the target's
+    FastMCP argument schema, so an argument that schema drops on a direct
+    call (``agent_id`` or ``agent_uuid`` on the metrics tools) still reaches
+    a nested target.
+    """
     from src.mcp_handlers.context import (
         reset_csid_transport_injected,
         set_csid_transport_injected,
     )
 
     nested = dict(arguments or {})
+    # The target starts from what the caller sent, as a direct call does: the
+    # typed wrapper resets this flag on every direct call, and nothing on this
+    # path sets it.
     csid_token = set_csid_transport_injected(False)
     try:
-        # ``use_tool`` itself is not session-injected. An explicit outer CSID
-        # is therefore caller input and behaves exactly as if it had appeared
-        # on a directly named target.
+        # ``use_tool`` itself is not session-injected, so an outer
+        # client_session_id reached these arguments only because the caller
+        # sent it. It is caller input and behaves exactly as if it had
+        # appeared on a directly named target. An explicit nested value,
+        # including an explicit empty one, wins.
         if (
             "client_session_id" not in nested
             and "client_session_id" in outer_arguments
         ):
             nested["client_session_id"] = outer_arguments.get("client_session_id")
-
-        # Reproduce create_typed_wrapper's per-target policy. Targets outside
-        # this set resolve the caller-proven MCP session from transport context;
-        # copying it into arguments would downgrade it to server_inferred.
-        # This is the one /mcp/ path where that injection still runs: on a
-        # direct call FastMCP None-fills client_session_id before the typed
-        # wrapper sees it, so the wrapper never injects (see the comment at
-        # its inject site). An X-Session-ID header copied in here is therefore
-        # server_inferred on the nested path while the same header on a direct
-        # call derives caller_asserted.
-        if (
-            TOOLS_NEEDING_SESSION_INJECTION.matches(tool_name)
-            and "client_session_id" not in nested
-        ):
-            session_id = _session_id_from_ctx(None)
-            if session_id:
-                nested["client_session_id"] = session_id
-                set_csid_transport_injected(True)
         return await get_tool_wrapper(tool_name)(**nested)
     finally:
         reset_csid_transport_injected(csid_token)

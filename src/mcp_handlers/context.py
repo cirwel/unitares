@@ -346,6 +346,56 @@ def get_csid_transport_injected() -> bool:
     return _csid_transport_injected.get()
 
 
+# The derive_session_key source behind a client_session_id the REST transport
+# put on the call itself (http_routes/tools._inject_http_client_session), or
+# None when the caller sent the id. The transport-injected flag above cannot
+# carry this: an id derived from a caller-asserted header (X-Session-ID or
+# X-Client-Id) is correctly NOT flagged, yet once it sits in the arguments a
+# later derivation sees only explicit_client_session_id and can no longer tell
+# a process-scoped header from a client-scoped one. The REST pre-onboard read
+# gate needs that distinction to judge the header the way /mcp/ does.
+_csid_injected_source: ContextVar[Optional[str]] = ContextVar(
+    'csid_injected_source', default=None
+)
+
+
+def set_csid_injected_source(source: Optional[str]) -> object:
+    """Record which derivation source produced a transport-put client_session_id."""
+    return _csid_injected_source.set(source)
+
+
+def reset_csid_injected_source(token: object) -> None:
+    """Restore the previous transport-put session source."""
+    _csid_injected_source.reset(token)
+
+
+def get_csid_injected_source() -> Optional[str]:
+    """Derivation source of a transport-put client_session_id; None if caller-sent."""
+    return _csid_injected_source.get()
+
+
+# What the REST prebind's resolver returned when it bound nothing
+# (http_routes/access._resolve_http_session_binding): the refusal or error
+# shape, {} for a result with no usable binding, or None when no resolution
+# ran for this call. The REST strict gate (services/http_tool_service) reads it
+# to tell a session miss from a refused or failed resolution; the prebind
+# itself returns only "no binding". Reset at the start of every prebind,
+# nested ones included.
+_http_prebind_resolution: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    'http_prebind_resolution', default=None
+)
+
+
+def set_http_prebind_resolution(result: Optional[Dict[str, Any]]) -> object:
+    """Record the REST prebind resolver's unbound result (None: none ran)."""
+    return _http_prebind_resolution.set(result)
+
+
+def get_http_prebind_resolution() -> Optional[Dict[str, Any]]:
+    """The REST prebind resolver's unbound result, or None when none ran."""
+    return _http_prebind_resolution.get()
+
+
 # Pin scope detail. Set by derive_session_key when an onboard-pin lookup hits,
 # distinguishing which candidate form matched (client_model / client / model /
 # unscoped). Kept as a side-channel so the load-bearing exact-match comparison

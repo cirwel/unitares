@@ -194,9 +194,14 @@ async def http_list_tools(request):
 
 
 async def _inject_http_client_session(request, arguments: dict) -> str | None:
-    from src.mcp_handlers.context import set_csid_transport_injected
+    from src.mcp_handlers.context import (
+        get_session_resolution_source,
+        set_csid_injected_source,
+        set_csid_transport_injected,
+    )
 
     set_csid_transport_injected(False)
+    set_csid_injected_source(None)
     if "client_session_id" in arguments:
         return arguments.get("client_session_id")
 
@@ -209,6 +214,11 @@ async def _inject_http_client_session(request, arguments: dict) -> str | None:
     # purely-random fallback either, because the pin key (IP+UA) can be
     # shared by unrelated callers behind the same proxy pool or client string.
     set_csid_transport_injected(not is_caller_asserted)
+    # Which signal produced the id, for the pre-onboard read gate: a
+    # caller-asserted X-Client-Id is not flagged above, but it names a client,
+    # not a process, and must not prove a read (see
+    # identity/session.transport_session_is_read_proof).
+    set_csid_injected_source(get_session_resolution_source())
     return client_session_id
 
 

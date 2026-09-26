@@ -155,18 +155,33 @@ def unbound_metrics_payload(*, caller_sent_session_id: bool = False) -> dict:
 
 
 def _unbound_next_action(caller_sent_session_id: bool) -> dict:
-    """The unbound read's next step, keyed only on what the caller sent."""
+    """The unbound read's next step, keyed only on what the caller sent.
+
+    The shared sentences come from identity_bootstrap, the one source for
+    recovery wording that the strict refusals quote as well.
+    """
+    from src.mcp_handlers.identity_bootstrap import (
+        FRESH_MINT_STEP,
+        SESSION_ID_NAMES_NO_IDENTITY,
+    )
+
     if caller_sent_session_id:
+        # Same order as the strict refusal for the same fact: a process that
+        # still holds its uuid and continuity_token rebinds, so a stale id
+        # does not fork its work; only one that cannot rebind mints.
         return {
-            "tool": "start_session",
-            "example": "start_session(force_new=true)",
+            "tool": "identity",
+            "example": "identity(agent_uuid=<uuid>, continuity_token=<token>, resume=true)",
+            "then": "check_working_state(client_session_id=<the id identity returns>)",
+            "otherwise": "start_session(force_new=true)",
             "note": (
-                "The client_session_id on this call names no identity on this "
-                "server (never minted here, or its binding expired), so "
-                "repeating it cannot help. Mint one: "
-                "start_session(force_new=true); add parent_agent_id=<prior_uuid>, "
-                "spawn_reason='explicit' only to continue a finished "
-                "predecessor's work. get_governance_metrics is read-only; it "
+                SESSION_ID_NAMES_NO_IDENTITY
+                + " If this process still holds its uuid and continuity_token, "
+                "rebind with identity(agent_uuid=..., continuity_token=..., "
+                "resume=true) and repeat this read with the client_session_id "
+                "it returns. Otherwise mint one: "
+                + FRESH_MINT_STEP
+                + " get_governance_metrics is read-only; it "
                 "creates no identity and no state for unbound callers."
             ),
         }
@@ -178,9 +193,8 @@ def _unbound_next_action(caller_sent_session_id: bool) -> dict:
             "If this process already called start_session, repeat this "
             "read with the client_session_id it returned: "
             "check_working_state(client_session_id=...). Otherwise "
-            "start_session(force_new=true); add parent_agent_id=<prior_uuid>, "
-            "spawn_reason='explicit' only to continue a finished "
-            "predecessor's work. get_governance_metrics is read-only; "
+            + FRESH_MINT_STEP
+            + " get_governance_metrics is read-only; "
             "it creates no identity and no state for unbound callers. "
             "Avoid bare identity()/start_session() — without force_new or a "
             "proof (client_session_id / continuity_token) they can mint "
@@ -291,9 +305,14 @@ async def handle_get_governance_metrics(arguments: ToolArgumentsDict) -> Sequenc
         # is not caller proof for a pre-onboard read. Otherwise a fresh
         # no-proof Hermes/MCP episode can display a resident sibling's state.
         if not bound_agent_id or proof_origin == "server_inferred":
-            sent = bool(arguments.get("client_session_id")) and not transport_injected
+            from src.mcp_handlers.identity_bootstrap import (
+                caller_sent_usable_session_id,
+            )
+
             return success_response(
-                unbound_metrics_payload(caller_sent_session_id=sent)
+                unbound_metrics_payload(
+                    caller_sent_session_id=caller_sent_usable_session_id(arguments)
+                )
             )
 
     agent_id, error = require_agent_id(arguments)
