@@ -12,6 +12,22 @@ Date: 2026-08-24
 Expose two primary verbs for model-mediated help:
 
 - `consult` returns advisory model evidence and never creates a governance record.
+
+> **Amended 2026-09-26.** Two qualifications. First, "no governance record"
+> was already inexact before this amendment: the inference layers' Energy
+> accounting runs a synthetic `process_update` on every successful call,
+> which writes an `auto_attest` decision row that does not say a
+> consultation produced it (the same holds for `call_model` and
+> `delegate_inference`). Second, every consultation that reaches the router
+> now also writes an `audit.events` row, `event_type='consultation'`
+> (`unitares.consultation_record.v1`): requester, policy, outcome, the route
+> whenever a well-formed inference result came back (an upstream failure, or a
+> result without valid provenance, records no route block: a failed thorough
+> call still names its target host, a failed standard call does not say
+> where it was tried),
+> and HMAC hashes of the brief, prompt and advice under a key returned only
+> to the caller. The advice stays advisory and off the governed record; the
+> fact that it was sought is on it.
 - `request_review` requests governed, on-record judgment with actual reviewer provenance.
 
 `call_model`, `delegate_inference`, and raw `dialectic` remain compatible route or

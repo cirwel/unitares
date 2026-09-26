@@ -984,3 +984,406 @@ def test_unavailable_fallback_skips_a_host_the_operator_switched_off(monkeypatch
     assert co._thorough_host_for_caller() == "antigravity:host-adapter"
     monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "codex,antigravity")
     assert co._thorough_host_for_caller() == "codex:host-adapter"
+
+
+# ---------------------------------------------------------------------------
+# Durable consultation record: the envelope is kept, the text never is.
+# ---------------------------------------------------------------------------
+
+_BRIEF_SENTINEL = "BRIEF-SENTINEL-7f3a private operator context"
+_ADVICE_SENTINEL = "ADVICE-SENTINEL-91c2 model answer"
+_WARNING_SENTINEL = "WARNING-SENTINEL-e04d echoed BRIEF-SENTINEL-7f3a"
+
+
+@pytest.fixture
+def audit_sinks(monkeypatch):
+    """Run the real AuditLogger path, capturing what reaches Postgres and JSONL."""
+    import asyncio
+
+    import src.audit_db as audit_db
+    import src.audit_log as audit_log
+
+    pg_entries = []
+
+    async def _capture(entry, raw_hash=None):
+        pg_entries.append(entry)
+        return True
+
+    monkeypatch.setattr(audit_db, "append_audit_event_async", _capture)
+    log_file = audit_log.audit_logger.log_file
+    offset = log_file.stat().st_size if log_file.exists() else 0
+
+    async def _drain():
+        pending = list(audit_log._inflight_pg_audit_tasks)
+        if pending:
+            await asyncio.gather(*pending)
+        new_jsonl = ""
+        if log_file.exists():
+            with open(log_file) as handle:
+                handle.seek(offset)
+                new_jsonl = handle.read()
+        pg = [e for e in pg_entries if e["event_type"] == "consultation"]
+        return new_jsonl, pg
+
+    return _drain
+
+
+def _verify(key, text):
+    return co._keyed_hash(key, text)
+
+
+@pytest.mark.asyncio
+async def test_consultation_record_keeps_envelope_never_text(monkeypatch, audit_sinks):
+    outcome = _completed(response=_ADVICE_SENTINEL)
+    outcome.inference["warnings"] = [_WARNING_SENTINEL]
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
+
+    parsed = _payload(await co.handle_consult({"brief": _BRIEF_SENTINEL}))
+    assert parsed["success"] is True
+
+    jsonl, pg = await audit_sinks()
+    assert len(pg) == 1
+    # Postgres only: JSONL readers take entries without a type filter.
+    assert "consultation" not in jsonl
+    entry = pg[0]
+    serialized = json.dumps(entry)
+    assert "BRIEF-SENTINEL" not in serialized
+    assert "ADVICE-SENTINEL" not in serialized
+    assert "WARNING-SENTINEL" not in serialized
+    assert entry["agent_id"] == "test-resolved-caller"
+
+    record = entry["details"]
+    key = parsed["record"]["hash_key"]
+    assert key not in serialized
+    assert record["schema"] == "unitares.consultation_record.v1"
+    assert record["consultation_id"] == parsed["consultation_id"]
+    assert parsed["record"]["consultation_id"] == parsed["consultation_id"]
+    assert record["status"] == "completed"
+    assert record["request"]["privacy"] == "local"
+    assert record["route"]["host_id"] == "ollama:local"
+    assert record["route"]["model_used"] == "test-model"
+    assert "warnings" not in record["route"]
+    assert record["hashes"]["scheme"] == "hmac-sha256"
+    assert record["hashes"]["brief"] == _verify(key, _BRIEF_SENTINEL)
+    assert record["hashes"]["advice"] == _verify(key, parsed["advice"])
+    assert record["hashes"]["constructed_prompt"] == _verify(
+        key,
+        co._constructed_prompt(
+            co.ConsultRequest(brief=_BRIEF_SENTINEL, requester_uuid=None)
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_hashes_cannot_confirm_a_guess_without_the_key(
+    monkeypatch, audit_sinks
+):
+    from src.mcp_handlers.support.inference_registry import sha256_text
+
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    first = _payload(await co.handle_consult({"brief": "yes"}))
+    second = _payload(await co.handle_consult({"brief": "yes"}))
+
+    _, pg = await audit_sinks()
+    hashes = [entry["details"]["hashes"]["brief"] for entry in pg]
+    assert sha256_text("yes") not in json.dumps(pg)
+    # The same brief twice does not link the two rows.
+    assert hashes[0] != hashes[1]
+    assert first["record"]["hash_key"] != second["record"]["hash_key"]
+
+
+@pytest.mark.asyncio
+async def test_failed_consultation_is_recorded_without_route_or_advice(
+    monkeypatch, audit_sinks
+):
+    monkeypatch.setattr(
+        co,
+        "run_delegated_inference",
+        AsyncMock(return_value=_failure("DELEGATED_INFERENCE_TIMEOUT")),
+    )
+
+    parsed = _payload(await co.handle_consult({
+        "brief": _BRIEF_SENTINEL,
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+    }))
+    assert parsed["success"] is False
+    assert parsed["record"]["hash_key"]
+
+    _, pg = await audit_sinks()
+    assert len(pg) == 1
+    record = pg[0]["details"]
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+    assert record["status"] == "failed"
+    assert record["failure"]["code"] == "DELEGATED_INFERENCE_TIMEOUT"
+    assert record["request"]["thorough_host_id"]
+    assert "route" not in record
+    assert "advice" not in record["hashes"]
+
+
+@pytest.mark.asyncio
+async def test_policy_refusal_is_recorded(monkeypatch, audit_sinks):
+    parsed = _payload(await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+    }))
+
+    assert parsed["error_code"] == "CONSULT_POLICY_UNSATISFIED"
+    _, pg = await audit_sinks()
+    assert len(pg) == 1
+    assert pg[0]["details"]["failure"]["code"] == "CONSULT_POLICY_UNSATISFIED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments,resolved",
+    [
+        ({"brief": "Explain", "purpose": "not-a-purpose"}, "test-resolved-caller"),
+        ({"brief": "Explain"}, None),
+    ],
+)
+async def test_argument_refusals_leave_no_consultation_record(
+    monkeypatch, audit_sinks, arguments, resolved
+):
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "get_context_resolved_agent_id", lambda: resolved)
+
+    parsed = _payload(await co.handle_consult(arguments))
+
+    assert parsed["success"] is False
+    assert "record" not in parsed
+    standard.assert_not_awaited()
+    _, pg = await audit_sinks()
+    assert pg == []
+
+
+@pytest.mark.asyncio
+async def test_audit_failure_never_fails_the_consultation(monkeypatch):
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("record could not be built")
+
+    # The reachable failure: building the record raises before the writer.
+    monkeypatch.setattr(co, "_consultation_record", _boom)
+    monkeypatch.setattr(
+        co, "run_model_inference", AsyncMock(return_value=_completed())
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": "Explain"}))
+
+    assert parsed["success"] is True
+    assert parsed["advice"] == "careful advice"
+    # No row was handed to the writer, so no verification key is offered.
+    assert "record" not in parsed
+
+
+@pytest.mark.asyncio
+async def test_backend_reported_text_in_identifier_fields_is_hashed(monkeypatch, audit_sinks):
+    echoed = "echoing BRIEF-SENTINEL-7f3a back"
+    outcome = _completed(response=_ADVICE_SENTINEL, finish_reason=echoed)
+    outcome.inference["model_used"] = echoed
+    outcome.inference["models_used"] = ["test-model", echoed]
+    outcome.inference["model_requested"] = echoed
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
+
+    parsed = _payload(await co.handle_consult({"brief": _BRIEF_SENTINEL}))
+
+    _, pg = await audit_sinks()
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+    record = pg[0]["details"]
+    hashed = {"unrecorded_text": _verify(parsed["record"]["hash_key"], echoed)}
+    assert record["route"]["model_used"] == hashed
+    assert record["route"]["models_used"] == ["test-model", hashed]
+    assert record["route"]["model_requested"] == hashed
+    assert "finish_reason" not in record["route"]
+    assert record["completion"] == {"state": "unknown", "answer_complete": False}
+
+
+@pytest.mark.asyncio
+async def test_backend_text_in_failure_codes_is_hashed(monkeypatch, audit_sinks):
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_failure("provider said BRIEF-SENTINEL-7f3a")),
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": _BRIEF_SENTINEL}))
+    assert parsed["success"] is False
+
+    _, pg = await audit_sinks()
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+    assert "unrecorded_text" in pg[0]["details"]["failure"]["code"]
+
+
+@pytest.mark.asyncio
+async def test_consultation_row_is_not_a_confidence_claim(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    await co.handle_consult({"brief": "Explain"})
+
+    _, pg = await audit_sinks()
+    # Postgres confidence readers take the newest row with confidence > 0.
+    assert pg[0]["confidence"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_route_violation_records_where_the_inference_went(monkeypatch, audit_sinks):
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_completed(
+            route="huggingface",
+            host_id="hf:router",
+            privacy_class="external_cloud",
+        )),
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": "Explain"}))
+
+    assert parsed["error_code"] == "CONSULT_PRIVACY_POSTCONDITION_FAILED"
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["status"] == "failed"
+    assert record["route"]["host_id"] == "hf:router"
+    assert record["route"]["privacy_class"] == "external_cloud"
+    assert "advice" not in record["hashes"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_consultation_is_recorded_then_reraised(monkeypatch, audit_sinks):
+    import asyncio
+
+    monkeypatch.setattr(
+        co,
+        "run_delegated_inference",
+        AsyncMock(side_effect=asyncio.CancelledError()),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await co.handle_consult({
+            "brief": _BRIEF_SENTINEL,
+            "effort": "thorough",
+            "privacy": "cloud_allowed",
+        })
+
+    _, pg = await audit_sinks()
+    assert len(pg) == 1
+    assert pg[0]["details"]["status"] == "cancelled"
+    # No caller ever holds this call's key, so no unverifiable hashes.
+    assert pg[0]["details"]["hashes"] is None
+    assert "BRIEF-SENTINEL" not in json.dumps(pg[0])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["sk-live-SECRETTOKEN123", "key.SECRETTOKEN/123"])
+async def test_non_constant_shaped_code_is_hashed(monkeypatch, audit_sinks, token):
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_failure(token)),
+    )
+
+    await co.handle_consult({"brief": f"please rotate {token}"})
+
+    _, pg = await audit_sinks()
+    assert "SECRETTOKEN" not in json.dumps(pg[0])
+
+
+@pytest.mark.asyncio
+async def test_server_authored_reasons_stay_readable(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    await co.handle_consult({
+        "brief": "Deep analysis",
+        "effort": "thorough",
+        "privacy": "local",
+        "allow_degraded": True,
+    })
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_completed(
+            route="huggingface",
+            host_id="hf:router",
+            privacy_class="external_cloud",
+        )),
+    )
+    await co.handle_consult({"brief": "Explain"})
+
+    _, pg = await audit_sinks()
+    degraded, violated = (entry["details"] for entry in pg)
+    assert degraded["degradation"]["reason_code"] == "privacy_policy_requires_local"
+    assert violated["failure"]["code"] == "CONSULT_PRIVACY_POSTCONDITION_FAILED"
+    assert violated["failure"]["category"] == "system_error"
+    assert "non-local" in violated["failure"]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_non_string_response_still_fails_closed_and_is_recorded(
+    monkeypatch, audit_sinks
+):
+    monkeypatch.setattr(
+        co, "run_model_inference", AsyncMock(return_value=_completed(response=None))
+    )
+
+    parsed = _payload(await co.handle_consult({"brief": "Explain"}))
+
+    assert parsed["error_code"] == "INTERNAL_INFERENCE_CONTRACT"
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["failure"]["reason"] == "empty_advisory_response"
+    # The inference ran, so the record still says where it went.
+    assert record["route"]["host_id"] == "ollama:local"
+
+
+@pytest.mark.asyncio
+async def test_padded_brief_verifies_against_its_stripped_form(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    parsed = _payload(await co.handle_consult({"brief": "  needs review \n"}))
+
+    _, pg = await audit_sinks()
+    key = parsed["record"]["hash_key"]
+    assert pg[0]["details"]["hashes"]["brief"] == _verify(key, "needs review")
+
+
+@pytest.mark.asyncio
+async def test_server_set_values_survive_a_brief_that_mentions_them(monkeypatch, audit_sinks):
+    # Regression guard against any future brief-dependent hashing rule: every
+    # value asserted below appears in its brief, and must still be recorded
+    # readably (see _RECORD_ROUTE_FIELDS for why no such rule exists).
+    monkeypatch.setattr(
+        co,
+        "run_model_inference",
+        AsyncMock(return_value=_completed(
+            route="huggingface",
+            host_id="hf:router",
+            privacy_class="external_cloud",
+        )),
+    )
+    await co.handle_consult({
+        "brief": "why CONSULT_PRIVACY_POSTCONDITION_FAILED on external_cloud standard?",
+    })
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+    await co.handle_consult({
+        "brief": "what does privacy_policy_requires_local mean",
+        "effort": "thorough",
+        "privacy": "local",
+        "allow_degraded": True,
+    })
+    await co.handle_consult({
+        "brief": "I got CONSULT_POLICY_UNSATISFIED again, why?",
+        "effort": "thorough",
+    })
+
+    _, pg = await audit_sinks()
+    violated, degraded, refused = (entry["details"] for entry in pg)
+    assert violated["failure"]["code"] == "CONSULT_PRIVACY_POSTCONDITION_FAILED"
+    assert violated["route"]["privacy_class"] == "external_cloud"
+    assert degraded["degradation"]["reason_code"] == "privacy_policy_requires_local"
+    assert degraded["delivery"]["effort"] == "standard"
+    assert refused["failure"]["code"] == "CONSULT_POLICY_UNSATISFIED"
+    # privacy='local' never contacts a thorough host, so neither row names one.
+    assert "thorough_host_id" not in degraded["request"]
+    assert "thorough_host_id" not in refused["request"]

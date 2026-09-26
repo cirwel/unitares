@@ -43,8 +43,10 @@ three ways, none of which is a missing capability:
   deliberately, pending a cross-repo follow-up). Duplicate registrations
   retired; `tests/test_lite_wire_surface.py` pins the advertised set.
 - **`consult-advisory-facade-v1`** (2026-08-24): the advisory/governed split is
-  decided — `consult` returns advisory evidence and creates no record;
-  `request_review` is governed, on-record judgment.
+  decided — `consult` returns advisory evidence and creates no governed
+  record (amended 2026-09-26: it does write an audit row that the
+  consultation happened, see that doc); `request_review` is governed,
+  on-record judgment.
 - **Audit tooling**: `scripts/dev/tool_edge_index.py` /
   `docs/dev/TOOL_EDGE_INDEX.md` resolve every registered name to its handler.
 
@@ -81,7 +83,7 @@ already-decided facade semantics:
 
 | Tool | Proposed routing line |
 |---|---|
-| `consult` | Ask a model for advisory help — evidence only, creates no governance record; for on-record judgment use `request_review`. |
+| `consult` | Ask a model for advisory help — evidence only, off the governed record (the call itself is audited); for on-record judgment use `request_review`. |
 | `request_review` | Request governed, on-record review with reviewer provenance; for off-record advice use `consult`. |
 | `delegate_inference` | Hand a bounded task to a configured strong-model host and get the result back; for a raw completion use `call_model`. |
 | `call_model` | Run a raw completion on a configured inference host (plumbing); for advisory help prefer `consult`. |
