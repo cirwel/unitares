@@ -205,23 +205,26 @@ class TestBilateralAttestation:
 class TestNew2RegressionGuard:
     """Direct guards that the specific NEW-2 failure mode cannot recur."""
 
-    def test_signatures_are_not_simply_last_message_hashes(self):
-        """If finalize_resolution regressed to signing the last synthesis
-        message (the NEW-2 bug shape), signature_a would equal
-        last_msg.sign(api_key_a). Assert it does NOT — the v2 signatures
-        are over the canonical resolution payload."""
+    def test_verify_rejects_last_message_signed_row(self):
+        """Since #2449 nothing mints, so the NEW-2 property lives on the read
+        side: production ``verify_signatures`` must accept only signatures
+        over the canonical resolution payload. A v2 row whose slots carry
+        ``last_msg.sign(key)`` (the NEW-2 bug shape) must NOT verify, and the
+        canonical-payload row built from the same session must."""
         s = _converged_session()
-        # Capture last agreed synthesis message before finalization
         last_msg = next(
             m for m in reversed(s.transcript)
             if m.phase == "synthesis" and m.agrees
         )
-        legacy_a = last_msg.sign("key-a")
-        r = _historical_v2(session=s)
-        assert r.signature_a != legacy_a, (
-            "v2 attestation must sign the canonical resolution payload, "
+        new2_shaped = s.finalize_resolution()
+        new2_shaped.signature_version = 2
+        new2_shaped.signature_a = last_msg.sign("key-a")
+        new2_shaped.signature_b = last_msg.sign("key-b")
+        assert new2_shaped.verify_signatures("key-a", "key-b") is False, (
+            "verify_signatures must check the canonical resolution payload, "
             "NOT the last synthesis message (NEW-2 regression)"
         )
+        assert _historical_v2(session=s).verify_signatures("key-a", "key-b") is True
 
     def test_two_resolutions_with_same_keys_produce_same_signatures_only_when_payload_matches(self):
         """Determinism property: two identical canonical payloads signed
