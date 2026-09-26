@@ -3515,8 +3515,9 @@ def _resolution_notes_call(discovery_id: str, status: Optional[str]) -> str:
     critical finding may add resolution_notes only together with a cross-agent
     closing status (_requested_non_owner_edits): without it the same call is
     refused. For anyone else the repeated status is a no-op; resolved_at is
-    stamped only on the transition into resolved, so repeating 'resolved'
-    leaves it alone. An update that set no status
+    stamped on the transition into resolved, or on a resolved row that has
+    none, so repeating 'resolved' leaves an existing stamp alone. An update
+    that set no status
     needs none: a non-owner of a gated finding cannot make one succeed.
     """
     status_argument = f", status='{status}'" if status else ""

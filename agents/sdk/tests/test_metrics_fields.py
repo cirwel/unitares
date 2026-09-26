@@ -260,6 +260,26 @@ def test_a_canonical_lifecycle_word_reads_as_the_policy_action(read, word):
 
 
 @pytest.mark.parametrize("read", CLIENTS)
+@pytest.mark.parametrize(
+    "envelope_action, canonical_word",
+    [("pause", "guide"), ("proceed", "pause")],
+)
+def test_the_envelope_action_outranks_a_disagreeing_canonical_word(
+    read, envelope_action, canonical_word
+):
+    """At full verbosity both sources ride along. When they disagree, the
+    envelope's action_summary.action wins; a canonical-first order would read
+    the mapped lifecycle word instead."""
+    raw = deepcopy(FULL)
+    raw["action_summary"]["action"] = envelope_action
+    raw["raw_governance"]["last_decision_action"] = canonical_word
+    if isinstance(raw["raw_governance"].get("verdict"), dict):
+        raw["raw_governance"]["verdict"]["decision_action"] = canonical_word
+
+    assert read(raw).action == envelope_action
+
+
+@pytest.mark.parametrize("read", CLIENTS)
 def test_a_pause_is_the_action_not_the_verdict(read):
     result = read(PAUSED)
     assert result.action == "pause"
