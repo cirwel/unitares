@@ -278,17 +278,47 @@ def test_workflow_aliases_are_lite_visible():
     )
 
 
+def _signature_for(binding):
+    """The agent_signature success_response would attach for ``binding``."""
+    if binding == "unbound":
+        return {"uuid": None}
+    from tests.helpers.metrics_producer import agent_signature
+
+    proof_origin, source = {
+        "strong": ("caller_asserted", "explicit_client_session_id"),
+        "medium": ("caller_asserted", "pinned_onboard_session"),
+        "weak": ("server_inferred", "ip_ua_fingerprint"),
+    }[binding]
+    return agent_signature(proof_origin=proof_origin, session_source=source)
+
+
 @pytest.mark.asyncio
-async def test_orientation_compact_view_is_name_only_and_under_four_kib():
-    """Lite is a bounded handshake, not a second copy of tool metadata."""
+@pytest.mark.parametrize("binding", ["unbound", "strong", "medium", "weak"])
+async def test_orientation_compact_view_is_name_only_and_under_four_kib(binding):
+    """Lite is a bounded handshake, not a second copy of tool metadata.
+
+    Measured bound, not only unbound: an agent_signature rode on it, 635 B for
+    a strong binding (4,030 B of the 4,096 B cap) and 1.6-2.0 KB for a medium
+    or server-inferred one, over the cap. The handshake is identity-
+    independent, so it carries none.
+    """
     import json
+    from unittest.mock import patch
 
     from src.mcp_handlers.introspection import tool_introspection
 
-    raw = (await tool_introspection.handle_list_tools({"lite": True}))[0].text
+    with patch(
+        "src.mcp_handlers.support.agent_auth.compute_agent_signature",
+        return_value=_signature_for(binding),
+    ):
+        raw = (await tool_introspection.handle_list_tools({"lite": True}))[0].text
     payload = json.loads(raw)
 
     assert len(raw.encode("utf-8")) <= 4096
+    assert "agent_signature" not in payload
+    # "For parameters" names the parameter view: an unqualified describe_tool
+    # is the full record (10-17 KB for the core write tools).
+    assert "describe_tool(tool_name=..., lite=true)" in payload["tip"]
     assert payload["tools"]
     assert all(set(tool) == {"name"} for tool in payload["tools"])
     assert {

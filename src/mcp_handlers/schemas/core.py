@@ -215,9 +215,12 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
     """
     Get current governance state and metrics for an agent without updating state.
     """
+    # Retained so existing callers still validate. No tier ever returned the
+    # monitor's nested state dict: runtime_queries replaces it with the
+    # interpreted state before any tier is built.
     include_state: Union[bool, str, None] = Field(
         default=False,
-        description="Include nested state dict in response (can be large). Default false to reduce context bloat. Accepts boolean or string ('true'/'false')."
+        description="Retained for compatibility; has no effect on any tier. Use verbosity to choose what is returned. Accepts boolean or string ('true'/'false')."
     )
     lite: Union[bool, str, None] = Field(
         default=True,
@@ -229,7 +232,19 @@ class GetGovernanceMetricsParams(AgentIdentityMixin):
     # not ask for). Advertising the middle tier is the whole fix.
     verbosity: Optional[Literal["minimal", "standard", "full"]] = Field(
         default=None,
-        description="Response tier: 'minimal' (same as lite=true), 'standard' (EISV, verdict, risk_score, basin and mode with their meanings, no diagnostics), or 'full' (same as lite=false). Overrides lite when set."
+        description=(
+            "Response tier: 'minimal' (the default, same as lite=true), "
+            "'standard' (EISV, verdict and risk_score as bare values, basin "
+            "and mode with their meanings, and guidance, no diagnostics; "
+            "check_working_state carries it under raw_governance), or 'full' "
+            "(same as lite=false). Overrides lite when set."
+        ),
+        json_schema_extra={
+            "brief": (
+                "Tier: minimal (default); standard: bare EISV and risk, basin "
+                "and mode with meanings, guidance; full: diagnostics."
+            )
+        },
     )
 
     @model_validator(mode='after')
@@ -426,7 +441,10 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         description=(
             "Agent-facing response shape. Prefer 'auto' or 'compact' for routine "
             "check-ins. 'auto' resolves to compact for steady states and mirror "
-            "for actionable at-risk/guide/pause states. 'mirror' returns "
+            "for actionable at-risk/guide/pause states, and also for a "
+            "degraded identity binding (tier weak, degraded or refused, or "
+            "caller_proven false) and for any response carrying warnings. "
+            "'mirror' returns "
             "actionable self-awareness signals. 'full' returns the complete "
             "payload. 'standard' returns a bounded, explained summary for "
             "agent consumption. Compatibility aliases: 'lite' -> compact, "

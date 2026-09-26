@@ -625,6 +625,138 @@ def _legacy_diagnostics(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+_COHERENCE_BADGE_KEYS = ("value", "status", "source", "role")
+
+
+def _metrics_state_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The metrics read's state, each value said once.
+
+    The canonical minimal tier annotates every EISV dimension as
+    {value, label, range, note} and risk as {value, threshold, status}; that
+    shape stays for canonical readers (the discord-bridge HUD parses it). Here
+    they are bare values: the per-dimension contract rides once on this
+    tool's description (EISV_INLINE_SUMMARY), and risk_summary carries the
+    risk band. Coherence keeps its inline badge in the same
+    {value, status, source, role} shape sync_state uses (#1872), so a legacy
+    reading is never a bare float read as health.
+    """
+    verdict = payload.get("verdict")
+    if verdict is not None:
+        state = dict(verdict) if isinstance(verdict, dict) else {"verdict": verdict}
+    else:
+        state = {}
+    for key in (
+        "status",
+        "primary_eisv_source",
+        "E",
+        "I",
+        "S",
+        "V",
+        "coherence",
+        "risk_score",
+    ):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            value = (
+                {k: value[k] for k in _COHERENCE_BADGE_KEYS if k in value}
+                if key == "coherence"
+                else value.get("value")
+            )
+        if value is not None:
+            state.setdefault(key, value)
+    return state
+
+
+def _metrics_next_action(payload: Dict[str, Any]) -> Any:
+    """The next step a metrics read recommends, from the state it reports.
+
+    unitares.lifecycle-envelope.v1 requires next_action on check_working_state.
+    The canonical payload carries one only when uninitialized or unbound
+    (next_action) or when interpret_state has advice (guidance), so the
+    verdict's own recommended step is next, then the full tier's interpreted
+    guidance, then the glossary entry for the verdict value with the decision
+    it rode on (the full tier keeps its verdict a bare string).
+    """
+    for value in (payload.get("next_action"), payload.get("guidance")):
+        if value:
+            return value
+    verdict = payload.get("verdict")
+    if isinstance(verdict, dict) and verdict.get("next_action"):
+        return verdict["next_action"]
+    state = payload.get("state")
+    if isinstance(state, dict) and state.get("guidance"):
+        return state["guidance"]
+    if isinstance(verdict, str) and verdict:
+        try:
+            from src.governance_glossary import explain_verdict
+
+            decision = payload.get("last_decision_action")
+            return explain_verdict(
+                verdict,
+                decision_action=str(decision) if decision is not None else None,
+            ).get("next_action")
+        except Exception:  # pragma: no cover - defensive; glossary is pure
+            return None
+    return None
+
+
+def _metrics_identity_assurance(
+    payload: Dict[str, Any],
+    binding_assurance: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Mark a real metrics read whose binding the server merely inferred.
+
+    check_working_state's description promises that such a read returns the
+    agent's state marked identity_assurance.caller_proven=false, since it may
+    be a co-located sibling's. The canonical payload cannot carry that mark:
+    its agent_signature collapses to {"uuid": null} for a server-inferred
+    binding. So the request's assurance comes from the dispatch context
+    (``binding_assurance``), with the signature as a fallback. A
+    caller-proven read gets nothing; an unbound payload (no agent_id) is not a
+    reading of anyone.
+    """
+    if payload.get("agent_id") is None:
+        return None
+    assurance = binding_assurance
+    if not isinstance(assurance, dict):
+        signature = payload.get("agent_signature")
+        signature = signature if isinstance(signature, dict) else {}
+        assurance = signature.get("identity_assurance")
+    if not isinstance(assurance, dict):
+        return None
+    if (
+        assurance.get("caller_proven") is not False
+        or assurance.get("proof_origin") != "server_inferred"
+    ):
+        return None
+    return _lift(assurance, "tier", "caller_proven", "session_source")
+
+
+def _inferred_binding_assurance() -> Optional[Dict[str, Any]]:
+    """This request's identity assurance, only when the server inferred it.
+
+    Read from the dispatch context the identity step stamped, through the same
+    source-to-tier rule the identity responses use (#679: server-inferred is
+    never strong). Imported lazily: the middleware must not load the identity
+    services at import time.
+    """
+    try:
+        from ..context import get_session_proof_origin, get_session_resolution_source
+        from src.services.identity_payloads import (
+            _identity_assurance_from_source,
+            _normalize_source,
+        )
+
+        if get_session_proof_origin() != "server_inferred":
+            return None
+        return _identity_assurance_from_source(
+            _normalize_source(get_session_resolution_source()),
+            "server_inferred",
+        )
+    except Exception:
+        return None
+
+
 def _needs_attention(payload: Dict[str, Any]) -> bool:
     verdict = _verdict_value(payload)
     if verdict in {"guide", "pause", "reject"}:
@@ -806,7 +938,22 @@ def _recovery_hint(
     return margin_hint if margin_is_near_edge else verdict_hint
 
 
-def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
+def _resolves(payload: Dict[str, Any], path: tuple[str, ...]) -> bool:
+    """True when ``path`` names a present, non-None value inside ``payload``."""
+    node: Any = payload
+    for key in path:
+        if not isinstance(node, dict) or node.get(key) is None:
+            return False
+        node = node[key]
+    return True
+
+
+def _verdict_caveat(
+    source_payload: Dict[str, Any],
+    *,
+    include_raw: bool,
+    state_summary: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
     """Plain-language warning that the verdict is provisional, lifted from
     risk_attribution to the envelope surface.
 
@@ -818,6 +965,16 @@ def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
     returned status=healthy with the only caveat buried in risk_attribution).
     This re-exposes it where the skimmer actually looks; it computes no new
     signal. Returns None when the verdict is NOT provisional (baseline warm).
+
+    The provenance pointer names only a path present in the response being
+    returned: the envelope's own ``state_summary.evidence`` when it carries
+    one, otherwise a ``raw_governance`` path, and only when raw is included.
+    A bounded ``sync_state`` has neither, and its evidence basis is already
+    stated inline, so it gets no pointer: the pointer used to name
+    ``raw_governance`` on responses that omit it (#2332 dropped raw from
+    bounded check-ins after #1867 wrote the paths), and the only way to act on
+    it there was another check-in, which writes. Presence is unchanged, so
+    ``_is_routine_proceed`` still keys on the caveat alone.
     """
     verdict_confidence, evidence_basis = _verdict_assurance(source_payload)
     if verdict_confidence != "provisional":
@@ -833,27 +990,33 @@ def _verdict_caveat(source_payload: Dict[str, Any]) -> Optional[str]:
     tail = ""
     if isinstance(until, int) and until > 0:
         tail = f" ~{until} more check-in(s) until the behavioral signal is weighted."
-    if cold_start or non_discriminative:
-        evidence_path = "raw_governance.risk_attribution"
-    elif isinstance(source_payload.get("verdict"), dict):
-        evidence_path = "raw_governance.verdict.evidence"
-    elif isinstance(source_payload.get("metrics"), dict) and isinstance(
-        source_payload["metrics"].get("verdict"), dict
-    ):
-        evidence_path = "raw_governance.metrics.verdict.evidence"
-    elif isinstance(source_payload.get("metrics"), dict) and source_payload[
-        "metrics"
-    ].get("primary_eisv_source") is not None:
-        evidence_path = "raw_governance.metrics.primary_eisv_source"
-    elif source_payload.get("primary_eisv_source") is not None:
-        evidence_path = "raw_governance.primary_eisv_source"
-    else:
-        evidence_path = "raw_governance.metrics.verdict.evidence"
+    evidence_path = None
+    if isinstance(state_summary, dict) and isinstance(state_summary.get("evidence"), dict):
+        evidence_path = "state_summary.evidence"
+    elif include_raw:
+        candidates = [
+            ("verdict", "evidence"),
+            ("metrics", "verdict", "evidence"),
+            ("metrics", "primary_eisv_source"),
+            ("primary_eisv_source",),
+        ]
+        if cold_start or non_discriminative:
+            candidates.insert(0, ("risk_attribution",))
+        evidence_path = next(
+            (
+                "raw_governance." + ".".join(path)
+                for path in candidates
+                if _resolves(source_payload, path)
+            ),
+            None,
+        )
+    pointer = f" See {evidence_path} for provenance." if evidence_path else ""
     return (
         "Verdict is provisional: the behavioral baseline is not warm. "
         "'safe'/'proceed' means no trouble detected under the cold-start prior, "
-        f"not a validated all-clear. Evidence basis: {evidence_basis or 'cold-start prior'}. "
-        f"See {evidence_path} for provenance." + tail
+        f"not a validated all-clear. Evidence basis: {evidence_basis or 'cold-start prior'}."
+        + pointer
+        + tail
     )
 
 
@@ -1463,14 +1626,16 @@ def _raw_governance_policy(
 
     arguments = arguments or {}
     if friendly_name == "check_working_state":
-        wants_full = (
-            resolve_metrics_verbosity(arguments) != "minimal"
-            or _as_bool(arguments.get("include_state"), default=False)
-        )
-        return wants_full, (
-            "Re-call check_working_state(verbosity='standard') for EISV, verdict "
-            "and basin with their meanings, or verbosity='full' for the complete "
-            "canonical diagnostics."
+        # The tier alone decides. include_state adds no state on any tier
+        # (runtime_queries replaces the monitor's state dict with the
+        # interpreted one before any tier is built), so escalating on it
+        # (#1715) only doubled the default read with a copy of itself.
+        # The minimal envelope's E/I/S/V are bare values too, so what
+        # 'standard' adds is basin, mode and guidance.
+        return resolve_metrics_verbosity(arguments) != "minimal", (
+            "Re-call check_working_state(verbosity='standard') for basin and "
+            "mode with their meanings and guidance, or verbosity='full' for "
+            "the complete canonical diagnostics."
         )
 
     response_mode = str(
@@ -1593,15 +1758,46 @@ def _response_options(
     return None
 
 
+def _mode_in_effect(
+    friendly_name: str,
+    arguments: Optional[Dict[str, Any]],
+    payload: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """The response mode this call was served in, read from the request.
+
+    Resolved from the arguments (and sync_state's resolved ``_mode``), not
+    from ``response_options``: that block is absent in exactly the responses
+    where a size hint could name the mode already in effect (a bounded
+    sync_state, a truncated search, the default check_working_state).
+    """
+    arguments = arguments or {}
+    if friendly_name == "sync_state":
+        return (payload or {}).get("_mode") or canonical_response_mode(
+            arguments.get("response_mode") or "auto"
+        )
+    if friendly_name == "check_working_state":
+        return resolve_metrics_verbosity(arguments)
+    if friendly_name == "search_shared_memory":
+        return str(arguments.get("response_mode") or "lean").strip().lower()
+    return None
+
+
 def _attach_response_size(
     envelope: Dict[str, Any],
     friendly_name: str,
+    arguments: Optional[Dict[str, Any]] = None,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Expose response cost before callers discover it through context pressure.
 
     The byte count intentionally excludes this metadata field, avoiding a
     self-referential size calculation while staying within a few dozen bytes of
     the final serialized payload.
+
+    ``reduce_with`` never names the mode already in effect: advice to switch
+    to the mode the caller is in cannot be acted on. start_session gets none
+    at all, since acting on it would mean minting another identity; its size
+    receipt stays.
     """
     measured_bytes = len(
         json.dumps(envelope, ensure_ascii=False).encode("utf-8")
@@ -1618,31 +1814,32 @@ def _attach_response_size(
         "measured_without_self": True,
     }
     if measured_bytes >= 4_000:
-        current = envelope.get("response_options", {}).get("current")
+        current = _mode_in_effect(friendly_name, arguments, payload)
+        reduce_with = None
         if friendly_name == "search_shared_memory":
-            metadata["reduce_with"] = (
+            reduce_with = (
                 "Use include_details=false and response_mode='lean'; open one "
                 "discovery with knowledge(action='details', discovery_id='...')."
             )
         elif friendly_name == "sync_state" and current == "full":
-            metadata["reduce_with"] = (
+            reduce_with = (
                 "Use response_mode='compact' for routine check-ins or 'mirror' "
                 "for actionable diagnostics."
             )
         elif friendly_name == "sync_state":
-            metadata["reduce_with"] = (
+            reduce_with = (
                 "Use response_mode='minimal' only when the bare action/EISV "
                 "snapshot is sufficient."
             )
-        elif friendly_name == "start_session":
-            metadata["reduce_with"] = "Use response_mode='minimal'."
         elif friendly_name == "check_working_state" and current == "full":
-            metadata["reduce_with"] = (
+            reduce_with = (
                 "Use verbosity='standard' for EISV, verdict, risk_score, basin "
                 "and mode without the diagnostics, or verbosity='minimal'."
             )
         elif friendly_name == "check_working_state":
-            metadata["reduce_with"] = "Use verbosity='minimal'."
+            reduce_with = "Use verbosity='minimal'."
+        if reduce_with and not (current and f"'{current}'" in reduce_with):
+            metadata["reduce_with"] = reduce_with
     envelope["_response_size"] = metadata
 
 
@@ -1792,11 +1989,15 @@ def build_experience_envelope(
     canonical_name: str,
     payload: Dict[str, Any],
     arguments: Optional[Dict[str, Any]] = None,
+    *,
+    binding_assurance: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Reshape a successful canonical payload into the experience envelope.
 
     Pure function over the parsed payload — raises nothing the caller
-    can't recover from (callers guard anyway).
+    can't recover from (callers guard anyway). ``binding_assurance`` is the
+    request's identity assurance when the dispatch context has one to report
+    (see ``_inferred_binding_assurance``); only the metrics read uses it.
     """
     envelope: Dict[str, Any] = {
         "success": payload.get("success", True),
@@ -1837,9 +2038,13 @@ def build_experience_envelope(
     bounded_sync = friendly_name == "sync_state" and not include_raw
     sync_mode = source_payload.get("_mode") if bounded_sync else None
     routine_sync = bounded_sync and sync_mode == "compact"
+    # The default metrics read teaches the tier ladder once, in its
+    # raw_governance_hint, as a bounded sync_state does; response_options
+    # reports the tier whenever a non-default one is served.
+    bounded_metrics = friendly_name == "check_working_state" and not include_raw
     options = (
         None
-        if bounded_sync
+        if bounded_sync or bounded_metrics
         else _response_options(friendly_name, source_payload, arguments)
     )
 
@@ -2001,26 +2206,31 @@ def build_experience_envelope(
         # Preserve the essential EISV read at the friendly surface so compact
         # mode can omit the repeated canonical payload without making the state
         # tool useless.
-        next_action = payload.get("next_action") or payload.get("guidance")
-        verdict = payload.get("verdict")
-        if verdict is not None:
-            state_summary = (
-                dict(verdict) if isinstance(verdict, dict) else {"verdict": verdict}
-            )
-        else:
-            state_summary = {}
-        for key, value in _lift(
-            payload,
-            "status",
-            "primary_eisv_source",
-            "E",
-            "I",
-            "S",
-            "V",
-            "coherence",
-            "risk_score",
-        ).items():
-            state_summary.setdefault(key, value)
+        state_summary = _metrics_state_summary(payload)
+        next_action = _metrics_next_action(payload)
+        if next_action is not None and state_summary.get("next_action") == next_action:
+            # Lifted from the verdict: said once, at the top level.
+            state_summary.pop("next_action")
+        summary = envelope.get("action_summary")
+        meaning = _one_line(state_summary.get("meaning"))
+        if isinstance(summary, dict) and meaning and summary.get("reason") == meaning:
+            # The reason fell through to the verdict's meaning, which
+            # state_summary already carries.
+            summary.pop("reason")
+        assurance = _metrics_identity_assurance(payload, binding_assurance)
+        if assurance:
+            envelope["identity_assurance"] = assurance
+        coherence_badge = state_summary.get("coherence")
+        if (
+            legacy
+            and isinstance(coherence_badge, dict)
+            and coherence_badge.get("source") == legacy.get("source")
+            and coherence_badge.get("role") == legacy.get("role")
+            and coherence_badge.get("value") == legacy.get("coherence")
+        ):
+            # The inline badge already says this reading is legacy control
+            # feedback, not a health rating.
+            legacy = None
 
     elif canonical_name == "knowledge" and friendly_name in {
         "store_finding",
@@ -2286,7 +2496,11 @@ def build_experience_envelope(
     # self-disclosure out of risk_attribution so a reader of state_summary
     # alone is not misled by a clean 'safe'/'proceed'. Also flag it inside
     # state_summary itself, where the skimmer actually looks.
-    caveat = _verdict_caveat(source_payload)
+    caveat = _verdict_caveat(
+        source_payload,
+        include_raw=include_raw,
+        state_summary=envelope.get("state_summary"),
+    )
     if caveat:
         envelope["verdict_caveat"] = caveat
         summary = envelope.get("state_summary")
@@ -2397,17 +2611,17 @@ def build_experience_envelope(
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         budget = _SYNC_ROUTINE_BUDGET_BYTES if routine_sync else 4_000
         if measured_bytes > budget:
-            _attach_response_size(envelope, friendly_name)
+            _attach_response_size(envelope, friendly_name, arguments, source_payload)
     elif bounded_search:
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         if measured_bytes > _SEARCH_LEAN_BUDGET_BYTES:
-            _attach_response_size(envelope, friendly_name)
+            _attach_response_size(envelope, friendly_name, arguments, source_payload)
     elif bounded_start:
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         if measured_bytes > _START_SESSION_BUDGET_BYTES:
-            _attach_response_size(envelope, friendly_name)
+            _attach_response_size(envelope, friendly_name, arguments, source_payload)
     else:
-        _attach_response_size(envelope, friendly_name)
+        _attach_response_size(envelope, friendly_name, arguments, source_payload)
     return envelope
 
 
@@ -2477,7 +2691,17 @@ async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, r
         if identity_refusal_status(payload) is not None:
             return _refusal_with_friendly_tool(payload, invoked, result)
 
-        envelope = build_experience_envelope(invoked, name, payload, arguments)
+        envelope = build_experience_envelope(
+            invoked,
+            name,
+            payload,
+            arguments,
+            binding_assurance=(
+                _inferred_binding_assurance()
+                if name == "get_governance_metrics"
+                else None
+            ),
+        )
         return [TextContent(type="text", text=json.dumps(envelope, ensure_ascii=False))]
     except Exception:
         logger.warning(
