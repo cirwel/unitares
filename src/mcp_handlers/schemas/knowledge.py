@@ -379,33 +379,39 @@ class KnowledgeParams(AgentIdentityMixin):
     # tests/test_router_action_fields.py holds it to the routing table.
     # Identity and session parameters are common to every action and are
     # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    # Each tuple lists the action's primary parameters first: describe_tool's
+    # lite view of an action shows the first few
+    # (router_actions.action_fields_by_priority). Each also lists every
+    # parameter its handler reads, which
+    # tests/test_describe_lite_action_parameters.py derives from the handler
+    # source; update's summary, discovery_type and tags, store's status, and
+    # the limit that get and synthesize read were missing until 2026-09-26.
     ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "store": (
                 "summary", "details", "content", "discovery_type", "severity",
                 "tags", "related_files", "confidence", "auto_link_related",
                 "supersedes", "response_to", "task_label", "task_outcome",
-                "memory_context",
+                "memory_context", "status",
         ),
         "search": (
-                "query", "limit", "search_mode", "semantic",
-                "include_details", "include_archived", "include_cold",
-                "response_mode", "tags", "status",
-                "exclude_agent_labels", "min_similarity", "operator",
-                "discovery_type", "severity", "include_provenance",
-                "agent_id_filter", "authority_mode",
+                "query", "tags", "discovery_type", "status", "response_mode",
+                "severity", "limit", "search_mode", "include_details",
+                "include_archived", "include_cold", "exclude_agent_labels",
+                "min_similarity", "operator", "include_provenance",
+                "agent_id_filter", "authority_mode", "semantic",
         ),
         "get": (
                 "discovery_id", "include_details", "include_provenance",
-                "include_response_chain", "response_mode",
+                "include_response_chain", "response_mode", "limit",
         ),
         "list": (
                 "limit", "offset", "including_cold", "status", "response_mode",
                 "epoch_scope",
         ),
         "update": (
-                "discovery_id", "status", "severity", "superseded_by",
-                "closure_class", "closure_evidence", "resolution_notes",
-                "details", "content",
+                "discovery_id", "status", "resolution_notes", "closure_class",
+                "closure_evidence", "superseded_by", "summary", "details",
+                "content", "severity", "discovery_type", "tags",
         ),
         "details": (
                 "discovery_id", "length", "offset", "max_chain_depth",
@@ -418,7 +424,7 @@ class KnowledgeParams(AgentIdentityMixin):
                 "dry_run",
         ),
         "synthesize": (
-                "topic", "min_members", "use_llm", "dry_run",
+                "topic", "min_members", "limit", "use_llm", "dry_run",
         ),
         "stats": (
                 "response_mode",
@@ -435,6 +441,23 @@ class KnowledgeParams(AgentIdentityMixin):
         ),
         "audit": (
                 "scope", "top_n", "use_model", "comparison_key",
+        ),
+    }
+    # Parameters an action's handler refuses to run without, although the
+    # flat wire schema can only mark `action` required. describe_tool's lite
+    # view lists them as required at call time.
+    # tests/test_describe_lite_action_parameters.py holds each entry to its
+    # handler: every name here must be refused when missing, and every
+    # require_argument the handler reaches must be named here.
+    ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "store": ("summary",),
+        "update": ("discovery_id",),
+        "details": ("discovery_id",),
+        "note": ("summary",),
+        "supersede": ("discovery_id", "supersedes_id"),
+        "promote": (
+                "discovery_id", "evidence_ids", "summary",
+                "verification_basis", "decision_standard",
         ),
     }
     action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "promote", "audit"] = Field(..., description="Operation to perform")

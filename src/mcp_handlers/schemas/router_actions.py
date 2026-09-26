@@ -78,6 +78,38 @@ def declared_action_fields(model: Any) -> Optional[Mapping[str, Tuple[str, ...]]
     return declared
 
 
+def action_fields_by_priority(model: Any, action: Optional[str]) -> Optional[Tuple[str, ...]]:
+    """The action's own fields in DECLARATION order, primary parameters first.
+
+    ``fields_for_action`` returns model order, which is right for a narrowed
+    schema that should read like the full one. A short view needs the other
+    order: on ``knowledge`` the model declares ``content``, ``details`` and
+    ``summary`` before ``discovery_id`` and ``status``, so a five-line view of
+    ``update`` in model order showed what the store action writes and left
+    out the discovery it updates. None when the model declares no map or does
+    not know the action.
+    """
+    declared = declared_action_fields(model)
+    if declared is None or not action:
+        return None
+    own = declared.get(action.lower())
+    return None if own is None else tuple(own)
+
+
+def declared_action_required_fields(model: Any, action: Optional[str]) -> Tuple[str, ...]:
+    """Parameters ``action``'s handler requires, from ``ACTION_REQUIRED_FIELDS``.
+
+    The flat wire schema cannot mark a parameter required for one action
+    only, so ``knowledge``'s schema requires ``action`` and nothing else while
+    ``update`` refuses to run without ``discovery_id``. Empty when the model
+    declares nothing for the action.
+    """
+    declared = getattr(model, "ACTION_REQUIRED_FIELDS", None)
+    if not isinstance(declared, Mapping) or not action:
+        return ()
+    return tuple(declared.get(action.lower(), ()))
+
+
 def fields_for_action(
     model: Any,
     action: str,
