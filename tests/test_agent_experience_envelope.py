@@ -2176,11 +2176,10 @@ def _served_tier(env):
         assert "raw_governance" in env
         return env["response_options"]["current"]
     assert "raw_governance" not in env
-    hint = env.get("raw_governance_hint")
-    if hint is None:
-        # Only before the first check-in: no tier has basin or mode yet, and
-        # next_action names the step that changes that.
-        assert env["action_summary"]["verdict"] == "uninitialized", env["action_summary"]
+    hint = env["raw_governance_hint"]
+    if (env.get("action_summary") or {}).get("verdict") == "uninitialized":
+        # No tier has basin or mode yet, so the hint names only 'full'.
+        assert "verbosity='full'" in hint and "verbosity='standard'" not in hint
     else:
         assert "verbosity='standard'" in hint
     return "minimal"

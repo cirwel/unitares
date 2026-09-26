@@ -1684,15 +1684,16 @@ def _raw_governance_policy(
         # of itself.
         # The minimal envelope's E/I/S/V are bare values too, so what
         # 'standard' adds is basin, mode and guidance. Before the first
-        # check-in no tier has basin or mode, and next_action already names
-        # the one step that changes that, so no hint.
+        # check-in no tier has basin or mode, so the hint names only 'full',
+        # which still returns the omitted canonical payload.
         verdict = (payload or {}).get("verdict")
         verdict_value = verdict.get("value") if isinstance(verdict, dict) else verdict
         uninitialized = verdict_value == "uninitialized" or "uninitialized" in str(
             (payload or {}).get("status") or ""
         )
         return resolve_metrics_verbosity(arguments) != "minimal", (
-            None
+            "Re-call check_working_state(verbosity='full') for the complete "
+            "canonical payload; basin and mode appear after the first check-in."
             if uninitialized
             else "Re-call check_working_state(verbosity='standard') for basin and "
             "mode with their meanings and guidance, or verbosity='full' for "

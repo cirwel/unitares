@@ -103,10 +103,12 @@ async def test_default_read_says_each_fact_once(check_ins):
         assert "not health-rated" not in state["coherence"]["status"]
         assert env["legacy_diagnostics"]["health_evidence"] is False
 
-    # One tier ladder, not two; none before the first check-in, when no tier
-    # has basin or mode yet and next_action names the step that changes that.
-    ladders = ("response_options" in env) + ("raw_governance_hint" in env)
-    assert ladders == (1 if check_ins else 0), env.keys()
+    # One tier ladder, not two. Before the first check-in it names only
+    # 'full': no tier has basin or mode yet.
+    assert ("response_options" in env) + ("raw_governance_hint" in env) == 1
+    if not check_ins:
+        assert "verbosity='standard'" not in env["raw_governance_hint"]
+        assert "verbosity='full'" in env["raw_governance_hint"]
     # One next step. Uninitialized, it used to be said three times: the
     # {tool, example} step, the verdict's prose step, and the guidance as the
     # action reason.
