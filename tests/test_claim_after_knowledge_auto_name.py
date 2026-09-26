@@ -3,8 +3,8 @@
 A knowledge write by an agent with no meaningful label names it
 ``Agent_<uuid8>``: knowledge/handlers._check_display_name_required sets
 ``display_name``, ``label`` and ``auto_label`` together, in memory. A later
-claim (identity(name=...), which goes through set_agent_label, or a name on a
-check-in) updated ``label`` only. Every reader prefers ``display_name``
+claim (identity(client_session_id=..., name=...), which goes through
+set_agent_label) updated ``label`` only. Every reader prefers ``display_name``
 (agent_auth.compute_agent_signature, the knowledge display payload), so the
 signature kept showing ``Agent_<uuid8>`` with ``label_source: "auto"``.
 
@@ -14,10 +14,15 @@ was never auto-named. ``display_name`` is not an AgentMetadata field and is
 never persisted, and the cold-start loader never restores it, so there is no
 stored copy to keep in step.
 
+A ``name`` on a check-in is not a claim path: every route sets ``agent_id``
+to the bound UUID before the check-in's identity phase reads its label
+(params_step.inject_identity, and the REST prebind for the direct handler),
+so that phase never reads ``name``.
+
 The fixtures come from the real producers: the persisted mint path of
-``resolve_session_identity``, the real knowledge auto-name, the real
-``set_agent_label_resolved`` (with its collision rename) and the real
-check-in identity phase. Only the database is mocked.
+``resolve_session_identity``, the real knowledge auto-name and the real
+``set_agent_label_resolved`` (with its collision rename). Only the database
+is mocked.
 """
 
 from __future__ import annotations
@@ -137,42 +142,6 @@ async def test_a_claim_renamed_by_a_collision_is_displayed_as_renamed(auto_named
     assert applied == f"reviewer_{agent_uuid[:8]}"
     signature = _signature(agent_uuid)
     assert signature["display_name"] == applied
-    assert signature["label_source"] == "claimed"
-
-
-@pytest.mark.asyncio
-async def test_a_name_on_a_check_in_is_displayed(auto_named):
-    """The check-in's identity phase writes a caller-supplied name as the
-    label too; it clears the auto-name the same way."""
-    from src.mcp_handlers.context import (
-        reset_session_context,
-        set_session_context,
-        set_session_proof_origin,
-        update_context_agent_id,
-    )
-    from src.mcp_handlers.updates.context import UpdateContext
-    from src.mcp_handlers.updates.phases import resolve_identity_and_guards
-
-    agent_uuid, meta = await _auto_name(auto_named)
-    meta.status = "active"
-    ctx = UpdateContext(arguments={"name": "reviewer"}, mcp_server=auto_named.server)
-
-    token = set_session_context(session_key=None, client_session_id=None)
-    try:
-        update_context_agent_id(agent_uuid)
-        set_session_proof_origin("caller_asserted")
-        with patch(
-            "src.grounding.onboard_classifier.reconcile_resident_tags",
-            AsyncMock(return_value=None),
-        ):
-            assert await resolve_identity_and_guards(ctx) is None
-    finally:
-        reset_session_context(token)
-
-    assert meta.label == "reviewer"
-    assert getattr(meta, "display_name", None) is None
-    signature = _signature(agent_uuid)
-    assert signature["display_name"] == "reviewer"
     assert signature["label_source"] == "claimed"
 
 
