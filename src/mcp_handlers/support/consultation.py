@@ -25,6 +25,7 @@ from .delegated_inference import (
     DelegatedInferenceRequest,
     run_delegated_inference,
 )
+from .host_adapter import host_adapter_available
 from .inference_outcome import InferenceFailure, InferenceOutcome
 from .inference_registry import sha256_text
 from .model_inference import (
@@ -85,6 +86,23 @@ _THOROUGH_HOST_ROUTES = {
         "codex_host_adapter",
         "operator_authorized_external",
     ),
+    "antigravity:host-adapter": (
+        "agent_orchestrator",
+        "antigravity:host-adapter",
+        "antigravity_host_adapter",
+        "operator_authorized_external",
+    ),
+}
+
+# Model family -> the thorough hosts that family is sent to, in preference
+# order. A caller is never sent to its own family; an unrecognised caller may
+# get any of them. Claude stays first wherever it is eligible, which keeps the
+# pre-Antigravity default for unknown callers.
+_THOROUGH_PEERS: dict[str | None, tuple[str, ...]] = {
+    "anthropic": ("codex:host-adapter", "antigravity:host-adapter"),
+    "openai": ("claude:host-adapter", "antigravity:host-adapter"),
+    "google": ("claude:host-adapter", "codex:host-adapter"),
+    None: ("claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"),
 }
 
 _SAFE_PROVENANCE_FIELDS = (
@@ -148,23 +166,59 @@ def _constructed_prompt(request: ConsultRequest) -> str:
     return f"{instruction}\n\nConsultation brief:\n{request.brief}"
 
 
-def _thorough_host_for_caller() -> str:
-    """Choose the reciprocal strong-model lane from descriptive harness data.
+def _family_of(value: Any) -> str | None:
+    text = str(value or "").strip().lower().replace("_", "-")
+    if not text:
+        return None
+    if any(m in text for m in ("claude", "anthropic")):
+        return "anthropic"
+    if any(m in text for m in ("codex", "chatgpt", "openai", "gpt")):
+        return "openai"
+    if any(m in text for m in ("antigravity", "gemini", "google")):
+        return "google"
+    return None
 
-    A Claude-family caller gets Codex; every other or unknown caller gets
-    Claude. Both routes have the same privacy/cost/accountability class and are
-    operator-enabled, so this hint selects between already-authorized peers; it
-    never grants authority. The public consult schema exposes no host control.
+
+def _caller_family() -> str | None:
+    """The caller's model family from descriptive transport data, or None.
+
+    The harness the caller reported wins, then the detected client, then the
+    reported model and provider, then the raw user agent (the Gemini connector
+    announces itself only as ``Google``). None of these is proof; they choose
+    between already-authorized peers and never grant authority.
     """
     signals = get_session_signals()
     if signals is None:
-        return "claude:host-adapter"
+        return None
+    for value in (
+        signals.reported_harness_type,
+        signals.client_hint,
+        signals.reported_model,
+        signals.model_provider,
+        signals.user_agent,
+    ):
+        family = _family_of(value)
+        if family is not None:
+            return family
+    return None
 
-    for value in (signals.reported_harness_type, signals.client_hint):
-        normalized = str(value or "").strip().lower().replace("_", "-")
-        if normalized == "claude" or normalized.startswith("claude-"):
-            return "codex:host-adapter"
-    return "claude:host-adapter"
+
+def _thorough_host_for_caller() -> str:
+    """Choose the reciprocal strong-model lane from descriptive harness data.
+
+    The caller's own family is excluded; of the rest, the first the operator
+    has available wins (``host_adapter_available`` covers the opt-in flag,
+    per-host switch-off, CLI and bearer). When none is available the first
+    eligible peer is returned so the failure names a real, fixable route.
+    Every route has the same privacy/cost/accountability class, so this
+    selects between already-authorized peers; the public consult schema
+    exposes no host control.
+    """
+    peers = _THOROUGH_PEERS[_caller_family()]
+    for host_id in peers:
+        if host_adapter_available(host_id):
+            return host_id
+    return peers[0]
 
 
 def _safe_provenance(

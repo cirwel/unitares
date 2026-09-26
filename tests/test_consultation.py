@@ -67,11 +67,7 @@ def _completed(
                 if route == "ollama"
                 else "hf"
                 if route == "huggingface"
-                else (
-                    "codex_host_adapter"
-                    if host_id == "codex:host-adapter"
-                    else "claude_host_adapter"
-                )
+                else host_id.split(":", 1)[0] + "_host_adapter"
             ),
             "transport": (
                 "openai_compatible_http" if route == "ollama" else "host_adapter"
@@ -903,3 +899,72 @@ async def test_actual_delegated_seam_never_falls_back_after_ambiguous_spawn(
     assert parsed["error_code"] == "DELEGATED_INFERENCE_FAILED"
     assert parsed["failure"]["upstream"]["possibly_running"] is True
     standard.assert_not_awaited()
+
+
+_ALL_HOSTS = {"claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"}
+
+
+@pytest.mark.parametrize(
+    ("signals", "available", "expected"),
+    [
+        # A caller is never sent to its own family.
+        (SessionSignals(reported_harness_type="claude-code"), _ALL_HOSTS, "codex:host-adapter"),
+        (SessionSignals(client_hint="chatgpt"), _ALL_HOSTS, "claude:host-adapter"),
+        (SessionSignals(reported_harness_type="antigravity"), _ALL_HOSTS, "claude:host-adapter"),
+        # The Gemini connector names itself only in the user agent.
+        (SessionSignals(user_agent="Google"), _ALL_HOSTS, "claude:host-adapter"),
+        (SessionSignals(reported_model="gemini-3-pro"), _ALL_HOSTS, "claude:host-adapter"),
+        # The first AVAILABLE peer wins: with Codex switched off, Claude asks
+        # Antigravity and Gemini asks Codex only if Claude is also out.
+        (SessionSignals(reported_harness_type="claude-code"),
+         {"claude:host-adapter", "antigravity:host-adapter"}, "antigravity:host-adapter"),
+        (SessionSignals(user_agent="Google"),
+         {"codex:host-adapter", "antigravity:host-adapter"}, "codex:host-adapter"),
+        (SessionSignals(client_hint="chatgpt"),
+         {"antigravity:host-adapter", "codex:host-adapter"}, "antigravity:host-adapter"),
+        # Unknown callers keep the pre-existing Claude default.
+        (None, _ALL_HOSTS, "claude:host-adapter"),
+        (SessionSignals(user_agent="curl/8"), {"antigravity:host-adapter"},
+         "antigravity:host-adapter"),
+        # Nothing available: name the first eligible peer so the failure is fixable.
+        (SessionSignals(reported_harness_type="claude-code"), set(), "codex:host-adapter"),
+        (SessionSignals(reported_harness_type="claude-code"), {"claude:host-adapter"},
+         "codex:host-adapter"),
+    ],
+)
+def test_thorough_host_is_a_different_family_that_is_available(
+    monkeypatch, signals, available, expected
+):
+    monkeypatch.setattr(co, "get_session_signals", lambda: signals)
+    monkeypatch.setattr(co, "host_adapter_available", lambda host_id: host_id in available)
+    assert co._thorough_host_for_caller() == expected
+
+
+@pytest.mark.asyncio
+async def test_thorough_antigravity_route_passes_the_postcondition(monkeypatch):
+    thorough = AsyncMock(return_value=_completed(
+        route="agent_orchestrator",
+        host_id="antigravity:host-adapter",
+        privacy_class="operator_authorized_external",
+        task_type="review",
+    ))
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    monkeypatch.setattr(
+        co, "get_session_signals",
+        lambda: SessionSignals(reported_harness_type="claude-code"),
+    )
+    monkeypatch.setattr(
+        co, "host_adapter_available", lambda host_id: host_id == "antigravity:host-adapter"
+    )
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "Critique this",
+        "purpose": "critique",
+        "effort": "thorough",
+        "privacy": "cloud_allowed",
+        "response_mode": "full",
+    }))
+
+    assert parsed["success"] is True
+    assert thorough.await_args.args[0].host_id == "antigravity:host-adapter"
+    assert parsed["diagnostics"]["host_id"] == "antigravity:host-adapter"
