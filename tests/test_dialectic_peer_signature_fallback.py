@@ -12,6 +12,11 @@ secret, and ``describe_attestation`` read it as an attestation by party A.
 
 These drive the real handler to convergence (not ``finalize_resolution``
 directly), because the defect was in how the handler chose the key.
+
+Since #2449 retired party-HMAC minting, the handler chooses no key at all and
+every new record is unsigned by design. The tests keep pinning the #2450
+property -- the caller's key never lands in party A's slot -- which now holds
+because no key lands anywhere.
 """
 
 from __future__ import annotations
@@ -29,11 +34,10 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.dialectic_protocol import (
-    ATTESTATION_SINGLE_SIGNER,
     ATTESTATION_UNSIGNED,
+    SIGNATURE_VERSION_PARTY_HMAC_RETIRED,
     DialecticPhase,
     DialecticSession,
-    Resolution,
     describe_attestation,
 )
 
@@ -121,14 +125,6 @@ async def _reviewer_converges(paused_key, reviewer_key):
     return stored, json.loads(response[0].text)
 
 
-def _payload_of(stored):
-    """Rebuild the canonical payload the handler signed, from the stored row."""
-    fields = {k: stored[k] for k in (
-        "action", "conditions", "root_cause", "reasoning", "timestamp",
-    )}
-    return Resolution(signature_a="", signature_b="", signature_version=2, **fields).canonical_payload()
-
-
 @pytest.mark.asyncio
 async def test_no_key_on_file_leaves_party_a_unsigned_even_when_the_caller_passes_one():
     stored, response = await _reviewer_converges(paused_key=None, reviewer_key=None)
@@ -142,23 +138,24 @@ async def test_no_key_on_file_leaves_party_a_unsigned_even_when_the_caller_passe
 
 
 @pytest.mark.asyncio
-async def test_the_callers_key_never_lands_in_party_as_slot():
+async def test_the_callers_key_never_lands_in_either_slot():
     """With the reviewer's own key on file too, the old fallback made A == B."""
     stored, response = await _reviewer_converges(paused_key=None, reviewer_key=CALLER_KEY)
 
     assert stored["signature_a"] == ""
-    assert stored["signature_b"] == Resolution.compute_signature(_payload_of(stored), CALLER_KEY)
-    assert stored["signature_b"] != ""
-    assert describe_attestation(stored)["state"] == ATTESTATION_SINGLE_SIGNER
-    assert response["attestation"]["signer_count"] == 1
+    assert stored["signature_b"] == ""
+    assert describe_attestation(stored)["state"] == ATTESTATION_UNSIGNED
+    assert response["attestation"]["signer_count"] == 0
 
 
 @pytest.mark.asyncio
-async def test_a_paused_agent_with_a_key_on_file_still_signs_with_its_own_key():
-    stored, _ = await _reviewer_converges(paused_key="paused-own-key", reviewer_key=None)
+async def test_a_paused_agent_with_a_key_on_file_is_no_longer_signed_for():
+    """Before #2449 this minted signature_a with the paused agent's own key."""
+    stored, response = await _reviewer_converges(paused_key="paused-own-key", reviewer_key=CALLER_KEY)
 
-    expected = Resolution.compute_signature(_payload_of(stored), "paused-own-key")
-    assert expected != ""
-    assert stored["signature_a"] == expected
-    assert stored["signature_a"] != Resolution.compute_signature(_payload_of(stored), CALLER_KEY)
-    assert describe_attestation(stored)["state"] == ATTESTATION_SINGLE_SIGNER
+    assert stored["signature_a"] == "" and stored["signature_b"] == ""
+    assert stored["signature_version"] == SIGNATURE_VERSION_PARTY_HMAC_RETIRED
+    described = describe_attestation(stored)
+    assert described["state"] == ATTESTATION_UNSIGNED
+    assert described["unsigned_by_design"] is True
+    assert response["attestation"]["unsigned_by_design"] is True
