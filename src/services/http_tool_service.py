@@ -31,6 +31,7 @@ from src.mcp_handlers.core import (
     handle_process_agent_update,
     metrics_agent_is_known,
     unbound_metrics_payload,
+    unbound_read_cause,
     unknown_agent_error,
 )
 from src.mcp_handlers.utils import require_agent_id
@@ -197,12 +198,11 @@ async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any
             bound_agent_id = None
             transport_injected = False
         if not bound_agent_id:
-            from src.mcp_handlers.identity_bootstrap import (
-                caller_sent_usable_session_id,
-            )
-
+            # Keyed on why the prebind bound nothing, as the MCP handler is.
+            caller_sent_session_id, resolution = unbound_read_cause(arguments)
             return unbound_metrics_payload(
-                caller_sent_session_id=caller_sent_usable_session_id(arguments)
+                caller_sent_session_id=caller_sent_session_id,
+                resolution=resolution,
             )
     agent_id, error = require_agent_id(arguments)
     if error:
@@ -323,12 +323,10 @@ def _strict_identity_refusal_or_none(
     # recovery keys on whether the caller itself sent a client_session_id. On
     # REST every call carries one, so an id the transport put there (from the
     # fingerprint, a pin, or a header it derived) does not count.
-    from src.mcp_handlers.context import (
-        get_http_prebind_resolution,
-    )
+    from src.mcp_handlers.context import get_unbound_resolution
     from src.mcp_handlers.identity_bootstrap import unbound_call_refusal
 
-    resolution = get_http_prebind_resolution()
+    resolution = get_unbound_resolution()
     if resolution is not None and "caller_sent_session_id" in resolution:
         # Recorded by the prebind (caller_sent_usable_session_id).
         caller_sent_session_id = bool(resolution["caller_sent_session_id"])

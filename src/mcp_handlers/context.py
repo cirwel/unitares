@@ -374,26 +374,35 @@ def get_csid_injected_source() -> Optional[str]:
     return _csid_injected_source.get()
 
 
-# What the REST prebind's resolver returned when it bound nothing
-# (http_routes/access._resolve_http_session_binding): the refusal or error
-# shape, {} for a result with no usable binding, or None when no resolution
-# ran for this call. The REST strict gate (services/http_tool_service) reads it
-# to tell a session miss from a refused or failed resolution; the prebind
-# itself returns only "no binding". Reset at the start of every prebind,
-# nested ones included.
-_http_prebind_resolution: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
-    'http_prebind_resolution', default=None
+# What identity resolution returned for this call when it bound nothing, as
+# identity_bootstrap.unbound_resolution_record shapes it: the refusal or error
+# keys, plus whether the caller sent a usable client_session_id and whether a
+# presented continuity_token failed. A record without an error key means
+# resolution ran and produced nothing usable (or raised). None means no
+# resolution ran: a pre_onboard read without proof short-circuits before it.
+#
+# Written on both transports: by the REST prebind
+# (http_routes/access._resolve_http_session_binding), reset at the start of
+# every prebind, nested ones included; and by the /mcp/ identity step
+# (middleware/identity_step.resolve_identity), reset at the start of every
+# dispatch. Read by the REST strict gate (services/http_tool_service), which
+# must tell a session miss from a refused or failed resolution because the
+# prebind itself returns only "no binding", and by both unbound metrics reads
+# (core.unbound_read_cause), so an unbound read and a strict refusal give the
+# same recovery for the same resolver result.
+_unbound_resolution: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    'unbound_resolution', default=None
 )
 
 
-def set_http_prebind_resolution(result: Optional[Dict[str, Any]]) -> object:
-    """Record the REST prebind resolver's unbound result (None: none ran)."""
-    return _http_prebind_resolution.set(result)
+def set_unbound_resolution(result: Optional[Dict[str, Any]]) -> object:
+    """Record why this call's identity resolution bound nothing (None: none ran)."""
+    return _unbound_resolution.set(result)
 
 
-def get_http_prebind_resolution() -> Optional[Dict[str, Any]]:
-    """The REST prebind resolver's unbound result, or None when none ran."""
-    return _http_prebind_resolution.get()
+def get_unbound_resolution() -> Optional[Dict[str, Any]]:
+    """Why this call's identity resolution bound nothing, or None when none ran."""
+    return _unbound_resolution.get()
 
 
 # Pin scope detail. Set by derive_session_key when an onboard-pin lookup hits,

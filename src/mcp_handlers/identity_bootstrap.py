@@ -292,6 +292,83 @@ def session_miss_refusal_options(
 # cannot drift on which cause gets which text.
 
 
+def unbound_resolution_record(
+    resolved,
+    *,
+    token_failed_verification: bool,
+    caller_sent_session_id: bool,
+    resolution_raised: bool = False,
+) -> dict:
+    """What a call's identity resolution returned when it bound nothing, in
+    the one shape both transports record (context.set_unbound_resolution).
+
+    ``resolved`` is the resolver's result (None when it raised, with
+    ``resolution_raised``). Only the keys that say why are kept; a record
+    with no ``error`` key is a resolution that ran and produced nothing
+    usable. ``caller_sent_session_id`` must come from
+    ``caller_sent_usable_session_id``.
+    """
+    record = {
+        key: resolved[key]
+        for key in ("error", "reason", "message", "resume_failed", "created")
+        if isinstance(resolved, dict) and key in resolved
+    }
+    if resolution_raised:
+        record["resolution_raised"] = True
+    if token_failed_verification:
+        record["token_failed_verification"] = True
+    record["caller_sent_session_id"] = caller_sent_session_id
+    return record
+
+
+def unbound_cause(resolve_result: dict | None) -> str:
+    """Why a call resolved no identity, from the resolver's own result.
+
+    One classification for the strict refusal (``unbound_call_refusal``) and
+    the unbound metrics read (``core.unbound_metrics_payload``), so the two
+    cannot disagree about the same resolver result:
+
+    - ``no_resolution``: no resolution ran (None).
+    - ``session_miss``: nothing is bound to the session the call named.
+    - ``resolution_failed``: the session lookup raised
+      (``session_resolve_miss`` with reason ``pg_lookup_exception``), or the
+      result carries no error and no binding. A server failure, not a miss.
+    - ``hijack_guard``: the session names an identity and a hijack guard
+      refused the resume (#1319).
+    - ``resume_refused``: any other resolver refusal (a substrate resident
+      over HTTP, a continuity_token naming an inactive agent).
+    """
+    if resolve_result is None:
+        return "no_resolution"
+    error = resolve_result.get("error")
+    if error == "session_resolve_miss":
+        if resolve_result.get("reason") == "pg_lookup_exception":
+            return "resolution_failed"
+        return "session_miss"
+    if error == "resume_rejected_hijack_guard":
+        return "hijack_guard"
+    if error or resolve_result.get("resume_failed"):
+        return "resume_refused"
+    return "resolution_failed"
+
+
+# What to do when identity resolution failed on the server. Shared by the
+# strict refusal (resolution_failed_refusal_options) and the unbound read.
+# Worded without "onboard" as a verb: check_working_state's envelope renames
+# canonical tool names in its hints (onboard becomes start_session), which
+# turned "a missing onboard" into "a missing start_session".
+RESOLUTION_FAILED_NEXT_STEP = (
+    "Retry the call. If it keeps failing, report it to the "
+    "operator: this is a server-side failure, not a missing "
+    "identity."
+)
+RESOLUTION_FAILED_DO_NOT = (
+    "Do not mint a fresh identity only to get past this: the "
+    "failure is on the server, and if you already have an "
+    "identity a new one would split your work from it."
+)
+
+
 def resolution_failed_refusal_options() -> dict:
     """hint / next_step / safe_options / do_not when identity resolution
     failed on the server: the resolver raised, returned nothing usable, or
@@ -306,11 +383,7 @@ def resolution_failed_refusal_options() -> dict:
             "strict identity mode refuses rather than running the "
             "tool unattributed. The tool handler did not run."
         ),
-        "next_step": (
-            "Retry the call. If it keeps failing, report it to the "
-            "operator: this is a server-side failure, not a missing "
-            "onboard."
-        ),
+        "next_step": RESOLUTION_FAILED_NEXT_STEP,
         # The defaults steer a caller toward onboarding, which is the right
         # advice for a missing identity and the wrong one here.
         "safe_options": (
@@ -325,11 +398,7 @@ def resolution_failed_refusal_options() -> dict:
                 "when": "Calls that need no identity keep working while resolution fails.",
             },
         ),
-        "do_not": (
-            "Do not onboard a fresh identity only to get past this: the "
-            "failure is on the server, and if you already have an "
-            "identity a new one would split your work from it.",
-        ),
+        "do_not": (RESOLUTION_FAILED_DO_NOT,),
     }
 
 
@@ -352,7 +421,7 @@ def hijack_guard_refusal_hint(
             if token_failed_verification
             else ""
         )
-        + " Nothing was written. Re-onboard with "
+        + " Nothing was written. Mint a new identity with "
         "start_session(force_new=true, parent_agent_id="
         "<your prior uuid, which must have exited>, "
         "spawn_reason=\"explicit\") "
@@ -401,6 +470,13 @@ def hard_resume_refusal_options(resolve_result: dict) -> dict:
     return options
 
 
+# Where a rebind gets its token when the one on the call failed verification.
+USE_THIS_PROCESS_LATEST_TOKEN = (
+    "The token on this call failed verification, so use the one "
+    "from this process's latest start_session or identity response."
+)
+
+
 def _with_failed_token(options: dict) -> dict:
     """Session-miss recovery for a call whose continuity_token failed: the
     failure leads the hint and next step, and the rebind option asks for a
@@ -411,9 +487,7 @@ def _with_failed_token(options: dict) -> dict:
     out["safe_options"] = tuple(
         {
             **option,
-            "when": option["when"]
-            + " The token on this call failed verification, so use the one "
-            "from this process's latest start_session or identity response.",
+            "when": option["when"] + " " + USE_THIS_PROCESS_LATEST_TOKEN,
         }
         if option.get("action") == "rebind_then_retry"
         else option
@@ -455,13 +529,8 @@ def unbound_call_refusal(
             ),
             {},
         )
-    error = resolve_result.get("error")
-    if error == "session_resolve_miss":
-        if resolve_result.get("reason") == "pg_lookup_exception":
-            return resolution_failed_refusal_options(), {
-                "identity_resolution": "failed",
-                "identity_resolution_failure": "pg_lookup_exception",
-            }
+    cause = unbound_cause(resolve_result)
+    if cause == "session_miss":
         options = session_miss_refusal_options(
             tool_name, caller_sent_session_id=caller_sent_session_id
         )
@@ -470,7 +539,7 @@ def unbound_call_refusal(
             # resume). Say so, and do not offer that token for the rebind.
             return _with_failed_token(options), {"continuity_token_invalid": True}
         return options, {}
-    if error == "resume_rejected_hijack_guard":
+    if cause == "hijack_guard":
         surface = {"resume_rejected_reason": resolve_result.get("reason")}
         if token_failed_verification:
             surface["continuity_token_invalid"] = True
@@ -483,13 +552,28 @@ def unbound_call_refusal(
             },
             surface,
         )
-    if error or resolve_result.get("resume_failed"):
+    if cause == "resume_refused":
         return hard_resume_refusal_options(resolve_result), {
-            "resume_rejected_reason": error or "resume_failed",
+            "resume_rejected_reason": resolve_result.get("error") or "resume_failed",
         }
-    return resolution_failed_refusal_options(), {
+    return resolution_failed_refusal_options(), resolution_failed_surface(
+        resolve_result
+    )
+
+
+def resolution_failed_surface(resolve_result: dict) -> dict:
+    """The surface keys for a server-side resolution failure, naming its kind
+    as the /mcp/ strict gate names it (``exception``, ``unusable_result``),
+    or ``pg_lookup_exception`` for a session lookup that raised."""
+    if resolve_result.get("reason") == "pg_lookup_exception":
+        kind = "pg_lookup_exception"
+    elif resolve_result.get("resolution_raised"):
+        kind = "exception"
+    else:
+        kind = "unusable_result"
+    return {
         "identity_resolution": "failed",
-        "identity_resolution_failure": "unusable_result",
+        "identity_resolution_failure": kind,
     }
 
 
