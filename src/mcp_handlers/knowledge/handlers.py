@@ -77,6 +77,7 @@ from src.knowledge_graph import (
     VALID_RESPONSE_TYPES, VALID_DISCOVERY_STATUSES,
     VALID_SEVERITIES as _SHARED_VALID_SEVERITIES,
     CLOSURE_CLASS_ADMITTING_STATUSES, CLOSURE_CLASS_CLEARING_STATUSES,
+    closure_evidence_to_json,
 )
 from src.knowledge_authority import (
     GOVERNED_CLAIM,
@@ -87,7 +88,9 @@ from src.knowledge_authority import (
     has_imported_memory_marker,
     rank_by_authority,
 )
-from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN, MAX_DETAILS_LEN
+from src.mcp_handlers.knowledge.limits import (
+    MAX_CLOSURE_EVIDENCE_BYTES, MAX_DETAILS_LEN, MAX_SUMMARY_LEN,
+)
 from config.governance_config import config
 from src.logging_utils import get_logger
 from src.coherence_provenance import (
@@ -3259,6 +3262,65 @@ def _requested_non_owner_edits(
     return requested_edits
 
 
+# What _requested_non_owner_edits lets a non-owner set on a gated finding, but
+# only in the call that closes it. Every other field it lists is the owner's.
+_CLOSING_CALL_FIELDS = ("resolution_notes", "closure_class")
+
+
+def _non_owner_edit_refusal(
+    discovery_id: str, requested_edits: list[str], allowed_list: list[str]
+) -> TextContent:
+    """Refuse a non-owner's edit, naming the call that would be accepted.
+
+    "Retry with status only" is right for the owner's fields and wrong for
+    resolution_notes and closure_class: following it drops them, when the same
+    call with a cross-agent closing status would have landed them.
+    """
+    owner_only = [f for f in requested_edits if f not in _CLOSING_CALL_FIELDS]
+    closing_call = [f for f in requested_edits if f in _CLOSING_CALL_FIELDS]
+    if not closing_call:
+        message = (
+            "Permission denied: Non-owners cannot edit "
+            f"{', '.join(owner_only)} on high-severity discovery "
+            f"'{discovery_id}'. Allowed cross-agent status values: "
+            f"{allowed_list}."
+        )
+        action = f"Retry with status only. Allowed values: {allowed_list}"
+    else:
+        closing_fields = " and ".join(closing_call)
+        verb = "is" if len(closing_call) == 1 else "are"
+        accepted = (
+            f"{closing_fields} {verb} accepted from a non-owner only together "
+            f"with a cross-agent closing status, one of {allowed_list}"
+        )
+        if owner_only:
+            message = (
+                "Permission denied: Non-owners cannot edit "
+                f"{', '.join(owner_only)} on high-severity discovery "
+                f"'{discovery_id}', and {accepted}."
+            )
+            action = (
+                f"Drop {', '.join(owner_only)}, and pass {closing_fields} "
+                f"together with status in {allowed_list}."
+            )
+        else:
+            message = (
+                f"Permission denied on high-severity discovery "
+                f"'{discovery_id}': {accepted}."
+            )
+            action = f"Pass {closing_fields} together with status in {allowed_list}."
+    return error_response(
+        message,
+        recovery={
+            "action": action,
+            "related_tools": [
+                "knowledge",
+                "search_knowledge_graph",
+            ],
+        },
+    )
+
+
 def _authorize_high_severity_update(
     request: _KnowledgeUpdateRequest,
     discovery: DiscoveryNode,
@@ -3298,21 +3360,8 @@ def _authorize_high_severity_update(
     allowed_list = sorted(allowed_statuses)
     if requested_edits:
         raise _UpdateResponseError(
-            error_response(
-                "Permission denied: Non-owners cannot edit "
-                f"{', '.join(requested_edits)} on high-severity discovery "
-                f"'{request.discovery_id}'. Allowed cross-agent status values: "
-                f"{allowed_list}.",
-                recovery={
-                    "action": (
-                        "Retry with status only. "
-                        f"Allowed values: {allowed_list}"
-                    ),
-                    "related_tools": [
-                        "knowledge",
-                        "search_knowledge_graph",
-                    ],
-                },
+            _non_owner_edit_refusal(
+                request.discovery_id, requested_edits, allowed_list
             )
         )
     if request.status not in allowed_statuses:
@@ -3658,6 +3707,21 @@ def _validate_closure_class(
             f"{type(evidence).__name__}.",
             recovery=_closure_evidence_hint(request.closure_class),
         )
+    if evidence is not None:
+        # Refused before storage: on AGE an oversized property fails the whole
+        # update (status included) and reads back as "Discovery not found".
+        stored_size = len(closure_evidence_to_json(evidence).encode("utf-8"))
+        if stored_size > MAX_CLOSURE_EVIDENCE_BYTES:
+            raise _invalid_closure_param(
+                f"closure_evidence is {stored_size:,} bytes as stored JSON; the "
+                f"limit is {MAX_CLOSURE_EVIDENCE_BYTES:,}. Nothing was changed.",
+                recovery=(
+                    "Keep each evidence value to a short statement or a pointer "
+                    "(a commit, a build_sha, a query, a finding id) and put long "
+                    "material such as log excerpts in resolution_notes, which is "
+                    "appended to details."
+                ),
+            )
 
     required = _CLOSURE_EVIDENCE_REQUIRED.get(request.closure_class)
     if not required:
