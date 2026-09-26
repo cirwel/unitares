@@ -239,10 +239,11 @@ def label_source_for(
     - ``claimed``: a label the server did not derive. Caller-supplied names
       (start_session(name=...), identity(name=...)) land here, including one
       renamed ``{name}_{uuid8}`` by a label collision.
-    - ``auto``: the label equals the public handle, the structured id, or the
-      label the server assigned at mint (``auto_label``, the [AUTO_NAME]
-      label such as ``claude_code-opus_1856bb5c``); or there is no label and
-      a public handle is displayed instead.
+    - ``auto``: the label equals the public handle, the structured id, or a
+      label the server assigned (``auto_label``: the mint's [AUTO_NAME] label
+      such as ``claude_code-opus_1856bb5c``, or the ``Agent_<uuid8>`` name a
+      knowledge write gives an agent with no meaningful label); or there is
+      no label and a public handle is displayed instead.
     - ``uuid``: nothing to display but the uuid.
 
     The server-assigned label cannot be recognised by its shape: a claimed

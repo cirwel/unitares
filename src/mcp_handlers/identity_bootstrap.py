@@ -249,6 +249,198 @@ def session_miss_refusal_options(
     }
 
 
+# ─── Recovery keyed on why a required call resolved no identity ───
+#
+# A session miss is one cause among several. The resolver can also refuse a
+# session that does name an identity (a hijack guard, a substrate resident
+# over HTTP, a continuity_token naming an inactive agent) or fail on the
+# server. Each cause needs its own recovery, and telling a refused or
+# server-failed caller that its id "names no identity" is false. Both
+# transports pick the recovery here from the resolver's own result, so they
+# cannot drift on which cause gets which text.
+
+
+def resolution_failed_refusal_options() -> dict:
+    """hint / next_step / safe_options / do_not when identity resolution
+    failed on the server: the resolver raised, returned nothing usable, or
+    could not read the session table (``session_resolve_miss`` with reason
+    ``pg_lookup_exception``). The id on the call may be fine, so the retry
+    leads and onboarding is not offered.
+    """
+    return {
+        "hint": (
+            "The server could not resolve an identity for this call "
+            "because identity resolution failed internally, and "
+            "strict identity mode refuses rather than running the "
+            "tool unattributed. The tool handler did not run."
+        ),
+        "next_step": (
+            "Retry the call. If it keeps failing, report it to the "
+            "operator: this is a server-side failure, not a missing "
+            "onboard."
+        ),
+        # The defaults steer a caller toward onboarding, which is the right
+        # advice for a missing identity and the wrong one here.
+        "safe_options": (
+            {
+                "action": "retry",
+                "call": "the same call, unchanged",
+                "when": "Identity resolution failed on the server and may recover.",
+            },
+            {
+                "action": "stay_read_only",
+                "call": "get_governance_metrics() or list_tools()",
+                "when": "Calls that need no identity keep working while resolution fails.",
+            },
+        ),
+        "do_not": (
+            "Do not onboard a fresh identity only to get past this: the "
+            "failure is on the server, and if you already have an "
+            "identity a new one would split your work from it.",
+        ),
+    }
+
+
+def hijack_guard_refusal_hint(
+    resolve_result: dict,
+    *,
+    token_failed_verification: bool,
+) -> str:
+    """The hint for a resume the identity hijack guard rejected (#1319):
+    which guard, and whether the presented continuity_token failed
+    verification. The whole point of failing closed is that the old silent
+    phantom mint told the caller nothing.
+    """
+    return (
+        "Your session resume was rejected by the identity "
+        "hijack guard "
+        f"({resolve_result.get('reason', 'unknown')})."
+        + (
+            " The continuity_token you presented failed "
+            "verification (malformed, truncated, or "
+            "expired secret) and could not prove "
+            "ownership."
+            if token_failed_verification
+            else ""
+        )
+        + " Nothing was written. Re-onboard with "
+        "start_session(force_new=true, parent_agent_id="
+        "<your prior uuid, which must have exited>, "
+        "spawn_reason=\"explicit\") "
+        "or retry with a valid continuity_token."
+    )
+
+
+def hard_resume_refusal_options(resolve_result: dict) -> dict:
+    """hint (and, for a substrate resident, next_step / safe_options /
+    do_not) for a terminal resolver refusal other than a session miss or a
+    hijack-guard rejection: the resolver's own message, which names the cause.
+    """
+    resolve_error = resolve_result.get("error") or "resume_failed"
+    options: dict = {
+        "hint": resolve_result.get("message") or (
+            f"Identity resume was refused ({resolve_error}). Nothing was written."
+        ),
+    }
+    if resolve_error == "substrate_anchored_uuid_requires_uds":
+        options.update({
+            "next_step": (
+                "Retry this substrate-enrolled resident through "
+                "UNITARES_UDS_SOCKET so governance can verify kernel peer "
+                "credentials."
+            ),
+            "safe_options": (
+                {
+                    "action": "use_attested_uds",
+                    "call": "Retry the same request through UNITARES_UDS_SOCKET.",
+                    "when": (
+                        "The resident is launchd-managed and its substrate "
+                        "claim matches the running executable."
+                    ),
+                },
+                {
+                    "action": "inspect_enrollment",
+                    "call": "Verify the registered launchd label and executable path.",
+                    "when": "The attested UDS request is still refused.",
+                },
+            ),
+            "do_not": (
+                "Do not retry a substrate-anchored session over HTTP; bearer "
+                "or session material is not process attestation.",
+            ),
+        })
+    return options
+
+
+def unbound_call_refusal(
+    tool_name: str,
+    resolve_result: dict | None,
+    *,
+    caller_sent_session_id: bool,
+    token_failed_verification: bool = False,
+) -> tuple[dict, dict]:
+    """Recovery for a required call that resolved no identity under
+    STRICT_IDENTITY_REQUIRED, keyed on why it resolved none.
+
+    Returns ``(options, surface_context)``: keyword overrides for
+    ``strict_identity_refusal_payload``, and the keys the emission point adds
+    to its own ``surface_context``. ``resolve_result`` is the resolver's
+    result for this call, or None when no resolution ran for it.
+
+    - ``session_resolve_miss``: no session binding for what the call named.
+      ``session_miss_refusal_options``, the caller's own id first. The
+      ``pg_lookup_exception`` form is not a miss: the session lookup raised,
+      so the id may be fine and a retry may succeed.
+    - ``resume_rejected_hijack_guard``: the session names an identity and a
+      hijack guard refused the resume; the hint names the guard.
+    - Any other error (a substrate resident over HTTP, a continuity_token
+      naming an inactive agent): the resolver's own message.
+    - No error and no binding: resolution failed on the server.
+    - No resolution ran: the session-miss recovery, since nothing resolved.
+    """
+    if resolve_result is None:
+        return (
+            session_miss_refusal_options(
+                tool_name, caller_sent_session_id=caller_sent_session_id
+            ),
+            {},
+        )
+    error = resolve_result.get("error")
+    if error == "session_resolve_miss":
+        if resolve_result.get("reason") == "pg_lookup_exception":
+            return resolution_failed_refusal_options(), {
+                "identity_resolution": "failed",
+                "identity_resolution_failure": "pg_lookup_exception",
+            }
+        return (
+            session_miss_refusal_options(
+                tool_name, caller_sent_session_id=caller_sent_session_id
+            ),
+            {},
+        )
+    if error == "resume_rejected_hijack_guard":
+        surface = {"resume_rejected_reason": resolve_result.get("reason")}
+        if token_failed_verification:
+            surface["continuity_token_invalid"] = True
+        return (
+            {
+                "hint": hijack_guard_refusal_hint(
+                    resolve_result,
+                    token_failed_verification=token_failed_verification,
+                ),
+            },
+            surface,
+        )
+    if error or resolve_result.get("resume_failed"):
+        return hard_resume_refusal_options(resolve_result), {
+            "resume_rejected_reason": error or "resume_failed",
+        }
+    return resolution_failed_refusal_options(), {
+        "identity_resolution": "failed",
+        "identity_resolution_failure": "unusable_result",
+    }
+
+
 # The #425 typed refusal is the one success-SHAPED payload that is not a
 # success: `strict_identity_refusal_payload` is deliberately "a structured
 # success-shape, not an error" (see below), so it carries `success: true` with

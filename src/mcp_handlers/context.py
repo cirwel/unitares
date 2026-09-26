@@ -374,6 +374,28 @@ def get_csid_injected_source() -> Optional[str]:
     return _csid_injected_source.get()
 
 
+# What the REST prebind's resolver returned when it bound nothing
+# (http_routes/access._resolve_http_session_binding): the refusal or error
+# shape, {} for a result with no usable binding, or None when no resolution
+# ran for this call. The REST strict gate (services/http_tool_service) reads it
+# to tell a session miss from a refused or failed resolution; the prebind
+# itself returns only "no binding". Reset at the start of every prebind,
+# nested ones included.
+_http_prebind_resolution: ContextVar[Optional[Dict[str, Any]]] = ContextVar(
+    'http_prebind_resolution', default=None
+)
+
+
+def set_http_prebind_resolution(result: Optional[Dict[str, Any]]) -> object:
+    """Record the REST prebind resolver's unbound result (None: none ran)."""
+    return _http_prebind_resolution.set(result)
+
+
+def get_http_prebind_resolution() -> Optional[Dict[str, Any]]:
+    """The REST prebind resolver's unbound result, or None when none ran."""
+    return _http_prebind_resolution.get()
+
+
 # Pin scope detail. Set by derive_session_key when an onboard-pin lookup hits,
 # distinguishing which candidate form matched (client_model / client / model /
 # unscoped). Kept as a side-channel so the load-bearing exact-match comparison

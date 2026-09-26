@@ -1,4 +1,5 @@
-"""A target named through use_tool resolves exactly as it does named directly.
+"""A target named through use_tool resolves its session exactly as it does
+named directly.
 
 ``tool_registration._invoke_mcp_nested_tool`` used to copy the transport
 session (an X-Session-ID header, an Mcp-Session-Id, the OAuth or X-Client-Id

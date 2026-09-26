@@ -211,3 +211,31 @@ def test_knowledge_display_payload_uses_the_same_rule():
     assert _build_agent_display_payload("u", meta, "h")["label_source"] == "auto"
     meta.label = "worker_1856bb5c"
     assert _build_agent_display_payload("u", meta, "h")["label_source"] == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_the_name_a_knowledge_write_assigns_reads_auto(minted):
+    """A mint with no client or model hint gets no label. The first
+    knowledge write then names the agent Agent_<uuid8>, which the server
+    chose, so it reads as server-assigned too."""
+    from src.mcp_handlers.identity.handlers import resolve_session_identity
+    from src.mcp_handlers.knowledge import handlers as knowledge
+
+    result = await resolve_session_identity(
+        session_key="unhinted-session", persist=True, force_new=True,
+    )
+    agent_uuid = result["agent_uuid"]
+    meta = minted.registry[agent_uuid]
+    assert not meta.label
+
+    server = SimpleNamespace(agent_metadata=minted.registry)
+    with patch.object(knowledge, "mcp_server", server), patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=agent_uuid,
+    ):
+        error, warning = knowledge._check_display_name_required(agent_uuid, {})
+
+    assert error is None and warning
+    assert meta.label == f"Agent_{agent_uuid[:8]}"
+    signature = _signature(agent_uuid)
+    assert signature["display_name"] == meta.label
+    assert signature["label_source"] == "auto"
