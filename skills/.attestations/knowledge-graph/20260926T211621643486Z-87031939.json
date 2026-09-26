@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "knowledge-graph",
-  "verified_at": "2026-09-26T20:40:16Z",
+  "verified_at": "2026-09-26T21:16:21Z",
   "verified_date": "2026-09-26",
-  "verifier": "Kenny Wang",
+  "verifier": "Claude (closure-class persistence after the rebase onto #2479-#2481; claims re-checked)",
   "source_digests": {
     "unitares/src/alias_schema.py": "8ffea8289331373b",
     "unitares/src/db/mixins/knowledge_graph.py": "d471e7a56576bd9d",

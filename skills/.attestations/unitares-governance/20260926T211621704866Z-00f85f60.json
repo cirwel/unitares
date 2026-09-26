@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-09-26T20:40:16Z",
+  "verified_at": "2026-09-26T21:16:21Z",
   "verified_date": "2026-09-26",
-  "verifier": "Kenny Wang",
+  "verifier": "Claude (closure-class persistence after the rebase onto #2479-#2481; claims re-checked)",
   "source_digests": {
     "unitares/skills/dialectic-reasoning/SKILL.md": "c25b13bc3ac17565",
     "unitares/skills/discord-bridge/SKILL.md": "b1bf0f1276d8756a",
