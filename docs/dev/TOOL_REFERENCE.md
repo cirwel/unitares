@@ -98,7 +98,7 @@ Name/model fields are cosmetic/contextual. The returned uuid is your identity an
 
 Resolve which agent this MCP session is bound to, or set a cosmetic display name. Not a plain read: a call carrying no proof argument at all is gated to a fresh mint, so it persists a new agent and reports on that one, marked caller_proven=false. A call carrying only a cosmetic name= skips that gate and can instead infer a co-located binding — pass client_session_id to get your own back. name= persists a cosmetic label only and never looks an agent up. For a fresh process call onboard(force_new=true). continuity_token is per-process ownership proof, not a transport-level claim: carrying it into another process re-opens silent resurrection.
 
-Use identity(client_session_id='...') to see the identity currently bound to your session; an argument-less call cannot answer that question, because it mints before it reads. Use identity(name='...') to set a cosmetic display label.
+Use identity(client_session_id='...') to see the identity currently bound to your session; an argument-less call cannot answer that question, because it mints before it reads. Use identity(client_session_id='...', name='...') to set a cosmetic display label.
 
 To re-bind to a UUID you already own, pass both agent_uuid and a matching continuity_token: identity(agent_uuid='...', continuity_token='...', resume=true) — the token is what proves the UUID is yours. A bare identity(agent_uuid='...', resume=true) is an unsigned claim on a UUID, so under strict identity mode it reads as hijack-shaped and won't bind.
 
@@ -317,7 +317,7 @@ EISV FIELD CONTRACT:
 - **Older names:** `check_status`, `metrics`, `my_status`, `state`, `status`
 - **Related:** `process_agent_update`, `observe(action='agent')`, `export(action='history')`
 
-Read one agent's current governance state: it runs no cycle and mints no identity, so a client_session_id resolving to no agent gets an explicit 'unbound' payload rather than a fresh agent. A binding the server merely inferred still returns that agent's real numbers, marked identity_assurance.caller_proven=false and possibly a co-located sibling's, so pass start_session's client_session_id, or an explicit agent_id, to be sure the reading is yours. Use process_agent_update to log work and get a proceed/pause decision. check_working_state reaches this same handler and returns the digest envelope in place of this raw payload. EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); I=Information Integrity [0,1] (mixed-provenance calibration estimate); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
+Read one agent's current governance state: it runs no cycle and mints no identity. It reads your own state only on proof sent with the call (start_session's client_session_id, an X-Session-ID header or a verified continuity_token), never a binding the server inferred; without it, or when it names no agent, the payload is an explicit 'unbound' one rather than a fresh agent. agent_id is not declared on /mcp/, which drops it; through use_tool or REST it names the agent to read and proves nothing about who is asking. Use process_agent_update to log work and get a proceed/pause decision. check_working_state reaches this same handler and returns the digest envelope in place of this raw payload. EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); I=Information Integrity [0,1] (mixed-provenance calibration estimate); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
 
 Alias: status()
 
@@ -366,7 +366,7 @@ ERROR RECOVERY:
 
 ~~~text
 EXAMPLE REQUEST:
-{"agent_id": "test_agent_001"}
+{"client_session_id": "agent-5e728ecb..."}
 ~~~
 
 ~~~text
@@ -386,8 +386,8 @@ EXAMPLE RESPONSE:
 ~~~
 
 DEPENDENCIES:
-- Optional: agent_id (auto-injected from session if bound)
-- Optional: client_session_id (for session continuity across calls)
+- Optional: client_session_id (the proof that makes this read yours)
+- Optional: agent_id (a UUID naming the agent to read; REST and use_tool only, /mcp/ drops it)
 - Workflow: Call after process_agent_update to check current state
 
 EISV FIELD CONTRACT:

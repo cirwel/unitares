@@ -36,8 +36,19 @@ ones are absent.
 
 Resolving a key is not the same as trusting it. Each resolution is tagged
 `caller_asserted` or `server_inferred` (`set_session_proof_origin`). This is the
-gate behind "strict identity is a write gate" (see CLAUDE.md): **reads may work
-for a server-inferred caller; writes require a caller-asserted one.**
+gate behind "strict identity is a write gate" (see CLAUDE.md): **writes require
+a caller-asserted binding; reads may run without one, but a pre-onboard read
+never shows a server-inferred binding's state.** A pre-onboard read
+(`check_working_state`, `get_governance_metrics`, a knowledge search) resolves
+an identity only on proof the caller sent with the call: its own
+`client_session_id`, a verified `continuity_token`, or an `X-Session-ID` header
+that won the derivation. Anything else leaves it unbound, on both transports:
+the `/mcp/` identity step short-circuits it before resolution
+(`middleware/identity_step.resolve_identity`, #945), and the REST prebind
+applies the same gate (`http_routes/access._resolve_http_session_binding`).
+Neither consults the sticky transport binding for such a read, and an
+`agent_uuid` argument or a UUID `X-Agent-Id` header is not read proof, since the
+derivation ignores both.
 
 - **`caller_asserted`** — the caller *transmitted a proof in this request*:
   `continuity_token`, `mcp_session_id`, `x_session_id`, `oauth_client_id`,
@@ -46,14 +57,22 @@ for a server-inferred caller; writes require a caller-asserted one.**
 - **`server_inferred`** — everything the server *derived* rather than received:
   the IP/UA fingerprint, the pin lookup, the contextvar/stdio fallbacks, an
   invalid token, and a `client_session_id` the transport injected on the
-  caller's behalf. These resolve a session for read continuity but must not
-  satisfy strict for a write.
+  caller's behalf. These can resolve a session for a write, but must not
+  satisfy strict for one (a substrate-earned agent aside), and they never
+  answer a pre-onboard read.
 
-Why the injected-CSID carve-out matters: a remote connector that only sends
-schema-advertised params won't send `client_session_id`, so the server injects
-one from context. If that injected value is the IP/UA fingerprint, treating it
-as caller-asserted would let network-shared callers write under each other's
-identity — hence injected ⇒ `server_inferred`.
+Why the injected-CSID carve-out matters: on REST
+(`http_routes/tools._inject_http_client_session`), a body with no
+`client_session_id` key gets one the transport derives from the request's own
+signals. If that injected value is the IP/UA fingerprint, treating it as
+caller-asserted would let network-shared callers write under each other's
+identity — hence injected ⇒ `server_inferred`. `/mcp/` injects nothing: FastMCP
+None-fills a declared `client_session_id` before the typed wrapper runs, and
+the nested `use_tool` path stopped copying the transport session in #2478, so an
+omitted id is derived from the transport signals themselves. On a real
+`/mcp/` call the flag is set only by the pre-mint recovery of a required call,
+which re-threads the id a recovered identity was onboarded under (the typed
+wrapper's own inject branch is unreachable there).
 
 ## Privacy notes
 
@@ -76,5 +95,6 @@ identity — hence injected ⇒ `server_inferred`.
 ## One-line summary
 
 `derive_session_key` picks the strongest *present* signal; `proof_origin`
-then decides whether that signal is strong enough to **write**. Reads are
-lenient; writes require a proof the caller actually transmitted.
+then decides whether that signal is strong enough to **write**. Writes require
+a proof the caller actually transmitted; a pre-onboard read without one runs
+unbound rather than showing an inferred binding's state.

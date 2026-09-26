@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.19.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.21.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.19.0` is the negotiated interface release. Compatible additions
+- `version: 1.21.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -210,7 +210,24 @@ The two identifiers serve different jobs:
   and `sync_state` names the degraded-identity and warnings triggers that make
   `auto` resolve to mirror (its advertised brief is unchanged). Nothing is
   added, removed, retyped or renamed; the two metrics input digests and the
-  surface digest move).
+  surface digest move; 1.21.0, 2026-09-26, numbered after 1.20.0 (the
+  closure-class PR): tool descriptions only. `check_working_state` and
+  `get_governance_metrics` no longer promise that a binding the server merely
+  inferred returns that agent's real state marked
+  `identity_assurance.caller_proven=false`: no pre-onboard self-read binds to
+  one any more (the sticky transport binding is not consulted for a read, and
+  an `agent_uuid` argument or a UUID `X-Agent-Id` header is not read proof),
+  so such a read is unbound, and both texts name the proof that reads your own
+  state (your `client_session_id`, an `X-Session-ID` header, or a verified
+  `continuity_token`). `get_governance_metrics` no longer offers an explicit
+  `agent_id` as a way to be sure the reading is yours: `/mcp/` does not
+  declare `agent_id` and drops it, and through `use_tool` or REST it names the
+  agent to read and proves nothing about the caller; `check_working_state`
+  says the same, and that such a reading is marked `caller_proven=false` when
+  the call's session was only inferred. `identity`'s description names
+  `client_session_id` in the call that sets a display name. No parameter is
+  added, removed, retyped or renamed, and no input digest or the surface
+  digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

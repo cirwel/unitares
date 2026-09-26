@@ -753,16 +753,28 @@ def _metrics_identity_assurance(
     payload: Dict[str, Any],
     binding_assurance: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """Mark a real metrics read whose binding the server merely inferred.
+    """Mark a real metrics read on a call whose session the server only
+    inferred.
 
-    check_working_state's description promises that such a read returns the
-    agent's state marked identity_assurance.caller_proven=false, since it may
-    be a co-located sibling's. The canonical payload cannot carry that mark:
-    its agent_signature collapses to {"uuid": null} for a server-inferred
-    binding. So the request's assurance comes from the dispatch context
-    (``binding_assurance``), with the signature as a fallback. A
-    caller-proven read gets nothing; an unbound payload (no agent_id) is not a
-    reading of anyone.
+    No self-read reaches this with an inferred binding any more. The /mcp/
+    identity step and the REST prebind never bind a pre_onboard read to a
+    server-inferred source (no sticky consult for a read, and no agent_uuid
+    or X-Agent-Id read proof), so such a read returns the unbound payload,
+    which has no agent_id and gets nothing here: for self-reads the mark is
+    purely defensive.
+
+    It is still reached by an explicit agent_id (through use_tool, or
+    check_working_state over REST; the /mcp/ schema drops the argument) on a
+    call whose session was only inferred (a fingerprint, an onboard pin, a
+    transport-injected REST id). That reading is of the agent the caller
+    named, and caller_proven=false says nothing on the call proves the caller
+    is that agent. check_working_state's description says so.
+
+    The canonical payload cannot carry the mark: its agent_signature is
+    {"uuid": null} for an unbound caller. So the request's assurance comes
+    from the dispatch context (``binding_assurance``), with the signature as
+    a fallback. A caller-proven read gets nothing; an unbound payload (no
+    agent_id) is not a reading of anyone.
     """
     if payload.get("agent_id") is None:
         return None
