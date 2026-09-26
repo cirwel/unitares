@@ -1465,12 +1465,14 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
     Swept over the envelope's free space: every digest an attribution-free
     payload keeps, the attributed payload keeps with the same
     non-attribution fields; attribution returns as label+identity, identity
-    alone, or not at all, and an identity that survives is exact."""
-    saw_labels, saw_ids_only, saw_none = False, False, False
+    alone, or not at all, and an identity that survives is exact.
+
+    What attribution may cost is only what is optional (the coaching the
+    budget steps already drop, and a truncated digest's `expand_with`, which
+    repeats `raw_governance_hint`), and only instead of being withheld."""
+    saw_labels, saw_ids_only, saw_none, saw_coaching_yield = False, False, False, False
     for n in range(0, 2600, 2):
         extra = {"total_count": n_results, "confidence_note": "c" * n, "success": True}
-        # Whole-envelope size is not asserted here: master already overshoots
-        # 3,000 bytes in a narrow window, independent of attribution.
         bare = build_experience_envelope(
             "search_shared_memory", "knowledge", {**extra, "results": _results(n_results, False)})
         env = build_experience_envelope(
@@ -1479,24 +1481,36 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
         env_d = env.get("memory_suggestions") or []
         bare_size = len(json.dumps(bare, ensure_ascii=False).encode("utf-8"))
         env_size = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
-        # Attribution adds no overshoot of its own (master's narrow window,
-        # where the attribution-free payload is already over, is not ours).
+        # Attribution adds no overshoot of its own. Nor do the truncation
+        # markers any more: the only envelopes over budget are those whose
+        # note alone does not fit, with every digest already dropped.
         if bare_size <= 3_000:
             assert env_size <= 3_000, (n, env_size)
+        if bare_d or env_d:
+            assert max(bare_size, env_size) <= 3_000, (n, bare_size, env_size)
         # Every attributed row has a label and an identity, so anything
         # missing from a digest was withheld (a dropped label included).
         withheld = any("agent_id" not in d or "by" not in d for d in env_d)
-        if withheld and bare_size <= 3_000 - 40:
+        if withheld and bare_size <= 3_000:
+            # Optional coaching or the repeated pointer always gives the
+            # marker its room, so a withheld attribution is never unmarked.
             assert env.get("digest_attribution_omitted") is True, n
         if not withheld:
             assert "digest_attribution_omitted" not in env, n
         assert len(env_d) >= len(bare_d), n
         # Envelope-level parity too: attribution alone never triggers the
-        # truncation path (flags, dropped coaching, the full-mode pointer).
-        for key in ("projection_truncated", "expand_with", "response_options",
-                    "discovery_retrieval_options"):
-            assert env.get(key) == bare.get(key), (n, key)
+        # truncation path (its flag, dropped digests, the digest counts).
+        assert env.get("projection_truncated") == bare.get("projection_truncated"), n
         assert env.get("state_summary") == bare.get("state_summary"), n
+        # Optional coaching and the repeated full-mode pointer may yield to
+        # attribution, but are only ever dropped or trimmed, and the full-mode
+        # route stays named.
+        for key in ("response_options", "discovery_retrieval_options", "expand_with"):
+            got, want = env.get(key), bare.get(key)
+            if got != want:
+                assert got is None or got.items() <= want.items(), (n, key)
+                assert env["raw_governance_hint"] == bare["raw_governance_hint"], n
+                saw_coaching_yield = True
         for got, want in zip(env_d, bare_d):
             assert {k: v for k, v in got.items() if k not in _ATTRIBUTION_KEYS} == want, n
         for i, got in enumerate(env_d):
@@ -1509,7 +1523,7 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
                 saw_ids_only = True
             else:
                 saw_none = True
-    assert saw_labels and saw_ids_only and saw_none
+    assert saw_labels and saw_ids_only and saw_none and saw_coaching_yield
 
 
 def test_a_short_identity_is_restored_where_the_marker_cannot_fit():
@@ -1520,7 +1534,9 @@ def test_a_short_identity_is_restored_where_the_marker_cannot_fit():
     base = {"success": True, "results": [{"id": "d1", "summary": "s", "agent_id": "a1"}],
             "total_count": 1}
     exercised = False
-    for n in range(1050, 1200):
+    # The free-space dial is confidence_note, which the envelope now carries
+    # once (top level), so the window sits at twice the old note length.
+    for n in range(2150, 2400):
         payload = {**base, "confidence_note": "c" * n}
         bare = build_experience_envelope(
             "search_shared_memory", "knowledge",
@@ -1642,7 +1658,10 @@ def test_search_envelope_promotes_low_confidence():
     assert env["low_confidence"] is True
     assert env["confidence_note"] == "Semantic-only matches; verify before use."
     assert env["state_summary"]["low_confidence"] is True
-    assert env["state_summary"]["confidence_note"] == "Semantic-only matches; verify before use."
+    # Said once: the note is the top-level copy every alias gets; a second
+    # copy in state_summary was paid out of the lean digest budget.
+    assert "confidence_note" not in env["state_summary"]
+    assert json.dumps(env).count("Semantic-only matches") == 1
     assert env["memory_suggestions"][0]["summary"] == "semantic lead"
 
 
