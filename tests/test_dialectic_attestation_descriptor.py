@@ -122,8 +122,11 @@ class TestStates:
         described = describe_attestation(
             {"signature_version": 2, "signature_a": "", "signature_b": ""}
         )
-        assert set(described) == {"state", "signature_version", "signer_count"}
+        assert set(described) == {
+            "state", "signature_version", "signer_count", "unsigned_by_design",
+        }
         assert all(not isinstance(v, str) or len(v) < 40 for v in described.values())
+        assert isinstance(described["unsigned_by_design"], bool)
 
     def test_accepts_a_resolution_object_as_well_as_a_dict(self):
         obj = _resolution(signature_a=SIG_A, signature_b=SIG_B)

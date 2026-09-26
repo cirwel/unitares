@@ -2,14 +2,18 @@
 
 What this is
 ------------
-A dialectic resolution carries two *symmetric* attestations: each party's
-HMAC-SHA256 over the canonical payload, keyed on that party's ``api_key``
-(``Resolution.compute_signature``). That construction is sound inside one
-operator's trust boundary and is deliberately retained. It is also, by
-construction, unverifiable by anyone who does not hold the keys, and a second
-principal is exactly the party who cannot be handed them
+A dialectic resolution record has two party-signature fields,
+``signature_a`` and ``signature_b``. Historical rows may hold a *symmetric*
+attestation in them: each party's HMAC-SHA256 over the canonical payload,
+keyed on that party's ``api_key`` (``Resolution.compute_signature``). Minting
+those is retired (#2449, decided 2026-09-25 as D5 in
+``docs/proposals/active/federation-trust-decisions-2026-09-25.md``): the
+server holds every key it would verify with, so the HMAC attested only the
+server's own write, and it was unverifiable by anyone who does not hold the
+keys, a second principal being exactly the party who cannot be handed them
 (``docs/SCOPE_AND_THREAT_MODEL.md``, "The attestation half of the same
-boundary").
+boundary"). New rows keep both fields, present and empty, under
+``signature_version`` 3, so the fields this receipt covers are unchanged.
 
 A receipt is the deployment's own Ed25519 signature over the *stored record*:
 the resolution dict as persisted at the terminal ``resolved`` write. It is
@@ -29,11 +33,10 @@ attached the receipt at ``iat``.
 Does not prove: that either party *intended* the resolution, or that the
 parties' symmetric signatures are valid — a peer cannot check those and the
 receipt does not claim to. ``both_signatures_present`` reports only that two
-non-empty signature strings were stored; note that an LLM-assisted session
-signs ``signature_a`` with the agent's ``api_key`` when one is on file and
-stores an empty string when none is (#2155 removed the uuid-derived fallback
-key, which was forgeable from public data), and leaves ``signature_b`` empty
-either way, so a keyless session's record reports as ``unsigned``. Party-level
+non-empty signature strings were stored. It is False for every record
+finalized since party-HMAC minting was retired (``signature_version`` 3, both
+fields empty by design), and on historical rows it can be False because a
+session was single-signer (LLM-assisted) or keyless. Party-level
 non-repudiation would need party-held asymmetric keys, a separate decision
 (shelved 2026-04-19).
 

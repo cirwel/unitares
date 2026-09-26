@@ -47,7 +47,8 @@ in a structured dialogue (thesis -> antithesis -> synthesis) to reach a consensu
 4. Resolution Finalization
    ├─> Check hard limits (safety violations)
    ├─> Merge proposals intelligently
-   └─> Create signed Resolution object
+   └─> Create Resolution object (no party signatures: party-HMAC minting
+       was retired in #2449; signature_version 3 marks such a record)
 
 5. Execution
    └─> Resume Agent A with agreed conditions OR escalate to quorum
@@ -122,7 +123,7 @@ result = session.submit_synthesis(synthesis, api_key_a)
 
 # If converged, finalize resolution
 if result.get("converged"):
-    resolution = session.finalize_resolution(signature_a, signature_b)
+    resolution = session.finalize_resolution()
     is_safe, violation = session.check_hard_limits(resolution)
     if is_safe:
         # Execute resolution (resume agent with conditions)
@@ -285,25 +286,30 @@ class Resolution:
     Final resolution of a dialectic session.
 
     Represents the agreed-upon outcome after both agents have converged
-    on a synthesis. Includes merged conditions, root cause, and signatures
-    from both agents for verification.
+    on a synthesis. Includes merged conditions and root cause. The two
+    signature fields stay in the record for every row, but only rows
+    finalized before party-HMAC minting was retired (#2449) can hold one.
 
     Attributes:
         action: Resolution action (typically "resume")
         conditions: List of merged conditions for resumption
         root_cause: Agreed understanding of the root cause
         reasoning: Combined reasoning from both agents
-        signature_a: Agent A's cryptographic signature
-        signature_b: Agent B's cryptographic signature
+        signature_a: Agent A's party HMAC on historical rows; "" on every
+            row finalized since minting was retired (#2449)
+        signature_b: Agent B's party HMAC on historical rows; "" likewise
         timestamp: ISO timestamp of resolution creation
         signature_version: Attestation scheme version. v1 (legacy, broken):
             both signatures over the same last-synthesis-message; reviewer's
-            "signature" was over a message they never wrote. v2 (current):
+            "signature" was over a message they never wrote. v2 (historical):
             each signature is over the canonical resolution payload (action +
             conditions + root_cause + reasoning + timestamp), independently
             signed with each agent's api_key. v2 signatures verify via
             verify_signatures(); v1 cannot be verified because the source
-            message was not preserved.
+            message was not preserved. v3 (current): party-HMAC minting
+            retired (#2449); both signature fields are present and empty by
+            design, and describe_attestation reports the row as ``unsigned``
+            with ``unsigned_by_design`` set.
         receipt: Deployment-signed receipt (``drr.v1``) over the stored record,
             attached only at the terminal "resolved" write and only when the
             deployment has an attestation key; a peer verifies it with the
@@ -312,11 +318,16 @@ class Resolution:
             before. Issuer-level, not party-level, non-repudiation; see
             ``src/dialectic_receipt.py``.
 
-    The v2 attestation closes council 2026-05-06 NEW-2 — until then the
+    The v2 attestation closed council 2026-05-06 NEW-2 — until then the
     bilateral cryptographic claim was effectively single-signer-with-two-
-    keys. New sessions land at v2; the 31 historical v1 resolutions remain
-    on disk with signature_version=1 and verify_signatures() returning
-    False (intentionally — they are not provably bilateral).
+    keys. v2 minting was itself retired (#2449; decided 2026-09-25 as D5 in
+    ``docs/proposals/active/federation-trust-decisions-2026-09-25.md``): a
+    symmetric HMAC the server computes with a key the server stores attests
+    only that the server wrote the row. New sessions land at v3, unsigned.
+    Historical rows are never stripped or backfilled: the v1 rows remain on
+    disk with signature_version=1 and verify_signatures() returning False
+    (intentionally — they are not provably bilateral), and v2 rows keep
+    whatever signatures they were minted with.
     """
     action: str  # ResolutionAction
     conditions: List[str]
@@ -325,7 +336,7 @@ class Resolution:
     signature_a: str  # Agent A's signature
     signature_b: str  # Agent B's signature
     timestamp: str
-    signature_version: int = 1  # v2 = canonical-payload bilateral; default 1 for backward-compat decode of legacy on-disk rows
+    signature_version: int = 1  # 3 = party HMAC retired (new rows); 2 = historical canonical-payload HMAC; default 1 for backward-compat decode of legacy on-disk rows
     receipt: str = ""  # drr.v1 deployment-signed receipt, attached at the terminal write when an attestation key is configured; "" otherwise (src/dialectic_receipt.py)
 
     def to_dict(self) -> Dict:
@@ -359,7 +370,11 @@ class Resolution:
         return hashlib.sha256(resolution_json.encode()).hexdigest()
 
     def canonical_payload(self) -> bytes:
-        """The deterministic byte-string both agents independently sign in v2.
+        """The deterministic byte-string both agents independently signed in v2.
+
+        Kept for reading history: ``verify_signatures`` recomputes a
+        historical v2 signature over it. Nothing mints over it any more
+        (#2449).
 
         Excludes the signature fields themselves (signature_a, signature_b,
         signature_version) so verification can compare against signatures
@@ -393,6 +408,10 @@ class Resolution:
     def compute_signature(payload: bytes, api_key: str) -> str:
         """HMAC-SHA256 over the canonical payload, keyed on the agent's api_key.
 
+        Retained for reading history only. ``finalize_resolution`` no longer
+        calls it (#2449); its one production caller is ``verify_signatures``,
+        which recomputes a historical v2 signature to check it.
+
         Originally (PR #411) this was raw `sha256(payload || ":" || api_key)`,
         which CodeQL py/weak-sensitive-data-hashing flagged because the rule
         treats raw-sha256-with-key as a misuse of the bare hash for password
@@ -422,6 +441,10 @@ class Resolution:
 
     def verify_signatures(self, api_key_a: str, api_key_b: str) -> bool:
         """Verify both agents signed the canonical payload with their keys.
+
+        Meaningful only for historical v2 rows. A row finalized since party-
+        HMAC minting was retired (signature_version 3) carries no signature
+        and always returns False, as does every other non-v2 row.
 
         Returns False (not raises) when verification is not possible, in any
         of the following cases:
@@ -462,6 +485,14 @@ ATTESTATION_SINGLE_SIGNER = "single_signer"
 ATTESTATION_UNSIGNED = "unsigned"
 ATTESTATION_LEGACY_V1 = "legacy_v1"
 
+# signature_version values. v2 is the historical canonical-payload party HMAC;
+# only v2 rows can verify. v3 is what finalize_resolution stamps since party-
+# HMAC minting was retired (#2449): both signature fields present and empty by
+# design. A new value rather than an unsigned v2 so that a record read on its
+# own (an export, a drr.v1 verifier's input) says why it is unsigned.
+SIGNATURE_VERSION_PARTY_HMAC = 2
+SIGNATURE_VERSION_PARTY_HMAC_RETIRED = 3
+
 
 def coerce_signature_version(value: Any) -> int:
     """Stored rows predate the field (-> 1); JSON round-trips may stringify it.
@@ -490,23 +521,35 @@ def describe_attestation(resolution) -> Optional[Dict[str, Any]]:
     is a presentation fix, not a correctness one -- nothing here changes what
     verification concludes.
 
-    Measured 2026-09-08 on the live corpus, which is why it is worth stating:
-    no agent has been minted with an api_key since 2026-01-29 (0 of the 1,223
-    agents created in the preceding 30 days carry one), so 104 of 122 stored
-    resolutions are ``unsigned``. The only 2026 resolutions that do carry a
-    signature (four, 2026-06-17 to 2026-06-24 UTC, all LLM-assisted) were keyed on
-    the uuid-derived fallback that #2155 removed; anyone who could read the
-    session could recompute them, so they are not attestations either.
-    Party-level HMAC attestation therefore has no key material and has produced
-    no genuine signature in 2026. Naming that state is NOT a decision to keep the
-    scheme: the choice between restoring key issuance and deleting the party
-    HMAC outright is tracked as its own issue, because a descriptor that makes
-    an inert mechanism read as handled would be worse than the silence.
+    Party-HMAC minting is retired (#2449, decided 2026-09-25 as D5 in
+    ``docs/proposals/active/federation-trust-decisions-2026-09-25.md``). The
+    scheme is symmetric and the server holds every key it would verify with,
+    so a party HMAC the server computes says only that the server wrote the
+    row, which the attributed row already says. ``finalize_resolution`` now
+    stamps ``signature_version`` 3 with both signatures empty, and such a row
+    reads as ``unsigned`` with ``unsigned_by_design`` True: expected, not a
+    fault. Party-level non-repudiation remains a goal; its lever is
+    asymmetric keys held by the agents, which is separate, unscheduled work.
+
+    History is classified exactly as before and is never stripped or
+    backfilled. For context on what that history holds, measured 2026-09-08 on
+    the live corpus: 104 of 122 stored resolutions were already ``unsigned``
+    (no agent had been minted with an api_key since 2026-01-29), and the only
+    2026 rows carrying a signature (four, 2026-06-17 to 2026-06-24 UTC, all
+    LLM-assisted) were keyed on the uuid-derived fallback that #2155 removed,
+    so they are not attestations either. That measurement is telemetry, not
+    the reason for retiring the scheme. ``unsigned_by_design`` is False on
+    every historical row, including those unsigned ones: they were finalized
+    while the scheme was still meant to mint.
+
+    A v3 row carrying a signature string cannot come from
+    ``finalize_resolution``; it would read as ``legacy_v1`` (present,
+    unverifiable), the conservative reading for any non-v2 signature.
 
     Derived, never stored. Computed on the read path only: adding a field to
     ``Resolution.to_dict()`` would change ``Resolution.hash()``, which is served
     as ``resolution_hash``, and would alter the bytes the drr.v1 receipt is
-    minted over. Deliberately small -- no prose ``note`` field -- because
+    minted over. Deliberately small -- a boolean, no prose ``note`` field -- because
     ``dialectic(action='list')`` pages 50 sessions and a per-row constant string
     would re-inflate exactly the payload #1929's projection work cut down.
 
@@ -525,7 +568,7 @@ def describe_attestation(resolution) -> Optional[Dict[str, Any]]:
     version = coerce_signature_version(get("signature_version", None))
 
     signer_count = bool(signature_a) + bool(signature_b)
-    if version != 2:
+    if version != SIGNATURE_VERSION_PARTY_HMAC:
         state = ATTESTATION_LEGACY_V1 if signer_count else ATTESTATION_UNSIGNED
     elif signer_count == 2:
         state = ATTESTATION_BILATERAL
@@ -538,6 +581,9 @@ def describe_attestation(resolution) -> Optional[Dict[str, Any]]:
         "state": state,
         "signature_version": version,
         "signer_count": signer_count,
+        "unsigned_by_design": (
+            version == SIGNATURE_VERSION_PARTY_HMAC_RETIRED and signer_count == 0
+        ),
     }
 
 
@@ -551,9 +597,10 @@ class DialecticSession:
     1. Paused agent (A) submits thesis explaining their understanding
     2. Reviewer (B) submits antithesis with observations and concerns
     3. Both agents negotiate synthesis proposals until convergence
-    4. Final resolution is created with merged conditions and signatures
+    4. Final resolution is created with merged conditions (unsigned: party-
+       HMAC minting was retired in #2449)
 
-    The session enforces timeouts, validates signatures, checks hard limits,
+    The session enforces timeouts, checks hard limits,
     and uses semantic matching to detect convergence.
 
     Session Types:
@@ -1131,28 +1178,29 @@ class DialecticSession:
 
         return False
 
-    def finalize_resolution(self,
-                           api_key_a: str,
-                           api_key_b: str) -> Resolution:
+    def finalize_resolution(self) -> Resolution:
         """
-        Create final v2-attested resolution from agreed synthesis.
-        Intelligently merges proposals from both agents and independently
-        signs the canonical payload with each agent's api_key.
+        Create the final resolution from the agreed synthesis.
+        Intelligently merges proposals from both agents.
 
-        Council 2026-05-06 NEW-2: previously this method took already-
-        computed signature_a/signature_b strings, and the only caller
-        (handle_submit_synthesis) computed both as last_msg.sign(api_key_X) —
-        meaning the reviewer's "signature" was over a message they never
-        wrote. v2 attestation moves signing into this method so both
-        signatures are guaranteed to be over the same canonical payload,
-        each with their own api_key.
+        Mints no party signature. Party-HMAC minting is retired (#2449,
+        decided 2026-09-25 as D5 in
+        ``docs/proposals/active/federation-trust-decisions-2026-09-25.md``):
+        the HMAC was symmetric and keyed on api_keys the server stores, so it
+        attested only the server's own write. Minting stops here, inside this
+        method, rather than by relying on keys being absent, because some
+        legacy paths still generate an api_key. The method therefore takes
+        no key at all.
 
-        Args:
-            api_key_a: Paused agent's api_key
-            api_key_b: Reviewer's api_key (or empty string if unavailable)
+        The record shape is unchanged: ``signature_a`` and ``signature_b``
+        stay present and empty, so ``Resolution.hash()`` (served as
+        ``resolution_hash``) and the field set a drr.v1 receipt covers are
+        the same as before. ``signature_version`` is 3, which
+        ``describe_attestation`` reports as ``unsigned`` with
+        ``unsigned_by_design`` True.
 
         Returns:
-            v2-attested Resolution with bilateral signatures
+            An unsigned Resolution stamped signature_version 3
         """
         if self.phase != DialecticPhase.RESOLVED:
             raise ValueError(f"Cannot finalize in phase {self.phase.value}")
@@ -1251,12 +1299,10 @@ class DialecticSession:
 
         timestamp = datetime.now(timezone.utc).isoformat()
 
-        # Build the prototype with empty signatures, compute the canonical
-        # payload bytes, then sign with each agent's own api_key. This
-        # guarantees both signatures are over the same payload (closes
-        # NEW-2) — previously each was over its own last synthesis message
-        # and they happened to share the last one (single-signer-two-keys).
-        proto = Resolution(
+        # No party signature (#2449). Both fields stay present and empty so
+        # the stored shape, Resolution.hash() and the drr.v1 field set are
+        # unchanged; v3 says the emptiness is by design.
+        resolution = Resolution(
             action=ResolutionAction.RESUME.value,
             conditions=merged["conditions"],
             root_cause=merged["root_cause"],
@@ -1264,14 +1310,11 @@ class DialecticSession:
             signature_a="",
             signature_b="",
             timestamp=timestamp,
-            signature_version=2,
+            signature_version=SIGNATURE_VERSION_PARTY_HMAC_RETIRED,
         )
-        payload = proto.canonical_payload()
-        proto.signature_a = Resolution.compute_signature(payload, api_key_a)
-        proto.signature_b = Resolution.compute_signature(payload, api_key_b)
 
-        self.resolution = proto
-        return proto
+        self.resolution = resolution
+        return resolution
 
     def check_hard_limits(self, resolution: Resolution) -> tuple[bool, Optional[str]]:
         """

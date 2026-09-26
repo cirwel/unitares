@@ -31,6 +31,7 @@ from src.dialectic_protocol import (  # noqa: E402
 )
 from src.dialectic_receipt import (  # noqa: E402
     RECEIPT_PREFIX,
+    REQUIRED_RECORD_FIELDS,
     ReceiptError,
     canonical_record_bytes,
     covered_fields,
@@ -131,9 +132,25 @@ def _converged_session(conditions=("agreed", "  padded  ", "")):
     return s
 
 
-def _sealed(key_b="key-b", conditions=("agreed", "  padded  ", "")):
+def _finalize(s, keys=("key-a", "key-b")):
+    """finalize_resolution, re-signed as a historical v2 row when ``keys`` is given.
+
+    finalize mints no party signature since #2449. Records that carry v2
+    signatures still exist and can still be receipted, so most tests here
+    rebuild one the way finalize used to; ``keys=None`` is a new record.
+    """
+    res = s.finalize_resolution()
+    if keys is not None:
+        res.signature_version = 2
+        payload = res.canonical_payload()
+        res.signature_a = Resolution.compute_signature(payload, keys[0])
+        res.signature_b = Resolution.compute_signature(payload, keys[1])
+    return res
+
+
+def _sealed(key_b="key-b", conditions=("agreed", "  padded  ", ""), historical=True):
     s = _converged_session(conditions)
-    res = s.finalize_resolution("key-a", key_b)
+    res = _finalize(s, ("key-a", key_b) if historical else None)
     record = seal_resolution_for_persistence(s, res, status="resolved")
     return s, res, record
 
@@ -182,7 +199,7 @@ def test_flag_without_key_mints_nothing(monkeypatch, no_key):
 
 def test_finalize_never_mints_even_with_a_key(configured_key):
     s = _converged_session()
-    res = s.finalize_resolution("key-a", "key-b")
+    res = _finalize(s)
     assert res.receipt == ""
     assert "receipt" not in res.to_dict()
     # the gates that run between finalize and the terminal write see the raw candidate
@@ -192,7 +209,7 @@ def test_finalize_never_mints_even_with_a_key(configured_key):
 
 def test_failed_terminal_write_never_mints(configured_key):
     s = _converged_session()
-    res = s.finalize_resolution("key-a", "key-b")
+    res = _finalize(s)
     record = seal_resolution_for_persistence(s, res, status="failed")
     assert res.receipt == "" and "receipt" not in record
     assert "  padded  " in res.conditions
@@ -241,7 +258,7 @@ def test_invalid_seed_degrades_with_warning_and_touches_nothing(monkeypatch, cap
     monkeypatch.setenv(FLAG_ENV, "1")
     monkeypatch.setenv(KEY_ENV, "definitely-not-a-seed")
     s = _converged_session()
-    res = s.finalize_resolution("key-a", "key-b")
+    res = _finalize(s)
     with caplog.at_level(logging.WARNING, logger="src.dialectic_receipt"):
         record = seal_resolution_for_persistence(s, res, status="resolved")
     assert res.receipt == "" and "receipt" not in record
@@ -263,6 +280,19 @@ def test_llm_assisted_single_signer_is_reported_not_hidden(configured_key):
     claims = verify_resolution_receipt(res.receipt, record, public_key=configured_key.public_key())
     assert claims["both_signatures_present"] is False
     assert res.verify_signatures("key-a", "") is False
+
+
+def test_a_new_unsigned_record_is_receipted_and_claims_no_signatures(configured_key):
+    """Since #2449 a new record carries no party signature; the receipt says so truthfully."""
+    s, res, record = _sealed(historical=False)
+    assert record["signature_a"] == "" and record["signature_b"] == ""
+    assert record["signature_version"] == 3
+    claims = verify_resolution_receipt(res.receipt, record, public_key=configured_key.public_key(),
+                                       expected_session_id=s.session_id)
+    assert claims["both_signatures_present"] is False
+    assert claims["signature_version"] == 3
+    assert set(REQUIRED_RECORD_FIELDS) <= set(claims["record_fields"])
+    assert res.hash() == _legacy_hash(res)
 
 
 # ── binding ────────────────────────────────────────────────────────────────
@@ -319,7 +349,7 @@ def test_canonical_form_is_exact_except_condition_whitespace():
 
 def test_non_ascii_content_is_emitted_raw_and_survives_a_round_trip(configured_key):
     s = _converged_session(("agreed — \U0001F600", "étape"))
-    res = s.finalize_resolution("key-a", "key-b")
+    res = _finalize(s)
     record = seal_resolution_for_persistence(s, res, status="resolved")
     raw = canonical_record_bytes(record, covered_fields(record))
     assert "\U0001F600".encode("utf-8") in raw and b"\\u" not in raw
@@ -491,7 +521,7 @@ def test_resolution_dataclass_omits_empty_receipt_and_ignores_it_in_hash():
 
 def _resolved_session_for_save(phase=DialecticPhase.RESOLVED):
     s = _converged_session()
-    res = s.finalize_resolution("key-a", "key-b")
+    res = _finalize(s)
     s.resolution = res
     s.phase = phase
     return s, res
@@ -768,6 +798,36 @@ def test_cli_single_signer_and_block_are_flagged_not_hidden(configured_key, tmp_
     code, out = _run(cli, capsys, "verify", "--record", str(doc_path), "--jwks", str(jwks_path))
     assert code == 0 and out["both_signatures_present"] is False
     assert any("single-signer" in w for w in out["warnings"])
+
+
+def test_cli_says_unsigned_by_design_not_single_signer(configured_key, tmp_path, capsys):
+    """A record with no party signature was never single-signer; the warning must not say so."""
+    cli = _load_cli()
+    s, res, record = _sealed(historical=False)
+    jwks_path = tmp_path / "jwks.json"
+    jwks_path.write_text(json.dumps(export_public_jwks(configured_key)))
+    doc_path = tmp_path / "session.json"
+    doc_path.write_text(json.dumps({"session_id": s.session_id, "resolution": dict(record)}))
+    code, out = _run(cli, capsys, "verify", "--record", str(doc_path), "--jwks", str(jwks_path))
+    assert code == 0 and out["both_signatures_present"] is False
+    assert not any("single-signer" in w for w in out["warnings"])
+    assert any("unsigned by design" in w and "#2449" in w for w in out["warnings"])
+
+
+def test_cli_historical_unsigned_record_is_not_called_by_design(configured_key, tmp_path, capsys):
+    """A keyless v2 row from before #2449: unsigned, but not by design."""
+    cli = _load_cli()
+    s = _converged_session(("agreed",))
+    res = _finalize(s, ("", ""))
+    record = seal_resolution_for_persistence(s, res, status="resolved")
+    jwks_path = tmp_path / "jwks.json"
+    jwks_path.write_text(json.dumps(export_public_jwks(configured_key)))
+    doc_path = tmp_path / "session.json"
+    doc_path.write_text(json.dumps({"session_id": s.session_id, "resolution": dict(record)}))
+    code, out = _run(cli, capsys, "verify", "--record", str(doc_path), "--jwks", str(jwks_path))
+    assert code == 0 and record["signature_version"] == 2
+    assert any(w.startswith("unsigned record") for w in out["warnings"])
+    assert not any("by design" in w or "single-signer" in w for w in out["warnings"])
 
 
 def test_cli_missing_cryptography_is_an_environment_error(configured_key, tmp_path, capsys, monkeypatch):

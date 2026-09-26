@@ -133,12 +133,15 @@ would need: process-bound identity, evidence provenance, a
 policy decisions with named reasons.
 
 **The blocker is named, not unknown.** The party-level attestation scheme for
-dialectic resolutions, as written in the code, is HMAC keyed on each agent's
+dialectic resolutions, as written in the code, was HMAC keyed on each agent's
 api_key. That is symmetric: a verifier needs the signing key, and holding it
-would also let them forge a signature. At most it suits one operator attesting
-inside their own trust boundary, and it is explicitly not non-repudiation. As
+would also let them forge a signature. At most it suited one operator attesting
+inside their own trust boundary, and it is explicitly not non-repudiation.
+Minting it is retired (decided 2026-09-25 as D5,
+[#2449](https://github.com/cirwel/unitares/issues/2449)), so new resolution
+records carry no party signature by design; historical rows are unchanged. As
 of 2026-09-25 no resolution record in the maintainer deployment carries a
-signature keyed on a party's api_key under the current scheme. The four 2026
+signature keyed on a party's api_key under the v2 scheme. The four 2026
 records that carry a signature used a key derived from the agent's uuid, which
 is forgeable from public data; that fallback was removed in #2155. The most
 recent records carrying two signatures are legacy v1 rows from 2025-12-13 (UTC),

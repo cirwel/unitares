@@ -65,6 +65,20 @@ def _converged_session(conditions):
     return s
 
 
+def _historical_v2(session, api_key_a="key-a", api_key_b="key-b"):
+    """A v2 row as finalize_resolution minted it before #2449 retired minting.
+
+    History must still survive a reload and verify, so the row is built the
+    way finalize used to build it.
+    """
+    res = session.finalize_resolution()
+    res.signature_version = 2
+    payload = res.canonical_payload()
+    res.signature_a = Resolution.compute_signature(payload, api_key_a)
+    res.signature_b = Resolution.compute_signature(payload, api_key_b)
+    return res
+
+
 def _reload(session, resolution_dict):
     doc = {
         "paused_agent_id": session.paused_agent_id,
@@ -83,7 +97,7 @@ def _reload(session, resolution_dict):
 
 def test_reload_preserves_signature_version_and_bilateral_verification():
     s = _converged_session(["agreed"])
-    res = s.finalize_resolution("key-a", "key-b")
+    res = _historical_v2(s)
     assert res.signature_version == 2
     assert res.verify_signatures("key-a", "key-b") is True
 
@@ -120,7 +134,7 @@ def test_coerce_signature_version(raw, expected):
 
 def test_padded_and_empty_conditions_survive_reload_verification():
     s = _converged_session(["agreed", "  padded  ", ""])
-    res = s.finalize_resolution("key-a", "key-b")
+    res = _historical_v2(s)
     assert res.verify_signatures("key-a", "key-b") is True
 
     reloaded = _reload(s, res.to_dict())
@@ -134,12 +148,12 @@ def test_stored_conditions_are_not_modified_by_signing():
     """Only the signed bytes are canonicalized. What finalize stores, and what
     check_hard_limits therefore sees, is unchanged by this fix."""
     s = _converged_session(["agreed", "  padded  ", ""])
-    res = s.finalize_resolution("key-a", "key-b")
+    res = s.finalize_resolution()
     assert "  padded  " in res.conditions
     assert "" in res.conditions
     # The hard-limit gate evaluates the same raw list it always did.
     assert s.check_hard_limits(res)[0] is True
-    whitespace_only = _converged_session(["   "]).finalize_resolution("key-a", "key-b")
+    whitespace_only = _converged_session(["   "]).finalize_resolution()
     # _merge_proposals keeps each party's entry; the point here is only that
     # the raw whitespace survives finalize untouched.
     assert whitespace_only.conditions and all(c == "   " for c in whitespace_only.conditions)

@@ -2472,21 +2472,12 @@ async def _run_synthetic_review(
 
     resolved = False
     if session.phase == DialecticPhase.RESOLVED:
-        paused_meta = mcp_server.agent_metadata.get(agent_uuid)
-        # ⛔No fallback key. This used to derive one as f"llm-{agent_uuid[:8]}"
-        # when no key was on file, which is FORGEABLE BY CONSTRUCTION: the uuid
-        # is served publicly in session reads, so anyone who can see the session
-        # can recompute the "signature". It produced every signature_a written
-        # in 2026 (4 rows), each of which reads as attested and is not.
-        # An empty key makes compute_signature return "", and describe_attestation
-        # then reports the record as `unsigned` -- which is the truth.
-        api_key_a = (
-            paused_meta.api_key
-            if paused_meta and getattr(paused_meta, "api_key", None)
-            else ""
-        )
+        # No party signature: party-HMAC minting is retired (#2449), so no key
+        # is looked up. Before that, this site once derived a fallback key as
+        # f"llm-{agent_uuid[:8]}" (removed in #2155), which was forgeable from
+        # the publicly served uuid.
         try:
-            resolution_obj = session.finalize_resolution(api_key_a, "")
+            resolution_obj = session.finalize_resolution()
             session.resolution = resolution_obj
             written = await pg_resolve_session(
                 session_id=session.session_id,
@@ -3419,26 +3410,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
 
             # If converged, finalize resolution
             if result.get("success") and result.get("converged"):
-                # Bilateral attestation (v2): finalize_resolution signs the
-                # canonical resolution payload with each agent's own api_key.
-                # Council 2026-05-06 NEW-2 fixed: previously we computed both
-                # signatures over the SAME last synthesis message, so the
-                # reviewer's "signature" was over a message they never wrote.
-                paused_meta = mcp_server.agent_metadata.get(session.paused_agent_id)
-                reviewer_meta = mcp_server.agent_metadata.get(session.reviewer_agent_id)
-    
-                # ⛔No fallback to `api_key`. That is the SYNTHESIS CALLER's
-                # argument -- usually the reviewer -- so falling back to it
-                # signed party A's slot with party B's key: a "paused agent
-                # signature" the paused agent never produced. Same rule #2155
-                # set at the synthetic-reviewer and LLM-assisted finalize
-                # sites: no key on file means an empty key, compute_signature
-                # returns "", and describe_attestation reports the record as
-                # `unsigned` -- which is the truth.
-                api_key_a = paused_meta.api_key if paused_meta and paused_meta.api_key else ""
-                api_key_b = reviewer_meta.api_key if reviewer_meta and reviewer_meta.api_key else ""
-    
-                resolution = session.finalize_resolution(api_key_a, api_key_b)
+                # No party signature: party-HMAC minting is retired (#2449),
+                # so neither party's api_key is looked up, and the synthesis
+                # caller's `api_key` never reaches the resolution (the #2450
+                # defect signed party A's slot with it).
+                resolution = session.finalize_resolution()
                 is_safe, violation = session.check_hard_limits(resolution)
     
                 if not is_safe:
@@ -4137,27 +4113,14 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         )
 
         # 4. Finalize resolution through protocol (canonical schema).
-        # LLM-assisted dialectic has no real second party — pass an empty
-        # api_key_b so the v2 attestation correctly reports as
-        # not-verifiable-bilaterally (verify_signatures() will return False).
-        # The agent's own api_key produces a real signature_a when one is on
-        # file; signature_b is empty by design. With no key on file BOTH are
-        # empty and the record reports as `unsigned`, which is the truth --
-        # see the note below on why the uuid-derived fallback was removed.
+        # No party signature: party-HMAC minting is retired (#2449), so the
+        # record carries signature_version 3 with both signatures empty and
+        # reads as `unsigned` by design.
         # Only finalize when the reviewer actually agreed (phase reaches RESOLVED).
         # On COOLDOWN/ESCALATE the synthesis registered agrees=False, so the session
         # stays unresolved and is left for facilitation rather than force-resumed.
         if synth_agrees and session.phase == DialecticPhase.RESOLVED:
-            paused_meta = mcp_server.agent_metadata.get(agent_uuid)
-            # ⛔No fallback key -- see the note at the other finalize site.
-            # A uuid-derived key is forgeable from public data and mints a
-            # signature that looks like attestation and is not.
-            api_key_a = (
-                paused_meta.api_key
-                if paused_meta and getattr(paused_meta, "api_key", None)
-                else ""
-            )
-            resolution_obj = session.finalize_resolution(api_key_a, "")
+            resolution_obj = session.finalize_resolution()
             session.resolution = resolution_obj
             written = await pg_resolve_session(
                 session_id=session_id,

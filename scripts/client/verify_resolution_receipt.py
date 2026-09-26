@@ -22,9 +22,11 @@ Usage::
 
 Read the ``warnings`` in the output before trusting a ``verified: true``:
 a session id taken from the same document that carries the receipt binds
-nothing, a single-signer record was never bilaterally attested, and a
-verified record whose ``action`` is not ``resume`` is still a verified
-record.
+nothing, a single-signer or unsigned record was never bilaterally attested,
+and a verified record whose ``action`` is not ``resume`` is still a verified
+record. A record finalized since party-HMAC minting was retired (#2449,
+``signature_version`` 3) carries no party signature by design, and the
+warning says so rather than calling it single-signer.
 
 Exit status: 0 verified, 1 not verified (reason code in the JSON output),
 2 usage or environment error (malformed inputs, or the ``cryptography``
@@ -110,8 +112,9 @@ def cmd_verify(args: argparse.Namespace) -> int:
         _emit({"verified": False, "code": exc.code, "message": str(exc)})
         return 2 if exc.code in _ENVIRONMENT_CODES else 1
 
-    if not claims.get("both_signatures_present"):
-        warnings.append("single-signer record: only one party's symmetric signature was stored")
+    warning = _party_signature_warning(record)
+    if warning:
+        warnings.append(warning)
     if record.get("action") != "resume":
         warnings.append(f"record action is {record.get('action')!r}, not 'resume'")
     if not args.issuer:
@@ -129,6 +132,37 @@ def cmd_verify(args: argparse.Namespace) -> int:
         "claims": claims,
     })
     return 0
+
+
+# Mirrors SIGNATURE_VERSION_PARTY_HMAC_RETIRED in src/dialectic_protocol.py.
+# Not imported: that module pulls numpy, and this verifier should stay light.
+_SIGNATURE_VERSION_PARTY_HMAC_RETIRED = 3
+
+
+def _party_signature_warning(record: Dict[str, Any]) -> Optional[str]:
+    """Say what party signatures the record holds, when it is not two.
+
+    Counted from the record, which the receipt's ``both_signatures_present``
+    claim has already been checked against, so the wording can separate an
+    unsigned record from a single-signer one instead of calling both
+    single-signer.
+    """
+    signers = bool(record.get("signature_a")) + bool(record.get("signature_b"))
+    if signers == 2:
+        return None
+    if signers == 1:
+        return "single-signer record: only one party's symmetric signature was stored"
+    try:
+        version = int(record.get("signature_version"))
+    except (TypeError, ValueError):
+        version = None
+    if version == _SIGNATURE_VERSION_PARTY_HMAC_RETIRED:
+        return (
+            "unsigned by design: party-HMAC minting was retired (#2449), so this "
+            "record carries no party signature; the receipt attests the "
+            "deployment's write, not either party's intent"
+        )
+    return "unsigned record: no party signature was stored"
 
 
 def cmd_export_jwks(args: argparse.Namespace) -> int:
